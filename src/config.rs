@@ -53,6 +53,7 @@ pub struct JsFpsConfig {
     pub products: Vec<String>,
     pub components: Vec<String>,
     pub statuses: Vec<String>,
+    pub reason: String,
 }
 
 impl JsFpsConfig {

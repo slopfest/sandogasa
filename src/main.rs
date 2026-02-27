@@ -213,6 +213,9 @@ async fn cmd_js_fps(
             "resolution": "NOTABUG",
             "blocks": {
                 "add": [config.tracker_bug]
+            },
+            "comment": {
+                "body": config.reason
             }
         });
 

@@ -2,3 +2,4 @@ tracker_bug = "CVE-FalsePositive-Unshipped"
 products = ["Fedora", "Fedora EPEL"]
 components = ["cachelib"]
 statuses = ["NEW", "ASSIGNED"]
+reason = "This project only ships JavaScript code as part of the website, the files are not shipped in the binary RPMs"
