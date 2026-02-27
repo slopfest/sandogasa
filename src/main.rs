@@ -48,6 +48,10 @@ enum Command {
         /// Path to TOML config file
         #[arg(short = 'f', long)]
         config: PathBuf,
+
+        /// Close detected false positives as NOTABUG and add them as blocking the tracker bug
+        #[arg(long)]
+        close_bugs: bool,
     },
 
     /// Set up or verify Bugzilla API key configuration
@@ -65,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             assignee,
             status,
         } => cmd_search(product, component, assignee, status).await,
-        Command::NodejsFps { config } => cmd_nodejs_fps(config).await,
+        Command::NodejsFps { config, close_bugs } => cmd_nodejs_fps(config, close_bugs).await,
         Command::Config => cmd_config(),
     }
 }
@@ -101,7 +105,10 @@ async fn cmd_search(
     Ok(())
 }
 
-async fn cmd_nodejs_fps(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_nodejs_fps(
+    config_path: PathBuf,
+    close_bugs: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let config = NodejsFpsConfig::from_file(&config_path)?;
     let bz = BzClient::new(BUGZILLA_URL);
     let nvd = NvdClient::new();
@@ -129,7 +136,7 @@ async fn cmd_nodejs_fps(config_path: PathBuf) -> Result<(), Box<dyn std::error::
 
     println!("Found {} CVE bugs to check", cve_bugs.len());
 
-    let mut fps_found = 0;
+    let mut fp_bug_ids: Vec<u64> = Vec::new();
     let mut nvd_requests = 0;
     let mut nodejs_cache: HashMap<String, bool> = HashMap::new();
 
@@ -171,7 +178,7 @@ async fn cmd_nodejs_fps(config_path: PathBuf) -> Result<(), Box<dyn std::error::
         };
 
         if is_nodejs {
-            fps_found += 1;
+            fp_bug_ids.push(bug.id);
             println!(
                 "FP: bug {} ({} / {}) — {} targets node.js",
                 bug.id, bug.product, component, cve_id
@@ -179,11 +186,52 @@ async fn cmd_nodejs_fps(config_path: PathBuf) -> Result<(), Box<dyn std::error::
         }
     }
 
-    if fps_found == 0 {
+    if fp_bug_ids.is_empty() {
         println!("No NodeJS false positives found.");
-    } else {
-        println!("\n{fps_found} likely false positive(s) found.");
+        return Ok(());
     }
+
+    println!("\n{} likely false positive(s) found.", fp_bug_ids.len());
+
+    if !close_bugs {
+        return Ok(());
+    }
+
+    // Load API key for bug modifications
+    let app_config = AppConfig::load()?;
+    let bz = BzClient::new(BUGZILLA_URL).with_api_key(app_config.bugzilla.api_key);
+
+    println!(
+        "\nThis will close {} bug(s) as NOTABUG and mark them as blocking {}.",
+        fp_bug_ids.len(),
+        config.tracker_bug
+    );
+    print!("Proceed? [y/N] ");
+    io::stdout().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        println!("Aborted.");
+        return Ok(());
+    }
+
+    for &bug_id in &fp_bug_ids {
+        let update = serde_json::json!({
+            "status": "CLOSED",
+            "resolution": "NOTABUG",
+            "blocks": {
+                "add": [config.tracker_bug]
+            }
+        });
+
+        match bz.update(bug_id, &update).await {
+            Ok(()) => println!("Closed bug {bug_id}"),
+            Err(e) => eprintln!("Error closing bug {bug_id}: {e}"),
+        }
+    }
+
+    println!("Done. {} bug(s) closed.", fp_bug_ids.len());
 
     Ok(())
 }
