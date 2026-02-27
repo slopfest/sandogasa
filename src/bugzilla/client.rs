@@ -64,15 +64,37 @@ impl BzClient {
     }
 
     /// Search bugs with a query string (e.g. "product=Fedora&component=kernel&status=NEW").
-    pub async fn search(&self, query: &str) -> Result<Vec<Bug>, reqwest::Error> {
-        let resp: BugSearchResponse = self
-            .request(&format!("bug?{query}"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-        Ok(resp.bugs)
+    /// Paginates through all results up to `max_results`. Pass 0 for no limit.
+    pub async fn search(&self, query: &str, max_results: u64) -> Result<Vec<Bug>, reqwest::Error> {
+        const PAGE_SIZE: u64 = 1000;
+        let mut all_bugs = Vec::new();
+        let mut offset: u64 = 0;
+
+        loop {
+            let limit = if max_results > 0 {
+                PAGE_SIZE.min(max_results - offset as u64)
+            } else {
+                PAGE_SIZE
+            };
+
+            let resp: BugSearchResponse = self
+                .request(&format!("bug?{query}&limit={limit}&offset={offset}"))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+
+            let total = resp.total_matches.unwrap_or(resp.bugs.len() as u64);
+            all_bugs.extend(resp.bugs);
+
+            offset = all_bugs.len() as u64;
+            if offset >= total || (max_results > 0 && offset >= max_results) {
+                break;
+            }
+        }
+
+        Ok(all_bugs)
     }
 
     /// Fetch comments for a bug.

@@ -93,7 +93,7 @@ async fn cmd_search(
         query.push_str(&format!("&assigned_to={assignee}"));
     }
 
-    let bugs = client.search(&query).await?;
+    let bugs = client.search(&query, 0).await?;
 
     for bug in &bugs {
         let is_cve =
@@ -128,7 +128,7 @@ async fn cmd_nodejs_fps(
     }
     let query = query.trim_start_matches('&');
 
-    let bugs = bz.search(query).await?;
+    let bugs = bz.search(query, 0).await?;
 
     // Filter to CVE bugs only
     let cve_bugs: Vec<_> = bugs
