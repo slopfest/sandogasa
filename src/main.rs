@@ -136,15 +136,13 @@ async fn cmd_js_fps(
         .filter(|b| b.summary.starts_with("CVE-") || b.keywords.iter().any(|k| k == "Security"))
         .collect();
 
-    println!("Found {} CVE bugs to check", cve_bugs.len());
+    println!("Checking {} CVE bugs for JavaScript false positives...", cve_bugs.len());
 
     let mut fp_bug_ids: Vec<u64> = Vec::new();
     let mut nvd_requests = 0;
     let mut js_cache: HashMap<String, bool> = HashMap::new();
 
     for bug in &cve_bugs {
-        let component = bug.component.first().map(String::as_str).unwrap_or("");
-
         // Extract CVE ID from summary (e.g. "CVE-2026-25639 axios: ...")
         let cve_id = match bug.summary.split_whitespace().next() {
             Some(id) if id.starts_with("CVE-") => id.trim_end_matches(':'),
@@ -175,10 +173,7 @@ async fn cmd_js_fps(
 
         if is_js {
             fp_bug_ids.push(bug.id);
-            println!(
-                "FP: bug {} ({} / {}) — {} targets JavaScript",
-                bug.id, bug.product, component, cve_id
-            );
+            println!("FP: bug {} — {}", bug.id, bug.summary);
         }
     }
 
