@@ -30,14 +30,15 @@ Create a TOML config file (see `configs/` for examples):
 ```toml
 tracker_bug = "CVE-FalsePositive-Unshipped"
 products = ["Fedora", "Fedora EPEL"]
-components = ["cachelib"]
+components = ["cachelib", "fbthrift"]
 statuses = ["NEW", "ASSIGNED"]
+reason = "This project only ships JavaScript code as part of the website, the files are not shipped in the binary RPMs"
 ```
 
 Then run:
 
 ```
-$ fedora-cve-triage js-fps -f configs/js-fps-cachelib.toml
+$ fedora-cve-triage js-fps -f configs/js-fps-folly-stack.toml
 Checking 3 CVE bugs for JavaScript false positives...
 FP: bug 2418496 — CVE-2025-13466 cachelib: body-parser denial of service [epel-9]
 FP: bug 2418504 — CVE-2025-13466 cachelib: body-parser denial of service [fedora-42]
@@ -63,7 +64,7 @@ Add `--close-bugs` to close detected bugs as NOTABUG and mark them as
 blocking the configured tracker bug. This requires a Bugzilla API key.
 
 ```
-$ fedora-cve-triage js-fps -f configs/js-fps-cachelib.toml --close-bugs
+$ fedora-cve-triage js-fps -f configs/js-fps-folly-stack.toml --close-bugs
 Checking 3 CVE bugs for JavaScript false positives...
 FP: bug 2418496 — CVE-2025-13466 cachelib: body-parser denial of service [epel-9]
 ...
