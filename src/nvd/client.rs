@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use reqwest::Client;
 
 use super::models::CveResponse;
