@@ -32,8 +32,17 @@ impl BzClient {
         }
     }
 
-    /// Fetch a single bug by ID.
+    /// Fetch a single bug by numeric ID.
     pub async fn bug(&self, id: u64) -> Result<Bug, reqwest::Error> {
+        self.bug_by_id(&id.to_string()).await
+    }
+
+    /// Fetch a single bug by alias (e.g. "CVE-FalsePositive-Unshipped") or numeric ID string.
+    pub async fn bug_by_alias(&self, id_or_alias: &str) -> Result<Bug, reqwest::Error> {
+        self.bug_by_id(id_or_alias).await
+    }
+
+    async fn bug_by_id(&self, id: &str) -> Result<Bug, reqwest::Error> {
         let resp: BugSearchResponse = self
             .request(&format!("bug/{id}"))
             .send()
