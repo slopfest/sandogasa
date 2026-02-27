@@ -3,12 +3,13 @@ mod config;
 mod nvd;
 
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use bugzilla::BzClient;
 use clap::{Parser, Subcommand};
-use config::NodejsFpsConfig;
+use config::{AppConfig, BugzillaConfig, NodejsFpsConfig};
 use nvd::NvdClient;
 
 const BUGZILLA_URL: &str = "https://bugzilla.redhat.com";
@@ -48,6 +49,9 @@ enum Command {
         #[arg(short = 'f', long)]
         config: PathBuf,
     },
+
+    /// Set up or verify Bugzilla API key configuration
+    Config,
 }
 
 #[tokio::main]
@@ -62,6 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             status,
         } => cmd_search(product, component, assignee, status).await,
         Command::NodejsFps { config } => cmd_nodejs_fps(config).await,
+        Command::Config => cmd_config(),
     }
 }
 
@@ -178,6 +183,40 @@ async fn cmd_nodejs_fps(config_path: PathBuf) -> Result<(), Box<dyn std::error::
         println!("No NodeJS false positives found.");
     } else {
         println!("\n{fps_found} likely false positive(s) found.");
+    }
+
+    Ok(())
+}
+
+fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
+    let config_path = AppConfig::path();
+
+    match AppConfig::load() {
+        Ok(_) => {
+            println!("Config OK: {}", config_path.display());
+        }
+        Err(_) => {
+            println!("No config found at {}", config_path.display());
+            println!(
+                "Create an API key at https://bugzilla.redhat.com/userprefs.cgi?tab=apikey"
+            );
+            print!("Enter your Bugzilla API key: ");
+            io::stdout().flush()?;
+
+            let mut key = String::new();
+            io::stdin().read_line(&mut key)?;
+            let key = key.trim().to_string();
+
+            if key.is_empty() {
+                return Err("API key cannot be empty".into());
+            }
+
+            let config = AppConfig {
+                bugzilla: BugzillaConfig { api_key: key },
+            };
+            config.save()?;
+            println!("Saved to {}", config_path.display());
+        }
     }
 
     Ok(())

@@ -22,14 +22,20 @@ impl BzClient {
         self
     }
 
-    fn request(&self, path: &str) -> reqwest::RequestBuilder {
-        let url = format!("{}/rest/{}", self.base_url, path.trim_start_matches('/'));
-        let req = self.client.get(&url);
+    fn url(&self, path: &str) -> String {
+        format!("{}/rest/{}", self.base_url, path.trim_start_matches('/'))
+    }
+
+    fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(ref key) = self.api_key {
             req.bearer_auth(key)
         } else {
             req
         }
+    }
+
+    fn request(&self, path: &str) -> reqwest::RequestBuilder {
+        self.auth(self.client.get(self.url(path)))
     }
 
     /// Fetch a single bug by numeric ID.
@@ -80,5 +86,19 @@ impl BzClient {
             .next()
             .map(|b| b.comments)
             .unwrap_or_default())
+    }
+
+    /// Update a bug. Requires an API key. The body is a JSON object with fields to update.
+    pub async fn update(
+        &self,
+        id: u64,
+        body: &serde_json::Value,
+    ) -> Result<(), reqwest::Error> {
+        self.auth(self.client.put(self.url(&format!("bug/{id}"))))
+            .json(body)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
     }
 }
