@@ -46,16 +46,16 @@ impl AppConfig {
     }
 }
 
-/// Per-run config for the nodejs-fps subcommand
+/// Per-run config for the js-fps subcommand
 #[derive(Debug, Deserialize)]
-pub struct NodejsFpsConfig {
+pub struct JsFpsConfig {
     pub tracker_bug: String,
     pub products: Vec<String>,
     pub components: Vec<String>,
     pub statuses: Vec<String>,
 }
 
-impl NodejsFpsConfig {
+impl JsFpsConfig {
     pub fn from_file(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let contents = std::fs::read_to_string(path)?;
         let config: Self = toml::from_str(&contents)?;

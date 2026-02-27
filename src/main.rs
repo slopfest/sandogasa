@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use bugzilla::BzClient;
 use clap::{Parser, Subcommand};
-use config::{AppConfig, BugzillaConfig, NodejsFpsConfig};
+use config::{AppConfig, BugzillaConfig, JsFpsConfig};
 use nvd::NvdClient;
 
 const BUGZILLA_URL: &str = "https://bugzilla.redhat.com";
@@ -45,8 +45,8 @@ enum Command {
         status: String,
     },
 
-    /// Detect NodeJS false positives from a tracker bug
-    NodejsFps {
+    /// Detect JavaScript/NodeJS false positives
+    JsFps {
         /// Path to TOML config file
         #[arg(short = 'f', long)]
         config: PathBuf,
@@ -71,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             assignee,
             status,
         } => cmd_search(product, component, assignee, status).await,
-        Command::NodejsFps { config, close_bugs } => cmd_nodejs_fps(config, close_bugs).await,
+        Command::JsFps { config, close_bugs } => cmd_js_fps(config, close_bugs).await,
         Command::Config => cmd_config(),
     }
 }
@@ -107,11 +107,11 @@ async fn cmd_search(
     Ok(())
 }
 
-async fn cmd_nodejs_fps(
+async fn cmd_js_fps(
     config_path: PathBuf,
     close_bugs: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let config = NodejsFpsConfig::from_file(&config_path)?;
+    let config = JsFpsConfig::from_file(&config_path)?;
     let bz = BzClient::new(BUGZILLA_URL);
     let nvd = NvdClient::new();
 
@@ -140,7 +140,7 @@ async fn cmd_nodejs_fps(
 
     let mut fp_bug_ids: Vec<u64> = Vec::new();
     let mut nvd_requests = 0;
-    let mut nodejs_cache: HashMap<String, bool> = HashMap::new();
+    let mut js_cache: HashMap<String, bool> = HashMap::new();
 
     for bug in &cve_bugs {
         let component = bug.component.first().map(String::as_str).unwrap_or("");
@@ -151,7 +151,7 @@ async fn cmd_nodejs_fps(
             _ => continue,
         };
 
-        let is_nodejs = if let Some(&cached) = nodejs_cache.get(cve_id) {
+        let is_js = if let Some(&cached) = js_cache.get(cve_id) {
             cached
         } else {
             // Rate-limit NVD requests (5 req / 30s for unauthenticated)
@@ -162,8 +162,8 @@ async fn cmd_nodejs_fps(
 
             match nvd.cve(cve_id).await {
                 Ok(resp) => {
-                    let result = resp.targets_nodejs();
-                    nodejs_cache.insert(cve_id.to_string(), result);
+                    let result = resp.targets_js();
+                    js_cache.insert(cve_id.to_string(), result);
                     result
                 }
                 Err(e) => {
@@ -173,17 +173,17 @@ async fn cmd_nodejs_fps(
             }
         };
 
-        if is_nodejs {
+        if is_js {
             fp_bug_ids.push(bug.id);
             println!(
-                "FP: bug {} ({} / {}) — {} targets node.js",
+                "FP: bug {} ({} / {}) — {} targets JavaScript",
                 bug.id, bug.product, component, cve_id
             );
         }
     }
 
     if fp_bug_ids.is_empty() {
-        println!("No NodeJS false positives found.");
+        println!("No JavaScript false positives found.");
         return Ok(());
     }
 

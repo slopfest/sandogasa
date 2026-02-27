@@ -49,7 +49,7 @@ impl CpeMatch {
     /// Check if this CPE match targets node.js as its target software.
     /// CPE 2.3 format: cpe:2.3:part:vendor:product:version:update:edition:language:sw_edition:target_sw:target_hw:other
     /// target_sw is at index 10 (0-based).
-    pub fn targets_nodejs(&self) -> bool {
+    pub fn targets_js(&self) -> bool {
         self.criteria
             .split(':')
             .nth(10)
@@ -57,8 +57,9 @@ impl CpeMatch {
     }
 }
 
-/// Keywords that indicate a NodeJS-related CVE when found in the description.
-const NODEJS_KEYWORDS: &[&str] = &[
+/// Keywords that indicate a JavaScript-related CVE when found in the description.
+const JS_KEYWORDS: &[&str] = &[
+    "javascript",
     "node.js",
     "nodejs",
     "npm package",
@@ -66,10 +67,10 @@ const NODEJS_KEYWORDS: &[&str] = &[
 ];
 
 impl CveResponse {
-    /// Check if this CVE targets NodeJS, first via CPE data, then falling back
-    /// to keyword matching on the English description if no CPE configurations
-    /// are available.
-    pub fn targets_nodejs(&self) -> bool {
+    /// Check if this CVE targets JavaScript/NodeJS, first via CPE data, then
+    /// falling back to keyword matching on the English description if no CPE
+    /// configurations are available.
+    pub fn targets_js(&self) -> bool {
         let cpe_matches: Vec<_> = self
             .vulnerabilities
             .iter()
@@ -80,10 +81,10 @@ impl CveResponse {
 
         // If CPE data exists, use it authoritatively
         if !cpe_matches.is_empty() {
-            return cpe_matches.iter().any(|m| m.targets_nodejs());
+            return cpe_matches.iter().any(|m| m.targets_js());
         }
 
-        // Fallback: check English description for NodeJS keywords
+        // Fallback: check English description for JS keywords
         self.vulnerabilities.iter().any(|v| {
             v.cve
                 .descriptions
@@ -91,7 +92,7 @@ impl CveResponse {
                 .filter(|d| d.lang == "en")
                 .any(|d| {
                     let lower = d.value.to_lowercase();
-                    NODEJS_KEYWORDS.iter().any(|kw| lower.contains(kw))
+                    JS_KEYWORDS.iter().any(|kw| lower.contains(kw))
                 })
         })
     }

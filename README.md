@@ -2,8 +2,8 @@
 
 A tool for triaging CVEs reported against Fedora components in Red Hat Bugzilla.
 
-Fedora packages sometimes bundle third-party code (e.g. NodeJS libraries for
-website assets) without shipping it. When CVEs are filed against those
+Fedora packages sometimes bundle third-party code (e.g. JavaScript/NodeJS
+libraries for website assets) without shipping it. When CVEs are filed against those
 libraries, tracking bugs get created against the Fedora packages even though
 they're not affected. This tool helps identify and close those false positives.
 
@@ -23,7 +23,7 @@ $ fedora-cve-triage search -p "Fedora EPEL" -c cachelib
 ...
 ```
 
-### Detect NodeJS false positives
+### Detect JavaScript false positives
 
 Create a TOML config file (see `configs/` for examples):
 
@@ -37,26 +37,19 @@ statuses = ["NEW", "ASSIGNED"]
 Then run:
 
 ```
-$ fedora-cve-triage nodejs-fps -f configs/nodejs-fps-cachelib.toml
-Found 18 CVE bugs to check
-FP: bug 2381749 (Fedora EPEL / cachelib) — CVE-2025-7339 targets node.js
-FP: bug 2381757 (Fedora / cachelib) — CVE-2025-7339 targets node.js
-FP: bug 2418525 (Fedora / cachelib) — CVE-2025-66031 targets node.js
-FP: bug 2421509 (Fedora EPEL / cachelib) — CVE-2025-12816 targets node.js
-FP: bug 2421512 (Fedora / cachelib) — CVE-2025-12816 targets node.js
-FP: bug 2422467 (Fedora EPEL / cachelib) — CVE-2025-64718 targets node.js
-FP: bug 2422479 (Fedora / cachelib) — CVE-2025-64718 targets node.js
-FP: bug 2422986 (Fedora EPEL / cachelib) — CVE-2025-66400 targets node.js
-FP: bug 2422987 (Fedora / cachelib) — CVE-2025-66400 targets node.js
-FP: bug 2426469 (Fedora EPEL / cachelib) — CVE-2025-15284 targets node.js
+$ fedora-cve-triage js-fps -f configs/js-fps-cachelib.toml
+Found 19 CVE bugs to check
+FP: bug 2389816 (Fedora EPEL / cachelib) — CVE-2025-54881 targets JavaScript
+FP: bug 2437350 (Fedora EPEL / cachelib) — CVE-2025-68157 targets JavaScript
+FP: bug 2437357 (Fedora / cachelib) — CVE-2025-68458 targets JavaScript
+FP: bug 2439008 (Fedora EPEL / cachelib) — CVE-2026-25639 targets JavaScript
+FP: bug 2439545 (Fedora EPEL / cachelib) — CVE-2026-2391 targets JavaScript
 ...
-
-13 likely false positive(s) found.
 ```
 
 The tool searches Bugzilla for CVE bugs matching the configured products,
 components, and statuses, then queries the [NVD API](https://nvd.nist.gov/)
-to check if each CVE targets `node.js` in its CPE data. When CPE
+to check if each CVE targets JavaScript/Node.js in its CPE data. When CPE
 configurations are not yet available (e.g. CVEs still "Awaiting Analysis"),
 it falls back to keyword matching on the CVE description. NVD results are
 cached per CVE ID so duplicate bugs across products don't cause redundant
@@ -68,14 +61,12 @@ Add `--close-bugs` to close detected bugs as NOTABUG and mark them as
 blocking the configured tracker bug. This requires a Bugzilla API key.
 
 ```
-$ fedora-cve-triage nodejs-fps -f configs/nodejs-fps-cachelib.toml --close-bugs
-Found 18 CVE bugs to check
-FP: bug 2381749 (Fedora EPEL / cachelib) — CVE-2025-7339 targets node.js
+$ fedora-cve-triage js-fps -f configs/js-fps-cachelib.toml --close-bugs
+Found 19 CVE bugs to check
+FP: bug 2389816 (Fedora EPEL / cachelib) — CVE-2025-54881 targets JavaScript
 ...
 
-13 likely false positive(s) found.
-
-This will close 13 bug(s) as NOTABUG and mark them as blocking CVE-FalsePositive-Unshipped.
+This will close N bug(s) as NOTABUG and mark them as blocking CVE-FalsePositive-Unshipped.
 Proceed? [y/N]
 ```
 
