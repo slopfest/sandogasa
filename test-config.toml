@@ -1,4 +1,0 @@
-tracker_bug = "CVE-FalsePositive-Unshipped"
-products = ["Fedora", "Fedora EPEL"]
-components = ["cachelib"]
-statuses = ["NEW", "ASSIGNED"]
