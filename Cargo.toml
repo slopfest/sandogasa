@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A tool for triaging CVEs reported against Fedora components in Bugzilla"
 license = "MPL-2.0"
+repository = "https://github.com/slopfest/fedora-cve-triage"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
