@@ -162,13 +162,7 @@ async fn cmd_nodejs_fps(
 
             match nvd.cve(cve_id).await {
                 Ok(resp) => {
-                    let result = resp
-                        .vulnerabilities
-                        .iter()
-                        .flat_map(|v| &v.cve.configurations)
-                        .flat_map(|c| &c.nodes)
-                        .flat_map(|n| &n.cpe_match)
-                        .any(|m| m.targets_nodejs());
+                    let result = resp.targets_nodejs();
                     nodejs_cache.insert(cve_id.to_string(), result);
                     result
                 }

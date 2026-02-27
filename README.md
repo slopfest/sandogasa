@@ -39,6 +39,8 @@ Then run:
 ```
 $ fedora-cve-triage nodejs-fps -f configs/nodejs-fps-cachelib.toml
 Found 18 CVE bugs to check
+FP: bug 2381749 (Fedora EPEL / cachelib) — CVE-2025-7339 targets node.js
+FP: bug 2381757 (Fedora / cachelib) — CVE-2025-7339 targets node.js
 FP: bug 2418525 (Fedora / cachelib) — CVE-2025-66031 targets node.js
 FP: bug 2421509 (Fedora EPEL / cachelib) — CVE-2025-12816 targets node.js
 FP: bug 2421512 (Fedora / cachelib) — CVE-2025-12816 targets node.js
@@ -49,12 +51,14 @@ FP: bug 2422987 (Fedora / cachelib) — CVE-2025-66400 targets node.js
 FP: bug 2426469 (Fedora EPEL / cachelib) — CVE-2025-15284 targets node.js
 ...
 
-11 likely false positive(s) found.
+13 likely false positive(s) found.
 ```
 
 The tool searches Bugzilla for CVE bugs matching the configured products,
 components, and statuses, then queries the [NVD API](https://nvd.nist.gov/)
-to check if each CVE targets `node.js` in its CPE data. NVD results are
+to check if each CVE targets `node.js` in its CPE data. When CPE
+configurations are not yet available (e.g. CVEs still "Awaiting Analysis"),
+it falls back to keyword matching on the CVE description. NVD results are
 cached per CVE ID so duplicate bugs across products don't cause redundant
 lookups.
 
@@ -66,12 +70,12 @@ blocking the configured tracker bug. This requires a Bugzilla API key.
 ```
 $ fedora-cve-triage nodejs-fps -f configs/nodejs-fps-cachelib.toml --close-bugs
 Found 18 CVE bugs to check
-FP: bug 2418525 (Fedora / cachelib) — CVE-2025-66031 targets node.js
+FP: bug 2381749 (Fedora EPEL / cachelib) — CVE-2025-7339 targets node.js
 ...
 
-11 likely false positive(s) found.
+13 likely false positive(s) found.
 
-This will close 11 bug(s) as NOTABUG and mark them as blocking CVE-FalsePositive-Unshipped.
+This will close 13 bug(s) as NOTABUG and mark them as blocking CVE-FalsePositive-Unshipped.
 Proceed? [y/N]
 ```
 
