@@ -38,22 +38,24 @@ Then run:
 
 ```
 $ fedora-cve-triage js-fps -f configs/js-fps-cachelib.toml
-Found 19 CVE bugs to check
-FP: bug 2389816 (Fedora EPEL / cachelib) — CVE-2025-54881 targets JavaScript
-FP: bug 2437350 (Fedora EPEL / cachelib) — CVE-2025-68157 targets JavaScript
-FP: bug 2437357 (Fedora / cachelib) — CVE-2025-68458 targets JavaScript
-FP: bug 2439008 (Fedora EPEL / cachelib) — CVE-2026-25639 targets JavaScript
-FP: bug 2439545 (Fedora EPEL / cachelib) — CVE-2026-2391 targets JavaScript
-...
+Checking 3 CVE bugs for JavaScript false positives...
+FP: bug 2418496 — CVE-2025-13466 cachelib: body-parser denial of service [epel-9]
+FP: bug 2418504 — CVE-2025-13466 cachelib: body-parser denial of service [fedora-42]
+FP: bug 2418510 — CVE-2025-13466 cachelib: body-parser denial of service [fedora-43]
+
+3 likely false positive(s) found.
 ```
 
 The tool searches Bugzilla for CVE bugs matching the configured products,
 components, and statuses, then queries the [NVD API](https://nvd.nist.gov/)
-to check if each CVE targets JavaScript/Node.js in its CPE data. When CPE
-configurations are not yet available (e.g. CVEs still "Awaiting Analysis"),
-it falls back to keyword matching on the CVE description. NVD results are
-cached per CVE ID so duplicate bugs across products don't cause redundant
-lookups.
+to determine if each CVE is JavaScript-related using three strategies:
+
+1. **CPE data** — checks the `target_sw` field for `node.js` (authoritative, when available)
+2. **CNA source** — identifies CVEs filed by JavaScript-specific CNAs (e.g. OpenJS Foundation)
+3. **Description keywords** — falls back to matching keywords like "javascript", "node.js", "npm" in the CVE description
+
+NVD results are cached per CVE ID so duplicate bugs across products don't
+cause redundant lookups.
 
 ### Close false positives
 
@@ -62,8 +64,8 @@ blocking the configured tracker bug. This requires a Bugzilla API key.
 
 ```
 $ fedora-cve-triage js-fps -f configs/js-fps-cachelib.toml --close-bugs
-Found 19 CVE bugs to check
-FP: bug 2389816 (Fedora EPEL / cachelib) — CVE-2025-54881 targets JavaScript
+Checking 3 CVE bugs for JavaScript false positives...
+FP: bug 2418496 — CVE-2025-13466 cachelib: body-parser denial of service [epel-9]
 ...
 
 This will close N bug(s) as NOTABUG and mark them as blocking CVE-FalsePositive-Unshipped.
