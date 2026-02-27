@@ -3,12 +3,14 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct BugSearchResponse {
     pub bugs: Vec<Bug>,
     pub total_matches: Option<u64>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct Bug {
     pub id: u64,
@@ -39,6 +41,7 @@ pub struct Bug {
     pub flags: Vec<Flag>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct Flag {
     pub name: String,
@@ -49,16 +52,19 @@ pub struct Flag {
     pub requestee: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct CommentResponse {
     pub bugs: std::collections::HashMap<String, CommentBucket>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct CommentBucket {
     pub comments: Vec<Comment>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct Comment {
     pub id: u64,

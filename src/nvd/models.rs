@@ -12,6 +12,7 @@ pub struct Vulnerability {
     pub cve: CveItem,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct CveItem {
     pub id: String,

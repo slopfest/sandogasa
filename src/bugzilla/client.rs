@@ -41,11 +41,13 @@ impl BzClient {
     }
 
     /// Fetch a single bug by numeric ID.
+    #[allow(dead_code)]
     pub async fn bug(&self, id: u64) -> Result<Bug, reqwest::Error> {
         self.bug_by_id(&id.to_string()).await
     }
 
     /// Fetch a single bug by alias (e.g. "CVE-FalsePositive-Unshipped") or numeric ID string.
+    #[allow(dead_code)]
     pub async fn bug_by_alias(&self, id_or_alias: &str) -> Result<Bug, reqwest::Error> {
         self.bug_by_id(id_or_alias).await
     }
@@ -74,6 +76,7 @@ impl BzClient {
     }
 
     /// Fetch comments for a bug.
+    #[allow(dead_code)]
     pub async fn comments(&self, bug_id: u64) -> Result<Vec<Comment>, reqwest::Error> {
         let resp: CommentResponse = self
             .request(&format!("bug/{bug_id}/comment"))
