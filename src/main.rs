@@ -76,6 +76,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+/// Check whether a bug is a CVE bug (summary starts with "CVE-" or has the "Security" keyword).
+fn is_cve_bug(summary: &str, keywords: &[String]) -> bool {
+    summary.starts_with("CVE-") || keywords.iter().any(|k| k == "Security")
+}
+
+/// Extract a CVE ID from a bug summary (e.g. "CVE-2026-25639 axios: ..." → "CVE-2026-25639").
+fn extract_cve_id(summary: &str) -> Option<&str> {
+    match summary.split_whitespace().next() {
+        Some(id) if id.starts_with("CVE-") => Some(id.trim_end_matches(':')),
+        _ => None,
+    }
+}
+
+/// Build a Bugzilla query string from lists of products, components, and statuses.
+fn build_multi_query(products: &[String], components: &[String], statuses: &[String]) -> String {
+    let mut query = String::new();
+    for product in products {
+        query.push_str(&format!("&product={product}"));
+    }
+    for component in components {
+        query.push_str(&format!("&component={component}"));
+    }
+    for status in statuses {
+        query.push_str(&format!("&bug_status={status}"));
+    }
+    query.trim_start_matches('&').to_string()
+}
+
 async fn cmd_search(
     product: String,
     component: Option<String>,
@@ -96,9 +124,7 @@ async fn cmd_search(
     let bugs = client.search(&query, 0).await?;
 
     for bug in &bugs {
-        let is_cve =
-            bug.summary.starts_with("CVE-") || bug.keywords.iter().any(|k| k == "Security");
-        if !is_cve {
+        if !is_cve_bug(&bug.summary, &bug.keywords) {
             continue;
         }
         println!("[{}] {}", bug.id, bug.summary);
@@ -115,25 +141,14 @@ async fn cmd_js_fps(
     let bz = BzClient::new(BUGZILLA_URL);
     let nvd = NvdClient::new();
 
-    // Build search query with multiple products, components, and statuses
-    let mut query = String::new();
-    for product in &config.products {
-        query.push_str(&format!("&product={product}"));
-    }
-    for component in &config.components {
-        query.push_str(&format!("&component={component}"));
-    }
-    for status in &config.statuses {
-        query.push_str(&format!("&bug_status={status}"));
-    }
-    let query = query.trim_start_matches('&');
+    let query = build_multi_query(&config.products, &config.components, &config.statuses);
 
-    let bugs = bz.search(query, 0).await?;
+    let bugs = bz.search(&query, 0).await?;
 
     // Filter to CVE bugs only
     let cve_bugs: Vec<_> = bugs
         .iter()
-        .filter(|b| b.summary.starts_with("CVE-") || b.keywords.iter().any(|k| k == "Security"))
+        .filter(|b| is_cve_bug(&b.summary, &b.keywords))
         .collect();
 
     println!("Checking {} CVE bugs for JavaScript false positives...", cve_bugs.len());
@@ -144,9 +159,9 @@ async fn cmd_js_fps(
 
     for bug in &cve_bugs {
         // Extract CVE ID from summary (e.g. "CVE-2026-25639 axios: ...")
-        let cve_id = match bug.summary.split_whitespace().next() {
-            Some(id) if id.starts_with("CVE-") => id.trim_end_matches(':'),
-            _ => continue,
+        let cve_id = match extract_cve_id(&bug.summary) {
+            Some(id) => id,
+            None => continue,
         };
 
         let is_js = if let Some(&cached) = js_cache.get(cve_id) {
@@ -262,4 +277,120 @@ fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- is_cve_bug ----
+
+    #[test]
+    fn is_cve_bug_with_cve_prefix() {
+        assert!(is_cve_bug("CVE-2026-25639 axios: SSRF", &[]));
+    }
+
+    #[test]
+    fn is_cve_bug_with_security_keyword() {
+        let kw = vec!["Security".to_string()];
+        assert!(is_cve_bug("Some non-CVE summary", &kw));
+    }
+
+    #[test]
+    fn is_cve_bug_with_both() {
+        let kw = vec!["Security".to_string()];
+        assert!(is_cve_bug("CVE-2026-12345 foo: bar", &kw));
+    }
+
+    #[test]
+    fn is_not_cve_bug() {
+        assert!(!is_cve_bug("Crash in libfoo on startup", &[]));
+    }
+
+    #[test]
+    fn is_not_cve_bug_wrong_keyword() {
+        let kw = vec!["SecurityTracking".to_string()];
+        assert!(!is_cve_bug("Bug in libfoo", &kw));
+    }
+
+    #[test]
+    fn is_cve_bug_bare_prefix() {
+        assert!(is_cve_bug("CVE-", &[]));
+    }
+
+    // ---- extract_cve_id ----
+
+    #[test]
+    fn extract_cve_id_normal() {
+        assert_eq!(
+            extract_cve_id("CVE-2026-25639 axios: SSRF vulnerability"),
+            Some("CVE-2026-25639")
+        );
+    }
+
+    #[test]
+    fn extract_cve_id_with_trailing_colon() {
+        assert_eq!(
+            extract_cve_id("CVE-2026-25639: axios SSRF"),
+            Some("CVE-2026-25639")
+        );
+    }
+
+    #[test]
+    fn extract_cve_id_only_id() {
+        assert_eq!(extract_cve_id("CVE-2026-25639"), Some("CVE-2026-25639"));
+    }
+
+    #[test]
+    fn extract_cve_id_not_cve() {
+        assert_eq!(extract_cve_id("Bug in libfoo causes crash"), None);
+    }
+
+    #[test]
+    fn extract_cve_id_empty() {
+        assert_eq!(extract_cve_id(""), None);
+    }
+
+    #[test]
+    fn extract_cve_id_cve_in_middle() {
+        // CVE ID must be the first word
+        assert_eq!(extract_cve_id("Bug CVE-2026-12345 in foo"), None);
+    }
+
+    // ---- build_multi_query ----
+
+    #[test]
+    fn build_multi_query_full() {
+        let q = build_multi_query(
+            &["Fedora".into(), "Fedora EPEL".into()],
+            &["vulnerability".into()],
+            &["NEW".into(), "ASSIGNED".into()],
+        );
+        assert_eq!(
+            q,
+            "product=Fedora&product=Fedora EPEL&component=vulnerability&bug_status=NEW&bug_status=ASSIGNED"
+        );
+    }
+
+    #[test]
+    fn build_multi_query_single_each() {
+        let q = build_multi_query(
+            &["Fedora".into()],
+            &["kernel".into()],
+            &["NEW".into()],
+        );
+        assert_eq!(q, "product=Fedora&component=kernel&bug_status=NEW");
+    }
+
+    #[test]
+    fn build_multi_query_empty() {
+        let q = build_multi_query(&[], &[], &[]);
+        assert_eq!(q, "");
+    }
+
+    #[test]
+    fn build_multi_query_products_only() {
+        let q = build_multi_query(&["Security Response".into()], &[], &[]);
+        assert_eq!(q, "product=Security Response");
+    }
 }

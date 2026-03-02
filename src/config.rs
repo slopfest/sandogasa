@@ -23,8 +23,11 @@ impl AppConfig {
     }
 
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
-        let path = Self::path();
-        let contents = std::fs::read_to_string(&path).map_err(|e| {
+        Self::load_from(&Self::path())
+    }
+
+    pub fn load_from(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let contents = std::fs::read_to_string(path).map_err(|e| {
             format!(
                 "Could not read {}: {}. Run 'config' to set up.",
                 path.display(),
@@ -36,12 +39,15 @@ impl AppConfig {
     }
 
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let path = Self::path();
+        self.save_to(&Self::path())
+    }
+
+    pub fn save_to(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let contents = toml::to_string_pretty(self)?;
-        std::fs::write(&path, contents)?;
+        std::fs::write(path, contents)?;
         Ok(())
     }
 }
@@ -133,5 +139,65 @@ reason = "test"
         assert!(config.products.is_empty());
         assert!(config.components.is_empty());
         assert!(config.statuses.is_empty());
+    }
+
+    // ---- AppConfig ----
+
+    #[test]
+    fn app_config_path_ends_with_expected_components() {
+        let path = AppConfig::path();
+        assert!(path.ends_with("fedora-cve-triage/config.toml"));
+    }
+
+    #[test]
+    fn app_config_save_and_load_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let config = AppConfig {
+            bugzilla: BugzillaConfig {
+                api_key: "test-key-12345".to_string(),
+            },
+        };
+        config.save_to(&path).unwrap();
+
+        let loaded = AppConfig::load_from(&path).unwrap();
+        assert_eq!(loaded.bugzilla.api_key, "test-key-12345");
+    }
+
+    #[test]
+    fn app_config_save_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("deep").join("config.toml");
+
+        let config = AppConfig {
+            bugzilla: BugzillaConfig {
+                api_key: "key".to_string(),
+            },
+        };
+        config.save_to(&path).unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn app_config_load_nonexistent_file_errors() {
+        let result = AppConfig::load_from(Path::new("/tmp/does-not-exist-99999.toml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn app_config_load_invalid_toml_errors() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "this is not valid toml [[[").unwrap();
+        let result = AppConfig::load_from(tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn app_config_load_missing_field_errors() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "[bugzilla]\n").unwrap();
+        let result = AppConfig::load_from(tmp.path());
+        assert!(result.is_err());
     }
 }

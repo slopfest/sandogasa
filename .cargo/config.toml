@@ -1,0 +1,2 @@
+[alias]
+cov = "llvm-cov test --fail-under-lines 64"

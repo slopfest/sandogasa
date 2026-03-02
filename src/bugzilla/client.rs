@@ -129,3 +129,71 @@ impl BzClient {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- new / URL normalization ----
+
+    #[test]
+    fn new_trims_trailing_slash() {
+        let client = BzClient::new("https://bugzilla.redhat.com/");
+        assert_eq!(client.base_url, "https://bugzilla.redhat.com");
+    }
+
+    #[test]
+    fn new_preserves_url_without_trailing_slash() {
+        let client = BzClient::new("https://bugzilla.redhat.com");
+        assert_eq!(client.base_url, "https://bugzilla.redhat.com");
+    }
+
+    #[test]
+    fn new_trims_multiple_trailing_slashes() {
+        let client = BzClient::new("https://bugzilla.redhat.com///");
+        assert_eq!(client.base_url, "https://bugzilla.redhat.com");
+    }
+
+    #[test]
+    fn new_no_api_key_by_default() {
+        let client = BzClient::new("https://example.com");
+        assert!(client.api_key.is_none());
+    }
+
+    // ---- with_api_key ----
+
+    #[test]
+    fn with_api_key_sets_key() {
+        let client = BzClient::new("https://example.com").with_api_key("secret123".to_string());
+        assert_eq!(client.api_key.as_deref(), Some("secret123"));
+    }
+
+    // ---- url() ----
+
+    #[test]
+    fn url_constructs_rest_path() {
+        let client = BzClient::new("https://bugzilla.redhat.com");
+        assert_eq!(
+            client.url("bug/12345"),
+            "https://bugzilla.redhat.com/rest/bug/12345"
+        );
+    }
+
+    #[test]
+    fn url_trims_leading_slash_from_path() {
+        let client = BzClient::new("https://bugzilla.redhat.com");
+        assert_eq!(
+            client.url("/bug/12345"),
+            "https://bugzilla.redhat.com/rest/bug/12345"
+        );
+    }
+
+    #[test]
+    fn url_with_query_string() {
+        let client = BzClient::new("https://bugzilla.redhat.com");
+        assert_eq!(
+            client.url("bug?product=Fedora&status=NEW"),
+            "https://bugzilla.redhat.com/rest/bug?product=Fedora&status=NEW"
+        );
+    }
+}
