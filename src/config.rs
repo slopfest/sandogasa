@@ -233,7 +233,7 @@ tracker_bug = "CVE-AlreadyFixed"
 products = ["Fedora", "Fedora EPEL"]
 components = ["freerdp"]
 statuses = ["NEW", "ASSIGNED"]
-reason = "This bug is already fixed in a stable Bodhi update."
+reason = "This bug is already fixed in a published Bodhi update."
 lag_tolerance = 7
 "#
         )
@@ -244,7 +244,7 @@ lag_tolerance = 7
         assert_eq!(config.products, vec!["Fedora", "Fedora EPEL"]);
         assert_eq!(config.components, vec!["freerdp"]);
         assert_eq!(config.statuses, vec!["NEW", "ASSIGNED"]);
-        assert_eq!(config.reason, "This bug is already fixed in a stable Bodhi update.");
+        assert_eq!(config.reason, "This bug is already fixed in a published Bodhi update.");
         assert_eq!(config.lag_tolerance, 7);
     }
 

@@ -7,4 +7,4 @@
 ## Testing
 - Always write corresponding tests when adding or modifying features
 - Run `cargo cov` before committing to verify tests pass and coverage does not regress
-- Coverage must stay at or above 64% line coverage
+- Coverage must stay at or above 67% line coverage

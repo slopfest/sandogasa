@@ -22,6 +22,8 @@ pub struct Update {
     pub bugs: Vec<BodhiBug>,
     #[serde(default)]
     pub release: Option<Release>,
+    #[serde(default)]
+    pub date_submitted: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,7 +60,8 @@ mod tests {
                     "bugs": [
                         {"bug_id": 2442801}
                     ],
-                    "release": {"name": "F42"}
+                    "release": {"name": "F42"},
+                    "date_submitted": "2026-02-25 11:55:26"
                 }
             ],
             "total": 1,
@@ -75,6 +78,10 @@ mod tests {
         assert_eq!(resp.updates[0].bugs.len(), 1);
         assert_eq!(resp.updates[0].bugs[0].bug_id, 2442801);
         assert_eq!(resp.updates[0].release.as_ref().unwrap().name, "F42");
+        assert_eq!(
+            resp.updates[0].date_submitted.as_deref(),
+            Some("2026-02-25 11:55:26")
+        );
         assert_eq!(resp.total, 1);
         assert_eq!(resp.page, 1);
         assert_eq!(resp.pages, 1);
@@ -93,6 +100,7 @@ mod tests {
         assert!(update.builds.is_empty());
         assert!(update.bugs.is_empty());
         assert!(update.release.is_none());
+        assert!(update.date_submitted.is_none());
     }
 
     #[test]

@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use bodhi::BodhiClient;
 use bugzilla::BzClient;
+use chrono::{DateTime, NaiveDateTime, TimeDelta, Utc};
 use clap::{Parser, Subcommand};
 use config::{AppConfig, BodhiCheckConfig, BugzillaConfig, JsFpsConfig};
 use nvd::NvdClient;
@@ -277,12 +278,14 @@ enum BodhiCheckResult {
         bug_id: u64,
         alias: String,
         nvr: String,
+        date_submitted: Option<String>,
     },
     /// A testing update contains a build that fixes the CVE.
     TestingFix {
         bug_id: u64,
         alias: String,
         nvr: String,
+        date_submitted: Option<String>,
     },
     /// No Bodhi update has a build that fixes the CVE.
     NoFix { bug_id: u64 },
@@ -336,12 +339,14 @@ fn categorize_bug(
                         bug_id,
                         alias: update.alias.clone(),
                         nvr: build.nvr.clone(),
+                        date_submitted: update.date_submitted.clone(),
                     };
                 } else {
                     return BodhiCheckResult::TestingFix {
                         bug_id,
                         alias: update.alias.clone(),
                         nvr: build.nvr.clone(),
+                        date_submitted: update.date_submitted.clone(),
                     };
                 }
             }
@@ -349,6 +354,20 @@ fn categorize_bug(
     }
 
     BodhiCheckResult::NoFix { bug_id }
+}
+
+/// Check whether a bug was filed late (after the Bodhi update was already submitted + tolerance).
+fn is_late_filed(
+    bug_created: DateTime<Utc>,
+    date_submitted: &str,
+    lag_tolerance_minutes: i64,
+) -> bool {
+    let submitted = match NaiveDateTime::parse_from_str(date_submitted, "%Y-%m-%d %H:%M:%S") {
+        Ok(dt) => dt.and_utc(),
+        Err(_) => return false,
+    };
+    let deadline = submitted + TimeDelta::minutes(lag_tolerance_minutes);
+    bug_created > deadline
 }
 
 async fn cmd_bodhi_check(
@@ -500,6 +519,7 @@ async fn cmd_bodhi_check(
                 bug_id,
                 alias,
                 nvr,
+                ..
             } = r
             {
                 println!("  bug {} — {} ({})", bug_id, nvr, alias);
@@ -514,6 +534,7 @@ async fn cmd_bodhi_check(
                 bug_id,
                 alias,
                 nvr,
+                ..
             } = r
             {
                 println!("  bug {} — {} ({})", bug_id, nvr, alias);
@@ -539,44 +560,108 @@ async fn cmd_bodhi_check(
         }
     }
 
-    // --close-bugs: close StableFix bugs as ERRATA
-    if close_bugs && !stable_fixes.is_empty() {
-        let app_config = AppConfig::load()?;
-        let bz = BzClient::new(BUGZILLA_URL).with_api_key(app_config.bugzilla.api_key);
+    // --close-bugs: close StableFix bugs as ERRATA, and block tracker for late-filed bugs
+    if close_bugs {
+        // Build a map of bug_id → creation_time for late-filed detection
+        let bug_creation_times: HashMap<u64, DateTime<Utc>> = cve_bugs
+            .iter()
+            .map(|b| (b.id, b.creation_time))
+            .collect();
 
-        println!(
-            "\nThis will close {} bug(s) as ERRATA.",
-            stable_fixes.len()
-        );
-        print!("Proceed? [y/N] ");
-        io::stdout().flush()?;
+        // Find late-filed bugs (filed after update submission + lag tolerance)
+        let late_filed: Vec<u64> = results
+            .iter()
+            .filter_map(|r| {
+                let (bug_id, date_submitted) = match r {
+                    BodhiCheckResult::StableFix {
+                        bug_id,
+                        date_submitted: Some(ds),
+                        ..
+                    }
+                    | BodhiCheckResult::TestingFix {
+                        bug_id,
+                        date_submitted: Some(ds),
+                        ..
+                    } => (*bug_id, ds.as_str()),
+                    _ => return None,
+                };
+                let created = bug_creation_times.get(&bug_id)?;
+                if is_late_filed(*created, date_submitted, config.lag_tolerance) {
+                    Some(bug_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-        let mut answer = String::new();
-        io::stdin().read_line(&mut answer)?;
-        if !answer.trim().eq_ignore_ascii_case("y") {
-            println!("Aborted.");
-            return Ok(());
-        }
+        if !stable_fixes.is_empty() || !late_filed.is_empty() {
+            let app_config = AppConfig::load()?;
+            let bz = BzClient::new(BUGZILLA_URL).with_api_key(app_config.bugzilla.api_key);
 
-        for r in &stable_fixes {
-            if let BodhiCheckResult::StableFix {
-                bug_id,
-                alias: _,
-                nvr,
-            } = r
-            {
+            // Describe what will happen
+            let mut actions: Vec<String> = Vec::new();
+            if !stable_fixes.is_empty() {
+                actions.push(format!("close {} bug(s) as ERRATA", stable_fixes.len()));
+            }
+            if !late_filed.is_empty() {
+                actions.push(format!(
+                    "mark {} late-filed bug(s) as blocking {}",
+                    late_filed.len(),
+                    config.tracker_bug
+                ));
+            }
+            println!("\nThis will {}.", actions.join(" and "));
+            print!("Proceed? [y/N] ");
+            io::stdout().flush()?;
+
+            let mut answer = String::new();
+            io::stdin().read_line(&mut answer)?;
+            if !answer.trim().eq_ignore_ascii_case("y") {
+                println!("Aborted.");
+                return Ok(());
+            }
+
+            // Close StableFix bugs as ERRATA
+            for r in &stable_fixes {
+                if let BodhiCheckResult::StableFix {
+                    bug_id,
+                    nvr,
+                    ..
+                } = r
+                {
+                    let update = serde_json::json!({
+                        "status": "CLOSED",
+                        "resolution": "ERRATA",
+                        "cf_fixed_in": nvr,
+                        "comment": {
+                            "body": format!("This bug is already fixed in a published Bodhi update: {nvr}")
+                        }
+                    });
+
+                    match bz.update(*bug_id, &update).await {
+                        Ok(()) => println!("Closed bug {} as ERRATA ({})", bug_id, nvr),
+                        Err(e) => eprintln!("Error closing bug {}: {}", bug_id, e),
+                    }
+                }
+            }
+
+            // Add tracker_bug as blocker for late-filed bugs
+            for &bug_id in &late_filed {
                 let update = serde_json::json!({
-                    "status": "CLOSED",
-                    "resolution": "ERRATA",
-                    "cf_fixed_in": nvr,
+                    "blocks": {
+                        "add": [config.tracker_bug]
+                    },
                     "comment": {
-                        "body": format!("This bug is already fixed in a stable Bodhi update: {nvr}")
+                        "body": config.reason
                     }
                 });
 
-                match bz.update(*bug_id, &update).await {
-                    Ok(()) => println!("Closed bug {} as ERRATA ({})", bug_id, nvr),
-                    Err(e) => eprintln!("Error closing bug {}: {}", bug_id, e),
+                match bz.update(bug_id, &update).await {
+                    Ok(()) => println!(
+                        "Marked bug {} as blocking {} (late-filed)",
+                        bug_id, config.tracker_bug
+                    ),
+                    Err(e) => eprintln!("Error updating bug {}: {}", bug_id, e),
                 }
             }
         }
@@ -589,7 +674,7 @@ async fn cmd_bodhi_check(
             if let BodhiCheckResult::TestingFix {
                 bug_id,
                 alias,
-                nvr: _,
+                ..
             } = r
             {
                 let output = std::process::Command::new("bodhi")
@@ -819,6 +904,15 @@ mod tests {
     // ---- categorize_bug ----
 
     fn make_update(alias: &str, status: &str, builds: &[&str]) -> bodhi::models::Update {
+        make_update_with_date(alias, status, builds, None)
+    }
+
+    fn make_update_with_date(
+        alias: &str,
+        status: &str,
+        builds: &[&str],
+        date_submitted: Option<&str>,
+    ) -> bodhi::models::Update {
         bodhi::models::Update {
             alias: alias.to_string(),
             status: status.to_string(),
@@ -830,6 +924,7 @@ mod tests {
                 .collect(),
             bugs: vec![],
             release: None,
+            date_submitted: date_submitted.map(|s| s.to_string()),
         }
     }
 
@@ -856,6 +951,7 @@ mod tests {
                 bug_id: 100,
                 alias: "FEDORA-2026-abc".to_string(),
                 nvr: "freerdp-3.23.0-1.fc42".to_string(),
+                date_submitted: None,
             }
         );
     }
@@ -876,6 +972,7 @@ mod tests {
                 bug_id: 200,
                 alias: "FEDORA-2026-xyz".to_string(),
                 nvr: "freerdp-3.24.0-1.fc42".to_string(),
+                date_submitted: None,
             }
         );
     }
@@ -966,7 +1063,95 @@ mod tests {
                 bug_id: 800,
                 alias: "FEDORA-2026-old".to_string(),
                 nvr: "freerdp-2.11.8-1.fc41".to_string(),
+                date_submitted: None,
             }
         );
+    }
+
+    #[test]
+    fn categorize_stable_fix_with_date_submitted() {
+        let fv = vec![make_fixed_version("freerdp", "3.23.0")];
+        let updates = vec![make_update_with_date(
+            "FEDORA-2026-dated",
+            "stable",
+            &["freerdp-3.23.0-1.fc42"],
+            Some("2026-02-25 11:55:26"),
+        )];
+
+        let result = categorize_bug(900, &fv, &updates, "freerdp");
+        assert_eq!(
+            result,
+            BodhiCheckResult::StableFix {
+                bug_id: 900,
+                alias: "FEDORA-2026-dated".to_string(),
+                nvr: "freerdp-3.23.0-1.fc42".to_string(),
+                date_submitted: Some("2026-02-25 11:55:26".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn categorize_testing_fix_with_date_submitted() {
+        let fv = vec![make_fixed_version("freerdp", "3.23.0")];
+        let updates = vec![make_update_with_date(
+            "FEDORA-2026-test",
+            "testing",
+            &["freerdp-3.24.0-1.fc42"],
+            Some("2026-02-20 08:00:00"),
+        )];
+
+        let result = categorize_bug(950, &fv, &updates, "freerdp");
+        assert_eq!(
+            result,
+            BodhiCheckResult::TestingFix {
+                bug_id: 950,
+                alias: "FEDORA-2026-test".to_string(),
+                nvr: "freerdp-3.24.0-1.fc42".to_string(),
+                date_submitted: Some("2026-02-20 08:00:00".to_string()),
+            }
+        );
+    }
+
+    // ---- is_late_filed ----
+
+    #[test]
+    fn is_late_filed_bug_filed_well_after_submission() {
+        // Update submitted at 2026-02-25 12:00:00, bug filed 2 hours later, tolerance 30 min
+        let bug_created = "2026-02-25T14:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert!(is_late_filed(bug_created, "2026-02-25 12:00:00", 30));
+    }
+
+    #[test]
+    fn is_late_filed_bug_filed_before_submission() {
+        // Bug filed before the update was even submitted
+        let bug_created = "2026-02-24T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert!(!is_late_filed(bug_created, "2026-02-25 12:00:00", 30));
+    }
+
+    #[test]
+    fn is_late_filed_bug_filed_within_tolerance() {
+        // Bug filed 10 minutes after submission, tolerance 30 min → not late
+        let bug_created = "2026-02-25T12:10:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert!(!is_late_filed(bug_created, "2026-02-25 12:00:00", 30));
+    }
+
+    #[test]
+    fn is_late_filed_bug_filed_exactly_at_deadline() {
+        // Bug filed exactly at submission + tolerance → not late (need to be strictly after)
+        let bug_created = "2026-02-25T12:30:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert!(!is_late_filed(bug_created, "2026-02-25 12:00:00", 30));
+    }
+
+    #[test]
+    fn is_late_filed_zero_tolerance() {
+        // Zero tolerance: bug filed 1 second after submission → late
+        let bug_created = "2026-02-25T12:00:01Z".parse::<DateTime<Utc>>().unwrap();
+        assert!(is_late_filed(bug_created, "2026-02-25 12:00:00", 0));
+    }
+
+    #[test]
+    fn is_late_filed_invalid_date_returns_false() {
+        let bug_created = "2026-02-25T14:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert!(!is_late_filed(bug_created, "not-a-date", 30));
     }
 }

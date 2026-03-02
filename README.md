@@ -73,6 +73,54 @@ This will close N bug(s) as NOTABUG and mark them as blocking CVE-FalsePositive-
 Proceed? [y/N]
 ```
 
+### Check for existing Bodhi fixes
+
+The `bodhi-check` subcommand detects CVE bugs that are already fixed by a
+Bodhi update. It queries NVD for fixed version information, then checks Bodhi
+for updates containing builds that meet or exceed those versions.
+
+Create a TOML config file:
+
+```toml
+tracker_bug = "CVE-AlreadyFixed"
+products = ["Fedora", "Fedora EPEL"]
+components = ["freerdp"]
+statuses = ["NEW", "ASSIGNED"]
+reason = "This bug is already fixed in a published Bodhi update."
+lag_tolerance = 30
+```
+
+Then run:
+
+```
+$ fedora-cve-triage bodhi-check -f configs/bodhi-check-freerdp.toml
+Checking 5 CVE bugs for existing Bodhi fixes...
+
+Stable fixes (2):
+  bug 2442801 — freerdp-3.23.0-1.fc42 (FEDORA-2026-abc123)
+  bug 2442802 — freerdp-3.23.0-1.fc41 (FEDORA-2026-def456)
+
+Testing fixes (1):
+  bug 2442803 — freerdp-3.24.0-1.fc42 (FEDORA-2026-ghi789)
+```
+
+Add `--close-bugs` to close stable-fix bugs as ERRATA and mark late-filed
+bugs as blocking the tracker. A bug is considered "late-filed" when it was
+created after the Bodhi update's submission date plus `lag_tolerance` minutes —
+meaning the fix was already available when the bug was filed. Late-filed bugs
+that only have a testing fix are marked as blocking the tracker but are **not**
+closed, since the update hasn't reached stable yet.
+
+```
+$ fedora-cve-triage bodhi-check -f configs/bodhi-check-freerdp.toml --close-bugs
+...
+This will close 2 bug(s) as ERRATA and mark 1 late-filed bug(s) as blocking CVE-AlreadyFixed.
+Proceed? [y/N]
+```
+
+Add `--edit-bodhi` to add bug references to testing updates via the `bodhi`
+CLI (requires `bodhi-client` to be installed).
+
 ### Configure Bugzilla API key
 
 Required for `--close-bugs`. Create an API key at
