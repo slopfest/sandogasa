@@ -1,3 +1,6 @@
+tracker_bug = "CVE-AlreadyFixed"
 products = ["Fedora", "Fedora EPEL"]
 components = ["freerdp"]
 statuses = ["NEW", "ASSIGNED"]
+reason = "This bug is already fixed in a stable Bodhi update."
+lag_tolerance = 7

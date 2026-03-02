@@ -71,11 +71,15 @@ impl JsFpsConfig {
 }
 
 /// Per-run config for the bodhi-check subcommand
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct BodhiCheckConfig {
+    pub tracker_bug: String,
     pub products: Vec<String>,
     pub components: Vec<String>,
     pub statuses: Vec<String>,
+    pub reason: String,
+    pub lag_tolerance: i64,
 }
 
 impl BodhiCheckConfig {
@@ -225,17 +229,23 @@ reason = "test"
         write!(
             tmp,
             r#"
+tracker_bug = "CVE-AlreadyFixed"
 products = ["Fedora", "Fedora EPEL"]
 components = ["freerdp"]
 statuses = ["NEW", "ASSIGNED"]
+reason = "This bug is already fixed in a stable Bodhi update."
+lag_tolerance = 7
 "#
         )
         .unwrap();
 
         let config = BodhiCheckConfig::from_file(tmp.path()).unwrap();
+        assert_eq!(config.tracker_bug, "CVE-AlreadyFixed");
         assert_eq!(config.products, vec!["Fedora", "Fedora EPEL"]);
         assert_eq!(config.components, vec!["freerdp"]);
         assert_eq!(config.statuses, vec!["NEW", "ASSIGNED"]);
+        assert_eq!(config.reason, "This bug is already fixed in a stable Bodhi update.");
+        assert_eq!(config.lag_tolerance, 7);
     }
 
     #[test]
@@ -265,9 +275,12 @@ products = ["Fedora"]
         write!(
             tmp,
             r#"
+tracker_bug = "TRACKER"
 products = []
 components = []
 statuses = []
+reason = "test"
+lag_tolerance = 0
 "#
         )
         .unwrap();
@@ -276,5 +289,6 @@ statuses = []
         assert!(config.products.is_empty());
         assert!(config.components.is_empty());
         assert!(config.statuses.is_empty());
+        assert_eq!(config.lag_tolerance, 0);
     }
 }
