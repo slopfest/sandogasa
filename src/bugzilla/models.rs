@@ -39,6 +39,10 @@ pub struct Bug {
     pub cc: Vec<String>,
     #[serde(default)]
     pub flags: Vec<Flag>,
+    #[serde(default)]
+    pub version: Vec<String>,
+    #[serde(default)]
+    pub cf_fixed_in: String,
 }
 
 #[allow(dead_code)]

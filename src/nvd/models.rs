@@ -45,6 +45,16 @@ pub struct Node {
 #[derive(Debug, Deserialize)]
 pub struct CpeMatch {
     pub criteria: String,
+    #[serde(default)]
+    pub vulnerable: bool,
+    #[serde(default, rename = "versionEndExcluding")]
+    pub version_end_excluding: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default, rename = "versionStartIncluding")]
+    pub version_start_including: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default, rename = "versionEndIncluding")]
+    pub version_end_including: Option<String>,
 }
 
 impl CpeMatch {
@@ -74,7 +84,40 @@ const JS_KEYWORDS: &[&str] = &[
     "npm module",
 ];
 
+/// A fixed version extracted from CPE match data.
+#[derive(Debug, PartialEq)]
+pub struct FixedVersion {
+    /// The product name from the CPE string (e.g. "freerdp").
+    pub product: String,
+    /// The version that fixes the vulnerability (from versionEndExcluding).
+    pub version: String,
+}
+
 impl CveResponse {
+    /// Extract fixed versions from CPE match data.
+    ///
+    /// Looks for vulnerable CPE matches with `versionEndExcluding` set,
+    /// which indicates the first version that fixes the vulnerability.
+    pub fn fixed_versions(&self) -> Vec<FixedVersion> {
+        self.vulnerabilities
+            .iter()
+            .flat_map(|v| &v.cve.configurations)
+            .flat_map(|c| &c.nodes)
+            .flat_map(|n| &n.cpe_match)
+            .filter(|m| m.vulnerable)
+            .filter_map(|m| {
+                let fixed = m.version_end_excluding.as_ref()?;
+                // CPE 2.3 format: cpe:2.3:part:vendor:product:...
+                // product is at index 4 (0-based)
+                let product = m.criteria.split(':').nth(4)?;
+                Some(FixedVersion {
+                    product: product.to_string(),
+                    version: fixed.clone(),
+                })
+            })
+            .collect()
+    }
+
     /// Check if this CVE targets JavaScript/NodeJS using three strategies:
     /// 1. CPE data (authoritative, if available)
     /// 2. CNA source (e.g. OpenJS Foundation)
@@ -125,6 +168,20 @@ mod tests {
     fn cpe_match(criteria: &str) -> CpeMatch {
         CpeMatch {
             criteria: criteria.to_string(),
+            vulnerable: false,
+            version_end_excluding: None,
+            version_start_including: None,
+            version_end_including: None,
+        }
+    }
+
+    fn vulnerable_cpe_match(criteria: &str, fixed: &str) -> CpeMatch {
+        CpeMatch {
+            criteria: criteria.to_string(),
+            vulnerable: true,
+            version_end_excluding: Some(fixed.to_string()),
+            version_start_including: None,
+            version_end_including: None,
         }
     }
 
@@ -346,5 +403,119 @@ mod tests {
             }],
         };
         assert!(resp.targets_js());
+    }
+
+    // ---- CveResponse::fixed_versions ----
+
+    #[test]
+    fn fixed_versions_with_version_end_excluding() {
+        let resp = CveResponse {
+            vulnerabilities: vec![Vulnerability {
+                cve: CveItem {
+                    id: "CVE-2026-27951".to_string(),
+                    source_identifier: String::new(),
+                    descriptions: vec![],
+                    configurations: vec![Configuration {
+                        nodes: vec![Node {
+                            cpe_match: vec![vulnerable_cpe_match(
+                                "cpe:2.3:a:freerdp:freerdp:*:*:*:*:*:*:*:*",
+                                "3.23.0",
+                            )],
+                        }],
+                    }],
+                },
+            }],
+        };
+        let fv = resp.fixed_versions();
+        assert_eq!(fv.len(), 1);
+        assert_eq!(fv[0].product, "freerdp");
+        assert_eq!(fv[0].version, "3.23.0");
+    }
+
+    #[test]
+    fn fixed_versions_non_vulnerable_ignored() {
+        let resp = CveResponse {
+            vulnerabilities: vec![Vulnerability {
+                cve: CveItem {
+                    id: "CVE-2026-0001".to_string(),
+                    source_identifier: String::new(),
+                    descriptions: vec![],
+                    configurations: vec![Configuration {
+                        nodes: vec![Node {
+                            cpe_match: vec![CpeMatch {
+                                criteria: "cpe:2.3:a:freerdp:freerdp:*:*:*:*:*:*:*:*".to_string(),
+                                vulnerable: false,
+                                version_end_excluding: Some("3.23.0".to_string()),
+                                version_start_including: None,
+                                version_end_including: None,
+                            }],
+                        }],
+                    }],
+                },
+            }],
+        };
+        assert!(resp.fixed_versions().is_empty());
+    }
+
+    #[test]
+    fn fixed_versions_no_end_excluding() {
+        let resp = CveResponse {
+            vulnerabilities: vec![Vulnerability {
+                cve: CveItem {
+                    id: "CVE-2026-0001".to_string(),
+                    source_identifier: String::new(),
+                    descriptions: vec![],
+                    configurations: vec![Configuration {
+                        nodes: vec![Node {
+                            cpe_match: vec![CpeMatch {
+                                criteria: "cpe:2.3:a:freerdp:freerdp:*:*:*:*:*:*:*:*".to_string(),
+                                vulnerable: true,
+                                version_end_excluding: None,
+                                version_start_including: None,
+                                version_end_including: None,
+                            }],
+                        }],
+                    }],
+                },
+            }],
+        };
+        assert!(resp.fixed_versions().is_empty());
+    }
+
+    #[test]
+    fn fixed_versions_empty_configurations() {
+        let resp = empty_cve();
+        assert!(resp.fixed_versions().is_empty());
+    }
+
+    #[test]
+    fn fixed_versions_multiple_ranges() {
+        let resp = CveResponse {
+            vulnerabilities: vec![Vulnerability {
+                cve: CveItem {
+                    id: "CVE-2026-27951".to_string(),
+                    source_identifier: String::new(),
+                    descriptions: vec![],
+                    configurations: vec![Configuration {
+                        nodes: vec![Node {
+                            cpe_match: vec![
+                                vulnerable_cpe_match(
+                                    "cpe:2.3:a:freerdp:freerdp:*:*:*:*:*:*:*:*",
+                                    "3.23.0",
+                                ),
+                                vulnerable_cpe_match(
+                                    "cpe:2.3:a:freerdp:freerdp:*:*:*:*:*:*:*:*",
+                                    "2.11.8",
+                                ),
+                            ],
+                        }],
+                    }],
+                },
+            }],
+        };
+        let fv = resp.fixed_versions();
+        assert_eq!(fv.len(), 2);
+        assert_eq!(fv[0].version, "3.23.0");
+        assert_eq!(fv[1].version, "2.11.8");
     }
 }

@@ -70,6 +70,22 @@ impl JsFpsConfig {
     }
 }
 
+/// Per-run config for the bodhi-check subcommand
+#[derive(Debug, Deserialize)]
+pub struct BodhiCheckConfig {
+    pub products: Vec<String>,
+    pub components: Vec<String>,
+    pub statuses: Vec<String>,
+}
+
+impl BodhiCheckConfig {
+    pub fn from_file(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let contents = std::fs::read_to_string(path)?;
+        let config: Self = toml::from_str(&contents)?;
+        Ok(config)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +215,66 @@ reason = "test"
         write!(tmp, "[bugzilla]\n").unwrap();
         let result = AppConfig::load_from(tmp.path());
         assert!(result.is_err());
+    }
+
+    // ---- BodhiCheckConfig ----
+
+    #[test]
+    fn bodhi_check_config_parses_valid_toml() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            tmp,
+            r#"
+products = ["Fedora", "Fedora EPEL"]
+components = ["freerdp"]
+statuses = ["NEW", "ASSIGNED"]
+"#
+        )
+        .unwrap();
+
+        let config = BodhiCheckConfig::from_file(tmp.path()).unwrap();
+        assert_eq!(config.products, vec!["Fedora", "Fedora EPEL"]);
+        assert_eq!(config.components, vec!["freerdp"]);
+        assert_eq!(config.statuses, vec!["NEW", "ASSIGNED"]);
+    }
+
+    #[test]
+    fn bodhi_check_config_missing_field_errors() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            tmp,
+            r#"
+products = ["Fedora"]
+"#
+        )
+        .unwrap();
+
+        let result = BodhiCheckConfig::from_file(tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn bodhi_check_config_nonexistent_file_errors() {
+        let result = BodhiCheckConfig::from_file(Path::new("/tmp/does-not-exist-bodhi.toml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn bodhi_check_config_empty_arrays() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            tmp,
+            r#"
+products = []
+components = []
+statuses = []
+"#
+        )
+        .unwrap();
+
+        let config = BodhiCheckConfig::from_file(tmp.path()).unwrap();
+        assert!(config.products.is_empty());
+        assert!(config.components.is_empty());
+        assert!(config.statuses.is_empty());
     }
 }

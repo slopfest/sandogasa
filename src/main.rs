@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
 
+mod bodhi;
 mod bugzilla;
 mod config;
 mod nvd;
+mod version;
 
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use bodhi::BodhiClient;
 use bugzilla::BzClient;
 use clap::{Parser, Subcommand};
-use config::{AppConfig, BugzillaConfig, JsFpsConfig};
+use config::{AppConfig, BodhiCheckConfig, BugzillaConfig, JsFpsConfig};
 use nvd::NvdClient;
+use version::{Nvr, fedora_release_from_version, release_from_summary, version_gte};
 
 const BUGZILLA_URL: &str = "https://bugzilla.redhat.com";
 
@@ -56,6 +60,21 @@ enum Command {
         close_bugs: bool,
     },
 
+    /// Check if CVE bugs are already fixed by a Bodhi update
+    BodhiCheck {
+        /// Path to TOML config file
+        #[arg(short = 'f', long)]
+        config: PathBuf,
+
+        /// Close bugs that have a stable fix as ERRATA
+        #[arg(long)]
+        close_bugs: bool,
+
+        /// Edit Bodhi updates in testing to add bug references (requires bodhi CLI)
+        #[arg(long)]
+        edit_bodhi: bool,
+    },
+
     /// Set up or verify Bugzilla API key configuration
     Config,
 }
@@ -72,6 +91,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             status,
         } => cmd_search(product, component, assignee, status).await,
         Command::JsFps { config, close_bugs } => cmd_js_fps(config, close_bugs).await,
+        Command::BodhiCheck {
+            config,
+            close_bugs,
+            edit_bodhi,
+        } => cmd_bodhi_check(config, close_bugs, edit_bodhi).await,
         Command::Config => cmd_config(),
     }
 }
@@ -245,6 +269,353 @@ async fn cmd_js_fps(
     Ok(())
 }
 
+/// Result of checking whether a bug is already fixed in Bodhi.
+#[derive(Debug, PartialEq)]
+enum BodhiCheckResult {
+    /// A stable update contains a build that fixes the CVE.
+    StableFix {
+        bug_id: u64,
+        alias: String,
+        nvr: String,
+    },
+    /// A testing update contains a build that fixes the CVE.
+    TestingFix {
+        bug_id: u64,
+        alias: String,
+        nvr: String,
+    },
+    /// No Bodhi update has a build that fixes the CVE.
+    NoFix { bug_id: u64 },
+    /// NVD has no fixed version information for this CVE.
+    NoFixedVersion { bug_id: u64 },
+}
+
+/// Determine the Fedora release for a bug: first from the version field, then from summary tags.
+fn determine_release(version: &[String], summary: &str) -> Option<String> {
+    // Try the version field first (e.g. ["42"] → "F42")
+    if let Some(ver) = version.first() {
+        if let Some(rel) = fedora_release_from_version(ver) {
+            return Some(rel);
+        }
+    }
+    // Fall back to summary tag (e.g. "[fedora-42]" → "F42")
+    release_from_summary(summary)
+}
+
+/// Check a single bug against Bodhi updates and NVD fixed versions.
+fn categorize_bug(
+    bug_id: u64,
+    fixed_versions: &[nvd::FixedVersion],
+    updates: &[bodhi::models::Update],
+    component: &str,
+) -> BodhiCheckResult {
+    if fixed_versions.is_empty() {
+        return BodhiCheckResult::NoFixedVersion { bug_id };
+    }
+
+    for update in updates {
+        for build in &update.builds {
+            let nvr = match Nvr::parse(&build.nvr) {
+                Some(n) => n,
+                None => continue,
+            };
+
+            // Only consider builds for this component
+            if nvr.name != component {
+                continue;
+            }
+
+            // Check if this build's version is >= any of the fixed versions
+            let is_fix = fixed_versions
+                .iter()
+                .any(|fv| version_gte(&nvr.version, &fv.version));
+
+            if is_fix {
+                if update.status == "stable" {
+                    return BodhiCheckResult::StableFix {
+                        bug_id,
+                        alias: update.alias.clone(),
+                        nvr: build.nvr.clone(),
+                    };
+                } else {
+                    return BodhiCheckResult::TestingFix {
+                        bug_id,
+                        alias: update.alias.clone(),
+                        nvr: build.nvr.clone(),
+                    };
+                }
+            }
+        }
+    }
+
+    BodhiCheckResult::NoFix { bug_id }
+}
+
+async fn cmd_bodhi_check(
+    config_path: PathBuf,
+    close_bugs: bool,
+    edit_bodhi: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Check bodhi CLI is available if --edit-bodhi was requested
+    if edit_bodhi {
+        let status = std::process::Command::new("which")
+            .arg("bodhi")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            return Err("bodhi CLI not found. Install it with: sudo dnf install bodhi-client".into());
+        }
+    }
+
+    let config = BodhiCheckConfig::from_file(&config_path)?;
+    let bz = BzClient::new(BUGZILLA_URL);
+    let nvd = NvdClient::new();
+    let bodhi_client = BodhiClient::new();
+
+    let query = build_multi_query(&config.products, &config.components, &config.statuses);
+    let bugs = bz.search(&query, 0).await?;
+
+    // Filter to CVE bugs only
+    let cve_bugs: Vec<_> = bugs
+        .iter()
+        .filter(|b| is_cve_bug(&b.summary, &b.keywords))
+        .collect();
+
+    println!(
+        "Checking {} CVE bugs for existing Bodhi fixes...",
+        cve_bugs.len()
+    );
+
+    // Collect unique CVE IDs and query NVD for fixed versions
+    let mut nvd_cache: HashMap<String, Vec<nvd::FixedVersion>> = HashMap::new();
+    let mut nvd_requests = 0;
+
+    for bug in &cve_bugs {
+        let cve_id = match extract_cve_id(&bug.summary) {
+            Some(id) => id.to_string(),
+            None => continue,
+        };
+
+        if nvd_cache.contains_key(&cve_id) {
+            continue;
+        }
+
+        // Rate-limit NVD requests (5 req / 30s for unauthenticated)
+        if nvd_requests > 0 {
+            tokio::time::sleep(Duration::from_secs(6)).await;
+        }
+        nvd_requests += 1;
+
+        match nvd.cve(&cve_id).await {
+            Ok(resp) => {
+                let fv = resp.fixed_versions();
+                nvd_cache.insert(cve_id, fv);
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to fetch {} from NVD: {}", cve_id, e);
+            }
+        }
+    }
+
+    // Query Bodhi for each (component, release) pair and categorize
+    let mut bodhi_cache: HashMap<(String, String), Vec<bodhi::models::Update>> = HashMap::new();
+    let mut results: Vec<BodhiCheckResult> = Vec::new();
+
+    for bug in &cve_bugs {
+        let cve_id = match extract_cve_id(&bug.summary) {
+            Some(id) => id,
+            None => continue,
+        };
+
+        let fixed_versions = match nvd_cache.get(cve_id) {
+            Some(fv) => fv,
+            None => continue,
+        };
+
+        let release = match determine_release(&bug.version, &bug.summary) {
+            Some(r) => r,
+            None => {
+                eprintln!(
+                    "Warning: cannot determine release for bug {} (version={:?})",
+                    bug.id,
+                    bug.version
+                );
+                continue;
+            }
+        };
+
+        let component = match bug.component.first() {
+            Some(c) => c.clone(),
+            None => continue,
+        };
+
+        let cache_key = (component.clone(), release.clone());
+        if !bodhi_cache.contains_key(&cache_key) {
+            match bodhi_client
+                .updates_for_package(&component, &release, &["stable", "testing"])
+                .await
+            {
+                Ok(updates) => {
+                    bodhi_cache.insert(cache_key.clone(), updates);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: failed to query Bodhi for {} on {}: {}",
+                        component, release, e
+                    );
+                    bodhi_cache.insert(cache_key.clone(), Vec::new());
+                }
+            }
+        }
+
+        let updates = bodhi_cache.get(&cache_key).unwrap();
+
+        let result = categorize_bug(bug.id, fixed_versions, updates, &component);
+        results.push(result);
+    }
+
+    // Print summary
+    let stable_fixes: Vec<_> = results
+        .iter()
+        .filter(|r| matches!(r, BodhiCheckResult::StableFix { .. }))
+        .collect();
+    let testing_fixes: Vec<_> = results
+        .iter()
+        .filter(|r| matches!(r, BodhiCheckResult::TestingFix { .. }))
+        .collect();
+    let no_fixes: Vec<_> = results
+        .iter()
+        .filter(|r| matches!(r, BodhiCheckResult::NoFix { .. }))
+        .collect();
+    let no_fixed_ver: Vec<_> = results
+        .iter()
+        .filter(|r| matches!(r, BodhiCheckResult::NoFixedVersion { .. }))
+        .collect();
+
+    if !stable_fixes.is_empty() {
+        println!("\nStable fixes ({}):", stable_fixes.len());
+        for r in &stable_fixes {
+            if let BodhiCheckResult::StableFix {
+                bug_id,
+                alias,
+                nvr,
+            } = r
+            {
+                println!("  bug {} — {} ({})", bug_id, nvr, alias);
+            }
+        }
+    }
+
+    if !testing_fixes.is_empty() {
+        println!("\nTesting fixes ({}):", testing_fixes.len());
+        for r in &testing_fixes {
+            if let BodhiCheckResult::TestingFix {
+                bug_id,
+                alias,
+                nvr,
+            } = r
+            {
+                println!("  bug {} — {} ({})", bug_id, nvr, alias);
+            }
+        }
+    }
+
+    if !no_fixes.is_empty() {
+        println!("\nNo fix found ({}):", no_fixes.len());
+        for r in &no_fixes {
+            if let BodhiCheckResult::NoFix { bug_id } = r {
+                println!("  bug {}", bug_id);
+            }
+        }
+    }
+
+    if !no_fixed_ver.is_empty() {
+        println!("\nNo fixed version in NVD ({}):", no_fixed_ver.len());
+        for r in &no_fixed_ver {
+            if let BodhiCheckResult::NoFixedVersion { bug_id } = r {
+                println!("  bug {}", bug_id);
+            }
+        }
+    }
+
+    // --close-bugs: close StableFix bugs as ERRATA
+    if close_bugs && !stable_fixes.is_empty() {
+        let app_config = AppConfig::load()?;
+        let bz = BzClient::new(BUGZILLA_URL).with_api_key(app_config.bugzilla.api_key);
+
+        println!(
+            "\nThis will close {} bug(s) as ERRATA.",
+            stable_fixes.len()
+        );
+        print!("Proceed? [y/N] ");
+        io::stdout().flush()?;
+
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        if !answer.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted.");
+            return Ok(());
+        }
+
+        for r in &stable_fixes {
+            if let BodhiCheckResult::StableFix {
+                bug_id,
+                alias: _,
+                nvr,
+            } = r
+            {
+                let update = serde_json::json!({
+                    "status": "CLOSED",
+                    "resolution": "ERRATA",
+                    "cf_fixed_in": nvr,
+                    "comment": {
+                        "body": format!("This bug is already fixed in a stable Bodhi update: {nvr}")
+                    }
+                });
+
+                match bz.update(*bug_id, &update).await {
+                    Ok(()) => println!("Closed bug {} as ERRATA ({})", bug_id, nvr),
+                    Err(e) => eprintln!("Error closing bug {}: {}", bug_id, e),
+                }
+            }
+        }
+    }
+
+    // --edit-bodhi: add bug references to testing updates
+    if edit_bodhi && !testing_fixes.is_empty() {
+        println!("\nAdding bug references to testing updates...");
+        for r in &testing_fixes {
+            if let BodhiCheckResult::TestingFix {
+                bug_id,
+                alias,
+                nvr: _,
+            } = r
+            {
+                let output = std::process::Command::new("bodhi")
+                    .args(["updates", "edit", alias, "--bugs", &bug_id.to_string()])
+                    .output();
+
+                match output {
+                    Ok(out) if out.status.success() => {
+                        println!("  Added bug {} to {}", bug_id, alias);
+                    }
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        eprintln!("  Error editing {}: {}", alias, stderr.trim());
+                    }
+                    Err(e) => {
+                        eprintln!("  Failed to run bodhi CLI for {}: {}", alias, e);
+                    }
+                }
+            }
+        }
+    }
+
+    println!("\nDone.");
+    Ok(())
+}
+
 fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = AppConfig::path();
 
@@ -392,5 +763,210 @@ mod tests {
     fn build_multi_query_products_only() {
         let q = build_multi_query(&["Security Response".into()], &[], &[]);
         assert_eq!(q, "product=Security Response");
+    }
+
+    // ---- determine_release ----
+
+    #[test]
+    fn determine_release_from_version_field() {
+        assert_eq!(
+            determine_release(&["42".to_string()], "CVE-2026-12345 foo: bar"),
+            Some("F42".to_string())
+        );
+    }
+
+    #[test]
+    fn determine_release_from_summary_tag() {
+        assert_eq!(
+            determine_release(&[], "CVE-2026-12345 foo: bar [fedora-42]"),
+            Some("F42".to_string())
+        );
+    }
+
+    #[test]
+    fn determine_release_version_takes_precedence() {
+        // version field says 41, summary says 42 — version wins
+        assert_eq!(
+            determine_release(&["41".to_string()], "CVE-2026-12345 foo [fedora-42]"),
+            Some("F41".to_string())
+        );
+    }
+
+    #[test]
+    fn determine_release_rawhide_falls_back_to_summary() {
+        assert_eq!(
+            determine_release(&["rawhide".to_string()], "CVE-2026-12345 foo [fedora-42]"),
+            Some("F42".to_string())
+        );
+    }
+
+    #[test]
+    fn determine_release_no_info() {
+        assert_eq!(
+            determine_release(&[], "CVE-2026-12345 foo: bar"),
+            None
+        );
+    }
+
+    #[test]
+    fn determine_release_epel() {
+        assert_eq!(
+            determine_release(&["epel9".to_string()], "CVE-2026-12345 foo"),
+            Some("EPEL-9".to_string())
+        );
+    }
+
+    // ---- categorize_bug ----
+
+    fn make_update(alias: &str, status: &str, builds: &[&str]) -> bodhi::models::Update {
+        bodhi::models::Update {
+            alias: alias.to_string(),
+            status: status.to_string(),
+            builds: builds
+                .iter()
+                .map(|nvr| bodhi::models::Build {
+                    nvr: nvr.to_string(),
+                })
+                .collect(),
+            bugs: vec![],
+            release: None,
+        }
+    }
+
+    fn make_fixed_version(product: &str, version: &str) -> nvd::FixedVersion {
+        nvd::FixedVersion {
+            product: product.to_string(),
+            version: version.to_string(),
+        }
+    }
+
+    #[test]
+    fn categorize_stable_fix() {
+        let fv = vec![make_fixed_version("freerdp", "3.23.0")];
+        let updates = vec![make_update(
+            "FEDORA-2026-abc",
+            "stable",
+            &["freerdp-3.23.0-1.fc42"],
+        )];
+
+        let result = categorize_bug(100, &fv, &updates, "freerdp");
+        assert_eq!(
+            result,
+            BodhiCheckResult::StableFix {
+                bug_id: 100,
+                alias: "FEDORA-2026-abc".to_string(),
+                nvr: "freerdp-3.23.0-1.fc42".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn categorize_testing_fix() {
+        let fv = vec![make_fixed_version("freerdp", "3.23.0")];
+        let updates = vec![make_update(
+            "FEDORA-2026-xyz",
+            "testing",
+            &["freerdp-3.24.0-1.fc42"],
+        )];
+
+        let result = categorize_bug(200, &fv, &updates, "freerdp");
+        assert_eq!(
+            result,
+            BodhiCheckResult::TestingFix {
+                bug_id: 200,
+                alias: "FEDORA-2026-xyz".to_string(),
+                nvr: "freerdp-3.24.0-1.fc42".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn categorize_no_fix_version_too_old() {
+        let fv = vec![make_fixed_version("freerdp", "3.23.0")];
+        let updates = vec![make_update(
+            "FEDORA-2026-old",
+            "stable",
+            &["freerdp-3.22.0-1.fc42"],
+        )];
+
+        let result = categorize_bug(300, &fv, &updates, "freerdp");
+        assert_eq!(result, BodhiCheckResult::NoFix { bug_id: 300 });
+    }
+
+    #[test]
+    fn categorize_no_fixed_version() {
+        let updates = vec![make_update(
+            "FEDORA-2026-any",
+            "stable",
+            &["freerdp-3.23.0-1.fc42"],
+        )];
+
+        let result = categorize_bug(400, &[], &updates, "freerdp");
+        assert_eq!(
+            result,
+            BodhiCheckResult::NoFixedVersion { bug_id: 400 }
+        );
+    }
+
+    #[test]
+    fn categorize_wrong_component_ignored() {
+        let fv = vec![make_fixed_version("freerdp", "3.23.0")];
+        let updates = vec![make_update(
+            "FEDORA-2026-other",
+            "stable",
+            &["other-pkg-3.23.0-1.fc42"],
+        )];
+
+        let result = categorize_bug(500, &fv, &updates, "freerdp");
+        assert_eq!(result, BodhiCheckResult::NoFix { bug_id: 500 });
+    }
+
+    #[test]
+    fn categorize_no_updates() {
+        let fv = vec![make_fixed_version("freerdp", "3.23.0")];
+
+        let result = categorize_bug(600, &fv, &[], "freerdp");
+        assert_eq!(result, BodhiCheckResult::NoFix { bug_id: 600 });
+    }
+
+    #[test]
+    fn categorize_stable_preferred_over_testing() {
+        let fv = vec![make_fixed_version("freerdp", "3.23.0")];
+        let updates = vec![
+            make_update("FEDORA-2026-stable", "stable", &["freerdp-3.23.0-1.fc42"]),
+            make_update(
+                "FEDORA-2026-testing",
+                "testing",
+                &["freerdp-3.24.0-1.fc42"],
+            ),
+        ];
+
+        let result = categorize_bug(700, &fv, &updates, "freerdp");
+        // Should find stable first since it appears first
+        assert!(matches!(result, BodhiCheckResult::StableFix { .. }));
+    }
+
+    #[test]
+    fn categorize_multiple_fixed_versions() {
+        // Two version ranges (e.g. 2.x and 3.x branches)
+        let fv = vec![
+            make_fixed_version("freerdp", "3.23.0"),
+            make_fixed_version("freerdp", "2.11.8"),
+        ];
+        let updates = vec![make_update(
+            "FEDORA-2026-old",
+            "stable",
+            &["freerdp-2.11.8-1.fc41"],
+        )];
+
+        let result = categorize_bug(800, &fv, &updates, "freerdp");
+        assert_eq!(
+            result,
+            BodhiCheckResult::StableFix {
+                bug_id: 800,
+                alias: "FEDORA-2026-old".to_string(),
+                nvr: "freerdp-2.11.8-1.fc41".to_string(),
+            }
+        );
     }
 }

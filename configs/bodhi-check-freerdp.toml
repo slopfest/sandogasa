@@ -1,0 +1,3 @@
+products = ["Fedora", "Fedora EPEL"]
+components = ["freerdp"]
+statuses = ["NEW", "ASSIGNED"]
