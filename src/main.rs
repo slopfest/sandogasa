@@ -716,9 +716,7 @@ fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
             print!("Enter your Bugzilla API key: ");
             io::stdout().flush()?;
 
-            let mut key = String::new();
-            io::stdin().read_line(&mut key)?;
-            let key = key.trim().to_string();
+            let key = rpassword::read_password()?.trim().to_string();
 
             if key.is_empty() {
                 return Err("API key cannot be empty".into());
