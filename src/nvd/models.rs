@@ -67,6 +67,14 @@ impl CpeMatch {
             .nth(10)
             .is_some_and(|sw| sw.eq_ignore_ascii_case("node.js"))
     }
+
+    /// Check if this CPE match has a specific (non-wildcard) target_sw value.
+    pub fn has_specific_target_sw(&self) -> bool {
+        self.criteria
+            .split(':')
+            .nth(10)
+            .is_some_and(|sw| sw != "*")
+    }
 }
 
 /// CNAs (CVE Numbering Authorities) known to exclusively handle JavaScript projects.
@@ -131,9 +139,18 @@ impl CveResponse {
             .flat_map(|n| &n.cpe_match)
             .collect();
 
-        // If CPE data exists, use it authoritatively
+        // If CPE data exists with specific target_sw, use it authoritatively
         if !cpe_matches.is_empty() {
-            return cpe_matches.iter().any(|m| m.targets_js());
+            if cpe_matches.iter().any(|m| m.targets_js()) {
+                return true;
+            }
+            // Only treat CPE as authoritative if at least one entry has a
+            // specific target_sw (e.g. "node.js", "python").  When all entries
+            // have wildcard target_sw, fall through to CNA/description heuristics
+            // since many JS-only libraries (e.g. DOMPurify) use wildcard CPEs.
+            if cpe_matches.iter().any(|m| m.has_specific_target_sw()) {
+                return false;
+            }
         }
 
         // Check if the CNA is a known JavaScript-only authority
@@ -290,6 +307,32 @@ mod tests {
         assert!(!m.targets_js());
     }
 
+    // ---- CpeMatch::has_specific_target_sw ----
+
+    #[test]
+    fn cpe_specific_target_sw_node() {
+        let m = cpe_match("cpe:2.3:a:axios:axios:*:*:*:*:*:node.js:*:*");
+        assert!(m.has_specific_target_sw());
+    }
+
+    #[test]
+    fn cpe_specific_target_sw_python() {
+        let m = cpe_match("cpe:2.3:a:vendor:product:*:*:*:*:*:python:*:*");
+        assert!(m.has_specific_target_sw());
+    }
+
+    #[test]
+    fn cpe_wildcard_target_sw() {
+        let m = cpe_match("cpe:2.3:a:cure53:dompurify:*:*:*:*:*:*:*:*");
+        assert!(!m.has_specific_target_sw());
+    }
+
+    #[test]
+    fn cpe_short_string_no_target_sw() {
+        let m = cpe_match("cpe:2.3:a:vendor");
+        assert!(!m.has_specific_target_sw());
+    }
+
     // ---- CveResponse::targets_js — strategy 1: CPE ----
 
     #[test]
@@ -305,12 +348,34 @@ mod tests {
     }
 
     #[test]
-    fn cpe_is_authoritative_over_description() {
-        // CPE says not-JS, description says JS — CPE should win
-        let mut resp = cve_with_cpe("cpe:2.3:a:vendor:product:*:*:*:*:*:*:*:*");
+    fn cpe_specific_target_sw_is_authoritative_over_description() {
+        // CPE says target_sw=python, description says JS — CPE should win
+        let mut resp = cve_with_cpe("cpe:2.3:a:vendor:product:*:*:*:*:*:python:*:*");
         resp.vulnerabilities[0].cve.descriptions.push(CveDescription {
             lang: "en".to_string(),
             value: "A vulnerability in a Node.js package".to_string(),
+        });
+        assert!(!resp.targets_js());
+    }
+
+    #[test]
+    fn cpe_wildcard_target_sw_falls_through_to_description() {
+        // CPE has wildcard target_sw, description says JS — should detect as JS
+        let mut resp = cve_with_cpe("cpe:2.3:a:cure53:dompurify:*:*:*:*:*:*:*:*");
+        resp.vulnerabilities[0].cve.descriptions.push(CveDescription {
+            lang: "en".to_string(),
+            value: "Attackers can inject payloads to execute JavaScript".to_string(),
+        });
+        assert!(resp.targets_js());
+    }
+
+    #[test]
+    fn cpe_wildcard_target_sw_no_js_description() {
+        // CPE has wildcard target_sw, description has no JS keywords — not JS
+        let mut resp = cve_with_cpe("cpe:2.3:a:vendor:product:*:*:*:*:*:*:*:*");
+        resp.vulnerabilities[0].cve.descriptions.push(CveDescription {
+            lang: "en".to_string(),
+            value: "Buffer overflow in libpng".to_string(),
         });
         assert!(!resp.targets_js());
     }
