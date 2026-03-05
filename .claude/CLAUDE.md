@@ -2,7 +2,7 @@
 
 ## Git
 - Always use `git commit -s` (sign-off) when committing
-- Always use `git tag -s` (GPG sign) when tagging
+- Always use `git tag -s` (GPG sign) when tagging, with a descriptive message summarizing the changes since the last tag
 
 ## Testing
 - Always write corresponding tests when adding or modifying features
