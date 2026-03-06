@@ -261,25 +261,25 @@ pub fn safe_to_backport(
     Ok(evaluate(build_requires, provides, requires, reverse_deps, target_branch))
 }
 
-/// Print a `BackportResult` in human-readable format.
-pub fn print_result(
+/// Format a `BackportResult` as a human-readable string.
+pub fn format_result(
     result: &BackportResult,
     srpm: &str,
     target_branch: &str,
     source_branch: &str,
-) {
+) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+
     if result.safe {
-        println!(
-            "Backporting {srpm} from {source_branch} to {target_branch}: SAFE"
-        );
+        writeln!(out, "Backporting {srpm} from {source_branch} to {target_branch}: SAFE").unwrap();
     } else {
-        println!(
-            "Backporting {srpm} from {source_branch} to {target_branch}: NOT SAFE"
-        );
-        println!();
-        println!("Concerns:");
+        writeln!(out, "Backporting {srpm} from {source_branch} to {target_branch}: NOT SAFE")
+            .unwrap();
+        writeln!(out).unwrap();
+        writeln!(out, "Concerns:").unwrap();
         for c in &result.concerns {
-            println!("  - {c}");
+            writeln!(out, "  - {c}").unwrap();
         }
     }
 
@@ -297,38 +297,54 @@ pub fn print_result(
         {
             continue;
         }
-        println!();
-        compare::print_result(cmp, label, target_branch, source_branch, false);
+        writeln!(out).unwrap();
+        write!(out, "{}", compare::format_result(cmp, label, target_branch, source_branch, false))
+            .unwrap();
     }
 
     for (branch, deps) in &result.reverse_deps {
         if deps.is_empty() {
             continue;
         }
-        println!();
-        println!("Reverse dependencies on {branch}:");
+        writeln!(out).unwrap();
+        writeln!(out, "Reverse dependencies on {branch}:").unwrap();
         for dep in deps {
-            println!("  {}:", dep.package);
+            writeln!(out, "  {}:", dep.package).unwrap();
             for req in &dep.affected_requires {
-                print!("    - {}", req.required);
                 if req.target_provides == req.source_provides {
-                    println!(" — provided by both {target_branch} and {source_branch}");
+                    writeln!(
+                        out,
+                        "    - {} — provided by both {target_branch} and {source_branch}",
+                        req.required
+                    )
+                    .unwrap();
                 } else {
-                    println!();
+                    writeln!(out, "    - {}", req.required).unwrap();
                     for prov in &req.target_provides {
-                        println!("      {target_branch}: {prov}");
+                        writeln!(out, "      {target_branch}: {prov}").unwrap();
                     }
                     if req.source_provides.is_empty() {
-                        println!("      {source_branch}: (not provided)");
+                        writeln!(out, "      {source_branch}: (not provided)").unwrap();
                     } else {
                         for prov in &req.source_provides {
-                            println!("      {source_branch}: {prov}");
+                            writeln!(out, "      {source_branch}: {prov}").unwrap();
                         }
                     }
                 }
             }
         }
     }
+    out
+}
+
+/// Print a `BackportResult` in human-readable format.
+pub fn print_result(
+    result: &BackportResult,
+    srpm: &str,
+    target_branch: &str,
+    source_branch: &str,
+) {
+    print!("{}", format_result(result, srpm, target_branch, source_branch));
 }
 
 #[cfg(test)]

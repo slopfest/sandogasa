@@ -170,31 +170,34 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
     CompareResult { added: final_added, removed, upgraded, downgraded, unchanged }
 }
 
-/// Print a `CompareResult` in human-readable format.
+/// Format a `CompareResult` as a human-readable string.
 ///
 /// When `show_unchanged` is true, entries that are identical in both
 /// branches are listed at the end.
-pub fn print_result(
+pub fn format_result(
     result: &CompareResult,
     label: &str,
     source_branch: &str,
     target_branch: &str,
     show_unchanged: bool,
-) {
+) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+
     if result.added.is_empty()
         && result.removed.is_empty()
         && result.upgraded.is_empty()
         && result.downgraded.is_empty()
     {
-        println!("No differences in {label}.");
+        writeln!(out, "No differences in {label}.").unwrap();
         if show_unchanged && !result.unchanged.is_empty() {
-            println!();
-            println!("Unchanged:");
+            writeln!(out).unwrap();
+            writeln!(out, "Unchanged:").unwrap();
             for p in &result.unchanged {
-                println!("  {p}");
+                writeln!(out, "  {p}").unwrap();
             }
         }
-        return;
+        return out;
     }
     let mut need_blank = false;
     for (section_label, entries) in [
@@ -205,7 +208,7 @@ pub fn print_result(
             continue;
         }
         if need_blank {
-            println!();
+            writeln!(out).unwrap();
         }
         let name_w = entries.iter().map(|u| u.name.len()).max().unwrap();
         let src_w = entries
@@ -227,51 +230,70 @@ pub fn print_result(
             "-".repeat(src_w),
             "-".repeat(tgt_w)
         );
-        println!("{section_label} ({source_branch} -> {target_branch}):");
-        println!("{sep}");
-        println!(
+        writeln!(out, "{section_label} ({source_branch} -> {target_branch}):").unwrap();
+        writeln!(out, "{sep}").unwrap();
+        writeln!(
+            out,
             "| {:<name_w$} | {:<src_w$} | {:<tgt_w$} |",
             label, source_branch, target_branch
-        );
-        println!("{sep}");
+        )
+        .unwrap();
+        writeln!(out, "{sep}").unwrap();
         for u in entries {
-            println!(
+            writeln!(
+                out,
                 "| {:<name_w$} | {:<src_w$} | {:<tgt_w$} |",
                 u.name, u.source_version, u.target_version
-            );
+            )
+            .unwrap();
         }
-        println!("{sep}");
+        writeln!(out, "{sep}").unwrap();
         need_blank = true;
     }
     if !result.removed.is_empty() {
         if need_blank {
-            println!();
+            writeln!(out).unwrap();
         }
-        println!("Removed (in {source_branch} but not {target_branch}):");
+        writeln!(out, "Removed (in {source_branch} but not {target_branch}):").unwrap();
         for p in &result.removed {
-            println!("  - {p}");
+            writeln!(out, "  - {p}").unwrap();
         }
         need_blank = true;
     }
     if !result.added.is_empty() {
         if need_blank {
-            println!();
+            writeln!(out).unwrap();
         }
-        println!("Added (in {target_branch} but not {source_branch}):");
+        writeln!(out, "Added (in {target_branch} but not {source_branch}):").unwrap();
         for p in &result.added {
-            println!("  + {p}");
+            writeln!(out, "  + {p}").unwrap();
         }
         need_blank = true;
     }
     if show_unchanged && !result.unchanged.is_empty() {
         if need_blank {
-            println!();
+            writeln!(out).unwrap();
         }
-        println!("Unchanged:");
+        writeln!(out, "Unchanged:").unwrap();
         for p in &result.unchanged {
-            println!("  {p}");
+            writeln!(out, "  {p}").unwrap();
         }
     }
+    out
+}
+
+/// Print a `CompareResult` in human-readable format.
+///
+/// When `show_unchanged` is true, entries that are identical in both
+/// branches are listed at the end.
+pub fn print_result(
+    result: &CompareResult,
+    label: &str,
+    source_branch: &str,
+    target_branch: &str,
+    show_unchanged: bool,
+) {
+    print!("{}", format_result(result, label, source_branch, target_branch, show_unchanged));
 }
 
 #[cfg(test)]
