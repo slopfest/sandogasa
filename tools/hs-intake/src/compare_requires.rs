@@ -5,8 +5,8 @@
 use crate::compare::{self, CompareResult};
 use crate::fedrq::Fedrq;
 
-/// Compare the Provides of a source package between two branches.
-pub fn compare_provides(
+/// Compare the Requires of a source package between two branches.
+pub fn compare_requires(
     srpm: &str,
     source_branch: &str,
     target_branch: &str,
@@ -20,8 +20,8 @@ pub fn compare_provides(
         ..Default::default()
     };
 
-    let source = source_fq.subpkgs_provides(srpm)?;
-    let target = target_fq.subpkgs_provides(srpm)?;
+    let source = source_fq.subpkgs_requires(srpm)?;
+    let target = target_fq.subpkgs_requires(srpm)?;
 
     Ok(compare::diff(source, target))
 }

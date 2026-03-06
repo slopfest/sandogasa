@@ -93,13 +93,23 @@ impl Fedrq {
         self.pkgs_query("provides", package)
     }
 
-    /// Return the Provides of all subpackages of a source package.
-    pub fn subpkgs_provides(&self, srpm: &str) -> Result<Vec<String>, Error> {
+    /// Run `fedrq subpkgs -S -F <formatter> <srpm>` and return one entry per line.
+    fn subpkgs_query(&self, formatter: &str, srpm: &str) -> Result<Vec<String>, Error> {
         let mut cmd = Command::new("fedrq");
-        cmd.args(["subpkgs", "-S", "-F", "provides"]);
+        cmd.args(["subpkgs", "-S", "-F", formatter]);
         self.apply_opts(&mut cmd);
         cmd.arg(srpm);
         Self::run(&mut cmd)
+    }
+
+    /// Return the Provides of all subpackages of a source package.
+    pub fn subpkgs_provides(&self, srpm: &str) -> Result<Vec<String>, Error> {
+        self.subpkgs_query("provides", srpm)
+    }
+
+    /// Return the Requires of all subpackages of a source package.
+    pub fn subpkgs_requires(&self, srpm: &str) -> Result<Vec<String>, Error> {
+        self.subpkgs_query("requires", srpm)
     }
 }
 
