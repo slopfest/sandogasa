@@ -2,13 +2,16 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
+use crate::rpmvercmp::compare_evr;
+
 /// An entry whose version changed between branches.
 #[derive(Debug, PartialEq, Eq, Serialize)]
-pub struct Upgraded {
+pub struct VersionChange {
     pub name: String,
     pub source_version: String,
     pub target_version: String,
@@ -19,7 +22,8 @@ pub struct Upgraded {
 pub struct CompareResult {
     pub added: Vec<String>,
     pub removed: Vec<String>,
-    pub upgraded: Vec<Upgraded>,
+    pub upgraded: Vec<VersionChange>,
+    pub downgraded: Vec<VersionChange>,
 }
 
 /// Split an RPM dependency/provide string into (name, operator, version).
@@ -69,8 +73,8 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
     }
 
     let mut added = Vec::new();
-    let mut upgraded = Vec::new();
-    let mut upgraded_names: BTreeSet<&str> = BTreeSet::new();
+    let mut changed: Vec<VersionChange> = Vec::new();
+    let mut changed_names: BTreeSet<&str> = BTreeSet::new();
 
     for a in &raw_added {
         let (name, op, version) = split_entry(a);
@@ -79,12 +83,12 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
                 if target_op == source_op =>
             {
                 let prefix = if target_op == "=" { "" } else { ">= " };
-                upgraded.push(Upgraded {
+                changed.push(VersionChange {
                     name: name.to_string(),
                     source_version: format!("{prefix}{source_v}"),
                     target_version: format!("{prefix}{target_v}"),
                 });
-                upgraded_names.insert(name);
+                changed_names.insert(name);
             }
             _ => added.push(a.to_string()),
         }
@@ -94,7 +98,7 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
         .iter()
         .filter(|r| {
             let (name, _, _) = split_entry(r);
-            !upgraded_names.contains(name)
+            !changed_names.contains(name)
         })
         .map(|r| r.to_string())
         .collect();
@@ -107,17 +111,17 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
         }
     }
 
-    let mut solib_upgraded_originals: BTreeSet<String> = BTreeSet::new();
+    let mut solib_changed_originals: BTreeSet<String> = BTreeSet::new();
     let mut final_added = Vec::new();
     for a in &added {
         if let Some((pattern, target_v)) = split_solib(a) {
             if let Some((original, source_v)) = solib_removed_by_pattern.get(&pattern) {
-                upgraded.push(Upgraded {
+                changed.push(VersionChange {
                     name: pattern,
                     source_version: source_v.to_string(),
                     target_version: target_v.to_string(),
                 });
-                solib_upgraded_originals.insert(original.clone());
+                solib_changed_originals.insert(original.clone());
                 continue;
             }
         }
@@ -126,12 +130,26 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
 
     let removed: Vec<String> = remaining_removed
         .into_iter()
-        .filter(|r| !solib_upgraded_originals.contains(r))
+        .filter(|r| !solib_changed_originals.contains(r))
         .collect();
 
-    upgraded.sort_by(|a, b| a.name.cmp(&b.name));
+    changed.sort_by(|a, b| a.name.cmp(&b.name));
 
-    CompareResult { added: final_added, removed, upgraded }
+    // Split changed into upgraded vs downgraded using RPM version comparison.
+    // Strip the ">= " prefix before comparing, as it's not part of the EVR.
+    let mut upgraded = Vec::new();
+    let mut downgraded = Vec::new();
+    for c in changed {
+        let src = c.source_version.strip_prefix(">= ").unwrap_or(&c.source_version);
+        let tgt = c.target_version.strip_prefix(">= ").unwrap_or(&c.target_version);
+        match compare_evr(src, tgt) {
+            Ordering::Less => upgraded.push(c),
+            Ordering::Greater => downgraded.push(c),
+            Ordering::Equal => upgraded.push(c),
+        }
+    }
+
+    CompareResult { added: final_added, removed, upgraded, downgraded }
 }
 
 /// Print a `CompareResult` in human-readable format.
@@ -141,22 +159,33 @@ pub fn print_result(
     source_branch: &str,
     target_branch: &str,
 ) {
-    if result.added.is_empty() && result.removed.is_empty() && result.upgraded.is_empty() {
+    if result.added.is_empty()
+        && result.removed.is_empty()
+        && result.upgraded.is_empty()
+        && result.downgraded.is_empty()
+    {
         println!("No differences in {label}.");
         return;
     }
     let mut need_blank = false;
-    if !result.upgraded.is_empty() {
-        let name_w = result.upgraded.iter().map(|u| u.name.len()).max().unwrap();
-        let src_w = result
-            .upgraded
+    for (section_label, entries) in [
+        ("Upgraded", &result.upgraded),
+        ("Downgraded", &result.downgraded),
+    ] {
+        if entries.is_empty() {
+            continue;
+        }
+        if need_blank {
+            println!();
+        }
+        let name_w = entries.iter().map(|u| u.name.len()).max().unwrap();
+        let src_w = entries
             .iter()
             .map(|u| u.source_version.len())
             .max()
             .unwrap()
             .max(source_branch.len());
-        let tgt_w = result
-            .upgraded
+        let tgt_w = entries
             .iter()
             .map(|u| u.target_version.len())
             .max()
@@ -169,14 +198,14 @@ pub fn print_result(
             "-".repeat(src_w),
             "-".repeat(tgt_w)
         );
-        println!("Upgraded ({source_branch} -> {target_branch}):");
+        println!("{section_label} ({source_branch} -> {target_branch}):");
         println!("{sep}");
         println!(
             "| {:<name_w$} | {:<src_w$} | {:<tgt_w$} |",
             label, source_branch, target_branch
         );
         println!("{sep}");
-        for u in &result.upgraded {
+        for u in entries {
             println!(
                 "| {:<name_w$} | {:<src_w$} | {:<tgt_w$} |",
                 u.name, u.source_version, u.target_version
@@ -240,6 +269,7 @@ mod tests {
         assert!(result.added.is_empty());
         assert!(result.removed.is_empty());
         assert!(result.upgraded.is_empty());
+        assert!(result.downgraded.is_empty());
     }
 
     #[test]
@@ -248,6 +278,7 @@ mod tests {
         assert_eq!(result.added, vec!["foo"]);
         assert!(result.removed.is_empty());
         assert!(result.upgraded.is_empty());
+        assert!(result.downgraded.is_empty());
     }
 
     #[test]
@@ -256,6 +287,7 @@ mod tests {
         assert!(result.added.is_empty());
         assert_eq!(result.removed, vec!["foo"]);
         assert!(result.upgraded.is_empty());
+        assert!(result.downgraded.is_empty());
     }
 
     #[test]
@@ -265,10 +297,25 @@ mod tests {
         let result = diff(source, target);
         assert!(result.added.is_empty());
         assert!(result.removed.is_empty());
+        assert!(result.downgraded.is_empty());
         assert_eq!(result.upgraded.len(), 1);
         assert_eq!(result.upgraded[0].name, "libbpf");
         assert_eq!(result.upgraded[0].source_version, "1.0");
         assert_eq!(result.upgraded[0].target_version, "2.0");
+    }
+
+    #[test]
+    fn diff_detects_downgrade() {
+        let source = vec!["libbpf = 2.0".to_string()];
+        let target = vec!["libbpf = 1.0".to_string()];
+        let result = diff(source, target);
+        assert!(result.added.is_empty());
+        assert!(result.removed.is_empty());
+        assert!(result.upgraded.is_empty());
+        assert_eq!(result.downgraded.len(), 1);
+        assert_eq!(result.downgraded[0].name, "libbpf");
+        assert_eq!(result.downgraded[0].source_version, "2.0");
+        assert_eq!(result.downgraded[0].target_version, "1.0");
     }
 
     #[test]
@@ -286,6 +333,7 @@ mod tests {
         assert_eq!(result.removed, vec!["libold"]);
         assert_eq!(result.upgraded.len(), 1);
         assert_eq!(result.upgraded[0].name, "libfoo");
+        assert!(result.downgraded.is_empty());
     }
 
     #[test]
@@ -295,10 +343,23 @@ mod tests {
         let result = diff(source, target);
         assert!(result.added.is_empty());
         assert!(result.removed.is_empty());
+        assert!(result.downgraded.is_empty());
         assert_eq!(result.upgraded.len(), 1);
         assert_eq!(result.upgraded[0].name, "kernel-headers");
         assert_eq!(result.upgraded[0].source_version, ">= 5.14.0-647");
         assert_eq!(result.upgraded[0].target_version, ">= 5.16.0");
+    }
+
+    #[test]
+    fn diff_detects_gte_downgrade() {
+        let source = vec!["kernel-headers >= 5.16.0".to_string()];
+        let target = vec!["kernel-headers >= 5.14.0-647".to_string()];
+        let result = diff(source, target);
+        assert!(result.added.is_empty());
+        assert!(result.removed.is_empty());
+        assert!(result.upgraded.is_empty());
+        assert_eq!(result.downgraded.len(), 1);
+        assert_eq!(result.downgraded[0].name, "kernel-headers");
     }
 
     #[test]
@@ -325,10 +386,23 @@ mod tests {
         let result = diff(source, target);
         assert!(result.added.is_empty());
         assert!(result.removed.is_empty());
+        assert!(result.downgraded.is_empty());
         assert_eq!(result.upgraded.len(), 1);
         assert_eq!(result.upgraded[0].name, "libc.so.6()(64bit)");
         assert_eq!(result.upgraded[0].source_version, "GLIBC_2.28");
         assert_eq!(result.upgraded[0].target_version, "GLIBC_2.38");
+    }
+
+    #[test]
+    fn diff_detects_solib_downgrade() {
+        let source = vec!["libc.so.6(GLIBC_2.38)(64bit)".to_string()];
+        let target = vec!["libc.so.6(GLIBC_2.28)(64bit)".to_string()];
+        let result = diff(source, target);
+        assert!(result.added.is_empty());
+        assert!(result.removed.is_empty());
+        assert!(result.upgraded.is_empty());
+        assert_eq!(result.downgraded.len(), 1);
+        assert_eq!(result.downgraded[0].name, "libc.so.6()(64bit)");
     }
 
     #[test]
@@ -338,5 +412,6 @@ mod tests {
         assert!(result.added.is_empty());
         assert!(result.removed.is_empty());
         assert!(result.upgraded.is_empty());
+        assert!(result.downgraded.is_empty());
     }
 }

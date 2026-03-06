@@ -2,6 +2,7 @@ mod compare;
 mod compare_provides;
 mod compare_requires;
 mod fedrq;
+mod rpmvercmp;
 
 use clap::{Parser, Subcommand};
 
