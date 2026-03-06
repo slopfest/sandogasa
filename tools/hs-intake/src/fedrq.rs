@@ -41,10 +41,6 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl Fedrq {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     fn apply_opts(&self, cmd: &mut Command) {
         if let Some(branch) = &self.branch {
             cmd.args(["-b", branch]);
@@ -71,26 +67,6 @@ impl Fedrq {
             .filter(|l| !l.is_empty())
             .collect();
         Ok(lines)
-    }
-
-    /// Run `fedrq pkgs -F <formatter> <package>` and return one entry per line.
-    fn pkgs_query(&self, formatter: &str, package: &str) -> Result<Vec<String>, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "-F", formatter]);
-
-        self.apply_opts(&mut cmd);
-        cmd.arg(package);
-        Self::run(&mut cmd)
-    }
-
-    /// Return the Requires (dependencies) of a package.
-    pub fn requires(&self, package: &str) -> Result<Vec<String>, Error> {
-        self.pkgs_query("requires", package)
-    }
-
-    /// Return the Provides of a package.
-    pub fn provides(&self, package: &str) -> Result<Vec<String>, Error> {
-        self.pkgs_query("provides", package)
     }
 
     /// Run `fedrq subpkgs -S -F <formatter> <srpm>` and return one entry per line.
@@ -142,7 +118,7 @@ mod tests {
 
     #[test]
     fn build_command_defaults() {
-        let fq = Fedrq::new();
+        let fq = Fedrq::default();
         // Verify the struct starts with no options set.
         assert!(fq.branch.is_none());
         assert!(fq.repo.is_none());
