@@ -2,6 +2,7 @@ mod compare;
 mod compare_buildrequires;
 mod compare_provides;
 mod compare_requires;
+mod safe_to_backport;
 
 mod fedrq;
 mod rpmvercmp;
@@ -49,6 +50,18 @@ enum Commands {
         source_branch: String,
         /// Branch to compare to (e.g. "c10s-hyperscale").
         target_branch: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check if a source package is safe to backport between branches.
+    SafeToBackport {
+        /// Source RPM name (e.g. "systemd").
+        srpm: String,
+        /// Branch to backport to (e.g. "c10s-hyperscale").
+        target_branch: String,
+        /// Branch to take the package from (e.g. "rawhide").
+        source_branch: String,
         /// Output as JSON.
         #[arg(long)]
         json: bool,
@@ -113,6 +126,34 @@ fn main() {
             let result =
                 compare_requires::compare_requires(&srpm, &source_branch, &target_branch);
             run_compare(result, "Require", &source_branch, &target_branch, json);
+        }
+        Commands::SafeToBackport {
+            srpm,
+            target_branch,
+            source_branch,
+            json,
+        } => {
+            match safe_to_backport::safe_to_backport(&srpm, &target_branch, &source_branch) {
+                Ok(result) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+                    } else {
+                        safe_to_backport::print_result(
+                            &result,
+                            &srpm,
+                            &target_branch,
+                            &source_branch,
+                        );
+                    }
+                    if !result.safe {
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
