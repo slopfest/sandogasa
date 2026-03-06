@@ -36,6 +36,20 @@ pub fn split_entry(entry: &str) -> (&str, Option<&str>, Option<&str>) {
     (entry, None, None)
 }
 
+/// Split a solib-style entry like `libc.so.6(GLIBC_2.28)(64bit)` into
+/// (name_pattern, version_symbol), e.g. `("libc.so.6()(64bit)", "GLIBC_2.28")`.
+/// Returns `None` if the entry has no non-empty first parenthesized group.
+fn split_solib(entry: &str) -> Option<(String, &str)> {
+    let open = entry.find('(')?;
+    let close = entry[open..].find(')')? + open;
+    let content = &entry[open + 1..close];
+    if content.is_empty() {
+        return None;
+    }
+    let name = format!("{}(){}", &entry[..open], &entry[close + 1..]);
+    Some((name, content))
+}
+
 /// Diff two sets of RPM dependency/provide strings, detecting upgrades
 /// where the name matches but the version differs.
 pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
@@ -76,7 +90,7 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
         }
     }
 
-    let removed: Vec<String> = raw_removed
+    let remaining_removed: Vec<String> = raw_removed
         .iter()
         .filter(|r| {
             let (name, _, _) = split_entry(r);
@@ -85,7 +99,39 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
         .map(|r| r.to_string())
         .collect();
 
-    CompareResult { added, removed, upgraded }
+    // Second pass: match solib-style entries like libc.so.6(GLIBC_2.28)(64bit).
+    let mut solib_removed_by_pattern: BTreeMap<String, (String, &str)> = BTreeMap::new();
+    for r in &remaining_removed {
+        if let Some((pattern, version)) = split_solib(r) {
+            solib_removed_by_pattern.insert(pattern, (r.clone(), version));
+        }
+    }
+
+    let mut solib_upgraded_originals: BTreeSet<String> = BTreeSet::new();
+    let mut final_added = Vec::new();
+    for a in &added {
+        if let Some((pattern, target_v)) = split_solib(a) {
+            if let Some((original, source_v)) = solib_removed_by_pattern.get(&pattern) {
+                upgraded.push(Upgraded {
+                    name: pattern,
+                    source_version: source_v.to_string(),
+                    target_version: target_v.to_string(),
+                });
+                solib_upgraded_originals.insert(original.clone());
+                continue;
+            }
+        }
+        final_added.push(a.clone());
+    }
+
+    let removed: Vec<String> = remaining_removed
+        .into_iter()
+        .filter(|r| !solib_upgraded_originals.contains(r))
+        .collect();
+
+    upgraded.sort_by(|a, b| a.name.cmp(&b.name));
+
+    CompareResult { added: final_added, removed, upgraded }
 }
 
 /// Print a `CompareResult` in human-readable format.
@@ -253,6 +299,36 @@ mod tests {
         assert_eq!(result.upgraded[0].name, "kernel-headers");
         assert_eq!(result.upgraded[0].source_version, ">= 5.14.0-647");
         assert_eq!(result.upgraded[0].target_version, ">= 5.16.0");
+    }
+
+    #[test]
+    fn split_solib_with_version() {
+        let (name, version) = split_solib("libc.so.6(GLIBC_2.28)(64bit)").unwrap();
+        assert_eq!(name, "libc.so.6()(64bit)");
+        assert_eq!(version, "GLIBC_2.28");
+    }
+
+    #[test]
+    fn split_solib_empty_parens() {
+        assert!(split_solib("libfoo.so()(64bit)").is_none());
+    }
+
+    #[test]
+    fn split_solib_no_parens() {
+        assert!(split_solib("/usr/sbin/halt").is_none());
+    }
+
+    #[test]
+    fn diff_detects_solib_upgrade() {
+        let source = vec!["libc.so.6(GLIBC_2.28)(64bit)".to_string()];
+        let target = vec!["libc.so.6(GLIBC_2.38)(64bit)".to_string()];
+        let result = diff(source, target);
+        assert!(result.added.is_empty());
+        assert!(result.removed.is_empty());
+        assert_eq!(result.upgraded.len(), 1);
+        assert_eq!(result.upgraded[0].name, "libc.so.6()(64bit)");
+        assert_eq!(result.upgraded[0].source_version, "GLIBC_2.28");
+        assert_eq!(result.upgraded[0].target_version, "GLIBC_2.38");
     }
 
     #[test]
