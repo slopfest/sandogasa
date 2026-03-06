@@ -45,20 +45,16 @@ impl Fedrq {
         Self::default()
     }
 
-    /// Run `fedrq pkgs -F <formatter> <package>` and return one entry per line.
-    fn pkgs_query(&self, formatter: &str, package: &str) -> Result<Vec<String>, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "-F", formatter]);
-
+    fn apply_opts(&self, cmd: &mut Command) {
         if let Some(branch) = &self.branch {
             cmd.args(["-b", branch]);
         }
         if let Some(repo) = &self.repo {
             cmd.args(["-r", repo]);
         }
+    }
 
-        cmd.arg(package);
-
+    fn run(cmd: &mut Command) -> Result<Vec<String>, Error> {
         let output = cmd.output().map_err(Error::Spawn)?;
 
         if !output.status.success() {
@@ -77,6 +73,16 @@ impl Fedrq {
         Ok(lines)
     }
 
+    /// Run `fedrq pkgs -F <formatter> <package>` and return one entry per line.
+    fn pkgs_query(&self, formatter: &str, package: &str) -> Result<Vec<String>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["pkgs", "-F", formatter]);
+
+        self.apply_opts(&mut cmd);
+        cmd.arg(package);
+        Self::run(&mut cmd)
+    }
+
     /// Return the Requires (dependencies) of a package.
     pub fn requires(&self, package: &str) -> Result<Vec<String>, Error> {
         self.pkgs_query("requires", package)
@@ -85,6 +91,15 @@ impl Fedrq {
     /// Return the Provides of a package.
     pub fn provides(&self, package: &str) -> Result<Vec<String>, Error> {
         self.pkgs_query("provides", package)
+    }
+
+    /// Return the Provides of all subpackages of a source package.
+    pub fn subpkgs_provides(&self, srpm: &str) -> Result<Vec<String>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["subpkgs", "-S", "-F", "provides"]);
+        self.apply_opts(&mut cmd);
+        cmd.arg(srpm);
+        Self::run(&mut cmd)
     }
 }
 
