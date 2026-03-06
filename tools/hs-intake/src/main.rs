@@ -29,6 +29,9 @@ enum Commands {
         /// Output as JSON.
         #[arg(long)]
         json: bool,
+        /// Also show unchanged entries.
+        #[arg(long)]
+        show_unchanged: bool,
     },
     /// Compare the Provides of a source package between two branches.
     CompareProvides {
@@ -41,6 +44,9 @@ enum Commands {
         /// Output as JSON.
         #[arg(long)]
         json: bool,
+        /// Also show unchanged entries.
+        #[arg(long)]
+        show_unchanged: bool,
     },
     /// Compare the Requires of a source package between two branches.
     CompareRequires {
@@ -53,6 +59,9 @@ enum Commands {
         /// Output as JSON.
         #[arg(long)]
         json: bool,
+        /// Also show unchanged entries.
+        #[arg(long)]
+        show_unchanged: bool,
     },
     /// Check if a source package is safe to backport between branches.
     SafeToBackport {
@@ -74,13 +83,14 @@ fn run_compare(
     source_branch: &str,
     target_branch: &str,
     json: bool,
+    show_unchanged: bool,
 ) {
     match result {
         Ok(cmp) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&cmp).unwrap());
             } else {
-                compare::print_result(&cmp, label, source_branch, target_branch);
+                compare::print_result(&cmp, label, source_branch, target_branch, show_unchanged);
             }
         }
         Err(e) => {
@@ -99,33 +109,36 @@ fn main() {
             source_branch,
             target_branch,
             json,
+            show_unchanged,
         } => {
             let result = compare_buildrequires::compare_buildrequires(
                 &srpm,
                 &source_branch,
                 &target_branch,
             );
-            run_compare(result, "BuildRequire", &source_branch, &target_branch, json);
+            run_compare(result, "BuildRequire", &source_branch, &target_branch, json, show_unchanged);
         }
         Commands::CompareProvides {
             srpm,
             source_branch,
             target_branch,
             json,
+            show_unchanged,
         } => {
             let result =
                 compare_provides::compare_provides(&srpm, &source_branch, &target_branch);
-            run_compare(result, "Provide", &source_branch, &target_branch, json);
+            run_compare(result, "Provide", &source_branch, &target_branch, json, show_unchanged);
         }
         Commands::CompareRequires {
             srpm,
             source_branch,
             target_branch,
             json,
+            show_unchanged,
         } => {
             let result =
                 compare_requires::compare_requires(&srpm, &source_branch, &target_branch);
-            run_compare(result, "Require", &source_branch, &target_branch, json);
+            run_compare(result, "Require", &source_branch, &target_branch, json, show_unchanged);
         }
         Commands::SafeToBackport {
             srpm,

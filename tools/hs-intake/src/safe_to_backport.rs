@@ -255,7 +255,7 @@ pub fn print_result(
             continue;
         }
         println!();
-        compare::print_result(cmp, label, target_branch, source_branch);
+        compare::print_result(cmp, label, target_branch, source_branch, false);
     }
 
     if !result.reverse_deps.is_empty() {
@@ -296,6 +296,7 @@ mod tests {
             removed: vec![],
             upgraded: vec![],
             downgraded: vec![],
+            unchanged: vec![],
         }
     }
 

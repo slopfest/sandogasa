@@ -24,6 +24,7 @@ pub struct CompareResult {
     pub removed: Vec<String>,
     pub upgraded: Vec<VersionChange>,
     pub downgraded: Vec<VersionChange>,
+    pub unchanged: Vec<String>,
 }
 
 /// Split an RPM dependency/provide string into (name, operator, version).
@@ -62,6 +63,7 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
 
     let raw_added: BTreeSet<&String> = target_set.difference(&source_set).collect();
     let raw_removed: BTreeSet<&String> = source_set.difference(&target_set).collect();
+    let unchanged: Vec<String> = source_set.intersection(&target_set).cloned().collect();
 
     // Index removed entries by their name (LHS of operator) to find upgrades.
     let mut removed_by_name: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
@@ -149,15 +151,19 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
         }
     }
 
-    CompareResult { added: final_added, removed, upgraded, downgraded }
+    CompareResult { added: final_added, removed, upgraded, downgraded, unchanged }
 }
 
 /// Print a `CompareResult` in human-readable format.
+///
+/// When `show_unchanged` is true, entries that are identical in both
+/// branches are listed at the end.
 pub fn print_result(
     result: &CompareResult,
     label: &str,
     source_branch: &str,
     target_branch: &str,
+    show_unchanged: bool,
 ) {
     if result.added.is_empty()
         && result.removed.is_empty()
@@ -165,6 +171,13 @@ pub fn print_result(
         && result.downgraded.is_empty()
     {
         println!("No differences in {label}.");
+        if show_unchanged && !result.unchanged.is_empty() {
+            println!();
+            println!("Unchanged:");
+            for p in &result.unchanged {
+                println!("  {p}");
+            }
+        }
         return;
     }
     let mut need_blank = false;
@@ -231,6 +244,16 @@ pub fn print_result(
         println!("Added (in {target_branch} but not {source_branch}):");
         for p in &result.added {
             println!("  + {p}");
+        }
+        need_blank = true;
+    }
+    if show_unchanged && !result.unchanged.is_empty() {
+        if need_blank {
+            println!();
+        }
+        println!("Unchanged:");
+        for p in &result.unchanged {
+            println!("  {p}");
         }
     }
 }
@@ -413,6 +436,23 @@ mod tests {
         assert!(result.removed.is_empty());
         assert!(result.upgraded.is_empty());
         assert!(result.downgraded.is_empty());
+        assert_eq!(result.unchanged, vec!["bar", "foo = 1.0"]);
+    }
+
+    #[test]
+    fn diff_tracks_unchanged() {
+        let source = vec![
+            "libfoo = 1.0".to_string(),
+            "libbar".to_string(),
+            "libold".to_string(),
+        ];
+        let target = vec![
+            "libfoo = 2.0".to_string(),
+            "libbar".to_string(),
+            "libnew".to_string(),
+        ];
+        let result = diff(source, target);
+        assert_eq!(result.unchanged, vec!["libbar"]);
     }
 
     #[test]
@@ -422,9 +462,10 @@ mod tests {
             removed: vec![],
             upgraded: vec![],
             downgraded: vec![],
+            unchanged: vec![],
         };
         // Exercises the early-return "No differences" path.
-        print_result(&result, "Provide", "f41", "rawhide");
+        print_result(&result, "Provide", "f41", "rawhide", false);
     }
 
     #[test]
@@ -438,8 +479,9 @@ mod tests {
                 target_version: "2.0".to_string(),
             }],
             downgraded: vec![],
+            unchanged: vec![],
         };
-        print_result(&result, "Require", "c9s", "f44");
+        print_result(&result, "Require", "c9s", "f44", false);
     }
 
     #[test]
@@ -453,8 +495,9 @@ mod tests {
                 source_version: "2.0".to_string(),
                 target_version: "1.0".to_string(),
             }],
+            unchanged: vec![],
         };
-        print_result(&result, "Require", "f44", "c9s");
+        print_result(&result, "Require", "f44", "c9s", false);
     }
 
     #[test]
@@ -464,8 +507,9 @@ mod tests {
             removed: vec!["libold".to_string()],
             upgraded: vec![],
             downgraded: vec![],
+            unchanged: vec![],
         };
-        print_result(&result, "Provide", "f41", "rawhide");
+        print_result(&result, "Provide", "f41", "rawhide", false);
     }
 
     #[test]
@@ -483,8 +527,47 @@ mod tests {
                 source_version: "3.0".to_string(),
                 target_version: "1.0".to_string(),
             }],
+            unchanged: vec![],
         };
         // Exercises all four sections including need_blank separators.
-        print_result(&result, "Require", "f41", "c9s");
+        print_result(&result, "Require", "f41", "c9s", false);
+    }
+
+    #[test]
+    fn print_result_show_unchanged_with_differences() {
+        let result = CompareResult {
+            added: vec!["libnew".to_string()],
+            removed: vec![],
+            upgraded: vec![],
+            downgraded: vec![],
+            unchanged: vec!["libcommon".to_string()],
+        };
+        print_result(&result, "Provide", "f41", "rawhide", true);
+    }
+
+    #[test]
+    fn print_result_show_unchanged_no_differences() {
+        let result = CompareResult {
+            added: vec![],
+            removed: vec![],
+            upgraded: vec![],
+            downgraded: vec![],
+            unchanged: vec!["libcommon".to_string()],
+        };
+        // Exercises the "No differences" + unchanged path.
+        print_result(&result, "Provide", "f41", "rawhide", true);
+    }
+
+    #[test]
+    fn print_result_show_unchanged_false_hides_unchanged() {
+        let result = CompareResult {
+            added: vec![],
+            removed: vec![],
+            upgraded: vec![],
+            downgraded: vec![],
+            unchanged: vec!["libcommon".to_string()],
+        };
+        // With show_unchanged=false, unchanged entries are not shown.
+        print_result(&result, "Provide", "f41", "rawhide", false);
     }
 }
