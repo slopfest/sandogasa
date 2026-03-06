@@ -4,10 +4,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
+
 use crate::fedrq::Fedrq;
 
 /// A Provide whose version changed between branches.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct Upgraded {
     pub name: String,
     pub source_version: String,
@@ -15,7 +17,7 @@ pub struct Upgraded {
 }
 
 /// Result of comparing provides between two branches.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct CompareResult {
     pub added: Vec<String>,
     pub removed: Vec<String>,

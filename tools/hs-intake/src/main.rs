@@ -20,6 +20,9 @@ enum Commands {
         source_branch: String,
         /// Branch to compare to (e.g. "c10s-hyperscale").
         target_branch: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -31,12 +34,17 @@ fn main() {
             srpm,
             source_branch,
             target_branch,
+            json,
         } => {
             let result =
                 compare_provides::compare_provides(&srpm, &source_branch, &target_branch);
 
             match result {
                 Ok(cmp) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&cmp).unwrap());
+                        return;
+                    }
                     if cmp.added.is_empty() && cmp.removed.is_empty() && cmp.upgraded.is_empty() {
                         println!("No differences in Provides.");
                         return;
