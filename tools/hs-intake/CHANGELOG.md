@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.2 — 2026-03-06
+
+### Features
+
+- Add library target so `hs-intake` can be used as a dependency from other crates.
+
 ## v0.1.1 — 2026-03-06
 
 ### Features

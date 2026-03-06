@@ -1,13 +1,5 @@
-mod compare;
-mod compare_buildrequires;
-mod compare_provides;
-mod compare_requires;
-mod safe_to_backport;
-
-mod fedrq;
-mod rpmvercmp;
-
 use clap::{Parser, Subcommand};
+use hs_intake::{compare, compare_buildrequires, compare_provides, compare_requires, fedrq, safe_to_backport};
 
 #[derive(Parser)]
 #[command(about = "Hyperscale package intake tool")]
