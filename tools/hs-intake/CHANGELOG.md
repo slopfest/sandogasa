@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.3 — 2026-03-06
+
+### Features
+
+- Add `format_result` functions to `compare` and `safe_to_backport` for programmatic report generation without printing to stdout.
+
+### Housekeeping
+
+- Use SPDX license headers (`// SPDX-License-Identifier: MPL-2.0`) in all source files.
+
 ## v0.1.2 — 2026-03-06
 
 ### Features
