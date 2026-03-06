@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.1 — 2026-03-06
+
+### Features
+
+- **safe-to-backport**: Add `--also-check` flag to check reverse dependencies on additional branches (comma-separated).
+
+### Bug Fixes
+
+- Restrict solib version extraction to actual `.so` entries. Parenthesized entries like `pkgconfig(dracut)` are no longer incorrectly split into a name and version.
+
 ## v0.1.0 — 2026-03-06
 
 Initial release.
