@@ -85,10 +85,18 @@ pub fn evaluate(
             requires.added.len()
         ));
     }
-    if !requires.upgraded.is_empty() {
+    // Solib-style requires (e.g. libc.so.6()(64bit)) are auto-generated at
+    // build time and will be regenerated when the package is rebuilt on the
+    // target branch, so they are not a concern.
+    let non_solib_upgraded: Vec<_> = requires
+        .upgraded
+        .iter()
+        .filter(|c| !c.name.contains(".so."))
+        .collect();
+    if !non_solib_upgraded.is_empty() {
         concerns.push(format!(
             "{} Require(s) upgraded — {target_branch} may only have older versions",
-            requires.upgraded.len()
+            non_solib_upgraded.len()
         ));
     }
 
@@ -434,6 +442,40 @@ mod tests {
             source_version: "2.28".to_string(),
             target_version: "2.38".to_string(),
         }];
+        let result = evaluate(empty_result(), empty_result(), req, BTreeMap::new(), "c9s");
+        assert!(!result.safe);
+        assert_eq!(result.concerns.len(), 1);
+        assert!(result.concerns[0].contains("1 Require(s) upgraded"));
+    }
+
+    #[test]
+    fn evaluate_requires_solib_upgraded_is_safe() {
+        let mut req = empty_result();
+        req.upgraded = vec![VersionChange {
+            name: "libc.so.6()(64bit)".to_string(),
+            source_version: "GLIBC_2.28".to_string(),
+            target_version: "GLIBC_2.38".to_string(),
+        }];
+        let result = evaluate(empty_result(), empty_result(), req, BTreeMap::new(), "c9s");
+        assert!(result.safe);
+        assert!(result.concerns.is_empty());
+    }
+
+    #[test]
+    fn evaluate_requires_mixed_upgraded() {
+        let mut req = empty_result();
+        req.upgraded = vec![
+            VersionChange {
+                name: "libc.so.6()(64bit)".to_string(),
+                source_version: "GLIBC_2.28".to_string(),
+                target_version: "GLIBC_2.38".to_string(),
+            },
+            VersionChange {
+                name: "libfoo".to_string(),
+                source_version: "1.0".to_string(),
+                target_version: "2.0".to_string(),
+            },
+        ];
         let result = evaluate(empty_result(), empty_result(), req, BTreeMap::new(), "c9s");
         assert!(!result.safe);
         assert_eq!(result.concerns.len(), 1);
