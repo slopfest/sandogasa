@@ -3,6 +3,8 @@ name = "hs-intake"
 version = "0.1.0"
 edition = "2024"
 license = "MPL-2.0"
+description = "Hyperscale package intake tool — compare RPM package metadata between branches"
+repository = "https://gitlab.com/CentOS/Hyperscale/misc/hs-intake"
 
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
