@@ -46,6 +46,11 @@ pub fn split_entry(entry: &str) -> (&str, Option<&str>, Option<&str>) {
 /// Returns `None` if the entry has no non-empty first parenthesized group.
 fn split_solib(entry: &str) -> Option<(String, &str)> {
     let open = entry.find('(')?;
+    // Only treat as solib if the prefix contains ".so." (e.g. libc.so.6).
+    // This avoids matching non-solib entries like pkgconfig(dracut).
+    if !entry[..open].contains(".so.") {
+        return None;
+    }
     let close = entry[open..].find(')')? + open;
     let content = &entry[open + 1..close];
     if content.is_empty() {
@@ -446,6 +451,11 @@ mod tests {
     }
 
     #[test]
+    fn split_solib_non_solib_parens() {
+        assert!(split_solib("pkgconfig(dracut)").is_none());
+    }
+
+    #[test]
     fn diff_detects_solib_upgrade() {
         let source = vec!["libc.so.6(GLIBC_2.28)(64bit)".to_string()];
         let target = vec!["libc.so.6(GLIBC_2.38)(64bit)".to_string()];
@@ -469,6 +479,17 @@ mod tests {
         assert!(result.upgraded.is_empty());
         assert_eq!(result.downgraded.len(), 1);
         assert_eq!(result.downgraded[0].name, "libc.so.6()(64bit)");
+    }
+
+    #[test]
+    fn diff_non_solib_parens_not_matched() {
+        let source = vec!["pkgconfig(dracut)".to_string()];
+        let target = vec!["pkgconfig(systemd)".to_string()];
+        let result = diff(source, target);
+        assert_eq!(result.added, vec!["pkgconfig(systemd)"]);
+        assert_eq!(result.removed, vec!["pkgconfig(dracut)"]);
+        assert!(result.upgraded.is_empty());
+        assert!(result.downgraded.is_empty());
     }
 
     #[test]
