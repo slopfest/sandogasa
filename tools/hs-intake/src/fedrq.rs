@@ -112,6 +112,20 @@ impl Fedrq {
         self.subpkgs_query("requires", srpm)
     }
 
+    /// Return the names of all subpackages of a source package.
+    pub fn subpkgs_names(&self, srpm: &str) -> Result<Vec<String>, Error> {
+        self.subpkgs_query("name", srpm)
+    }
+
+    /// Return source package names that require any of the given packages.
+    pub fn whatrequires(&self, packages: &[String]) -> Result<Vec<String>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["whatrequires", "-F", "source_name"]);
+        self.apply_opts(&mut cmd);
+        cmd.args(packages);
+        Self::run(&mut cmd)
+    }
+
     /// Return the BuildRequires of a source package.
     pub fn src_buildrequires(&self, srpm: &str) -> Result<Vec<String>, Error> {
         let mut cmd = Command::new("fedrq");
