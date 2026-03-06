@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use clap::{Parser, Subcommand};
 use hs_intake::{compare, compare_buildrequires, compare_provides, compare_requires, fedrq, safe_to_backport};
 
