@@ -1,6 +1,8 @@
 mod compare;
+mod compare_buildrequires;
 mod compare_provides;
 mod compare_requires;
+
 mod fedrq;
 mod rpmvercmp;
 
@@ -15,6 +17,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Compare the BuildRequires of a source package between two branches.
+    CompareBuildRequires {
+        /// Source RPM name (e.g. "systemd").
+        srpm: String,
+        /// Branch to compare from (e.g. "rawhide").
+        source_branch: String,
+        /// Branch to compare to (e.g. "c10s-hyperscale").
+        target_branch: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Compare the Provides of a source package between two branches.
     CompareProvides {
         /// Source RPM name (e.g. "systemd").
@@ -67,6 +81,19 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::CompareBuildRequires {
+            srpm,
+            source_branch,
+            target_branch,
+            json,
+        } => {
+            let result = compare_buildrequires::compare_buildrequires(
+                &srpm,
+                &source_branch,
+                &target_branch,
+            );
+            run_compare(result, "BuildRequire", &source_branch, &target_branch, json);
+        }
         Commands::CompareProvides {
             srpm,
             source_branch,
