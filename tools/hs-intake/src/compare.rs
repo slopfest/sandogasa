@@ -414,4 +414,77 @@ mod tests {
         assert!(result.upgraded.is_empty());
         assert!(result.downgraded.is_empty());
     }
+
+    #[test]
+    fn print_result_no_differences() {
+        let result = CompareResult {
+            added: vec![],
+            removed: vec![],
+            upgraded: vec![],
+            downgraded: vec![],
+        };
+        // Exercises the early-return "No differences" path.
+        print_result(&result, "Provide", "f41", "rawhide");
+    }
+
+    #[test]
+    fn print_result_upgraded_only() {
+        let result = CompareResult {
+            added: vec![],
+            removed: vec![],
+            upgraded: vec![VersionChange {
+                name: "libbpf".to_string(),
+                source_version: "1.0".to_string(),
+                target_version: "2.0".to_string(),
+            }],
+            downgraded: vec![],
+        };
+        print_result(&result, "Require", "c9s", "f44");
+    }
+
+    #[test]
+    fn print_result_downgraded_only() {
+        let result = CompareResult {
+            added: vec![],
+            removed: vec![],
+            upgraded: vec![],
+            downgraded: vec![VersionChange {
+                name: "libbpf".to_string(),
+                source_version: "2.0".to_string(),
+                target_version: "1.0".to_string(),
+            }],
+        };
+        print_result(&result, "Require", "f44", "c9s");
+    }
+
+    #[test]
+    fn print_result_added_and_removed() {
+        let result = CompareResult {
+            added: vec!["libnew".to_string()],
+            removed: vec!["libold".to_string()],
+            upgraded: vec![],
+            downgraded: vec![],
+        };
+        print_result(&result, "Provide", "f41", "rawhide");
+    }
+
+    #[test]
+    fn print_result_all_sections() {
+        let result = CompareResult {
+            added: vec!["libnew".to_string()],
+            removed: vec!["libold".to_string()],
+            upgraded: vec![VersionChange {
+                name: "libfoo".to_string(),
+                source_version: "1.0".to_string(),
+                target_version: "2.0".to_string(),
+            }],
+            downgraded: vec![VersionChange {
+                name: "libbar".to_string(),
+                source_version: "3.0".to_string(),
+                target_version: "1.0".to_string(),
+            }],
+        };
+        // Exercises all four sections including need_blank separators.
+        print_result(&result, "Require", "f41", "c9s");
+    }
 }
