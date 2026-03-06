@@ -2,10 +2,15 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::collections::BTreeSet;
+
 use crate::compare::{self, CompareResult};
 use crate::fedrq::Fedrq;
 
 /// Compare the Requires of a source package between two branches.
+///
+/// Self-dependencies (requires on the srpm's own subpackages) are
+/// filtered out.
 pub fn compare_requires(
     srpm: &str,
     source_branch: &str,
@@ -22,6 +27,14 @@ pub fn compare_requires(
 
     let source = source_fq.subpkgs_requires(srpm)?;
     let target = target_fq.subpkgs_requires(srpm)?;
+
+    // Filter out self-dependencies on the srpm's own subpackages.
+    let source_names = source_fq.subpkgs_names(srpm)?;
+    let target_names = target_fq.subpkgs_names(srpm)?;
+    let self_names: BTreeSet<String> = source_names.into_iter().chain(target_names).collect();
+
+    let source = compare::filter_self_deps(source, &self_names);
+    let target = compare::filter_self_deps(target, &self_names);
 
     Ok(compare::diff(source, target))
 }

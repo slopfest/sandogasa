@@ -55,6 +55,19 @@ fn split_solib(entry: &str) -> Option<(String, &str)> {
     Some((name, content))
 }
 
+/// Filter out entries whose name (the part before any operator) matches
+/// one of the given subpackage names.  This removes self-dependencies
+/// when comparing Requires or BuildRequires.
+pub fn filter_self_deps(entries: Vec<String>, subpkg_names: &BTreeSet<String>) -> Vec<String> {
+    entries
+        .into_iter()
+        .filter(|entry| {
+            let (name, _, _) = split_entry(entry);
+            !subpkg_names.contains(name)
+        })
+        .collect()
+}
+
 /// Diff two sets of RPM dependency/provide strings, detecting upgrades
 /// where the name matches but the version differs.
 pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
@@ -261,6 +274,36 @@ pub fn print_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_self_deps_removes_matching_names() {
+        let entries = vec![
+            "libbpf = 2:1.5.0-3.el9".to_string(),
+            "libbpf-devel = 2:1.5.0-3.el9".to_string(),
+            "glibc >= 2.28".to_string(),
+            "kernel-headers".to_string(),
+            "libbpf.so.1()(64bit)".to_string(),
+        ];
+        let self_names: BTreeSet<String> =
+            ["libbpf", "libbpf-devel"].iter().map(|s| s.to_string()).collect();
+        let filtered = filter_self_deps(entries, &self_names);
+        assert_eq!(
+            filtered,
+            vec![
+                "glibc >= 2.28",
+                "kernel-headers",
+                "libbpf.so.1()(64bit)",
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_self_deps_empty_names() {
+        let entries = vec!["foo".to_string(), "bar = 1.0".to_string()];
+        let self_names: BTreeSet<String> = BTreeSet::new();
+        let filtered = filter_self_deps(entries.clone(), &self_names);
+        assert_eq!(filtered, entries);
+    }
 
     #[test]
     fn split_entry_with_equals() {
@@ -556,6 +599,27 @@ mod tests {
         };
         // Exercises the "No differences" + unchanged path.
         print_result(&result, "Provide", "f41", "rawhide", true);
+    }
+
+    #[test]
+    fn print_result_all_sections_with_unchanged() {
+        let result = CompareResult {
+            added: vec!["libnew".to_string()],
+            removed: vec!["libold".to_string()],
+            upgraded: vec![VersionChange {
+                name: "libfoo".to_string(),
+                source_version: "1.0".to_string(),
+                target_version: "2.0".to_string(),
+            }],
+            downgraded: vec![VersionChange {
+                name: "libbar".to_string(),
+                source_version: "3.0".to_string(),
+                target_version: "1.0".to_string(),
+            }],
+            unchanged: vec!["libcommon".to_string()],
+        };
+        // Exercises all five sections including unchanged.
+        print_result(&result, "Require", "f41", "c9s", true);
     }
 
     #[test]
