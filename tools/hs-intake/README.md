@@ -42,6 +42,9 @@ hs-intake compare-provides systemd c9s f44 --json
 # Check if it is safe to backport libbpf from f44 to c9s
 hs-intake safe-to-backport libbpf c9s f44
 
+# Also check reverse dependencies on other branches
+hs-intake safe-to-backport libbpf c9s f44 --also-check epel9,epel9-next
+
 # JSON output
 hs-intake safe-to-backport libbpf c9s f44 --json
 ```

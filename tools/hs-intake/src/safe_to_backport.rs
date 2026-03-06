@@ -41,7 +41,8 @@ pub struct BackportResult {
     pub build_requires: CompareResult,
     pub provides: CompareResult,
     pub requires: CompareResult,
-    pub reverse_deps: Vec<AffectedDep>,
+    /// Reverse dependencies grouped by branch.
+    pub reverse_deps: BTreeMap<String, Vec<AffectedDep>>,
 }
 
 /// Index a list of Provide/Require strings by their name (the part before
@@ -57,12 +58,12 @@ fn index_by_name(entries: &[String]) -> BTreeMap<String, Vec<String>> {
 }
 
 /// Evaluate whether a backport is safe given the three comparison results
-/// and the reverse dependencies on the target branch.
+/// and the reverse dependencies on checked branches.
 pub fn evaluate(
     build_requires: CompareResult,
     provides: CompareResult,
     requires: CompareResult,
-    reverse_deps: Vec<AffectedDep>,
+    reverse_deps: BTreeMap<String, Vec<AffectedDep>>,
     target_branch: &str,
 ) -> BackportResult {
     let mut concerns = Vec::new();
@@ -107,13 +108,17 @@ pub fn evaluate(
     }
 
     let provides_break = !provides.removed.is_empty() || !provides.downgraded.is_empty();
-    if !reverse_deps.is_empty() && provides_break {
-        let names: Vec<&str> = reverse_deps.iter().map(|d| d.package.as_str()).collect();
-        concerns.push(format!(
-            "{} package(s) on {target_branch} depend on affected subpackages: {}",
-            reverse_deps.len(),
-            names.join(", ")
-        ));
+    if provides_break {
+        for (branch, deps) in &reverse_deps {
+            if !deps.is_empty() {
+                let names: Vec<&str> = deps.iter().map(|d| d.package.as_str()).collect();
+                concerns.push(format!(
+                    "{} package(s) on {branch} depend on affected subpackages: {}",
+                    deps.len(),
+                    names.join(", ")
+                ));
+            }
+        }
     }
 
     let safe = concerns.is_empty();
@@ -126,7 +131,7 @@ pub fn evaluate(
 /// both branches.
 fn build_affected_deps(
     reverse_dep_names: &[String],
-    target_fq: &Fedrq,
+    branch_fq: &Fedrq,
     target_provides_by_name: &BTreeMap<String, Vec<String>>,
     source_provides_by_name: &BTreeMap<String, Vec<String>>,
 ) -> Result<Vec<AffectedDep>, fedrq::Error> {
@@ -138,7 +143,7 @@ fn build_affected_deps(
 
     let mut affected_deps = Vec::new();
     for rdep in reverse_dep_names {
-        let rdep_requires = target_fq.subpkgs_requires(rdep)?;
+        let rdep_requires = branch_fq.subpkgs_requires(rdep)?;
         let mut seen = BTreeSet::new();
         let mut affected_requires = Vec::new();
         for req in &rdep_requires {
@@ -167,14 +172,41 @@ fn build_affected_deps(
     Ok(affected_deps)
 }
 
+/// Query reverse dependencies on a single branch, dedup, exclude self,
+/// and build the detailed affected-dep list.
+fn check_branch_reverse_deps(
+    srpm: &str,
+    branch_fq: &Fedrq,
+    subpkg_names: &[String],
+    target_provides_by_name: &BTreeMap<String, Vec<String>>,
+    source_provides_by_name: &BTreeMap<String, Vec<String>>,
+) -> Result<Vec<AffectedDep>, fedrq::Error> {
+    let all_rdeps = branch_fq.whatrequires(subpkg_names)?;
+    let reverse_dep_names: Vec<String> = all_rdeps
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|dep| dep != srpm)
+        .collect();
+
+    build_affected_deps(
+        &reverse_dep_names,
+        branch_fq,
+        target_provides_by_name,
+        source_provides_by_name,
+    )
+}
+
 /// Run all three comparisons and evaluate whether backporting is safe.
 ///
 /// `target_branch` is the branch to backport to (e.g. "c9s").
 /// `source_branch` is the branch to take the package from (e.g. "f44").
+/// `also_check` is additional branches to check for reverse dependencies.
 pub fn safe_to_backport(
     srpm: &str,
     target_branch: &str,
     source_branch: &str,
+    also_check: &[String],
 ) -> Result<BackportResult, fedrq::Error> {
     // Compare functions expect (compare_from, compare_to), i.e. (staler, fresher).
     let build_requires =
@@ -182,7 +214,6 @@ pub fn safe_to_backport(
     let provides = compare_provides::compare_provides(srpm, target_branch, source_branch)?;
     let requires = compare_requires::compare_requires(srpm, target_branch, source_branch)?;
 
-    // Find reverse dependencies on the target branch.
     let target_fq = Fedrq {
         branch: Some(target_branch.to_string()),
         ..Default::default()
@@ -192,28 +223,42 @@ pub fn safe_to_backport(
         ..Default::default()
     };
 
+    // Use the target branch's subpackage names for all reverse-dep checks,
+    // since those are the subpackages being replaced.
     let subpkg_names = target_fq.subpkgs_names(srpm)?;
-    let all_rdeps = target_fq.whatrequires(&subpkg_names)?;
-    // Deduplicate and exclude self.
-    let reverse_dep_names: Vec<String> = all_rdeps
-        .into_iter()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .filter(|dep| dep != srpm)
-        .collect();
 
-    // Build detailed reverse-dep info by cross-referencing Requires vs Provides.
+    // Build Provides indexes for cross-referencing.
     let target_provides_raw = target_fq.subpkgs_provides(srpm)?;
     let source_provides_raw = source_fq.subpkgs_provides(srpm)?;
     let target_provides_by_name = index_by_name(&target_provides_raw);
     let source_provides_by_name = index_by_name(&source_provides_raw);
 
-    let reverse_deps = build_affected_deps(
-        &reverse_dep_names,
+    // Check reverse deps on the target branch and any additional branches.
+    let mut reverse_deps = BTreeMap::new();
+
+    let target_affected = check_branch_reverse_deps(
+        srpm,
         &target_fq,
+        &subpkg_names,
         &target_provides_by_name,
         &source_provides_by_name,
     )?;
+    reverse_deps.insert(target_branch.to_string(), target_affected);
+
+    for branch in also_check {
+        let branch_fq = Fedrq {
+            branch: Some(branch.clone()),
+            ..Default::default()
+        };
+        let affected = check_branch_reverse_deps(
+            srpm,
+            &branch_fq,
+            &subpkg_names,
+            &target_provides_by_name,
+            &source_provides_by_name,
+        )?;
+        reverse_deps.insert(branch.clone(), affected);
+    }
 
     Ok(evaluate(build_requires, provides, requires, reverse_deps, target_branch))
 }
@@ -258,10 +303,13 @@ pub fn print_result(
         compare::print_result(cmp, label, target_branch, source_branch, false);
     }
 
-    if !result.reverse_deps.is_empty() {
+    for (branch, deps) in &result.reverse_deps {
+        if deps.is_empty() {
+            continue;
+        }
         println!();
-        println!("Reverse dependencies on {target_branch}:");
-        for dep in &result.reverse_deps {
+        println!("Reverse dependencies on {branch}:");
+        for dep in deps {
             println!("  {}:", dep.package);
             for req in &dep.affected_requires {
                 print!("    - {}", req.required);
@@ -318,7 +366,13 @@ mod tests {
 
     #[test]
     fn evaluate_all_empty_is_safe() {
-        let result = evaluate(empty_result(), empty_result(), empty_result(), vec![], "c9s");
+        let result = evaluate(
+            empty_result(),
+            empty_result(),
+            empty_result(),
+            BTreeMap::new(),
+            "c9s",
+        );
         assert!(result.safe);
         assert!(result.concerns.is_empty());
     }
@@ -327,7 +381,7 @@ mod tests {
     fn evaluate_buildrequires_added_is_unsafe() {
         let mut br = empty_result();
         br.added = vec!["newdep".to_string()];
-        let result = evaluate(br, empty_result(), empty_result(), vec![], "c9s");
+        let result = evaluate(br, empty_result(), empty_result(), BTreeMap::new(), "c9s");
         assert!(!result.safe);
         assert_eq!(result.concerns.len(), 1);
         assert!(result.concerns[0].contains("1 BuildRequire(s) added"));
@@ -342,7 +396,7 @@ mod tests {
             source_version: "12.0".to_string(),
             target_version: "14.0".to_string(),
         }];
-        let result = evaluate(br, empty_result(), empty_result(), vec![], "c9s");
+        let result = evaluate(br, empty_result(), empty_result(), BTreeMap::new(), "c9s");
         assert!(!result.safe);
         assert_eq!(result.concerns.len(), 1);
         assert!(result.concerns[0].contains("1 BuildRequire(s) upgraded"));
@@ -352,7 +406,7 @@ mod tests {
     fn evaluate_requires_added_is_unsafe() {
         let mut req = empty_result();
         req.added = vec!["newlib".to_string()];
-        let result = evaluate(empty_result(), empty_result(), req, vec![], "c9s");
+        let result = evaluate(empty_result(), empty_result(), req, BTreeMap::new(), "c9s");
         assert!(!result.safe);
         assert_eq!(result.concerns.len(), 1);
         assert!(result.concerns[0].contains("1 Require(s) added"));
@@ -366,7 +420,7 @@ mod tests {
             source_version: "2.28".to_string(),
             target_version: "2.38".to_string(),
         }];
-        let result = evaluate(empty_result(), empty_result(), req, vec![], "c9s");
+        let result = evaluate(empty_result(), empty_result(), req, BTreeMap::new(), "c9s");
         assert!(!result.safe);
         assert_eq!(result.concerns.len(), 1);
         assert!(result.concerns[0].contains("1 Require(s) upgraded"));
@@ -376,7 +430,7 @@ mod tests {
     fn evaluate_provides_removed_is_unsafe() {
         let mut prov = empty_result();
         prov.removed = vec!["libold.so".to_string()];
-        let result = evaluate(empty_result(), prov, empty_result(), vec![], "c9s");
+        let result = evaluate(empty_result(), prov, empty_result(), BTreeMap::new(), "c9s");
         assert!(!result.safe);
         assert_eq!(result.concerns.len(), 1);
         assert!(result.concerns[0].contains("1 Provide(s) removed"));
@@ -390,7 +444,7 @@ mod tests {
             source_version: "3.0".to_string(),
             target_version: "2.0".to_string(),
         }];
-        let result = evaluate(empty_result(), prov, empty_result(), vec![], "c9s");
+        let result = evaluate(empty_result(), prov, empty_result(), BTreeMap::new(), "c9s");
         assert!(!result.safe);
         assert_eq!(result.concerns.len(), 1);
         assert!(result.concerns[0].contains("1 Provide(s) downgraded"));
@@ -408,16 +462,13 @@ mod tests {
             source_version: "2.28".to_string(),
             target_version: "2.38".to_string(),
         }];
-        let result = evaluate(br, prov, req, vec![], "c9s");
+        let result = evaluate(br, prov, req, BTreeMap::new(), "c9s");
         assert!(!result.safe);
         assert_eq!(result.concerns.len(), 3);
     }
 
     #[test]
     fn evaluate_safe_changes_are_ignored() {
-        // removed BuildRequires, downgraded BuildRequires,
-        // removed Requires, downgraded Requires,
-        // added Provides, upgraded Provides — all fine.
         let mut br = empty_result();
         br.removed = vec!["olddep".to_string()];
         br.downgraded = vec![VersionChange {
@@ -439,7 +490,7 @@ mod tests {
             source_version: "2.38".to_string(),
             target_version: "2.28".to_string(),
         }];
-        let result = evaluate(br, prov, req, vec![], "c9s");
+        let result = evaluate(br, prov, req, BTreeMap::new(), "c9s");
         assert!(result.safe);
         assert!(result.concerns.is_empty());
     }
@@ -458,17 +509,23 @@ mod tests {
         }
     }
 
+    fn rdeps_map(branch: &str, deps: Vec<AffectedDep>) -> BTreeMap<String, Vec<AffectedDep>> {
+        BTreeMap::from([(branch.to_string(), deps)])
+    }
+
     #[test]
     fn evaluate_reverse_deps_with_provides_removed() {
         let mut prov = empty_result();
         prov.removed = vec!["libold.so".to_string()];
-        let rdeps = vec![
-            make_affected_dep("bpftrace", vec![("libold.so", vec!["libold.so"], vec![])]),
-            make_affected_dep("iproute", vec![("libold.so", vec!["libold.so"], vec![])]),
-        ];
+        let rdeps = rdeps_map(
+            "c9s",
+            vec![
+                make_affected_dep("bpftrace", vec![("libold.so", vec!["libold.so"], vec![])]),
+                make_affected_dep("iproute", vec![("libold.so", vec!["libold.so"], vec![])]),
+            ],
+        );
         let result = evaluate(empty_result(), prov, empty_result(), rdeps, "c9s");
         assert!(!result.safe);
-        // "Provide(s) removed" + "package(s) on c9s depend on affected subpackages"
         assert_eq!(result.concerns.len(), 2);
         assert!(result.concerns[1].contains("2 package(s)"));
         assert!(result.concerns[1].contains("bpftrace"));
@@ -483,10 +540,13 @@ mod tests {
             source_version: "3.0".to_string(),
             target_version: "2.0".to_string(),
         }];
-        let rdeps = vec![make_affected_dep(
-            "systemd",
-            vec![("libfoo >= 2.0", vec!["libfoo = 3.0"], vec!["libfoo = 2.0"])],
-        )];
+        let rdeps = rdeps_map(
+            "c9s",
+            vec![make_affected_dep(
+                "systemd",
+                vec![("libfoo >= 2.0", vec!["libfoo = 3.0"], vec!["libfoo = 2.0"])],
+            )],
+        );
         let result = evaluate(empty_result(), prov, empty_result(), rdeps, "c9s");
         assert!(!result.safe);
         assert_eq!(result.concerns.len(), 2);
@@ -496,22 +556,53 @@ mod tests {
 
     #[test]
     fn evaluate_reverse_deps_without_provides_changes_is_safe() {
-        // Reverse deps exist but Provides only have upgrades/additions — no concern.
         let mut prov = empty_result();
         prov.upgraded = vec![VersionChange {
             name: "libfoo".to_string(),
             source_version: "1.0".to_string(),
             target_version: "2.0".to_string(),
         }];
-        let rdeps = vec![make_affected_dep(
-            "bpftrace",
-            vec![("libfoo >= 1.0", vec!["libfoo = 1.0"], vec!["libfoo = 2.0"])],
-        )];
+        let rdeps = rdeps_map(
+            "c9s",
+            vec![make_affected_dep(
+                "bpftrace",
+                vec![("libfoo >= 1.0", vec!["libfoo = 1.0"], vec!["libfoo = 2.0"])],
+            )],
+        );
         let result = evaluate(empty_result(), prov, empty_result(), rdeps, "c9s");
         assert!(result.safe);
         assert!(result.concerns.is_empty());
-        assert_eq!(result.reverse_deps.len(), 1);
-        assert_eq!(result.reverse_deps[0].package, "bpftrace");
+        assert_eq!(result.reverse_deps["c9s"].len(), 1);
+        assert_eq!(result.reverse_deps["c9s"][0].package, "bpftrace");
+    }
+
+    #[test]
+    fn evaluate_reverse_deps_multiple_branches() {
+        let mut prov = empty_result();
+        prov.removed = vec!["libold.so".to_string()];
+        let mut rdeps = BTreeMap::new();
+        rdeps.insert(
+            "c9s".to_string(),
+            vec![make_affected_dep(
+                "bpftrace",
+                vec![("libold.so", vec!["libold.so"], vec![])],
+            )],
+        );
+        rdeps.insert(
+            "c9s-hyperscale".to_string(),
+            vec![make_affected_dep(
+                "systemd",
+                vec![("libold.so", vec!["libold.so"], vec![])],
+            )],
+        );
+        let result = evaluate(empty_result(), prov, empty_result(), rdeps, "c9s");
+        assert!(!result.safe);
+        // "Provide(s) removed" + concern for c9s + concern for c9s-hyperscale
+        assert_eq!(result.concerns.len(), 3);
+        assert!(result.concerns[1].contains("c9s"));
+        assert!(result.concerns[1].contains("bpftrace"));
+        assert!(result.concerns[2].contains("c9s-hyperscale"));
+        assert!(result.concerns[2].contains("systemd"));
     }
 
     #[test]
@@ -522,9 +613,8 @@ mod tests {
             build_requires: empty_result(),
             provides: empty_result(),
             requires: empty_result(),
-            reverse_deps: vec![],
+            reverse_deps: BTreeMap::new(),
         };
-        // target=c9s, source=rawhide → "Backporting systemd from rawhide to c9s"
         print_result(&result, "systemd", "c9s", "rawhide");
     }
 
@@ -538,9 +628,8 @@ mod tests {
             build_requires: br,
             provides: empty_result(),
             requires: empty_result(),
-            reverse_deps: vec![],
+            reverse_deps: BTreeMap::new(),
         };
-        // target=c9s, source=rawhide
         print_result(&result, "systemd", "c9s", "rawhide");
     }
 
@@ -552,16 +641,18 @@ mod tests {
             build_requires: empty_result(),
             provides: empty_result(),
             requires: empty_result(),
-            reverse_deps: vec![make_affected_dep(
-                "libabigail",
-                vec![(
-                    "libbpf.so.1()(64bit)",
-                    vec!["libbpf.so.1()(64bit)"],
-                    vec!["libbpf.so.1()(64bit)"],
+            reverse_deps: rdeps_map(
+                "c9s",
+                vec![make_affected_dep(
+                    "libabigail",
+                    vec![(
+                        "libbpf.so.1()(64bit)",
+                        vec!["libbpf.so.1()(64bit)"],
+                        vec!["libbpf.so.1()(64bit)"],
+                    )],
                 )],
-            )],
+            ),
         };
-        // Exercises the "provided by both" path.
         print_result(&result, "libbpf", "c9s", "f44");
     }
 
@@ -578,19 +669,84 @@ mod tests {
             build_requires: empty_result(),
             provides: prov,
             requires: empty_result(),
-            reverse_deps: vec![make_affected_dep(
-                "libabigail",
-                vec![
-                    (
-                        "libbpf = 2:1.5.0-3.el9",
-                        vec!["libbpf = 2:1.5.0-3.el9"],
-                        vec!["libbpf = 2:1.6.3-1.fc44"],
-                    ),
-                    ("libold.so", vec!["libold.so"], vec![]),
-                ],
-            )],
+            reverse_deps: rdeps_map(
+                "c9s",
+                vec![make_affected_dep(
+                    "libabigail",
+                    vec![
+                        (
+                            "libbpf = 2:1.5.0-3.el9",
+                            vec!["libbpf = 2:1.5.0-3.el9"],
+                            vec!["libbpf = 2:1.6.3-1.fc44"],
+                        ),
+                        ("libold.so", vec!["libold.so"], vec![]),
+                    ],
+                )],
+            ),
         };
-        // Exercises the per-branch listing and "(not provided)" paths.
+        print_result(&result, "libbpf", "c9s", "f44");
+    }
+
+    #[test]
+    fn print_result_with_multiple_branches() {
+        let mut rdeps = BTreeMap::new();
+        rdeps.insert(
+            "c9s".to_string(),
+            vec![make_affected_dep(
+                "bpftrace",
+                vec![(
+                    "libbpf.so.1()(64bit)",
+                    vec!["libbpf.so.1()(64bit)"],
+                    vec!["libbpf.so.1()(64bit)"],
+                )],
+            )],
+        );
+        rdeps.insert(
+            "c9s-hyperscale".to_string(),
+            vec![make_affected_dep(
+                "systemd",
+                vec![(
+                    "libbpf.so.1()(64bit)",
+                    vec!["libbpf.so.1()(64bit)"],
+                    vec!["libbpf.so.1()(64bit)"],
+                )],
+            )],
+        );
+        let result = BackportResult {
+            safe: true,
+            concerns: vec![],
+            build_requires: empty_result(),
+            provides: empty_result(),
+            requires: empty_result(),
+            reverse_deps: rdeps,
+        };
+        print_result(&result, "libbpf", "c9s", "f44");
+    }
+
+    #[test]
+    fn print_result_skips_empty_branch() {
+        let mut rdeps = BTreeMap::new();
+        rdeps.insert("c9s".to_string(), vec![]);
+        rdeps.insert(
+            "c9s-hyperscale".to_string(),
+            vec![make_affected_dep(
+                "systemd",
+                vec![(
+                    "libbpf.so.1()(64bit)",
+                    vec!["libbpf.so.1()(64bit)"],
+                    vec!["libbpf.so.1()(64bit)"],
+                )],
+            )],
+        );
+        let result = BackportResult {
+            safe: true,
+            concerns: vec![],
+            build_requires: empty_result(),
+            provides: empty_result(),
+            requires: empty_result(),
+            reverse_deps: rdeps,
+        };
+        // Should only print c9s-hyperscale section, not empty c9s.
         print_result(&result, "libbpf", "c9s", "f44");
     }
 }

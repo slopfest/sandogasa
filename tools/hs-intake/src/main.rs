@@ -74,6 +74,9 @@ enum Commands {
         /// Output as JSON.
         #[arg(long)]
         json: bool,
+        /// Additional branches to check for reverse dependencies (comma-separated).
+        #[arg(long, value_delimiter = ',')]
+        also_check: Vec<String>,
     },
 }
 
@@ -145,8 +148,9 @@ fn main() {
             target_branch,
             source_branch,
             json,
+            also_check,
         } => {
-            match safe_to_backport::safe_to_backport(&srpm, &target_branch, &source_branch) {
+            match safe_to_backport::safe_to_backport(&srpm, &target_branch, &source_branch, &also_check) {
                 Ok(result) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&result).unwrap());
