@@ -356,8 +356,8 @@ pub fn print_table(result: &CheckResult) {
         return;
     }
 
-    let distro_w = rows.iter().map(|r| r.distro.len()).max().unwrap_or(0);
-    let version_w = rows.iter().map(|r| r.version.len()).max().unwrap_or(0);
+    let distro_w = rows.iter().map(|r| r.distro.len()).max().unwrap_or(0).max("Distribution".len());
+    let version_w = rows.iter().map(|r| r.version.len()).max().unwrap_or(0).max("Version".len());
     let has_status = rows.iter().any(|r| !r.status.is_empty());
     let detail_w = rows
         .iter()

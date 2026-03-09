@@ -20,18 +20,31 @@ enum Command {
         package: String,
 
         /// Comma-separated list of distros to check.
-        ///
-        /// Valid names: upstream, fedora (rawhide + stable), fedora-rawhide,
-        /// fedora-stable, centos, centos-stream, hyperscale (9 + 10), hs,
-        /// hs9, hs10.
-        #[arg(short, long)]
+        #[arg(short, long, long_help = "\
+Comma-separated list of distros to check.
+
+Valid names:
+  upstream         Newest version across all repos
+  fedora           Fedora Rawhide + latest stable
+  fedora-rawhide   Fedora Rawhide only
+  fedora-stable    Latest stable Fedora only
+  centos           Latest CentOS Stream
+  centos-stream    Latest CentOS Stream
+  hyperscale / hs  Hyperscale EL9 + EL10
+  hs9              Hyperscale EL9 only
+  hs10             Hyperscale EL10 only")]
         distros: Option<String>,
 
         /// Distribution to compare Hyperscale builds against.
-        ///
-        /// Valid names: upstream (default), fedora-rawhide, fedora-stable,
-        /// centos, centos-stream.
-        #[arg(long, default_value = "upstream")]
+        #[arg(long, default_value = "upstream", long_help = "\
+Distribution to compare Hyperscale builds against.
+
+Valid names:
+  upstream         Newest version across all repos (default)
+  fedora-rawhide   Fedora Rawhide
+  fedora-stable    Latest stable Fedora
+  centos           Latest CentOS Stream
+  centos-stream    Latest CentOS Stream")]
         track: String,
 
         /// Output as JSON instead of a table.
