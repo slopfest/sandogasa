@@ -64,7 +64,7 @@ impl Client {
     /// Create a client with a custom base URL (useful for testing).
     pub fn with_base_url(base_url: &str) -> Self {
         let http = reqwest::blocking::Client::builder()
-            .user_agent("hs-relmon/0.1.0")
+            .user_agent("hs-relmon/0.2.1")
             .build()
             .expect("failed to build HTTP client");
         Self {

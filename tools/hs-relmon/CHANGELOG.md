@@ -2,6 +2,18 @@
 
 # Changelog
 
+## 0.2.1 - 2026-03-09
+
+- Add `check-manifest` command to check all packages listed in a TOML manifest
+  file, with `[defaults]` and per-package overrides for distros, track,
+  repology name, and issue filing
+- Add issue status and assignee fields to JSON output, resolved via GitLab
+  GraphQL work-item STATUS widget
+- Add `--issue-status` and `--issue-assignee` filters to `check-manifest` to
+  narrow the report by issue status (e.g. "To do") or assignee username
+- Replace version comparison with RPM `rpmvercmp` algorithm, correctly handling
+  `~` (pre-release) and `^` (post-release snapshot) markers
+
 ## 0.2.0 - 2026-03-09
 
 - Add `--file-issue` flag to `check-latest` to automatically create or update

@@ -12,6 +12,8 @@ Hyperscale to identify outdated packages.
 ```
 hs-relmon check-latest <package> [--distros <list>] [--track <distro>]
     [--repology-name <project>] [--json] [--file-issue [<url>]]
+hs-relmon check-manifest <manifest> [--json]
+    [--issue-status <status>] [--issue-assignee <username>]
 hs-relmon config
 ```
 
@@ -93,6 +95,45 @@ Override the project URL:
 ```
 $ hs-relmon check-latest ethtool --file-issue https://gitlab.com/other/project
 ```
+
+### Checking a manifest
+
+Check all packages listed in a TOML manifest file:
+
+```
+$ hs-relmon check-manifest packages.toml
+```
+
+The manifest uses `[defaults]` for shared settings and `[[package]]` entries
+for each package:
+
+```toml
+[defaults]
+distros = "upstream,fedora,centos,hyperscale"
+track = "upstream"
+file_issue = true
+
+[[package]]
+name = "ethtool"
+
+[[package]]
+name = "perf"
+repology_name = "linux"
+
+[[package]]
+name = "systemd"
+track = "fedora-rawhide"
+file_issue = false
+```
+
+Filter by GitLab issue status or assignee:
+
+```
+$ hs-relmon check-manifest packages.toml --issue-status "To do"
+$ hs-relmon check-manifest packages.toml --issue-assignee alice
+```
+
+Available issue statuses: `To do`, `In progress`, `Done`, `Canceled`.
 
 ### Configuration
 

@@ -61,7 +61,7 @@ impl Client {
             HeaderValue::from_str(token)?,
         );
         let http = reqwest::blocking::Client::builder()
-            .user_agent("hs-relmon/0.2.0")
+            .user_agent("hs-relmon/0.2.1")
             .default_headers(headers)
             .build()?;
         Ok(Self {
@@ -237,7 +237,7 @@ pub fn validate_token(
         HeaderValue::from_str(token)?,
     );
     let client = reqwest::blocking::Client::builder()
-        .user_agent("hs-relmon/0.2.0")
+        .user_agent("hs-relmon/0.2.1")
         .default_headers(headers)
         .build()?;
     let url = format!(
