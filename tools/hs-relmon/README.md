@@ -11,7 +11,8 @@ Hyperscale to identify outdated packages.
 
 ```
 hs-relmon check-latest <package> [--distros <list>] [--track <distro>]
-    [--repology-name <project>] [--json]
+    [--repology-name <project>] [--json] [--file-issue [<url>]]
+hs-relmon config
 ```
 
 ### Examples
@@ -76,6 +77,36 @@ $ hs-relmon check-latest ethtool --json
 | `fedora-rawhide` | Fedora Rawhide |
 | `fedora-stable` | Latest stable Fedora |
 | `centos` / `centos-stream` | Latest CentOS Stream |
+
+### Filing GitLab issues
+
+Automatically file or update a GitLab issue when a package is outdated:
+
+```
+$ hs-relmon check-latest ethtool --file-issue
+```
+
+This creates (or updates) an issue labeled `rfe::new-version` in the
+default project `https://gitlab.com/CentOS/Hyperscale/rpms/ethtool`.
+Override the project URL:
+
+```
+$ hs-relmon check-latest ethtool --file-issue https://gitlab.com/other/project
+```
+
+### Configuration
+
+Set up GitLab authentication (token stored in
+`~/.config/hs-relmon/config.toml`):
+
+```
+$ hs-relmon config
+Paste a GitLab personal access token with 'api' scope:
+Validating token... valid.
+Saved to /home/user/.config/hs-relmon/config.toml.
+```
+
+The `GITLAB_TOKEN` environment variable overrides the config file token.
 
 ## Data sources
 

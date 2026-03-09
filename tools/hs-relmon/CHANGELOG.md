@@ -2,6 +2,14 @@
 
 # Changelog
 
+## 0.2.0 - 2026-03-09
+
+- Add `--file-issue` flag to `check-latest` to automatically create or update
+  a GitLab issue (labeled `rfe::new-version`) when a package is outdated
+- Add `config` command to set up GitLab authentication with token validation
+  and secure input (token stored in `~/.config/hs-relmon/config.toml`)
+- GitLab client falls back to config file token when `GITLAB_TOKEN` is unset
+
 ## 0.1.1 - 2026-03-09
 
 - Add `--track` option to compare Hyperscale builds against a reference
