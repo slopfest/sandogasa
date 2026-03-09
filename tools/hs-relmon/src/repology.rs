@@ -119,6 +119,34 @@ pub fn latest_fedora_stable(packages: &[Package]) -> Option<&Package> {
     latest_for_repo(packages, &repo)
 }
 
+/// Find the package from the latest CentOS Stream release.
+///
+/// Looks for `centos_stream_NN` repos, picks the highest release number,
+/// then returns the entry with the highest version (non-legacy).
+pub fn latest_centos_stream(packages: &[Package]) -> Option<&Package> {
+    let max_release = packages
+        .iter()
+        .filter_map(|p| centos_stream_release_number(p))
+        .max()?;
+
+    let repo = format!("centos_stream_{}", max_release);
+    let matches = filter_by_repo(packages, &repo);
+    matches
+        .iter()
+        .filter(|p| p.status.as_ref() != Some(&Status::Legacy))
+        .max_by(|a, b| a.version.as_str().cmp(b.version.as_str()))
+        .copied()
+        .or_else(|| matches.first().copied())
+}
+
+/// Extract the numeric release from a `centos_stream_NN` repo name.
+fn centos_stream_release_number(package: &Package) -> Option<u32> {
+    package
+        .repo
+        .strip_prefix("centos_stream_")
+        .and_then(|s| s.parse::<u32>().ok())
+}
+
 /// Extract the numeric release from a `fedora_NN` repo name.
 fn fedora_release_number(package: &Package) -> Option<u32> {
     package
@@ -139,7 +167,7 @@ mod tests {
     #[test]
     fn deserialize_fixture() {
         let packages = fixture_packages();
-        assert_eq!(packages.len(), 10);
+        assert_eq!(packages.len(), 14);
 
         let arch = &packages[0];
         assert_eq!(arch.repo, "arch");
@@ -266,6 +294,40 @@ mod tests {
         let other: Package =
             serde_json::from_str(r#"{"repo":"arch","version":"1"}"#).unwrap();
         assert_eq!(fedora_release_number(&other), None);
+    }
+
+    #[test]
+    fn test_latest_centos_stream() {
+        let packages = fixture_packages();
+        let pkg = latest_centos_stream(&packages).unwrap();
+        assert_eq!(pkg.repo, "centos_stream_10");
+        assert_eq!(pkg.version, "6.15");
+        assert_eq!(pkg.status, Some(Status::Outdated));
+    }
+
+    #[test]
+    fn test_latest_centos_stream_no_centos() {
+        let packages: Vec<Package> = vec![
+            serde_json::from_str(r#"{"repo":"arch","version":"1","status":"newest"}"#).unwrap(),
+            serde_json::from_str(r#"{"repo":"fedora_43","version":"2","status":"outdated"}"#)
+                .unwrap(),
+        ];
+        assert!(latest_centos_stream(&packages).is_none());
+    }
+
+    #[test]
+    fn test_centos_stream_release_number() {
+        let pkg: Package =
+            serde_json::from_str(r#"{"repo":"centos_stream_10","version":"1"}"#).unwrap();
+        assert_eq!(centos_stream_release_number(&pkg), Some(10));
+
+        let old: Package =
+            serde_json::from_str(r#"{"repo":"centos_8","version":"1"}"#).unwrap();
+        assert_eq!(centos_stream_release_number(&old), None);
+
+        let other: Package =
+            serde_json::from_str(r#"{"repo":"fedora_43","version":"1"}"#).unwrap();
+        assert_eq!(centos_stream_release_number(&other), None);
     }
 
     #[test]

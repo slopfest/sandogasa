@@ -103,5 +103,45 @@
     "version": "6.7",
     "status": "outdated",
     "summary": "display or change Ethernet device settings"
+  },
+  {
+    "repo": "centos_stream_10",
+    "subrepo": "BaseOS",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.11",
+    "origversion": "2:6.11-5.el10",
+    "status": "legacy",
+    "summary": "Settings tool for Ethernet NICs"
+  },
+  {
+    "repo": "centos_stream_10",
+    "subrepo": "BaseOS",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.15",
+    "origversion": "2:6.15-2.el10",
+    "status": "outdated",
+    "summary": "Settings tool for Ethernet NICs"
+  },
+  {
+    "repo": "centos_stream_9",
+    "subrepo": "BaseOS",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.15",
+    "origversion": "2:6.15-2.el9",
+    "status": "outdated",
+    "summary": "Settings tool for Ethernet NICs"
+  },
+  {
+    "repo": "centos_stream_9",
+    "subrepo": "BaseOS",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "5.10",
+    "origversion": "2:5.10-4.el9",
+    "status": "legacy",
+    "summary": "Settings tool for Ethernet NICs"
   }
 ]
