@@ -3,6 +3,7 @@
 use clap::{Parser, Subcommand};
 use hs_relmon::cbs;
 use hs_relmon::check_latest::{self, Distros, TrackRef};
+use hs_relmon::gitlab;
 use hs_relmon::repology;
 
 #[derive(Parser)]
@@ -56,6 +57,17 @@ Valid names:
         /// Output as JSON instead of a table.
         #[arg(long)]
         json: bool,
+
+        /// File a GitLab issue if outdated.
+        #[arg(long, num_args = 0..=1, default_missing_value = "",
+            value_name = "URL", long_help = "\
+File or update a GitLab issue if the package is
+outdated. Searches for an open issue labeled
+rfe::new-version and updates its title, or creates
+a new one. Defaults to
+https://gitlab.com/CentOS/Hyperscale/rpms/PKG.
+Requires GITLAB_TOKEN env var.")]
+        file_issue: Option<String>,
     },
 }
 
@@ -69,6 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             repology_name,
             track,
             json,
+            file_issue,
         } => {
             let distros = match distros {
                 Some(s) => Distros::parse(&s)?,
@@ -93,7 +106,90 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 check_latest::print_table(&result);
             }
+
+            if let Some(url_override) = &file_issue {
+                if result.is_outdated() {
+                    let project_url = if url_override.is_empty() {
+                        format!(
+                            "https://gitlab.com/CentOS/\
+                            Hyperscale/rpms/{package}"
+                        )
+                    } else {
+                        url_override.clone()
+                    };
+                    let ref_ver = result.ref_version().ok_or(
+                        "no reference version available",
+                    )?;
+                    let title = format!(
+                        "{package}-{ref_ver} is available"
+                    );
+                    let description = format!(
+                        "```\n{}```",
+                        check_latest::format_table(&result)
+                    );
+                    file_or_update_issue(
+                        &project_url, &title, &description,
+                    )?;
+                }
+            }
         }
+    }
+
+    Ok(())
+}
+
+const ISSUE_LABEL: &str = "rfe::new-version";
+
+fn file_or_update_issue(
+    project_url: &str,
+    title: &str,
+    description: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = gitlab::Client::from_project_url(project_url)?;
+    let issues = client.list_issues(ISSUE_LABEL, "opened")?;
+
+    if let Some(existing) = issues.first() {
+        let title_changed = existing.title != title;
+        let desc_changed = existing
+            .description
+            .as_deref()
+            != Some(description);
+        if title_changed || desc_changed {
+            let updates = gitlab::IssueUpdate {
+                title: if title_changed {
+                    Some(title.to_string())
+                } else {
+                    None
+                },
+                description: if desc_changed {
+                    Some(description.to_string())
+                } else {
+                    None
+                },
+                ..Default::default()
+            };
+            let updated =
+                client.edit_issue(existing.iid, &updates)?;
+            eprintln!(
+                "Updated issue #{}: {}",
+                updated.iid, updated.web_url
+            );
+        } else {
+            eprintln!(
+                "Issue #{} already up to date: {}",
+                existing.iid, existing.web_url
+            );
+        }
+    } else {
+        let issue = client.create_issue(
+            title,
+            Some(description),
+            Some(ISSUE_LABEL),
+        )?;
+        eprintln!(
+            "Created issue #{}: {}",
+            issue.iid, issue.web_url
+        );
     }
 
     Ok(())

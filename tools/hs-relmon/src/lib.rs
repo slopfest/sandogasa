@@ -2,4 +2,5 @@
 
 pub mod cbs;
 pub mod check_latest;
+pub mod gitlab;
 pub mod repology;

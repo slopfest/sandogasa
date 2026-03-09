@@ -149,6 +149,21 @@ pub struct VersionWithDetail {
     pub detail: String,
 }
 
+impl CheckResult {
+    /// Whether any Hyperscale build is outdated relative to the reference.
+    pub fn is_outdated(&self) -> bool {
+        [&self.hs9, &self.hs10]
+            .iter()
+            .filter_map(|r| r.as_ref())
+            .any(|r| r.newest_version == Some(false))
+    }
+
+    /// The reference version used for tracking.
+    pub fn ref_version(&self) -> Option<&str> {
+        self.ref_version.as_deref()
+    }
+}
+
 /// Run the check-latest query for a package with the given distro selection.
 ///
 /// The `track` reference determines which distribution Hyperscale builds are
@@ -356,11 +371,31 @@ fn hs_rows(rows: &mut Vec<Row>, label: &str, summary: &HyperscaleSummary, ref_ve
     }
 }
 
+/// Format the result as a table string.
+pub fn format_table(result: &CheckResult) -> String {
+    let mut buf = Vec::new();
+    let _ = write_table(result, &mut buf);
+    String::from_utf8(buf).unwrap_or_default()
+}
+
 /// Format the result as a table and print to stdout.
 pub fn print_table(result: &CheckResult) {
+    let _ = write_table(result, &mut std::io::stdout().lock());
+}
+
+/// Format the result as JSON and print to stdout.
+pub fn print_json(result: &CheckResult) -> Result<(), Box<dyn std::error::Error>> {
+    write_json(result, &mut std::io::stdout().lock())?;
+    Ok(())
+}
+
+fn write_table(
+    result: &CheckResult,
+    w: &mut dyn std::io::Write,
+) -> std::io::Result<()> {
     let rows = result_to_rows(result);
     if rows.is_empty() {
-        return;
+        return Ok(());
     }
 
     let distro_w = rows.iter().map(|r| r.distro.len()).max().unwrap_or(0).max("Distribution".len());
@@ -373,51 +408,60 @@ pub fn print_table(result: &CheckResult) {
         .unwrap_or(0)
         .max("Detail".len());
 
-    println!("{}", result.package);
+    writeln!(w, "{}", result.package)?;
     if has_status {
-        println!(
+        writeln!(
+            w,
             "  {:<distro_w$}  {:<version_w$}  {:<detail_w$}  {}",
             "Distribution", "Version", "Detail", "Status"
-        );
-        println!(
+        )?;
+        writeln!(
+            w,
             "  {:<distro_w$}  {:<version_w$}  {:<detail_w$}  {}",
             "─".repeat(distro_w),
             "─".repeat(version_w),
             "─".repeat(detail_w),
             "──────"
-        );
+        )?;
     } else {
-        println!(
+        writeln!(
+            w,
             "  {:<distro_w$}  {:<version_w$}  {}",
             "Distribution", "Version", "Detail"
-        );
-        println!(
+        )?;
+        writeln!(
+            w,
             "  {:<distro_w$}  {:<version_w$}  {}",
             "─".repeat(distro_w),
             "─".repeat(version_w),
             "──────"
-        );
+        )?;
     }
     for row in &rows {
         if !row.status.is_empty() {
-            println!(
+            writeln!(
+                w,
                 "  {:<distro_w$}  {:<version_w$}  {:<detail_w$}  {}",
                 row.distro, row.version, row.detail, row.status
-            );
+            )?;
         } else if row.detail.is_empty() {
-            println!("  {:<distro_w$}  {}", row.distro, row.version);
+            writeln!(w, "  {:<distro_w$}  {}", row.distro, row.version)?;
         } else {
-            println!(
+            writeln!(
+                w,
                 "  {:<distro_w$}  {:<version_w$}  {}",
                 row.distro, row.version, row.detail
-            );
+            )?;
         }
     }
+    Ok(())
 }
 
-/// Format the result as JSON and print to stdout.
-pub fn print_json(result: &CheckResult) -> Result<(), Box<dyn std::error::Error>> {
-    println!("{}", serde_json::to_string_pretty(result)?);
+fn write_json(
+    result: &CheckResult,
+    w: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error>> {
+    writeln!(w, "{}", serde_json::to_string_pretty(result)?)?;
     Ok(())
 }
 
@@ -824,6 +868,199 @@ mod tests {
         assert_eq!(json["hs9"]["release"]["version"], "6.15");
         // ref_version should not appear in JSON
         assert!(json.get("ref_version").is_none());
+    }
+
+    #[test]
+    fn test_is_outdated_true() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: Some(make_build("1.0", "pkg-1.0-1.hs.el9")),
+                    testing: None,
+                },
+                newest_version: Some(false),
+            }),
+            hs10: None,
+            ref_version: Some("2.0".into()),
+        };
+        assert!(result.is_outdated());
+        assert_eq!(result.ref_version(), Some("2.0"));
+    }
+
+    #[test]
+    fn test_is_outdated_false_when_newest() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: Some(make_build("2.0", "pkg-2.0-1.hs.el9")),
+                    testing: None,
+                },
+                newest_version: Some(true),
+            }),
+            hs10: None,
+            ref_version: Some("2.0".into()),
+        };
+        assert!(!result.is_outdated());
+    }
+
+    #[test]
+    fn test_is_outdated_false_when_no_hs() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: Some("2.0".into()),
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: None,
+            hs10: None,
+            ref_version: None,
+        };
+        assert!(!result.is_outdated());
+        assert_eq!(result.ref_version(), None);
+    }
+
+    #[test]
+    fn test_is_outdated_mixed_hs9_hs10() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: Some(make_build("2.0", "pkg-2.0-1.hs.el9")),
+                    testing: None,
+                },
+                newest_version: Some(true),
+            }),
+            hs10: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: Some(make_build("1.0", "pkg-1.0-1.hs.el10")),
+                    testing: None,
+                },
+                newest_version: Some(false),
+            }),
+            ref_version: Some("2.0".into()),
+        };
+        assert!(result.is_outdated());
+    }
+
+    #[test]
+    fn test_format_table() {
+        let result = CheckResult {
+            package: "ethtool".into(),
+            upstream: Some("6.19".into()),
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(make_hs_result(HyperscaleSummary {
+                release: Some(make_build("6.15", "ethtool-6.15-3.hs.el9")),
+                testing: None,
+            })),
+            hs10: None,
+            ref_version: Some("6.19".into()),
+        };
+        let table = format_table(&result);
+        assert!(table.contains("ethtool"));
+        assert!(table.contains("Upstream"));
+        assert!(table.contains("outdated"));
+    }
+
+    #[test]
+    fn test_write_table_with_status() {
+        let result = CheckResult {
+            package: "ethtool".into(),
+            upstream: Some("6.19".into()),
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(make_hs_result(HyperscaleSummary {
+                release: Some(make_build("6.15", "ethtool-6.15-3.hs.el9")),
+                testing: None,
+            })),
+            hs10: None,
+            ref_version: Some("6.19".into()),
+        };
+        let mut buf = Vec::new();
+        write_table(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("ethtool"));
+        assert!(output.contains("Upstream"));
+        assert!(output.contains("6.19"));
+        assert!(output.contains("outdated"));
+        assert!(output.contains("Status"));
+    }
+
+    #[test]
+    fn test_write_table_without_status() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: Some("1.0".into()),
+            fedora_rawhide: None,
+            fedora_stable: Some(VersionWithDetail {
+                version: "1.0".into(),
+                detail: "fedora_43".into(),
+            }),
+            centos_stream: None,
+            hs9: None,
+            hs10: None,
+            ref_version: None,
+        };
+        let mut buf = Vec::new();
+        write_table(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("pkg"));
+        assert!(output.contains("Upstream"));
+        assert!(output.contains("fedora_43"));
+        assert!(!output.contains("Status"));
+    }
+
+    #[test]
+    fn test_write_table_empty() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: None,
+            hs10: None,
+            ref_version: None,
+        };
+        let mut buf = Vec::new();
+        write_table(&result, &mut buf).unwrap();
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_write_json() {
+        let result = CheckResult {
+            package: "ethtool".into(),
+            upstream: Some("6.19".into()),
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: None,
+            hs10: None,
+            ref_version: None,
+        };
+        let mut buf = Vec::new();
+        write_json(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(json["package"], "ethtool");
+        assert_eq!(json["upstream"], "6.19");
     }
 
     #[test]
