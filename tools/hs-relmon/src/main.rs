@@ -35,6 +35,12 @@ Valid names:
   hs10             Hyperscale EL10 only")]
         distros: Option<String>,
 
+        /// Override Repology project name.
+        #[arg(long, value_name = "PROJECT", long_help = "\
+Override Repology project name when it differs
+from the package (e.g. linux for perf).")]
+        repology_name: Option<String>,
+
         /// Distribution to compare Hyperscale builds against.
         #[arg(long, default_value = "upstream", long_help = "\
 Distribution to compare Hyperscale builds against.
@@ -60,6 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::CheckLatest {
             package,
             distros,
+            repology_name,
             track,
             json,
         } => {
@@ -68,11 +75,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => Distros::all(),
             };
             let track = TrackRef::parse(&track)?;
+            let repology_name = repology_name.as_deref().unwrap_or(&package);
 
             let repology_client = repology::Client::new();
             let cbs_client = cbs::Client::new();
-            let result =
-                check_latest::check(&repology_client, &cbs_client, &package, &distros, &track)?;
+            let result = check_latest::check(
+                &repology_client,
+                &cbs_client,
+                &package,
+                repology_name,
+                &distros,
+                &track,
+            )?;
 
             if json {
                 check_latest::print_json(&result)?;

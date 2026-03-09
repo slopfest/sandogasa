@@ -157,6 +157,7 @@ pub fn check(
     repology_client: &repology::Client,
     cbs_client: &cbs::Client,
     package: &str,
+    repology_name: &str,
     distros: &Distros,
     track: &TrackRef,
 ) -> Result<CheckResult, Box<dyn std::error::Error>> {
@@ -174,7 +175,7 @@ pub fn check(
     // Fetch Repology data if needed for display or for tracking reference.
     let fetch_repology = distros.needs_repology() || distros.needs_cbs();
     let packages = if fetch_repology {
-        repology_client.get_project(package)?
+        repology_client.get_project(repology_name)?
     } else {
         Vec::new()
     };

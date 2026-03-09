@@ -93,16 +93,57 @@ pub fn find_newest(packages: &[Package]) -> Option<&Package> {
         .find(|p| p.status.as_ref() == Some(&Status::Newest))
 }
 
-/// Find the latest entry for a specific Fedora repo.
+/// Find the latest entry for a specific repo.
 ///
-/// Prefers the "updates" subrepo over "release".
+/// When a Repology project contains multiple source packages, picks the
+/// best entry by status priority (newest > outdated > legacy), breaking
+/// ties with version comparison.
 pub fn latest_for_repo<'a>(packages: &'a [Package], repo: &str) -> Option<&'a Package> {
     let matches = filter_by_repo(packages, repo);
     matches
         .iter()
-        .find(|p| p.subrepo.as_deref() == Some("updates"))
-        .or_else(|| matches.first())
+        .max_by(|a, b| {
+            status_priority(&a.status)
+                .cmp(&status_priority(&b.status))
+                .then_with(|| version_cmp(&a.version, &b.version))
+        })
         .copied()
+}
+
+/// Ranking for Repology status values (higher = more preferred).
+fn status_priority(status: &Option<Status>) -> u8 {
+    match status.as_ref() {
+        Some(Status::Newest) => 6,
+        Some(Status::Devel) => 5,
+        Some(Status::Unique) => 4,
+        Some(Status::Rolling) => 3,
+        Some(Status::Outdated) | Some(Status::Incorrect) => 2,
+        Some(Status::Legacy) => 0,
+        _ => 1,
+    }
+}
+
+/// Compare version strings by splitting on separators and comparing
+/// each component numerically when possible.
+fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut a_parts = a.split(|c: char| !c.is_alphanumeric());
+    let mut b_parts = b.split(|c: char| !c.is_alphanumeric());
+    loop {
+        match (a_parts.next(), b_parts.next()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(ap), Some(bp)) => {
+                let ord = match (ap.parse::<u64>(), bp.parse::<u64>()) {
+                    (Ok(an), Ok(bn)) => an.cmp(&bn),
+                    _ => ap.cmp(bp),
+                };
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+            }
+        }
+    }
 }
 
 /// Find the package from the latest stable Fedora release.
@@ -133,10 +174,12 @@ pub fn latest_centos_stream(packages: &[Package]) -> Option<&Package> {
     let matches = filter_by_repo(packages, &repo);
     matches
         .iter()
-        .filter(|p| p.status.as_ref() != Some(&Status::Legacy))
-        .max_by(|a, b| a.version.as_str().cmp(b.version.as_str()))
+        .max_by(|a, b| {
+            status_priority(&a.status)
+                .cmp(&status_priority(&b.status))
+                .then_with(|| version_cmp(&a.version, &b.version))
+        })
         .copied()
-        .or_else(|| matches.first().copied())
 }
 
 /// Extract the numeric release from a `centos_stream_NN` repo name.
@@ -249,17 +292,50 @@ mod tests {
     }
 
     #[test]
-    fn test_latest_for_repo_falls_back_to_first() {
+    fn test_latest_for_repo_single_entry() {
         let packages = fixture_packages();
         let pkg = latest_for_repo(&packages, "fedora_rawhide").unwrap();
         assert_eq!(pkg.repo, "fedora_rawhide");
-        assert_eq!(pkg.subrepo.as_deref(), Some("development"));
+        assert_eq!(pkg.version, "6.19");
     }
 
     #[test]
     fn test_latest_for_repo_no_match() {
         let packages = fixture_packages();
         assert!(latest_for_repo(&packages, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_latest_for_repo_prefers_newest_status() {
+        let packages: Vec<Package> = vec![
+            serde_json::from_str(
+                r#"{"repo":"fedora_rawhide","version":"5.7.9","status":"outdated","srcname":"usbip"}"#,
+            ).unwrap(),
+            serde_json::from_str(
+                r#"{"repo":"fedora_rawhide","version":"7.0.0","status":"incorrect","srcname":"kernel"}"#,
+            ).unwrap(),
+            serde_json::from_str(
+                r#"{"repo":"fedora_rawhide","version":"6.19","status":"newest","srcname":"kernel"}"#,
+            ).unwrap(),
+        ];
+        let pkg = latest_for_repo(&packages, "fedora_rawhide").unwrap();
+        assert_eq!(pkg.version, "6.19");
+    }
+
+    #[test]
+    fn test_latest_for_repo_picks_highest_version_on_same_status() {
+        // Simulates linux project in fedora_rawhide: no newest entries,
+        // outdated usbip and incorrect kernel/kernel-headers.
+        let packages: Vec<Package> = vec![
+            serde_json::from_str(
+                r#"{"repo":"fedora_rawhide","version":"5.7.9","status":"outdated","srcname":"usbip"}"#,
+            ).unwrap(),
+            serde_json::from_str(
+                r#"{"repo":"fedora_rawhide","version":"7.0.0","status":"outdated","srcname":"kernel"}"#,
+            ).unwrap(),
+        ];
+        let pkg = latest_for_repo(&packages, "fedora_rawhide").unwrap();
+        assert_eq!(pkg.version, "7.0.0");
     }
 
     #[test]
@@ -328,6 +404,26 @@ mod tests {
         let other: Package =
             serde_json::from_str(r#"{"repo":"fedora_43","version":"1"}"#).unwrap();
         assert_eq!(centos_stream_release_number(&other), None);
+    }
+
+    #[test]
+    fn test_version_cmp() {
+        use std::cmp::Ordering;
+        assert_eq!(version_cmp("6.18.16", "6.18.3"), Ordering::Greater);
+        assert_eq!(version_cmp("6.18.3", "6.18.16"), Ordering::Less);
+        assert_eq!(version_cmp("6.19", "6.19"), Ordering::Equal);
+        assert_eq!(version_cmp("7.0.0", "5.7.9"), Ordering::Greater);
+        assert_eq!(version_cmp("10.0", "9.0"), Ordering::Greater);
+        assert_eq!(version_cmp("1.0", "1.0.1"), Ordering::Less);
+        assert_eq!(version_cmp("1.0.1", "1.0"), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_status_priority_ordering() {
+        assert!(status_priority(&Some(Status::Newest)) > status_priority(&Some(Status::Outdated)));
+        assert!(status_priority(&Some(Status::Outdated)) > status_priority(&Some(Status::Legacy)));
+        assert!(status_priority(&Some(Status::Outdated)) == status_priority(&Some(Status::Incorrect)));
+        assert!(status_priority(&Some(Status::Devel)) > status_priority(&Some(Status::Outdated)));
     }
 
     #[test]
