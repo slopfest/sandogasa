@@ -10,7 +10,8 @@ Hyperscale to identify outdated packages.
 ## Usage
 
 ```
-hs-relmon check-latest <package> [--distros <list>] [--json]
+hs-relmon check-latest <package> [--distros <list>] [--track <distro>]
+    [--repology-name <project>] [--json]
 ```
 
 ### Examples
@@ -20,14 +21,26 @@ Check all distributions (default):
 ```
 $ hs-relmon check-latest ethtool
 ethtool
-  Distribution    Version  Detail
-  ──────────────  ───────  ──────
+  Distribution    Version  Detail                  Status
+  ──────────────  ───────  ──────────────────────  ──────
   Upstream        6.19
   Fedora Rawhide  6.19
   Fedora Stable   6.19     fedora_43
   CentOS Stream   6.15     centos_stream_10
-  Hyperscale 9    6.15     ethtool-6.15-3.hs.el9
-  Hyperscale 10   6.15     ethtool-6.15-3.hs.el10
+  Hyperscale 9    6.15     ethtool-6.15-3.hs.el9   outdated
+  Hyperscale 10   6.15     ethtool-6.15-3.hs.el10  outdated
+```
+
+Track against CentOS Stream instead of upstream:
+
+```
+$ hs-relmon check-latest ethtool --track centos-stream
+```
+
+Override the Repology project name:
+
+```
+$ hs-relmon check-latest perf --repology-name linux
 ```
 
 Check only upstream and Hyperscale:
@@ -54,6 +67,15 @@ $ hs-relmon check-latest ethtool --json
 | `hyperscale` / `hs` | Hyperscale EL9 + EL10 |
 | `hs9` | Hyperscale EL9 only |
 | `hs10` | Hyperscale EL10 only |
+
+### `--track` reference distributions
+
+| Name | What it tracks against |
+|------|----------------------|
+| `upstream` | Newest version across all repos (default) |
+| `fedora-rawhide` | Fedora Rawhide |
+| `fedora-stable` | Latest stable Fedora |
+| `centos` / `centos-stream` | Latest CentOS Stream |
 
 ## Data sources
 

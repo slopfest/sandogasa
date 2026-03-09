@@ -2,6 +2,17 @@
 
 # Changelog
 
+## 0.1.1 - 2026-03-09
+
+- Add `--track` option to compare Hyperscale builds against a reference
+  distribution (defaults to upstream)
+- Add `--repology-name` option to override the Repology project name when
+  it differs from the package name (e.g. `linux` for `perf`)
+- Fix Repology entry selection for projects with multiple source packages,
+  using status priority and numeric version comparison
+- Fix table column alignment and help text formatting
+- Fix version comparison to use numeric ordering instead of string equality
+
 ## 0.1.0 - 2026-03-09
 
 Initial release.
