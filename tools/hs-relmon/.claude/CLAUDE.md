@@ -4,8 +4,9 @@
 - Always use `git commit -s` (sign-off) when committing
 - Always use `git tag -s` (GPG sign) when tagging
 - Before tagging a release, update CHANGELOG.md and README.md to reflect the new version's changes. Use the tag message identical to the new CHANGELOG.md entry
-- Before tagging, run `cargo publish --dry-run` to ensure Cargo.toml has all required metadata and the package is publishable
 - Before tagging, verify there are no uncommitted changes (`git status` must be clean)
+- Before tagging, run `cargo publish` to publish to crates.io first — if publishing fails, fix the issue before tagging so the tag always corresponds to a successful publish
+- After publishing and tagging, push with `git push --follow-tags`
 
 ## Code Style
 - Every source file must start with `// SPDX-License-Identifier: MPL-2.0`
