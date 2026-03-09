@@ -2,6 +2,7 @@
 
 use crate::cbs::{self, HyperscaleSummary};
 use crate::repology;
+use serde::Serialize;
 
 /// Which distribution sources to check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,21 +73,27 @@ impl Distros {
 }
 
 /// Result of checking a single package across selected distros.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct CheckResult {
     pub package: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fedora_rawhide: Option<String>,
-    pub fedora_stable: Option<VersionWithRepo>,
-    pub centos_stream: Option<VersionWithRepo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fedora_stable: Option<VersionWithDetail>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub centos_stream: Option<VersionWithDetail>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hs9: Option<HyperscaleSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hs10: Option<HyperscaleSummary>,
 }
 
-#[derive(Debug)]
-pub struct VersionWithRepo {
+#[derive(Debug, Serialize)]
+pub struct VersionWithDetail {
     pub version: String,
-    pub repo: String,
+    pub detail: String,
 }
 
 /// Run the check-latest query for a package with the given distro selection.
@@ -118,17 +125,17 @@ pub fn check(
         }
         if distros.fedora_stable {
             result.fedora_stable = repology::latest_fedora_stable(&packages).map(|p| {
-                VersionWithRepo {
+                VersionWithDetail {
                     version: p.version.clone(),
-                    repo: p.repo.clone(),
+                    detail: p.repo.clone(),
                 }
             });
         }
         if distros.centos_stream {
             result.centos_stream =
-                repology::latest_centos_stream(&packages).map(|p| VersionWithRepo {
+                repology::latest_centos_stream(&packages).map(|p| VersionWithDetail {
                     version: p.version.clone(),
-                    repo: p.repo.clone(),
+                    detail: p.repo.clone(),
                 });
         }
     }
@@ -152,51 +159,136 @@ pub fn check(
     Ok(result)
 }
 
-/// Format and print a CheckResult.
-pub fn print_result(result: &CheckResult) {
-    println!("{}:", result.package);
+/// A single row in the output table.
+struct Row {
+    distro: String,
+    version: String,
+    detail: String,
+}
+
+/// Collect the result into table rows.
+fn result_to_rows(result: &CheckResult) -> Vec<Row> {
+    let mut rows = Vec::new();
+
     if let Some(v) = &result.upstream {
-        println!("  upstream newest:  {v}");
+        rows.push(Row {
+            distro: "Upstream".into(),
+            version: v.clone(),
+            detail: String::new(),
+        });
     }
     if let Some(v) = &result.fedora_rawhide {
-        println!("  fedora rawhide:   {v}");
+        rows.push(Row {
+            distro: "Fedora Rawhide".into(),
+            version: v.clone(),
+            detail: String::new(),
+        });
     }
-    if let Some(vr) = &result.fedora_stable {
-        println!("  fedora stable:    {} ({})", vr.version, vr.repo);
+    if let Some(vd) = &result.fedora_stable {
+        rows.push(Row {
+            distro: "Fedora Stable".into(),
+            version: vd.version.clone(),
+            detail: vd.detail.clone(),
+        });
     }
-    if let Some(vr) = &result.centos_stream {
-        println!("  centos stream:    {} ({})", vr.version, vr.repo);
+    if let Some(vd) = &result.centos_stream {
+        rows.push(Row {
+            distro: "CentOS Stream".into(),
+            version: vd.version.clone(),
+            detail: vd.detail.clone(),
+        });
     }
     if let Some(summary) = &result.hs9 {
-        print_hyperscale("hs9", summary);
+        hs_rows(&mut rows, "Hyperscale 9", summary);
     }
     if let Some(summary) = &result.hs10 {
-        print_hyperscale("hs10", summary);
+        hs_rows(&mut rows, "Hyperscale 10", summary);
+    }
+
+    rows
+}
+
+fn hs_rows(rows: &mut Vec<Row>, label: &str, summary: &HyperscaleSummary) {
+    match (&summary.release, &summary.testing) {
+        (Some(rel), Some(test)) => {
+            rows.push(Row {
+                distro: format!("{label} (release)"),
+                version: rel.version.clone(),
+                detail: rel.nvr.clone(),
+            });
+            rows.push(Row {
+                distro: format!("{label} (testing)"),
+                version: test.version.clone(),
+                detail: test.nvr.clone(),
+            });
+        }
+        (Some(rel), None) => {
+            rows.push(Row {
+                distro: label.into(),
+                version: rel.version.clone(),
+                detail: rel.nvr.clone(),
+            });
+        }
+        (None, Some(test)) => {
+            rows.push(Row {
+                distro: format!("{label} (testing)"),
+                version: test.version.clone(),
+                detail: test.nvr.clone(),
+            });
+        }
+        (None, None) => {
+            rows.push(Row {
+                distro: label.into(),
+                version: "not found".into(),
+                detail: String::new(),
+            });
+        }
     }
 }
 
-fn print_hyperscale(label: &str, summary: &HyperscaleSummary) {
-    match (&summary.release, &summary.testing) {
-        (Some(rel), Some(test)) => {
-            println!("  {label} release: {} ({})", rel.version, rel.nvr);
-            println!("  {label} testing: {} ({})", test.version, test.nvr);
-        }
-        (Some(rel), None) => {
-            println!("  {label} release: {} ({})", rel.version, rel.nvr);
-        }
-        (None, Some(test)) => {
-            println!("  {label} release: not found");
-            println!("  {label} testing: {} ({})", test.version, test.nvr);
-        }
-        (None, None) => {
-            println!("  {label}:         not found");
+/// Format the result as a table and print to stdout.
+pub fn print_table(result: &CheckResult) {
+    let rows = result_to_rows(result);
+    if rows.is_empty() {
+        return;
+    }
+
+    let distro_w = rows.iter().map(|r| r.distro.len()).max().unwrap_or(0);
+    let version_w = rows.iter().map(|r| r.version.len()).max().unwrap_or(0);
+
+    println!("{}", result.package);
+    println!(
+        "  {:<distro_w$}  {:<version_w$}  {}",
+        "Distribution", "Version", "Detail"
+    );
+    println!(
+        "  {:<distro_w$}  {:<version_w$}  {}",
+        "─".repeat(distro_w),
+        "─".repeat(version_w),
+        "──────"
+    );
+    for row in &rows {
+        if row.detail.is_empty() {
+            println!("  {:<distro_w$}  {}", row.distro, row.version);
+        } else {
+            println!(
+                "  {:<distro_w$}  {:<version_w$}  {}",
+                row.distro, row.version, row.detail
+            );
         }
     }
+}
+
+/// Format the result as JSON and print to stdout.
+pub fn print_json(result: &CheckResult) -> Result<(), Box<dyn std::error::Error>> {
+    println!("{}", serde_json::to_string_pretty(result)?);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cbs::Build;
 
     #[test]
     fn test_distros_all() {
@@ -280,5 +372,123 @@ mod tests {
         let d = Distros::parse("upstream").unwrap();
         assert!(d.needs_repology());
         assert!(!d.needs_cbs());
+    }
+
+    fn make_build(version: &str, nvr: &str) -> Build {
+        Build {
+            build_id: 1,
+            name: "pkg".into(),
+            version: version.into(),
+            release: String::new(),
+            nvr: nvr.into(),
+        }
+    }
+
+    #[test]
+    fn test_result_to_rows_all_fields() {
+        let result = CheckResult {
+            package: "ethtool".into(),
+            upstream: Some("6.19".into()),
+            fedora_rawhide: Some("6.19".into()),
+            fedora_stable: Some(VersionWithDetail {
+                version: "6.19".into(),
+                detail: "fedora_43".into(),
+            }),
+            centos_stream: Some(VersionWithDetail {
+                version: "6.15".into(),
+                detail: "centos_stream_10".into(),
+            }),
+            hs9: Some(HyperscaleSummary {
+                release: Some(make_build("6.15", "ethtool-6.15-3.hs.el9")),
+                testing: None,
+            }),
+            hs10: None,
+        };
+        let rows = result_to_rows(&result);
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0].distro, "Upstream");
+        assert_eq!(rows[0].version, "6.19");
+        assert_eq!(rows[3].distro, "CentOS Stream");
+        assert_eq!(rows[4].distro, "Hyperscale 9");
+    }
+
+    #[test]
+    fn test_result_to_rows_hs_testing_and_release() {
+        let result = CheckResult {
+            package: "systemd".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleSummary {
+                release: Some(make_build("258.5", "systemd-258.5-1.1.hs.el9")),
+                testing: Some(make_build("260~rc2", "systemd-260~rc2-20260309.hs.el9")),
+            }),
+            hs10: None,
+        };
+        let rows = result_to_rows(&result);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].distro, "Hyperscale 9 (release)");
+        assert_eq!(rows[0].version, "258.5");
+        assert_eq!(rows[1].distro, "Hyperscale 9 (testing)");
+        assert_eq!(rows[1].version, "260~rc2");
+    }
+
+    #[test]
+    fn test_result_to_rows_hs_testing_only() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleSummary {
+                release: None,
+                testing: Some(make_build("1.0", "pkg-1.0-1.hs.el9")),
+            }),
+            hs10: None,
+        };
+        let rows = result_to_rows(&result);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].distro, "Hyperscale 9 (testing)");
+    }
+
+    #[test]
+    fn test_result_to_rows_hs_not_found() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleSummary {
+                release: None,
+                testing: None,
+            }),
+            hs10: None,
+        };
+        let rows = result_to_rows(&result);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].distro, "Hyperscale 9");
+        assert_eq!(rows[0].version, "not found");
+    }
+
+    #[test]
+    fn test_json_serialization() {
+        let result = CheckResult {
+            package: "ethtool".into(),
+            upstream: Some("6.19".into()),
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: None,
+            hs10: None,
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["package"], "ethtool");
+        assert_eq!(json["upstream"], "6.19");
+        // None fields should be absent
+        assert!(json.get("fedora_rawhide").is_none());
+        assert!(json.get("hs9").is_none());
     }
 }

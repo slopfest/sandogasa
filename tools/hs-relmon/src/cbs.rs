@@ -2,6 +2,7 @@
 
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use serde::Serialize;
 
 /// The highest promotion stage a build has reached in Hyperscale tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +26,7 @@ impl std::fmt::Display for TagStage {
 }
 
 /// A completed build from the CBS Koji instance.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Build {
     pub build_id: i64,
     pub name: String,
@@ -168,7 +169,7 @@ impl Client {
 }
 
 /// Summary of the latest Hyperscale builds for an EL version.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct HyperscaleSummary {
     /// Latest build tagged for release.
     pub release: Option<Build>,

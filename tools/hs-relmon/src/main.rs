@@ -26,6 +26,10 @@ enum Command {
         /// hs9, hs10.
         #[arg(short, long)]
         distros: Option<String>,
+
+        /// Output as JSON instead of a table.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -33,7 +37,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::CheckLatest { package, distros } => {
+        Command::CheckLatest {
+            package,
+            distros,
+            json,
+        } => {
             let distros = match distros {
                 Some(s) => Distros::parse(&s)?,
                 None => Distros::all(),
@@ -42,7 +50,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let repology_client = repology::Client::new();
             let cbs_client = cbs::Client::new();
             let result = check_latest::check(&repology_client, &cbs_client, &package, &distros)?;
-            check_latest::print_result(&result);
+
+            if json {
+                check_latest::print_json(&result)?;
+            } else {
+                check_latest::print_table(&result);
+            }
         }
     }
 
