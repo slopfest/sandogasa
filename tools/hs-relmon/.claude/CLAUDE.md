@@ -8,6 +8,7 @@
 
 ## Code Style
 - Every source file must start with `// SPDX-License-Identifier: MPL-2.0`
+- CLI help text (`-h` and `--help`) must not exceed 80 characters per line
 
 ## Testing
 - Always write corresponding tests when adding or modifying features

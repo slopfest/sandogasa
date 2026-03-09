@@ -41,7 +41,7 @@ Override Repology project name when it differs
 from the package (e.g. linux for perf).")]
         repology_name: Option<String>,
 
-        /// Distribution to compare Hyperscale builds against.
+        /// Reference distribution.
         #[arg(long, default_value = "upstream", long_help = "\
 Distribution to compare Hyperscale builds against.
 
