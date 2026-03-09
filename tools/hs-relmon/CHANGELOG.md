@@ -2,6 +2,20 @@
 
 # Changelog
 
+## 0.3.0 - 2026-03-09
+
+- Add `list-issues` command to list all GitLab issues labeled `rfe::new-version`
+  under a group, with `--issue-status` and `--issue-assignee` filters
+- Add `--manifest` flag to `list-issues` to show which packages with update
+  issues are missing from the manifest
+- Add `--add-missing` flag to `list-issues` to insert missing packages into the
+  manifest file, keeping entries sorted
+- Support `--issue-assignee "none"` to filter for unassigned issues in both
+  `check-manifest` and `list-issues`
+- Preserve comments and formatting when modifying manifest files via
+  `--add-missing` (using `toml_edit`)
+- Add GitLab CI with coverage tests (80% threshold) and secret detection
+
 ## 0.2.1 - 2026-03-09
 
 - Add `check-manifest` command to check all packages listed in a TOML manifest

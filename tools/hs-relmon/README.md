@@ -14,6 +14,9 @@ hs-relmon check-latest <package> [--distros <list>] [--track <distro>]
     [--repology-name <project>] [--json] [--file-issue [<url>]]
 hs-relmon check-manifest <manifest> [--json]
     [--issue-status <status>] [--issue-assignee <username>]
+hs-relmon list-issues [--group <url>] [--json]
+    [--issue-status <status>] [--issue-assignee <username>]
+    [--manifest <path>] [--add-missing]
 hs-relmon config
 ```
 
@@ -134,6 +137,33 @@ $ hs-relmon check-manifest packages.toml --issue-assignee alice
 ```
 
 Available issue statuses: `To do`, `In progress`, `Done`, `Canceled`.
+
+### Listing issues
+
+List all `rfe::new-version` issues under a GitLab group:
+
+```
+$ hs-relmon list-issues
+```
+
+Filter by status or assignee:
+
+```
+$ hs-relmon list-issues --issue-status "To do"
+$ hs-relmon list-issues --issue-assignee none
+```
+
+Compare against a manifest to find packages with issues but not yet tracked:
+
+```
+$ hs-relmon list-issues --manifest packages.toml
+```
+
+Automatically add missing packages to the manifest (preserves comments):
+
+```
+$ hs-relmon list-issues --manifest packages.toml --add-missing
+```
 
 ### Configuration
 
