@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
+
+[alias]
+cov = "llvm-cov"
