@@ -125,7 +125,7 @@ fn status_priority(status: &Option<Status>) -> u8 {
 
 /// Compare version strings by splitting on separators and comparing
 /// each component numerically when possible.
-fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+pub fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     let mut a_parts = a.split(|c: char| !c.is_alphanumeric());
     let mut b_parts = b.split(|c: char| !c.is_alphanumeric());
     loop {

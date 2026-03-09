@@ -235,14 +235,15 @@ pub fn check(
     Ok(result)
 }
 
-/// Determine whether the effective Hyperscale version matches the reference.
+/// Determine whether the effective Hyperscale version is at least as
+/// new as the reference.
 ///
 /// Uses the release build version, falling back to testing if no release exists.
 /// Returns `None` if the reference version is unknown.
 fn compute_newest_version(summary: &HyperscaleSummary, ref_version: &Option<String>) -> Option<bool> {
     let ref_ver = ref_version.as_ref()?;
     let effective = summary.release.as_ref().or(summary.testing.as_ref())?;
-    Some(effective.version == *ref_ver)
+    Some(repology::version_cmp(&effective.version, ref_ver) != std::cmp::Ordering::Less)
 }
 
 /// A single row in the output table.
@@ -301,8 +302,13 @@ fn result_to_rows(result: &CheckResult) -> Vec<Row> {
 
 fn version_status(version: &str, ref_version: Option<&str>) -> String {
     match ref_version {
-        Some(ref_ver) if version == ref_ver => "newest".into(),
-        Some(_) => "outdated".into(),
+        Some(ref_ver) => {
+            if repology::version_cmp(version, ref_ver) != std::cmp::Ordering::Less {
+                "newest".into()
+            } else {
+                "outdated".into()
+            }
+        }
         None => String::new(),
     }
 }
@@ -727,6 +733,18 @@ mod tests {
         assert_eq!(
             compute_newest_version(&summary, &Some("6.19".into())),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn test_compute_newest_version_ahead() {
+        let summary = HyperscaleSummary {
+            release: Some(make_build("6.19", "pkg-6.19-1.hs.el9")),
+            testing: None,
+        };
+        assert_eq!(
+            compute_newest_version(&summary, &Some("6.18.16".into())),
+            Some(true)
         );
     }
 
