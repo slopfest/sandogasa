@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::check_latest::{Distros, TrackRef};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// A manifest listing packages to check.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Manifest {
     #[serde(default)]
     pub defaults: Defaults,
@@ -14,23 +14,33 @@ pub struct Manifest {
 }
 
 /// Default settings applied to all packages unless overridden.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Defaults {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub distros: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub track: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub repology_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub file_issue: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_url: Option<String>,
 }
 
 /// A single package entry in the manifest.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PackageEntry {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub distros: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub track: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub repology_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub file_issue: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_url: Option<String>,
 }
 
@@ -52,6 +62,46 @@ impl Manifest {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let contents = std::fs::read_to_string(path)?;
         Ok(toml::from_str(&contents)?)
+    }
+
+    /// Add packages by name (skipping duplicates) and sort.
+    pub fn add_packages(&mut self, names: &[String]) {
+        let existing: std::collections::HashSet<String> = self
+            .packages
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        for name in names {
+            if !existing.contains(name) {
+                self.packages.push(PackageEntry {
+                    name: name.clone(),
+                    distros: None,
+                    track: None,
+                    repology_name: None,
+                    file_issue: None,
+                    issue_url: None,
+                });
+            }
+        }
+        self.sort_packages();
+    }
+
+    /// Sort packages by name.
+    pub fn sort_packages(&mut self) {
+        self.packages.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+
+    /// Save the manifest to a TOML file.
+    pub fn save(
+        &self,
+        path: &Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let toml_str = toml::to_string(self)?;
+        let contents = format!(
+            "# SPDX-License-Identifier: MPL-2.0\n\n{toml_str}"
+        );
+        std::fs::write(path, contents)?;
+        Ok(())
     }
 
     /// Resolve all packages by merging per-package overrides
@@ -335,5 +385,113 @@ file_issue = false
             resolved[1].repology_name.as_deref(),
             Some("linux")
         );
+    }
+
+    #[test]
+    fn test_sort_packages() {
+        let toml_str = r#"
+[[package]]
+name = "systemd"
+
+[[package]]
+name = "ethtool"
+
+[[package]]
+name = "perf"
+"#;
+        let mut m: Manifest = toml::from_str(toml_str).unwrap();
+        m.sort_packages();
+        assert_eq!(m.packages[0].name, "ethtool");
+        assert_eq!(m.packages[1].name, "perf");
+        assert_eq!(m.packages[2].name, "systemd");
+    }
+
+    #[test]
+    fn test_add_packages() {
+        let toml_str = r#"
+[[package]]
+name = "ethtool"
+
+[[package]]
+name = "systemd"
+"#;
+        let mut m: Manifest = toml::from_str(toml_str).unwrap();
+        m.add_packages(&[
+            "perf".into(),
+            "bpftrace".into(),
+        ]);
+        assert_eq!(m.packages.len(), 4);
+        assert_eq!(m.packages[0].name, "bpftrace");
+        assert_eq!(m.packages[1].name, "ethtool");
+        assert_eq!(m.packages[2].name, "perf");
+        assert_eq!(m.packages[3].name, "systemd");
+    }
+
+    #[test]
+    fn test_add_packages_skips_duplicates() {
+        let toml_str = r#"
+[[package]]
+name = "ethtool"
+"#;
+        let mut m: Manifest = toml::from_str(toml_str).unwrap();
+        m.add_packages(&["ethtool".into(), "perf".into()]);
+        assert_eq!(m.packages.len(), 2);
+        assert_eq!(m.packages[0].name, "ethtool");
+        assert_eq!(m.packages[1].name, "perf");
+    }
+
+    #[test]
+    fn test_add_packages_preserves_existing_fields() {
+        let toml_str = r#"
+[[package]]
+name = "perf"
+repology_name = "linux"
+"#;
+        let mut m: Manifest = toml::from_str(toml_str).unwrap();
+        m.add_packages(&["ethtool".into()]);
+        assert_eq!(m.packages.len(), 2);
+        assert_eq!(m.packages[0].name, "ethtool");
+        assert_eq!(m.packages[1].name, "perf");
+        assert_eq!(
+            m.packages[1].repology_name.as_deref(),
+            Some("linux")
+        );
+    }
+
+    #[test]
+    fn test_save_and_reload() {
+        let toml_str = r#"
+[defaults]
+file_issue = true
+
+[[package]]
+name = "systemd"
+
+[[package]]
+name = "ethtool"
+"#;
+        let mut m: Manifest = toml::from_str(toml_str).unwrap();
+        m.add_packages(&["perf".into()]);
+
+        let dir = std::env::temp_dir().join("hs-relmon-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test-save.toml");
+        m.save(&path).unwrap();
+
+        let reloaded = Manifest::load(&path).unwrap();
+        assert_eq!(reloaded.packages.len(), 3);
+        assert_eq!(reloaded.packages[0].name, "ethtool");
+        assert_eq!(reloaded.packages[1].name, "perf");
+        assert_eq!(reloaded.packages[2].name, "systemd");
+        assert_eq!(reloaded.defaults.file_issue, Some(true));
+
+        // Verify SPDX header
+        let contents =
+            std::fs::read_to_string(&path).unwrap();
+        assert!(contents.starts_with(
+            "# SPDX-License-Identifier: MPL-2.0"
+        ));
+
+        std::fs::remove_file(&path).ok();
     }
 }

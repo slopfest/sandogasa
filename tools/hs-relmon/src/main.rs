@@ -146,6 +146,13 @@ Path to a TOML manifest file. When provided, the
 output shows which packages with rfe::new-version
 issues are missing from the manifest.")]
         manifest: Option<PathBuf>,
+
+        /// Add missing packages to the manifest.
+        #[arg(long, requires = "manifest", long_help = "\
+Add packages that have rfe::new-version issues but
+are missing from the manifest. Requires --manifest.
+Packages are inserted in sorted order.")]
+        add_missing: bool,
     },
 
     /// Configure GitLab authentication.
@@ -354,6 +361,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             issue_assignee,
             json,
             manifest,
+            add_missing,
         } => {
             let client =
                 gitlab::GroupClient::from_group_url(&group)?;
@@ -387,6 +395,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 list_issues::print_json(&entries)?;
             } else {
                 list_issues::print_table(&entries);
+            }
+
+            if add_missing {
+                let path = manifest.as_ref().unwrap();
+                let missing: Vec<String> = entries
+                    .iter()
+                    .filter(|e| {
+                        e.in_manifest == Some(false)
+                    })
+                    .map(|e| e.package.clone())
+                    .collect();
+                if missing.is_empty() {
+                    eprintln!(
+                        "No missing packages to add."
+                    );
+                } else {
+                    let mut m =
+                        manifest::Manifest::load(path)?;
+                    m.add_packages(&missing);
+                    m.save(path)?;
+                    eprintln!(
+                        "Added {} package(s) to {}",
+                        missing.len(),
+                        path.display()
+                    );
+                }
             }
         }
         Command::Config => {
