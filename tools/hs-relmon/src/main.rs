@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 use hs_relmon::cbs;
 use hs_relmon::check_latest::{self, Distros, TrackRef};
 use hs_relmon::config;
 use hs_relmon::gitlab;
+use hs_relmon::manifest;
 use hs_relmon::repology;
 
 #[derive(Parser)]
@@ -72,6 +75,36 @@ GITLAB_TOKEN env var as an override.")]
         file_issue: Option<String>,
     },
 
+    /// Check all packages listed in a manifest file.
+    CheckManifest {
+        /// Path to the TOML manifest file.
+        manifest: PathBuf,
+
+        /// Output as JSON instead of tables.
+        #[arg(long)]
+        json: bool,
+
+        /// Only show packages whose issue matches this status.
+        #[arg(long, value_name = "STATUS", long_help = "\
+Only show packages whose GitLab issue matches this
+work-item status. Packages without an issue are
+excluded. Issues that do not match are not updated.
+
+Default statuses:
+  To do          Planned but not started
+  In progress    Currently being worked on
+  Done           Completed
+  Canceled       Will not be done")]
+        issue_status: Option<String>,
+
+        /// Only show packages whose issue is assigned to this user.
+        #[arg(long, value_name = "USERNAME", long_help = "\
+Only show packages whose GitLab issue is assigned
+to this username. Packages without an issue or
+without a matching assignee are excluded.")]
+        issue_assignee: Option<String>,
+    },
+
     /// Configure GitLab authentication.
     Config,
 }
@@ -97,7 +130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let repology_client = repology::Client::new();
             let cbs_client = cbs::Client::new();
-            let result = check_latest::check(
+            let mut result = check_latest::check(
                 &repology_client,
                 &cbs_client,
                 &package,
@@ -106,36 +139,170 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &track,
             )?;
 
+            if let Some(url_override) = &file_issue {
+                let project_url = if url_override.is_empty() {
+                    default_issue_url(&package)
+                } else {
+                    url_override.clone()
+                };
+                if result.is_outdated() {
+                    let issue_ref = maybe_file_issue(
+                        &package, &result, &project_url,
+                    )?;
+                    result.issue = Some(issue_ref);
+                } else {
+                    result.issue =
+                        lookup_issue(&project_url)?;
+                }
+            }
+
             if json {
                 check_latest::print_json(&result)?;
             } else {
                 check_latest::print_table(&result);
             }
+        }
+        Command::CheckManifest {
+            manifest,
+            json,
+            issue_status,
+            issue_assignee,
+        } => {
+            let m = manifest::Manifest::load(&manifest)?;
+            let packages = m.resolve()?;
+            let filtering = issue_status.is_some()
+                || issue_assignee.is_some();
 
-            if let Some(url_override) = &file_issue {
-                if result.is_outdated() {
-                    let project_url = if url_override.is_empty() {
-                        format!(
-                            "https://gitlab.com/CentOS/\
-                            Hyperscale/rpms/{package}"
-                        )
+            let repology_client = repology::Client::new();
+            let cbs_client = cbs::Client::new();
+            let mut results = Vec::new();
+            let mut errors = 0u32;
+
+            for pkg in &packages {
+                let repology_name = pkg
+                    .repology_name
+                    .as_deref()
+                    .unwrap_or(&pkg.name);
+
+                let result = check_latest::check(
+                    &repology_client,
+                    &cbs_client,
+                    &pkg.name,
+                    repology_name,
+                    &pkg.distros,
+                    &pkg.track,
+                );
+                let mut result = match result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("{}: {e}", pkg.name);
+                        errors += 1;
+                        continue;
+                    }
+                };
+
+                if pkg.file_issue {
+                    let project_url = pkg
+                        .issue_url
+                        .as_deref()
+                        .map(String::from)
+                        .unwrap_or_else(|| {
+                            default_issue_url(&pkg.name)
+                        });
+                    if result.is_outdated() && !filtering {
+                        match maybe_file_issue(
+                            &pkg.name,
+                            &result,
+                            &project_url,
+                        ) {
+                            Ok(issue_ref) => {
+                                result.issue =
+                                    Some(issue_ref);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "{}: filing issue: {e}",
+                                    pkg.name
+                                );
+                                errors += 1;
+                            }
+                        }
                     } else {
-                        url_override.clone()
-                    };
-                    let ref_ver = result.ref_version().ok_or(
-                        "no reference version available",
-                    )?;
-                    let title = format!(
-                        "{package}-{ref_ver} is available"
-                    );
-                    let description = format!(
-                        "```\n{}```",
-                        check_latest::format_table(&result)
-                    );
-                    file_or_update_issue(
-                        &project_url, &title, &description,
-                    )?;
+                        // Look up existing issue first so
+                        // we can check filters before
+                        // deciding whether to file/update.
+                        match lookup_issue(&project_url) {
+                            Ok(found) => {
+                                result.issue = found;
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "{}: looking up issue: \
+                                    {e}",
+                                    pkg.name
+                                );
+                                errors += 1;
+                            }
+                        }
+                        if result.is_outdated()
+                            && result.matches_issue_filter(
+                                issue_status.as_deref(),
+                                issue_assignee.as_deref(),
+                            )
+                        {
+                            match maybe_file_issue(
+                                &pkg.name,
+                                &result,
+                                &project_url,
+                            ) {
+                                Ok(issue_ref) => {
+                                    result.issue =
+                                        Some(issue_ref);
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "{}: filing issue: \
+                                        {e}",
+                                        pkg.name
+                                    );
+                                    errors += 1;
+                                }
+                            }
+                        }
+                    }
                 }
+
+                results.push(result);
+            }
+
+            let results: Vec<_> = if filtering {
+                results
+                    .into_iter()
+                    .filter(|r| r.matches_issue_filter(
+                        issue_status.as_deref(),
+                        issue_assignee.as_deref(),
+                    ))
+                    .collect()
+            } else {
+                results
+            };
+
+            if json {
+                check_latest::print_json_array(&results)?;
+            } else {
+                for (i, r) in results.iter().enumerate() {
+                    if i > 0 {
+                        println!();
+                    }
+                    check_latest::print_table(r);
+                }
+            }
+
+            if errors > 0 {
+                return Err(format!(
+                    "{errors} package(s) had errors"
+                )
+                .into());
             }
         }
         Command::Config => {
@@ -188,15 +355,71 @@ fn configure_gitlab() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn default_issue_url(package: &str) -> String {
+    format!(
+        "https://gitlab.com/CentOS/\
+        Hyperscale/rpms/{package}"
+    )
+}
+
+fn maybe_file_issue(
+    package: &str,
+    result: &check_latest::CheckResult,
+    project_url: &str,
+) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
+    let ref_ver = result
+        .ref_version()
+        .ok_or("no reference version available")?;
+    let title = format!("{package}-{ref_ver} is available");
+    let description = format!(
+        "```\n{}```",
+        check_latest::format_table(result)
+    );
+    file_or_update_issue(project_url, &title, &description)
+}
+
 const ISSUE_LABEL: &str = "rfe::new-version";
+
+fn resolve_issue_ref(
+    client: &gitlab::Client,
+    issue: &gitlab::Issue,
+) -> Result<
+    check_latest::IssueRef,
+    Box<dyn std::error::Error>,
+> {
+    let status =
+        client.get_work_item_status(issue.iid)?;
+    Ok(check_latest::IssueRef::from_gitlab_issue(
+        issue, status,
+    ))
+}
+
+fn lookup_issue(
+    project_url: &str,
+) -> Result<
+    Option<check_latest::IssueRef>,
+    Box<dyn std::error::Error>,
+> {
+    let client =
+        gitlab::Client::from_project_url(project_url)?;
+    let issues =
+        client.list_issues(ISSUE_LABEL, None)?;
+    match issues.first() {
+        Some(issue) => {
+            Ok(Some(resolve_issue_ref(&client, issue)?))
+        }
+        None => Ok(None),
+    }
+}
 
 fn file_or_update_issue(
     project_url: &str,
     title: &str,
     description: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
     let client = gitlab::Client::from_project_url(project_url)?;
-    let issues = client.list_issues(ISSUE_LABEL, "opened")?;
+    let issues =
+        client.list_issues(ISSUE_LABEL, Some("opened"))?;
 
     if let Some(existing) = issues.first() {
         let title_changed = existing.title != title;
@@ -224,11 +447,13 @@ fn file_or_update_issue(
                 "Updated issue #{}: {}",
                 updated.iid, updated.web_url
             );
+            resolve_issue_ref(&client, &updated)
         } else {
             eprintln!(
                 "Issue #{} already up to date: {}",
                 existing.iid, existing.web_url
             );
+            resolve_issue_ref(&client, existing)
         }
     } else {
         let issue = client.create_issue(
@@ -240,7 +465,6 @@ fn file_or_update_issue(
             "Created issue #{}: {}",
             issue.iid, issue.web_url
         );
+        resolve_issue_ref(&client, &issue)
     }
-
-    Ok(())
 }

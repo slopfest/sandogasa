@@ -3,6 +3,12 @@
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 
+/// A GitLab user (assignee).
+#[derive(Debug, Deserialize)]
+pub struct Assignee {
+    pub username: String,
+}
+
 /// A GitLab issue.
 #[derive(Debug, Deserialize)]
 pub struct Issue {
@@ -11,6 +17,8 @@ pub struct Issue {
     pub description: Option<String>,
     pub state: String,
     pub web_url: String,
+    #[serde(default)]
+    pub assignees: Vec<Assignee>,
 }
 
 /// Client for the GitLab REST API v4.
@@ -82,16 +90,20 @@ impl Client {
         check_response(resp)
     }
 
-    /// List issues matching a label and state.
+    /// List issues matching a label and optional state.
     pub fn list_issues(
         &self,
         label: &str,
-        state: &str,
+        state: Option<&str>,
     ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
+        let mut query = vec![("labels", label)];
+        if let Some(s) = state {
+            query.push(("state", s));
+        }
         let resp = self
             .http
             .get(&self.issues_url())
-            .query(&[("labels", label), ("state", state)])
+            .query(&query)
             .send()?;
         if !resp.status().is_success() {
             let status = resp.status();
@@ -118,6 +130,46 @@ impl Client {
         check_response(resp)
     }
 
+    /// Fetch the work-item status for an issue via GraphQL.
+    ///
+    /// Returns the status name (e.g. "To do", "In progress")
+    /// or `None` if the work-item has no status widget.
+    pub fn get_work_item_status(
+        &self,
+        iid: u64,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>>
+    {
+        let query = format!(
+            r#"{{ project(fullPath: "{}") {{
+                workItems(iids: ["{}"])  {{
+                    nodes {{ widgets {{
+                        type
+                        ... on WorkItemWidgetStatus {{
+                            status {{ name }}
+                        }}
+                    }} }}
+                }}
+            }} }}"#,
+            self.project_path, iid
+        );
+        let body = serde_json::json!({ "query": query });
+        let resp = self
+            .http
+            .post(&self.graphql_url())
+            .json(&body)
+            .send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!(
+                "GitLab GraphQL error {status}: {text}"
+            )
+            .into());
+        }
+        let json: serde_json::Value = resp.json()?;
+        Ok(parse_work_item_status(&json))
+    }
+
     fn issues_url(&self) -> String {
         let encoded = self.project_path.replace('/', "%2F");
         format!(
@@ -125,6 +177,27 @@ impl Client {
             self.base_url, encoded
         )
     }
+
+    fn graphql_url(&self) -> String {
+        format!("{}/api/graphql", self.base_url)
+    }
+}
+
+/// Extract the status name from a GraphQL work-item response.
+fn parse_work_item_status(
+    json: &serde_json::Value,
+) -> Option<String> {
+    json.pointer("/data/project/workItems/nodes/0/widgets")
+        .and_then(|w| w.as_array())
+        .and_then(|widgets| {
+            widgets.iter().find(|w| {
+                w.get("type").and_then(|t| t.as_str())
+                    == Some("STATUS")
+            })
+        })
+        .and_then(|w| w.pointer("/status/name"))
+        .and_then(|n| n.as_str())
+        .map(String::from)
 }
 
 /// Parameters for editing an issue.
@@ -287,13 +360,34 @@ mod tests {
             "title": "Test issue",
             "description": "Some description",
             "state": "opened",
-            "web_url": "https://gitlab.com/group/project/-/issues/42"
+            "web_url": "https://gitlab.com/group/project/-/issues/42",
+            "assignees": [
+                {"username": "alice"},
+                {"username": "bob"}
+            ]
         }"#;
         let issue: Issue = serde_json::from_str(json).unwrap();
         assert_eq!(issue.iid, 42);
         assert_eq!(issue.title, "Test issue");
         assert_eq!(issue.description.as_deref(), Some("Some description"));
         assert_eq!(issue.state, "opened");
+        assert_eq!(issue.assignees.len(), 2);
+        assert_eq!(issue.assignees[0].username, "alice");
+        assert_eq!(issue.assignees[1].username, "bob");
+    }
+
+    #[test]
+    fn test_issue_deserialize_no_assignees() {
+        let json = r#"{
+            "iid": 1,
+            "title": "t",
+            "description": null,
+            "state": "opened",
+            "web_url": "u"
+        }"#;
+        let issue: Issue = serde_json::from_str(json).unwrap();
+        assert!(issue.description.is_none());
+        assert!(issue.assignees.is_empty());
     }
 
     #[test]
@@ -307,5 +401,141 @@ mod tests {
         }"#;
         let issue: Issue = serde_json::from_str(json).unwrap();
         assert!(issue.description.is_none());
+    }
+
+    #[test]
+    fn test_graphql_url() {
+        let client = Client::new(
+            "https://gitlab.com",
+            "CentOS/Hyperscale/rpms/perf",
+            "fake-token",
+        )
+        .unwrap();
+        assert_eq!(
+            client.graphql_url(),
+            "https://gitlab.com/api/graphql"
+        );
+    }
+
+    #[test]
+    fn test_parse_work_item_status_found() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "data": {
+                    "project": {
+                        "workItems": {
+                            "nodes": [{
+                                "widgets": [
+                                    { "type": "ASSIGNEES" },
+                                    {
+                                        "type": "STATUS",
+                                        "status": {
+                                            "name": "To do"
+                                        }
+                                    }
+                                ]
+                            }]
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_work_item_status(&json).as_deref(),
+            Some("To do")
+        );
+    }
+
+    #[test]
+    fn test_parse_work_item_status_in_progress() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "data": {
+                    "project": {
+                        "workItems": {
+                            "nodes": [{
+                                "widgets": [
+                                    {
+                                        "type": "STATUS",
+                                        "status": {
+                                            "name": "In progress"
+                                        }
+                                    }
+                                ]
+                            }]
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_work_item_status(&json).as_deref(),
+            Some("In progress")
+        );
+    }
+
+    #[test]
+    fn test_parse_work_item_status_no_status_widget() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "data": {
+                    "project": {
+                        "workItems": {
+                            "nodes": [{
+                                "widgets": [
+                                    { "type": "ASSIGNEES" },
+                                    { "type": "LABELS" }
+                                ]
+                            }]
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(parse_work_item_status(&json).is_none());
+    }
+
+    #[test]
+    fn test_parse_work_item_status_empty_nodes() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "data": {
+                    "project": {
+                        "workItems": {
+                            "nodes": []
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(parse_work_item_status(&json).is_none());
+    }
+
+    #[test]
+    fn test_parse_work_item_status_null_status() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "data": {
+                    "project": {
+                        "workItems": {
+                            "nodes": [{
+                                "widgets": [
+                                    {
+                                        "type": "STATUS",
+                                        "status": null
+                                    }
+                                ]
+                            }]
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(parse_work_item_status(&json).is_none());
     }
 }

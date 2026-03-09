@@ -138,9 +138,45 @@ pub struct CheckResult {
     pub hs9: Option<HyperscaleResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hs10: Option<HyperscaleResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue: Option<IssueRef>,
     /// Reference version for tracking (not included in JSON).
     #[serde(skip)]
     ref_version: Option<String>,
+}
+
+/// Reference to a GitLab issue.
+#[derive(Debug, Clone, Serialize)]
+pub struct IssueRef {
+    pub iid: u64,
+    pub url: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub assignees: Vec<String>,
+}
+
+impl IssueRef {
+    /// Build an `IssueRef` from a GitLab API issue.
+    ///
+    /// `status` is the resolved work-item status
+    /// (e.g. "To do"), falling back to `issue.state` if
+    /// the GraphQL status is unavailable.
+    pub fn from_gitlab_issue(
+        issue: &crate::gitlab::Issue,
+        status: Option<String>,
+    ) -> Self {
+        Self {
+            iid: issue.iid,
+            url: issue.web_url.clone(),
+            status: status
+                .unwrap_or_else(|| issue.state.clone()),
+            assignees: issue
+                .assignees
+                .iter()
+                .map(|a| a.username.clone())
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -161,6 +197,32 @@ impl CheckResult {
     /// The reference version used for tracking.
     pub fn ref_version(&self) -> Option<&str> {
         self.ref_version.as_deref()
+    }
+
+    /// Whether the issue (if any) matches the given filters.
+    ///
+    /// Returns `false` if there is no issue. Both filters
+    /// must match when provided.
+    pub fn matches_issue_filter(
+        &self,
+        status: Option<&str>,
+        assignee: Option<&str>,
+    ) -> bool {
+        let issue = match &self.issue {
+            Some(i) => i,
+            None => return false,
+        };
+        if let Some(s) = status {
+            if issue.status != s {
+                return false;
+            }
+        }
+        if let Some(a) = assignee {
+            if !issue.assignees.iter().any(|u| u == a) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -184,6 +246,7 @@ pub fn check(
         centos_stream: None,
         hs9: None,
         hs10: None,
+        issue: None,
         ref_version: None,
     };
 
@@ -386,6 +449,21 @@ pub fn print_table(result: &CheckResult) {
 /// Format the result as JSON and print to stdout.
 pub fn print_json(result: &CheckResult) -> Result<(), Box<dyn std::error::Error>> {
     write_json(result, &mut std::io::stdout().lock())?;
+    Ok(())
+}
+
+/// Format multiple results as a JSON array and print to stdout.
+pub fn print_json_array(
+    results: &[CheckResult],
+) -> Result<(), Box<dyn std::error::Error>> {
+    write_json_array(results, &mut std::io::stdout().lock())
+}
+
+fn write_json_array(
+    results: &[CheckResult],
+    w: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error>> {
+    writeln!(w, "{}", serde_json::to_string_pretty(results)?)?;
     Ok(())
 }
 
@@ -620,6 +698,7 @@ mod tests {
                 testing: None,
             })),
             hs10: None,
+            issue: None,
             ref_version: None,
         };
         let rows = result_to_rows(&result);
@@ -643,6 +722,7 @@ mod tests {
                 testing: Some(make_build("260~rc2", "systemd-260~rc2-20260309.hs.el9")),
             })),
             hs10: None,
+            issue: None,
             ref_version: None,
         };
         let rows = result_to_rows(&result);
@@ -666,6 +746,7 @@ mod tests {
                 testing: Some(make_build("1.0", "pkg-1.0-1.hs.el9")),
             })),
             hs10: None,
+            issue: None,
             ref_version: None,
         };
         let rows = result_to_rows(&result);
@@ -686,6 +767,7 @@ mod tests {
                 testing: None,
             })),
             hs10: None,
+            issue: None,
             ref_version: None,
         };
         let rows = result_to_rows(&result);
@@ -707,6 +789,7 @@ mod tests {
                 testing: None,
             })),
             hs10: None,
+            issue: None,
             ref_version: Some("6.19".into()),
         };
         let rows = result_to_rows(&result);
@@ -727,6 +810,7 @@ mod tests {
                 testing: None,
             })),
             hs10: None,
+            issue: None,
             ref_version: Some("6.15".into()),
         };
         let rows = result_to_rows(&result);
@@ -747,6 +831,7 @@ mod tests {
                 testing: Some(make_build("260", "systemd-260-1.hs.el9")),
             })),
             hs10: None,
+            issue: None,
             ref_version: Some("260".into()),
         };
         let rows = result_to_rows(&result);
@@ -835,6 +920,7 @@ mod tests {
             centos_stream: None,
             hs9: None,
             hs10: None,
+            issue: None,
             ref_version: None,
         };
         let json = serde_json::to_value(&result).unwrap();
@@ -861,6 +947,7 @@ mod tests {
                 newest_version: Some(false),
             }),
             hs10: None,
+            issue: None,
             ref_version: Some("6.19".into()),
         };
         let json = serde_json::to_value(&result).unwrap();
@@ -886,6 +973,7 @@ mod tests {
                 newest_version: Some(false),
             }),
             hs10: None,
+            issue: None,
             ref_version: Some("2.0".into()),
         };
         assert!(result.is_outdated());
@@ -908,6 +996,7 @@ mod tests {
                 newest_version: Some(true),
             }),
             hs10: None,
+            issue: None,
             ref_version: Some("2.0".into()),
         };
         assert!(!result.is_outdated());
@@ -923,6 +1012,7 @@ mod tests {
             centos_stream: None,
             hs9: None,
             hs10: None,
+            issue: None,
             ref_version: None,
         };
         assert!(!result.is_outdated());
@@ -951,6 +1041,7 @@ mod tests {
                 },
                 newest_version: Some(false),
             }),
+            issue: None,
             ref_version: Some("2.0".into()),
         };
         assert!(result.is_outdated());
@@ -969,6 +1060,7 @@ mod tests {
                 testing: None,
             })),
             hs10: None,
+            issue: None,
             ref_version: Some("6.19".into()),
         };
         let table = format_table(&result);
@@ -990,6 +1082,7 @@ mod tests {
                 testing: None,
             })),
             hs10: None,
+            issue: None,
             ref_version: Some("6.19".into()),
         };
         let mut buf = Vec::new();
@@ -1015,6 +1108,7 @@ mod tests {
             centos_stream: None,
             hs9: None,
             hs10: None,
+            issue: None,
             ref_version: None,
         };
         let mut buf = Vec::new();
@@ -1036,6 +1130,7 @@ mod tests {
             centos_stream: None,
             hs9: None,
             hs10: None,
+            issue: None,
             ref_version: None,
         };
         let mut buf = Vec::new();
@@ -1053,6 +1148,7 @@ mod tests {
             centos_stream: None,
             hs9: None,
             hs10: None,
+            issue: None,
             ref_version: None,
         };
         let mut buf = Vec::new();
@@ -1061,6 +1157,78 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(json["package"], "ethtool");
         assert_eq!(json["upstream"], "6.19");
+    }
+
+    #[test]
+    fn test_write_json_with_issue() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: Some("2.0".into()),
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: None,
+            hs10: None,
+            issue: Some(IssueRef {
+                iid: 5,
+                url: "https://example.com/-/issues/5".into(),
+                status: "opened".into(),
+                assignees: vec!["alice".into()],
+            }),
+            ref_version: None,
+        };
+        let mut buf = Vec::new();
+        write_json(&result, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&output).unwrap();
+        assert_eq!(json["issue"]["iid"], 5);
+        assert_eq!(json["issue"]["status"], "opened");
+        assert_eq!(json["issue"]["assignees"][0], "alice");
+    }
+
+    #[test]
+    fn test_write_json_array() {
+        let results = vec![
+            CheckResult {
+                package: "a".into(),
+                upstream: Some("1.0".into()),
+                fedora_rawhide: None,
+                fedora_stable: None,
+                centos_stream: None,
+                hs9: None,
+                hs10: None,
+                issue: None,
+                ref_version: None,
+            },
+            CheckResult {
+                package: "b".into(),
+                upstream: None,
+                fedora_rawhide: None,
+                fedora_stable: None,
+                centos_stream: None,
+                hs9: None,
+                hs10: None,
+                issue: Some(IssueRef {
+                    iid: 3,
+                    url: "u".into(),
+                    status: "closed".into(),
+                    assignees: vec![],
+                }),
+                ref_version: None,
+            },
+        ];
+        let mut buf = Vec::new();
+        write_json_array(&results, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&output).unwrap();
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["package"], "a");
+        assert!(arr[0].get("issue").is_none());
+        assert_eq!(arr[1]["issue"]["iid"], 3);
+        assert_eq!(arr[1]["issue"]["status"], "closed");
     }
 
     #[test]
@@ -1079,10 +1247,233 @@ mod tests {
                 newest_version: None,
             }),
             hs10: None,
+            issue: None,
             ref_version: None,
         };
         let json = serde_json::to_value(&result).unwrap();
         // newest_version should be absent when None
         assert!(json["hs9"].get("newest_version").is_none());
+    }
+
+    #[test]
+    fn test_json_serialization_with_issue() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: Some("2.0".into()),
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: None,
+            hs10: None,
+            issue: Some(IssueRef {
+                iid: 42,
+                url: "https://gitlab.com/test/pkg/-/issues/42"
+                    .into(),
+                status: "opened".into(),
+                assignees: vec!["alice".into()],
+            }),
+            ref_version: None,
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["issue"]["iid"], 42);
+        assert_eq!(
+            json["issue"]["url"],
+            "https://gitlab.com/test/pkg/-/issues/42"
+        );
+        assert_eq!(json["issue"]["status"], "opened");
+        assert_eq!(json["issue"]["assignees"][0], "alice");
+    }
+
+    #[test]
+    fn test_json_serialization_issue_no_assignees() {
+        let issue_ref = IssueRef {
+            iid: 1,
+            url: "u".into(),
+            status: "closed".into(),
+            assignees: vec![],
+        };
+        let json = serde_json::to_value(&issue_ref).unwrap();
+        assert_eq!(json["status"], "closed");
+        // empty assignees should be absent
+        assert!(json.get("assignees").is_none());
+    }
+
+    #[test]
+    fn test_json_array_serialization() {
+        let results = vec![
+            CheckResult {
+                package: "a".into(),
+                upstream: Some("1.0".into()),
+                fedora_rawhide: None,
+                fedora_stable: None,
+                centos_stream: None,
+                hs9: None,
+                hs10: None,
+                issue: None,
+                ref_version: None,
+            },
+            CheckResult {
+                package: "b".into(),
+                upstream: Some("2.0".into()),
+                fedora_rawhide: None,
+                fedora_stable: None,
+                centos_stream: None,
+                hs9: None,
+                hs10: None,
+                issue: None,
+                ref_version: None,
+            },
+        ];
+        let json = serde_json::to_value(&results).unwrap();
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["package"], "a");
+        assert_eq!(arr[1]["package"], "b");
+    }
+
+    #[test]
+    fn test_issue_ref_from_gitlab_issue_with_status() {
+        use crate::gitlab;
+        let issue = gitlab::Issue {
+            iid: 7,
+            title: "t".into(),
+            description: None,
+            state: "opened".into(),
+            web_url: "https://example.com/issues/7".into(),
+            assignees: vec![
+                gitlab::Assignee {
+                    username: "alice".into(),
+                },
+                gitlab::Assignee {
+                    username: "bob".into(),
+                },
+            ],
+        };
+        let r = IssueRef::from_gitlab_issue(
+            &issue,
+            Some("To do".into()),
+        );
+        assert_eq!(r.iid, 7);
+        assert_eq!(r.url, "https://example.com/issues/7");
+        assert_eq!(r.status, "To do");
+        assert_eq!(r.assignees, vec!["alice", "bob"]);
+    }
+
+    #[test]
+    fn test_issue_ref_from_gitlab_issue_no_status() {
+        use crate::gitlab;
+        let issue = gitlab::Issue {
+            iid: 1,
+            title: "t".into(),
+            description: None,
+            state: "closed".into(),
+            web_url: "u".into(),
+            assignees: vec![],
+        };
+        let r = IssueRef::from_gitlab_issue(&issue, None);
+        assert_eq!(r.status, "closed");
+        assert!(r.assignees.is_empty());
+    }
+
+    fn make_result_with_issue(
+        issue: Option<IssueRef>,
+    ) -> CheckResult {
+        CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: None,
+            hs10: None,
+            issue,
+            ref_version: None,
+        }
+    }
+
+    #[test]
+    fn test_matches_issue_filter_no_issue() {
+        let r = make_result_with_issue(None);
+        assert!(!r.matches_issue_filter(None, None));
+        assert!(!r.matches_issue_filter(
+            Some("opened"),
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_matches_issue_filter_status() {
+        let r = make_result_with_issue(Some(IssueRef {
+            iid: 1,
+            url: "u".into(),
+            status: "opened".into(),
+            assignees: vec![],
+        }));
+        assert!(r.matches_issue_filter(
+            Some("opened"),
+            None,
+        ));
+        assert!(!r.matches_issue_filter(
+            Some("closed"),
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_matches_issue_filter_assignee() {
+        let r = make_result_with_issue(Some(IssueRef {
+            iid: 1,
+            url: "u".into(),
+            status: "opened".into(),
+            assignees: vec![
+                "alice".into(),
+                "bob".into(),
+            ],
+        }));
+        assert!(r.matches_issue_filter(
+            None,
+            Some("alice"),
+        ));
+        assert!(r.matches_issue_filter(
+            None,
+            Some("bob"),
+        ));
+        assert!(!r.matches_issue_filter(
+            None,
+            Some("eve"),
+        ));
+    }
+
+    #[test]
+    fn test_matches_issue_filter_both() {
+        let r = make_result_with_issue(Some(IssueRef {
+            iid: 1,
+            url: "u".into(),
+            status: "opened".into(),
+            assignees: vec!["alice".into()],
+        }));
+        assert!(r.matches_issue_filter(
+            Some("opened"),
+            Some("alice"),
+        ));
+        assert!(!r.matches_issue_filter(
+            Some("closed"),
+            Some("alice"),
+        ));
+        assert!(!r.matches_issue_filter(
+            Some("opened"),
+            Some("bob"),
+        ));
+    }
+
+    #[test]
+    fn test_matches_issue_filter_no_filters() {
+        let r = make_result_with_issue(Some(IssueRef {
+            iid: 1,
+            url: "u".into(),
+            status: "opened".into(),
+            assignees: vec![],
+        }));
+        assert!(r.matches_issue_filter(None, None));
     }
 }

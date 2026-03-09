@@ -25,18 +25,29 @@ pub fn config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
 }
 
 pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
-    let path = config_path()?;
-    let contents = std::fs::read_to_string(&path)?;
-    Ok(toml::from_str(&contents)?)
+    load_from(&config_path()?)
 }
 
 pub fn save(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
-    let path = config_path()?;
+    save_to(config, &config_path()?)
+}
+
+pub fn load_from(
+    path: &std::path::Path,
+) -> Result<Config, Box<dyn std::error::Error>> {
+    let contents = std::fs::read_to_string(path)?;
+    Ok(toml::from_str(&contents)?)
+}
+
+pub fn save_to(
+    config: &Config,
+    path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let contents = toml::to_string_pretty(config)?;
-    std::fs::write(&path, contents)?;
+    std::fs::write(path, contents)?;
     Ok(())
 }
 
@@ -94,5 +105,29 @@ access_token = "glpat-abc123"
     fn test_config_path() {
         let path = config_path().unwrap();
         assert!(path.ends_with("hs-relmon/config.toml"));
+    }
+
+    #[test]
+    fn test_save_and_load() {
+        let dir = std::env::temp_dir().join("hs-relmon-test");
+        let path = dir.join("config.toml");
+        let config = Config {
+            gitlab: Some(GitlabConfig {
+                access_token: "test-save-load".into(),
+            }),
+        };
+        save_to(&config, &path).unwrap();
+        let loaded = load_from(&path).unwrap();
+        assert_eq!(
+            loaded.gitlab.unwrap().access_token,
+            "test-save-load"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_missing_file() {
+        let path = PathBuf::from("/tmp/hs-relmon-nonexistent/x");
+        assert!(load_from(&path).is_err());
     }
 }
