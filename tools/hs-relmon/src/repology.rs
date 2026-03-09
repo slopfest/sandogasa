@@ -105,7 +105,7 @@ pub fn latest_for_repo<'a>(packages: &'a [Package], repo: &str) -> Option<&'a Pa
         .max_by(|a, b| {
             status_priority(&a.status)
                 .cmp(&status_priority(&b.status))
-                .then_with(|| version_cmp(&a.version, &b.version))
+                .then_with(|| crate::rpmvercmp::rpmvercmp(&a.version, &b.version))
         })
         .copied()
 }
@@ -120,29 +120,6 @@ fn status_priority(status: &Option<Status>) -> u8 {
         Some(Status::Outdated) | Some(Status::Incorrect) => 2,
         Some(Status::Legacy) => 0,
         _ => 1,
-    }
-}
-
-/// Compare version strings by splitting on separators and comparing
-/// each component numerically when possible.
-pub fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    let mut a_parts = a.split(|c: char| !c.is_alphanumeric());
-    let mut b_parts = b.split(|c: char| !c.is_alphanumeric());
-    loop {
-        match (a_parts.next(), b_parts.next()) {
-            (None, None) => return std::cmp::Ordering::Equal,
-            (None, Some(_)) => return std::cmp::Ordering::Less,
-            (Some(_), None) => return std::cmp::Ordering::Greater,
-            (Some(ap), Some(bp)) => {
-                let ord = match (ap.parse::<u64>(), bp.parse::<u64>()) {
-                    (Ok(an), Ok(bn)) => an.cmp(&bn),
-                    _ => ap.cmp(bp),
-                };
-                if ord != std::cmp::Ordering::Equal {
-                    return ord;
-                }
-            }
-        }
     }
 }
 
@@ -177,7 +154,7 @@ pub fn latest_centos_stream(packages: &[Package]) -> Option<&Package> {
         .max_by(|a, b| {
             status_priority(&a.status)
                 .cmp(&status_priority(&b.status))
-                .then_with(|| version_cmp(&a.version, &b.version))
+                .then_with(|| crate::rpmvercmp::rpmvercmp(&a.version, &b.version))
         })
         .copied()
 }
@@ -406,17 +383,6 @@ mod tests {
         assert_eq!(centos_stream_release_number(&other), None);
     }
 
-    #[test]
-    fn test_version_cmp() {
-        use std::cmp::Ordering;
-        assert_eq!(version_cmp("6.18.16", "6.18.3"), Ordering::Greater);
-        assert_eq!(version_cmp("6.18.3", "6.18.16"), Ordering::Less);
-        assert_eq!(version_cmp("6.19", "6.19"), Ordering::Equal);
-        assert_eq!(version_cmp("7.0.0", "5.7.9"), Ordering::Greater);
-        assert_eq!(version_cmp("10.0", "9.0"), Ordering::Greater);
-        assert_eq!(version_cmp("1.0", "1.0.1"), Ordering::Less);
-        assert_eq!(version_cmp("1.0.1", "1.0"), Ordering::Greater);
-    }
 
     #[test]
     fn test_status_priority_ordering() {

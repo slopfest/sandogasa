@@ -321,7 +321,7 @@ pub fn check(
 fn compute_newest_version(summary: &HyperscaleSummary, ref_version: &Option<String>) -> Option<bool> {
     let ref_ver = ref_version.as_ref()?;
     let effective = summary.release.as_ref().or(summary.testing.as_ref())?;
-    Some(repology::version_cmp(&effective.version, ref_ver) != std::cmp::Ordering::Less)
+    Some(crate::rpmvercmp::rpmvercmp(&effective.version, ref_ver) != std::cmp::Ordering::Less)
 }
 
 /// A single row in the output table.
@@ -381,7 +381,7 @@ fn result_to_rows(result: &CheckResult) -> Vec<Row> {
 fn version_status(version: &str, ref_version: Option<&str>) -> String {
     match ref_version {
         Some(ref_ver) => {
-            if repology::version_cmp(version, ref_ver) != std::cmp::Ordering::Less {
+            if crate::rpmvercmp::rpmvercmp(version, ref_ver) != std::cmp::Ordering::Less {
                 "newest".into()
             } else {
                 "outdated".into()

@@ -6,3 +6,4 @@ pub mod config;
 pub mod gitlab;
 pub mod manifest;
 pub mod repology;
+pub mod rpmvercmp;
