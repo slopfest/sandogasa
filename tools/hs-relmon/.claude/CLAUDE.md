@@ -4,6 +4,7 @@
 - Always use `git commit -s` (sign-off) when committing
 - Always use `git tag -s` (GPG sign) when tagging
 - Before tagging a release, update CHANGELOG.md and README.md to reflect the new version's changes. Use the tag message identical to the new CHANGELOG.md entry
+- Before tagging, run `cargo publish --dry-run` to ensure Cargo.toml has all required metadata and the package is publishable
 - Before tagging, verify there are no uncommitted changes (`git status` must be clean)
 
 ## Code Style
