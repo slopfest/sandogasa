@@ -23,12 +23,20 @@ pub struct Client {
 impl Client {
     /// Create a client for the given GitLab project URL.
     ///
-    /// Reads the authentication token from `GITLAB_TOKEN`.
+    /// Reads the authentication token from `GITLAB_TOKEN`, falling
+    /// back to the config file.
     pub fn from_project_url(
         url: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let token = std::env::var("GITLAB_TOKEN")
-            .map_err(|_| "GITLAB_TOKEN environment variable not set")?;
+        let token = std::env::var("GITLAB_TOKEN").ok().or_else(|| {
+            crate::config::load()
+                .ok()
+                .and_then(|c| c.gitlab.map(|g| g.access_token))
+        });
+        let token = token.ok_or(
+            "GitLab token not found; set GITLAB_TOKEN \
+            or run 'hs-relmon config'",
+        )?;
         let (base_url, project_path) = parse_project_url(url)?;
         Self::new(&base_url, &project_path, &token)
     }
@@ -143,6 +151,28 @@ fn check_response(
         return Err(format!("GitLab API error {status}: {text}").into());
     }
     Ok(resp.json()?)
+}
+
+/// Check whether a token is valid by calling `GET /api/v4/user`.
+pub fn validate_token(
+    base_url: &str,
+    token: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("private-token"),
+        HeaderValue::from_str(token)?,
+    );
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("hs-relmon/0.1.1")
+        .default_headers(headers)
+        .build()?;
+    let url = format!(
+        "{}/api/v4/user",
+        base_url.trim_end_matches('/')
+    );
+    let resp = client.get(&url).send()?;
+    Ok(resp.status().is_success())
 }
 
 /// Parse a GitLab project URL into (base_url, project_path).

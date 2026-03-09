@@ -3,6 +3,7 @@
 use clap::{Parser, Subcommand};
 use hs_relmon::cbs;
 use hs_relmon::check_latest::{self, Distros, TrackRef};
+use hs_relmon::config;
 use hs_relmon::gitlab;
 use hs_relmon::repology;
 
@@ -66,9 +67,13 @@ outdated. Searches for an open issue labeled
 rfe::new-version and updates its title, or creates
 a new one. Defaults to
 https://gitlab.com/CentOS/Hyperscale/rpms/PKG.
-Requires GITLAB_TOKEN env var.")]
+Uses the token from 'hs-relmon config', or
+GITLAB_TOKEN env var as an override.")]
         file_issue: Option<String>,
     },
+
+    /// Configure GitLab authentication.
+    Config,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -133,7 +138,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        Command::Config => {
+            configure_gitlab()?;
+        }
     }
+
+    Ok(())
+}
+
+const GITLAB_BASE: &str = "https://gitlab.com";
+
+fn configure_gitlab() -> Result<(), Box<dyn std::error::Error>> {
+    let existing_token = config::load()
+        .ok()
+        .and_then(|c| c.gitlab.map(|g| g.access_token));
+
+    if let Some(token) = &existing_token {
+        eprint!("Validating existing token... ");
+        if gitlab::validate_token(GITLAB_BASE, token)? {
+            eprintln!("valid.");
+            return Ok(());
+        }
+        eprintln!("invalid.");
+    }
+
+    let token = rpassword::prompt_password(
+        "Paste a GitLab personal access token \
+        with 'api' scope: ",
+    )?;
+    if token.is_empty() {
+        return Err("no token provided".into());
+    }
+
+    eprint!("Validating token... ");
+    if !gitlab::validate_token(GITLAB_BASE, &token)? {
+        return Err("token is invalid".into());
+    }
+    eprintln!("valid.");
+
+    let cfg = config::Config {
+        gitlab: Some(config::GitlabConfig {
+            access_token: token,
+        }),
+    };
+    let path = config::config_path()?;
+    config::save(&cfg)?;
+    eprintln!("Saved to {}", path.display());
 
     Ok(())
 }
