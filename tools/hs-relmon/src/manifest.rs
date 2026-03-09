@@ -91,19 +91,6 @@ impl Manifest {
         self.packages.sort_by(|a, b| a.name.cmp(&b.name));
     }
 
-    /// Save the manifest to a TOML file.
-    pub fn save(
-        &self,
-        path: &Path,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let toml_str = toml::to_string(self)?;
-        let contents = format!(
-            "# SPDX-License-Identifier: MPL-2.0\n\n{toml_str}"
-        );
-        std::fs::write(path, contents)?;
-        Ok(())
-    }
-
     /// Resolve all packages by merging per-package overrides
     /// with defaults.
     pub fn resolve(
@@ -165,6 +152,86 @@ impl Manifest {
             issue_url,
         })
     }
+}
+
+/// Add packages to a manifest file, keeping entries sorted.
+///
+/// Preserves comments and formatting via `toml_edit`.
+pub fn add_packages_to_file(
+    path: &Path,
+    names: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::collections::HashSet;
+    use toml_edit::DocumentMut;
+
+    let contents = std::fs::read_to_string(path)?;
+    let mut doc: DocumentMut = contents.parse()?;
+
+    // Collect existing tables, rebuilding each without span
+    // info but preserving decorations (comments).
+    let mut pkg_tables: Vec<(String, toml_edit::Table)> =
+        Vec::new();
+    let mut first_prefix: Option<toml_edit::RawString> = None;
+    if let Some(arr) =
+        doc.get("package").and_then(|i| i.as_array_of_tables())
+    {
+        for (i, table) in arr.iter().enumerate() {
+            if i == 0 {
+                first_prefix = table
+                    .decor()
+                    .prefix()
+                    .cloned();
+            }
+            let name = table
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let mut new_table = toml_edit::Table::new();
+            for (key, item) in table.iter() {
+                new_table.insert(key, item.clone());
+            }
+            pkg_tables.push((name, new_table));
+        }
+    }
+
+    let existing: HashSet<String> = pkg_tables
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    for name in names {
+        if !existing.contains(name) {
+            let mut table = toml_edit::Table::new();
+            table.insert(
+                "name",
+                toml_edit::value(name.as_str()),
+            );
+            pkg_tables.push((name.clone(), table));
+        }
+    }
+
+    pkg_tables.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut new_arr = toml_edit::ArrayOfTables::new();
+    for (i, (_, mut table)) in
+        pkg_tables.into_iter().enumerate()
+    {
+        if i == 0 {
+            if let Some(prefix) = &first_prefix {
+                table.decor_mut().set_prefix(prefix.clone());
+            }
+        }
+        new_arr.push(table);
+    }
+    doc.remove("package");
+    doc.insert(
+        "package",
+        toml_edit::Item::ArrayOfTables(new_arr),
+    );
+
+    std::fs::write(path, doc.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -459,38 +526,112 @@ repology_name = "linux"
     }
 
     #[test]
-    fn test_save_and_reload() {
-        let toml_str = r#"
+    fn test_add_packages_to_file() {
+        let original = "\
+# SPDX-License-Identifier: MPL-2.0
+
+# Default settings.
 [defaults]
 file_issue = true
 
-[[package]]
-name = "systemd"
+# Packages to monitor.
 
 [[package]]
-name = "ethtool"
-"#;
-        let mut m: Manifest = toml::from_str(toml_str).unwrap();
-        m.add_packages(&["perf".into()]);
+name = \"systemd\"
 
+[[package]]
+name = \"ethtool\"
+";
         let dir = std::env::temp_dir().join("hs-relmon-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("test-save.toml");
-        m.save(&path).unwrap();
+        let path = dir.join("test-add-packages.toml");
+        std::fs::write(&path, original).unwrap();
 
+        add_packages_to_file(
+            &path,
+            &["perf".into()],
+        )
+        .unwrap();
+
+        let contents =
+            std::fs::read_to_string(&path).unwrap();
+
+        // Comments preserved
+        assert!(
+            contents.contains("# SPDX-License-Identifier")
+        );
+        assert!(contents.contains("# Default settings."));
+        assert!(
+            contents.contains("# Packages to monitor.")
+        );
+
+        // Packages sorted
         let reloaded = Manifest::load(&path).unwrap();
         assert_eq!(reloaded.packages.len(), 3);
         assert_eq!(reloaded.packages[0].name, "ethtool");
         assert_eq!(reloaded.packages[1].name, "perf");
         assert_eq!(reloaded.packages[2].name, "systemd");
-        assert_eq!(reloaded.defaults.file_issue, Some(true));
+        assert_eq!(
+            reloaded.defaults.file_issue,
+            Some(true)
+        );
 
-        // Verify SPDX header
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_add_packages_to_file_skips_duplicates() {
+        let original = "\
+[[package]]
+name = \"ethtool\"
+";
+        let dir = std::env::temp_dir().join("hs-relmon-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path =
+            dir.join("test-add-packages-dup.toml");
+        std::fs::write(&path, original).unwrap();
+
+        add_packages_to_file(
+            &path,
+            &["ethtool".into(), "perf".into()],
+        )
+        .unwrap();
+
+        let reloaded = Manifest::load(&path).unwrap();
+        assert_eq!(reloaded.packages.len(), 2);
+        assert_eq!(reloaded.packages[0].name, "ethtool");
+        assert_eq!(reloaded.packages[1].name, "perf");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_add_packages_to_file_preserves_fields() {
+        let original = "\
+[[package]]
+name = \"perf\"
+repology_name = \"linux\"
+";
+        let dir = std::env::temp_dir().join("hs-relmon-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path =
+            dir.join("test-add-packages-fields.toml");
+        std::fs::write(&path, original).unwrap();
+
+        add_packages_to_file(
+            &path,
+            &["ethtool".into()],
+        )
+        .unwrap();
+
         let contents =
             std::fs::read_to_string(&path).unwrap();
-        assert!(contents.starts_with(
-            "# SPDX-License-Identifier: MPL-2.0"
-        ));
+        assert!(contents.contains("repology_name = \"linux\""));
+
+        let reloaded = Manifest::load(&path).unwrap();
+        assert_eq!(reloaded.packages.len(), 2);
+        assert_eq!(reloaded.packages[0].name, "ethtool");
+        assert_eq!(reloaded.packages[1].name, "perf");
 
         std::fs::remove_file(&path).ok();
     }

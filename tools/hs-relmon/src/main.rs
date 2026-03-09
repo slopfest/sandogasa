@@ -411,10 +411,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "No missing packages to add."
                     );
                 } else {
-                    let mut m =
-                        manifest::Manifest::load(path)?;
-                    m.add_packages(&missing);
-                    m.save(path)?;
+                    manifest::add_packages_to_file(
+                        path, &missing,
+                    )?;
                     eprintln!(
                         "Added {} package(s) to {}",
                         missing.len(),
