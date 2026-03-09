@@ -28,6 +28,35 @@ pub struct Client {
     project_path: String,
 }
 
+/// Load the GitLab token from `GITLAB_TOKEN` env var or config file.
+pub fn load_token() -> Result<String, Box<dyn std::error::Error>> {
+    let token = std::env::var("GITLAB_TOKEN").ok().or_else(|| {
+        crate::config::load()
+            .ok()
+            .and_then(|c| c.gitlab.map(|g| g.access_token))
+    });
+    token.ok_or_else(|| {
+        "GitLab token not found; set GITLAB_TOKEN \
+        or run 'hs-relmon config'"
+            .into()
+    })
+}
+
+/// Build an HTTP client with the given token.
+fn build_http_client(
+    token: &str,
+) -> Result<reqwest::blocking::Client, Box<dyn std::error::Error>> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("private-token"),
+        HeaderValue::from_str(token)?,
+    );
+    Ok(reqwest::blocking::Client::builder()
+        .user_agent("hs-relmon/0.2.1")
+        .default_headers(headers)
+        .build()?)
+}
+
 impl Client {
     /// Create a client for the given GitLab project URL.
     ///
@@ -36,15 +65,7 @@ impl Client {
     pub fn from_project_url(
         url: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let token = std::env::var("GITLAB_TOKEN").ok().or_else(|| {
-            crate::config::load()
-                .ok()
-                .and_then(|c| c.gitlab.map(|g| g.access_token))
-        });
-        let token = token.ok_or(
-            "GitLab token not found; set GITLAB_TOKEN \
-            or run 'hs-relmon config'",
-        )?;
+        let token = load_token()?;
         let (base_url, project_path) = parse_project_url(url)?;
         Self::new(&base_url, &project_path, &token)
     }
@@ -55,15 +76,7 @@ impl Client {
         project_path: &str,
         token: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            HeaderName::from_static("private-token"),
-            HeaderValue::from_str(token)?,
-        );
-        let http = reqwest::blocking::Client::builder()
-            .user_agent("hs-relmon/0.2.1")
-            .default_headers(headers)
-            .build()?;
+        let http = build_http_client(token)?;
         Ok(Self {
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -198,6 +211,170 @@ fn parse_work_item_status(
         .and_then(|w| w.pointer("/status/name"))
         .and_then(|n| n.as_str())
         .map(String::from)
+}
+
+/// Client for group-level GitLab API queries.
+pub struct GroupClient {
+    http: reqwest::blocking::Client,
+    base_url: String,
+    group_path: String,
+}
+
+impl GroupClient {
+    /// Create a group client from a GitLab group URL.
+    pub fn from_group_url(
+        url: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let token = load_token()?;
+        let (base_url, group_path) = parse_project_url(url)?;
+        Self::new(&base_url, &group_path, &token)
+    }
+
+    /// Create a group client with explicit parameters.
+    pub fn new(
+        base_url: &str,
+        group_path: &str,
+        token: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let http = build_http_client(token)?;
+        Ok(Self {
+            http,
+            base_url: base_url.trim_end_matches('/').to_string(),
+            group_path: group_path.to_string(),
+        })
+    }
+
+    /// List all issues in the group matching a label,
+    /// handling pagination automatically.
+    pub fn list_issues(
+        &self,
+        label: &str,
+        state: Option<&str>,
+    ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
+        let mut all_issues = Vec::new();
+        let mut page = 1u32;
+        loop {
+            let page_str = page.to_string();
+            let mut query = vec![
+                ("labels", label),
+                ("per_page", "100"),
+                ("page", &page_str),
+            ];
+            if let Some(s) = state {
+                query.push(("state", s));
+            }
+            let resp = self
+                .http
+                .get(&self.issues_url())
+                .query(&query)
+                .send()?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text()?;
+                return Err(format!(
+                    "GitLab API error {status}: {text}"
+                )
+                .into());
+            }
+            let next_page = resp
+                .headers()
+                .get("x-next-page")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            let issues: Vec<Issue> = resp.json()?;
+            all_issues.extend(issues);
+            if next_page.is_empty() {
+                break;
+            }
+            page = next_page.parse()?;
+        }
+        Ok(all_issues)
+    }
+
+    /// Fetch the work-item status for an issue via GraphQL.
+    pub fn get_work_item_status(
+        &self,
+        project_path: &str,
+        iid: u64,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>>
+    {
+        let query = format!(
+            r#"{{ project(fullPath: "{}") {{
+                workItems(iids: ["{}"])  {{
+                    nodes {{ widgets {{
+                        type
+                        ... on WorkItemWidgetStatus {{
+                            status {{ name }}
+                        }}
+                    }} }}
+                }}
+            }} }}"#,
+            project_path, iid
+        );
+        let body = serde_json::json!({ "query": query });
+        let resp = self
+            .http
+            .post(&self.graphql_url())
+            .json(&body)
+            .send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!(
+                "GitLab GraphQL error {status}: {text}"
+            )
+            .into());
+        }
+        let json: serde_json::Value = resp.json()?;
+        Ok(parse_work_item_status(&json))
+    }
+
+    fn issues_url(&self) -> String {
+        let encoded = self.group_path.replace('/', "%2F");
+        format!(
+            "{}/api/v4/groups/{}/issues",
+            self.base_url, encoded
+        )
+    }
+
+    fn graphql_url(&self) -> String {
+        format!("{}/api/graphql", self.base_url)
+    }
+}
+
+/// Extract the package name from a GitLab issue web_url.
+///
+/// Example: `"https://gitlab.com/CentOS/Hyperscale/rpms/ethtool/-/issues/1"`
+/// returns `Some("ethtool")`.
+pub fn package_from_issue_url(web_url: &str) -> Option<&str> {
+    let project_part = web_url.split("/-/issues/").next()?;
+    let name = project_part.rsplit('/').next()?;
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// Extract the project path from a GitLab issue web_url.
+///
+/// Example: `"https://gitlab.com/CentOS/Hyperscale/rpms/ethtool/-/issues/1"`
+/// returns `Some("CentOS/Hyperscale/rpms/ethtool")`.
+pub fn project_path_from_issue_url(
+    web_url: &str,
+) -> Option<String> {
+    let project_part = web_url.split("/-/issues/").next()?;
+    let rest = project_part
+        .strip_prefix("https://")
+        .or_else(|| project_part.strip_prefix("http://"))?;
+    let slash = rest.find('/')?;
+    let path = &rest[slash + 1..];
+    if path.is_empty() {
+        None
+    } else {
+        Some(path.to_string())
+    }
 }
 
 /// Parameters for editing an issue.
@@ -537,5 +714,97 @@ mod tests {
         )
         .unwrap();
         assert!(parse_work_item_status(&json).is_none());
+    }
+
+    #[test]
+    fn test_package_from_issue_url() {
+        assert_eq!(
+            package_from_issue_url(
+                "https://gitlab.com/CentOS/Hyperscale/\
+                rpms/ethtool/-/issues/1"
+            ),
+            Some("ethtool")
+        );
+        assert_eq!(
+            package_from_issue_url(
+                "https://gitlab.com/group/project/-/issues/42"
+            ),
+            Some("project")
+        );
+    }
+
+    #[test]
+    fn test_package_from_issue_url_no_issues_path() {
+        assert_eq!(
+            package_from_issue_url(
+                "https://gitlab.com/group/project"
+            ),
+            Some("project")
+        );
+    }
+
+    #[test]
+    fn test_package_from_issue_url_empty() {
+        assert_eq!(package_from_issue_url(""), None);
+    }
+
+    #[test]
+    fn test_project_path_from_issue_url() {
+        assert_eq!(
+            project_path_from_issue_url(
+                "https://gitlab.com/CentOS/Hyperscale/\
+                rpms/ethtool/-/issues/1"
+            )
+            .as_deref(),
+            Some("CentOS/Hyperscale/rpms/ethtool")
+        );
+    }
+
+    #[test]
+    fn test_project_path_from_issue_url_no_issues() {
+        assert_eq!(
+            project_path_from_issue_url(
+                "https://gitlab.com/group/project"
+            )
+            .as_deref(),
+            Some("group/project")
+        );
+    }
+
+    #[test]
+    fn test_project_path_from_issue_url_no_scheme() {
+        assert!(project_path_from_issue_url(
+            "gitlab.com/group/project"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn test_group_client_issues_url() {
+        let client = GroupClient::new(
+            "https://gitlab.com",
+            "CentOS/Hyperscale/rpms",
+            "fake-token",
+        )
+        .unwrap();
+        assert_eq!(
+            client.issues_url(),
+            "https://gitlab.com/api/v4/groups/\
+            CentOS%2FHyperscale%2Frpms/issues"
+        );
+    }
+
+    #[test]
+    fn test_group_client_graphql_url() {
+        let client = GroupClient::new(
+            "https://gitlab.com",
+            "CentOS/Hyperscale/rpms",
+            "fake-token",
+        )
+        .unwrap();
+        assert_eq!(
+            client.graphql_url(),
+            "https://gitlab.com/api/graphql"
+        );
     }
 }

@@ -3,10 +3,13 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use std::collections::HashSet;
+
 use hs_relmon::cbs;
 use hs_relmon::check_latest::{self, Distros, TrackRef};
 use hs_relmon::config;
 use hs_relmon::gitlab;
+use hs_relmon::list_issues;
 use hs_relmon::manifest;
 use hs_relmon::repology;
 
@@ -104,6 +107,45 @@ to this username. Use \"none\" to match unassigned
 issues. Packages without an issue or without a
 matching assignee are excluded.")]
         issue_assignee: Option<String>,
+    },
+
+    /// List GitLab issues labeled rfe::new-version.
+    ListIssues {
+        /// GitLab group URL to search.
+        #[arg(
+            long,
+            default_value =
+                "https://gitlab.com/CentOS/Hyperscale/rpms"
+        )]
+        group: String,
+
+        /// Only show issues matching this status.
+        #[arg(long, value_name = "STATUS", long_help = "\
+Only show issues matching this work-item status.
+
+Default statuses:
+  To do          Planned but not started
+  In progress    Currently being worked on
+  Done           Completed
+  Canceled       Will not be done")]
+        issue_status: Option<String>,
+
+        /// Only show issues assigned to this user.
+        #[arg(long, value_name = "USERNAME", long_help = "\
+Only show issues assigned to this username.
+Use \"none\" to match unassigned issues.")]
+        issue_assignee: Option<String>,
+
+        /// Output as JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+
+        /// TOML manifest to compare against.
+        #[arg(long, value_name = "PATH", long_help = "\
+Path to a TOML manifest file. When provided, the
+output shows which packages with rfe::new-version
+issues are missing from the manifest.")]
+        manifest: Option<PathBuf>,
     },
 
     /// Configure GitLab authentication.
@@ -304,6 +346,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "{errors} package(s) had errors"
                 )
                 .into());
+            }
+        }
+        Command::ListIssues {
+            group,
+            issue_status,
+            issue_assignee,
+            json,
+            manifest,
+        } => {
+            let client =
+                gitlab::GroupClient::from_group_url(&group)?;
+            let issues = client.list_issues(
+                ISSUE_LABEL,
+                None,
+            )?;
+
+            let manifest_names = match &manifest {
+                Some(path) => {
+                    let m = manifest::Manifest::load(path)?;
+                    let names: HashSet<String> = m
+                        .packages
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .collect();
+                    Some(names)
+                }
+                None => None,
+            };
+
+            let entries = list_issues::build_entries(
+                &client,
+                &issues,
+                issue_status.as_deref(),
+                issue_assignee.as_deref(),
+                manifest_names.as_ref(),
+            );
+
+            if json {
+                list_issues::print_json(&entries)?;
+            } else {
+                list_issues::print_table(&entries);
             }
         }
         Command::Config => {

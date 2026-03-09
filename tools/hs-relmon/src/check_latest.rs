@@ -212,22 +212,39 @@ impl CheckResult {
             Some(i) => i,
             None => return false,
         };
-        if let Some(s) = status {
-            if issue.status != s {
-                return false;
-            }
-        }
-        if let Some(a) = assignee {
-            if a == "none" {
-                if !issue.assignees.is_empty() {
-                    return false;
-                }
-            } else if !issue.assignees.iter().any(|u| u == a) {
-                return false;
-            }
-        }
-        true
+        matches_filter(
+            &issue.status,
+            &issue.assignees,
+            status,
+            assignee,
+        )
     }
+}
+
+/// Whether an issue matches the given status/assignee filters.
+///
+/// `"none"` as assignee matches issues with no assignees.
+pub fn matches_filter(
+    status: &str,
+    assignees: &[String],
+    filter_status: Option<&str>,
+    filter_assignee: Option<&str>,
+) -> bool {
+    if let Some(s) = filter_status {
+        if status != s {
+            return false;
+        }
+    }
+    if let Some(a) = filter_assignee {
+        if a == "none" {
+            if !assignees.is_empty() {
+                return false;
+            }
+        } else if !assignees.iter().any(|u| u == a) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Run the check-latest query for a package with the given distro selection.
@@ -1503,6 +1520,88 @@ mod tests {
         assert!(!assigned.matches_issue_filter(
             None,
             Some("none"),
+        ));
+    }
+
+    #[test]
+    fn test_matches_filter_no_filters() {
+        assert!(matches_filter(
+            "To do",
+            &["alice".into()],
+            None,
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_matches_filter_status() {
+        assert!(matches_filter(
+            "To do",
+            &[],
+            Some("To do"),
+            None,
+        ));
+        assert!(!matches_filter(
+            "Done",
+            &[],
+            Some("To do"),
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_matches_filter_assignee() {
+        let a: Vec<String> = vec!["alice".into()];
+        assert!(matches_filter(
+            "To do",
+            &a,
+            None,
+            Some("alice"),
+        ));
+        assert!(!matches_filter(
+            "To do",
+            &a,
+            None,
+            Some("bob"),
+        ));
+    }
+
+    #[test]
+    fn test_matches_filter_none_assignee() {
+        assert!(matches_filter(
+            "To do",
+            &[],
+            None,
+            Some("none"),
+        ));
+        assert!(!matches_filter(
+            "To do",
+            &["alice".into()],
+            None,
+            Some("none"),
+        ));
+    }
+
+    #[test]
+    fn test_matches_filter_both() {
+        let a: Vec<String> = vec!["alice".into()];
+        assert!(matches_filter(
+            "To do",
+            &a,
+            Some("To do"),
+            Some("alice"),
+        ));
+        assert!(!matches_filter(
+            "Done",
+            &a,
+            Some("To do"),
+            Some("alice"),
+        ));
+        assert!(!matches_filter(
+            "To do",
+            &a,
+            Some("To do"),
+            Some("bob"),
         ));
     }
 }
