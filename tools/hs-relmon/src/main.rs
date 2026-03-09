@@ -100,8 +100,9 @@ Default statuses:
         /// Only show packages whose issue is assigned to this user.
         #[arg(long, value_name = "USERNAME", long_help = "\
 Only show packages whose GitLab issue is assigned
-to this username. Packages without an issue or
-without a matching assignee are excluded.")]
+to this username. Use \"none\" to match unassigned
+issues. Packages without an issue or without a
+matching assignee are excluded.")]
         issue_assignee: Option<String>,
     },
 

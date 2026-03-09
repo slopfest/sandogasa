@@ -218,7 +218,11 @@ impl CheckResult {
             }
         }
         if let Some(a) = assignee {
-            if !issue.assignees.iter().any(|u| u == a) {
+            if a == "none" {
+                if !issue.assignees.is_empty() {
+                    return false;
+                }
+            } else if !issue.assignees.iter().any(|u| u == a) {
                 return false;
             }
         }
@@ -1475,5 +1479,30 @@ mod tests {
             assignees: vec![],
         }));
         assert!(r.matches_issue_filter(None, None));
+    }
+
+    #[test]
+    fn test_matches_issue_filter_unassigned() {
+        let unassigned = make_result_with_issue(Some(IssueRef {
+            iid: 1,
+            url: "u".into(),
+            status: "opened".into(),
+            assignees: vec![],
+        }));
+        assert!(unassigned.matches_issue_filter(
+            None,
+            Some("none"),
+        ));
+
+        let assigned = make_result_with_issue(Some(IssueRef {
+            iid: 2,
+            url: "u".into(),
+            status: "opened".into(),
+            assignees: vec!["alice".into()],
+        }));
+        assert!(!assigned.matches_issue_filter(
+            None,
+            Some("none"),
+        ));
     }
 }
