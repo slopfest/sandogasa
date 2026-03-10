@@ -247,25 +247,21 @@ async fn cmd_js_fps(
         return Ok(());
     }
 
-    for &bug_id in &fp_bug_ids {
-        let update = serde_json::json!({
-            "status": "CLOSED",
-            "resolution": "NOTABUG",
-            "blocks": {
-                "add": [config.tracker_bug]
-            },
-            "comment": {
-                "body": config.reason
-            }
-        });
-
-        match bz.update(bug_id, &update).await {
-            Ok(()) => println!("Closed bug {bug_id}"),
-            Err(e) => eprintln!("Error closing bug {bug_id}: {e}"),
+    let update = serde_json::json!({
+        "status": "CLOSED",
+        "resolution": "NOTABUG",
+        "blocks": {
+            "add": [config.tracker_bug]
+        },
+        "comment": {
+            "body": config.reason
         }
-    }
+    });
 
-    println!("Done. {} bug(s) closed.", fp_bug_ids.len());
+    match bz.update_many(&fp_bug_ids, &update).await {
+        Ok(()) => println!("Closed {} bug(s).", fp_bug_ids.len()),
+        Err(e) => eprintln!("Error closing bugs: {e}"),
+    }
 
     Ok(())
 }
@@ -621,32 +617,35 @@ async fn cmd_bodhi_check(
                 return Ok(());
             }
 
-            // Close StableFix bugs as ERRATA
+            // Close StableFix bugs as ERRATA, grouped by NVR for batch updates
+            let mut by_nvr: HashMap<String, Vec<u64>> = HashMap::new();
             for r in &stable_fixes {
-                if let BodhiCheckResult::StableFix {
-                    bug_id,
-                    nvr,
-                    ..
-                } = r
-                {
-                    let update = serde_json::json!({
-                        "status": "CLOSED",
-                        "resolution": "ERRATA",
-                        "cf_fixed_in": nvr,
-                        "comment": {
-                            "body": format!("This bug is already fixed in a published Bodhi update: {nvr}")
-                        }
-                    });
-
-                    match bz.update(*bug_id, &update).await {
-                        Ok(()) => println!("Closed bug {} as ERRATA ({})", bug_id, nvr),
-                        Err(e) => eprintln!("Error closing bug {}: {}", bug_id, e),
+                if let BodhiCheckResult::StableFix { bug_id, nvr, .. } = r {
+                    by_nvr.entry(nvr.clone()).or_default().push(*bug_id);
+                }
+            }
+            for (nvr, bug_ids) in &by_nvr {
+                let update = serde_json::json!({
+                    "status": "CLOSED",
+                    "resolution": "ERRATA",
+                    "cf_fixed_in": nvr,
+                    "comment": {
+                        "body": format!("This bug is already fixed in a published Bodhi update: {nvr}")
                     }
+                });
+
+                match bz.update_many(bug_ids, &update).await {
+                    Ok(()) => println!(
+                        "Closed {} bug(s) as ERRATA ({})",
+                        bug_ids.len(),
+                        nvr
+                    ),
+                    Err(e) => eprintln!("Error closing bugs for {}: {}", nvr, e),
                 }
             }
 
             // Add tracker_bug as blocker for late-filed bugs
-            for &bug_id in &late_filed {
+            if !late_filed.is_empty() {
                 let update = serde_json::json!({
                     "blocks": {
                         "add": [config.tracker_bug]
@@ -656,12 +655,13 @@ async fn cmd_bodhi_check(
                     }
                 });
 
-                match bz.update(bug_id, &update).await {
+                match bz.update_many(&late_filed, &update).await {
                     Ok(()) => println!(
-                        "Marked bug {} as blocking {} (late-filed)",
-                        bug_id, config.tracker_bug
+                        "Marked {} bug(s) as blocking {} (late-filed)",
+                        late_filed.len(),
+                        config.tracker_bug
                     ),
-                    Err(e) => eprintln!("Error updating bug {}: {}", bug_id, e),
+                    Err(e) => eprintln!("Error updating late-filed bugs: {}", e),
                 }
             }
         }

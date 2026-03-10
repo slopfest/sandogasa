@@ -116,6 +116,7 @@ impl BzClient {
     }
 
     /// Update a bug. Requires an API key. The body is a JSON object with fields to update.
+    #[allow(dead_code)]
     pub async fn update(
         &self,
         id: u64,
@@ -128,11 +129,33 @@ impl BzClient {
             .error_for_status()?;
         Ok(())
     }
+
+    /// Update multiple bugs in a single request. The `ids` are injected into the body.
+    pub async fn update_many(
+        &self,
+        ids: &[u64],
+        body: &serde_json::Value,
+    ) -> Result<(), reqwest::Error> {
+        let mut body = body.clone();
+        body.as_object_mut()
+            .unwrap()
+            .insert("ids".to_string(), serde_json::json!(ids));
+        // Use the first ID in the URL (required by the endpoint), but
+        // the `ids` field in the body controls which bugs are updated.
+        self.auth(self.client.put(self.url(&format!("bug/{}", ids[0]))))
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // ---- new / URL normalization ----
 
@@ -195,5 +218,109 @@ mod tests {
             client.url("bug?product=Fedora&status=NEW"),
             "https://bugzilla.redhat.com/rest/bug?product=Fedora&status=NEW"
         );
+    }
+
+    // ---- update ----
+
+    #[tokio::test]
+    async fn update_sends_put_with_body() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/42"))
+            .and(body_json(serde_json::json!({"status": "CLOSED"})))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client
+            .update(42, &serde_json::json!({"status": "CLOSED"}))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_returns_error_on_server_failure() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/99"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let result = client
+            .update(99, &serde_json::json!({"status": "CLOSED"}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    // ---- update_many ----
+
+    #[tokio::test]
+    async fn update_many_sends_ids_in_body() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/1"))
+            .and(body_json(serde_json::json!({
+                "status": "CLOSED",
+                "resolution": "NOTABUG",
+                "ids": [1, 2, 3]
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client
+            .update_many(
+                &[1, 2, 3],
+                &serde_json::json!({"status": "CLOSED", "resolution": "NOTABUG"}),
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_many_single_id() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/42"))
+            .and(body_json(serde_json::json!({
+                "status": "CLOSED",
+                "ids": [42]
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client
+            .update_many(&[42], &serde_json::json!({"status": "CLOSED"}))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_many_returns_error_on_server_failure() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+
+        let result = client
+            .update_many(&[1, 2], &serde_json::json!({"status": "CLOSED"}))
+            .await;
+        assert!(result.is_err());
     }
 }
