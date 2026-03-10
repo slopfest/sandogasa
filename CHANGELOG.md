@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.2
+
+- Batch Bugzilla updates to close multiple bugs in a single API request
+- Update project guidelines (code style rules, revised coverage threshold)
+
 ## v0.2.1
 
 - Fall through to description heuristics when CPE has wildcard target_sw

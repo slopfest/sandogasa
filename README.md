@@ -69,8 +69,9 @@ Checking 3 CVE bugs for JavaScript false positives...
 FP: bug 2418496 — CVE-2025-13466 cachelib: body-parser denial of service [epel-9]
 ...
 
-This will close N bug(s) as NOTABUG and mark them as blocking CVE-FalsePositive-Unshipped.
-Proceed? [y/N]
+This will close 3 bug(s) as NOTABUG and mark them as blocking CVE-FalsePositive-Unshipped.
+Proceed? [y/N] y
+Closed 3 bug(s).
 ```
 
 ### Check for existing Bodhi fixes
@@ -115,7 +116,9 @@ closed, since the update hasn't reached stable yet.
 $ fedora-cve-triage bodhi-check -f configs/bodhi-check-freerdp.toml --close-bugs
 ...
 This will close 2 bug(s) as ERRATA and mark 1 late-filed bug(s) as blocking CVE-AlreadyFixed.
-Proceed? [y/N]
+Proceed? [y/N] y
+Closed 2 bug(s) as ERRATA (freerdp-3.23.0-1.fc42)
+Marked 1 bug(s) as blocking CVE-AlreadyFixed (late-filed)
 ```
 
 Add `--edit-bodhi` to add bug references to testing updates via the `bodhi`
