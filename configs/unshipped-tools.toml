@@ -1,0 +1,5 @@
+tracker_bug = "CVE-FalsePositive-Unshipped"
+products = ["Fedora", "Fedora EPEL"]
+components = ["pcem"]
+statuses = ["NEW", "ASSIGNED"]
+reason = "The tool affected by the CVE is not shipped by this source RPM's binary subpackages"

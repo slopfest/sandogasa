@@ -126,6 +126,36 @@ impl CveResponse {
             .collect()
     }
 
+    /// Extract tool/binary names that this CVE specifically affects.
+    ///
+    /// Looks for patterns in the English descriptions and bug summary that
+    /// indicate a specific tool, such as "{name} tool", "{name} utility",
+    /// or "{name}'s". Returns an empty Vec if no specific tool can be
+    /// identified (e.g. for library-level vulnerabilities).
+    pub fn affected_tool_names(&self, bug_summary: &str) -> Vec<String> {
+        let mut tools = std::collections::HashSet::new();
+
+        // Extract from English descriptions
+        for v in &self.vulnerabilities {
+            for d in &v.cve.descriptions {
+                if d.lang == "en" {
+                    for name in extract_tool_names_from_text(&d.value) {
+                        tools.insert(name);
+                    }
+                }
+            }
+        }
+
+        // Extract from bug summary
+        for name in extract_tool_names_from_text(bug_summary) {
+            tools.insert(name);
+        }
+
+        let mut result: Vec<String> = tools.into_iter().collect();
+        result.sort();
+        result
+    }
+
     /// Check if this CVE targets JavaScript/NodeJS using three strategies:
     /// 1. CPE data (authoritative, if available)
     /// 2. CNA source (e.g. OpenJS Foundation)
@@ -174,6 +204,54 @@ impl CveResponse {
                 })
         })
     }
+}
+
+/// Keywords that when following a word indicate that word is a tool/binary name.
+///
+/// Kept narrow on purpose to avoid false positives like "interactive shell"
+/// or "remote server" — only unambiguous nouns that mean "a program you run".
+const TOOL_QUALIFIERS: &[&str] = &["tool", "utility", "binary", "executable"];
+
+/// Extract potential tool/binary names from text.
+///
+/// Looks for the pattern `{name} tool/utility/binary/executable` where
+/// `{name}` looks like a plausible Unix binary name.
+fn extract_tool_names_from_text(text: &str) -> Vec<String> {
+    let mut tools = Vec::new();
+    let words: Vec<&str> = text.split_whitespace().collect();
+
+    for i in 0..words.len().saturating_sub(1) {
+        let next_lower = words[i + 1].to_lowercase();
+        let next_clean = next_lower.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+        if TOOL_QUALIFIERS.iter().any(|q| next_clean == *q) {
+            let candidate = clean_word(words[i]);
+            if looks_like_binary_name(&candidate) {
+                tools.push(candidate);
+            }
+        }
+    }
+
+    tools.sort();
+    tools.dedup();
+    tools
+}
+
+/// Clean a word for comparison: strip non-alphanumeric edges, lowercase.
+fn clean_word(word: &str) -> String {
+    word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.')
+        .to_lowercase()
+}
+
+/// Check if a string looks like a plausible Unix binary name.
+fn looks_like_binary_name(s: &str) -> bool {
+    if s.len() < 2 {
+        return false;
+    }
+    if !s.chars().next().unwrap().is_ascii_alphabetic() {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
 }
 
 #[cfg(test)]
@@ -582,5 +660,171 @@ mod tests {
         assert_eq!(fv.len(), 2);
         assert_eq!(fv[0].version, "3.23.0");
         assert_eq!(fv[1].version, "2.11.8");
+    }
+
+    // ---- extract_tool_names_from_text ----
+
+    #[test]
+    fn tool_name_from_word_before_tool() {
+        let names = extract_tool_names_from_text("A flaw in libxml2's xmllint tool allows DoS");
+        assert!(names.contains(&"xmllint".to_string()));
+    }
+
+    #[test]
+    fn tool_name_from_word_before_utility() {
+        let names = extract_tool_names_from_text("The curl utility has a bug");
+        assert!(names.contains(&"curl".to_string()));
+    }
+
+    #[test]
+    fn tool_name_not_extracted_from_command() {
+        // "command" is too broad as a qualifier — could match "this command"
+        let names = extract_tool_names_from_text("The git-lfs command is vulnerable");
+        assert!(!names.contains(&"git-lfs".to_string()));
+    }
+
+    #[test]
+    fn tool_name_not_from_possessive() {
+        // Possessive form is too noisy (catches library names like "libxml2's")
+        let names = extract_tool_names_from_text(
+            "Memory in libxml2's xmllint tool is not freed",
+        );
+        assert!(!names.contains(&"libxml2".to_string()));
+        // But "xmllint tool" IS caught
+        assert!(names.contains(&"xmllint".to_string()));
+    }
+
+    #[test]
+    fn tool_name_not_from_shell_qualifier() {
+        // "shell" is not a qualifier to avoid "interactive shell" false positives
+        let names = extract_tool_names_from_text(
+            "Memory Leak in xmllint Interactive Shell",
+        );
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn tool_name_no_tool_in_library_cve() {
+        let names = extract_tool_names_from_text(
+            "Buffer overflow in the HTML parser of libxml2 before 2.12.0",
+        );
+        // "parser" is not near a qualifier, "libxml2" is not before a qualifier
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn tool_name_case_insensitive_qualifier() {
+        let names = extract_tool_names_from_text("The xmllint Tool is affected");
+        assert!(names.contains(&"xmllint".to_string()));
+    }
+
+    #[test]
+    fn tool_name_deduplication() {
+        let names = extract_tool_names_from_text(
+            "The xmllint tool and the xmllint utility are affected",
+        );
+        assert_eq!(names.iter().filter(|n| *n == "xmllint").count(), 1);
+    }
+
+    #[test]
+    fn tool_name_ignores_short_words() {
+        let names = extract_tool_names_from_text("A tool for testing");
+        // "A" is too short to be a binary name
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn tool_name_word_starting_with_digit_ignored() {
+        let names = extract_tool_names_from_text("The 7zip tool is affected");
+        assert!(!names.contains(&"7zip".to_string()));
+    }
+
+    // ---- CveResponse::affected_tool_names ----
+
+    #[test]
+    fn affected_tool_names_from_description() {
+        let resp = cve_with_description(
+            "en",
+            "A flaw was found in libxml2's xmllint tool. Memory is not freed.",
+        );
+        let names = resp.affected_tool_names("CVE-2026-1757 libxml2: some summary");
+        assert!(names.contains(&"xmllint".to_string()));
+    }
+
+    #[test]
+    fn affected_tool_names_from_summary() {
+        let resp = empty_cve();
+        let names = resp.affected_tool_names(
+            "CVE-2026-1757 libxml2: DoS in xmllint tool",
+        );
+        assert!(names.contains(&"xmllint".to_string()));
+    }
+
+    #[test]
+    fn affected_tool_names_combines_sources() {
+        let resp = cve_with_description(
+            "en",
+            "A flaw in the xmllint tool leaks memory",
+        );
+        let names = resp.affected_tool_names(
+            "CVE-2026-1757 libxml2: DoS in xmlcatalog utility",
+        );
+        assert!(names.contains(&"xmllint".to_string()));
+        assert!(names.contains(&"xmlcatalog".to_string()));
+    }
+
+    #[test]
+    fn affected_tool_names_empty_for_library_cve() {
+        let resp = cve_with_description(
+            "en",
+            "Buffer overflow in the HTML parser of libxml2 before 2.12.0",
+        );
+        let names = resp.affected_tool_names(
+            "CVE-2026-9999 libxml2: buffer overflow in parser",
+        );
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn affected_tool_names_ignores_non_english() {
+        let resp = cve_with_description(
+            "es",
+            "El xmllint tool tiene un fallo de memoria",
+        );
+        let names = resp.affected_tool_names("CVE-2026-1757 libxml2: summary");
+        // Spanish description should be ignored
+        assert!(!names.contains(&"xmllint".to_string()));
+    }
+
+    // ---- looks_like_binary_name ----
+
+    #[test]
+    fn binary_name_simple() {
+        assert!(looks_like_binary_name("xmllint"));
+    }
+
+    #[test]
+    fn binary_name_with_hyphen() {
+        assert!(looks_like_binary_name("git-lfs"));
+    }
+
+    #[test]
+    fn binary_name_with_dot() {
+        assert!(looks_like_binary_name("node.js"));
+    }
+
+    #[test]
+    fn binary_name_too_short() {
+        assert!(!looks_like_binary_name("a"));
+    }
+
+    #[test]
+    fn binary_name_starts_with_digit() {
+        assert!(!looks_like_binary_name("7zip"));
+    }
+
+    #[test]
+    fn binary_name_with_spaces() {
+        assert!(!looks_like_binary_name("my tool"));
     }
 }

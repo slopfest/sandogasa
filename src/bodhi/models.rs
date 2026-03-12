@@ -43,6 +43,25 @@ pub struct Release {
     pub name: String,
 }
 
+/// A Bodhi release entry from the releases API.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct BodhiRelease {
+    pub name: String,
+    pub branch: String,
+    pub id_prefix: String,
+    pub state: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct ReleasesResponse {
+    pub releases: Vec<BodhiRelease>,
+    pub total: u64,
+    pub page: u64,
+    pub pages: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +171,52 @@ mod tests {
         assert_eq!(update.bugs.len(), 3);
         assert_eq!(update.bugs[0].bug_id, 100);
         assert_eq!(update.bugs[2].bug_id, 300);
+    }
+
+    // ---- BodhiRelease / ReleasesResponse ----
+
+    #[test]
+    fn deserialize_releases_response() {
+        let json = r#"{
+            "releases": [
+                {
+                    "name": "F43",
+                    "branch": "f43",
+                    "id_prefix": "FEDORA",
+                    "state": "current"
+                },
+                {
+                    "name": "EPEL-9",
+                    "branch": "epel9",
+                    "id_prefix": "FEDORA-EPEL",
+                    "state": "current"
+                }
+            ],
+            "total": 2,
+            "page": 1,
+            "pages": 1
+        }"#;
+
+        let resp: ReleasesResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.releases.len(), 2);
+        assert_eq!(resp.releases[0].name, "F43");
+        assert_eq!(resp.releases[0].branch, "f43");
+        assert_eq!(resp.releases[0].id_prefix, "FEDORA");
+        assert_eq!(resp.releases[0].state, "current");
+        assert_eq!(resp.releases[1].name, "EPEL-9");
+        assert_eq!(resp.releases[1].branch, "epel9");
+    }
+
+    #[test]
+    fn deserialize_releases_empty() {
+        let json = r#"{
+            "releases": [],
+            "total": 0,
+            "page": 1,
+            "pages": 0
+        }"#;
+
+        let resp: ReleasesResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.releases.is_empty());
     }
 }

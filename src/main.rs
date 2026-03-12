@@ -3,6 +3,7 @@
 mod bodhi;
 mod bugzilla;
 mod config;
+mod distgit;
 mod nvd;
 mod version;
 
@@ -13,9 +14,10 @@ use std::time::Duration;
 
 use bodhi::BodhiClient;
 use bugzilla::BzClient;
+use distgit::DistGitClient;
 use chrono::{DateTime, NaiveDateTime, TimeDelta, Utc};
 use clap::{Parser, Subcommand};
-use config::{AppConfig, BodhiCheckConfig, BugzillaConfig, JsFpsConfig};
+use config::{AppConfig, BodhiCheckConfig, BugzillaConfig, JsFpsConfig, UnshippedToolsConfig};
 use nvd::NvdClient;
 use version::{Nvr, fedora_release_from_version, release_from_summary, version_gte};
 
@@ -31,6 +33,35 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Check if CVE bugs are already fixed by a Bodhi update
+    BodhiCheck {
+        /// Path to TOML config file
+        #[arg(short = 'f', long)]
+        config: PathBuf,
+
+        /// Close bugs that have a stable fix as ERRATA
+        #[arg(long)]
+        close_bugs: bool,
+
+        /// Edit Bodhi updates in testing to add bug references (requires bodhi CLI)
+        #[arg(long)]
+        edit_bodhi: bool,
+    },
+
+    /// Set up or verify Bugzilla API key configuration
+    Config,
+
+    /// Detect JavaScript/NodeJS false positives
+    JsFps {
+        /// Path to TOML config file
+        #[arg(short = 'f', long)]
+        config: PathBuf,
+
+        /// Close detected false positives as NOTABUG and add them as blocking the tracker bug
+        #[arg(long)]
+        close_bugs: bool,
+    },
+
     /// Search Bugzilla for CVE bugs
     Search {
         /// Bugzilla product (e.g. "Security Response", "Fedora", "Fedora EPEL")
@@ -50,34 +81,17 @@ enum Command {
         status: String,
     },
 
-    /// Detect JavaScript/NodeJS false positives
-    JsFps {
+    /// Detect CVEs affecting tools not shipped in Fedora
+    UnshippedTools {
         /// Path to TOML config file
         #[arg(short = 'f', long)]
         config: PathBuf,
 
-        /// Close detected false positives as NOTABUG and add them as blocking the tracker bug
+        /// Close detected false positives as NOTABUG and add them
+        /// as blocking the tracker bug
         #[arg(long)]
         close_bugs: bool,
     },
-
-    /// Check if CVE bugs are already fixed by a Bodhi update
-    BodhiCheck {
-        /// Path to TOML config file
-        #[arg(short = 'f', long)]
-        config: PathBuf,
-
-        /// Close bugs that have a stable fix as ERRATA
-        #[arg(long)]
-        close_bugs: bool,
-
-        /// Edit Bodhi updates in testing to add bug references (requires bodhi CLI)
-        #[arg(long)]
-        edit_bodhi: bool,
-    },
-
-    /// Set up or verify Bugzilla API key configuration
-    Config,
 }
 
 #[tokio::main]
@@ -92,6 +106,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             status,
         } => cmd_search(product, component, assignee, status).await,
         Command::JsFps { config, close_bugs } => cmd_js_fps(config, close_bugs).await,
+        Command::UnshippedTools { config, close_bugs } => {
+            cmd_unshipped_tools(config, close_bugs).await
+        }
         Command::BodhiCheck {
             config,
             close_bugs,
@@ -219,6 +236,186 @@ async fn cmd_js_fps(
 
     if fp_bug_ids.is_empty() {
         println!("No JavaScript false positives found.");
+        return Ok(());
+    }
+
+    println!("\n{} likely false positive(s) found.", fp_bug_ids.len());
+
+    if !close_bugs {
+        return Ok(());
+    }
+
+    // Load API key for bug modifications
+    let app_config = AppConfig::load()?;
+    let bz = BzClient::new(BUGZILLA_URL).with_api_key(app_config.bugzilla.api_key);
+
+    println!(
+        "\nThis will close {} bug(s) as NOTABUG and mark them as blocking {}.",
+        fp_bug_ids.len(),
+        config.tracker_bug
+    );
+    print!("Proceed? [y/N] ");
+    io::stdout().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        println!("Aborted.");
+        return Ok(());
+    }
+
+    let update = serde_json::json!({
+        "status": "CLOSED",
+        "resolution": "NOTABUG",
+        "blocks": {
+            "add": [config.tracker_bug]
+        },
+        "comment": {
+            "body": config.reason
+        }
+    });
+
+    match bz.update_many(&fp_bug_ids, &update).await {
+        Ok(()) => println!("Closed {} bug(s).", fp_bug_ids.len()),
+        Err(e) => eprintln!("Error closing bugs: {e}"),
+    }
+
+    Ok(())
+}
+
+/// Map a bug's version field to a dist-git branch name.
+///
+/// Returns `None` if the version is unrecognized, in which case callers
+/// should fall back to "rawhide".
+fn version_to_branch(version: &str) -> Option<String> {
+    if version.is_empty() || version == "unspecified" {
+        return None;
+    }
+    if version == "rawhide" {
+        return Some("rawhide".to_string());
+    }
+    // Numeric version → Fedora branch (e.g. "43" → "f43")
+    if version.chars().all(|c| c.is_ascii_digit()) {
+        return Some(format!("f{version}"));
+    }
+    // EPEL versions (e.g. "epel9" → "epel9")
+    if version.starts_with("epel") {
+        return Some(version.to_string());
+    }
+    None
+}
+
+async fn cmd_unshipped_tools(
+    config_path: PathBuf,
+    close_bugs: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = UnshippedToolsConfig::from_file(&config_path)?;
+    let bz = BzClient::new(BUGZILLA_URL);
+    let nvd = NvdClient::new();
+    let distgit = DistGitClient::new();
+
+    // Search Bugzilla
+    let query = build_multi_query(&config.products, &config.components, &config.statuses);
+    let bugs = bz.search(&query, 0).await?;
+
+    let cve_bugs: Vec<_> = bugs
+        .iter()
+        .filter(|b| is_cve_bug(&b.summary, &b.keywords))
+        .collect();
+
+    println!(
+        "Checking {} CVE bugs for unshipped tool false positives...",
+        cve_bugs.len()
+    );
+
+    let mut fp_bug_ids: Vec<u64> = Vec::new();
+    let mut nvd_requests = 0;
+    let mut nvd_cache: HashMap<String, nvd::models::CveResponse> = HashMap::new();
+    let mut spec_cache: HashMap<(String, String), Vec<String>> = HashMap::new();
+
+    for bug in &cve_bugs {
+        let cve_id = match extract_cve_id(&bug.summary) {
+            Some(id) => id,
+            None => continue,
+        };
+
+        // Fetch NVD data (with caching and rate limiting)
+        if !nvd_cache.contains_key(cve_id) {
+            if nvd_requests > 0 {
+                tokio::time::sleep(Duration::from_secs(6)).await;
+            }
+            nvd_requests += 1;
+
+            match nvd.cve(cve_id).await {
+                Ok(resp) => {
+                    nvd_cache.insert(cve_id.to_string(), resp);
+                }
+                Err(e) => {
+                    eprintln!("Warning: failed to fetch {} from NVD: {}", cve_id, e);
+                    continue;
+                }
+            }
+        }
+
+        let cve_resp = match nvd_cache.get(cve_id) {
+            Some(r) => r,
+            None => continue,
+        };
+
+        // Extract affected tool names from NVD + bug summary
+        let tool_names = cve_resp.affected_tool_names(&bug.summary);
+        if tool_names.is_empty() {
+            continue;
+        }
+
+        let component = match bug.component.first() {
+            Some(c) => c.clone(),
+            None => continue,
+        };
+
+        // Map bug version to dist-git branch (fall back to rawhide)
+        let branch = bug
+            .version
+            .first()
+            .and_then(|v| version_to_branch(v))
+            .unwrap_or_else(|| "rawhide".to_string());
+
+        // Check spec file for shipped binaries
+        let cache_key = (component.clone(), branch.clone());
+        if !spec_cache.contains_key(&cache_key) {
+            match distgit.fetch_spec(&component, &branch).await {
+                Ok(spec_text) => {
+                    let binaries = distgit::spec::shipped_binaries(&spec_text);
+                    spec_cache.insert(cache_key.clone(), binaries);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: failed to fetch spec for {}/{}: {}",
+                        component, branch, e
+                    );
+                    spec_cache.insert(cache_key.clone(), Vec::new());
+                }
+            }
+        }
+
+        let shipped = spec_cache.get(&cache_key).unwrap();
+        let tool_is_shipped = tool_names
+            .iter()
+            .any(|t| shipped.iter().any(|s| s.eq_ignore_ascii_case(t)));
+
+        if !tool_is_shipped {
+            fp_bug_ids.push(bug.id);
+            println!(
+                "FP: bug {} — {} (tools: {})",
+                bug.id,
+                bug.summary,
+                tool_names.join(", ")
+            );
+        }
+    }
+
+    if fp_bug_ids.is_empty() {
+        println!("No unshipped tool false positives found.");
         return Ok(());
     }
 
@@ -1151,5 +1348,37 @@ mod tests {
     fn is_late_filed_invalid_date_returns_false() {
         let bug_created = "2026-02-25T14:00:00Z".parse::<DateTime<Utc>>().unwrap();
         assert!(!is_late_filed(bug_created, "not-a-date", 30));
+    }
+
+    // ---- version_to_branch ----
+
+    #[test]
+    fn version_to_branch_numeric() {
+        assert_eq!(version_to_branch("43"), Some("f43".to_string()));
+    }
+
+    #[test]
+    fn version_to_branch_rawhide() {
+        assert_eq!(version_to_branch("rawhide"), Some("rawhide".to_string()));
+    }
+
+    #[test]
+    fn version_to_branch_epel() {
+        assert_eq!(version_to_branch("epel9"), Some("epel9".to_string()));
+    }
+
+    #[test]
+    fn version_to_branch_empty() {
+        assert_eq!(version_to_branch(""), None);
+    }
+
+    #[test]
+    fn version_to_branch_unspecified() {
+        assert_eq!(version_to_branch("unspecified"), None);
+    }
+
+    #[test]
+    fn version_to_branch_unknown() {
+        assert_eq!(version_to_branch("something-weird"), None);
     }
 }

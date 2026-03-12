@@ -70,6 +70,24 @@ impl JsFpsConfig {
     }
 }
 
+/// Per-run config for the unshipped-tools subcommand
+#[derive(Debug, Deserialize)]
+pub struct UnshippedToolsConfig {
+    pub tracker_bug: String,
+    pub products: Vec<String>,
+    pub components: Vec<String>,
+    pub statuses: Vec<String>,
+    pub reason: String,
+}
+
+impl UnshippedToolsConfig {
+    pub fn from_file(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let contents = std::fs::read_to_string(path)?;
+        let config: Self = toml::from_str(&contents)?;
+        Ok(config)
+    }
+}
+
 /// Per-run config for the bodhi-check subcommand
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
@@ -219,6 +237,75 @@ reason = "test"
         write!(tmp, "[bugzilla]\n").unwrap();
         let result = AppConfig::load_from(tmp.path());
         assert!(result.is_err());
+    }
+
+    // ---- UnshippedToolsConfig ----
+
+    #[test]
+    fn unshipped_tools_config_parses_valid_toml() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            tmp,
+            r#"
+tracker_bug = "CVE-FalsePositive-Unshipped"
+products = ["Fedora", "Fedora EPEL"]
+components = ["vulnerability"]
+statuses = ["NEW", "ASSIGNED"]
+reason = "This CVE affects a tool not shipped in Fedora."
+"#
+        )
+        .unwrap();
+
+        let config = UnshippedToolsConfig::from_file(tmp.path()).unwrap();
+        assert_eq!(config.tracker_bug, "CVE-FalsePositive-Unshipped");
+        assert_eq!(config.products, vec!["Fedora", "Fedora EPEL"]);
+        assert_eq!(config.components, vec!["vulnerability"]);
+        assert_eq!(config.statuses, vec!["NEW", "ASSIGNED"]);
+        assert!(config.reason.contains("not shipped"));
+    }
+
+    #[test]
+    fn unshipped_tools_config_missing_field_errors() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            tmp,
+            r#"
+tracker_bug = "CVE-FalsePositive-Unshipped"
+products = ["Fedora"]
+"#
+        )
+        .unwrap();
+
+        let result = UnshippedToolsConfig::from_file(tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unshipped_tools_config_nonexistent_file_errors() {
+        let result =
+            UnshippedToolsConfig::from_file(Path::new("/tmp/does-not-exist-unshipped.toml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unshipped_tools_config_empty_arrays() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            tmp,
+            r#"
+tracker_bug = "TRACKER"
+products = []
+components = []
+statuses = []
+reason = "test"
+"#
+        )
+        .unwrap();
+
+        let config = UnshippedToolsConfig::from_file(tmp.path()).unwrap();
+        assert!(config.products.is_empty());
+        assert!(config.components.is_empty());
+        assert!(config.statuses.is_empty());
     }
 
     // ---- BodhiCheckConfig ----
