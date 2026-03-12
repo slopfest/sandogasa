@@ -247,6 +247,8 @@ async fn cmd_js_fps(
 
     // Load API key for bug modifications
     let app_config = AppConfig::load()?;
+    let reassign = prompt_reassign(&app_config.bugzilla.email)?;
+    let email = app_config.bugzilla.email;
     let bz = BzClient::new(BUGZILLA_URL).with_api_key(app_config.bugzilla.api_key);
 
     println!(
@@ -264,7 +266,7 @@ async fn cmd_js_fps(
         return Ok(());
     }
 
-    let update = serde_json::json!({
+    let mut update = serde_json::json!({
         "status": "CLOSED",
         "resolution": "NOTABUG",
         "blocks": {
@@ -274,6 +276,9 @@ async fn cmd_js_fps(
             "body": config.reason
         }
     });
+    if reassign {
+        update["assigned_to"] = serde_json::json!(email);
+    }
 
     match bz.update_many(&fp_bug_ids, &update).await {
         Ok(()) => println!("Closed {} bug(s).", fp_bug_ids.len()),
@@ -427,6 +432,8 @@ async fn cmd_unshipped_tools(
 
     // Load API key for bug modifications
     let app_config = AppConfig::load()?;
+    let reassign = prompt_reassign(&app_config.bugzilla.email)?;
+    let email = app_config.bugzilla.email;
     let bz = BzClient::new(BUGZILLA_URL).with_api_key(app_config.bugzilla.api_key);
 
     println!(
@@ -444,7 +451,7 @@ async fn cmd_unshipped_tools(
         return Ok(());
     }
 
-    let update = serde_json::json!({
+    let mut update = serde_json::json!({
         "status": "CLOSED",
         "resolution": "NOTABUG",
         "blocks": {
@@ -454,6 +461,9 @@ async fn cmd_unshipped_tools(
             "body": config.reason
         }
     });
+    if reassign {
+        update["assigned_to"] = serde_json::json!(email);
+    }
 
     match bz.update_many(&fp_bug_ids, &update).await {
         Ok(()) => println!("Closed {} bug(s).", fp_bug_ids.len()),
@@ -561,6 +571,19 @@ fn is_late_filed(
     };
     let deadline = submitted + TimeDelta::minutes(lag_tolerance_minutes);
     bug_created > deadline
+}
+
+/// Ask the user whether to reassign bugs to their configured email.
+/// Returns `true` if they said yes; skips the prompt if no email is configured.
+fn prompt_reassign(email: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    if email.is_empty() {
+        return Ok(false);
+    }
+    print!("Also reassign bug(s) to {}? [y/N] ", email);
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(answer.trim().eq_ignore_ascii_case("y"))
 }
 
 async fn cmd_bodhi_check(
@@ -789,6 +812,8 @@ async fn cmd_bodhi_check(
 
         if !stable_fixes.is_empty() || !late_filed.is_empty() {
             let app_config = AppConfig::load()?;
+            let reassign = prompt_reassign(&app_config.bugzilla.email)?;
+            let email = app_config.bugzilla.email;
             let bz = BzClient::new(BUGZILLA_URL).with_api_key(app_config.bugzilla.api_key);
 
             // Describe what will happen
@@ -822,7 +847,7 @@ async fn cmd_bodhi_check(
                 }
             }
             for (nvr, bug_ids) in &by_nvr {
-                let update = serde_json::json!({
+                let mut update = serde_json::json!({
                     "status": "CLOSED",
                     "resolution": "ERRATA",
                     "cf_fixed_in": nvr,
@@ -830,6 +855,9 @@ async fn cmd_bodhi_check(
                         "body": format!("This bug is already fixed in a published Bodhi update: {nvr}")
                     }
                 });
+                if reassign {
+                    update["assigned_to"] = serde_json::json!(&email);
+                }
 
                 match bz.update_many(bug_ids, &update).await {
                     Ok(()) => println!(
@@ -843,7 +871,7 @@ async fn cmd_bodhi_check(
 
             // Add tracker_bug as blocker for late-filed bugs
             if !late_filed.is_empty() {
-                let update = serde_json::json!({
+                let mut update = serde_json::json!({
                     "blocks": {
                         "add": [config.tracker_bug]
                     },
@@ -851,6 +879,9 @@ async fn cmd_bodhi_check(
                         "body": config.reason
                     }
                 });
+                if reassign {
+                    update["assigned_to"] = serde_json::json!(&email);
+                }
 
                 match bz.update_many(&late_filed, &update).await {
                     Ok(()) => println!(
@@ -1408,5 +1439,12 @@ mod tests {
     #[test]
     fn version_to_branch_unknown() {
         assert_eq!(version_to_branch("something-weird"), None);
+    }
+
+    // ---- prompt_reassign ----
+
+    #[test]
+    fn prompt_reassign_skips_when_email_empty() {
+        assert!(!prompt_reassign("").unwrap());
     }
 }
