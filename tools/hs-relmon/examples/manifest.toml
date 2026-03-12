@@ -10,6 +10,10 @@ file_issue = true
 # All fields except 'name' are optional and override the defaults.
 
 [[package]]
+name = "dracut"
+track = "centos"
+
+[[package]]
 name = "ethtool"
 
 [[package]]
