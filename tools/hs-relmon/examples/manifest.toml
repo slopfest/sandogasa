@@ -21,6 +21,10 @@ name = "perf"
 repology_name = "linux"
 
 [[package]]
+name = "selinux-policy"
+track = "fedora-rawhide"
+
+[[package]]
 name = "systemd"
 track = "fedora-rawhide"
 file_issue = false
