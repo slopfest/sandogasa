@@ -519,6 +519,12 @@ enum BodhiCheckResult {
     NoFix { bug_id: u64 },
     /// NVD has no fixed version information for this CVE.
     NoFixedVersion { bug_id: u64 },
+    /// NVD fixed versions don't match the Fedora component (e.g. bundled dependency CVE).
+    ProductMismatch {
+        bug_id: u64,
+        component: String,
+        nvd_products: Vec<String>,
+    },
 }
 
 /// Determine the Fedora release for a bug: first from the version field, then from summary tags.
@@ -534,14 +540,82 @@ fn determine_release(version: &[String], summary: &str) -> Option<String> {
 }
 
 /// Check a single bug against Bodhi updates and NVD fixed versions.
+/// Check whether an NVD product name matches a Fedora component.
+///
+/// First tries an exact match, then checks if `(<product>)` appears in
+/// the component's RPM provides (obtained via fedrq).  This handles
+/// cases like NVD product "django" matching Fedora component
+/// "python-django3" (whose subpackages provide `python3dist(django)`).
+fn product_matches_component(product: &str, component: &str, provides: Option<&str>) -> bool {
+    if product == component {
+        return true;
+    }
+    if let Some(provides) = provides {
+        let needle = format!("({})", product.to_lowercase());
+        if provides.to_lowercase().contains(&needle) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Query fedrq for the RPM provides of a source package's subpackages.
+///
+/// Returns `None` if fedrq is not installed or the query fails.
+fn fedrq_provides(component: &str, release: &str, verbose: bool) -> Option<String> {
+    // Convert Bodhi release to fedrq branch: "F42" → "f42", "EPEL-9" → "epel9"
+    let branch = release.to_lowercase().replace('-', "");
+    if verbose {
+        eprintln!("Querying fedrq provides for {} on {}...", component, branch);
+    }
+    let output = std::process::Command::new("fedrq")
+        .args(["subpkgs", component, "-b", &branch, "-F", "provides"])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let provides = String::from_utf8(output.stdout).ok()?;
+        let provides = provides.trim().to_string();
+        if provides.is_empty() {
+            None
+        } else {
+            Some(provides)
+        }
+    } else {
+        None
+    }
+}
+
 fn categorize_bug(
     bug_id: u64,
     fixed_versions: &[nvd::FixedVersion],
     updates: &[bodhi::models::Update],
     component: &str,
+    upstream_url: Option<&str>,
 ) -> BodhiCheckResult {
     if fixed_versions.is_empty() {
         return BodhiCheckResult::NoFixedVersion { bug_id };
+    }
+
+    // Only compare against fixed versions whose NVD product matches the component.
+    // This avoids false positives from bundled/statically-linked dependencies
+    // (e.g. a golang library CVE filed against the binary that bundles it).
+    let matching_fv: Vec<_> = fixed_versions
+        .iter()
+        .filter(|fv| product_matches_component(&fv.product, component, upstream_url))
+        .collect();
+
+    if matching_fv.is_empty() {
+        let nvd_products: Vec<String> = fixed_versions
+            .iter()
+            .map(|fv| fv.product.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        return BodhiCheckResult::ProductMismatch {
+            bug_id,
+            component: component.to_string(),
+            nvd_products,
+        };
     }
 
     for update in updates {
@@ -556,8 +630,8 @@ fn categorize_bug(
                 continue;
             }
 
-            // Check if this build's version is >= any of the fixed versions
-            let is_fix = fixed_versions
+            // Check if this build's version is >= any of the matching fixed versions
+            let is_fix = matching_fv
                 .iter()
                 .any(|fv| version_gte(&nvr.version, &fv.version));
 
@@ -585,6 +659,17 @@ fn categorize_bug(
 }
 
 /// Check whether a bug was filed late (after the Bodhi update was already submitted + tolerance).
+/// Ranking for BodhiCheckResult so we can pick the best across multiple releases.
+fn result_priority(r: &BodhiCheckResult) -> u8 {
+    match r {
+        BodhiCheckResult::StableFix { .. } => 5,
+        BodhiCheckResult::TestingFix { .. } => 4,
+        BodhiCheckResult::NoFix { .. } => 3,
+        BodhiCheckResult::ProductMismatch { .. } => 2,
+        BodhiCheckResult::NoFixedVersion { .. } => 1,
+    }
+}
+
 fn is_late_filed(
     bug_created: DateTime<Utc>,
     date_submitted: &str,
@@ -656,6 +741,29 @@ async fn cmd_bodhi_check(
         cve_bugs.len()
     );
 
+    // Pre-fetch active EPEL releases if any bug is tagged [epel-all]
+    let has_epel_all = cve_bugs
+        .iter()
+        .any(|b| b.summary.contains("[epel-all]"));
+    let epel_releases: Vec<String> = if has_epel_all {
+        if verbose {
+            eprintln!("Fetching active EPEL releases from Bodhi...");
+        }
+        match bodhi_client.active_releases().await {
+            Ok(releases) => releases
+                .into_iter()
+                .filter(|r| r.id_prefix == "FEDORA-EPEL")
+                .map(|r| r.name)
+                .collect(),
+            Err(e) => {
+                eprintln!("Warning: failed to fetch active releases: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
     // Collect unique CVE IDs and query NVD for fixed versions
     let mut nvd_cache: HashMap<String, Vec<nvd::FixedVersion>> = HashMap::new();
     let mut nvd_requests = 0;
@@ -692,6 +800,7 @@ async fn cmd_bodhi_check(
 
     // Query Bodhi for each (component, release) pair and categorize
     let mut bodhi_cache: HashMap<(String, String), Vec<bodhi::models::Update>> = HashMap::new();
+    let mut provides_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     let mut results: Vec<BodhiCheckResult> = Vec::new();
 
     for bug in &cve_bugs {
@@ -705,49 +814,92 @@ async fn cmd_bodhi_check(
             None => continue,
         };
 
-        let release = match determine_release(&bug.version, &bug.summary) {
-            Some(r) => r,
-            None => {
-                eprintln!(
-                    "Warning: cannot determine release for bug {} (version={:?})",
-                    bug.id,
-                    bug.version
-                );
-                continue;
-            }
-        };
-
         let component = match bug.component.first() {
             Some(c) => c.clone(),
             None => continue,
         };
 
-        let cache_key = (component.clone(), release.clone());
-        if !bodhi_cache.contains_key(&cache_key) {
-            if verbose {
-                eprintln!("Querying Bodhi for {} on {}...", component, release);
-            }
-            match bodhi_client
-                .updates_for_package(&component, &release, &["stable", "testing"])
-                .await
-            {
-                Ok(updates) => {
-                    bodhi_cache.insert(cache_key.clone(), updates);
-                }
-                Err(e) => {
+        // Determine which releases to check: [epel-all] expands to all active EPEL releases
+        let releases = if bug.summary.contains("[epel-all]") {
+            epel_releases.clone()
+        } else {
+            match determine_release(&bug.version, &bug.summary) {
+                Some(r) => vec![r],
+                None => {
                     eprintln!(
-                        "Warning: failed to query Bodhi for {} on {}: {}",
-                        component, release, e
+                        "Warning: cannot determine release for bug {} (version={:?})",
+                        bug.id,
+                        bug.version
                     );
-                    bodhi_cache.insert(cache_key.clone(), Vec::new());
+                    continue;
                 }
+            }
+        };
+
+        let mut best_result: Option<BodhiCheckResult> = None;
+
+        for release in &releases {
+            let cache_key = (component.clone(), release.clone());
+            if !bodhi_cache.contains_key(&cache_key) {
+                if verbose {
+                    eprintln!("Querying Bodhi for {} on {}...", component, release);
+                }
+                match bodhi_client
+                    .updates_for_package(&component, release, &["stable", "testing"])
+                    .await
+                {
+                    Ok(updates) => {
+                        bodhi_cache.insert(cache_key.clone(), updates);
+                    }
+                    Err(e) => {
+                        if verbose {
+                            eprintln!(
+                                "Warning: failed to query Bodhi for {} on {}: {}",
+                                component, release, e
+                            );
+                        }
+                        bodhi_cache.insert(cache_key.clone(), Vec::new());
+                    }
+                }
+            }
+
+            let updates = bodhi_cache.get(&cache_key).unwrap();
+
+            // First try exact product match; on mismatch, check RPM provides via fedrq
+            let result = categorize_bug(bug.id, fixed_versions, updates, &component, None);
+            let result = if matches!(result, BodhiCheckResult::ProductMismatch { .. }) {
+                let prov_key = (component.clone(), release.clone());
+                if !provides_cache.contains_key(&prov_key) {
+                    let provides = fedrq_provides(&component, release, verbose);
+                    provides_cache.insert(prov_key.clone(), provides);
+                }
+                let provides = provides_cache.get(&prov_key).unwrap().as_deref();
+                if provides.is_some() {
+                    categorize_bug(bug.id, fixed_versions, updates, &component, provides)
+                } else {
+                    result
+                }
+            } else {
+                result
+            };
+
+            // Keep the best result across releases
+            let dominated = best_result.as_ref().map_or(true, |best| {
+                result_priority(&result) > result_priority(best)
+            });
+            if dominated {
+                best_result = Some(result);
+            }
+
+            // No need to check more releases if we found a stable fix
+            if matches!(best_result, Some(BodhiCheckResult::StableFix { .. })) {
+                break;
             }
         }
 
-        let updates = bodhi_cache.get(&cache_key).unwrap();
-
-        let result = categorize_bug(bug.id, fixed_versions, updates, &component);
-        results.push(result);
+        if let Some(result) = best_result {
+            results.push(result);
+        }
     }
 
     // Print summary
@@ -766,6 +918,10 @@ async fn cmd_bodhi_check(
     let no_fixed_ver: Vec<_> = results
         .iter()
         .filter(|r| matches!(r, BodhiCheckResult::NoFixedVersion { .. }))
+        .collect();
+    let mismatches: Vec<_> = results
+        .iter()
+        .filter(|r| matches!(r, BodhiCheckResult::ProductMismatch { .. }))
         .collect();
 
     if !stable_fixes.is_empty() {
@@ -812,6 +968,28 @@ async fn cmd_bodhi_check(
         for r in &no_fixed_ver {
             if let BodhiCheckResult::NoFixedVersion { bug_id } = r {
                 println!("  bug {}", bug_id);
+            }
+        }
+    }
+
+    if !mismatches.is_empty() {
+        println!(
+            "\nProduct mismatch — skipped ({}):",
+            mismatches.len()
+        );
+        for r in &mismatches {
+            if let BodhiCheckResult::ProductMismatch {
+                bug_id,
+                component,
+                nvd_products,
+            } = r
+            {
+                println!(
+                    "  bug {} — component '{}', NVD product(s): {}",
+                    bug_id,
+                    component,
+                    nvd_products.join(", ")
+                );
             }
         }
     }
@@ -1268,7 +1446,7 @@ mod tests {
             &["freerdp-3.23.0-1.fc42"],
         )];
 
-        let result = categorize_bug(100, &fv, &updates, "freerdp");
+        let result = categorize_bug(100, &fv, &updates, "freerdp", None);
         assert_eq!(
             result,
             BodhiCheckResult::StableFix {
@@ -1289,7 +1467,7 @@ mod tests {
             &["freerdp-3.24.0-1.fc42"],
         )];
 
-        let result = categorize_bug(200, &fv, &updates, "freerdp");
+        let result = categorize_bug(200, &fv, &updates, "freerdp", None);
         assert_eq!(
             result,
             BodhiCheckResult::TestingFix {
@@ -1310,7 +1488,7 @@ mod tests {
             &["freerdp-3.22.0-1.fc42"],
         )];
 
-        let result = categorize_bug(300, &fv, &updates, "freerdp");
+        let result = categorize_bug(300, &fv, &updates, "freerdp", None);
         assert_eq!(result, BodhiCheckResult::NoFix { bug_id: 300 });
     }
 
@@ -1322,7 +1500,7 @@ mod tests {
             &["freerdp-3.23.0-1.fc42"],
         )];
 
-        let result = categorize_bug(400, &[], &updates, "freerdp");
+        let result = categorize_bug(400, &[], &updates, "freerdp", None);
         assert_eq!(
             result,
             BodhiCheckResult::NoFixedVersion { bug_id: 400 }
@@ -1338,7 +1516,7 @@ mod tests {
             &["other-pkg-3.23.0-1.fc42"],
         )];
 
-        let result = categorize_bug(500, &fv, &updates, "freerdp");
+        let result = categorize_bug(500, &fv, &updates, "freerdp", None);
         assert_eq!(result, BodhiCheckResult::NoFix { bug_id: 500 });
     }
 
@@ -1346,7 +1524,7 @@ mod tests {
     fn categorize_no_updates() {
         let fv = vec![make_fixed_version("freerdp", "3.23.0")];
 
-        let result = categorize_bug(600, &fv, &[], "freerdp");
+        let result = categorize_bug(600, &fv, &[], "freerdp", None);
         assert_eq!(result, BodhiCheckResult::NoFix { bug_id: 600 });
     }
 
@@ -1362,7 +1540,7 @@ mod tests {
             ),
         ];
 
-        let result = categorize_bug(700, &fv, &updates, "freerdp");
+        let result = categorize_bug(700, &fv, &updates, "freerdp", None);
         // Should find stable first since it appears first
         assert!(matches!(result, BodhiCheckResult::StableFix { .. }));
     }
@@ -1380,7 +1558,7 @@ mod tests {
             &["freerdp-2.11.8-1.fc41"],
         )];
 
-        let result = categorize_bug(800, &fv, &updates, "freerdp");
+        let result = categorize_bug(800, &fv, &updates, "freerdp", None);
         assert_eq!(
             result,
             BodhiCheckResult::StableFix {
@@ -1402,7 +1580,7 @@ mod tests {
             Some("2026-02-25 11:55:26"),
         )];
 
-        let result = categorize_bug(900, &fv, &updates, "freerdp");
+        let result = categorize_bug(900, &fv, &updates, "freerdp", None);
         assert_eq!(
             result,
             BodhiCheckResult::StableFix {
@@ -1424,7 +1602,7 @@ mod tests {
             Some("2026-02-20 08:00:00"),
         )];
 
-        let result = categorize_bug(950, &fv, &updates, "freerdp");
+        let result = categorize_bug(950, &fv, &updates, "freerdp", None);
         assert_eq!(
             result,
             BodhiCheckResult::TestingFix {
@@ -1434,6 +1612,171 @@ mod tests {
                 date_submitted: Some("2026-02-20 08:00:00".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn categorize_product_mismatch_bundled_dep() {
+        // CVE is for "containers_image" but bug is against "buildah"
+        let fv = vec![make_fixed_version("containers_image", "5.30.0")];
+        let updates = vec![make_update(
+            "FEDORA-2026-abc",
+            "stable",
+            &["buildah-1.35.0-1.fc42"],
+        )];
+
+        let result = categorize_bug(1000, &fv, &updates, "buildah", None);
+        match result {
+            BodhiCheckResult::ProductMismatch {
+                bug_id,
+                component,
+                nvd_products,
+            } => {
+                assert_eq!(bug_id, 1000);
+                assert_eq!(component, "buildah");
+                assert_eq!(nvd_products, vec!["containers_image"]);
+            }
+            other => panic!("Expected ProductMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn categorize_product_mismatch_multiple_nvd_products() {
+        let fv = vec![
+            make_fixed_version("go", "1.22.0"),
+            make_fixed_version("golang", "1.22.0"),
+        ];
+        let updates = vec![make_update(
+            "FEDORA-2026-abc",
+            "stable",
+            &["skopeo-1.14.0-1.fc42"],
+        )];
+
+        let result = categorize_bug(1100, &fv, &updates, "skopeo", None);
+        assert!(matches!(
+            result,
+            BodhiCheckResult::ProductMismatch { bug_id: 1100, .. }
+        ));
+    }
+
+    #[test]
+    fn categorize_matching_product_still_works() {
+        // Product matches component — should compare versions normally
+        let fv = vec![make_fixed_version("buildah", "1.35.0")];
+        let updates = vec![make_update(
+            "FEDORA-2026-abc",
+            "stable",
+            &["buildah-1.35.0-1.fc42"],
+        )];
+
+        let result = categorize_bug(1200, &fv, &updates, "buildah", None);
+        assert!(matches!(result, BodhiCheckResult::StableFix { .. }));
+    }
+
+    #[test]
+    fn categorize_mixed_products_uses_matching_only() {
+        // One fixed version matches the component, one doesn't
+        let fv = vec![
+            make_fixed_version("containers_image", "5.30.0"),
+            make_fixed_version("buildah", "1.35.0"),
+        ];
+        let updates = vec![make_update(
+            "FEDORA-2026-abc",
+            "stable",
+            &["buildah-1.35.0-1.fc42"],
+        )];
+
+        let result = categorize_bug(1300, &fv, &updates, "buildah", None);
+        assert!(matches!(result, BodhiCheckResult::StableFix { .. }));
+    }
+
+    // ---- product_matches_component ----
+
+    #[test]
+    fn product_matches_exact() {
+        assert!(product_matches_component("freerdp", "freerdp", None));
+    }
+
+    #[test]
+    fn product_matches_via_provides() {
+        let provides = "python3-django = 4.2.0-1.fc42\npython3dist(django) = 4.2";
+        assert!(product_matches_component(
+            "django",
+            "python-django3",
+            Some(provides)
+        ));
+    }
+
+    #[test]
+    fn product_matches_provides_case_insensitive() {
+        let provides = "python3dist(Django) = 4.2";
+        assert!(product_matches_component(
+            "django",
+            "python-django3",
+            Some(provides)
+        ));
+    }
+
+    #[test]
+    fn product_no_match_without_provides() {
+        assert!(!product_matches_component("django", "python-django3", None));
+    }
+
+    #[test]
+    fn product_no_match_provides_irrelevant() {
+        let provides = "python3-foo = 1.0\npython3dist(foo) = 1.0";
+        assert!(!product_matches_component(
+            "django",
+            "python-django3",
+            Some(provides)
+        ));
+    }
+
+    #[test]
+    fn product_no_match_partial_name() {
+        // "django" should NOT match "django-rest-framework"
+        let provides = "python3dist(django-rest-framework) = 3.14";
+        assert!(!product_matches_component(
+            "django",
+            "python-drf",
+            Some(provides)
+        ));
+    }
+
+    #[test]
+    fn product_matches_rust_crate() {
+        let provides = "crate(tokio) = 1.36.0";
+        assert!(product_matches_component(
+            "tokio",
+            "rust-tokio",
+            Some(provides)
+        ));
+    }
+
+    #[test]
+    fn categorize_provides_resolves_mismatch() {
+        // Without provides: product mismatch. With provides: match succeeds.
+        let fv = vec![make_fixed_version("django", "4.2.0")];
+        let updates = vec![make_update(
+            "FEDORA-2026-abc",
+            "stable",
+            &["python-django3-4.2.0-1.fc42"],
+        )];
+
+        let without = categorize_bug(1400, &fv, &updates, "python-django3", None);
+        assert!(matches!(
+            without,
+            BodhiCheckResult::ProductMismatch { .. }
+        ));
+
+        let provides = "python3dist(django) = 4.2";
+        let with = categorize_bug(
+            1400,
+            &fv,
+            &updates,
+            "python-django3",
+            Some(provides),
+        );
+        assert!(matches!(with, BodhiCheckResult::StableFix { .. }));
     }
 
     // ---- is_late_filed ----

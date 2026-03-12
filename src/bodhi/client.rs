@@ -66,7 +66,6 @@ impl BodhiClient {
     }
 
     /// Fetch active Fedora and EPEL releases from the Bodhi API.
-    #[allow(dead_code)]
     ///
     /// Returns releases with state "current", "pending", or "frozen",
     /// excluding Flatpak, Container, ELN, and EPEL-Next variants.
