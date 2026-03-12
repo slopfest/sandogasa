@@ -902,11 +902,36 @@ fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = AppConfig::path();
 
     match AppConfig::load() {
-        Ok(_) => {
-            println!("Config OK: {}", config_path.display());
+        Ok(mut config) => {
+            if config.bugzilla.email.is_empty() {
+                println!("Config at {} is missing email.", config_path.display());
+                print!("Enter your Bugzilla email: ");
+                io::stdout().flush()?;
+                let mut email = String::new();
+                io::stdin().read_line(&mut email)?;
+                let email = email.trim().to_string();
+                if email.is_empty() {
+                    return Err("Email cannot be empty".into());
+                }
+                config.bugzilla.email = email;
+                config.save()?;
+                println!("Saved to {}", config_path.display());
+            } else {
+                println!("Config OK: {}", config_path.display());
+            }
         }
         Err(_) => {
             println!("No config found at {}", config_path.display());
+
+            print!("Enter your Bugzilla email: ");
+            io::stdout().flush()?;
+            let mut email = String::new();
+            io::stdin().read_line(&mut email)?;
+            let email = email.trim().to_string();
+            if email.is_empty() {
+                return Err("Email cannot be empty".into());
+            }
+
             println!(
                 "Create an API key at https://bugzilla.redhat.com/userprefs.cgi?tab=apikey"
             );
@@ -920,7 +945,10 @@ fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let config = AppConfig {
-                bugzilla: BugzillaConfig { api_key: key },
+                bugzilla: BugzillaConfig {
+                    api_key: key,
+                    email,
+                },
             };
             config.save()?;
             println!("Saved to {}", config_path.display());

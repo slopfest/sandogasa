@@ -12,6 +12,8 @@ pub struct AppConfig {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct BugzillaConfig {
     pub api_key: String,
+    #[serde(default)]
+    pub email: String,
 }
 
 impl AppConfig {
@@ -195,12 +197,14 @@ reason = "test"
         let config = AppConfig {
             bugzilla: BugzillaConfig {
                 api_key: "test-key-12345".to_string(),
+                email: "user@example.com".to_string(),
             },
         };
         config.save_to(&path).unwrap();
 
         let loaded = AppConfig::load_from(&path).unwrap();
         assert_eq!(loaded.bugzilla.api_key, "test-key-12345");
+        assert_eq!(loaded.bugzilla.email, "user@example.com");
     }
 
     #[test]
@@ -211,6 +215,7 @@ reason = "test"
         let config = AppConfig {
             bugzilla: BugzillaConfig {
                 api_key: "key".to_string(),
+                email: "user@example.com".to_string(),
             },
         };
         config.save_to(&path).unwrap();
@@ -237,6 +242,15 @@ reason = "test"
         write!(tmp, "[bugzilla]\n").unwrap();
         let result = AppConfig::load_from(tmp.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn app_config_load_without_email_defaults_to_empty() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "[bugzilla]\napi_key = \"key-123\"\n").unwrap();
+        let config = AppConfig::load_from(tmp.path()).unwrap();
+        assert_eq!(config.bugzilla.api_key, "key-123");
+        assert_eq!(config.bugzilla.email, "");
     }
 
     // ---- UnshippedToolsConfig ----
