@@ -27,6 +27,10 @@ const BUGZILLA_URL: &str = "https://bugzilla.redhat.com";
 #[derive(Parser)]
 #[command(about)]
 struct Cli {
+    /// Show progress details for rate-limited API queries
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -98,6 +102,8 @@ enum Command {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
+    let verbose = cli.verbose;
+
     match cli.command {
         Command::Search {
             product,
@@ -105,15 +111,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             assignee,
             status,
         } => cmd_search(product, component, assignee, status).await,
-        Command::JsFps { config, close_bugs } => cmd_js_fps(config, close_bugs).await,
+        Command::JsFps { config, close_bugs } => cmd_js_fps(config, close_bugs, verbose).await,
         Command::UnshippedTools { config, close_bugs } => {
-            cmd_unshipped_tools(config, close_bugs).await
+            cmd_unshipped_tools(config, close_bugs, verbose).await
         }
         Command::BodhiCheck {
             config,
             close_bugs,
             edit_bodhi,
-        } => cmd_bodhi_check(config, close_bugs, edit_bodhi).await,
+        } => cmd_bodhi_check(config, close_bugs, edit_bodhi, verbose).await,
         Command::Config => cmd_config(),
     }
 }
@@ -186,6 +192,7 @@ async fn cmd_search(
 async fn cmd_js_fps(
     config_path: PathBuf,
     close_bugs: bool,
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = JsFpsConfig::from_file(&config_path)?;
     let bz = BzClient::new(BUGZILLA_URL);
@@ -223,6 +230,9 @@ async fn cmd_js_fps(
             }
             nvd_requests += 1;
 
+            if verbose {
+                eprintln!("Querying NVD for {}...", cve_id);
+            }
             match nvd.cve(cve_id).await {
                 Ok(resp) => {
                     let result = resp.targets_js();
@@ -321,6 +331,7 @@ fn version_to_branch(version: &str) -> Option<String> {
 async fn cmd_unshipped_tools(
     config_path: PathBuf,
     close_bugs: bool,
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = UnshippedToolsConfig::from_file(&config_path)?;
     let bz = BzClient::new(BUGZILLA_URL);
@@ -359,6 +370,9 @@ async fn cmd_unshipped_tools(
             }
             nvd_requests += 1;
 
+            if verbose {
+                eprintln!("Querying NVD for {}...", cve_id);
+            }
             match nvd.cve(cve_id).await {
                 Ok(resp) => {
                     nvd_cache.insert(cve_id.to_string(), resp);
@@ -396,6 +410,9 @@ async fn cmd_unshipped_tools(
         // Check spec file for shipped binaries
         let cache_key = (component.clone(), branch.clone());
         if !spec_cache.contains_key(&cache_key) {
+            if verbose {
+                eprintln!("Fetching spec file for {}/{}...", component, branch);
+            }
             match distgit.fetch_spec(&component, &branch).await {
                 Ok(spec_text) => {
                     let binaries = distgit::spec::shipped_binaries(&spec_text);
@@ -598,6 +615,7 @@ async fn cmd_bodhi_check(
     config_path: PathBuf,
     close_bugs: bool,
     edit_bodhi: bool,
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Check bodhi CLI is available if --edit-bodhi was requested
     if edit_bodhi {
@@ -658,6 +676,9 @@ async fn cmd_bodhi_check(
         }
         nvd_requests += 1;
 
+        if verbose {
+            eprintln!("Querying NVD for {}...", cve_id);
+        }
         match nvd.cve(&cve_id).await {
             Ok(resp) => {
                 let fv = resp.fixed_versions();
@@ -703,6 +724,9 @@ async fn cmd_bodhi_check(
 
         let cache_key = (component.clone(), release.clone());
         if !bodhi_cache.contains_key(&cache_key) {
+            if verbose {
+                eprintln!("Querying Bodhi for {} on {}...", component, release);
+            }
             match bodhi_client
                 .updates_for_package(&component, &release, &["stable", "testing"])
                 .await
