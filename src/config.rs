@@ -349,7 +349,10 @@ lag_tolerance = 7
         assert_eq!(config.components, vec!["freerdp"]);
         assert!(config.assignees.is_empty());
         assert_eq!(config.statuses, vec!["NEW", "ASSIGNED"]);
-        assert_eq!(config.reason, "This bug is already fixed in a published Bodhi update.");
+        assert_eq!(
+            config.reason,
+            "This bug is already fixed in a published Bodhi update."
+        );
         assert_eq!(config.lag_tolerance, 7);
     }
 

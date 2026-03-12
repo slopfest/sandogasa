@@ -117,11 +117,7 @@ impl BzClient {
 
     /// Update a bug. Requires an API key. The body is a JSON object with fields to update.
     #[allow(dead_code)]
-    pub async fn update(
-        &self,
-        id: u64,
-        body: &serde_json::Value,
-    ) -> Result<(), reqwest::Error> {
+    pub async fn update(&self, id: u64, body: &serde_json::Value) -> Result<(), reqwest::Error> {
         self.auth(self.client.put(self.url(&format!("bug/{id}"))))
             .json(body)
             .send()

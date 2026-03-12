@@ -70,18 +70,13 @@ impl CpeMatch {
 
     /// Check if this CPE match has a specific (non-wildcard) target_sw value.
     pub fn has_specific_target_sw(&self) -> bool {
-        self.criteria
-            .split(':')
-            .nth(10)
-            .is_some_and(|sw| sw != "*")
+        self.criteria.split(':').nth(10).is_some_and(|sw| sw != "*")
     }
 }
 
 /// CNAs (CVE Numbering Authorities) known to exclusively handle JavaScript projects.
 /// Maps source identifier (UUID or email) to a human-readable name.
-const JS_CNAS: &[(&str, &str)] = &[
-    ("ce714d77-add3-4f53-aff5-83d477b104bb", "OpenJS Foundation"),
-];
+const JS_CNAS: &[(&str, &str)] = &[("ce714d77-add3-4f53-aff5-83d477b104bb", "OpenJS Foundation")];
 
 /// Keywords that indicate a JavaScript-related CVE when found in the description.
 const JS_KEYWORDS: &[&str] = &[
@@ -343,33 +338,25 @@ mod tests {
 
     #[test]
     fn cpe_targets_js_with_node_target_sw() {
-        let m = cpe_match(
-            "cpe:2.3:a:axios:axios:*:*:*:*:*:node.js:*:*",
-        );
+        let m = cpe_match("cpe:2.3:a:axios:axios:*:*:*:*:*:node.js:*:*");
         assert!(m.targets_js());
     }
 
     #[test]
     fn cpe_targets_js_case_insensitive() {
-        let m = cpe_match(
-            "cpe:2.3:a:axios:axios:*:*:*:*:*:Node.JS:*:*",
-        );
+        let m = cpe_match("cpe:2.3:a:axios:axios:*:*:*:*:*:Node.JS:*:*");
         assert!(m.targets_js());
     }
 
     #[test]
     fn cpe_does_not_target_js_wildcard() {
-        let m = cpe_match(
-            "cpe:2.3:a:vendor:product:1.0:*:*:*:*:*:*:*",
-        );
+        let m = cpe_match("cpe:2.3:a:vendor:product:1.0:*:*:*:*:*:*:*");
         assert!(!m.targets_js());
     }
 
     #[test]
     fn cpe_does_not_target_js_python() {
-        let m = cpe_match(
-            "cpe:2.3:a:vendor:product:1.0:*:*:*:*:python:*:*",
-        );
+        let m = cpe_match("cpe:2.3:a:vendor:product:1.0:*:*:*:*:python:*:*");
         assert!(!m.targets_js());
     }
 
@@ -429,10 +416,13 @@ mod tests {
     fn cpe_specific_target_sw_is_authoritative_over_description() {
         // CPE says target_sw=python, description says JS — CPE should win
         let mut resp = cve_with_cpe("cpe:2.3:a:vendor:product:*:*:*:*:*:python:*:*");
-        resp.vulnerabilities[0].cve.descriptions.push(CveDescription {
-            lang: "en".to_string(),
-            value: "A vulnerability in a Node.js package".to_string(),
-        });
+        resp.vulnerabilities[0]
+            .cve
+            .descriptions
+            .push(CveDescription {
+                lang: "en".to_string(),
+                value: "A vulnerability in a Node.js package".to_string(),
+            });
         assert!(!resp.targets_js());
     }
 
@@ -440,10 +430,13 @@ mod tests {
     fn cpe_wildcard_target_sw_falls_through_to_description() {
         // CPE has wildcard target_sw, description says JS — should detect as JS
         let mut resp = cve_with_cpe("cpe:2.3:a:cure53:dompurify:*:*:*:*:*:*:*:*");
-        resp.vulnerabilities[0].cve.descriptions.push(CveDescription {
-            lang: "en".to_string(),
-            value: "Attackers can inject payloads to execute JavaScript".to_string(),
-        });
+        resp.vulnerabilities[0]
+            .cve
+            .descriptions
+            .push(CveDescription {
+                lang: "en".to_string(),
+                value: "Attackers can inject payloads to execute JavaScript".to_string(),
+            });
         assert!(resp.targets_js());
     }
 
@@ -451,10 +444,13 @@ mod tests {
     fn cpe_wildcard_target_sw_no_js_description() {
         // CPE has wildcard target_sw, description has no JS keywords — not JS
         let mut resp = cve_with_cpe("cpe:2.3:a:vendor:product:*:*:*:*:*:*:*:*");
-        resp.vulnerabilities[0].cve.descriptions.push(CveDescription {
-            lang: "en".to_string(),
-            value: "Buffer overflow in libpng".to_string(),
-        });
+        resp.vulnerabilities[0]
+            .cve
+            .descriptions
+            .push(CveDescription {
+                lang: "en".to_string(),
+                value: "Buffer overflow in libpng".to_string(),
+            });
         assert!(!resp.targets_js());
     }
 
@@ -686,9 +682,7 @@ mod tests {
     #[test]
     fn tool_name_not_from_possessive() {
         // Possessive form is too noisy (catches library names like "libxml2's")
-        let names = extract_tool_names_from_text(
-            "Memory in libxml2's xmllint tool is not freed",
-        );
+        let names = extract_tool_names_from_text("Memory in libxml2's xmllint tool is not freed");
         assert!(!names.contains(&"libxml2".to_string()));
         // But "xmllint tool" IS caught
         assert!(names.contains(&"xmllint".to_string()));
@@ -697,9 +691,7 @@ mod tests {
     #[test]
     fn tool_name_not_from_shell_qualifier() {
         // "shell" is not a qualifier to avoid "interactive shell" false positives
-        let names = extract_tool_names_from_text(
-            "Memory Leak in xmllint Interactive Shell",
-        );
+        let names = extract_tool_names_from_text("Memory Leak in xmllint Interactive Shell");
         assert!(names.is_empty());
     }
 
@@ -720,9 +712,8 @@ mod tests {
 
     #[test]
     fn tool_name_deduplication() {
-        let names = extract_tool_names_from_text(
-            "The xmllint tool and the xmllint utility are affected",
-        );
+        let names =
+            extract_tool_names_from_text("The xmllint tool and the xmllint utility are affected");
         assert_eq!(names.iter().filter(|n| *n == "xmllint").count(), 1);
     }
 
@@ -754,21 +745,14 @@ mod tests {
     #[test]
     fn affected_tool_names_from_summary() {
         let resp = empty_cve();
-        let names = resp.affected_tool_names(
-            "CVE-2026-1757 libxml2: DoS in xmllint tool",
-        );
+        let names = resp.affected_tool_names("CVE-2026-1757 libxml2: DoS in xmllint tool");
         assert!(names.contains(&"xmllint".to_string()));
     }
 
     #[test]
     fn affected_tool_names_combines_sources() {
-        let resp = cve_with_description(
-            "en",
-            "A flaw in the xmllint tool leaks memory",
-        );
-        let names = resp.affected_tool_names(
-            "CVE-2026-1757 libxml2: DoS in xmlcatalog utility",
-        );
+        let resp = cve_with_description("en", "A flaw in the xmllint tool leaks memory");
+        let names = resp.affected_tool_names("CVE-2026-1757 libxml2: DoS in xmlcatalog utility");
         assert!(names.contains(&"xmllint".to_string()));
         assert!(names.contains(&"xmlcatalog".to_string()));
     }
@@ -779,18 +763,13 @@ mod tests {
             "en",
             "Buffer overflow in the HTML parser of libxml2 before 2.12.0",
         );
-        let names = resp.affected_tool_names(
-            "CVE-2026-9999 libxml2: buffer overflow in parser",
-        );
+        let names = resp.affected_tool_names("CVE-2026-9999 libxml2: buffer overflow in parser");
         assert!(names.is_empty());
     }
 
     #[test]
     fn affected_tool_names_ignores_non_english() {
-        let resp = cve_with_description(
-            "es",
-            "El xmllint tool tiene un fallo de memoria",
-        );
+        let resp = cve_with_description("es", "El xmllint tool tiene un fallo de memoria");
         let names = resp.affected_tool_names("CVE-2026-1757 libxml2: summary");
         // Spanish description should be ignored
         assert!(!names.contains(&"xmllint".to_string()));

@@ -36,10 +36,7 @@ impl BodhiClient {
         let mut page = 1;
 
         loop {
-            let status_params: String = statuses
-                .iter()
-                .map(|s| format!("&status={s}"))
-                .collect();
+            let status_params: String = statuses.iter().map(|s| format!("&status={s}")).collect();
             let url = format!(
                 "{}/updates/?packages={}&releases={}{}&rows_per_page=100&page={}",
                 self.base_url, package, release, status_params, page
@@ -70,10 +67,7 @@ impl BodhiClient {
     /// Returns releases with state "current", "pending", or "frozen",
     /// excluding Flatpak, Container, ELN, and EPEL-Next variants.
     pub async fn active_releases(&self) -> Result<Vec<BodhiRelease>, reqwest::Error> {
-        let url = format!(
-            "{}/releases/?chrome=0&rows_per_page=100",
-            self.base_url
-        );
+        let url = format!("{}/releases/?chrome=0&rows_per_page=100", self.base_url);
 
         let resp: ReleasesResponse = self
             .client
@@ -88,10 +82,7 @@ impl BodhiClient {
             .releases
             .into_iter()
             .filter(|r| matches!(r.state.as_str(), "current" | "pending" | "frozen"))
-            .filter(|r| {
-                matches!(r.id_prefix.as_str(), "FEDORA" | "FEDORA-EPEL")
-                    && r.name != "ELN"
-            })
+            .filter(|r| matches!(r.id_prefix.as_str(), "FEDORA" | "FEDORA-EPEL") && r.name != "ELN")
             .collect();
 
         Ok(active)

@@ -67,15 +67,7 @@ fn is_section_start(line: &str) -> bool {
     }
     // These are valid directives within %files sections
     const FILES_DIRECTIVES: &[&str] = &[
-        "%license",
-        "%doc",
-        "%dir",
-        "%config",
-        "%ghost",
-        "%defattr",
-        "%attr",
-        "%verify",
-        "%caps",
+        "%license", "%doc", "%dir", "%config", "%ghost", "%defattr", "%attr", "%verify", "%caps",
         "%exclude",
     ];
     !FILES_DIRECTIVES.iter().any(|d| line.starts_with(d))

@@ -14,10 +14,10 @@ use std::time::Duration;
 
 use bodhi::BodhiClient;
 use bugzilla::BzClient;
-use distgit::DistGitClient;
 use chrono::{DateTime, NaiveDateTime, TimeDelta, Utc};
 use clap::{Parser, Subcommand};
 use config::{AppConfig, BodhiCheckConfig, BugzillaConfig, JsFpsConfig, UnshippedToolsConfig};
+use distgit::DistGitClient;
 use nvd::NvdClient;
 use version::{Nvr, fedora_release_from_version, release_from_summary, version_gte};
 
@@ -208,7 +208,10 @@ async fn cmd_js_fps(
         .filter(|b| is_cve_bug(&b.summary, &b.keywords))
         .collect();
 
-    println!("Checking {} CVE bugs for JavaScript false positives...", cve_bugs.len());
+    println!(
+        "Checking {} CVE bugs for JavaScript false positives...",
+        cve_bugs.len()
+    );
 
     let mut fp_bug_ids: Vec<u64> = Vec::new();
     let mut nvd_requests = 0;
@@ -710,7 +713,9 @@ async fn cmd_bodhi_check(
             .stderr(std::process::Stdio::null())
             .status();
         if status.is_err() || !status.unwrap().success() {
-            return Err("bodhi CLI not found. Install it with: sudo dnf install bodhi-client".into());
+            return Err(
+                "bodhi CLI not found. Install it with: sudo dnf install bodhi-client".into(),
+            );
         }
     }
 
@@ -742,9 +747,7 @@ async fn cmd_bodhi_check(
     );
 
     // Pre-fetch active EPEL releases if any bug is tagged [epel-all]
-    let has_epel_all = cve_bugs
-        .iter()
-        .any(|b| b.summary.contains("[epel-all]"));
+    let has_epel_all = cve_bugs.iter().any(|b| b.summary.contains("[epel-all]"));
     let epel_releases: Vec<String> = if has_epel_all {
         if verbose {
             eprintln!("Fetching active EPEL releases from Bodhi...");
@@ -828,8 +831,7 @@ async fn cmd_bodhi_check(
                 None => {
                     eprintln!(
                         "Warning: cannot determine release for bug {} (version={:?})",
-                        bug.id,
-                        bug.version
+                        bug.id, bug.version
                     );
                     continue;
                 }
@@ -928,10 +930,7 @@ async fn cmd_bodhi_check(
         println!("\nStable fixes ({}):", stable_fixes.len());
         for r in &stable_fixes {
             if let BodhiCheckResult::StableFix {
-                bug_id,
-                alias,
-                nvr,
-                ..
+                bug_id, alias, nvr, ..
             } = r
             {
                 println!("  bug {} — {} ({})", bug_id, nvr, alias);
@@ -943,10 +942,7 @@ async fn cmd_bodhi_check(
         println!("\nTesting fixes ({}):", testing_fixes.len());
         for r in &testing_fixes {
             if let BodhiCheckResult::TestingFix {
-                bug_id,
-                alias,
-                nvr,
-                ..
+                bug_id, alias, nvr, ..
             } = r
             {
                 println!("  bug {} — {} ({})", bug_id, nvr, alias);
@@ -973,10 +969,7 @@ async fn cmd_bodhi_check(
     }
 
     if !mismatches.is_empty() {
-        println!(
-            "\nProduct mismatch — skipped ({}):",
-            mismatches.len()
-        );
+        println!("\nProduct mismatch — skipped ({}):", mismatches.len());
         for r in &mismatches {
             if let BodhiCheckResult::ProductMismatch {
                 bug_id,
@@ -997,10 +990,8 @@ async fn cmd_bodhi_check(
     // --close-bugs: close StableFix bugs as ERRATA, and block tracker for late-filed bugs
     if close_bugs {
         // Build a map of bug_id → creation_time for late-filed detection
-        let bug_creation_times: HashMap<u64, DateTime<Utc>> = cve_bugs
-            .iter()
-            .map(|b| (b.id, b.creation_time))
-            .collect();
+        let bug_creation_times: HashMap<u64, DateTime<Utc>> =
+            cve_bugs.iter().map(|b| (b.id, b.creation_time)).collect();
 
         // Find late-filed bugs (filed after update submission + lag tolerance)
         let late_filed: Vec<u64> = results
@@ -1078,11 +1069,7 @@ async fn cmd_bodhi_check(
                 }
 
                 match bz.update_many(bug_ids, &update).await {
-                    Ok(()) => println!(
-                        "Closed {} bug(s) as ERRATA ({})",
-                        bug_ids.len(),
-                        nvr
-                    ),
+                    Ok(()) => println!("Closed {} bug(s) as ERRATA ({})", bug_ids.len(), nvr),
                     Err(e) => eprintln!("Error closing bugs for {}: {}", nvr, e),
                 }
             }
@@ -1117,12 +1104,7 @@ async fn cmd_bodhi_check(
     if edit_bodhi && !testing_fixes.is_empty() {
         println!("\nAdding bug references to testing updates...");
         for r in &testing_fixes {
-            if let BodhiCheckResult::TestingFix {
-                bug_id,
-                alias,
-                ..
-            } = r
-            {
+            if let BodhiCheckResult::TestingFix { bug_id, alias, .. } = r {
                 let output = std::process::Command::new("bodhi")
                     .args(["updates", "edit", alias, "--bugs", &bug_id.to_string()])
                     .output();
@@ -1181,9 +1163,7 @@ fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("Email cannot be empty".into());
             }
 
-            println!(
-                "Create an API key at https://bugzilla.redhat.com/userprefs.cgi?tab=apikey"
-            );
+            println!("Create an API key at https://bugzilla.redhat.com/userprefs.cgi?tab=apikey");
             print!("Enter your Bugzilla API key: ");
             io::stdout().flush()?;
 
@@ -1303,12 +1283,7 @@ mod tests {
 
     #[test]
     fn build_multi_query_single_each() {
-        let q = build_multi_query(
-            &["Fedora".into()],
-            &["kernel".into()],
-            &["NEW".into()],
-            &[],
-        );
+        let q = build_multi_query(&["Fedora".into()], &["kernel".into()], &["NEW".into()], &[]);
         assert_eq!(q, "product=Fedora&component=kernel&bug_status=NEW");
     }
 
@@ -1389,10 +1364,7 @@ mod tests {
 
     #[test]
     fn determine_release_no_info() {
-        assert_eq!(
-            determine_release(&[], "CVE-2026-12345 foo: bar"),
-            None
-        );
+        assert_eq!(determine_release(&[], "CVE-2026-12345 foo: bar"), None);
     }
 
     #[test]
@@ -1501,10 +1473,7 @@ mod tests {
         )];
 
         let result = categorize_bug(400, &[], &updates, "freerdp", None);
-        assert_eq!(
-            result,
-            BodhiCheckResult::NoFixedVersion { bug_id: 400 }
-        );
+        assert_eq!(result, BodhiCheckResult::NoFixedVersion { bug_id: 400 });
     }
 
     #[test]
@@ -1533,11 +1502,7 @@ mod tests {
         let fv = vec![make_fixed_version("freerdp", "3.23.0")];
         let updates = vec![
             make_update("FEDORA-2026-stable", "stable", &["freerdp-3.23.0-1.fc42"]),
-            make_update(
-                "FEDORA-2026-testing",
-                "testing",
-                &["freerdp-3.24.0-1.fc42"],
-            ),
+            make_update("FEDORA-2026-testing", "testing", &["freerdp-3.24.0-1.fc42"]),
         ];
 
         let result = categorize_bug(700, &fv, &updates, "freerdp", None);
@@ -1763,19 +1728,10 @@ mod tests {
         )];
 
         let without = categorize_bug(1400, &fv, &updates, "python-django3", None);
-        assert!(matches!(
-            without,
-            BodhiCheckResult::ProductMismatch { .. }
-        ));
+        assert!(matches!(without, BodhiCheckResult::ProductMismatch { .. }));
 
         let provides = "python3dist(django) = 4.2";
-        let with = categorize_bug(
-            1400,
-            &fv,
-            &updates,
-            "python-django3",
-            Some(provides),
-        );
+        let with = categorize_bug(1400, &fv, &updates, "python-django3", Some(provides));
         assert!(matches!(with, BodhiCheckResult::StableFix { .. }));
     }
 

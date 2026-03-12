@@ -203,18 +203,12 @@ mod tests {
 
     #[test]
     fn release_from_version_numeric() {
-        assert_eq!(
-            fedora_release_from_version("42"),
-            Some("F42".to_string())
-        );
+        assert_eq!(fedora_release_from_version("42"), Some("F42".to_string()));
     }
 
     #[test]
     fn release_from_version_numeric_41() {
-        assert_eq!(
-            fedora_release_from_version("41"),
-            Some("F41".to_string())
-        );
+        assert_eq!(fedora_release_from_version("41"), Some("F41".to_string()));
     }
 
     #[test]
@@ -281,9 +275,6 @@ mod tests {
 
     #[test]
     fn summary_fedora_tag_no_number() {
-        assert_eq!(
-            release_from_summary("CVE-2026-12345 [fedora-] foo"),
-            None
-        );
+        assert_eq!(release_from_summary("CVE-2026-12345 [fedora-] foo"), None);
     }
 }

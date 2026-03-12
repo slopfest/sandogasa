@@ -9,6 +9,7 @@
 - After publishing and tagging, push with `git push --follow-tags`
 
 ## Code Style
+- Always run `cargo fmt` before committing
 - Every source file must start with `// SPDX-License-Identifier: MPL-2.0`
 - CLI help text (`-h` and `--help`) must not exceed 80 characters per line
 - Keep the `Command` enum variants in `main.rs` sorted alphabetically (this determines the order in `--help` output)
