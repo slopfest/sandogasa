@@ -1,0 +1,7 @@
+tracker_bug = "CVE-AlreadyFixed"
+products = ["Fedora", "Fedora EPEL"]
+assignees = ["michel@michel-slm.name"]
+# components = ["python-django3"]
+statuses = ["NEW", "ASSIGNED"]
+reason = "This bug is already fixed in a published Bodhi update."
+lag_tolerance = 30
