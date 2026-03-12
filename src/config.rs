@@ -96,7 +96,10 @@ impl UnshippedToolsConfig {
 pub struct BodhiCheckConfig {
     pub tracker_bug: String,
     pub products: Vec<String>,
+    #[serde(default)]
     pub components: Vec<String>,
+    #[serde(default)]
+    pub assignees: Vec<String>,
     pub statuses: Vec<String>,
     pub reason: String,
     pub lag_tolerance: i64,
@@ -344,9 +347,56 @@ lag_tolerance = 7
         assert_eq!(config.tracker_bug, "CVE-AlreadyFixed");
         assert_eq!(config.products, vec!["Fedora", "Fedora EPEL"]);
         assert_eq!(config.components, vec!["freerdp"]);
+        assert!(config.assignees.is_empty());
         assert_eq!(config.statuses, vec!["NEW", "ASSIGNED"]);
         assert_eq!(config.reason, "This bug is already fixed in a published Bodhi update.");
         assert_eq!(config.lag_tolerance, 7);
+    }
+
+    #[test]
+    fn bodhi_check_config_with_assignees() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            tmp,
+            r#"
+tracker_bug = "CVE-AlreadyFixed"
+products = ["Fedora"]
+assignees = ["user@example.com", "other@example.com"]
+statuses = ["NEW"]
+reason = "Already fixed."
+lag_tolerance = 0
+"#
+        )
+        .unwrap();
+
+        let config = BodhiCheckConfig::from_file(tmp.path()).unwrap();
+        assert!(config.components.is_empty());
+        assert_eq!(
+            config.assignees,
+            vec!["user@example.com", "other@example.com"]
+        );
+    }
+
+    #[test]
+    fn bodhi_check_config_with_components_and_assignees() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            tmp,
+            r#"
+tracker_bug = "CVE-AlreadyFixed"
+products = ["Fedora"]
+components = ["freerdp"]
+assignees = ["user@example.com"]
+statuses = ["NEW"]
+reason = "Already fixed."
+lag_tolerance = 0
+"#
+        )
+        .unwrap();
+
+        let config = BodhiCheckConfig::from_file(tmp.path()).unwrap();
+        assert_eq!(config.components, vec!["freerdp"]);
+        assert_eq!(config.assignees, vec!["user@example.com"]);
     }
 
     #[test]

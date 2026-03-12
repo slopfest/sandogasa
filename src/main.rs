@@ -132,7 +132,12 @@ fn extract_cve_id(summary: &str) -> Option<&str> {
 }
 
 /// Build a Bugzilla query string from lists of products, components, and statuses.
-fn build_multi_query(products: &[String], components: &[String], statuses: &[String]) -> String {
+fn build_multi_query(
+    products: &[String],
+    components: &[String],
+    statuses: &[String],
+    assignees: &[String],
+) -> String {
     let mut query = String::new();
     for product in products {
         query.push_str(&format!("&product={product}"));
@@ -142,6 +147,9 @@ fn build_multi_query(products: &[String], components: &[String], statuses: &[Str
     }
     for status in statuses {
         query.push_str(&format!("&bug_status={status}"));
+    }
+    for assignee in assignees {
+        query.push_str(&format!("&assigned_to={assignee}"));
     }
     query.trim_start_matches('&').to_string()
 }
@@ -183,7 +191,7 @@ async fn cmd_js_fps(
     let bz = BzClient::new(BUGZILLA_URL);
     let nvd = NvdClient::new();
 
-    let query = build_multi_query(&config.products, &config.components, &config.statuses);
+    let query = build_multi_query(&config.products, &config.components, &config.statuses, &[]);
 
     let bugs = bz.search(&query, 0).await?;
 
@@ -320,7 +328,7 @@ async fn cmd_unshipped_tools(
     let distgit = DistGitClient::new();
 
     // Search Bugzilla
-    let query = build_multi_query(&config.products, &config.components, &config.statuses);
+    let query = build_multi_query(&config.products, &config.components, &config.statuses, &[]);
     let bugs = bz.search(&query, 0).await?;
 
     let cve_bugs: Vec<_> = bugs
@@ -604,11 +612,19 @@ async fn cmd_bodhi_check(
     }
 
     let config = BodhiCheckConfig::from_file(&config_path)?;
+    if config.components.is_empty() && config.assignees.is_empty() {
+        return Err("Config must specify at least one of 'components' or 'assignees'.".into());
+    }
     let bz = BzClient::new(BUGZILLA_URL);
     let nvd = NvdClient::new();
     let bodhi_client = BodhiClient::new();
 
-    let query = build_multi_query(&config.products, &config.components, &config.statuses);
+    let query = build_multi_query(
+        &config.products,
+        &config.components,
+        &config.statuses,
+        &config.assignees,
+    );
     let bugs = bz.search(&query, 0).await?;
 
     // Filter to CVE bugs only
@@ -1075,6 +1091,7 @@ mod tests {
             &["Fedora".into(), "Fedora EPEL".into()],
             &["vulnerability".into()],
             &["NEW".into(), "ASSIGNED".into()],
+            &[],
         );
         assert_eq!(
             q,
@@ -1088,20 +1105,49 @@ mod tests {
             &["Fedora".into()],
             &["kernel".into()],
             &["NEW".into()],
+            &[],
         );
         assert_eq!(q, "product=Fedora&component=kernel&bug_status=NEW");
     }
 
     #[test]
     fn build_multi_query_empty() {
-        let q = build_multi_query(&[], &[], &[]);
+        let q = build_multi_query(&[], &[], &[], &[]);
         assert_eq!(q, "");
     }
 
     #[test]
     fn build_multi_query_products_only() {
-        let q = build_multi_query(&["Security Response".into()], &[], &[]);
+        let q = build_multi_query(&["Security Response".into()], &[], &[], &[]);
         assert_eq!(q, "product=Security Response");
+    }
+
+    #[test]
+    fn build_multi_query_with_assignees() {
+        let q = build_multi_query(
+            &["Fedora".into()],
+            &[],
+            &["NEW".into()],
+            &["user@example.com".into()],
+        );
+        assert_eq!(
+            q,
+            "product=Fedora&bug_status=NEW&assigned_to=user@example.com"
+        );
+    }
+
+    #[test]
+    fn build_multi_query_components_and_assignees() {
+        let q = build_multi_query(
+            &["Fedora".into()],
+            &["kernel".into()],
+            &["NEW".into()],
+            &["a@example.com".into(), "b@example.com".into()],
+        );
+        assert_eq!(
+            q,
+            "product=Fedora&component=kernel&bug_status=NEW&assigned_to=a@example.com&assigned_to=b@example.com"
+        );
     }
 
     // ---- determine_release ----
