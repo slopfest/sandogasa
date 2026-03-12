@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.0
+
+- Add unshipped-tools command to detect CVEs for tools not shipped in RPMs
+- Add Bugzilla email to config and prompt to reassign bugs when closing them
+- Support filtering bodhi-check bugs by assignee (opt-in per-user triage)
+- Add global -v/--verbose flag for progress on rate-limited API queries
+- Fix bodhi-check false positives from mismatched NVD products:
+  - Only compare versions when NVD product matches Fedora component
+  - Use fedrq RPM provides to resolve name mismatches (e.g. django → python-django3)
+  - Expand [epel-all] bugs to check all active EPEL releases
+
 ## v0.2.2
 
 - Batch Bugzilla updates to close multiple bugs in a single API request

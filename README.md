@@ -86,6 +86,7 @@ Create a TOML config file:
 tracker_bug = "CVE-AlreadyFixed"
 products = ["Fedora", "Fedora EPEL"]
 components = ["freerdp"]
+# assignees = ["user@example.com"]  # optional: filter by assignee
 statuses = ["NEW", "ASSIGNED"]
 reason = "This bug is already fixed in a published Bodhi update."
 lag_tolerance = 30
@@ -124,6 +125,16 @@ Marked 1 bug(s) as blocking CVE-AlreadyFixed (late-filed)
 Add `--edit-bodhi` to add bug references to testing updates via the `bodhi`
 CLI (requires `bodhi-client` to be installed).
 
+### Detect unshipped tool false positives
+
+The `unshipped-tools` subcommand detects CVE bugs where the affected tool
+(e.g. `xmllint`) is not shipped by the Fedora package that bundles the
+upstream library (e.g. `pcem` bundles `libxml2` but doesn't ship `xmllint`).
+
+```
+$ fedora-cve-triage unshipped-tools -f configs/unshipped-tools.toml
+```
+
 ### Configure Bugzilla API key
 
 Required for `--close-bugs`. Create an API key at
@@ -132,8 +143,17 @@ https://bugzilla.redhat.com/userprefs.cgi?tab=apikey, then run:
 ```
 $ fedora-cve-triage config
 No config found at /home/user/.config/fedora-cve-triage/config.toml
+Enter your Bugzilla email: user@example.com
 Create an API key at https://bugzilla.redhat.com/userprefs.cgi?tab=apikey
 Enter your Bugzilla API key:
+```
+
+### Verbose mode
+
+Pass `-v` / `--verbose` to see progress details for rate-limited API queries:
+
+```
+$ fedora-cve-triage -v bodhi-check -f configs/bodhi-check.toml
 ```
 
 ## Building

@@ -1,6 +1,6 @@
 [package]
 name = "fedora-cve-triage"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
 description = "A tool for triaging CVEs reported against Fedora components in Bugzilla"
 license = "MPL-2.0"
