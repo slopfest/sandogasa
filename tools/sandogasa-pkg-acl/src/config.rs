@@ -57,6 +57,7 @@ impl AclConfig {
 /// ```toml
 /// [dist-git]
 /// api_token = "..."
+/// username = "salimma"
 /// ```
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AppConfig {
@@ -67,6 +68,8 @@ pub struct AppConfig {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DistGitConfig {
     pub api_token: String,
+    #[serde(default)]
+    pub username: String,
 }
 
 #[cfg(test)]
@@ -233,6 +236,41 @@ ngompa = "admin"
         write!(tmp, "this is not valid toml [[[").unwrap();
         let result = AclConfig::from_file(tmp.path());
         assert!(result.is_err());
+    }
+
+    // ---- AppConfig ----
+
+    #[test]
+    fn app_config_round_trip_with_username() {
+        use sandogasa_config::ConfigFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cf = ConfigFile::from_path(dir.path().join("config.toml"));
+
+        let config = AppConfig {
+            dist_git: DistGitConfig {
+                api_token: "tok-123".to_string(),
+                username: "salimma".to_string(),
+            },
+        };
+        cf.save(&config).unwrap();
+
+        let loaded: AppConfig = cf.load().unwrap();
+        assert_eq!(loaded.dist_git.api_token, "tok-123");
+        assert_eq!(loaded.dist_git.username, "salimma");
+    }
+
+    #[test]
+    fn app_config_username_defaults_to_empty() {
+        use sandogasa_config::ConfigFile;
+        use std::io::Write as _;
+
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "[dist-git]\napi_token = \"tok-456\"\n").unwrap();
+        let cf = ConfigFile::from_path(tmp.path().to_path_buf());
+        let config: AppConfig = cf.load().unwrap();
+        assert_eq!(config.dist_git.api_token, "tok-456");
+        assert_eq!(config.dist_git.username, "");
     }
 
     #[test]

@@ -145,6 +145,17 @@ fn resolve_token() -> Result<String, Box<dyn std::error::Error>> {
     Ok(config.dist_git.api_token)
 }
 
+/// Return the cached username from the config file, if available.
+fn resolve_username() -> Option<String> {
+    let cf = ConfigFile::for_tool(TOOL_NAME);
+    let config: AppConfig = cf.load().ok()?;
+    if config.dist_git.username.is_empty() {
+        None
+    } else {
+        Some(config.dist_git.username)
+    }
+}
+
 fn resolve_target(
     user: Option<String>,
     group: Option<String>,
@@ -165,10 +176,11 @@ async fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
             print!("Verifying API token... ");
             io::stdout().flush()?;
 
-            let client = DistGitClient::new().with_token(config.dist_git.api_token);
+            let client = DistGitClient::new().with_token(config.dist_git.api_token.clone());
             match client.verify_token().await {
                 Ok(username) => {
                     println!("OK (authenticated as {username})");
+                    cache_username(&username);
                     return Ok(());
                 }
                 Err(e) => {
@@ -197,7 +209,10 @@ async fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
     println!("OK (authenticated as {username})");
 
     let config = AppConfig {
-        dist_git: DistGitConfig { api_token: token },
+        dist_git: DistGitConfig {
+            api_token: token,
+            username,
+        },
     };
     cf.save(&config)?;
     println!("Saved to {}", cf.path().display());
@@ -339,19 +354,45 @@ async fn cmd_show(package: &str, json: bool) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-/// If a token is available, resolve the username and check access.
+/// If a token/username is available, check the user's access level.
+///
+/// Uses the cached username from the config file when available,
+/// falling back to `verify_token()` only if needed.
 async fn check_my_access(
     client: &DistGitClient,
     acls: &sandogasa_distgit::ProjectAcls,
 ) -> Option<(String, AccessResult)> {
-    let token = resolve_token().ok()?;
-    let auth_client = DistGitClient::new().with_token(token);
-    let username = auth_client.verify_token().await.ok()?;
+    let username = match resolve_username() {
+        Some(u) => u,
+        None => {
+            let token = resolve_token().ok()?;
+            let auth_client = DistGitClient::new().with_token(token);
+            let u = auth_client.verify_token().await.ok()?;
+            cache_username(&u);
+            u
+        }
+    };
     let result = client
         .check_access(acls, &username, AccessLevel::Admin)
         .await
         .ok()?;
     Some((username, result))
+}
+
+/// Save the username into the config file if it's not already cached.
+fn cache_username(username: &str) {
+    let cf = ConfigFile::for_tool(TOOL_NAME);
+    if let Ok(config) = cf.load::<AppConfig>() {
+        if config.dist_git.username != username {
+            let updated = AppConfig {
+                dist_git: DistGitConfig {
+                    api_token: config.dist_git.api_token,
+                    username: username.to_string(),
+                },
+            };
+            let _ = cf.save(&updated);
+        }
+    }
 }
 
 #[derive(Serialize)]
