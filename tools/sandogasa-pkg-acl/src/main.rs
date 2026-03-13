@@ -470,6 +470,14 @@ async fn cmd_set(
     };
 
     if let Some(current) = current {
+        // Cannot modify a package owner
+        if current == AccessLevel::Owner {
+            return Err(format!(
+                "cannot modify {user_type} '{name}' on {package}: \
+                 package owner"
+            )
+            .into());
+        }
         if current == requested {
             if json {
                 println!(
@@ -538,7 +546,15 @@ async fn cmd_remove(
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = DistGitClient::new().with_token(token.to_string());
-    let _acls = require_admin(&client, package).await?;
+    let acls = require_admin(&client, package).await?;
+    // Cannot remove a package owner
+    if user_type == "user" && acls.user_level(name) == Some(AccessLevel::Owner) {
+        return Err(format!(
+            "cannot remove user '{name}' from {package}: \
+             package owner"
+        )
+        .into());
+    }
     client.remove_acl(package, user_type, name).await?;
     if json {
         println!(
@@ -592,6 +608,27 @@ async fn cmd_apply(
 
     for (name, level) in &config.users {
         let is_remove = level == "remove";
+
+        // Cannot modify a package owner (applies to both set and remove)
+        if acls.user_level(name) == Some(AccessLevel::Owner) {
+            if !json {
+                eprintln!(
+                    "Skipped user '{name}' on {package}: \
+                     cannot modify package owner"
+                );
+            }
+            if json {
+                entries.push(ApplyEntry {
+                    user_type: "user".to_string(),
+                    name: name.clone(),
+                    action: "skipped".to_string(),
+                    level: Some("owner".to_string()),
+                    ok: false,
+                    error: Some("cannot modify package owner".to_string()),
+                });
+            }
+            continue;
+        }
 
         // Check for skip (only when setting, not removing)
         if !is_remove {
@@ -742,6 +779,24 @@ fn check_skip(
 ) -> Option<ApplyEntry> {
     let requested: AccessLevel = requested_level.parse().unwrap();
     let current = current?;
+
+    // Cannot modify a package owner
+    if current == AccessLevel::Owner {
+        if !json {
+            eprintln!(
+                "Skipped {user_type} '{name}' on {package}: \
+                 cannot modify package owner"
+            );
+        }
+        return Some(ApplyEntry {
+            user_type: user_type.to_string(),
+            name: name.to_string(),
+            action: "skipped".to_string(),
+            level: Some("owner".to_string()),
+            ok: false,
+            error: Some("cannot modify package owner".to_string()),
+        });
+    }
 
     if current == requested {
         if !json {
@@ -899,5 +954,94 @@ mod tests {
     fn parse_acl_level_invalid() {
         assert!(parse_acl_level("owner").is_err());
         assert!(parse_acl_level("superadmin").is_err());
+    }
+
+    // ---- check_skip owner protection ----
+
+    #[test]
+    fn check_skip_owner_always_skips() {
+        // Even with strict=true, owner cannot be modified
+        for strict in [false, true] {
+            let result = check_skip(
+                "user",
+                "pkgowner",
+                "commit",
+                Some(AccessLevel::Owner),
+                strict,
+                "mypkg",
+                true,
+            );
+            let entry = result.expect("should skip owner");
+            assert_eq!(entry.action, "skipped");
+            assert_eq!(entry.level, Some("owner".to_string()));
+            assert!(!entry.ok);
+            assert!(entry.error.as_ref().unwrap().contains("package owner"));
+        }
+    }
+
+    #[test]
+    fn check_skip_same_level() {
+        let result = check_skip(
+            "user",
+            "alice",
+            "commit",
+            Some(AccessLevel::Commit),
+            false,
+            "mypkg",
+            true,
+        );
+        let entry = result.expect("should skip same level");
+        assert_eq!(entry.action, "skipped");
+        assert!(entry.ok);
+    }
+
+    #[test]
+    fn check_skip_higher_without_strict() {
+        let result = check_skip(
+            "user",
+            "alice",
+            "ticket",
+            Some(AccessLevel::Admin),
+            false,
+            "mypkg",
+            true,
+        );
+        let entry = result.expect("should skip higher level");
+        assert_eq!(entry.action, "skipped");
+        assert!(entry.ok);
+    }
+
+    #[test]
+    fn check_skip_higher_with_strict_proceeds() {
+        let result = check_skip(
+            "user",
+            "alice",
+            "ticket",
+            Some(AccessLevel::Admin),
+            true,
+            "mypkg",
+            true,
+        );
+        assert!(result.is_none(), "strict should proceed with downgrade");
+    }
+
+    #[test]
+    fn check_skip_lower_proceeds() {
+        let result = check_skip(
+            "user",
+            "alice",
+            "admin",
+            Some(AccessLevel::Commit),
+            false,
+            "mypkg",
+            true,
+        );
+        assert!(result.is_none(), "should proceed to upgrade");
+    }
+
+    #[test]
+    fn check_skip_no_current_proceeds() {
+        let result = check_skip("user", "alice", "commit", None, false, "mypkg", true);
+        assert!(result.is_none(), "should proceed for new user");
     }
 }
