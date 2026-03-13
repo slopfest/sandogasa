@@ -700,6 +700,43 @@ fn prompt_reassign(email: &str) -> Result<bool, Box<dyn std::error::Error>> {
     Ok(answer.trim().eq_ignore_ascii_case("y"))
 }
 
+/// Edit a Bodhi update to add bug references, preserving any existing bugs.
+fn bodhi_edit_add_bugs(
+    alias: &str,
+    new_bug_ids: &[u64],
+    existing_bugs: &HashMap<String, Vec<u64>>,
+) {
+    let mut all_bugs: Vec<u64> = existing_bugs.get(alias).cloned().unwrap_or_default();
+    for &id in new_bug_ids {
+        if !all_bugs.contains(&id) {
+            all_bugs.push(id);
+        }
+    }
+    let bugs_str = all_bugs
+        .iter()
+        .map(|b| b.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let output = std::process::Command::new("bodhi")
+        .args(["updates", "edit", alias, "--bugs", &bugs_str])
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let added: Vec<_> = new_bug_ids.iter().map(|b| b.to_string()).collect();
+            println!("  Added bug(s) {} to {}", added.join(", "), alias);
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            eprintln!("  Error editing {}: {}", alias, stderr.trim());
+        }
+        Err(e) => {
+            eprintln!("  Failed to run bodhi CLI for {}: {}", alias, e);
+        }
+    }
+}
+
 async fn cmd_bodhi_check(
     config_path: PathBuf,
     close_bugs: bool,
@@ -905,6 +942,14 @@ async fn cmd_bodhi_check(
         }
     }
 
+    // Build a map of update alias → existing bug IDs so we can
+    // add new bugs without removing existing references.
+    let update_existing_bugs: HashMap<String, Vec<u64>> = bodhi_cache
+        .values()
+        .flatten()
+        .map(|u| (u.alias.clone(), u.bugs.iter().map(|b| b.bug_id).collect()))
+        .collect();
+
     // Print summary
     let stable_fixes: Vec<_> = results
         .iter()
@@ -1104,25 +1149,14 @@ async fn cmd_bodhi_check(
     // --edit-bodhi: add bug references to testing updates
     if edit_bodhi && !testing_fixes.is_empty() {
         println!("\nAdding bug references to testing updates...");
+        let mut by_alias: HashMap<String, Vec<u64>> = HashMap::new();
         for r in &testing_fixes {
             if let BodhiCheckResult::TestingFix { bug_id, alias, .. } = r {
-                let output = std::process::Command::new("bodhi")
-                    .args(["updates", "edit", alias, "--bugs", &bug_id.to_string()])
-                    .output();
-
-                match output {
-                    Ok(out) if out.status.success() => {
-                        println!("  Added bug {} to {}", bug_id, alias);
-                    }
-                    Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        eprintln!("  Error editing {}: {}", alias, stderr.trim());
-                    }
-                    Err(e) => {
-                        eprintln!("  Failed to run bodhi CLI for {}: {}", alias, e);
-                    }
-                }
+                by_alias.entry(alias.clone()).or_default().push(*bug_id);
             }
+        }
+        for (alias, bug_ids) in &by_alias {
+            bodhi_edit_add_bugs(alias, bug_ids, &update_existing_bugs);
         }
     }
 
