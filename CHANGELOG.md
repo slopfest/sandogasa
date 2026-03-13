@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.4.0
+
+### New: sandogasa-pkg-acl tool
+
+- View and manage Fedora package ACLs via the Pagure dist-git API
+- Subcommands: `show`, `set`, `remove`, `apply`, `give`, `config`
+- Batch ACL application from TOML config files across multiple packages
+- `--strict` flag to downgrade access when target already has higher level
+- Access checks: require admin for modifications, owner for transfers
+- Owner protection: cannot downgrade or remove a package owner
+- Username caching to avoid repeated token verification
+- `--json` flag for machine-readable output on all subcommands
+
+### New: sandogasa-config crate
+
+- Shared config file management (`ConfigFile`) and interactive prompting
+  (`prompt_field`) extracted from fedora-cve-triage for reuse across tools
+- Email address validation helper
+
+### sandogasa-distgit
+
+- ACL management: `set_acl`, `remove_acl`, `get_acls`, `get_contributors`
+- Ownership transfer: `give_package` via Pagure PATCH API
+- User validation: `user_exists`
+- Access level model with ordering, display, serde, and `FromStr`
+- Access checking with direct and group membership support
+- Token verification via `/api/0/-/whoami`
+
+### Workspace
+
+- Centralize all dependencies in `[workspace.dependencies]`
+- Add `--json` requirement for non-interactive subcommands (CLAUDE.md)
+
 ## v0.3.1
 
 - Fix --edit-bodhi to preserve existing bug references when adding new ones
