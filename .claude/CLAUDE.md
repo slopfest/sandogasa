@@ -15,7 +15,7 @@
 - Keep the `Command` enum variants in `main.rs` sorted alphabetically (this determines the order in `--help` output)
 
 ## CLI behavior
-- Non-interactive subcommands (e.g. `show`, `search`) must support a `--json` flag that outputs machine-readable JSON instead of human-readable text
+- Non-interactive subcommands (e.g. `show`, `search`) must support a `--json` flag that outputs pretty-printed, machine-readable JSON instead of human-readable text
 
 ## Workspace layout
 - Library crates go in `crates/`, binary crates go in `tools/`

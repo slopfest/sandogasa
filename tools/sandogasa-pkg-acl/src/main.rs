@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use sandogasa_distgit::DistGitClient;
+use serde::Serialize;
 
 use config::AclConfig;
 
@@ -15,6 +16,10 @@ use config::AclConfig;
 #[derive(Parser)]
 #[command(about)]
 struct Cli {
+    /// Output machine-readable JSON
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -103,8 +108,9 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let json = cli.json;
     match cli.command {
-        Command::Apply { config, token } => cmd_apply(&config, &token).await,
+        Command::Apply { config, token } => cmd_apply(&config, &token, json).await,
         Command::Remove {
             package,
             user,
@@ -112,7 +118,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             token,
         } => {
             let (user_type, name) = resolve_target(user, group)?;
-            cmd_remove(&package, &user_type, &name, &token).await
+            cmd_remove(&package, &user_type, &name, &token, json).await
         }
         Command::Set {
             package,
@@ -122,9 +128,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             token,
         } => {
             let (user_type, name) = resolve_target(user, group)?;
-            cmd_set(&package, &user_type, &name, &level, &token).await
+            cmd_set(&package, &user_type, &name, &level, &token, json).await
         }
-        Command::Show { package } => cmd_show(&package).await,
+        Command::Show { package } => cmd_show(&package, json).await,
     }
 }
 
@@ -139,9 +145,14 @@ fn resolve_target(
     }
 }
 
-async fn cmd_show(package: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_show(package: &str, json: bool) -> Result<(), Box<dyn std::error::Error>> {
     let client = DistGitClient::new();
     let acls = client.get_acls(package).await?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&acls)?);
+        return Ok(());
+    }
 
     println!("Package: {package}");
 
@@ -188,16 +199,40 @@ async fn cmd_show(package: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[derive(Serialize)]
+struct AclChange {
+    package: String,
+    user_type: String,
+    name: String,
+    action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level: Option<String>,
+}
+
 async fn cmd_set(
     package: &str,
     user_type: &str,
     name: &str,
     level: &str,
     token: &str,
+    json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = DistGitClient::new().with_token(token.to_string());
     client.set_acl(package, user_type, name, level).await?;
-    println!("Set {user_type} '{name}' to '{level}' on {package}");
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&AclChange {
+                package: package.to_string(),
+                user_type: user_type.to_string(),
+                name: name.to_string(),
+                action: "set".to_string(),
+                level: Some(level.to_string()),
+            })?
+        );
+    } else {
+        println!("Set {user_type} '{name}' to '{level}' on {package}");
+    }
     Ok(())
 }
 
@@ -206,60 +241,149 @@ async fn cmd_remove(
     user_type: &str,
     name: &str,
     token: &str,
+    json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = DistGitClient::new().with_token(token.to_string());
     client.remove_acl(package, user_type, name).await?;
-    println!("Removed {user_type} '{name}' from {package}");
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&AclChange {
+                package: package.to_string(),
+                user_type: user_type.to_string(),
+                name: name.to_string(),
+                action: "remove".to_string(),
+                level: None,
+            })?
+        );
+    } else {
+        println!("Removed {user_type} '{name}' from {package}");
+    }
     Ok(())
 }
 
-async fn cmd_apply(config_path: &PathBuf, token: &str) -> Result<(), Box<dyn std::error::Error>> {
+#[derive(Serialize)]
+struct ApplyResult {
+    package: String,
+    results: Vec<ApplyEntry>,
+}
+
+#[derive(Serialize)]
+struct ApplyEntry {
+    user_type: String,
+    name: String,
+    action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level: Option<String>,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+async fn cmd_apply(
+    config_path: &PathBuf,
+    token: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let config = AclConfig::from_file(config_path)?;
     let client = DistGitClient::new().with_token(token.to_string());
     let package = &config.package;
 
     let mut errors = Vec::new();
+    let mut entries = Vec::new();
 
     for (name, level) in &config.users {
-        let result = if level == "remove" {
+        let is_remove = level == "remove";
+        let result = if is_remove {
             client.remove_acl(package, "user", name).await
         } else {
             client.set_acl(package, "user", name, level).await
         };
-        match result {
+        match &result {
             Ok(()) => {
-                if level == "remove" {
-                    println!("Removed user '{name}' from {package}");
-                } else {
-                    println!("Set user '{name}' to '{level}' on {package}");
+                if !json {
+                    if is_remove {
+                        println!("Removed user '{name}' from {package}");
+                    } else {
+                        println!("Set user '{name}' to '{level}' on {package}");
+                    }
                 }
             }
             Err(e) => {
-                eprintln!("error: user '{name}' on {package}: {e}");
-                errors.push(e);
+                if !json {
+                    eprintln!("error: user '{name}' on {package}: {e}");
+                }
             }
+        }
+        if json {
+            entries.push(ApplyEntry {
+                user_type: "user".to_string(),
+                name: name.clone(),
+                action: if is_remove {
+                    "remove".to_string()
+                } else {
+                    "set".to_string()
+                },
+                level: if is_remove { None } else { Some(level.clone()) },
+                ok: result.is_ok(),
+                error: result.as_ref().err().map(|e| e.to_string()),
+            });
+        }
+        if let Err(e) = result {
+            errors.push(e);
         }
     }
 
     for (name, level) in &config.groups {
-        let result = if level == "remove" {
+        let is_remove = level == "remove";
+        let result = if is_remove {
             client.remove_acl(package, "group", name).await
         } else {
             client.set_acl(package, "group", name, level).await
         };
-        match result {
+        match &result {
             Ok(()) => {
-                if level == "remove" {
-                    println!("Removed group '{name}' from {package}");
-                } else {
-                    println!("Set group '{name}' to '{level}' on {package}");
+                if !json {
+                    if is_remove {
+                        println!("Removed group '{name}' from {package}");
+                    } else {
+                        println!("Set group '{name}' to '{level}' on {package}");
+                    }
                 }
             }
             Err(e) => {
-                eprintln!("error: group '{name}' on {package}: {e}");
-                errors.push(e);
+                if !json {
+                    eprintln!("error: group '{name}' on {package}: {e}");
+                }
             }
         }
+        if json {
+            entries.push(ApplyEntry {
+                user_type: "group".to_string(),
+                name: name.clone(),
+                action: if is_remove {
+                    "remove".to_string()
+                } else {
+                    "set".to_string()
+                },
+                level: if is_remove { None } else { Some(level.clone()) },
+                ok: result.is_ok(),
+                error: result.as_ref().err().map(|e| e.to_string()),
+            });
+        }
+        if let Err(e) = result {
+            errors.push(e);
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&ApplyResult {
+                package: package.clone(),
+                results: entries,
+            })?
+        );
     }
 
     if !errors.is_empty() {
@@ -267,4 +391,126 @@ async fn cmd_apply(config_path: &PathBuf, token: &str) -> Result<(), Box<dyn std
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acl_change_set_serializes_with_level() {
+        let change = AclChange {
+            package: "freerdp".to_string(),
+            user_type: "user".to_string(),
+            name: "salimma".to_string(),
+            action: "set".to_string(),
+            level: Some("commit".to_string()),
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&change).unwrap()).unwrap();
+        assert_eq!(json["package"], "freerdp");
+        assert_eq!(json["user_type"], "user");
+        assert_eq!(json["name"], "salimma");
+        assert_eq!(json["action"], "set");
+        assert_eq!(json["level"], "commit");
+    }
+
+    #[test]
+    fn acl_change_remove_omits_level() {
+        let change = AclChange {
+            package: "freerdp".to_string(),
+            user_type: "group".to_string(),
+            name: "kde-sig".to_string(),
+            action: "remove".to_string(),
+            level: None,
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&change).unwrap()).unwrap();
+        assert_eq!(json["action"], "remove");
+        assert!(json.get("level").is_none());
+    }
+
+    #[test]
+    fn apply_result_serializes() {
+        let result = ApplyResult {
+            package: "freerdp".to_string(),
+            results: vec![
+                ApplyEntry {
+                    user_type: "user".to_string(),
+                    name: "salimma".to_string(),
+                    action: "set".to_string(),
+                    level: Some("commit".to_string()),
+                    ok: true,
+                    error: None,
+                },
+                ApplyEntry {
+                    user_type: "user".to_string(),
+                    name: "olduser".to_string(),
+                    action: "remove".to_string(),
+                    level: None,
+                    ok: true,
+                    error: None,
+                },
+            ],
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&result).unwrap()).unwrap();
+        assert_eq!(json["package"], "freerdp");
+        let results = json["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["name"], "salimma");
+        assert_eq!(results[0]["ok"], true);
+        assert!(results[0].get("error").is_none());
+        assert_eq!(results[1]["action"], "remove");
+        assert!(results[1].get("level").is_none());
+    }
+
+    #[test]
+    fn apply_entry_with_error_serializes() {
+        let entry = ApplyEntry {
+            user_type: "user".to_string(),
+            name: "baduser".to_string(),
+            action: "set".to_string(),
+            level: Some("admin".to_string()),
+            ok: false,
+            error: Some("403 Forbidden".to_string()),
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&entry).unwrap()).unwrap();
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["error"], "403 Forbidden");
+        assert_eq!(json["level"], "admin");
+    }
+
+    #[test]
+    fn resolve_target_user() {
+        let (t, n) = resolve_target(Some("alice".to_string()), None).unwrap();
+        assert_eq!(t, "user");
+        assert_eq!(n, "alice");
+    }
+
+    #[test]
+    fn resolve_target_group() {
+        let (t, n) = resolve_target(None, Some("kde-sig".to_string())).unwrap();
+        assert_eq!(t, "group");
+        assert_eq!(n, "kde-sig");
+    }
+
+    #[test]
+    fn resolve_target_neither_errors() {
+        assert!(resolve_target(None, None).is_err());
+    }
+
+    #[test]
+    fn parse_acl_level_valid() {
+        for level in &["ticket", "collaborator", "commit", "admin"] {
+            assert_eq!(parse_acl_level(level).unwrap(), *level);
+        }
+    }
+
+    #[test]
+    fn parse_acl_level_invalid() {
+        assert!(parse_acl_level("owner").is_err());
+        assert!(parse_acl_level("superadmin").is_err());
+    }
 }
