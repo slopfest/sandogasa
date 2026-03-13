@@ -6,6 +6,7 @@ members = [
     "crates/sandogasa-distgit",
     "crates/sandogasa-nvd",
     "tools/fedora-cve-triage",
+    "tools/sandogasa-pkg-acl",
 ]
 
 # sandogasa (菅笠, a Japanese straw hat) is often associated with

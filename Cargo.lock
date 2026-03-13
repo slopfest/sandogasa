@@ -1302,6 +1302,10 @@ name = "sandogasa-distgit"
 version = "0.3.1"
 dependencies = [
  "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -1311,6 +1315,18 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "sandogasa-pkg-acl"
+version = "0.3.1"
+dependencies = [
+ "clap",
+ "sandogasa-distgit",
+ "serde",
+ "tempfile",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

@@ -1,0 +1,17 @@
+[package]
+name = "sandogasa-pkg-acl"
+description = "View and manage Fedora package ACLs via the Pagure dist-git API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+sandogasa-distgit = { version = "0.3.1", path = "../../crates/sandogasa-distgit" }
+serde = { workspace = true }
+tokio = { workspace = true }
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
