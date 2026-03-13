@@ -8,6 +8,8 @@ repository.workspace = true
 
 [dependencies]
 clap = { workspace = true }
+dirs = { workspace = true }
+rpassword = { workspace = true }
 sandogasa-distgit = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

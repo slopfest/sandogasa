@@ -111,6 +111,22 @@ impl DistGitClient {
         Ok(())
     }
 
+    /// Verify the API token and return the authenticated username.
+    pub async fn verify_token(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/0/-/whoami", self.base_url);
+        let resp = self
+            .auth(self.client.post(&url))
+            .send()
+            .await?
+            .error_for_status()?;
+        #[derive(serde::Deserialize)]
+        struct WhoAmI {
+            username: String,
+        }
+        let whoami: WhoAmI = resp.json().await?;
+        Ok(whoami.username)
+    }
+
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(ref token) = self.api_token {
             req.header("Authorization", format!("token {token}"))
@@ -358,6 +374,44 @@ mod tests {
             .await;
 
         let result = client.remove_acl("freerdp", "group", "old-group").await;
+        assert!(result.is_err());
+    }
+
+    // ---- verify_token ----
+
+    #[tokio::test]
+    async fn verify_token_returns_username() {
+        let server = MockServer::start().await;
+        let client =
+            DistGitClient::with_base_url(&server.uri()).with_token("goodtoken".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/api/0/-/whoami"))
+            .and(header("Authorization", "token goodtoken"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"username": "salimma"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let username = client.verify_token().await.unwrap();
+        assert_eq!(username, "salimma");
+    }
+
+    #[tokio::test]
+    async fn verify_token_returns_error_on_401() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("badtoken".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/api/0/-/whoami"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let result = client.verify_token().await;
         assert!(result.is_err());
     }
 }

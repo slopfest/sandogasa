@@ -1322,6 +1322,8 @@ name = "sandogasa-pkg-acl"
 version = "0.3.1"
 dependencies = [
  "clap",
+ "dirs",
+ "rpassword",
  "sandogasa-distgit",
  "serde",
  "serde_json",

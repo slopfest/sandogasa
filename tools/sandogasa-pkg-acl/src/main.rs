@@ -2,6 +2,7 @@
 
 mod config;
 
+use std::io::{self, Write as _};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -9,7 +10,7 @@ use clap::{Parser, Subcommand};
 use sandogasa_distgit::DistGitClient;
 use serde::Serialize;
 
-use config::AclConfig;
+use config::{AclConfig, AppConfig, DistGitConfig};
 
 /// View and manage Fedora package ACLs via the
 /// Pagure dist-git API
@@ -31,11 +32,10 @@ enum Command {
         /// Path to TOML config file
         #[arg(short = 'f', long)]
         config: PathBuf,
-
-        /// Pagure API token
-        #[arg(long, env = "PAGURE_API_TOKEN")]
-        token: String,
     },
+
+    /// Set up or verify stored API token
+    Config,
 
     /// Remove all ACLs for a user or group
     Remove {
@@ -49,10 +49,6 @@ enum Command {
         /// Group to remove ACLs for
         #[arg(long, group = "target")]
         group: Option<String>,
-
-        /// Pagure API token
-        #[arg(long, env = "PAGURE_API_TOKEN")]
-        token: String,
     },
 
     /// Set an ACL level for a user or group
@@ -68,13 +64,10 @@ enum Command {
         #[arg(long, group = "target")]
         group: Option<String>,
 
-        /// ACL level (ticket, collaborator, commit, admin)
+        /// ACL level
+        /// (ticket, collaborator, commit, admin)
         #[arg(long, value_parser = parse_acl_level)]
         level: String,
-
-        /// Pagure API token
-        #[arg(long, env = "PAGURE_API_TOKEN")]
-        token: String,
     },
 
     /// Show current ACLs for a package
@@ -110,13 +103,17 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let json = cli.json;
     match cli.command {
-        Command::Apply { config, token } => cmd_apply(&config, &token, json).await,
+        Command::Apply { config } => {
+            let token = resolve_token()?;
+            cmd_apply(&config, &token, json).await
+        }
+        Command::Config => cmd_config().await,
         Command::Remove {
             package,
             user,
             group,
-            token,
         } => {
+            let token = resolve_token()?;
             let (user_type, name) = resolve_target(user, group)?;
             cmd_remove(&package, &user_type, &name, &token, json).await
         }
@@ -125,13 +122,23 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             user,
             group,
             level,
-            token,
         } => {
+            let token = resolve_token()?;
             let (user_type, name) = resolve_target(user, group)?;
             cmd_set(&package, &user_type, &name, &level, &token, json).await
         }
         Command::Show { package } => cmd_show(&package, json).await,
     }
+}
+
+fn resolve_token() -> Result<String, Box<dyn std::error::Error>> {
+    if let Ok(token) = std::env::var("PAGURE_API_TOKEN") {
+        if !token.is_empty() {
+            return Ok(token);
+        }
+    }
+    let config = AppConfig::load()?;
+    Ok(config.dist_git.api_token)
 }
 
 fn resolve_target(
@@ -143,6 +150,60 @@ fn resolve_target(
         (None, Some(g)) => Ok(("group".to_string(), g)),
         _ => Err("specify exactly one of --user or --group".into()),
     }
+}
+
+async fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
+    let config_path = AppConfig::path();
+
+    match AppConfig::load() {
+        Ok(config) => {
+            println!("Found config at {}", config_path.display());
+            print!("Verifying API token... ");
+            io::stdout().flush()?;
+
+            let client = DistGitClient::new().with_token(config.dist_git.api_token);
+            match client.verify_token().await {
+                Ok(username) => {
+                    println!("OK (authenticated as {username})");
+                    return Ok(());
+                }
+                Err(e) => {
+                    println!("FAILED ({e})");
+                    println!("Would you like to replace the token? [y/N] ");
+                    io::stdout().flush()?;
+                    let mut answer = String::new();
+                    io::stdin().read_line(&mut answer)?;
+                    if !answer.trim().eq_ignore_ascii_case("y") {
+                        return Err("Token verification failed".into());
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            println!("No config found at {}", config_path.display());
+        }
+    }
+
+    print!("Enter your dist-git API token: ");
+    io::stdout().flush()?;
+    let token = rpassword::read_password()?.trim().to_string();
+    if token.is_empty() {
+        return Err("API token cannot be empty".into());
+    }
+
+    print!("Verifying token... ");
+    io::stdout().flush()?;
+    let client = DistGitClient::new().with_token(token.clone());
+    let username = client.verify_token().await?;
+    println!("OK (authenticated as {username})");
+
+    let config = AppConfig {
+        dist_git: DistGitConfig { api_token: token },
+    };
+    config.save()?;
+    println!("Saved to {}", config_path.display());
+
+    Ok(())
 }
 
 async fn cmd_show(package: &str, json: bool) -> Result<(), Box<dyn std::error::Error>> {
