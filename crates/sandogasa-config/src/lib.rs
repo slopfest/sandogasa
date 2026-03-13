@@ -101,6 +101,20 @@ pub fn prompt_field(
     }
 }
 
+/// Validate that a string looks like an email address.
+///
+/// Suitable for use as a `validate` callback in [`prompt_field`].
+pub fn validate_email(value: &str) -> Result<(), String> {
+    if !value.contains('@') {
+        return Err("must contain '@'".to_string());
+    }
+    let (local, domain) = value.split_once('@').unwrap();
+    if local.is_empty() || domain.is_empty() || !domain.contains('.') {
+        return Err("invalid email address".to_string());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +220,34 @@ mod tests {
         let cf = ConfigFile::from_path(path);
         let result: Result<TestConfig, _> = cf.load();
         assert!(result.is_err());
+    }
+
+    // ---- validate_email ----
+
+    #[test]
+    fn validate_email_accepts_valid() {
+        assert!(validate_email("user@example.com").is_ok());
+        assert!(validate_email("a@b.c").is_ok());
+        assert!(validate_email("user+tag@sub.domain.org").is_ok());
+    }
+
+    #[test]
+    fn validate_email_rejects_no_at() {
+        assert!(validate_email("userexample.com").is_err());
+    }
+
+    #[test]
+    fn validate_email_rejects_empty_local() {
+        assert!(validate_email("@example.com").is_err());
+    }
+
+    #[test]
+    fn validate_email_rejects_empty_domain() {
+        assert!(validate_email("user@").is_err());
+    }
+
+    #[test]
+    fn validate_email_rejects_domain_without_dot() {
+        assert!(validate_email("user@localhost").is_err());
     }
 }
