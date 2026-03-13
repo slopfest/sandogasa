@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use sandogasa_config::ConfigFile;
-use sandogasa_distgit::DistGitClient;
+use sandogasa_distgit::{AccessLevel, AccessResult, DistGitClient};
 use serde::Serialize;
 
 use config::{AclConfig, AppConfig, DistGitConfig};
@@ -219,18 +219,41 @@ async fn cmd_show(package: &str, json: bool) -> Result<(), Box<dyn std::error::E
         None
     };
 
+    // Check current user's access if a token is available
+    let my_access = check_my_access(&client, &acls).await;
+
     if json {
-        if let Some(contribs) = &contribs {
-            // Merge owner info into the contributors response.
-            let merged = serde_json::json!({
+        let mut output = if let Some(contribs) = &contribs {
+            serde_json::json!({
                 "owner": acls.access_users.owner,
                 "users": contribs.users,
                 "groups": contribs.groups,
-            });
-            println!("{}", serde_json::to_string_pretty(&merged)?);
+            })
         } else {
-            println!("{}", serde_json::to_string_pretty(&acls)?);
+            serde_json::to_value(&acls)?
+        };
+        if let Some((username, ref result)) = my_access {
+            let access_obj = match result {
+                AccessResult::Direct(level) => serde_json::json!({
+                    "username": username,
+                    "level": level.to_string(),
+                    "source": "direct",
+                }),
+                AccessResult::ViaGroup { level, group } => serde_json::json!({
+                    "username": username,
+                    "level": level.to_string(),
+                    "source": "group",
+                    "group": group,
+                }),
+                AccessResult::Insufficient { level } => serde_json::json!({
+                    "username": username,
+                    "level": level.map(|l| l.to_string()),
+                    "source": serde_json::Value::Null,
+                }),
+            };
+            output["your_access"] = access_obj;
         }
+        println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
     }
 
@@ -296,7 +319,39 @@ async fn cmd_show(package: &str, json: bool) -> Result<(), Box<dyn std::error::E
         println!("  (none)");
     }
 
+    if let Some((username, result)) = my_access {
+        match result {
+            AccessResult::Direct(level) => {
+                println!("\nYour access ({username}): {level}");
+            }
+            AccessResult::ViaGroup { level, group } => {
+                println!("\nYour access ({username}): {level} (via {group})");
+            }
+            AccessResult::Insufficient { level: Some(level) } => {
+                println!("\nYour access ({username}): {level}");
+            }
+            AccessResult::Insufficient { level: None } => {
+                println!("\nYour access ({username}): none");
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// If a token is available, resolve the username and check access.
+async fn check_my_access(
+    client: &DistGitClient,
+    acls: &sandogasa_distgit::ProjectAcls,
+) -> Option<(String, AccessResult)> {
+    let token = resolve_token().ok()?;
+    let auth_client = DistGitClient::new().with_token(token);
+    let username = auth_client.verify_token().await.ok()?;
+    let result = client
+        .check_access(acls, &username, AccessLevel::Admin)
+        .await
+        .ok()?;
+    Some((username, result))
 }
 
 #[derive(Serialize)]

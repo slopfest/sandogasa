@@ -2,6 +2,47 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Access level tiers, ordered from lowest to highest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccessLevel {
+    Ticket,
+    Collaborator,
+    Commit,
+    Admin,
+    Owner,
+}
+
+impl std::fmt::Display for AccessLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AccessLevel::Ticket => write!(f, "ticket"),
+            AccessLevel::Collaborator => write!(f, "collaborator"),
+            AccessLevel::Commit => write!(f, "commit"),
+            AccessLevel::Admin => write!(f, "admin"),
+            AccessLevel::Owner => write!(f, "owner"),
+        }
+    }
+}
+
+/// Result of an access level check.
+#[derive(Debug, Clone)]
+pub enum AccessResult {
+    /// User has sufficient access directly.
+    Direct(AccessLevel),
+    /// User has sufficient access via group membership.
+    ViaGroup { level: AccessLevel, group: String },
+    /// User does not have sufficient access.
+    Insufficient { level: Option<AccessLevel> },
+}
+
+impl AccessResult {
+    /// Returns true if the access check passed.
+    pub fn is_sufficient(&self) -> bool {
+        !matches!(self, AccessResult::Insufficient { .. })
+    }
+}
+
 /// ACL levels for a dist-git project.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProjectAcls {
@@ -33,6 +74,54 @@ pub struct AccessGroups {
     pub collaborator: Vec<String>,
     #[serde(default)]
     pub ticket: Vec<String>,
+}
+
+impl ProjectAcls {
+    /// Return the highest direct access level for a user.
+    pub fn user_level(&self, username: &str) -> Option<AccessLevel> {
+        if self.access_users.owner.iter().any(|u| u == username) {
+            return Some(AccessLevel::Owner);
+        }
+        if self.access_users.admin.iter().any(|u| u == username) {
+            return Some(AccessLevel::Admin);
+        }
+        if self.access_users.commit.iter().any(|u| u == username) {
+            return Some(AccessLevel::Commit);
+        }
+        if self.access_users.collaborator.iter().any(|u| u == username) {
+            return Some(AccessLevel::Collaborator);
+        }
+        if self.access_users.ticket.iter().any(|u| u == username) {
+            return Some(AccessLevel::Ticket);
+        }
+        None
+    }
+
+    /// Return groups that have access at or above `min_level`.
+    pub fn groups_with_level(&self, min_level: AccessLevel) -> Vec<(&str, AccessLevel)> {
+        let mut result = Vec::new();
+        if min_level <= AccessLevel::Admin {
+            for g in &self.access_groups.admin {
+                result.push((g.as_str(), AccessLevel::Admin));
+            }
+        }
+        if min_level <= AccessLevel::Commit {
+            for g in &self.access_groups.commit {
+                result.push((g.as_str(), AccessLevel::Commit));
+            }
+        }
+        if min_level <= AccessLevel::Collaborator {
+            for g in &self.access_groups.collaborator {
+                result.push((g.as_str(), AccessLevel::Collaborator));
+            }
+        }
+        if min_level <= AccessLevel::Ticket {
+            for g in &self.access_groups.ticket {
+                result.push((g.as_str(), AccessLevel::Ticket));
+            }
+        }
+        result
+    }
 }
 
 /// Contributors response from `/api/0/rpms/<package>/contributors`.
@@ -84,6 +173,209 @@ impl Collaborator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_acls(
+        owners: Vec<&str>,
+        admins: Vec<&str>,
+        commits: Vec<&str>,
+        collabs: Vec<&str>,
+        tickets: Vec<&str>,
+    ) -> ProjectAcls {
+        ProjectAcls {
+            access_users: AccessUsers {
+                owner: owners.into_iter().map(String::from).collect(),
+                admin: admins.into_iter().map(String::from).collect(),
+                commit: commits.into_iter().map(String::from).collect(),
+                collaborator: collabs.into_iter().map(String::from).collect(),
+                ticket: tickets.into_iter().map(String::from).collect(),
+            },
+            access_groups: AccessGroups {
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+        }
+    }
+
+    // ---- AccessLevel ----
+
+    #[test]
+    fn access_level_ordering() {
+        assert!(AccessLevel::Ticket < AccessLevel::Collaborator);
+        assert!(AccessLevel::Collaborator < AccessLevel::Commit);
+        assert!(AccessLevel::Commit < AccessLevel::Admin);
+        assert!(AccessLevel::Admin < AccessLevel::Owner);
+    }
+
+    #[test]
+    fn access_level_display() {
+        assert_eq!(AccessLevel::Ticket.to_string(), "ticket");
+        assert_eq!(AccessLevel::Collaborator.to_string(), "collaborator");
+        assert_eq!(AccessLevel::Commit.to_string(), "commit");
+        assert_eq!(AccessLevel::Admin.to_string(), "admin");
+        assert_eq!(AccessLevel::Owner.to_string(), "owner");
+    }
+
+    #[test]
+    fn access_level_serde_round_trip() {
+        let json = serde_json::to_string(&AccessLevel::Admin).unwrap();
+        assert_eq!(json, "\"admin\"");
+        let parsed: AccessLevel = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, AccessLevel::Admin);
+    }
+
+    // ---- ProjectAcls::user_level ----
+
+    #[test]
+    fn user_level_returns_owner() {
+        let acls = make_acls(vec!["ngompa"], vec![], vec![], vec![], vec![]);
+        assert_eq!(acls.user_level("ngompa"), Some(AccessLevel::Owner));
+    }
+
+    #[test]
+    fn user_level_returns_admin() {
+        let acls = make_acls(vec![], vec!["salimma"], vec![], vec![], vec![]);
+        assert_eq!(acls.user_level("salimma"), Some(AccessLevel::Admin));
+    }
+
+    #[test]
+    fn user_level_returns_commit() {
+        let acls = make_acls(vec![], vec![], vec!["dcavalca"], vec![], vec![]);
+        assert_eq!(acls.user_level("dcavalca"), Some(AccessLevel::Commit));
+    }
+
+    #[test]
+    fn user_level_returns_collaborator() {
+        let acls = make_acls(vec![], vec![], vec![], vec!["testuser"], vec![]);
+        assert_eq!(acls.user_level("testuser"), Some(AccessLevel::Collaborator));
+    }
+
+    #[test]
+    fn user_level_returns_ticket() {
+        let acls = make_acls(vec![], vec![], vec![], vec![], vec!["viewer"]);
+        assert_eq!(acls.user_level("viewer"), Some(AccessLevel::Ticket));
+    }
+
+    #[test]
+    fn user_level_returns_none_for_unknown() {
+        let acls = make_acls(vec!["ngompa"], vec![], vec![], vec![], vec![]);
+        assert_eq!(acls.user_level("unknown"), None);
+    }
+
+    #[test]
+    fn user_level_returns_highest_level() {
+        let acls = make_acls(vec![], vec!["user1"], vec!["user1"], vec![], vec![]);
+        assert_eq!(acls.user_level("user1"), Some(AccessLevel::Admin));
+    }
+
+    // ---- ProjectAcls::groups_with_level ----
+
+    #[test]
+    fn groups_with_level_admin_returns_only_admin_groups() {
+        let acls = ProjectAcls {
+            access_users: AccessUsers {
+                owner: vec![],
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+            access_groups: AccessGroups {
+                admin: vec!["sig-a".to_string()],
+                commit: vec!["sig-b".to_string()],
+                collaborator: vec![],
+                ticket: vec!["sig-c".to_string()],
+            },
+        };
+        let groups = acls.groups_with_level(AccessLevel::Admin);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0], ("sig-a", AccessLevel::Admin));
+    }
+
+    #[test]
+    fn groups_with_level_commit_returns_admin_and_commit() {
+        let acls = ProjectAcls {
+            access_users: AccessUsers {
+                owner: vec![],
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+            access_groups: AccessGroups {
+                admin: vec!["sig-a".to_string()],
+                commit: vec!["sig-b".to_string()],
+                collaborator: vec![],
+                ticket: vec!["sig-c".to_string()],
+            },
+        };
+        let groups = acls.groups_with_level(AccessLevel::Commit);
+        assert_eq!(groups.len(), 2);
+        assert!(groups.contains(&("sig-a", AccessLevel::Admin)));
+        assert!(groups.contains(&("sig-b", AccessLevel::Commit)));
+    }
+
+    #[test]
+    fn groups_with_level_ticket_returns_all_groups() {
+        let acls = ProjectAcls {
+            access_users: AccessUsers {
+                owner: vec![],
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+            access_groups: AccessGroups {
+                admin: vec!["sig-a".to_string()],
+                commit: vec!["sig-b".to_string()],
+                collaborator: vec!["sig-d".to_string()],
+                ticket: vec!["sig-c".to_string()],
+            },
+        };
+        let groups = acls.groups_with_level(AccessLevel::Ticket);
+        assert_eq!(groups.len(), 4);
+    }
+
+    #[test]
+    fn groups_with_level_empty_when_no_groups() {
+        let acls = make_acls(vec!["ngompa"], vec![], vec![], vec![], vec![]);
+        let groups = acls.groups_with_level(AccessLevel::Ticket);
+        assert!(groups.is_empty());
+    }
+
+    // ---- AccessResult ----
+
+    #[test]
+    fn access_result_direct_is_sufficient() {
+        let result = AccessResult::Direct(AccessLevel::Admin);
+        assert!(result.is_sufficient());
+    }
+
+    #[test]
+    fn access_result_via_group_is_sufficient() {
+        let result = AccessResult::ViaGroup {
+            level: AccessLevel::Admin,
+            group: "kde-sig".to_string(),
+        };
+        assert!(result.is_sufficient());
+    }
+
+    #[test]
+    fn access_result_insufficient_is_not_sufficient() {
+        let result = AccessResult::Insufficient {
+            level: Some(AccessLevel::Commit),
+        };
+        assert!(!result.is_sufficient());
+    }
+
+    #[test]
+    fn access_result_insufficient_none_is_not_sufficient() {
+        let result = AccessResult::Insufficient { level: None };
+        assert!(!result.is_sufficient());
+    }
+
+    // ---- Deserialization ----
 
     #[test]
     fn deserialize_project_acls_full() {

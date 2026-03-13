@@ -2,7 +2,7 @@
 
 use reqwest::Client;
 
-use crate::acl::{Contributors, ProjectAcls};
+use crate::acl::{AccessLevel, AccessResult, Contributors, ProjectAcls};
 
 const DISTGIT_BASE: &str = "https://src.fedoraproject.org";
 
@@ -127,6 +127,53 @@ impl DistGitClient {
         Ok(whoami.username)
     }
 
+    /// Fetch members of a Pagure group.
+    pub async fn get_group_members(
+        &self,
+        group: &str,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/0/group/{}", self.base_url, group);
+        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        #[derive(serde::Deserialize)]
+        struct GroupInfo {
+            members: Vec<String>,
+        }
+        let info: GroupInfo = resp.json().await?;
+        Ok(info.members)
+    }
+
+    /// Check whether a user has at least `required` access on a
+    /// package, considering both direct and group membership.
+    pub async fn check_access(
+        &self,
+        acls: &ProjectAcls,
+        username: &str,
+        required: AccessLevel,
+    ) -> Result<AccessResult, Box<dyn std::error::Error>> {
+        // Check direct access first
+        if let Some(level) = acls.user_level(username) {
+            if level >= required {
+                return Ok(AccessResult::Direct(level));
+            }
+        }
+
+        // Check groups with sufficient access
+        let candidates = acls.groups_with_level(required);
+        for (group, level) in candidates {
+            let members = self.get_group_members(group).await?;
+            if members.iter().any(|m| m == username) {
+                return Ok(AccessResult::ViaGroup {
+                    level,
+                    group: group.to_string(),
+                });
+            }
+        }
+
+        Ok(AccessResult::Insufficient {
+            level: acls.user_level(username),
+        })
+    }
+
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(ref token) = self.api_token {
             req.header("Authorization", format!("token {token}"))
@@ -139,6 +186,7 @@ impl DistGitClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acl::{AccessGroups, AccessUsers};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -413,5 +461,263 @@ mod tests {
 
         let result = client.verify_token().await;
         assert!(result.is_err());
+    }
+
+    // ---- get_group_members ----
+
+    #[tokio::test]
+    async fn get_group_members_returns_members() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/group/kde-sig"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "display_name": "KDE SIG",
+                "description": "KDE Special Interest Group",
+                "creator": {"name": "ngompa"},
+                "date_created": "1234567890",
+                "group_type": "user",
+                "members": ["ngompa", "salimma", "dcavalca"],
+                "name": "kde-sig"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let members = client.get_group_members("kde-sig").await.unwrap();
+        assert_eq!(members, vec!["ngompa", "salimma", "dcavalca"]);
+    }
+
+    #[tokio::test]
+    async fn get_group_members_returns_error_on_404() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/group/nonexistent"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let result = client.get_group_members("nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    // ---- check_access ----
+
+    #[tokio::test]
+    async fn check_access_direct_admin() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        let acls = ProjectAcls {
+            access_users: AccessUsers {
+                owner: vec![],
+                admin: vec!["salimma".to_string()],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+            access_groups: AccessGroups {
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+        };
+
+        let result = client
+            .check_access(&acls, "salimma", AccessLevel::Admin)
+            .await
+            .unwrap();
+        assert!(result.is_sufficient());
+        assert!(matches!(result, AccessResult::Direct(AccessLevel::Admin)));
+    }
+
+    #[tokio::test]
+    async fn check_access_direct_owner_satisfies_admin() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        let acls = ProjectAcls {
+            access_users: AccessUsers {
+                owner: vec!["ngompa".to_string()],
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+            access_groups: AccessGroups {
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+        };
+
+        let result = client
+            .check_access(&acls, "ngompa", AccessLevel::Admin)
+            .await
+            .unwrap();
+        assert!(result.is_sufficient());
+        assert!(matches!(result, AccessResult::Direct(AccessLevel::Owner)));
+    }
+
+    #[tokio::test]
+    async fn check_access_via_group() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/group/python-sig"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "members": ["salimma", "dcavalca"],
+                "name": "python-sig"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let acls = ProjectAcls {
+            access_users: AccessUsers {
+                owner: vec![],
+                admin: vec![],
+                commit: vec!["salimma".to_string()],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+            access_groups: AccessGroups {
+                admin: vec!["python-sig".to_string()],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+        };
+
+        let result = client
+            .check_access(&acls, "salimma", AccessLevel::Admin)
+            .await
+            .unwrap();
+        assert!(result.is_sufficient());
+        match result {
+            AccessResult::ViaGroup { level, group } => {
+                assert_eq!(level, AccessLevel::Admin);
+                assert_eq!(group, "python-sig");
+            }
+            _ => panic!("expected ViaGroup"),
+        }
+    }
+
+    #[tokio::test]
+    async fn check_access_insufficient_with_lower_level() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        let acls = ProjectAcls {
+            access_users: AccessUsers {
+                owner: vec![],
+                admin: vec![],
+                commit: vec!["salimma".to_string()],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+            access_groups: AccessGroups {
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+        };
+
+        let result = client
+            .check_access(&acls, "salimma", AccessLevel::Admin)
+            .await
+            .unwrap();
+        assert!(!result.is_sufficient());
+        match result {
+            AccessResult::Insufficient { level } => {
+                assert_eq!(level, Some(AccessLevel::Commit));
+            }
+            _ => panic!("expected Insufficient"),
+        }
+    }
+
+    #[tokio::test]
+    async fn check_access_no_access_at_all() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        let acls = ProjectAcls {
+            access_users: AccessUsers {
+                owner: vec!["ngompa".to_string()],
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+            access_groups: AccessGroups {
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+        };
+
+        let result = client
+            .check_access(&acls, "unknown", AccessLevel::Admin)
+            .await
+            .unwrap();
+        assert!(!result.is_sufficient());
+        match result {
+            AccessResult::Insufficient { level } => {
+                assert_eq!(level, None);
+            }
+            _ => panic!("expected Insufficient"),
+        }
+    }
+
+    #[tokio::test]
+    async fn check_access_via_group_not_member() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/group/python-sig"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "members": ["dcavalca"],
+                "name": "python-sig"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let acls = ProjectAcls {
+            access_users: AccessUsers {
+                owner: vec![],
+                admin: vec![],
+                commit: vec!["salimma".to_string()],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+            access_groups: AccessGroups {
+                admin: vec!["python-sig".to_string()],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+        };
+
+        let result = client
+            .check_access(&acls, "salimma", AccessLevel::Admin)
+            .await
+            .unwrap();
+        assert!(!result.is_sufficient());
+        match result {
+            AccessResult::Insufficient { level } => {
+                assert_eq!(level, Some(AccessLevel::Commit));
+            }
+            _ => panic!("expected Insufficient"),
+        }
     }
 }
