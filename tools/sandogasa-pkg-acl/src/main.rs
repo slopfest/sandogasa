@@ -7,10 +7,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use sandogasa_config::ConfigFile;
 use sandogasa_distgit::DistGitClient;
 use serde::Serialize;
 
 use config::{AclConfig, AppConfig, DistGitConfig};
+
+const TOOL_NAME: &str = "sandogasa-pkg-acl";
 
 /// View and manage Fedora package ACLs via the
 /// Pagure dist-git API
@@ -137,7 +140,8 @@ fn resolve_token() -> Result<String, Box<dyn std::error::Error>> {
             return Ok(token);
         }
     }
-    let config = AppConfig::load()?;
+    let cf = ConfigFile::for_tool(TOOL_NAME);
+    let config: AppConfig = cf.load()?;
     Ok(config.dist_git.api_token)
 }
 
@@ -153,11 +157,11 @@ fn resolve_target(
 }
 
 async fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
-    let config_path = AppConfig::path();
+    let cf = ConfigFile::for_tool(TOOL_NAME);
 
-    match AppConfig::load() {
+    match cf.load::<AppConfig>() {
         Ok(config) => {
-            println!("Found config at {}", config_path.display());
+            println!("Found config at {}", cf.path().display());
             print!("Verifying API token... ");
             io::stdout().flush()?;
 
@@ -180,16 +184,11 @@ async fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Err(_) => {
-            println!("No config found at {}", config_path.display());
+            println!("No config found at {}", cf.path().display());
         }
     }
 
-    print!("Enter your dist-git API token: ");
-    io::stdout().flush()?;
-    let token = rpassword::read_password()?.trim().to_string();
-    if token.is_empty() {
-        return Err("API token cannot be empty".into());
-    }
+    let token = sandogasa_config::prompt_field("dist-git", "API token", true, None)?;
 
     print!("Verifying token... ");
     io::stdout().flush()?;
@@ -200,8 +199,8 @@ async fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
     let config = AppConfig {
         dist_git: DistGitConfig { api_token: token },
     };
-    config.save()?;
-    println!("Saved to {}", config_path.display());
+    cf.save(&config)?;
+    println!("Saved to {}", cf.path().display());
 
     Ok(())
 }

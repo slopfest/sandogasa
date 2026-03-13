@@ -288,11 +288,10 @@ version = "0.3.1"
 dependencies = [
  "chrono",
  "clap",
- "dirs",
  "reqwest",
- "rpassword",
  "sandogasa-bodhi",
  "sandogasa-bugzilla",
+ "sandogasa-config",
  "sandogasa-distgit",
  "sandogasa-nvd",
  "serde",
@@ -1298,6 +1297,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandogasa-config"
+version = "0.3.1"
+dependencies = [
+ "dirs",
+ "rpassword",
+ "serde",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "sandogasa-distgit"
 version = "0.3.1"
 dependencies = [
@@ -1322,8 +1332,7 @@ name = "sandogasa-pkg-acl"
 version = "0.3.1"
 dependencies = [
  "clap",
- "dirs",
- "rpassword",
+ "sandogasa-config",
  "sandogasa-distgit",
  "serde",
  "serde_json",
