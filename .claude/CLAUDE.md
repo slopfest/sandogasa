@@ -14,6 +14,11 @@
 - CLI help text (`-h` and `--help`) must not exceed 80 characters per line
 - Keep the `Command` enum variants in `main.rs` sorted alphabetically (this determines the order in `--help` output)
 
+## Workspace layout
+- Library crates go in `crates/`, binary crates go in `tools/`
+- Each crate (library or tool) must have its own README.md
+- Symlink the root LICENSE file into each crate subdirectory so it is included when publishing to crates.io
+
 ## Testing
 - Always write corresponding tests when adding or modifying features
 - Run `cargo cov` before committing to verify tests pass and coverage does not regress
