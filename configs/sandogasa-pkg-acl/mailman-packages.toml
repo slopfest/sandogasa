@@ -1,0 +1,6 @@
+[users]
+ngompa = "admin"
+
+[groups]
+infra-sig = "commit"
+python-packagers-sig = "commit"

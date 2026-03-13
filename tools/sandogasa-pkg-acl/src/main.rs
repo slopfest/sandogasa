@@ -33,8 +33,11 @@ enum Command {
     /// Apply ACLs from a TOML config file
     Apply {
         /// Path to TOML config file
-        #[arg(short = 'f', long)]
         config: PathBuf,
+
+        /// Package name(s)
+        #[arg(required = true)]
+        packages: Vec<String>,
 
         /// Downgrade access if already higher than requested
         #[arg(long)]
@@ -124,9 +127,13 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let json = cli.json;
     match cli.command {
-        Command::Apply { config, strict } => {
+        Command::Apply {
+            config,
+            packages,
+            strict,
+        } => {
             let token = resolve_token()?;
-            cmd_apply(&config, &token, strict, json).await
+            cmd_apply(&config, &packages, &token, strict, json).await
         }
         Command::Config => cmd_config().await,
         Command::Give { user, packages } => {
@@ -707,173 +714,203 @@ struct ApplyEntry {
 
 async fn cmd_apply(
     config_path: &PathBuf,
+    packages: &[String],
     token: &str,
     strict: bool,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = AclConfig::from_file(config_path)?;
     let client = DistGitClient::new().with_token(token.to_string());
-    let package = &config.package;
 
-    let acls = require_admin(&client, package).await?;
+    let mut all_results = Vec::new();
+    let mut total_errors = 0usize;
 
-    let mut errors = Vec::new();
-    let mut entries = Vec::new();
+    for package in packages {
+        let acls = match require_admin(&client, package).await {
+            Ok(acls) => acls,
+            Err(e) => {
+                if !json {
+                    eprintln!("error: {package}: {e}");
+                }
+                if json {
+                    all_results.push(ApplyResult {
+                        package: package.clone(),
+                        results: vec![ApplyEntry {
+                            user_type: String::new(),
+                            name: String::new(),
+                            action: "error".to_string(),
+                            level: None,
+                            ok: false,
+                            error: Some(e.to_string()),
+                        }],
+                    });
+                }
+                total_errors += 1;
+                continue;
+            }
+        };
 
-    for (name, level) in &config.users {
-        let is_remove = level == "remove";
+        let mut errors = Vec::new();
+        let mut entries = Vec::new();
 
-        // Cannot modify a package owner (applies to both set and remove)
-        if acls.user_level(name) == Some(AccessLevel::Owner) {
-            if !json {
-                eprintln!(
-                    "Skipped user '{name}' on {package}: \
-                     cannot modify package owner"
-                );
+        for (name, level) in &config.users {
+            let is_remove = level == "remove";
+
+            // Cannot modify a package owner
+            if acls.user_level(name) == Some(AccessLevel::Owner) {
+                if !json {
+                    eprintln!(
+                        "Skipped user '{name}' on {package}: \
+                         cannot modify package owner"
+                    );
+                }
+                if json {
+                    entries.push(ApplyEntry {
+                        user_type: "user".to_string(),
+                        name: name.clone(),
+                        action: "skipped".to_string(),
+                        level: Some("owner".to_string()),
+                        ok: false,
+                        error: Some("cannot modify package owner".to_string()),
+                    });
+                }
+                continue;
+            }
+
+            // Check for skip (only when setting, not removing)
+            if !is_remove {
+                if let Some(action) = check_skip(
+                    "user",
+                    name,
+                    level,
+                    acls.user_level(name),
+                    strict,
+                    package,
+                    json,
+                ) {
+                    if json {
+                        entries.push(action);
+                    }
+                    continue;
+                }
+            }
+
+            let result = if is_remove {
+                client.remove_acl(package, "user", name).await
+            } else {
+                client.set_acl(package, "user", name, level).await
+            };
+            match &result {
+                Ok(()) => {
+                    if !json {
+                        if is_remove {
+                            println!("Removed user '{name}' from {package}");
+                        } else {
+                            println!("Set user '{name}' to '{level}' on {package}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    if !json {
+                        eprintln!("error: user '{name}' on {package}: {e}");
+                    }
+                }
             }
             if json {
                 entries.push(ApplyEntry {
                     user_type: "user".to_string(),
                     name: name.clone(),
-                    action: "skipped".to_string(),
-                    level: Some("owner".to_string()),
-                    ok: false,
-                    error: Some("cannot modify package owner".to_string()),
+                    action: if is_remove {
+                        "remove".to_string()
+                    } else {
+                        "set".to_string()
+                    },
+                    level: if is_remove { None } else { Some(level.clone()) },
+                    ok: result.is_ok(),
+                    error: result.as_ref().err().map(|e| e.to_string()),
                 });
             }
-            continue;
-        }
-
-        // Check for skip (only when setting, not removing)
-        if !is_remove {
-            if let Some(action) = check_skip(
-                "user",
-                name,
-                level,
-                acls.user_level(name),
-                strict,
-                package,
-                json,
-            ) {
-                if json {
-                    entries.push(action);
-                }
-                continue;
+            if let Err(e) = result {
+                errors.push(e);
             }
         }
 
-        let result = if is_remove {
-            client.remove_acl(package, "user", name).await
-        } else {
-            client.set_acl(package, "user", name, level).await
-        };
-        match &result {
-            Ok(()) => {
-                if !json {
-                    if is_remove {
-                        println!("Removed user '{name}' from {package}");
-                    } else {
-                        println!("Set user '{name}' to '{level}' on {package}");
+        for (name, level) in &config.groups {
+            let is_remove = level == "remove";
+
+            if !is_remove {
+                if let Some(action) = check_skip(
+                    "group",
+                    name,
+                    level,
+                    acls.group_level(name),
+                    strict,
+                    package,
+                    json,
+                ) {
+                    if json {
+                        entries.push(action);
+                    }
+                    continue;
+                }
+            }
+
+            let result = if is_remove {
+                client.remove_acl(package, "group", name).await
+            } else {
+                client.set_acl(package, "group", name, level).await
+            };
+            match &result {
+                Ok(()) => {
+                    if !json {
+                        if is_remove {
+                            println!("Removed group '{name}' from {package}");
+                        } else {
+                            println!("Set group '{name}' to '{level}' on {package}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    if !json {
+                        eprintln!("error: group '{name}' on {package}: {e}");
                     }
                 }
             }
-            Err(e) => {
-                if !json {
-                    eprintln!("error: user '{name}' on {package}: {e}");
-                }
-            }
-        }
-        if json {
-            entries.push(ApplyEntry {
-                user_type: "user".to_string(),
-                name: name.clone(),
-                action: if is_remove {
-                    "remove".to_string()
-                } else {
-                    "set".to_string()
-                },
-                level: if is_remove { None } else { Some(level.clone()) },
-                ok: result.is_ok(),
-                error: result.as_ref().err().map(|e| e.to_string()),
-            });
-        }
-        if let Err(e) = result {
-            errors.push(e);
-        }
-    }
-
-    for (name, level) in &config.groups {
-        let is_remove = level == "remove";
-
-        if !is_remove {
-            if let Some(action) = check_skip(
-                "group",
-                name,
-                level,
-                acls.group_level(name),
-                strict,
-                package,
-                json,
-            ) {
-                if json {
-                    entries.push(action);
-                }
-                continue;
-            }
-        }
-
-        let result = if is_remove {
-            client.remove_acl(package, "group", name).await
-        } else {
-            client.set_acl(package, "group", name, level).await
-        };
-        match &result {
-            Ok(()) => {
-                if !json {
-                    if is_remove {
-                        println!("Removed group '{name}' from {package}");
+            if json {
+                entries.push(ApplyEntry {
+                    user_type: "group".to_string(),
+                    name: name.clone(),
+                    action: if is_remove {
+                        "remove".to_string()
                     } else {
-                        println!("Set group '{name}' to '{level}' on {package}");
-                    }
-                }
+                        "set".to_string()
+                    },
+                    level: if is_remove { None } else { Some(level.clone()) },
+                    ok: result.is_ok(),
+                    error: result.as_ref().err().map(|e| e.to_string()),
+                });
             }
-            Err(e) => {
-                if !json {
-                    eprintln!("error: group '{name}' on {package}: {e}");
-                }
+            if let Err(e) = result {
+                errors.push(e);
             }
         }
+
+        total_errors += errors.len();
+
         if json {
-            entries.push(ApplyEntry {
-                user_type: "group".to_string(),
-                name: name.clone(),
-                action: if is_remove {
-                    "remove".to_string()
-                } else {
-                    "set".to_string()
-                },
-                level: if is_remove { None } else { Some(level.clone()) },
-                ok: result.is_ok(),
-                error: result.as_ref().err().map(|e| e.to_string()),
+            all_results.push(ApplyResult {
+                package: package.clone(),
+                results: entries,
             });
-        }
-        if let Err(e) = result {
-            errors.push(e);
         }
     }
 
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&ApplyResult {
-                package: package.clone(),
-                results: entries,
-            })?
-        );
+        println!("{}", serde_json::to_string_pretty(&all_results)?);
     }
 
-    if !errors.is_empty() {
-        return Err(format!("{} operation(s) failed", errors.len()).into());
+    if total_errors > 0 {
+        return Err(format!("{total_errors} operation(s) failed").into());
     }
 
     Ok(())
@@ -1279,5 +1316,77 @@ mod tests {
         let entry = result.expect("should skip same level");
         assert_eq!(entry.level, Some("ticket".to_string()));
         assert_eq!(entry.name, "python-sig");
+    }
+
+    // ---- multi-package apply result serialization ----
+
+    #[test]
+    fn apply_results_array_serializes() {
+        let results = vec![
+            ApplyResult {
+                package: "pkg-a".to_string(),
+                results: vec![ApplyEntry {
+                    user_type: "user".to_string(),
+                    name: "alice".to_string(),
+                    action: "set".to_string(),
+                    level: Some("commit".to_string()),
+                    ok: true,
+                    error: None,
+                }],
+            },
+            ApplyResult {
+                package: "pkg-b".to_string(),
+                results: vec![ApplyEntry {
+                    user_type: "group".to_string(),
+                    name: "kde-sig".to_string(),
+                    action: "set".to_string(),
+                    level: Some("admin".to_string()),
+                    ok: true,
+                    error: None,
+                }],
+            },
+        ];
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&results).unwrap()).unwrap();
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["package"], "pkg-a");
+        assert_eq!(arr[0]["results"][0]["name"], "alice");
+        assert_eq!(arr[1]["package"], "pkg-b");
+        assert_eq!(arr[1]["results"][0]["name"], "kde-sig");
+    }
+
+    #[test]
+    fn check_skip_admin_to_commit_with_strict_proceeds() {
+        let result = check_skip(
+            "user",
+            "alice",
+            "commit",
+            Some(AccessLevel::Admin),
+            true,
+            "mypkg",
+            false,
+        );
+        assert!(result.is_none(), "strict should allow downgrade");
+    }
+
+    #[test]
+    fn apply_result_with_error_entry_serializes() {
+        let result = ApplyResult {
+            package: "pkg-a".to_string(),
+            results: vec![ApplyEntry {
+                user_type: String::new(),
+                name: String::new(),
+                action: "error".to_string(),
+                level: None,
+                ok: false,
+                error: Some("not an admin".to_string()),
+            }],
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&result).unwrap()).unwrap();
+        assert_eq!(json["results"][0]["action"], "error");
+        assert_eq!(json["results"][0]["ok"], false);
+        assert_eq!(json["results"][0]["error"], "not an admin");
     }
 }

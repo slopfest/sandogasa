@@ -7,8 +7,6 @@ use std::path::Path;
 /// TOML config for batch ACL application.
 ///
 /// ```toml
-/// package = "freerdp"
-///
 /// [users]
 /// ngompa = "admin"
 /// salimma = "commit"
@@ -20,11 +18,14 @@ use std::path::Path;
 /// ```
 #[derive(Debug, Deserialize)]
 pub struct AclConfig {
-    pub package: String,
     #[serde(default)]
     pub users: HashMap<String, String>,
     #[serde(default)]
     pub groups: HashMap<String, String>,
+    #[serde(default)]
+    user: Option<toml::Value>,
+    #[serde(default)]
+    group: Option<toml::Value>,
 }
 
 impl AclConfig {
@@ -36,6 +37,12 @@ impl AclConfig {
     }
 
     fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.user.is_some() {
+            return Err("use [users] (plural) instead of [user]".into());
+        }
+        if self.group.is_some() {
+            return Err("use [groups] (plural) instead of [group]".into());
+        }
         let valid_levels = ["ticket", "collaborator", "commit", "admin", "remove"];
         for (name, level) in self.users.iter().chain(self.groups.iter()) {
             if !valid_levels.contains(&level.as_str()) {
@@ -83,8 +90,6 @@ mod tests {
         write!(
             tmp,
             r#"
-package = "freerdp"
-
 [users]
 ngompa = "admin"
 salimma = "commit"
@@ -98,7 +103,6 @@ old-group = "remove"
         .unwrap();
 
         let config = AclConfig::from_file(tmp.path()).unwrap();
-        assert_eq!(config.package, "freerdp");
         assert_eq!(config.users.len(), 3);
         assert_eq!(config.users["ngompa"], "admin");
         assert_eq!(config.users["salimma"], "commit");
@@ -114,8 +118,6 @@ old-group = "remove"
         write!(
             tmp,
             r#"
-package = "freerdp"
-
 [users]
 ngompa = "admin"
 "#
@@ -123,7 +125,6 @@ ngompa = "admin"
         .unwrap();
 
         let config = AclConfig::from_file(tmp.path()).unwrap();
-        assert_eq!(config.package, "freerdp");
         assert_eq!(config.users.len(), 1);
         assert!(config.groups.is_empty());
     }
@@ -134,8 +135,6 @@ ngompa = "admin"
         write!(
             tmp,
             r#"
-package = "freerdp"
-
 [groups]
 kde-sig = "commit"
 "#
@@ -153,8 +152,6 @@ kde-sig = "commit"
         write!(
             tmp,
             r#"
-package = "freerdp"
-
 [users]
 a = "ticket"
 b = "collaborator"
@@ -170,13 +167,47 @@ e = "remove"
     }
 
     #[test]
+    fn rejects_singular_user() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            tmp,
+            r#"
+[user]
+ngompa = "admin"
+"#
+        )
+        .unwrap();
+
+        let result = AclConfig::from_file(tmp.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("[users]"));
+    }
+
+    #[test]
+    fn rejects_singular_group() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            tmp,
+            r#"
+[group]
+infra-sig = "commit"
+"#
+        )
+        .unwrap();
+
+        let result = AclConfig::from_file(tmp.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("[groups]"));
+    }
+
+    #[test]
     fn rejects_invalid_acl_level() {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         write!(
             tmp,
             r#"
-package = "freerdp"
-
 [users]
 ngompa = "owner"
 "#
@@ -196,8 +227,6 @@ ngompa = "owner"
         write!(
             tmp,
             r#"
-package = "freerdp"
-
 [groups]
 kde-sig = "superadmin"
 "#
@@ -209,7 +238,7 @@ kde-sig = "superadmin"
     }
 
     #[test]
-    fn missing_package_field_errors() {
+    fn parses_users_only_config() {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         write!(
             tmp,
@@ -220,8 +249,9 @@ ngompa = "admin"
         )
         .unwrap();
 
-        let result = AclConfig::from_file(tmp.path());
-        assert!(result.is_err());
+        let config = AclConfig::from_file(tmp.path()).unwrap();
+        assert_eq!(config.users.len(), 1);
+        assert!(config.groups.is_empty());
     }
 
     #[test]
@@ -279,8 +309,6 @@ ngompa = "admin"
         write!(
             tmp,
             r#"
-package = "freerdp"
-
 [users]
 
 [groups]
