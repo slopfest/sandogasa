@@ -15,10 +15,15 @@ use config::{AclConfig, AppConfig, DistGitConfig};
 
 const TOOL_NAME: &str = "sandogasa-pkg-acl";
 
-/// View and manage Fedora package ACLs via the
-/// Pagure dist-git API
 #[derive(Parser)]
-#[command(about)]
+#[command(
+    version,
+    about,
+    long_about = None,
+    before_help = concat!(
+        env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")
+    )
+)]
 struct Cli {
     /// Output machine-readable JSON
     #[arg(long, global = true)]
