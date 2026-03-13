@@ -3,9 +3,9 @@
 ## Git
 - Always use `git commit -s` (sign-off) when committing
 - Always use `git tag -s` (GPG sign) when tagging
-- Before tagging a release, update CHANGELOG.md and README.md to reflect the new version's changes. Use the tag message identical to the new CHANGELOG.md entry
+- Before tagging a release, update CHANGELOG.md and any README.md files affected by the changes (root, tool, or library crate). Use the tag message identical to the new CHANGELOG.md entry
 - Before tagging, verify there are no uncommitted changes (`git status` must be clean)
-- Before tagging, run `cargo publish` to publish to crates.io first — if publishing fails, fix the issue before tagging so the tag always corresponds to a successful publish
+- Before tagging, publish all crates to crates.io in dependency order — library crates in `crates/` first, then binary crates in `tools/`. Use `cargo publish -p <crate>` for each. If any publish fails, fix the issue before tagging so the tag always corresponds to a successful publish
 - After publishing and tagging, push with `git push --follow-tags`
 
 ## Code Style

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.1
+
+- Fix --edit-bodhi to preserve existing bug references when adding new ones
+- Convert to Cargo workspace with sandogasa library crates (bodhi, bugzilla, nvd, distgit)
+- Move binary crate to tools/fedora-cve-triage for multi-tool workspace layout
+
 ## v0.3.0
 
 - Add unshipped-tools command to detect CVEs for tools not shipped in RPMs
