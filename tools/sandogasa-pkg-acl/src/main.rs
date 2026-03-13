@@ -379,6 +379,42 @@ async fn check_my_access(
     Some((username, result))
 }
 
+/// Verify that the current user has admin access on a package.
+///
+/// Fetches ACLs, resolves the username, and checks access level.
+/// Returns an error if the user does not have admin (or owner) access,
+/// either directly or via group membership.
+async fn require_admin(
+    client: &DistGitClient,
+    package: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let acls = client.get_acls(package).await?;
+    let username = match resolve_username() {
+        Some(u) => u,
+        None => {
+            let u = client.verify_token().await?;
+            cache_username(&u);
+            u
+        }
+    };
+    let result = client
+        .check_access(&acls, &username, AccessLevel::Admin)
+        .await?;
+    if result.is_sufficient() {
+        Ok(())
+    } else {
+        let current = match result {
+            AccessResult::Insufficient { level: Some(l) } => l.to_string(),
+            _ => "none".to_string(),
+        };
+        Err(format!(
+            "{username} does not have admin access on {package} \
+             (current level: {current})"
+        )
+        .into())
+    }
+}
+
 /// Save the username into the config file if it's not already cached.
 fn cache_username(username: &str) {
     let cf = ConfigFile::for_tool(TOOL_NAME);
@@ -414,6 +450,7 @@ async fn cmd_set(
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = DistGitClient::new().with_token(token.to_string());
+    require_admin(&client, package).await?;
     client.set_acl(package, user_type, name, level).await?;
     if json {
         println!(
@@ -440,6 +477,7 @@ async fn cmd_remove(
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = DistGitClient::new().with_token(token.to_string());
+    require_admin(&client, package).await?;
     client.remove_acl(package, user_type, name).await?;
     if json {
         println!(
@@ -484,6 +522,8 @@ async fn cmd_apply(
     let config = AclConfig::from_file(config_path)?;
     let client = DistGitClient::new().with_token(token.to_string());
     let package = &config.package;
+
+    require_admin(&client, package).await?;
 
     let mut errors = Vec::new();
     let mut entries = Vec::new();
