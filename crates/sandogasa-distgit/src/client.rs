@@ -127,6 +127,31 @@ impl DistGitClient {
         Ok(whoami.username)
     }
 
+    /// Transfer ownership of an RPM package to another user.
+    ///
+    /// To orphan a package, pass `"orphan"` as `new_owner`.
+    pub async fn give_package(
+        &self,
+        package: &str,
+        new_owner: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!("{}/api/0/rpms/{}", self.base_url, package);
+        let form = [("main_admin", new_owner)];
+        self.auth(self.client.patch(&url))
+            .form(&form)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    /// Check whether a user exists on the Pagure instance.
+    pub async fn user_exists(&self, username: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/0/user/{}", self.base_url, username);
+        let resp = self.client.get(&url).send().await?;
+        Ok(resp.status().is_success())
+    }
+
     /// Fetch members of a Pagure group.
     pub async fn get_group_members(
         &self,
@@ -719,5 +744,91 @@ mod tests {
             }
             _ => panic!("expected Insufficient"),
         }
+    }
+
+    // ---- give_package ----
+
+    #[tokio::test]
+    async fn give_package_sends_patch_with_main_admin() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("mytoken".to_string());
+
+        Mock::given(method("PATCH"))
+            .and(path("/api/0/rpms/freerdp"))
+            .and(header("Authorization", "token mytoken"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": "Project \"freerdp\" has been given to \"dcavalca\""
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client.give_package("freerdp", "dcavalca").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn give_package_orphan() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("tok".to_string());
+
+        Mock::given(method("PATCH"))
+            .and(path("/api/0/rpms/freerdp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": "Project \"freerdp\" has been given to \"orphan\""
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client.give_package("freerdp", "orphan").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn give_package_returns_error_on_403() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("bad".to_string());
+
+        Mock::given(method("PATCH"))
+            .and(path("/api/0/rpms/freerdp"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+
+        let result = client.give_package("freerdp", "dcavalca").await;
+        assert!(result.is_err());
+    }
+
+    // ---- user_exists ----
+
+    #[tokio::test]
+    async fn user_exists_returns_true_for_existing_user() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/salimma"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "user": {"name": "salimma"}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(client.user_exists("salimma").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn user_exists_returns_false_for_missing_user() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/nonexistent"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(!client.user_exists("nonexistent").await.unwrap());
     }
 }

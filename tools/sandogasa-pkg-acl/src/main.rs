@@ -44,6 +44,16 @@ enum Command {
     /// Set up or verify stored API token
     Config,
 
+    /// Give package ownership to another user
+    Give {
+        /// Username of new owner
+        user: String,
+
+        /// Package name(s)
+        #[arg(required = true)]
+        packages: Vec<String>,
+    },
+
     /// Remove all ACLs for a user or group
     Remove {
         /// Package name
@@ -119,6 +129,10 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             cmd_apply(&config, &token, strict, json).await
         }
         Command::Config => cmd_config().await,
+        Command::Give { user, packages } => {
+            let token = resolve_token()?;
+            cmd_give(&packages, &user, &token, json).await
+        }
         Command::Remove {
             package,
             user,
@@ -424,6 +438,29 @@ async fn require_admin(
     }
 }
 
+/// Verify that the current user is the package owner.
+///
+/// Returns the ACLs on success, or an error if the user is not the owner.
+async fn require_owner(
+    client: &DistGitClient,
+    package: &str,
+) -> Result<sandogasa_distgit::ProjectAcls, Box<dyn std::error::Error>> {
+    let acls = client.get_acls(package).await?;
+    let username = match resolve_username() {
+        Some(u) => u,
+        None => {
+            let u = client.verify_token().await?;
+            cache_username(&u);
+            u
+        }
+    };
+    if acls.access_users.owner.iter().any(|o| o == &username) {
+        Ok(acls)
+    } else {
+        Err(format!("{username} is not the owner of {package}").into())
+    }
+}
+
 /// Save the username into the config file if it's not already cached.
 fn cache_username(username: &str) {
     let cf = ConfigFile::for_tool(TOOL_NAME);
@@ -448,6 +485,83 @@ struct AclChange {
     action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     level: Option<String>,
+}
+
+async fn cmd_give(
+    packages: &[String],
+    new_owner: &str,
+    token: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = DistGitClient::new().with_token(token.to_string());
+
+    // Validate the target user exists (once, before any transfers)
+    if !client.user_exists(new_owner).await? {
+        return Err(format!("user '{new_owner}' does not exist").into());
+    }
+
+    let mut errors = Vec::new();
+    let mut entries = Vec::new();
+
+    for package in packages {
+        if let Err(e) = require_owner(&client, package).await {
+            if !json {
+                eprintln!("error: {package}: {e}");
+            }
+            if json {
+                entries.push(serde_json::json!({
+                    "package": package,
+                    "ok": false,
+                    "error": e.to_string(),
+                }));
+            }
+            errors.push(e);
+            continue;
+        }
+
+        match client.give_package(package, new_owner).await {
+            Ok(()) => {
+                if !json {
+                    println!("Gave {package} to '{new_owner}'");
+                }
+                if json {
+                    entries.push(serde_json::json!({
+                        "package": package,
+                        "ok": true,
+                    }));
+                }
+            }
+            Err(e) => {
+                if !json {
+                    eprintln!("error: {package}: {e}");
+                }
+                if json {
+                    entries.push(serde_json::json!({
+                        "package": package,
+                        "ok": false,
+                        "error": e.to_string(),
+                    }));
+                }
+                errors.push(e);
+            }
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "action": "give",
+                "new_owner": new_owner,
+                "results": entries,
+            }))?
+        );
+    }
+
+    if !errors.is_empty() {
+        return Err(format!("{} package(s) failed", errors.len()).into());
+    }
+    Ok(())
 }
 
 async fn cmd_set(
@@ -1043,5 +1157,127 @@ mod tests {
     fn check_skip_no_current_proceeds() {
         let result = check_skip("user", "alice", "commit", None, false, "mypkg", true);
         assert!(result.is_none(), "should proceed for new user");
+    }
+
+    // ---- check_skip text output paths (json=false) ----
+
+    #[test]
+    fn check_skip_owner_text_output() {
+        let result = check_skip(
+            "user",
+            "pkgowner",
+            "commit",
+            Some(AccessLevel::Owner),
+            false,
+            "mypkg",
+            false,
+        );
+        let entry = result.expect("should skip owner");
+        assert!(!entry.ok);
+        assert!(entry.error.is_some());
+    }
+
+    #[test]
+    fn check_skip_same_level_text_output() {
+        let result = check_skip(
+            "user",
+            "alice",
+            "commit",
+            Some(AccessLevel::Commit),
+            false,
+            "mypkg",
+            false,
+        );
+        let entry = result.expect("should skip same level");
+        assert!(entry.ok);
+    }
+
+    #[test]
+    fn check_skip_higher_text_output() {
+        let result = check_skip(
+            "user",
+            "alice",
+            "ticket",
+            Some(AccessLevel::Admin),
+            false,
+            "mypkg",
+            false,
+        );
+        let entry = result.expect("should skip higher level");
+        assert!(entry.ok);
+        assert_eq!(entry.level, Some("admin".to_string()));
+    }
+
+    // ---- apply entry owner skip serialization ----
+
+    #[test]
+    fn apply_entry_owner_skip_serializes() {
+        let entry = ApplyEntry {
+            user_type: "user".to_string(),
+            name: "pkgowner".to_string(),
+            action: "skipped".to_string(),
+            level: Some("owner".to_string()),
+            ok: false,
+            error: Some("cannot modify package owner".to_string()),
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&entry).unwrap()).unwrap();
+        assert_eq!(json["action"], "skipped");
+        assert_eq!(json["level"], "owner");
+        assert_eq!(json["ok"], false);
+        assert!(json["error"].as_str().unwrap().contains("package owner"));
+    }
+
+    #[test]
+    fn resolve_target_both_errors() {
+        assert!(resolve_target(Some("a".to_string()), Some("b".to_string())).is_err());
+    }
+
+    // ---- check_skip with different access level combinations ----
+
+    #[test]
+    fn check_skip_collaborator_to_ticket_without_strict() {
+        let result = check_skip(
+            "group",
+            "kde-sig",
+            "ticket",
+            Some(AccessLevel::Collaborator),
+            false,
+            "mypkg",
+            true,
+        );
+        let entry = result.expect("should skip higher level");
+        assert_eq!(entry.level, Some("collaborator".to_string()));
+        assert_eq!(entry.user_type, "group");
+    }
+
+    #[test]
+    fn check_skip_ticket_to_admin_proceeds() {
+        let result = check_skip(
+            "user",
+            "alice",
+            "admin",
+            Some(AccessLevel::Ticket),
+            false,
+            "mypkg",
+            true,
+        );
+        assert!(result.is_none(), "should proceed to upgrade");
+    }
+
+    #[test]
+    fn check_skip_same_ticket_level() {
+        let result = check_skip(
+            "group",
+            "python-sig",
+            "ticket",
+            Some(AccessLevel::Ticket),
+            false,
+            "mypkg",
+            false,
+        );
+        let entry = result.expect("should skip same level");
+        assert_eq!(entry.level, Some("ticket".to_string()));
+        assert_eq!(entry.name, "python-sig");
     }
 }
