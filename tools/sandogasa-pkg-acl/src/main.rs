@@ -35,6 +35,10 @@ enum Command {
         /// Path to TOML config file
         #[arg(short = 'f', long)]
         config: PathBuf,
+
+        /// Downgrade access if already higher than requested
+        #[arg(long)]
+        strict: bool,
     },
 
     /// Set up or verify stored API token
@@ -71,6 +75,10 @@ enum Command {
         /// (ticket, collaborator, commit, admin)
         #[arg(long, value_parser = parse_acl_level)]
         level: String,
+
+        /// Downgrade access if already higher than requested
+        #[arg(long)]
+        strict: bool,
     },
 
     /// Show current ACLs for a package
@@ -106,9 +114,9 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let json = cli.json;
     match cli.command {
-        Command::Apply { config } => {
+        Command::Apply { config, strict } => {
             let token = resolve_token()?;
-            cmd_apply(&config, &token, json).await
+            cmd_apply(&config, &token, strict, json).await
         }
         Command::Config => cmd_config().await,
         Command::Remove {
@@ -125,10 +133,11 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             user,
             group,
             level,
+            strict,
         } => {
             let token = resolve_token()?;
             let (user_type, name) = resolve_target(user, group)?;
-            cmd_set(&package, &user_type, &name, &level, &token, json).await
+            cmd_set(&package, &user_type, &name, &level, &token, strict, json).await
         }
         Command::Show { package } => cmd_show(&package, json).await,
     }
@@ -382,12 +391,12 @@ async fn check_my_access(
 /// Verify that the current user has admin access on a package.
 ///
 /// Fetches ACLs, resolves the username, and checks access level.
-/// Returns an error if the user does not have admin (or owner) access,
-/// either directly or via group membership.
+/// Returns the ACLs on success (for reuse by callers), or an error
+/// if the user does not have admin (or owner) access.
 async fn require_admin(
     client: &DistGitClient,
     package: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<sandogasa_distgit::ProjectAcls, Box<dyn std::error::Error>> {
     let acls = client.get_acls(package).await?;
     let username = match resolve_username() {
         Some(u) => u,
@@ -401,7 +410,7 @@ async fn require_admin(
         .check_access(&acls, &username, AccessLevel::Admin)
         .await?;
     if result.is_sufficient() {
-        Ok(())
+        Ok(acls)
     } else {
         let current = match result {
             AccessResult::Insufficient { level: Some(l) } => l.to_string(),
@@ -447,10 +456,62 @@ async fn cmd_set(
     name: &str,
     level: &str,
     token: &str,
+    strict: bool,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = DistGitClient::new().with_token(token.to_string());
-    require_admin(&client, package).await?;
+    let acls = require_admin(&client, package).await?;
+
+    let requested: AccessLevel = level.parse().unwrap();
+    let current = if user_type == "user" {
+        acls.user_level(name)
+    } else {
+        acls.group_level(name)
+    };
+
+    if let Some(current) = current {
+        if current == requested {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&AclChange {
+                        package: package.to_string(),
+                        user_type: user_type.to_string(),
+                        name: name.to_string(),
+                        action: "skipped".to_string(),
+                        level: Some(level.to_string()),
+                    })?
+                );
+            } else {
+                println!(
+                    "Skipped {user_type} '{name}' on {package}: \
+                     already has {current}"
+                );
+            }
+            return Ok(());
+        }
+        if current > requested && !strict {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&AclChange {
+                        package: package.to_string(),
+                        user_type: user_type.to_string(),
+                        name: name.to_string(),
+                        action: "skipped".to_string(),
+                        level: Some(current.to_string()),
+                    })?
+                );
+            } else {
+                println!(
+                    "Skipped {user_type} '{name}' on {package}: \
+                     already has {current} (use --strict to downgrade)"
+                );
+            }
+            return Ok(());
+        }
+    }
+
     client.set_acl(package, user_type, name, level).await?;
     if json {
         println!(
@@ -477,7 +538,7 @@ async fn cmd_remove(
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = DistGitClient::new().with_token(token.to_string());
-    require_admin(&client, package).await?;
+    let _acls = require_admin(&client, package).await?;
     client.remove_acl(package, user_type, name).await?;
     if json {
         println!(
@@ -517,19 +578,39 @@ struct ApplyEntry {
 async fn cmd_apply(
     config_path: &PathBuf,
     token: &str,
+    strict: bool,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = AclConfig::from_file(config_path)?;
     let client = DistGitClient::new().with_token(token.to_string());
     let package = &config.package;
 
-    require_admin(&client, package).await?;
+    let acls = require_admin(&client, package).await?;
 
     let mut errors = Vec::new();
     let mut entries = Vec::new();
 
     for (name, level) in &config.users {
         let is_remove = level == "remove";
+
+        // Check for skip (only when setting, not removing)
+        if !is_remove {
+            if let Some(action) = check_skip(
+                "user",
+                name,
+                level,
+                acls.user_level(name),
+                strict,
+                package,
+                json,
+            ) {
+                if json {
+                    entries.push(action);
+                }
+                continue;
+            }
+        }
+
         let result = if is_remove {
             client.remove_acl(package, "user", name).await
         } else {
@@ -572,6 +653,24 @@ async fn cmd_apply(
 
     for (name, level) in &config.groups {
         let is_remove = level == "remove";
+
+        if !is_remove {
+            if let Some(action) = check_skip(
+                "group",
+                name,
+                level,
+                acls.group_level(name),
+                strict,
+                package,
+                json,
+            ) {
+                if json {
+                    entries.push(action);
+                }
+                continue;
+            }
+        }
+
         let result = if is_remove {
             client.remove_acl(package, "group", name).await
         } else {
@@ -627,6 +726,58 @@ async fn cmd_apply(
     }
 
     Ok(())
+}
+
+/// Check if a set operation should be skipped because the target
+/// already has equal or higher access. Returns `Some(ApplyEntry)` if
+/// skipped (for JSON output), or `None` to proceed.
+fn check_skip(
+    user_type: &str,
+    name: &str,
+    requested_level: &str,
+    current: Option<AccessLevel>,
+    strict: bool,
+    package: &str,
+    json: bool,
+) -> Option<ApplyEntry> {
+    let requested: AccessLevel = requested_level.parse().unwrap();
+    let current = current?;
+
+    if current == requested {
+        if !json {
+            println!(
+                "Skipped {user_type} '{name}' on {package}: \
+                 already has {current}"
+            );
+        }
+        return Some(ApplyEntry {
+            user_type: user_type.to_string(),
+            name: name.to_string(),
+            action: "skipped".to_string(),
+            level: Some(current.to_string()),
+            ok: true,
+            error: None,
+        });
+    }
+
+    if current > requested && !strict {
+        if !json {
+            println!(
+                "Skipped {user_type} '{name}' on {package}: \
+                 already has {current} (use --strict to downgrade)"
+            );
+        }
+        return Some(ApplyEntry {
+            user_type: user_type.to_string(),
+            name: name.to_string(),
+            action: "skipped".to_string(),
+            level: Some(current.to_string()),
+            ok: true,
+            error: None,
+        });
+    }
+
+    None
 }
 
 #[cfg(test)]

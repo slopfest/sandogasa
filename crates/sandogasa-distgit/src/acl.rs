@@ -13,6 +13,21 @@ pub enum AccessLevel {
     Owner,
 }
 
+impl std::str::FromStr for AccessLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ticket" => Ok(AccessLevel::Ticket),
+            "collaborator" => Ok(AccessLevel::Collaborator),
+            "commit" => Ok(AccessLevel::Commit),
+            "admin" => Ok(AccessLevel::Admin),
+            "owner" => Ok(AccessLevel::Owner),
+            _ => Err(format!("invalid access level: {s}")),
+        }
+    }
+}
+
 impl std::fmt::Display for AccessLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -92,6 +107,28 @@ impl ProjectAcls {
             return Some(AccessLevel::Collaborator);
         }
         if self.access_users.ticket.iter().any(|u| u == username) {
+            return Some(AccessLevel::Ticket);
+        }
+        None
+    }
+
+    /// Return the highest access level for a group.
+    pub fn group_level(&self, group_name: &str) -> Option<AccessLevel> {
+        if self.access_groups.admin.iter().any(|g| g == group_name) {
+            return Some(AccessLevel::Admin);
+        }
+        if self.access_groups.commit.iter().any(|g| g == group_name) {
+            return Some(AccessLevel::Commit);
+        }
+        if self
+            .access_groups
+            .collaborator
+            .iter()
+            .any(|g| g == group_name)
+        {
+            return Some(AccessLevel::Collaborator);
+        }
+        if self.access_groups.ticket.iter().any(|g| g == group_name) {
             return Some(AccessLevel::Ticket);
         }
         None
@@ -342,6 +379,80 @@ mod tests {
         let acls = make_acls(vec!["ngompa"], vec![], vec![], vec![], vec![]);
         let groups = acls.groups_with_level(AccessLevel::Ticket);
         assert!(groups.is_empty());
+    }
+
+    // ---- AccessLevel::from_str ----
+
+    #[test]
+    fn access_level_from_str_valid() {
+        assert_eq!(
+            "ticket".parse::<AccessLevel>().unwrap(),
+            AccessLevel::Ticket
+        );
+        assert_eq!(
+            "collaborator".parse::<AccessLevel>().unwrap(),
+            AccessLevel::Collaborator
+        );
+        assert_eq!(
+            "commit".parse::<AccessLevel>().unwrap(),
+            AccessLevel::Commit
+        );
+        assert_eq!("admin".parse::<AccessLevel>().unwrap(), AccessLevel::Admin);
+        assert_eq!("owner".parse::<AccessLevel>().unwrap(), AccessLevel::Owner);
+    }
+
+    #[test]
+    fn access_level_from_str_invalid() {
+        assert!("superadmin".parse::<AccessLevel>().is_err());
+        assert!("".parse::<AccessLevel>().is_err());
+    }
+
+    // ---- ProjectAcls::group_level ----
+
+    #[test]
+    fn group_level_returns_admin() {
+        let acls = ProjectAcls {
+            access_users: AccessUsers {
+                owner: vec![],
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+            access_groups: AccessGroups {
+                admin: vec!["kde-sig".to_string()],
+                commit: vec!["python-sig".to_string()],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+        };
+        assert_eq!(acls.group_level("kde-sig"), Some(AccessLevel::Admin));
+    }
+
+    #[test]
+    fn group_level_returns_commit() {
+        let acls = ProjectAcls {
+            access_users: AccessUsers {
+                owner: vec![],
+                admin: vec![],
+                commit: vec![],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+            access_groups: AccessGroups {
+                admin: vec![],
+                commit: vec!["python-sig".to_string()],
+                collaborator: vec![],
+                ticket: vec![],
+            },
+        };
+        assert_eq!(acls.group_level("python-sig"), Some(AccessLevel::Commit));
+    }
+
+    #[test]
+    fn group_level_returns_none_for_unknown() {
+        let acls = make_acls(vec![], vec![], vec![], vec![], vec![]);
+        assert_eq!(acls.group_level("nonexistent"), None);
     }
 
     // ---- AccessResult ----
