@@ -2,7 +2,6 @@
 
 use serde::Deserialize;
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct UpdatesResponse {
     pub updates: Vec<Update>,
@@ -11,7 +10,6 @@ pub struct UpdatesResponse {
     pub pages: u64,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct Update {
     pub alias: String,
@@ -31,20 +29,17 @@ pub struct Build {
     pub nvr: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct BodhiBug {
     pub bug_id: u64,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct Release {
     pub name: String,
 }
 
 /// A Bodhi release entry from the releases API.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct BodhiRelease {
     pub name: String,
@@ -53,7 +48,6 @@ pub struct BodhiRelease {
     pub state: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ReleasesResponse {
     pub releases: Vec<BodhiRelease>,

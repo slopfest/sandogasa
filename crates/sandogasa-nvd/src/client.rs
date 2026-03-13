@@ -2,7 +2,7 @@
 
 use reqwest::Client;
 
-use super::models::CveResponse;
+use crate::models::CveResponse;
 
 pub struct NvdClient {
     client: Client,

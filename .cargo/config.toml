@@ -1,2 +1,2 @@
 [alias]
-cov = "llvm-cov test --fail-under-lines 67"
+cov = "llvm-cov test --workspace --fail-under-lines 72"

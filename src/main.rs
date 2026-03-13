@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MPL-2.0
 
-mod bodhi;
-mod bugzilla;
 mod config;
-mod distgit;
-mod nvd;
 mod version;
 
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
+
+use sandogasa_bodhi as bodhi;
+use sandogasa_bugzilla as bugzilla;
+use sandogasa_distgit as distgit;
+use sandogasa_nvd as nvd;
 
 use bodhi::BodhiClient;
 use bugzilla::BzClient;

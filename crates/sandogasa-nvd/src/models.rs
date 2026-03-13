@@ -14,7 +14,6 @@ pub struct Vulnerability {
 
 #[derive(Debug, Deserialize)]
 pub struct CveItem {
-    #[allow(dead_code)]
     pub id: String,
     #[serde(default, rename = "sourceIdentifier")]
     pub source_identifier: String,
@@ -49,10 +48,8 @@ pub struct CpeMatch {
     pub vulnerable: bool,
     #[serde(default, rename = "versionEndExcluding")]
     pub version_end_excluding: Option<String>,
-    #[allow(dead_code)]
     #[serde(default, rename = "versionStartIncluding")]
     pub version_start_including: Option<String>,
-    #[allow(dead_code)]
     #[serde(default, rename = "versionEndIncluding")]
     pub version_end_including: Option<String>,
 }

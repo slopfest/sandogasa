@@ -291,6 +291,10 @@ dependencies = [
  "dirs",
  "reqwest",
  "rpassword",
+ "sandogasa-bodhi",
+ "sandogasa-bugzilla",
+ "sandogasa-distgit",
+ "sandogasa-nvd",
  "serde",
  "serde_json",
  "tempfile",
@@ -1269,6 +1273,45 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "sandogasa-bodhi"
+version = "0.3.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
+name = "sandogasa-bugzilla"
+version = "0.3.0"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
+name = "sandogasa-distgit"
+version = "0.3.0"
+dependencies = [
+ "reqwest",
+]
+
+[[package]]
+name = "sandogasa-nvd"
+version = "0.3.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "scopeguard"

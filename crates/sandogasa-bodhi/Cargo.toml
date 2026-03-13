@@ -1,0 +1,16 @@
+[package]
+name = "sandogasa-bodhi"
+description = "Bodhi API client for Fedora update queries"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = { workspace = true }
