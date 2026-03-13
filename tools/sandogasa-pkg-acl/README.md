@@ -70,6 +70,15 @@ Removed group 'old-group' from freerdp
 The value `"remove"` removes all ACLs for that user or group. Any other
 value sets the corresponding ACL level.
 
+### JSON output
+
+All subcommands support `--json` for machine-readable output:
+
+```
+$ sandogasa-pkg-acl --json show freerdp
+{"access_users":{"owner":["ngompa"],"admin":["salimma"],...},"access_groups":{...}}
+```
+
 ## License
 
 This project is licensed under the [Mozilla Public License 2.0](https://mozilla.org/MPL/2.0/).

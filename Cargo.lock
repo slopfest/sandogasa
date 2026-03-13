@@ -1324,6 +1324,7 @@ dependencies = [
  "clap",
  "sandogasa-distgit",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "toml",

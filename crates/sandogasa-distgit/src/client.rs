@@ -2,7 +2,7 @@
 
 use reqwest::Client;
 
-use crate::acl::ProjectAcls;
+use crate::acl::{Contributors, ProjectAcls};
 
 const DISTGIT_BASE: &str = "https://src.fedoraproject.org";
 
@@ -58,6 +58,19 @@ impl DistGitClient {
         let resp = self.client.get(&url).send().await?.error_for_status()?;
         let acls: ProjectAcls = resp.json().await?;
         Ok(acls)
+    }
+
+    /// Fetch contributors for an RPM package.
+    ///
+    /// Unlike `get_acls`, this includes branch patterns for collaborators.
+    pub async fn get_contributors(
+        &self,
+        package: &str,
+    ) -> Result<Contributors, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/0/rpms/{}/contributors", self.base_url, package);
+        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let contributors: Contributors = resp.json().await?;
+        Ok(contributors)
     }
 
     /// Set an ACL for a user or group on an RPM package.
@@ -192,6 +205,63 @@ mod tests {
             .await;
 
         let result = client.get_acls("nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    // ---- get_contributors ----
+
+    #[tokio::test]
+    async fn get_contributors_returns_collaborator_branches() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/python-zope-testing/contributors"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "groups": {
+                    "admin": [],
+                    "collaborators": [
+                        {"branches": "epel*", "user": "epel-packagers-sig"}
+                    ],
+                    "commit": [],
+                    "ticket": []
+                },
+                "users": {
+                    "admin": ["orion"],
+                    "collaborators": [],
+                    "commit": [],
+                    "ticket": []
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let contribs = client
+            .get_contributors("python-zope-testing")
+            .await
+            .unwrap();
+        assert_eq!(contribs.users.admin, vec!["orion"]);
+        assert_eq!(contribs.groups.collaborators.len(), 1);
+        assert_eq!(
+            contribs.groups.collaborators[0].name(),
+            "epel-packagers-sig"
+        );
+        assert_eq!(contribs.groups.collaborators[0].branches(), Some("epel*"));
+    }
+
+    #[tokio::test]
+    async fn get_contributors_returns_error_on_404() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/nonexistent/contributors"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let result = client.get_contributors("nonexistent").await;
         assert!(result.is_err());
     }
 

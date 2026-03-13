@@ -149,8 +149,28 @@ async fn cmd_show(package: &str, json: bool) -> Result<(), Box<dyn std::error::E
     let client = DistGitClient::new();
     let acls = client.get_acls(package).await?;
 
+    // Only fetch contributors (extra API call) when collaborators exist,
+    // since that endpoint includes branch info for collaborators.
+    let has_collaborators =
+        !acls.access_users.collaborator.is_empty() || !acls.access_groups.collaborator.is_empty();
+    let contribs = if has_collaborators {
+        Some(client.get_contributors(package).await?)
+    } else {
+        None
+    };
+
     if json {
-        println!("{}", serde_json::to_string_pretty(&acls)?);
+        if let Some(contribs) = &contribs {
+            // Merge owner info into the contributors response.
+            let merged = serde_json::json!({
+                "owner": acls.access_users.owner,
+                "users": contribs.users,
+                "groups": contribs.groups,
+            });
+            println!("{}", serde_json::to_string_pretty(&merged)?);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&acls)?);
+        }
         return Ok(());
     }
 
@@ -166,8 +186,18 @@ async fn cmd_show(package: &str, json: bool) -> Result<(), Box<dyn std::error::E
     for name in &acls.access_users.commit {
         println!("  {name}: commit");
     }
-    for name in &acls.access_users.collaborator {
-        println!("  {name}: collaborator");
+    if let Some(contribs) = &contribs {
+        for collab in &contribs.users.collaborators {
+            if let Some(branches) = collab.branches() {
+                println!("  {}: collaborator ({})", collab.name(), branches);
+            } else {
+                println!("  {}: collaborator", collab.name());
+            }
+        }
+    } else {
+        for name in &acls.access_users.collaborator {
+            println!("  {name}: collaborator");
+        }
     }
     for name in &acls.access_users.ticket {
         println!("  {name}: ticket");
@@ -186,8 +216,18 @@ async fn cmd_show(package: &str, json: bool) -> Result<(), Box<dyn std::error::E
         for name in &acls.access_groups.commit {
             println!("  {name}: commit");
         }
-        for name in &acls.access_groups.collaborator {
-            println!("  {name}: collaborator");
+        if let Some(contribs) = &contribs {
+            for collab in &contribs.groups.collaborators {
+                if let Some(branches) = collab.branches() {
+                    println!("  {}: collaborator ({})", collab.name(), branches);
+                } else {
+                    println!("  {}: collaborator", collab.name());
+                }
+            }
+        } else {
+            for name in &acls.access_groups.collaborator {
+                println!("  {name}: collaborator");
+            }
         }
         for name in &acls.access_groups.ticket {
             println!("  {name}: ticket");
