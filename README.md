@@ -156,6 +156,18 @@ Pass `-v` / `--verbose` to see progress details for rate-limited API queries:
 $ fedora-cve-triage -v bodhi-check -f configs/bodhi-check.toml
 ```
 
+## Library crates
+
+This project is organized as a Cargo workspace. The underlying API clients
+are published as reusable library crates under the **sandogasa** name
+(菅笠, a Japanese straw hat often associated with "slum" or
+post-apocalyptic robots):
+
+- **sandogasa-bodhi** — Bodhi API client for Fedora update queries
+- **sandogasa-bugzilla** — Bugzilla REST API client
+- **sandogasa-nvd** — NVD (National Vulnerability Database) API client
+- **sandogasa-distgit** — Fedora dist-git client and RPM spec file parser
+
 ## Building
 
 ```
