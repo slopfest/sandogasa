@@ -7,11 +7,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-clap = { version = "4", features = ["derive", "env"] }
-sandogasa-distgit = { version = "0.3.1", path = "../../crates/sandogasa-distgit" }
+clap = { workspace = true }
+sandogasa-distgit = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
-toml = "0.8"
+toml = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }

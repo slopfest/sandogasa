@@ -18,6 +18,7 @@
 - Library crates go in `crates/`, binary crates go in `tools/`
 - Each crate (library or tool) must have its own README.md
 - Symlink the root LICENSE file into each crate subdirectory so it is included when publishing to crates.io
+- All dependencies (external and internal) are declared in `[workspace.dependencies]` in the root `Cargo.toml`, then referenced as `{ workspace = true }` in member crates
 
 ## Testing
 - Always write corresponding tests when adding or modifying features
