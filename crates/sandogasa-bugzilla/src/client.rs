@@ -112,6 +112,24 @@ impl BzClient {
             .unwrap_or_default())
     }
 
+    /// Validate the API key by checking if the login is recognized.
+    ///
+    /// Calls `GET /rest/valid_login?login={email}` with the configured
+    /// API key.  Returns `Ok(true)` when valid, `Ok(false)` when the
+    /// login is not recognized, and `Err` on network or auth errors
+    /// (e.g. invalid API key → 400).
+    pub async fn valid_login(&self, email: &str) -> Result<bool, reqwest::Error> {
+        let url = format!("{}/rest/valid_login?login={email}", self.base_url);
+        let resp: serde_json::Value = self
+            .auth(self.client.get(&url))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(resp["result"].as_bool().unwrap_or(false))
+    }
+
     /// Update a bug. Requires an API key. The body is a JSON object with fields to update.
     pub async fn update(&self, id: u64, body: &serde_json::Value) -> Result<(), reqwest::Error> {
         self.auth(self.client.put(self.url(&format!("bug/{id}"))))
@@ -146,7 +164,7 @@ impl BzClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{body_json, method, path};
+    use wiremock::matchers::{body_json, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // ---- new / URL normalization ----
@@ -210,6 +228,58 @@ mod tests {
             client.url("bug?product=Fedora&status=NEW"),
             "https://bugzilla.redhat.com/rest/bug?product=Fedora&status=NEW"
         );
+    }
+
+    // ---- valid_login ----
+
+    #[tokio::test]
+    async fn valid_login_returns_true() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/valid_login"))
+            .and(query_param("login", "user@example.com"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": true})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(client.valid_login("user@example.com").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn valid_login_returns_false() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/valid_login"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": false})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(!client.valid_login("unknown@example.com").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn valid_login_returns_error_on_bad_key() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri()).with_api_key("bad".into());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/valid_login"))
+            .respond_with(ResponseTemplate::new(400))
+            .mount(&server)
+            .await;
+
+        let result = client.valid_login("user@example.com").await;
+        assert!(result.is_err());
     }
 
     // ---- update ----
