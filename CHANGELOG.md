@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.5.0
+
+### fedora-cve-triage
+
+- Add `cross-ecosystem` command to detect CVEs misattributed across
+  ecosystems (e.g. JavaScript CVE filed against a Rust package with a
+  similar name)
+- Ecosystem detection from Fedora package names (`rust-*`, `nodejs-*`,
+  `python-*`) with spec file fallback for ambiguous names
+- Validate Bugzilla API key in `config` command via `valid_login` endpoint
+
+### sandogasa-bugzilla
+
+- Add `valid_login()` method for API key validation
+
+### sandogasa-distgit
+
+- Add `Ecosystem` enum and ecosystem detection functions
+  (`is_js_package`, `is_rust_package`, `is_python_package`,
+  `detect_ecosystem`) with quick name-based and full spec-based modes
+
+### sandogasa-nvd
+
+- Add NVD reference URL parsing (`CveReference`, `github_repos()`)
+- Add `has_npm_references()` for detecting JavaScript packages via
+  npmjs.com URLs
+- Add npmjs.com reference check as 4th strategy in `targets_js()`
+- GitHub repo language detection fallback for cross-ecosystem command
+
 ## v0.4.0
 
 ### New: sandogasa-pkg-acl tool
