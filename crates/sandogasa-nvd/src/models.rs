@@ -21,6 +21,13 @@ pub struct CveItem {
     pub descriptions: Vec<CveDescription>,
     #[serde(default)]
     pub configurations: Vec<Configuration>,
+    #[serde(default)]
+    pub references: Vec<CveReference>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CveReference {
+    pub url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,6 +101,34 @@ pub struct FixedVersion {
 }
 
 impl CveResponse {
+    /// Check if any reference URL points to npmjs.com, indicating a JS package.
+    pub fn has_npm_references(&self) -> bool {
+        self.vulnerabilities.iter().any(|v| {
+            v.cve
+                .references
+                .iter()
+                .any(|r| r.url.contains("npmjs.com/"))
+        })
+    }
+
+    /// Extract GitHub `(owner, repo)` pairs from reference URLs.
+    ///
+    /// Parses URLs matching `github.com/{owner}/{repo}` (ignoring
+    /// deeper paths like `/issues/321`).
+    pub fn github_repos(&self) -> Vec<(String, String)> {
+        let mut repos = Vec::new();
+        for v in &self.vulnerabilities {
+            for r in &v.cve.references {
+                if let Some((owner, repo)) = parse_github_repo(&r.url) {
+                    if !repos.contains(&(owner.clone(), repo.clone())) {
+                        repos.push((owner, repo));
+                    }
+                }
+            }
+        }
+        repos
+    }
+
     /// Extract fixed versions from CPE match data.
     ///
     /// Looks for vulnerable CPE matches with `versionEndExcluding` set,
@@ -185,7 +220,7 @@ impl CveResponse {
         }
 
         // Fallback: check English description for JS keywords
-        self.vulnerabilities.iter().any(|v| {
+        let desc_match = self.vulnerabilities.iter().any(|v| {
             v.cve
                 .descriptions
                 .iter()
@@ -194,8 +229,31 @@ impl CveResponse {
                     let lower = d.value.to_lowercase();
                     JS_KEYWORDS.iter().any(|kw| lower.contains(kw))
                 })
-        })
+        });
+        if desc_match {
+            return true;
+        }
+
+        // Check if any reference URL points to npmjs.com
+        self.has_npm_references()
     }
+}
+
+/// Parse a GitHub `owner/repo` pair from a URL.
+///
+/// Accepts URLs like `https://github.com/indutny/elliptic/issues/321`
+/// and returns `("indutny", "elliptic")`.
+fn parse_github_repo(url: &str) -> Option<(String, String)> {
+    let rest = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))?;
+    let mut parts = rest.split('/');
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some((owner.to_string(), repo.to_string()))
 }
 
 /// Keywords that when following a word indicate that word is a tool/binary name.
@@ -284,6 +342,7 @@ mod tests {
                             cpe_match: vec![cpe_match(criteria)],
                         }],
                     }],
+                    references: vec![],
                 },
             }],
         }
@@ -297,6 +356,7 @@ mod tests {
                     source_identifier: source_id.to_string(),
                     descriptions: vec![],
                     configurations: vec![],
+                    references: vec![],
                 },
             }],
         }
@@ -313,6 +373,24 @@ mod tests {
                         value: text.to_string(),
                     }],
                     configurations: vec![],
+                    references: vec![],
+                },
+            }],
+        }
+    }
+
+    fn cve_with_references(urls: &[&str]) -> CveResponse {
+        CveResponse {
+            vulnerabilities: vec![Vulnerability {
+                cve: CveItem {
+                    id: "CVE-2026-0004".to_string(),
+                    source_identifier: String::new(),
+                    descriptions: vec![],
+                    configurations: vec![],
+                    references: urls
+                        .iter()
+                        .map(|u| CveReference { url: u.to_string() })
+                        .collect(),
                 },
             }],
         }
@@ -326,6 +404,7 @@ mod tests {
                     source_identifier: String::new(),
                     descriptions: vec![],
                     configurations: vec![],
+                    references: vec![],
                 },
             }],
         }
@@ -535,10 +614,117 @@ mod tests {
                             ],
                         }],
                     }],
+                    references: vec![],
                 },
             }],
         };
         assert!(resp.targets_js());
+    }
+
+    // ---- CveResponse::has_npm_references ----
+
+    #[test]
+    fn has_npm_references_true() {
+        let resp = cve_with_references(&["https://www.npmjs.com/package/elliptic"]);
+        assert!(resp.has_npm_references());
+    }
+
+    #[test]
+    fn has_npm_references_false() {
+        let resp = cve_with_references(&["https://github.com/indutny/elliptic/issues/321"]);
+        assert!(!resp.has_npm_references());
+    }
+
+    #[test]
+    fn has_npm_references_empty() {
+        let resp = empty_cve();
+        assert!(!resp.has_npm_references());
+    }
+
+    #[test]
+    fn targets_js_via_npm_reference() {
+        let resp = cve_with_references(&[
+            "https://github.com/indutny/elliptic/issues/321",
+            "https://www.npmjs.com/package/elliptic",
+        ]);
+        assert!(resp.targets_js());
+    }
+
+    // ---- CveResponse::github_repos ----
+
+    #[test]
+    fn github_repos_extracts_owner_repo() {
+        let resp = cve_with_references(&["https://github.com/indutny/elliptic/issues/321"]);
+        let repos = resp.github_repos();
+        assert_eq!(repos, vec![("indutny".to_string(), "elliptic".to_string())]);
+    }
+
+    #[test]
+    fn github_repos_multiple() {
+        let resp = cve_with_references(&[
+            "https://github.com/indutny/elliptic/issues/321",
+            "https://github.com/nicolo-ribaudo/tc39-proposal-seeded-random",
+        ]);
+        let repos = resp.github_repos();
+        assert_eq!(repos.len(), 2);
+    }
+
+    #[test]
+    fn github_repos_deduplicates() {
+        let resp = cve_with_references(&[
+            "https://github.com/indutny/elliptic/issues/321",
+            "https://github.com/indutny/elliptic/pull/322",
+        ]);
+        let repos = resp.github_repos();
+        assert_eq!(repos.len(), 1);
+    }
+
+    #[test]
+    fn github_repos_ignores_non_github() {
+        let resp = cve_with_references(&[
+            "https://www.herodevs.com/vulnerability-directory/cve-2025-14505",
+        ]);
+        let repos = resp.github_repos();
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn github_repos_empty_references() {
+        let resp = empty_cve();
+        assert!(resp.github_repos().is_empty());
+    }
+
+    // ---- parse_github_repo ----
+
+    #[test]
+    fn parse_github_repo_with_path() {
+        assert_eq!(
+            parse_github_repo("https://github.com/indutny/elliptic/issues/321"),
+            Some(("indutny".to_string(), "elliptic".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_github_repo_bare() {
+        assert_eq!(
+            parse_github_repo("https://github.com/indutny/elliptic"),
+            Some(("indutny".to_string(), "elliptic".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_github_repo_not_github() {
+        assert_eq!(parse_github_repo("https://www.herodevs.com/foo/bar"), None);
+    }
+
+    #[test]
+    fn parse_github_repo_too_short() {
+        assert_eq!(parse_github_repo("https://github.com/indutny"), None);
+    }
+
+    #[test]
+    fn parse_github_repo_empty_parts() {
+        assert_eq!(parse_github_repo("https://github.com//elliptic"), None);
     }
 
     // ---- CveResponse::fixed_versions ----
@@ -559,6 +745,7 @@ mod tests {
                             )],
                         }],
                     }],
+                    references: vec![],
                 },
             }],
         };
@@ -576,6 +763,7 @@ mod tests {
                     id: "CVE-2026-0001".to_string(),
                     source_identifier: String::new(),
                     descriptions: vec![],
+                    references: vec![],
                     configurations: vec![Configuration {
                         nodes: vec![Node {
                             cpe_match: vec![CpeMatch {
@@ -601,6 +789,7 @@ mod tests {
                     id: "CVE-2026-0001".to_string(),
                     source_identifier: String::new(),
                     descriptions: vec![],
+                    references: vec![],
                     configurations: vec![Configuration {
                         nodes: vec![Node {
                             cpe_match: vec![CpeMatch {
@@ -632,6 +821,7 @@ mod tests {
                     id: "CVE-2026-27951".to_string(),
                     source_identifier: String::new(),
                     descriptions: vec![],
+                    references: vec![],
                     configurations: vec![Configuration {
                         nodes: vec![Node {
                             cpe_match: vec![
