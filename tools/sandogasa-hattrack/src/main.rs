@@ -832,6 +832,10 @@ struct ServiceLastSeen {
     detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status_expires: Option<String>,
 }
 
 async fn cmd_last_seen(
@@ -895,6 +899,12 @@ async fn cmd_last_seen(
                 println!("  {:<14} {ts}{rel}", svc.service);
                 println!("  {:<14} {detail}", "");
             }
+            if let Some(status) = &svc.status {
+                println!("  {:<14} {:<8} {status}", "", "status:");
+            }
+            if let Some(expires) = &svc.status_expires {
+                println!("  {:<14} {:<8} {expires}", "", "expires:");
+            }
         } else if let Some(err) = &svc.error {
             println!("  {:<14} error: {err}", svc.service);
         } else {
@@ -908,17 +918,43 @@ async fn cmd_last_seen(
 async fn check_discourse(username: &str) -> ServiceLastSeen {
     let client = sandogasa_discourse::DiscourseClient::new("https://discussion.fedoraproject.org");
     match client.user(username).await {
-        Ok(user) => ServiceLastSeen {
-            service: "Discourse".to_string(),
-            last_active: user.last_posted_at.map(|t| t.to_rfc3339()),
-            detail: user.last_posted_at.map(|_| "last post".to_string()),
-            error: None,
-        },
+        Ok(user) => {
+            let (status, status_expires) = match user.status.as_ref() {
+                Some(s) => {
+                    let emoji = s
+                        .emoji
+                        .as_deref()
+                        .and_then(render_emoji)
+                        .unwrap_or_default();
+                    let desc = s.description.as_deref().unwrap_or("");
+                    let text = format!("{emoji} {desc}").trim().to_string();
+                    let expires = s.ends_at.map(|ends| {
+                        format!(
+                            "{} ({})",
+                            ends.format("%Y-%m-%d %H:%M UTC"),
+                            relative_time(ends)
+                        )
+                    });
+                    (if text.is_empty() { None } else { Some(text) }, expires)
+                }
+                None => (None, None),
+            };
+            ServiceLastSeen {
+                service: "Discourse".to_string(),
+                last_active: user.last_posted_at.map(|t| t.to_rfc3339()),
+                detail: user.last_posted_at.map(|_| "last post".to_string()),
+                error: None,
+                status,
+                status_expires,
+            }
+        }
         Err(e) => ServiceLastSeen {
             service: "Discourse".to_string(),
             last_active: None,
             detail: None,
             error: Some(e.to_string()),
+            status: None,
+            status_expires: None,
         },
     }
 }
@@ -960,6 +996,8 @@ async fn check_bodhi(username: &str) -> ServiceLastSeen {
             Some(detail.to_string())
         },
         error: None,
+        status: None,
+        status_expires: None,
     }
 }
 
@@ -979,6 +1017,8 @@ async fn check_distgit(username: &str) -> ServiceLastSeen {
                     .map(|naive| naive.and_utc().to_rfc3339()),
                 detail: latest.map(|d| format!("last active on {d}")),
                 error: None,
+                status: None,
+                status_expires: None,
             }
         }
         Err(e) => ServiceLastSeen {
@@ -986,6 +1026,8 @@ async fn check_distgit(username: &str) -> ServiceLastSeen {
             last_active: None,
             detail: None,
             error: Some(e.to_string()),
+            status: None,
+            status_expires: None,
         },
     }
 }
@@ -1003,6 +1045,8 @@ async fn check_bugzilla(emails: &[String]) -> ServiceLastSeen {
                     last_active: Some(bug.creation_time.to_rfc3339()),
                     detail: Some(format!("#{} {}", bug.id, bug.summary)),
                     error: None,
+                    status: None,
+                    status_expires: None,
                 };
             }
         }
@@ -1012,6 +1056,8 @@ async fn check_bugzilla(emails: &[String]) -> ServiceLastSeen {
         last_active: None,
         detail: None,
         error: None,
+        status: None,
+        status_expires: None,
     }
 }
 
@@ -1031,6 +1077,8 @@ async fn check_mailman(emails: &[String], lists: &[String], max_pages: u32) -> S
                         last_active: rfc3339,
                         detail: Some(post.subject),
                         error: None,
+                        status: None,
+                        status_expires: None,
                     };
                 }
             }
@@ -1041,6 +1089,8 @@ async fn check_mailman(emails: &[String], lists: &[String], max_pages: u32) -> S
         last_active: None,
         detail: None,
         error: None,
+        status: None,
+        status_expires: None,
     }
 }
 
@@ -1488,12 +1538,16 @@ mod tests {
                     last_active: Some("2026-03-17T14:50:30+00:00".to_string()),
                     detail: Some("last post".to_string()),
                     error: None,
+                    status: Some("🏖️ on vacation".to_string()),
+                    status_expires: Some("2026-04-01 00:00 UTC (in 1 week)".to_string()),
                 },
                 ServiceLastSeen {
                     service: "Bugzilla".to_string(),
                     last_active: None,
                     detail: None,
                     error: Some("no results".to_string()),
+                    status: None,
+                    status_expires: None,
                 },
             ],
         };
@@ -1504,6 +1558,13 @@ mod tests {
         assert!(json["services"][0].get("error").is_none());
         assert_eq!(json["services"][1]["error"], "no results");
         assert!(json["services"][1].get("last_active").is_none());
+        assert_eq!(json["services"][0]["status"], "🏖️ on vacation");
+        assert_eq!(
+            json["services"][0]["status_expires"],
+            "2026-04-01 00:00 UTC (in 1 week)"
+        );
+        assert!(json["services"][1].get("status").is_none());
+        assert!(json["services"][1].get("status_expires").is_none());
     }
 
     // ---- Dist-git serialization ----
