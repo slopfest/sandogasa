@@ -26,7 +26,7 @@ pub struct User {
     pub last_posted_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub last_seen_at: Option<DateTime<Utc>>,
-    #[serde(default, alias = "user_status")]
+    #[serde(default)]
     pub status: Option<UserStatus>,
 }
 

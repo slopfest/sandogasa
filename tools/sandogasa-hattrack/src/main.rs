@@ -133,7 +133,11 @@ async fn cmd_discourse(
         println!("  Last seen:   {ts}");
     }
     if let Some(status) = &user.status {
-        let emoji = status.emoji.as_deref().unwrap_or("");
+        let emoji = status
+            .emoji
+            .as_deref()
+            .and_then(render_emoji)
+            .unwrap_or_default();
         let desc = status.description.as_deref().unwrap_or("");
         if !emoji.is_empty() || !desc.is_empty() {
             println!("  Status:      {emoji} {desc}");
@@ -144,6 +148,11 @@ async fn cmd_discourse(
     }
 
     Ok(())
+}
+
+/// Convert a Discourse emoji shortcode to a Unicode emoji string.
+fn render_emoji(shortcode: &str) -> Option<&'static str> {
+    emojis::get_by_shortcode(shortcode).map(|e| e.as_str())
 }
 
 #[cfg(test)]
@@ -208,5 +217,22 @@ mod tests {
         assert_eq!(json["emoji"], "coffee");
         assert!(json.get("description").is_none());
         assert!(json.get("ends_at").is_none());
+    }
+
+    // ---- render_emoji ----
+
+    #[test]
+    fn render_emoji_known_shortcode() {
+        assert_eq!(render_emoji("palm_tree"), Some("🌴"));
+    }
+
+    #[test]
+    fn render_emoji_another_shortcode() {
+        assert_eq!(render_emoji("rocket"), Some("🚀"));
+    }
+
+    #[test]
+    fn render_emoji_unknown_shortcode() {
+        assert_eq!(render_emoji("not_a_real_emoji_xyz"), None);
     }
 }

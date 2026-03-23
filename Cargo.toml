@@ -25,6 +25,7 @@ repository = "https://github.com/slopfest/fedora-cve-triage"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dirs = "6"
+emojis = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rpassword = "7"
 sandogasa-bodhi = { version = "0.5", path = "crates/sandogasa-bodhi" }
