@@ -58,6 +58,16 @@ enum Command {
         url: String,
     },
 
+    /// Show a contributor's recent dist-git activity
+    Distgit {
+        /// FAS/Pagure username to look up
+        username: String,
+
+        /// Dist-git instance base URL
+        #[arg(long, default_value = "https://src.fedoraproject.org")]
+        url: String,
+    },
+
     /// Show a contributor's Discourse profile and activity
     Discourse {
         /// Discourse username to look up
@@ -148,6 +158,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             no_fas,
             url,
         } => cmd_bugzilla(username.as_deref(), &email, no_fas, &url, json).await,
+        Command::Distgit { username, url } => cmd_distgit(&username, &url, json).await,
         Command::Discourse { username, url } => cmd_discourse(&username, &url, json).await,
         Command::Mailman {
             username,
@@ -626,6 +637,154 @@ async fn cmd_mailman(
     Ok(())
 }
 
+#[derive(Serialize)]
+struct DistgitActivity {
+    username: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    recent_days: Vec<DistgitDay>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_pr: Option<DistgitPr>,
+    actionable_prs: Vec<DistgitPr>,
+    actionable_total: u64,
+}
+
+#[derive(Serialize)]
+struct DistgitDay {
+    date: String,
+    actions: u64,
+}
+
+#[derive(Serialize)]
+struct DistgitPr {
+    id: u64,
+    title: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    date_created: Option<String>,
+}
+
+/// Convert a Unix timestamp string to RFC 3339.
+fn unix_to_rfc3339(ts: &str) -> Option<String> {
+    let secs: i64 = ts.parse().ok()?;
+    DateTime::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
+}
+
+async fn cmd_distgit(
+    username: &str,
+    base_url: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = sandogasa_distgit::DistGitClient::with_base_url(base_url);
+
+    let (stats, prs, actionable) = tokio::try_join!(
+        client.user_activity_stats(username),
+        client.user_pull_requests(username, "all", 1),
+        client.user_actionable_pull_requests(username, 10),
+    )?;
+    let (actionable_prs, actionable_total) = actionable;
+
+    // Last 7 days of activity, sorted most recent first
+    let mut days: Vec<_> = stats.into_iter().collect();
+    days.sort_by(|a, b| b.0.cmp(&a.0));
+    let recent_days: Vec<DistgitDay> = days
+        .into_iter()
+        .take(7)
+        .map(|(date, actions)| DistgitDay { date, actions })
+        .collect();
+
+    let last_pr = prs.into_iter().next().map(|pr| DistgitPr {
+        id: pr.id,
+        title: pr.title,
+        status: pr.status,
+        project: pr.project.map(|p| p.fullname),
+        date_created: pr.date_created.as_deref().and_then(unix_to_rfc3339),
+    });
+
+    let activity = DistgitActivity {
+        username: username.to_string(),
+        recent_days,
+        last_pr,
+        actionable_prs: actionable_prs
+            .into_iter()
+            .map(|pr| DistgitPr {
+                id: pr.id,
+                title: pr.title,
+                status: pr.status,
+                project: pr.project.map(|p| p.fullname),
+                date_created: pr.date_created.as_deref().and_then(unix_to_rfc3339),
+            })
+            .collect(),
+        actionable_total,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&activity)?);
+        return Ok(());
+    }
+
+    println!("Dist-git: {username}");
+
+    if !activity.recent_days.is_empty() {
+        println!("\n  Recent activity:");
+        let mut last_relative_week = None;
+        for day in &activity.recent_days {
+            if let Ok(date) = NaiveDateTime::parse_from_str(
+                &format!("{} 00:00:00", day.date),
+                "%Y-%m-%d %H:%M:%S",
+            ) {
+                let dt = date.and_utc();
+                let days_ago = Utc::now().signed_duration_since(dt).num_days();
+                let week = days_ago / 7;
+                if last_relative_week != Some(week) {
+                    last_relative_week = Some(week);
+                    let rel = relative_time(dt);
+                    println!("    {}: {} action(s)  ({rel})", day.date, day.actions);
+                } else {
+                    println!("    {}: {} action(s)", day.date, day.actions);
+                }
+            } else {
+                println!("    {}: {} action(s)", day.date, day.actions);
+            }
+        }
+    } else {
+        println!("\n  No recent activity.");
+    }
+
+    if let Some(pr) = &activity.last_pr {
+        let project = pr.project.as_deref().unwrap_or("?");
+        println!("\n  Last PR filed:");
+        println!("    #{} [{}] {}", pr.id, pr.status, pr.title);
+        println!("    Project: {project}");
+        if let Some(ts) = &pr.date_created {
+            if let Ok(dt) = ts.parse::<DateTime<Utc>>() {
+                println!("    Filed:   {}", format_with_relative(ts, dt));
+            } else {
+                println!("    Filed:   {ts}");
+            }
+        }
+    } else {
+        println!("\n  No PRs filed.");
+    }
+
+    if activity.actionable_total > 0 {
+        println!("\n  {} PR(s) awaiting review:", activity.actionable_total);
+        for pr in &activity.actionable_prs {
+            let project = pr.project.as_deref().unwrap_or("?");
+            println!("    #{} [{}] {}", pr.id, project, pr.title);
+        }
+        if activity.actionable_total > activity.actionable_prs.len() as u64 {
+            println!(
+                "    ... and {} more",
+                activity.actionable_total - activity.actionable_prs.len() as u64
+            );
+        }
+    }
+
+    Ok(())
+}
+
 async fn cmd_discourse(
     username: &str,
     base_url: &str,
@@ -1056,6 +1215,81 @@ mod tests {
             extract_list_name("https://example.com/something"),
             "https://example.com/something"
         );
+    }
+
+    // ---- Dist-git serialization ----
+
+    #[test]
+    fn distgit_activity_serializes_full() {
+        let activity = DistgitActivity {
+            username: "salimma".to_string(),
+            recent_days: vec![
+                DistgitDay {
+                    date: "2026-03-20".to_string(),
+                    actions: 24,
+                },
+                DistgitDay {
+                    date: "2026-03-19".to_string(),
+                    actions: 39,
+                },
+            ],
+            last_pr: Some(DistgitPr {
+                id: 1,
+                title: "Update to 1.0".to_string(),
+                status: "Merged".to_string(),
+                project: Some("rpms/freerdp".to_string()),
+                date_created: Some("2026-03-20T10:00:00+00:00".to_string()),
+            }),
+            actionable_prs: vec![DistgitPr {
+                id: 4,
+                title: "Update to 2.1.0".to_string(),
+                status: "Open".to_string(),
+                project: Some("rpms/python-send2trash".to_string()),
+                date_created: None,
+            }],
+            actionable_total: 3,
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&activity).unwrap()).unwrap();
+        assert_eq!(json["username"], "salimma");
+        assert_eq!(json["recent_days"][0]["date"], "2026-03-20");
+        assert_eq!(json["recent_days"][0]["actions"], 24);
+        assert_eq!(json["last_pr"]["project"], "rpms/freerdp");
+        assert_eq!(json["actionable_total"], 3);
+        assert_eq!(
+            json["actionable_prs"][0]["project"],
+            "rpms/python-send2trash"
+        );
+    }
+
+    #[test]
+    fn distgit_activity_empty() {
+        let activity = DistgitActivity {
+            username: "nobody".to_string(),
+            recent_days: vec![],
+            last_pr: None,
+            actionable_prs: vec![],
+            actionable_total: 0,
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&activity).unwrap()).unwrap();
+        assert!(json.get("recent_days").is_none());
+        assert!(json.get("last_pr").is_none());
+    }
+
+    // ---- unix_to_rfc3339 ----
+
+    #[test]
+    fn unix_to_rfc3339_valid() {
+        assert_eq!(
+            unix_to_rfc3339("1773953041").unwrap(),
+            "2026-03-19T20:44:01+00:00"
+        );
+    }
+
+    #[test]
+    fn unix_to_rfc3339_invalid() {
+        assert!(unix_to_rfc3339("not_a_number").is_none());
     }
 
     // ---- Bugzilla serialization ----

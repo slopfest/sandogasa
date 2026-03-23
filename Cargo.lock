@@ -1376,6 +1376,7 @@ dependencies = [
  "sandogasa-bodhi",
  "sandogasa-bugzilla",
  "sandogasa-discourse",
+ "sandogasa-distgit",
  "sandogasa-fasjson",
  "sandogasa-mailman",
  "serde",

@@ -13,6 +13,7 @@ emojis = { workspace = true }
 sandogasa-bodhi = { workspace = true }
 sandogasa-bugzilla = { workspace = true }
 sandogasa-discourse = { workspace = true }
+sandogasa-distgit = { workspace = true }
 sandogasa-fasjson = { workspace = true }
 sandogasa-mailman = { workspace = true }
 serde = { workspace = true }

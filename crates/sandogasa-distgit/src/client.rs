@@ -2,9 +2,49 @@
 
 use reqwest::Client;
 
+use std::collections::HashMap;
+
+use serde::Deserialize;
+
 use crate::acl::{AccessLevel, AccessResult, Contributors, ProjectAcls};
 
 const DISTGIT_BASE: &str = "https://src.fedoraproject.org";
+
+#[derive(Debug, Deserialize)]
+pub struct PullRequestsResponse {
+    pub requests: Vec<PullRequest>,
+    #[serde(default)]
+    pub total_requests: u64,
+    #[serde(default)]
+    pub pagination: Option<Pagination>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Pagination {
+    #[serde(default)]
+    pub pages: u64,
+    #[serde(default)]
+    pub per_page: u64,
+}
+
+/// A Pagure pull request.
+#[derive(Debug, Deserialize)]
+pub struct PullRequest {
+    pub id: u64,
+    pub title: String,
+    pub status: String,
+    #[serde(default)]
+    pub date_created: Option<String>,
+    #[serde(default)]
+    pub last_updated: Option<String>,
+    #[serde(default)]
+    pub project: Option<PullRequestProject>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PullRequestProject {
+    pub fullname: String,
+}
 
 pub struct DistGitClient {
     base_url: String,
@@ -197,6 +237,66 @@ impl DistGitClient {
         Ok(AccessResult::Insufficient {
             level: acls.user_level(username),
         })
+    }
+
+    /// Fetch a user's activity stats (actions per day).
+    ///
+    /// Returns a map of date strings (YYYY-MM-DD) to action counts.
+    pub async fn user_activity_stats(
+        &self,
+        username: &str,
+    ) -> Result<HashMap<String, u64>, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/0/user/{}/activity/stats", self.base_url, username);
+        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let stats: HashMap<String, u64> = resp.json().await?;
+        Ok(stats)
+    }
+
+    /// Fetch pull requests filed by a user.
+    ///
+    /// `status` can be "all", "Open", "Merged", or "Closed".
+    pub async fn user_pull_requests(
+        &self,
+        username: &str,
+        status: &str,
+        limit: u32,
+    ) -> Result<Vec<PullRequest>, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/0/user/{}/requests/filed?per_page={}&status={}&page=1",
+            self.base_url, username, limit, status
+        );
+        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let data: PullRequestsResponse = resp.json().await?;
+        Ok(data.requests)
+    }
+
+    /// Fetch pull requests actionable by a user (awaiting their review).
+    ///
+    /// Returns up to `limit` PRs and an estimate of the total count
+    /// (derived from pagination metadata, since `total_requests` is
+    /// capped to the page size by the Pagure API).
+    pub async fn user_actionable_pull_requests(
+        &self,
+        username: &str,
+        limit: u32,
+    ) -> Result<(Vec<PullRequest>, u64), Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/0/user/{}/requests/actionable?per_page={}&page=1",
+            self.base_url, username, limit
+        );
+        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let data: PullRequestsResponse = resp.json().await?;
+        // Pagure's total_requests is capped to per_page; use pagination
+        // metadata for a better estimate.
+        let total = match data.pagination {
+            Some(p) if p.pages > 1 => {
+                // Last page may be partial, but pages * per_page is
+                // a reasonable upper bound.
+                p.pages * p.per_page
+            }
+            _ => data.requests.len() as u64,
+        };
+        Ok((data.requests, total))
     }
 
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {

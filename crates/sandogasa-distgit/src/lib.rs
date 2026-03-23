@@ -8,4 +8,4 @@ pub use acl::{
     AccessGroups, AccessLevel, AccessResult, AccessUsers, Collaborator, ContributorLevels,
     Contributors, ProjectAcls,
 };
-pub use client::DistGitClient;
+pub use client::{DistGitClient, PullRequest};
