@@ -1,0 +1,15 @@
+[package]
+name = "sandogasa-hattrack"
+description = "Look up a Fedora contributor's activity across services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+clap = { workspace = true }
+sandogasa-discourse = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

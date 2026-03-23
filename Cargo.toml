@@ -4,9 +4,11 @@ members = [
     "crates/sandogasa-bodhi",
     "crates/sandogasa-bugzilla",
     "crates/sandogasa-config",
+    "crates/sandogasa-discourse",
     "crates/sandogasa-distgit",
     "crates/sandogasa-nvd",
     "tools/fedora-cve-triage",
+    "tools/sandogasa-hattrack",
     "tools/sandogasa-pkg-acl",
 ]
 
@@ -28,6 +30,7 @@ rpassword = "7"
 sandogasa-bodhi = { version = "0.5", path = "crates/sandogasa-bodhi" }
 sandogasa-bugzilla = { version = "0.5", path = "crates/sandogasa-bugzilla" }
 sandogasa-config = { version = "0.5", path = "crates/sandogasa-config" }
+sandogasa-discourse = { version = "0.5", path = "crates/sandogasa-discourse" }
 sandogasa-distgit = { version = "0.5", path = "crates/sandogasa-distgit" }
 sandogasa-nvd = { version = "0.5", path = "crates/sandogasa-nvd" }
 serde = { version = "1.0", features = ["derive"] }

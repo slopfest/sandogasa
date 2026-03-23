@@ -1308,6 +1308,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandogasa-discourse"
+version = "0.5.0"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "sandogasa-distgit"
 version = "0.5.0"
 dependencies = [
@@ -1316,6 +1328,18 @@ dependencies = [
  "serde_json",
  "tokio",
  "wiremock",
+]
+
+[[package]]
+name = "sandogasa-hattrack"
+version = "0.5.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "sandogasa-discourse",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
