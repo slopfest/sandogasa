@@ -28,6 +28,8 @@ Last seen: salimma
                  last update submitted
   Discourse      2026-03-18T10:51:27+00:00 (5 days ago)
                  last post
+                 status:  🏖️ on vacation
+                 expires: 2026-04-01 00:00 UTC (in 1 week)
   Mailing lists  2026-03-13T09:58:20+00:00 (1 week ago)
                  Retiring python-sphinx-hoverxref
   Bugzilla       no activity found
@@ -35,7 +37,8 @@ Last seen: salimma
 
 ### Subcommands
 
-- `last-seen` — summary of last activity across all services
+- `last-seen` — summary of last activity across all services, including
+  Discourse custom status and expiration
 - `discourse` — Discourse profile and activity
 - `bodhi` — recent Bodhi updates and comments
 - `bugzilla` — recent Bugzilla activity
