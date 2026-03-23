@@ -603,13 +603,15 @@ async fn cmd_mailman(
 
     // Search for sender across configured lists, trying each email address
     let mut mailman_id = None;
-    'outer: for list in lists {
-        for email in &emails {
-            eprintln!("Searching {list} for {email} (up to {max_pages} pages)...");
-            if let Some(id) = client.find_sender_id(list, email, max_pages).await? {
-                mailman_id = Some(id);
-                break 'outer;
-            }
+    for list in lists {
+        let searching: Vec<_> = emails.iter().map(|e| e.as_str()).collect();
+        eprintln!(
+            "Searching {list} for {} (up to {max_pages} pages)...",
+            searching.join(", ")
+        );
+        if let Some(id) = client.find_sender_id(list, &emails, max_pages).await? {
+            mailman_id = Some(id);
+            break;
         }
     }
 
@@ -1016,22 +1018,20 @@ async fn check_bugzilla(emails: &[String]) -> ServiceLastSeen {
 async fn check_mailman(emails: &[String], lists: &[String], max_pages: u32) -> ServiceLastSeen {
     let client = sandogasa_mailman::MailmanClient::new();
     for list in lists {
-        for email in emails {
-            if let Ok(Some(id)) = client.find_sender_id(list, email, max_pages).await {
-                if let Ok(posts) = client.sender_emails(&id, 1).await {
-                    if let Some(post) = posts.into_iter().next() {
-                        let rfc3339 = post.date.as_deref().and_then(|s| {
-                            s.parse::<DateTime<chrono::FixedOffset>>()
-                                .ok()
-                                .map(|dt| dt.with_timezone(&Utc).to_rfc3339())
-                        });
-                        return ServiceLastSeen {
-                            service: "Mailing lists".to_string(),
-                            last_active: rfc3339,
-                            detail: Some(post.subject),
-                            error: None,
-                        };
-                    }
+        if let Ok(Some(id)) = client.find_sender_id(list, emails, max_pages).await {
+            if let Ok(posts) = client.sender_emails(&id, 1).await {
+                if let Some(post) = posts.into_iter().next() {
+                    let rfc3339 = post.date.as_deref().and_then(|s| {
+                        s.parse::<DateTime<chrono::FixedOffset>>()
+                            .ok()
+                            .map(|dt| dt.with_timezone(&Utc).to_rfc3339())
+                    });
+                    return ServiceLastSeen {
+                        service: "Mailing lists".to_string(),
+                        last_active: rfc3339,
+                        detail: Some(post.subject),
+                        error: None,
+                    };
                 }
             }
         }

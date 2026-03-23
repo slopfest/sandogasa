@@ -28,15 +28,17 @@ impl MailmanClient {
 
     /// Find a sender's mailman_id by scanning recent emails on a list.
     ///
-    /// Searches through recent emails looking for one sent from `email`.
-    /// Returns the mailman_id if found. Scans up to `max_pages` pages.
+    /// Searches through recent emails looking for one sent from any of the
+    /// given `emails`. Returns the mailman_id if found. Scans up to
+    /// `max_pages` pages, checking all email addresses on each page
+    /// before moving to the next.
     pub async fn find_sender_id(
         &self,
         list: &str,
-        email: &str,
+        emails: &[String],
         max_pages: u32,
     ) -> Result<Option<String>, reqwest::Error> {
-        let obfuscated = obfuscate_email(email);
+        let obfuscated: Vec<String> = emails.iter().map(|e| obfuscate_email(e)).collect();
 
         // HyperKitty returns newest emails first (page 1 = most recent).
         for page in 1..=max_pages {
@@ -54,7 +56,7 @@ impl MailmanClient {
 
             for e in &resp.results {
                 if let Some(sender) = &e.sender {
-                    if sender.address == obfuscated {
+                    if obfuscated.iter().any(|o| o == &sender.address) {
                         return Ok(Some(sender.mailman_id.clone()));
                     }
                 }
@@ -147,7 +149,7 @@ mod tests {
             .await;
 
         let id = client
-            .find_sender_id("test@example.com", "alice@example.com", 3)
+            .find_sender_id("test@example.com", &["alice@example.com".to_string()], 3)
             .await
             .unwrap();
         assert_eq!(id.as_deref(), Some("alice-id-123"));
@@ -179,7 +181,7 @@ mod tests {
             .await;
 
         let id = client
-            .find_sender_id("test@example.com", "nobody@example.com", 1)
+            .find_sender_id("test@example.com", &["nobody@example.com".to_string()], 1)
             .await
             .unwrap();
         assert!(id.is_none());
