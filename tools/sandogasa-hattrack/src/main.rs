@@ -78,6 +78,29 @@ enum Command {
         url: String,
     },
 
+    /// Summary of a contributor's last activity across all services
+    LastSeen {
+        /// FAS username to look up
+        username: String,
+
+        /// Email address(es) for Bugzilla/Mailman.
+        /// Repeat for multiple: --email a@x.org --email b@y.org
+        #[arg(long)]
+        email: Vec<String>,
+
+        /// Skip FASJSON lookup for email discovery
+        #[arg(long)]
+        no_fas: bool,
+
+        /// Mailing list(s) to search for sender ID
+        #[arg(long, default_value = "devel@lists.fedoraproject.org")]
+        list: Vec<String>,
+
+        /// Max pages to scan mailing list archives
+        #[arg(long, default_value = "200")]
+        max_pages: u32,
+    },
+
     /// Show a contributor's mailing list activity
     Mailman {
         /// FAS username to look up (used to discover email via FASJSON)
@@ -160,6 +183,13 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => cmd_bugzilla(username.as_deref(), &email, no_fas, &url, json).await,
         Command::Distgit { username, url } => cmd_distgit(&username, &url, json).await,
         Command::Discourse { username, url } => cmd_discourse(&username, &url, json).await,
+        Command::LastSeen {
+            username,
+            email,
+            no_fas,
+            list,
+            max_pages,
+        } => cmd_last_seen(&username, &email, no_fas, &list, max_pages, json).await,
         Command::Mailman {
             username,
             email,
@@ -785,6 +815,235 @@ async fn cmd_distgit(
     Ok(())
 }
 
+#[derive(Serialize)]
+struct LastSeenSummary {
+    username: String,
+    services: Vec<ServiceLastSeen>,
+}
+
+#[derive(Serialize)]
+struct ServiceLastSeen {
+    service: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_active: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+async fn cmd_last_seen(
+    username: &str,
+    email_overrides: &[String],
+    no_fas: bool,
+    lists: &[String],
+    max_pages: u32,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let emails = resolve_emails(Some(username), email_overrides, no_fas)?;
+    let mut services = Vec::new();
+
+    // Discourse
+    eprintln!("Checking Discourse...");
+    services.push(check_discourse(username).await);
+
+    // Bodhi
+    eprintln!("Checking Bodhi...");
+    services.push(check_bodhi(username).await);
+
+    // Dist-git
+    eprintln!("Checking dist-git...");
+    services.push(check_distgit(username).await);
+
+    // Bugzilla
+    eprintln!("Checking Bugzilla...");
+    services.push(check_bugzilla(&emails).await);
+
+    // Mailman
+    eprintln!("Checking mailing lists...");
+    services.push(check_mailman(&emails, lists, max_pages).await);
+
+    // Sort by most recent first (entries with dates before those without)
+    services.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+
+    let summary = LastSeenSummary {
+        username: username.to_string(),
+        services,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        return Ok(());
+    }
+
+    println!("Last seen: {username}\n");
+    for svc in &summary.services {
+        if let Some(ts) = &svc.last_active {
+            let rel = if let Ok(dt) = ts.parse::<DateTime<Utc>>() {
+                format!(" ({})", relative_time(dt))
+            } else if let Ok(dt) = ts.parse::<DateTime<chrono::FixedOffset>>() {
+                format!(" ({})", relative_time(dt.with_timezone(&Utc)))
+            } else {
+                String::new()
+            };
+            let detail = svc.detail.as_deref().unwrap_or("");
+            if detail.is_empty() {
+                println!("  {:<14} {ts}{rel}", svc.service);
+            } else {
+                println!("  {:<14} {ts}{rel}", svc.service);
+                println!("  {:<14} {detail}", "");
+            }
+        } else if let Some(err) = &svc.error {
+            println!("  {:<14} error: {err}", svc.service);
+        } else {
+            println!("  {:<14} no activity found", svc.service);
+        }
+    }
+
+    Ok(())
+}
+
+async fn check_discourse(username: &str) -> ServiceLastSeen {
+    let client = sandogasa_discourse::DiscourseClient::new("https://discussion.fedoraproject.org");
+    match client.user(username).await {
+        Ok(user) => ServiceLastSeen {
+            service: "Discourse".to_string(),
+            last_active: user.last_posted_at.map(|t| t.to_rfc3339()),
+            detail: user.last_posted_at.map(|_| "last post".to_string()),
+            error: None,
+        },
+        Err(e) => ServiceLastSeen {
+            service: "Discourse".to_string(),
+            last_active: None,
+            detail: None,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+async fn check_bodhi(username: &str) -> ServiceLastSeen {
+    let client = sandogasa_bodhi::BodhiClient::new();
+    let updates = client.updates_for_user(username, 1).await;
+    let comments = client.comments_for_user(username, 1).await;
+
+    let update_ts = updates
+        .ok()
+        .and_then(|u| u.into_iter().next())
+        .and_then(|u| u.date_submitted);
+    let comment_ts = comments
+        .ok()
+        .and_then(|c| c.into_iter().next())
+        .and_then(|c| c.timestamp);
+
+    // Pick the more recent of update or comment
+    let (ts, detail) = match (&update_ts, &comment_ts) {
+        (Some(u), Some(c)) if u >= c => (Some(u.clone()), "last update submitted"),
+        (Some(_), Some(c)) => (Some(c.clone()), "last comment"),
+        (Some(u), None) => (Some(u.clone()), "last update submitted"),
+        (None, Some(c)) => (Some(c.clone()), "last comment"),
+        (None, None) => (None, ""),
+    };
+
+    // Bodhi timestamps are "YYYY-MM-DD HH:MM:SS" UTC — convert to RFC 3339
+    let rfc3339 = ts
+        .as_deref()
+        .and_then(|s| parse_bodhi_timestamp(s).map(|dt| dt.to_rfc3339()));
+
+    ServiceLastSeen {
+        service: "Bodhi".to_string(),
+        last_active: rfc3339,
+        detail: if detail.is_empty() {
+            None
+        } else {
+            Some(detail.to_string())
+        },
+        error: None,
+    }
+}
+
+async fn check_distgit(username: &str) -> ServiceLastSeen {
+    let client = sandogasa_distgit::DistGitClient::new();
+    match client.user_activity_stats(username).await {
+        Ok(stats) => {
+            let latest = stats.keys().max().cloned();
+            ServiceLastSeen {
+                service: "Dist-git".to_string(),
+                last_active: latest
+                    .as_deref()
+                    .and_then(|d| {
+                        NaiveDateTime::parse_from_str(&format!("{d} 23:59:59"), "%Y-%m-%d %H:%M:%S")
+                            .ok()
+                    })
+                    .map(|naive| naive.and_utc().to_rfc3339()),
+                detail: latest.map(|d| format!("last active on {d}")),
+                error: None,
+            }
+        }
+        Err(e) => ServiceLastSeen {
+            service: "Dist-git".to_string(),
+            last_active: None,
+            detail: None,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+async fn check_bugzilla(emails: &[String]) -> ServiceLastSeen {
+    let client = sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com");
+    for email in emails {
+        let bugs = client
+            .search(&format!("creator={email}&limit=1&order=bug_id%20DESC"), 1)
+            .await;
+        if let Ok(bugs) = bugs {
+            if let Some(bug) = bugs.into_iter().next() {
+                return ServiceLastSeen {
+                    service: "Bugzilla".to_string(),
+                    last_active: Some(bug.creation_time.to_rfc3339()),
+                    detail: Some(format!("#{} {}", bug.id, bug.summary)),
+                    error: None,
+                };
+            }
+        }
+    }
+    ServiceLastSeen {
+        service: "Bugzilla".to_string(),
+        last_active: None,
+        detail: None,
+        error: None,
+    }
+}
+
+async fn check_mailman(emails: &[String], lists: &[String], max_pages: u32) -> ServiceLastSeen {
+    let client = sandogasa_mailman::MailmanClient::new();
+    for list in lists {
+        for email in emails {
+            if let Ok(Some(id)) = client.find_sender_id(list, email, max_pages).await {
+                if let Ok(posts) = client.sender_emails(&id, 1).await {
+                    if let Some(post) = posts.into_iter().next() {
+                        let rfc3339 = post.date.as_deref().and_then(|s| {
+                            s.parse::<DateTime<chrono::FixedOffset>>()
+                                .ok()
+                                .map(|dt| dt.with_timezone(&Utc).to_rfc3339())
+                        });
+                        return ServiceLastSeen {
+                            service: "Mailing lists".to_string(),
+                            last_active: rfc3339,
+                            detail: Some(post.subject),
+                            error: None,
+                        };
+                    }
+                }
+            }
+        }
+    }
+    ServiceLastSeen {
+        service: "Mailing lists".to_string(),
+        last_active: None,
+        detail: None,
+        error: None,
+    }
+}
+
 async fn cmd_discourse(
     username: &str,
     base_url: &str,
@@ -1215,6 +1474,36 @@ mod tests {
             extract_list_name("https://example.com/something"),
             "https://example.com/something"
         );
+    }
+
+    // ---- Last-seen serialization ----
+
+    #[test]
+    fn last_seen_serializes() {
+        let summary = LastSeenSummary {
+            username: "salimma".to_string(),
+            services: vec![
+                ServiceLastSeen {
+                    service: "Discourse".to_string(),
+                    last_active: Some("2026-03-17T14:50:30+00:00".to_string()),
+                    detail: Some("last post".to_string()),
+                    error: None,
+                },
+                ServiceLastSeen {
+                    service: "Bugzilla".to_string(),
+                    last_active: None,
+                    detail: None,
+                    error: Some("no results".to_string()),
+                },
+            ],
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&summary).unwrap()).unwrap();
+        assert_eq!(json["username"], "salimma");
+        assert_eq!(json["services"][0]["service"], "Discourse");
+        assert!(json["services"][0].get("error").is_none());
+        assert_eq!(json["services"][1]["error"], "no results");
+        assert!(json["services"][1].get("last_active").is_none());
     }
 
     // ---- Dist-git serialization ----
