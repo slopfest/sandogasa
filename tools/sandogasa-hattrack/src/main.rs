@@ -25,6 +25,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Show a contributor's recent Bodhi updates and comments
+    Bodhi {
+        /// Bodhi/FAS username to look up
+        username: String,
+
+        /// Bodhi instance base URL
+        #[arg(long, default_value = "https://bodhi.fedoraproject.org")]
+        url: String,
+    },
+
     /// Show a contributor's Discourse profile and activity
     Discourse {
         /// Discourse username to look up
@@ -81,8 +91,124 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let json = cli.json;
     match cli.command {
+        Command::Bodhi { username, url } => cmd_bodhi(&username, &url, json).await,
         Command::Discourse { username, url } => cmd_discourse(&username, &url, json).await,
     }
+}
+
+#[derive(Serialize)]
+struct BodhiActivity {
+    username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_update: Option<BodhiUpdate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_comment: Option<BodhiComment>,
+}
+
+#[derive(Serialize)]
+struct BodhiUpdate {
+    alias: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release: Option<String>,
+    builds: Vec<String>,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    date_submitted: Option<String>,
+}
+
+#[derive(Serialize)]
+struct BodhiComment {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update_alias: Option<String>,
+    karma: i32,
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timestamp: Option<String>,
+}
+
+async fn cmd_bodhi(
+    username: &str,
+    base_url: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = sandogasa_bodhi::BodhiClient::with_base_url(base_url);
+    let (updates, comments) = tokio::try_join!(
+        client.updates_for_user(username, 1),
+        client.comments_for_user(username, 1),
+    )?;
+
+    let last_update = updates.into_iter().next().map(|u| BodhiUpdate {
+        alias: u.alias,
+        release: u.release.map(|r| r.name),
+        builds: u.builds.into_iter().map(|b| b.nvr).collect(),
+        status: u.status,
+        date_submitted: u.date_submitted,
+    });
+
+    let last_comment = comments.into_iter().next().map(|c| BodhiComment {
+        update_alias: c.update_alias,
+        karma: c.karma,
+        text: c.text,
+        timestamp: c.timestamp,
+    });
+
+    let activity = BodhiActivity {
+        username: username.to_string(),
+        last_update,
+        last_comment,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&activity)?);
+        return Ok(());
+    }
+
+    println!("Bodhi: {username}");
+
+    if let Some(update) = &activity.last_update {
+        println!("\n  Last update: {}", update.alias);
+        if let Some(release) = &update.release {
+            println!("    Release:   {release}");
+        }
+        for nvr in &update.builds {
+            println!("    Build:     {nvr}");
+        }
+        println!("    Status:    {}", update.status);
+        if let Some(ts) = &update.date_submitted {
+            println!("    Submitted: {ts}");
+        }
+    } else {
+        println!("\n  No updates found.");
+    }
+
+    if let Some(comment) = &activity.last_comment {
+        let karma_str = match comment.karma {
+            k if k > 0 => format!("+{k}"),
+            k if k < 0 => format!("{k}"),
+            _ => "0".to_string(),
+        };
+        println!("\n  Last comment:");
+        if let Some(alias) = &comment.update_alias {
+            println!("    Update:    {alias}");
+        }
+        println!("    Karma:     {karma_str}");
+        if let Some(ts) = &comment.timestamp {
+            println!("    Date:      {ts}");
+        }
+        // Show first line of comment text as a preview
+        let preview = comment.text.lines().next().unwrap_or("");
+        if !preview.is_empty() {
+            if comment.text.lines().count() > 1 {
+                println!("    Text:      {preview} [...]");
+            } else {
+                println!("    Text:      {preview}");
+            }
+        }
+    } else {
+        println!("\n  No comments found.");
+    }
+
+    Ok(())
 }
 
 async fn cmd_discourse(
@@ -217,6 +343,70 @@ mod tests {
         assert_eq!(json["emoji"], "coffee");
         assert!(json.get("description").is_none());
         assert!(json.get("ends_at").is_none());
+    }
+
+    // ---- Bodhi serialization ----
+
+    #[test]
+    fn bodhi_activity_serializes_full() {
+        let activity = BodhiActivity {
+            username: "salimma".to_string(),
+            last_update: Some(BodhiUpdate {
+                alias: "FEDORA-2026-b600f85be9".to_string(),
+                release: Some("F44".to_string()),
+                builds: vec!["python-puzpy-0.5.0-2.fc44".to_string()],
+                status: "testing".to_string(),
+                date_submitted: Some("2026-03-20 23:44:44".to_string()),
+            }),
+            last_comment: Some(BodhiComment {
+                update_alias: Some("FEDORA-EPEL-2026-8e235e20a2".to_string()),
+                karma: 1,
+                text: "Works for me".to_string(),
+                timestamp: Some("2026-02-24 11:17:59".to_string()),
+            }),
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&activity).unwrap()).unwrap();
+        assert_eq!(json["username"], "salimma");
+        assert_eq!(json["last_update"]["alias"], "FEDORA-2026-b600f85be9");
+        assert_eq!(json["last_update"]["release"], "F44");
+        assert_eq!(
+            json["last_update"]["builds"][0],
+            "python-puzpy-0.5.0-2.fc44"
+        );
+        assert_eq!(json["last_comment"]["karma"], 1);
+        assert_eq!(
+            json["last_comment"]["update_alias"],
+            "FEDORA-EPEL-2026-8e235e20a2"
+        );
+    }
+
+    #[test]
+    fn bodhi_activity_omits_none_fields() {
+        let activity = BodhiActivity {
+            username: "nobody".to_string(),
+            last_update: None,
+            last_comment: None,
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&activity).unwrap()).unwrap();
+        assert_eq!(json["username"], "nobody");
+        assert!(json.get("last_update").is_none());
+        assert!(json.get("last_comment").is_none());
+    }
+
+    #[test]
+    fn bodhi_comment_negative_karma_serializes() {
+        let comment = BodhiComment {
+            update_alias: Some("FEDORA-2026-xyz".to_string()),
+            karma: -1,
+            text: "Broken on aarch64".to_string(),
+            timestamp: None,
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&comment).unwrap()).unwrap();
+        assert_eq!(json["karma"], -1);
+        assert!(json.get("timestamp").is_none());
     }
 
     // ---- render_emoji ----

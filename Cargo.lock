@@ -1364,6 +1364,7 @@ dependencies = [
  "chrono",
  "clap",
  "emojis",
+ "sandogasa-bodhi",
  "sandogasa-discourse",
  "serde",
  "serde_json",

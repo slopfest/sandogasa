@@ -2,7 +2,9 @@
 
 use reqwest::Client;
 
-use crate::models::{BodhiRelease, ReleasesResponse, Update, UpdatesResponse};
+use crate::models::{
+    BodhiRelease, Comment, CommentsResponse, ReleasesResponse, Update, UpdatesResponse,
+};
 
 const BODHI_API_BASE: &str = "https://bodhi.fedoraproject.org";
 
@@ -93,6 +95,52 @@ impl BodhiClient {
             .collect();
 
         Ok(active)
+    }
+
+    /// Fetch the most recent updates submitted by a user.
+    ///
+    /// Returns up to `limit` updates, most recent first.
+    pub async fn updates_for_user(
+        &self,
+        username: &str,
+        limit: u32,
+    ) -> Result<Vec<Update>, reqwest::Error> {
+        let url = format!(
+            "{}/updates/?user={}&rows_per_page={}&chrome=0",
+            self.base_url, username, limit
+        );
+        let resp: UpdatesResponse = self
+            .client
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(resp.updates)
+    }
+
+    /// Fetch the most recent comments by a user.
+    ///
+    /// Returns up to `limit` comments, most recent first.
+    pub async fn comments_for_user(
+        &self,
+        username: &str,
+        limit: u32,
+    ) -> Result<Vec<Comment>, reqwest::Error> {
+        let url = format!(
+            "{}/comments/?user={}&rows_per_page={}&chrome=0",
+            self.base_url, username, limit
+        );
+        let resp: CommentsResponse = self
+            .client
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(resp.comments)
     }
 }
 
@@ -195,5 +243,116 @@ mod tests {
         let releases = client.active_releases().await.unwrap();
         let names: Vec<_> = releases.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["F43", "EPEL-9"]);
+    }
+
+    // ---- updates_for_user ----
+
+    #[tokio::test]
+    async fn updates_for_user_returns_updates() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path_regex("/updates/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": [
+                    {
+                        "alias": "FEDORA-2026-b600f85be9",
+                        "status": "testing",
+                        "builds": [{"nvr": "python-puzpy-0.5.0-2.fc44"}],
+                        "bugs": [],
+                        "release": {"name": "F44"},
+                        "date_submitted": "2026-03-20 23:44:44"
+                    }
+                ],
+                "total": 1,
+                "page": 1,
+                "pages": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let updates = client.updates_for_user("salimma", 1).await.unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].alias, "FEDORA-2026-b600f85be9");
+        assert_eq!(updates[0].release.as_ref().unwrap().name, "F44");
+    }
+
+    #[tokio::test]
+    async fn updates_for_user_empty() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path_regex("/updates/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": [],
+                "total": 0,
+                "page": 1,
+                "pages": 0
+            })))
+            .mount(&server)
+            .await;
+
+        let updates = client.updates_for_user("nobody", 1).await.unwrap();
+        assert!(updates.is_empty());
+    }
+
+    // ---- comments_for_user ----
+
+    #[tokio::test]
+    async fn comments_for_user_returns_comments() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path_regex("/comments/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "comments": [
+                    {
+                        "id": 4559905,
+                        "text": "Testing feedback",
+                        "karma": 1,
+                        "timestamp": "2026-02-24 11:17:59",
+                        "author": "salimma",
+                        "update_alias": "FEDORA-EPEL-2026-8e235e20a2"
+                    }
+                ],
+                "total": 1,
+                "page": 1,
+                "pages": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let comments = client.comments_for_user("salimma", 1).await.unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].karma, 1);
+        assert_eq!(
+            comments[0].update_alias.as_deref(),
+            Some("FEDORA-EPEL-2026-8e235e20a2")
+        );
+    }
+
+    #[tokio::test]
+    async fn comments_for_user_empty() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path_regex("/comments/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "comments": [],
+                "total": 0,
+                "page": 1,
+                "pages": 0
+            })))
+            .mount(&server)
+            .await;
+
+        let comments = client.comments_for_user("nobody", 1).await.unwrap();
+        assert!(comments.is_empty());
     }
 }

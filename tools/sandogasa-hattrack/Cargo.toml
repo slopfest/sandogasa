@@ -10,6 +10,7 @@ repository.workspace = true
 chrono = { workspace = true }
 clap = { workspace = true }
 emojis = { workspace = true }
+sandogasa-bodhi = { workspace = true }
 sandogasa-discourse = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

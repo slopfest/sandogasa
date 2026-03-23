@@ -39,6 +39,28 @@ pub struct Release {
     pub name: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CommentsResponse {
+    pub comments: Vec<Comment>,
+    pub total: u64,
+    pub page: u64,
+    pub pages: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Comment {
+    pub id: u64,
+    #[serde(default)]
+    pub text: String,
+    pub karma: i32,
+    #[serde(default)]
+    pub timestamp: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub update_alias: Option<String>,
+}
+
 /// A Bodhi release entry from the releases API.
 #[derive(Debug, Deserialize)]
 pub struct BodhiRelease {
@@ -212,5 +234,79 @@ mod tests {
 
         let resp: ReleasesResponse = serde_json::from_str(json).unwrap();
         assert!(resp.releases.is_empty());
+    }
+
+    // ---- Comment / CommentsResponse ----
+
+    #[test]
+    fn deserialize_comments_response() {
+        let json = r#"{
+            "comments": [
+                {
+                    "id": 4559905,
+                    "text": "Checking interaction with packages",
+                    "karma": 0,
+                    "timestamp": "2026-02-24 11:17:59",
+                    "author": "salimma",
+                    "update_alias": "FEDORA-EPEL-2026-8e235e20a2"
+                }
+            ],
+            "total": 1,
+            "page": 1,
+            "pages": 1
+        }"#;
+
+        let resp: CommentsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.comments.len(), 1);
+        assert_eq!(resp.comments[0].id, 4559905);
+        assert_eq!(resp.comments[0].karma, 0);
+        assert_eq!(resp.comments[0].author.as_deref(), Some("salimma"));
+        assert_eq!(
+            resp.comments[0].update_alias.as_deref(),
+            Some("FEDORA-EPEL-2026-8e235e20a2")
+        );
+    }
+
+    #[test]
+    fn deserialize_comment_with_karma() {
+        let json = r#"{
+            "id": 123,
+            "text": "Works for me",
+            "karma": 1,
+            "timestamp": "2026-03-01 10:00:00",
+            "author": "reviewer",
+            "update_alias": "FEDORA-2026-abc"
+        }"#;
+
+        let comment: Comment = serde_json::from_str(json).unwrap();
+        assert_eq!(comment.karma, 1);
+        assert_eq!(comment.text, "Works for me");
+    }
+
+    #[test]
+    fn deserialize_comment_negative_karma() {
+        let json = r#"{
+            "id": 456,
+            "text": "Broken on aarch64",
+            "karma": -1
+        }"#;
+
+        let comment: Comment = serde_json::from_str(json).unwrap();
+        assert_eq!(comment.karma, -1);
+        assert!(comment.author.is_none());
+        assert!(comment.update_alias.is_none());
+    }
+
+    #[test]
+    fn deserialize_comments_empty() {
+        let json = r#"{
+            "comments": [],
+            "total": 0,
+            "page": 1,
+            "pages": 0
+        }"#;
+
+        let resp: CommentsResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.comments.is_empty());
     }
 }
