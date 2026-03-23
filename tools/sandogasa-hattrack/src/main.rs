@@ -2,6 +2,7 @@
 
 use std::process::ExitCode;
 
+use chrono::{DateTime, NaiveDateTime, Utc};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
@@ -175,7 +176,11 @@ async fn cmd_bodhi(
         }
         println!("    Status:    {}", update.status);
         if let Some(ts) = &update.date_submitted {
-            println!("    Submitted: {ts}");
+            if let Some(dt) = parse_bodhi_timestamp(ts) {
+                println!("    Submitted: {}", format_with_relative(ts, dt));
+            } else {
+                println!("    Submitted: {ts}");
+            }
         }
     } else {
         println!("\n  No updates found.");
@@ -193,7 +198,11 @@ async fn cmd_bodhi(
         }
         println!("    Karma:     {karma_str}");
         if let Some(ts) = &comment.timestamp {
-            println!("    Date:      {ts}");
+            if let Some(dt) = parse_bodhi_timestamp(ts) {
+                println!("    Date:      {}", format_with_relative(ts, dt));
+            } else {
+                println!("    Date:      {ts}");
+            }
         }
         // Show first line of comment text as a preview
         let preview = comment.text.lines().next().unwrap_or("");
@@ -252,11 +261,17 @@ async fn cmd_discourse(
     if let Some(loc) = &user.location {
         println!("  Location:    {loc}");
     }
-    if let Some(ts) = &user.last_posted_at {
-        println!("  Last post:   {ts}");
+    if let Some(ts) = user.last_posted_at {
+        println!(
+            "  Last post:   {}",
+            format_with_relative(&ts.to_rfc3339(), ts)
+        );
     }
-    if let Some(ts) = &user.last_seen_at {
-        println!("  Last seen:   {ts}");
+    if let Some(ts) = user.last_seen_at {
+        println!(
+            "  Last seen:   {}",
+            format_with_relative(&ts.to_rfc3339(), ts)
+        );
     }
     if let Some(status) = &user.status {
         let emoji = status
@@ -268,12 +283,66 @@ async fn cmd_discourse(
         if !emoji.is_empty() || !desc.is_empty() {
             println!("  Status:      {emoji} {desc}");
         }
-        if let Some(ends) = &status.ends_at {
-            println!("  Status ends: {ends}");
+        if let Some(ends) = status.ends_at {
+            println!(
+                "  Status ends: {}",
+                format_with_relative(&ends.to_rfc3339(), ends)
+            );
         }
     }
 
     Ok(())
+}
+
+/// Format a `DateTime<Utc>` as a relative time string (e.g. "3 days ago").
+fn relative_time(dt: DateTime<Utc>) -> String {
+    relative_time_from(dt, Utc::now())
+}
+
+/// Format a relative time string given an explicit "now" (for testing).
+fn relative_time_from(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let duration = now.signed_duration_since(dt);
+    let seconds = duration.num_seconds();
+    let (abs_seconds, suffix, prefix) = if seconds < 0 {
+        (-seconds, "", "in ")
+    } else {
+        (seconds, " ago", "")
+    };
+
+    let abs_minutes = abs_seconds / 60;
+    let abs_hours = abs_seconds / 3600;
+    let abs_days = abs_seconds / 86400;
+    let abs_weeks = abs_days / 7;
+    let abs_months = abs_days / 30;
+    let abs_years = abs_days / 365;
+
+    match () {
+        _ if abs_seconds < 60 => "just now".to_string(),
+        _ if abs_minutes == 1 => format!("{prefix}1 minute{suffix}"),
+        _ if abs_minutes < 60 => format!("{prefix}{abs_minutes} minutes{suffix}"),
+        _ if abs_hours == 1 => format!("{prefix}1 hour{suffix}"),
+        _ if abs_hours < 24 => format!("{prefix}{abs_hours} hours{suffix}"),
+        _ if abs_days == 1 => format!("{prefix}1 day{suffix}"),
+        _ if abs_days < 7 => format!("{prefix}{abs_days} days{suffix}"),
+        _ if abs_weeks == 1 => format!("{prefix}1 week{suffix}"),
+        _ if abs_weeks < 5 => format!("{prefix}{abs_weeks} weeks{suffix}"),
+        _ if abs_months == 1 => format!("{prefix}1 month{suffix}"),
+        _ if abs_months < 12 => format!("{prefix}{abs_months} months{suffix}"),
+        _ if abs_years == 1 => format!("{prefix}1 year{suffix}"),
+        _ => format!("{prefix}{abs_years} years{suffix}"),
+    }
+}
+
+/// Parse a Bodhi timestamp ("YYYY-MM-DD HH:MM:SS", assumed UTC) into DateTime.
+fn parse_bodhi_timestamp(ts: &str) -> Option<DateTime<Utc>> {
+    NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S")
+        .ok()
+        .map(|naive| naive.and_utc())
+}
+
+/// Format a timestamp with relative time appended, e.g. "2026-03-20 23:44:44 (3 days ago)".
+fn format_with_relative(ts: &str, dt: DateTime<Utc>) -> String {
+    format!("{ts} ({})", relative_time(dt))
 }
 
 /// Convert a Discourse emoji shortcode to a Unicode emoji string.
@@ -407,6 +476,133 @@ mod tests {
             serde_json::from_str(&serde_json::to_string_pretty(&comment).unwrap()).unwrap();
         assert_eq!(json["karma"], -1);
         assert!(json.get("timestamp").is_none());
+    }
+
+    // ---- relative_time ----
+
+    fn utc(s: &str) -> DateTime<Utc> {
+        s.parse::<DateTime<Utc>>().unwrap()
+    }
+
+    #[test]
+    fn relative_time_just_now() {
+        let now = utc("2026-03-23T12:00:00Z");
+        let dt = utc("2026-03-23T11:59:30Z");
+        assert_eq!(relative_time_from(dt, now), "just now");
+    }
+
+    #[test]
+    fn relative_time_minutes() {
+        let now = utc("2026-03-23T12:00:00Z");
+        assert_eq!(
+            relative_time_from(utc("2026-03-23T11:55:00Z"), now),
+            "5 minutes ago"
+        );
+        assert_eq!(
+            relative_time_from(utc("2026-03-23T11:59:00Z"), now),
+            "1 minute ago"
+        );
+    }
+
+    #[test]
+    fn relative_time_hours() {
+        let now = utc("2026-03-23T12:00:00Z");
+        assert_eq!(
+            relative_time_from(utc("2026-03-23T11:00:00Z"), now),
+            "1 hour ago"
+        );
+        assert_eq!(
+            relative_time_from(utc("2026-03-23T06:00:00Z"), now),
+            "6 hours ago"
+        );
+    }
+
+    #[test]
+    fn relative_time_days() {
+        let now = utc("2026-03-23T12:00:00Z");
+        assert_eq!(
+            relative_time_from(utc("2026-03-22T12:00:00Z"), now),
+            "1 day ago"
+        );
+        assert_eq!(
+            relative_time_from(utc("2026-03-20T12:00:00Z"), now),
+            "3 days ago"
+        );
+    }
+
+    #[test]
+    fn relative_time_weeks() {
+        let now = utc("2026-03-23T12:00:00Z");
+        assert_eq!(
+            relative_time_from(utc("2026-03-16T12:00:00Z"), now),
+            "1 week ago"
+        );
+        assert_eq!(
+            relative_time_from(utc("2026-03-02T12:00:00Z"), now),
+            "3 weeks ago"
+        );
+    }
+
+    #[test]
+    fn relative_time_months() {
+        let now = utc("2026-06-23T12:00:00Z");
+        // 38 days ago -> past 5 weeks threshold, into months
+        assert_eq!(
+            relative_time_from(utc("2026-05-16T12:00:00Z"), now),
+            "1 month ago"
+        );
+        assert_eq!(
+            relative_time_from(utc("2026-03-23T12:00:00Z"), now),
+            "3 months ago"
+        );
+    }
+
+    #[test]
+    fn relative_time_years() {
+        let now = utc("2026-03-23T12:00:00Z");
+        assert_eq!(
+            relative_time_from(utc("2025-03-23T12:00:00Z"), now),
+            "1 year ago"
+        );
+        assert_eq!(
+            relative_time_from(utc("2023-03-23T12:00:00Z"), now),
+            "3 years ago"
+        );
+    }
+
+    #[test]
+    fn relative_time_future_hours() {
+        let now = utc("2026-03-23T12:00:00Z");
+        assert_eq!(
+            relative_time_from(utc("2026-03-23T14:00:00Z"), now),
+            "in 2 hours"
+        );
+    }
+
+    #[test]
+    fn relative_time_future_days() {
+        let now = utc("2026-03-23T12:00:00Z");
+        assert_eq!(
+            relative_time_from(utc("2026-03-24T12:00:00Z"), now),
+            "in 1 day"
+        );
+        assert_eq!(
+            relative_time_from(utc("2026-03-26T12:00:00Z"), now),
+            "in 3 days"
+        );
+    }
+
+    // ---- parse_bodhi_timestamp ----
+
+    #[test]
+    fn parse_bodhi_timestamp_valid() {
+        let dt = parse_bodhi_timestamp("2026-03-20 23:44:44").unwrap();
+        assert_eq!(dt.to_rfc3339(), "2026-03-20T23:44:44+00:00");
+    }
+
+    #[test]
+    fn parse_bodhi_timestamp_invalid() {
+        assert!(parse_bodhi_timestamp("not a timestamp").is_none());
     }
 
     // ---- render_emoji ----
