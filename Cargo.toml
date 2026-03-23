@@ -18,7 +18,7 @@ members = [
 # "slum" or post-apocalyptic robots in popular culture.
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 license = "MPL-2.0"
 repository = "https://github.com/slopfest/fedora-cve-triage"
@@ -30,14 +30,14 @@ dirs = "6"
 emojis = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rpassword = "7"
-sandogasa-bodhi = { version = "0.5", path = "crates/sandogasa-bodhi" }
-sandogasa-bugzilla = { version = "0.5", path = "crates/sandogasa-bugzilla" }
-sandogasa-config = { version = "0.5", path = "crates/sandogasa-config" }
-sandogasa-discourse = { version = "0.5", path = "crates/sandogasa-discourse" }
-sandogasa-distgit = { version = "0.5", path = "crates/sandogasa-distgit" }
-sandogasa-fasjson = { version = "0.5", path = "crates/sandogasa-fasjson" }
-sandogasa-mailman = { version = "0.5", path = "crates/sandogasa-mailman" }
-sandogasa-nvd = { version = "0.5", path = "crates/sandogasa-nvd" }
+sandogasa-bodhi = { version = "0.6", path = "crates/sandogasa-bodhi" }
+sandogasa-bugzilla = { version = "0.6", path = "crates/sandogasa-bugzilla" }
+sandogasa-config = { version = "0.6", path = "crates/sandogasa-config" }
+sandogasa-discourse = { version = "0.6", path = "crates/sandogasa-discourse" }
+sandogasa-distgit = { version = "0.6", path = "crates/sandogasa-distgit" }
+sandogasa-fasjson = { version = "0.6", path = "crates/sandogasa-fasjson" }
+sandogasa-mailman = { version = "0.6", path = "crates/sandogasa-mailman" }
+sandogasa-nvd = { version = "0.6", path = "crates/sandogasa-nvd" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3"

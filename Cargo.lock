@@ -293,7 +293,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fedora-cve-triage"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "clap",
@@ -1302,7 +1302,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sandogasa-bodhi"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -1313,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-bugzilla"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "reqwest",
@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-config"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "dirs",
  "rpassword",
@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-discourse"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "reqwest",
@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-distgit"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -1359,7 +1359,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-fasjson"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1368,7 +1368,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-hattrack"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "clap",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-mailman"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -1397,16 +1397,18 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-nvd"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
 name = "sandogasa-pkg-acl"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "clap",
  "sandogasa-config",

@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.6.0
+
+### New: sandogasa-hattrack tool
+
+- Look up a Fedora contributor's activity across multiple services
+- Subcommands: `discourse`, `bodhi`, `bugzilla`, `distgit`, `mailman`,
+  `last-seen`
+- `last-seen` summary shows the most recent activity from each service,
+  sorted by date
+- Discourse: profile info, timezone, location, custom status with
+  rendered emoji, last post/seen timestamps
+- Bodhi: last update submitted and last comment/karma
+- Bugzilla: last bug filed and last bug changed
+- Dist-git: daily activity stats (last 7 days), last PR filed,
+  actionable PRs awaiting review
+- Mailing lists: recent posts across all lists via HyperKitty API
+- All timestamps include relative time ("3 days ago", "in 2 hours")
+- `--json` flag for machine-readable output on all subcommands
+- Email discovery via FASJSON (Kerberos) with `--email` override and
+  `--no-fas` to skip authentication
+
+### New: sandogasa-discourse crate
+
+- Discourse forum API client for user profile data
+- Fetch timezone, location, custom status, last post/seen timestamps
+
+### New: sandogasa-fasjson crate
+
+- FASJSON (Fedora Account System) API client via `curl --negotiate`
+- Kerberos ticket management: status check, renewal, interactive
+  acquisition with retry on timeout
+- Read Fedora UPN from `~/.fedora.upn`
+
+### New: sandogasa-mailman crate
+
+- HyperKitty (Mailman 3) archive API client
+- Find sender by email across list archives
+- Fetch recent posts by sender across all lists
+
+### sandogasa-bodhi
+
+- Add `updates_for_user()` and `comments_for_user()` for user activity
+  queries
+- Add `Comment` and `CommentsResponse` models
+
+### sandogasa-distgit
+
+- Add `user_activity_stats()` for daily action counts
+- Add `user_pull_requests()` for PRs filed by a user
+- Add `user_actionable_pull_requests()` with pagination-aware total
+  count
+- Add `PullRequest`, `PullRequestsResponse`, and `Pagination` models
+
 ## v0.5.0
 
 ### fedora-cve-triage
