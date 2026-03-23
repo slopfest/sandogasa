@@ -12,6 +12,8 @@ clap = { workspace = true }
 emojis = { workspace = true }
 sandogasa-bodhi = { workspace = true }
 sandogasa-discourse = { workspace = true }
+sandogasa-fasjson = { workspace = true }
+sandogasa-mailman = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

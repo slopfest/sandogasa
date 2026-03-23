@@ -6,6 +6,8 @@ members = [
     "crates/sandogasa-config",
     "crates/sandogasa-discourse",
     "crates/sandogasa-distgit",
+    "crates/sandogasa-fasjson",
+    "crates/sandogasa-mailman",
     "crates/sandogasa-nvd",
     "tools/fedora-cve-triage",
     "tools/sandogasa-hattrack",
@@ -33,6 +35,8 @@ sandogasa-bugzilla = { version = "0.5", path = "crates/sandogasa-bugzilla" }
 sandogasa-config = { version = "0.5", path = "crates/sandogasa-config" }
 sandogasa-discourse = { version = "0.5", path = "crates/sandogasa-discourse" }
 sandogasa-distgit = { version = "0.5", path = "crates/sandogasa-distgit" }
+sandogasa-fasjson = { version = "0.5", path = "crates/sandogasa-fasjson" }
+sandogasa-mailman = { version = "0.5", path = "crates/sandogasa-mailman" }
 sandogasa-nvd = { version = "0.5", path = "crates/sandogasa-nvd" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::io::{self, Write as _};
 use std::process::ExitCode;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use clap::{Parser, Subcommand};
+use sandogasa_fasjson::kerberos;
 use serde::Serialize;
 
 #[derive(Parser)]
@@ -44,6 +46,33 @@ enum Command {
         /// Discourse instance base URL
         #[arg(long, default_value = "https://discussion.fedoraproject.org")]
         url: String,
+    },
+
+    /// Show a contributor's mailing list activity
+    Mailman {
+        /// FAS username to look up (used to discover email via FASJSON)
+        #[arg(required_unless_present = "email")]
+        username: Option<String>,
+
+        /// Email address(es) to search for (skips FASJSON lookup).
+        /// Repeat for multiple: --email a@x.org --email b@y.org
+        #[arg(long)]
+        email: Vec<String>,
+
+        /// Skip FASJSON lookup, only search username@fedoraproject.org
+        #[arg(long)]
+        no_fas: bool,
+
+        /// Mailing list(s) to search for the sender.
+        /// Repeat for multiple: --list a@x.org --list b@x.org
+        #[arg(long, default_value = "devel@lists.fedoraproject.org")]
+        list: Vec<String>,
+
+        /// Max pages to scan when searching for sender
+        /// (each page has ~10 emails; high-traffic lists
+        /// may need 200+ to cover a week)
+        #[arg(long, default_value = "200")]
+        max_pages: u32,
     },
 }
 
@@ -94,6 +123,13 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Command::Bodhi { username, url } => cmd_bodhi(&username, &url, json).await,
         Command::Discourse { username, url } => cmd_discourse(&username, &url, json).await,
+        Command::Mailman {
+            username,
+            email,
+            no_fas,
+            list,
+            max_pages,
+        } => cmd_mailman(username.as_deref(), &email, no_fas, &list, max_pages, json).await,
     }
 }
 
@@ -215,6 +251,219 @@ async fn cmd_bodhi(
         }
     } else {
         println!("\n  No comments found.");
+    }
+
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct MailmanActivity {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    emails_searched: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mailman_id: Option<String>,
+    recent_posts: Vec<MailmanPost>,
+}
+
+#[derive(Serialize)]
+struct MailmanPost {
+    subject: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    list: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    date: Option<String>,
+}
+
+/// Resolve email addresses to search for: use --email if provided, otherwise
+/// query FASJSON (with Kerberos) to discover emails from the FAS username.
+/// Always includes `username@fedoraproject.org` since users may post from
+/// either their FAS alias or their personal email.
+fn resolve_emails(
+    username: Option<&str>,
+    email_overrides: &[String],
+    no_fas: bool,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    if !email_overrides.is_empty() {
+        return Ok(email_overrides.to_vec());
+    }
+
+    let fas_username = username.ok_or("either a username or --email must be provided")?;
+
+    let mut emails = vec![format!("{fas_username}@fedoraproject.org")];
+
+    if no_fas {
+        return Ok(emails);
+    }
+
+    // Try FASJSON for additional email addresses
+    match ensure_kerberos_ticket() {
+        Ok(()) => {
+            eprintln!("Looking up {fas_username} in FASJSON...");
+            let client = sandogasa_fasjson::FasjsonClient::new();
+            match client.user(fas_username) {
+                Ok(user) => {
+                    for email in user.emails {
+                        if !emails.contains(&email) {
+                            emails.push(email);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("FASJSON lookup failed: {e}");
+                    eprintln!("Continuing with {fas_username}@fedoraproject.org only.");
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Kerberos: {e}");
+            eprintln!("Continuing with {fas_username}@fedoraproject.org only.");
+        }
+    }
+
+    Ok(emails)
+}
+
+/// Ensure a valid Kerberos ticket exists, offering to renew or acquire one.
+fn ensure_kerberos_ticket() -> Result<(), Box<dyn std::error::Error>> {
+    match kerberos::ticket_status() {
+        kerberos::TicketStatus::Valid => Ok(()),
+        kerberos::TicketStatus::ExpiredRenewable => {
+            eprint!("Kerberos ticket expired but renewable. Renewing... ");
+            io::stderr().flush()?;
+            match kerberos::renew_ticket() {
+                Ok(()) => {
+                    eprintln!("OK");
+                    Ok(())
+                }
+                Err(_) => {
+                    eprintln!("failed");
+                    eprintln!("Ticket is no longer renewable. Acquiring a new one.");
+                    acquire_new_ticket()
+                }
+            }
+        }
+        kerberos::TicketStatus::None => {
+            eprintln!("No valid Kerberos ticket found.");
+            acquire_new_ticket()
+        }
+    }
+}
+
+/// Acquire a new Kerberos ticket, reading the principal from ~/.fedora.upn.
+///
+/// Retries on failure since the Fedora KDC can be slow to respond
+/// while also timing out aggressively on password input.
+fn acquire_new_ticket() -> Result<(), Box<dyn std::error::Error>> {
+    let upn = kerberos::read_fedora_upn()
+        .ok_or("no ~/.fedora.upn found — cannot determine Kerberos principal")?;
+    let principal = format!("{upn}@FEDORAPROJECT.ORG");
+
+    loop {
+        eprintln!("Running kinit {principal}...");
+        match kerberos::acquire_ticket(&principal) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                eprintln!("kinit failed: {e}");
+                eprint!("Try again? [Y/n] ");
+                io::stderr().flush()?;
+                let mut answer = String::new();
+                io::stdin().read_line(&mut answer)?;
+                let answer = answer.trim();
+                if !answer.is_empty() && !answer.eq_ignore_ascii_case("y") {
+                    return Err("Kerberos authentication cancelled".into());
+                }
+            }
+        }
+    }
+}
+
+/// Extract a mailing list name from a HyperKitty API URL.
+///
+/// Converts `https://lists.fedoraproject.org/archives/api/list/devel@lists.fedoraproject.org/`
+/// to `devel@lists.fedoraproject.org`.
+fn extract_list_name(api_url: &str) -> String {
+    // Look for /api/list/{name}/ pattern
+    if let Some(rest) = api_url.split("/api/list/").nth(1) {
+        rest.split('/').next().unwrap_or(api_url).to_string()
+    } else {
+        api_url.to_string()
+    }
+}
+
+async fn cmd_mailman(
+    username: Option<&str>,
+    email_overrides: &[String],
+    no_fas: bool,
+    lists: &[String],
+    max_pages: u32,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let emails = resolve_emails(username, email_overrides, no_fas)?;
+
+    let client = sandogasa_mailman::MailmanClient::new();
+
+    // Search for sender across configured lists, trying each email address
+    let mut mailman_id = None;
+    'outer: for list in lists {
+        for email in &emails {
+            eprintln!("Searching {list} for {email} (up to {max_pages} pages)...");
+            if let Some(id) = client.find_sender_id(list, email, max_pages).await? {
+                mailman_id = Some(id);
+                break 'outer;
+            }
+        }
+    }
+
+    let recent_posts = if let Some(ref id) = mailman_id {
+        let fetched = client.sender_emails(id, 5).await?;
+        fetched
+            .into_iter()
+            .map(|e| MailmanPost {
+                subject: e.subject,
+                list: e.mailinglist.map(|u| extract_list_name(&u)),
+                date: e.date,
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let activity = MailmanActivity {
+        username: username.map(String::from),
+        emails_searched: emails.clone(),
+        mailman_id: mailman_id.clone(),
+        recent_posts,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&activity)?);
+        return Ok(());
+    }
+
+    println!("Mailing lists: {}", emails.join(", "));
+    if let Some(id) = &mailman_id {
+        println!("  Sender ID: {id}");
+    }
+
+    if activity.recent_posts.is_empty() {
+        println!("\n  No recent posts found.");
+    } else {
+        println!("\n  Recent posts:");
+        for post in &activity.recent_posts {
+            let list = post.list.as_deref().unwrap_or("?");
+            let date_str = if let Some(ts) = &post.date {
+                if let Ok(dt) = ts.parse::<DateTime<chrono::FixedOffset>>() {
+                    format_with_relative(ts, dt.with_timezone(&Utc))
+                } else {
+                    ts.clone()
+                }
+            } else {
+                "?".to_string()
+            };
+            println!("    [{list}] {}", post.subject);
+            println!("      {date_str}");
+        }
     }
 
     Ok(())
@@ -620,5 +869,79 @@ mod tests {
     #[test]
     fn render_emoji_unknown_shortcode() {
         assert_eq!(render_emoji("not_a_real_emoji_xyz"), None);
+    }
+
+    // ---- extract_list_name ----
+
+    #[test]
+    fn extract_list_name_from_api_url() {
+        assert_eq!(
+            extract_list_name(
+                "https://lists.fedoraproject.org/archives/api/list/devel@lists.fedoraproject.org/"
+            ),
+            "devel@lists.fedoraproject.org"
+        );
+    }
+
+    #[test]
+    fn extract_list_name_with_format_param() {
+        assert_eq!(
+            extract_list_name(
+                "https://example.com/archives/api/list/test@example.com/?format=json"
+            ),
+            "test@example.com"
+        );
+    }
+
+    #[test]
+    fn extract_list_name_no_pattern() {
+        assert_eq!(
+            extract_list_name("https://example.com/something"),
+            "https://example.com/something"
+        );
+    }
+
+    // ---- Mailman serialization ----
+
+    #[test]
+    fn mailman_activity_serializes_full() {
+        let activity = MailmanActivity {
+            username: Some("salimma".to_string()),
+            emails_searched: vec![
+                "salimma@fedoraproject.org".to_string(),
+                "michel@michel-slm.name".to_string(),
+            ],
+            mailman_id: Some("abc123".to_string()),
+            recent_posts: vec![MailmanPost {
+                subject: "Re: Test subject".to_string(),
+                list: Some("devel@lists.fedoraproject.org".to_string()),
+                date: Some("2026-03-23T12:00:00+00:00".to_string()),
+            }],
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&activity).unwrap()).unwrap();
+        assert_eq!(json["emails_searched"][0], "salimma@fedoraproject.org");
+        assert_eq!(json["emails_searched"][1], "michel@michel-slm.name");
+        assert_eq!(json["mailman_id"], "abc123");
+        assert_eq!(json["recent_posts"][0]["subject"], "Re: Test subject");
+        assert_eq!(
+            json["recent_posts"][0]["list"],
+            "devel@lists.fedoraproject.org"
+        );
+    }
+
+    #[test]
+    fn mailman_activity_no_posts() {
+        let activity = MailmanActivity {
+            username: None,
+            emails_searched: vec!["user@example.com".to_string()],
+            mailman_id: None,
+            recent_posts: vec![],
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&activity).unwrap()).unwrap();
+        assert!(json.get("username").is_none());
+        assert!(json.get("mailman_id").is_none());
+        assert_eq!(json["recent_posts"].as_array().unwrap().len(), 0);
     }
 }
