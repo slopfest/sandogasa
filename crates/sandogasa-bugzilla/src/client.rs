@@ -385,4 +385,266 @@ mod tests {
             .await;
         assert!(result.is_err());
     }
+
+    // ---- bug ----
+
+    #[tokio::test]
+    async fn bug_returns_parsed_bug() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/12345"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{
+                    "id": 12345,
+                    "summary": "Test bug",
+                    "status": "NEW",
+                    "resolution": "",
+                    "product": "Fedora",
+                    "component": ["kernel"],
+                    "severity": "medium",
+                    "priority": "unspecified",
+                    "assigned_to": "nobody@fedoraproject.org",
+                    "creator": "reporter@example.com",
+                    "creation_time": "2025-01-15T10:00:00Z",
+                    "last_change_time": "2025-01-16T12:00:00Z"
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let bug = client.bug(12345).await.unwrap();
+        assert_eq!(bug.id, 12345);
+        assert_eq!(bug.summary, "Test bug");
+        assert_eq!(bug.status, "NEW");
+        assert_eq!(bug.product, "Fedora");
+    }
+
+    #[tokio::test]
+    async fn bug_returns_error_on_404() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/99999"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let result = client.bug(99999).await;
+        assert!(result.is_err());
+    }
+
+    // ---- bug_by_alias ----
+
+    #[tokio::test]
+    async fn bug_by_alias_returns_parsed_bug() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/CVE-2025-1234"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{
+                    "id": 54321,
+                    "summary": "CVE-2025-1234 kernel: buffer overflow",
+                    "status": "ASSIGNED",
+                    "resolution": "",
+                    "product": "Fedora",
+                    "component": ["kernel"],
+                    "severity": "high",
+                    "priority": "urgent",
+                    "assigned_to": "dev@example.com",
+                    "creator": "secalert@redhat.com",
+                    "creation_time": "2025-03-01T08:00:00Z",
+                    "last_change_time": "2025-03-02T09:00:00Z",
+                    "alias": ["CVE-2025-1234"]
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let bug = client.bug_by_alias("CVE-2025-1234").await.unwrap();
+        assert_eq!(bug.id, 54321);
+        assert_eq!(bug.alias, vec!["CVE-2025-1234"]);
+    }
+
+    // ---- search ----
+
+    #[tokio::test]
+    async fn search_returns_bugs() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [
+                    {
+                        "id": 1,
+                        "summary": "Bug 1",
+                        "status": "NEW",
+                        "resolution": "",
+                        "product": "Fedora",
+                        "component": ["kernel"],
+                        "severity": "medium",
+                        "priority": "unspecified",
+                        "assigned_to": "nobody@fedoraproject.org",
+                        "creator": "reporter@example.com",
+                        "creation_time": "2025-01-01T00:00:00Z",
+                        "last_change_time": "2025-01-01T00:00:00Z"
+                    },
+                    {
+                        "id": 2,
+                        "summary": "Bug 2",
+                        "status": "ASSIGNED",
+                        "resolution": "",
+                        "product": "Fedora",
+                        "component": ["glibc"],
+                        "severity": "low",
+                        "priority": "low",
+                        "assigned_to": "dev@example.com",
+                        "creator": "reporter@example.com",
+                        "creation_time": "2025-01-02T00:00:00Z",
+                        "last_change_time": "2025-01-02T00:00:00Z"
+                    }
+                ],
+                "total_matches": 2
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let bugs = client.search("product=Fedora", 0).await.unwrap();
+        assert_eq!(bugs.len(), 2);
+        assert_eq!(bugs[0].id, 1);
+        assert_eq!(bugs[1].id, 2);
+    }
+
+    #[tokio::test]
+    async fn search_with_max_results() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{
+                    "id": 1,
+                    "summary": "Bug 1",
+                    "status": "NEW",
+                    "resolution": "",
+                    "product": "Fedora",
+                    "component": ["kernel"],
+                    "severity": "medium",
+                    "priority": "unspecified",
+                    "assigned_to": "nobody@fedoraproject.org",
+                    "creator": "reporter@example.com",
+                    "creation_time": "2025-01-01T00:00:00Z",
+                    "last_change_time": "2025-01-01T00:00:00Z"
+                }],
+                "total_matches": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let bugs = client.search("product=Fedora", 1).await.unwrap();
+        assert_eq!(bugs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn search_returns_error_on_server_failure() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let result = client.search("product=Fedora", 0).await;
+        assert!(result.is_err());
+    }
+
+    // ---- comments ----
+
+    #[tokio::test]
+    async fn comments_returns_parsed_comments() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/12345/comment"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": {
+                    "12345": {
+                        "comments": [
+                            {
+                                "id": 1001,
+                                "text": "This is the first comment",
+                                "creator": "reporter@example.com",
+                                "creation_time": "2025-01-15T10:00:00Z",
+                                "is_private": false
+                            },
+                            {
+                                "id": 1002,
+                                "text": "This is a private comment",
+                                "creator": "dev@example.com",
+                                "creation_time": "2025-01-16T12:00:00Z",
+                                "is_private": true
+                            }
+                        ]
+                    }
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let comments = client.comments(12345).await.unwrap();
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].id, 1001);
+        assert_eq!(comments[0].text, "This is the first comment");
+        assert!(!comments[0].is_private);
+        assert_eq!(comments[1].id, 1002);
+        assert!(comments[1].is_private);
+    }
+
+    #[tokio::test]
+    async fn comments_returns_empty_for_missing_bucket() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/99999/comment"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let comments = client.comments(99999).await.unwrap();
+        assert!(comments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn comments_returns_error_on_server_failure() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/12345/comment"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let result = client.comments(12345).await;
+        assert!(result.is_err());
+    }
 }

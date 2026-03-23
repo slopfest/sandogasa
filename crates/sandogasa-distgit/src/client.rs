@@ -931,4 +931,218 @@ mod tests {
 
         assert!(!client.user_exists("nonexistent").await.unwrap());
     }
+
+    // ---- user_activity_stats ----
+
+    #[tokio::test]
+    async fn user_activity_stats_returns_map() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/salimma/activity/stats"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "2025-01-15": 5,
+                "2025-01-16": 12,
+                "2025-01-17": 0
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let stats = client.user_activity_stats("salimma").await.unwrap();
+        assert_eq!(stats.get("2025-01-15"), Some(&5));
+        assert_eq!(stats.get("2025-01-16"), Some(&12));
+        assert_eq!(stats.get("2025-01-17"), Some(&0));
+    }
+
+    #[tokio::test]
+    async fn user_activity_stats_returns_error_on_404() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/nonexistent/activity/stats"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let result = client.user_activity_stats("nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    // ---- user_pull_requests ----
+
+    #[tokio::test]
+    async fn user_pull_requests_returns_prs() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/salimma/requests/filed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "requests": [
+                    {
+                        "id": 1,
+                        "title": "Update to 2.0",
+                        "status": "Open",
+                        "date_created": "1700000000",
+                        "last_updated": "1700001000",
+                        "project": {"fullname": "rpms/freerdp"}
+                    },
+                    {
+                        "id": 2,
+                        "title": "Fix FTBFS",
+                        "status": "Merged",
+                        "date_created": "1700002000",
+                        "last_updated": "1700003000",
+                        "project": {"fullname": "rpms/pcem"}
+                    }
+                ],
+                "total_requests": 2
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let prs = client
+            .user_pull_requests("salimma", "all", 10)
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), 2);
+        assert_eq!(prs[0].id, 1);
+        assert_eq!(prs[0].title, "Update to 2.0");
+        assert_eq!(prs[0].status, "Open");
+        assert_eq!(prs[0].project.as_ref().unwrap().fullname, "rpms/freerdp");
+        assert_eq!(prs[1].id, 2);
+        assert_eq!(prs[1].status, "Merged");
+    }
+
+    #[tokio::test]
+    async fn user_pull_requests_returns_error_on_404() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/nonexistent/requests/filed"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let result = client.user_pull_requests("nonexistent", "all", 10).await;
+        assert!(result.is_err());
+    }
+
+    // ---- user_actionable_pull_requests ----
+
+    #[tokio::test]
+    async fn user_actionable_pull_requests_single_page() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/salimma/requests/actionable"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "requests": [
+                    {
+                        "id": 10,
+                        "title": "Review needed",
+                        "status": "Open"
+                    }
+                ],
+                "total_requests": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (prs, total) = client
+            .user_actionable_pull_requests("salimma", 50)
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].id, 10);
+        assert_eq!(total, 1);
+    }
+
+    #[tokio::test]
+    async fn user_actionable_pull_requests_with_pagination() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/salimma/requests/actionable"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "requests": [
+                    {"id": 1, "title": "PR 1", "status": "Open"},
+                    {"id": 2, "title": "PR 2", "status": "Open"}
+                ],
+                "total_requests": 2,
+                "pagination": {
+                    "pages": 5,
+                    "per_page": 2
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (prs, total) = client
+            .user_actionable_pull_requests("salimma", 2)
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), 2);
+        // 5 pages * 2 per_page = 10 estimated total
+        assert_eq!(total, 10);
+    }
+
+    #[tokio::test]
+    async fn user_actionable_pull_requests_returns_error_on_server_failure() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/salimma/requests/actionable"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let result = client.user_actionable_pull_requests("salimma", 50).await;
+        assert!(result.is_err());
+    }
+
+    // ---- fetch_spec ----
+
+    #[tokio::test]
+    async fn fetch_spec_returns_spec_content() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        let spec_content = "Name: pcem\nVersion: 17\nRelease: 1%{?dist}\nSummary: PC emulator\n";
+        Mock::given(method("GET"))
+            .and(path("/rpms/pcem/raw/rawhide/f/pcem.spec"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(spec_content))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let body = client.fetch_spec("pcem", "rawhide").await.unwrap();
+        assert!(body.contains("Name: pcem"));
+        assert!(body.contains("Version: 17"));
+    }
+
+    #[tokio::test]
+    async fn fetch_spec_returns_error_on_404() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/rpms/nonexistent/raw/rawhide/f/nonexistent.spec"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let result = client.fetch_spec("nonexistent", "rawhide").await;
+        assert!(result.is_err());
+    }
 }

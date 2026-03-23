@@ -1581,6 +1581,44 @@ mod tests {
         assert!(unix_to_rfc3339("not_a_number").is_none());
     }
 
+    // ---- resolve_emails ----
+
+    #[test]
+    fn resolve_emails_with_override() {
+        let result = resolve_emails(None, &["test@example.com".to_string()], false).unwrap();
+        assert_eq!(result, vec!["test@example.com"]);
+    }
+
+    #[test]
+    fn resolve_emails_multiple_overrides() {
+        let overrides = vec!["a@x.com".to_string(), "b@y.com".to_string()];
+        let result = resolve_emails(None, &overrides, false).unwrap();
+        assert_eq!(result, vec!["a@x.com", "b@y.com"]);
+    }
+
+    #[test]
+    fn resolve_emails_no_fas_uses_fedoraproject_org() {
+        let result = resolve_emails(Some("salimma"), &[], true).unwrap();
+        assert_eq!(result, vec!["salimma@fedoraproject.org"]);
+    }
+
+    #[test]
+    fn resolve_emails_no_username_no_email_errors() {
+        let result = resolve_emails(None, &[], false);
+        assert!(result.is_err());
+    }
+
+    // ---- format_with_relative ----
+
+    #[test]
+    fn format_with_relative_includes_timestamp_and_relative() {
+        let dt = Utc::now();
+        let ts = dt.to_rfc3339();
+        let formatted = format_with_relative(&ts, dt);
+        assert!(formatted.starts_with(&ts));
+        assert!(formatted.contains("just now"));
+    }
+
     // ---- Bugzilla serialization ----
 
     #[test]

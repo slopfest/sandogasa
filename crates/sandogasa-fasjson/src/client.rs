@@ -95,8 +95,34 @@ mod tests {
     }
 
     #[test]
-    fn error_display() {
+    fn error_display_auth() {
         let e = FasjsonError::Auth("no ticket".to_string());
         assert_eq!(format!("{e}"), "no ticket");
+    }
+
+    #[test]
+    fn error_display_curl() {
+        let e = FasjsonError::Curl("curl failed".to_string());
+        assert_eq!(format!("{e}"), "curl failed");
+    }
+
+    #[test]
+    fn error_display_parse() {
+        let e = FasjsonError::Parse("bad json".to_string());
+        assert_eq!(format!("{e}"), "bad json");
+    }
+
+    #[test]
+    fn error_is_std_error() {
+        let e: Box<dyn std::error::Error> = Box::new(FasjsonError::Auth("test".to_string()));
+        assert_eq!(format!("{e}"), "test");
+    }
+
+    #[test]
+    fn user_with_invalid_curl_returns_curl_error() {
+        // Use a base_url that curl can't reach to test error path
+        let client = FasjsonClient::with_base_url("http://127.0.0.1:1");
+        let result = client.user("test");
+        assert!(result.is_err());
     }
 }
