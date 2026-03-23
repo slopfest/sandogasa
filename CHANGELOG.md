@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.6.2
+
+### sandogasa-hattrack
+
+- Display Discourse custom status (emoji + description) and expiration
+  in the `last-seen` summary
+
 ## v0.6.1
 
 ### sandogasa-mailman
