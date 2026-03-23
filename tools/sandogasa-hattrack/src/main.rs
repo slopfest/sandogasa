@@ -38,6 +38,26 @@ enum Command {
         url: String,
     },
 
+    /// Show a contributor's recent Bugzilla activity
+    Bugzilla {
+        /// FAS username to look up (used to discover email via FASJSON)
+        #[arg(required_unless_present = "email")]
+        username: Option<String>,
+
+        /// Email address(es) to search for.
+        /// Repeat for multiple: --email a@x.org --email b@y.org
+        #[arg(long)]
+        email: Vec<String>,
+
+        /// Skip FASJSON lookup, only search username@fedoraproject.org
+        #[arg(long)]
+        no_fas: bool,
+
+        /// Bugzilla instance base URL
+        #[arg(long, default_value = "https://bugzilla.redhat.com")]
+        url: String,
+    },
+
     /// Show a contributor's Discourse profile and activity
     Discourse {
         /// Discourse username to look up
@@ -122,6 +142,12 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let json = cli.json;
     match cli.command {
         Command::Bodhi { username, url } => cmd_bodhi(&username, &url, json).await,
+        Command::Bugzilla {
+            username,
+            email,
+            no_fas,
+            url,
+        } => cmd_bugzilla(username.as_deref(), &email, no_fas, &url, json).await,
         Command::Discourse { username, url } => cmd_discourse(&username, &url, json).await,
         Command::Mailman {
             username,
@@ -257,6 +283,132 @@ async fn cmd_bodhi(
 }
 
 #[derive(Serialize)]
+struct BugzillaActivity {
+    emails_searched: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_filed: Option<BugSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_changed: Option<BugSummary>,
+}
+
+#[derive(Serialize)]
+struct BugSummary {
+    id: u64,
+    summary: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    component: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    date: Option<String>,
+}
+
+async fn cmd_bugzilla(
+    username: Option<&str>,
+    email_overrides: &[String],
+    no_fas: bool,
+    base_url: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let emails = resolve_emails(username, email_overrides, no_fas)?;
+
+    let client = sandogasa_bugzilla::BzClient::new(base_url);
+
+    let mut last_filed = None;
+    let mut last_changed = None;
+
+    for email in &emails {
+        // Last bug filed by this email
+        if last_filed.is_none() {
+            let bugs = client
+                .search(&format!("creator={email}&limit=1&order=bug_id%20DESC"), 1)
+                .await?;
+            if let Some(bug) = bugs.into_iter().next() {
+                last_filed = Some(BugSummary {
+                    id: bug.id,
+                    summary: bug.summary,
+                    status: bug.status,
+                    component: bug.component.into_iter().next(),
+                    date: Some(bug.creation_time.to_rfc3339()),
+                });
+            }
+        }
+
+        // Last bug changed by this email
+        if last_changed.is_none() {
+            let bugs = client
+                .search(
+                    &format!(
+                        "f1=commenter&o1=equals&v1={email}\
+                         &limit=1&order=last_change_time%20DESC"
+                    ),
+                    1,
+                )
+                .await?;
+            if let Some(bug) = bugs.into_iter().next() {
+                last_changed = Some(BugSummary {
+                    id: bug.id,
+                    summary: bug.summary,
+                    status: bug.status,
+                    component: bug.component.into_iter().next(),
+                    date: Some(bug.last_change_time.to_rfc3339()),
+                });
+            }
+        }
+
+        if last_filed.is_some() && last_changed.is_some() {
+            break;
+        }
+    }
+
+    let activity = BugzillaActivity {
+        emails_searched: emails.clone(),
+        last_filed,
+        last_changed,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&activity)?);
+        return Ok(());
+    }
+
+    println!("Bugzilla: {}", emails.join(", "));
+
+    if let Some(bug) = &activity.last_filed {
+        let component = bug.component.as_deref().unwrap_or("?");
+        println!("\n  Last bug filed:");
+        println!("    #{} [{}] {}", bug.id, bug.status, bug.summary);
+        println!("    Component: {component}");
+        if let Some(ts) = &bug.date {
+            if let Ok(dt) = ts.parse::<DateTime<Utc>>() {
+                println!("    Filed:     {}", format_with_relative(ts, dt));
+            } else {
+                println!("    Filed:     {ts}");
+            }
+        }
+    } else {
+        println!("\n  No bugs filed.");
+    }
+
+    if let Some(bug) = &activity.last_changed {
+        let component = bug.component.as_deref().unwrap_or("?");
+        println!("\n  Last bug changed:");
+        println!("    #{} [{}] {}", bug.id, bug.status, bug.summary);
+        println!("    Component: {component}");
+        if let Some(ts) = &bug.date {
+            if let Ok(dt) = ts.parse::<DateTime<Utc>>() {
+                println!("    Changed:   {}", format_with_relative(ts, dt));
+            } else {
+                println!("    Changed:   {ts}");
+            }
+        }
+    } else {
+        println!("\n  No bug changes found.");
+    }
+
+    Ok(())
+}
+
+#[derive(Serialize)]
 struct MailmanActivity {
     #[serde(skip_serializing_if = "Option::is_none")]
     username: Option<String>,
@@ -306,6 +458,11 @@ fn resolve_emails(
                     for email in user.emails {
                         if !emails.contains(&email) {
                             emails.push(email);
+                        }
+                    }
+                    if let Some(rhbz) = user.rhbzemail {
+                        if !emails.contains(&rhbz) {
+                            emails.push(rhbz);
                         }
                     }
                 }
@@ -899,6 +1056,48 @@ mod tests {
             extract_list_name("https://example.com/something"),
             "https://example.com/something"
         );
+    }
+
+    // ---- Bugzilla serialization ----
+
+    #[test]
+    fn bugzilla_activity_serializes_full() {
+        let activity = BugzillaActivity {
+            emails_searched: vec!["salimma@fedoraproject.org".to_string()],
+            last_filed: Some(BugSummary {
+                id: 2342424,
+                summary: "freerdp needs update".to_string(),
+                status: "NEW".to_string(),
+                component: Some("freerdp".to_string()),
+                date: Some("2026-03-15T10:00:00+00:00".to_string()),
+            }),
+            last_changed: Some(BugSummary {
+                id: 2340000,
+                summary: "CVE-2026-1234 libxml2".to_string(),
+                status: "ASSIGNED".to_string(),
+                component: Some("libxml2".to_string()),
+                date: Some("2026-03-20T14:30:00+00:00".to_string()),
+            }),
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&activity).unwrap()).unwrap();
+        assert_eq!(json["last_filed"]["id"], 2342424);
+        assert_eq!(json["last_filed"]["status"], "NEW");
+        assert_eq!(json["last_changed"]["id"], 2340000);
+        assert_eq!(json["last_changed"]["component"], "libxml2");
+    }
+
+    #[test]
+    fn bugzilla_activity_no_results() {
+        let activity = BugzillaActivity {
+            emails_searched: vec!["nobody@example.com".to_string()],
+            last_filed: None,
+            last_changed: None,
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&activity).unwrap()).unwrap();
+        assert!(json.get("last_filed").is_none());
+        assert!(json.get("last_changed").is_none());
     }
 
     // ---- Mailman serialization ----

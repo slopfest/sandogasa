@@ -11,6 +11,7 @@ chrono = { workspace = true }
 clap = { workspace = true }
 emojis = { workspace = true }
 sandogasa-bodhi = { workspace = true }
+sandogasa-bugzilla = { workspace = true }
 sandogasa-discourse = { workspace = true }
 sandogasa-fasjson = { workspace = true }
 sandogasa-mailman = { workspace = true }

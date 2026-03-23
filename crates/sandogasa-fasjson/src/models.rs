@@ -16,6 +16,9 @@ pub struct FasUser {
     pub human_name: Option<String>,
     #[serde(default)]
     pub emails: Vec<String>,
+    /// Red Hat Bugzilla email, if different from FAS email.
+    #[serde(default)]
+    pub rhbzemail: Option<String>,
 }
 
 #[cfg(test)]

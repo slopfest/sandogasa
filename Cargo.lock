@@ -1374,6 +1374,7 @@ dependencies = [
  "clap",
  "emojis",
  "sandogasa-bodhi",
+ "sandogasa-bugzilla",
  "sandogasa-discourse",
  "sandogasa-fasjson",
  "sandogasa-mailman",
