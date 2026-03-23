@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.1
+
+### sandogasa-mailman
+
+- Fix sender search to check all candidate email addresses per page
+  instead of exhaustively scanning all pages for one address at a time
+
+### sandogasa-hattrack
+
+- Fix slow mailing list lookups for users who post from a non-primary
+  email address
+
 ## v0.6.0
 
 ### New: sandogasa-hattrack tool
