@@ -26,13 +26,14 @@ Last seen: salimma
                  last active on 2026-03-20
   Bodhi          2026-03-20T23:44:44+00:00 (3 days ago)
                  last update submitted
+  Bugzilla       2026-03-20T15:14:06+00:00 (3 days ago)
+                 #2449640 Tracker for invalid, cross-ecosystem CVE
   Discourse      2026-03-18T10:51:27+00:00 (5 days ago)
                  last post
                  status:  🏖️ on vacation
                  expires: 2026-04-01 00:00 UTC (in 1 week)
   Mailing lists  2026-03-13T09:58:20+00:00 (1 week ago)
                  Retiring python-sphinx-hoverxref
-  Bugzilla       no activity found
 ```
 
 ### Subcommands
