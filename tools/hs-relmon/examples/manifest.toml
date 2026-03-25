@@ -11,7 +11,7 @@ file_issue = true
 
 [[package]]
 name = "dracut"
-track = "centos"
+track = "fedora-rawhide"
 
 [[package]]
 name = "ethtool"
