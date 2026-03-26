@@ -23,6 +23,7 @@ repology_name = "linux"
 [[package]]
 name = "rubygem-asciidoctor"
 repology_name = "asciidoctor"
+distros = "upstream,fedora,centos,hs9"
 track = "fedora-stable"
 
 [[package]]
