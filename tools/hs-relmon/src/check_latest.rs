@@ -151,6 +151,9 @@ pub struct IssueRef {
     pub iid: u64,
     pub url: String,
     pub status: String,
+    /// REST API state (`"opened"` or `"closed"`).
+    #[serde(skip)]
+    pub state: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub assignees: Vec<String>,
 }
@@ -168,6 +171,7 @@ impl IssueRef {
         Self {
             iid: issue.iid,
             url: issue.web_url.clone(),
+            state: issue.state.clone(),
             status: status
                 .unwrap_or_else(|| issue.state.clone()),
             assignees: issue
@@ -227,6 +231,69 @@ impl CheckResult {
                     false
                 }
             })
+    }
+
+    /// Whether every checked Hyperscale distro has an up-to-date
+    /// release build (i.e. promoted past testing).
+    ///
+    /// Returns `false` when no Hyperscale distros are checked, or
+    /// when any distro still has an outdated or missing release build.
+    pub fn is_released(&self) -> bool {
+        let results: Vec<_> = [&self.hs9, &self.hs10]
+            .iter()
+            .filter_map(|r| r.as_ref())
+            .collect();
+        if results.is_empty() {
+            return false;
+        }
+        results.iter().all(|r| {
+            r.summary.release.is_some()
+                && r.newest_version == Some(true)
+        })
+    }
+
+    /// Up-to-date release builds with their distro labels.
+    ///
+    /// Returns `(label, build_id)` pairs for each
+    /// Hyperscale distro that has a current release build.
+    pub fn release_builds(&self) -> Vec<(&str, i64)> {
+        let entries: [(&str, &Option<HyperscaleResult>);
+            2] = [
+            ("Hyperscale 9", &self.hs9),
+            ("Hyperscale 10", &self.hs10),
+        ];
+        entries
+            .iter()
+            .filter_map(|(label, opt)| {
+                let r = opt.as_ref()?;
+                if r.newest_version == Some(true) {
+                    r.summary
+                        .release
+                        .as_ref()
+                        .map(|b| (*label, b.build_id))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Format a closing comment for a released package.
+    ///
+    /// Lists CBS build page links for each up-to-date
+    /// release build, labelled by distro.
+    pub fn close_comment(&self) -> String {
+        let links: Vec<String> = self
+            .release_builds()
+            .iter()
+            .map(|(label, id)| {
+                format!(
+                    "- {label}: {}",
+                    crate::cbs::build_url(*id)
+                )
+            })
+            .collect();
+        format!("Released:\n{}", links.join("\n"))
     }
 
     /// The reference version used for tracking.
@@ -689,8 +756,16 @@ mod tests {
     }
 
     fn make_build(version: &str, nvr: &str) -> Build {
+        make_build_with_id(1, version, nvr)
+    }
+
+    fn make_build_with_id(
+        id: i64,
+        version: &str,
+        nvr: &str,
+    ) -> Build {
         Build {
-            build_id: 1,
+            build_id: id,
             name: "pkg".into(),
             version: version.into(),
             release: String::new(),
@@ -1277,6 +1352,199 @@ mod tests {
     }
 
     #[test]
+    fn test_is_released_true() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: Some(make_build(
+                        "2.0",
+                        "pkg-2.0-1.hs.el9",
+                    )),
+                    testing: None,
+                },
+                newest_version: Some(true),
+            }),
+            hs10: None,
+            issue: None,
+            ref_version: Some("2.0".into()),
+        };
+        assert!(result.is_released());
+        assert_eq!(
+            result.release_builds(),
+            vec![("Hyperscale 9", 1)]
+        );
+        assert_eq!(
+            result.close_comment(),
+            "Released:\n\
+             - Hyperscale 9: https://cbs.centos.org/\
+             koji/buildinfo?buildID=1"
+        );
+    }
+
+    #[test]
+    fn test_is_released_false_testing_only() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: None,
+                    testing: Some(make_build(
+                        "2.0",
+                        "pkg-2.0-1.hs.el9",
+                    )),
+                },
+                newest_version: Some(true),
+            }),
+            hs10: None,
+            issue: None,
+            ref_version: Some("2.0".into()),
+        };
+        assert!(!result.is_released());
+        assert!(result.release_builds().is_empty());
+    }
+
+    #[test]
+    fn test_is_released_false_outdated() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: Some(make_build(
+                        "1.0",
+                        "pkg-1.0-1.hs.el9",
+                    )),
+                    testing: None,
+                },
+                newest_version: Some(false),
+            }),
+            hs10: None,
+            issue: None,
+            ref_version: Some("2.0".into()),
+        };
+        assert!(!result.is_released());
+    }
+
+    #[test]
+    fn test_is_released_false_no_hs() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: None,
+            hs10: None,
+            issue: None,
+            ref_version: None,
+        };
+        assert!(!result.is_released());
+    }
+
+    #[test]
+    fn test_is_released_partial() {
+        // hs9 released, hs10 still testing-only
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: Some(make_build(
+                        "2.0",
+                        "pkg-2.0-1.hs.el9",
+                    )),
+                    testing: None,
+                },
+                newest_version: Some(true),
+            }),
+            hs10: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: None,
+                    testing: Some(make_build(
+                        "2.0",
+                        "pkg-2.0-1.hs.el10",
+                    )),
+                },
+                newest_version: Some(true),
+            }),
+            issue: None,
+            ref_version: Some("2.0".into()),
+        };
+        assert!(!result.is_released());
+        // Only hs9 has a release build
+        assert_eq!(
+            result.release_builds(),
+            vec![("Hyperscale 9", 1)]
+        );
+    }
+
+    #[test]
+    fn test_is_released_both_distros() {
+        let result = CheckResult {
+            package: "ethtool".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: Some(make_build_with_id(
+                        100,
+                        "6.11",
+                        "ethtool-6.11-1.hs.el9",
+                    )),
+                    testing: None,
+                },
+                newest_version: Some(true),
+            }),
+            hs10: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: Some(make_build_with_id(
+                        200,
+                        "6.11",
+                        "ethtool-6.11-1.hs.el10",
+                    )),
+                    testing: None,
+                },
+                newest_version: Some(true),
+            }),
+            issue: None,
+            ref_version: Some("6.11".into()),
+        };
+        assert!(result.is_released());
+        assert_eq!(
+            result.release_builds(),
+            vec![
+                ("Hyperscale 9", 100),
+                ("Hyperscale 10", 200),
+            ]
+        );
+        assert_eq!(
+            result.close_comment(),
+            "Released:\n\
+             - Hyperscale 9: https://cbs.centos.org/\
+             koji/buildinfo?buildID=100\n\
+             - Hyperscale 10: https://cbs.centos.org/\
+             koji/buildinfo?buildID=200"
+        );
+    }
+
+    #[test]
     fn test_format_table() {
         let result = CheckResult {
             package: "ethtool".into(),
@@ -1402,6 +1670,7 @@ mod tests {
                 iid: 5,
                 url: "https://example.com/-/issues/5".into(),
                 status: "opened".into(),
+                state: "opened".into(),
                 assignees: vec!["alice".into()],
             }),
             ref_version: None,
@@ -1442,6 +1711,7 @@ mod tests {
                     iid: 3,
                     url: "u".into(),
                     status: "closed".into(),
+                    state: "closed".into(),
                     assignees: vec![],
                 }),
                 ref_version: None,
@@ -1499,6 +1769,7 @@ mod tests {
                 url: "https://gitlab.com/test/pkg/-/issues/42"
                     .into(),
                 status: "opened".into(),
+                state: "opened".into(),
                 assignees: vec!["alice".into()],
             }),
             ref_version: None,
@@ -1519,6 +1790,7 @@ mod tests {
             iid: 1,
             url: "u".into(),
             status: "closed".into(),
+            state: "closed".into(),
             assignees: vec![],
         };
         let json = serde_json::to_value(&issue_ref).unwrap();
@@ -1585,6 +1857,7 @@ mod tests {
         assert_eq!(r.iid, 7);
         assert_eq!(r.url, "https://example.com/issues/7");
         assert_eq!(r.status, "To do");
+        assert_eq!(r.state, "opened");
         assert_eq!(r.assignees, vec!["alice", "bob"]);
     }
 
@@ -1601,6 +1874,7 @@ mod tests {
         };
         let r = IssueRef::from_gitlab_issue(&issue, None);
         assert_eq!(r.status, "closed");
+        assert_eq!(r.state, "closed");
         assert!(r.assignees.is_empty());
     }
 
@@ -1636,6 +1910,7 @@ mod tests {
             iid: 1,
             url: "u".into(),
             status: "opened".into(),
+            state: "opened".into(),
             assignees: vec![],
         }));
         assert!(r.matches_issue_filter(
@@ -1654,6 +1929,7 @@ mod tests {
             iid: 1,
             url: "u".into(),
             status: "opened".into(),
+            state: "opened".into(),
             assignees: vec![
                 "alice".into(),
                 "bob".into(),
@@ -1679,6 +1955,7 @@ mod tests {
             iid: 1,
             url: "u".into(),
             status: "opened".into(),
+            state: "opened".into(),
             assignees: vec!["alice".into()],
         }));
         assert!(r.matches_issue_filter(
@@ -1701,6 +1978,7 @@ mod tests {
             iid: 1,
             url: "u".into(),
             status: "opened".into(),
+            state: "opened".into(),
             assignees: vec![],
         }));
         assert!(r.matches_issue_filter(None, None));
@@ -1712,6 +1990,7 @@ mod tests {
             iid: 1,
             url: "u".into(),
             status: "opened".into(),
+            state: "opened".into(),
             assignees: vec![],
         }));
         assert!(unassigned.matches_issue_filter(
@@ -1723,6 +2002,7 @@ mod tests {
             iid: 2,
             url: "u".into(),
             status: "opened".into(),
+            state: "opened".into(),
             assignees: vec!["alice".into()],
         }));
         assert!(!assigned.matches_issue_filter(

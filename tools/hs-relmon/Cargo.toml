@@ -17,3 +17,6 @@ clap = { version = "4", features = ["derive"] }
 toml = "0.8"
 toml_edit = "0.22"
 rpassword = "7"
+
+[dev-dependencies]
+mockito = "1"

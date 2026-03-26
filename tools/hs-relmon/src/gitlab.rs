@@ -128,6 +128,33 @@ impl Client {
         Ok(resp.json()?)
     }
 
+    /// Add a note (comment) to an issue.
+    pub fn add_note(
+        &self,
+        iid: u64,
+        body: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let payload =
+            serde_json::json!({ "body": body });
+        let resp = self
+            .http
+            .post(&format!(
+                "{}/{iid}/notes",
+                self.issues_url()
+            ))
+            .json(&payload)
+            .send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!(
+                "GitLab API error {status}: {text}"
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     /// Edit an existing issue.
     pub fn edit_issue(
         &self,
@@ -1143,5 +1170,197 @@ mod tests {
             client.graphql_url(),
             "https://gitlab.com/api/graphql"
         );
+    }
+
+    #[test]
+    fn test_add_note_success() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock(
+                "POST",
+                "/api/v4/projects/g%2Fp/issues/1/notes",
+            )
+            .match_header("private-token", "tok")
+            .match_body(mockito::Matcher::Json(
+                serde_json::json!({"body": "hello"}),
+            ))
+            .with_status(201)
+            .with_body("{}")
+            .create();
+        let client =
+            Client::new(&server.url(), "g/p", "tok")
+                .unwrap();
+        client.add_note(1, "hello").unwrap();
+        mock.assert();
+    }
+
+    #[test]
+    fn test_add_note_error() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock(
+                "POST",
+                "/api/v4/projects/g%2Fp/issues/1/notes",
+            )
+            .with_status(403)
+            .with_body("forbidden")
+            .create();
+        let client =
+            Client::new(&server.url(), "g/p", "tok")
+                .unwrap();
+        let err = client.add_note(1, "x").unwrap_err();
+        assert!(
+            err.to_string().contains("403"),
+            "{}",
+            err
+        );
+        mock.assert();
+    }
+
+    #[test]
+    fn test_edit_issue_success() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("PUT", "/api/v4/projects/g%2Fp/issues/5")
+            .match_header("private-token", "tok")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "iid": 5,
+                    "title": "t",
+                    "description": null,
+                    "state": "closed",
+                    "web_url": "https://example.com/-/issues/5"
+                }"#,
+            )
+            .create();
+        let client =
+            Client::new(&server.url(), "g/p", "tok")
+                .unwrap();
+        let updates = IssueUpdate {
+            state_event: Some("close".into()),
+            ..Default::default()
+        };
+        let issue =
+            client.edit_issue(5, &updates).unwrap();
+        assert_eq!(issue.state, "closed");
+        mock.assert();
+    }
+
+    #[test]
+    fn test_edit_issue_error() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("PUT", "/api/v4/projects/g%2Fp/issues/5")
+            .with_status(404)
+            .with_body("not found")
+            .create();
+        let client =
+            Client::new(&server.url(), "g/p", "tok")
+                .unwrap();
+        let updates = IssueUpdate::default();
+        let err =
+            client.edit_issue(5, &updates).unwrap_err();
+        assert!(
+            err.to_string().contains("404"),
+            "{}",
+            err
+        );
+        mock.assert();
+    }
+
+    #[test]
+    fn test_create_issue_success() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("POST", "/api/v4/projects/g%2Fp/issues")
+            .match_header("private-token", "tok")
+            .with_status(201)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "iid": 10,
+                    "title": "new issue",
+                    "description": "desc",
+                    "state": "opened",
+                    "web_url": "https://example.com/-/issues/10"
+                }"#,
+            )
+            .create();
+        let client =
+            Client::new(&server.url(), "g/p", "tok")
+                .unwrap();
+        let issue = client
+            .create_issue(
+                "new issue",
+                Some("desc"),
+                Some("bug"),
+            )
+            .unwrap();
+        assert_eq!(issue.iid, 10);
+        assert_eq!(issue.title, "new issue");
+        mock.assert();
+    }
+
+    #[test]
+    fn test_list_issues_success() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/projects/g%2Fp/issues")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded(
+                    "labels".into(),
+                    "relmon".into(),
+                ),
+                mockito::Matcher::UrlEncoded(
+                    "state".into(),
+                    "opened".into(),
+                ),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"[{
+                    "iid": 1,
+                    "title": "t",
+                    "description": null,
+                    "state": "opened",
+                    "web_url": "u"
+                }]"#,
+            )
+            .create();
+        let client =
+            Client::new(&server.url(), "g/p", "tok")
+                .unwrap();
+        let issues = client
+            .list_issues("relmon", Some("opened"))
+            .unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].iid, 1);
+        mock.assert();
+    }
+
+    #[test]
+    fn test_list_issues_error() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/projects/g%2Fp/issues")
+            .match_query(mockito::Matcher::Any)
+            .with_status(500)
+            .with_body("internal error")
+            .create();
+        let client =
+            Client::new(&server.url(), "g/p", "tok")
+                .unwrap();
+        let err = client
+            .list_issues("relmon", None)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("500"),
+            "{}",
+            err
+        );
+        mock.assert();
     }
 }

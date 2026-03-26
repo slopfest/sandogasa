@@ -4,6 +4,13 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::Serialize;
 
+/// Build the CBS web URL for a given build ID.
+pub fn build_url(build_id: i64) -> String {
+    format!(
+        "https://cbs.centos.org/koji/buildinfo?buildID={build_id}"
+    )
+}
+
 /// The highest promotion stage a build has reached in Hyperscale tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TagStage {
@@ -860,6 +867,14 @@ mod tests {
         assert_eq!(TagStage::Release.to_string(), "release");
         assert_eq!(TagStage::Testing.to_string(), "testing");
         assert_eq!(TagStage::Candidate.to_string(), "candidate");
+    }
+
+    #[test]
+    fn test_build_url() {
+        assert_eq!(
+            build_url(70550),
+            "https://cbs.centos.org/koji/buildinfo?buildID=70550"
+        );
     }
 
     #[test]

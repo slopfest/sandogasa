@@ -219,6 +219,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                 }
+                if result.is_released() {
+                    let mut errors = 0u32;
+                    maybe_close_issue(
+                        &mut result,
+                        &project_url,
+                        &package,
+                        &mut errors,
+                    );
+                    if errors > 0 {
+                        return Err(
+                            "failed to close issue"
+                                .into(),
+                        );
+                    }
+                }
             }
 
             if json {
@@ -341,6 +356,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // mistaken for un-started work.
                     if result.is_in_testing() {
                         maybe_set_in_progress(
+                            &mut result,
+                            &project_url,
+                            &pkg.name,
+                            &mut errors,
+                        );
+                    }
+                    // When every distro has an
+                    // up-to-date release build, close
+                    // the issue with a comment.
+                    if result.is_released() {
+                        maybe_close_issue(
                             &mut result,
                             &project_url,
                             &pkg.name,
@@ -552,6 +578,64 @@ fn maybe_set_in_progress(
         Err(e) => {
             eprintln!(
                 "{package}: setting status: {e}"
+            );
+            *errors += 1;
+        }
+    }
+}
+
+/// Close an open issue with a comment linking to the
+/// CBS release build(s).
+///
+/// No-op when there is no issue or the issue is already
+/// closed.
+fn maybe_close_issue(
+    result: &mut check_latest::CheckResult,
+    project_url: &str,
+    package: &str,
+    errors: &mut u32,
+) {
+    let issue = match &result.issue {
+        Some(i) => i,
+        None => return,
+    };
+    if issue.state != "opened" {
+        return;
+    }
+    let client = match gitlab::Client::from_project_url(
+        project_url,
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{package}: closing issue: {e}");
+            *errors += 1;
+            return;
+        }
+    };
+    let comment = result.close_comment();
+    if let Err(e) = client.add_note(issue.iid, &comment)
+    {
+        eprintln!("{package}: adding comment: {e}");
+        *errors += 1;
+        return;
+    }
+    let updates = gitlab::IssueUpdate {
+        state_event: Some("close".to_string()),
+        ..Default::default()
+    };
+    match client.edit_issue(issue.iid, &updates) {
+        Ok(closed) => {
+            eprintln!(
+                "Closed issue #{}: {}",
+                closed.iid, closed.web_url
+            );
+            if let Some(ref mut issue) = result.issue {
+                issue.status = "closed".to_string();
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "{package}: closing issue: {e}"
             );
             *errors += 1;
         }
