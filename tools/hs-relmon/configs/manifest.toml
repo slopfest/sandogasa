@@ -21,6 +21,11 @@ name = "perf"
 repology_name = "linux"
 
 [[package]]
+name = "rubygem-asciidoctor"
+repology_name = "asciidoctor"
+track = "fedora-stable"
+
+[[package]]
 name = "selinux-policy"
 track = "fedora-rawhide"
 

@@ -187,11 +187,19 @@ pub struct VersionWithDetail {
 
 impl CheckResult {
     /// Whether any Hyperscale build is outdated relative to the reference.
+    ///
+    /// A build is outdated when it exists but is older than the reference
+    /// version, **or** when it has never been built at all while a
+    /// reference version is known.
     pub fn is_outdated(&self) -> bool {
         [&self.hs9, &self.hs10]
             .iter()
             .filter_map(|r| r.as_ref())
-            .any(|r| r.newest_version == Some(false))
+            .any(|r| match r.newest_version {
+                Some(false) => true,
+                None => self.ref_version.is_some(),
+                Some(true) => false,
+            })
     }
 
     /// The reference version used for tracking.
@@ -1066,6 +1074,50 @@ mod tests {
             ref_version: Some("2.0".into()),
         };
         assert!(result.is_outdated());
+    }
+
+    #[test]
+    fn test_is_outdated_never_built_with_ref() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: Some("2.0".into()),
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: None,
+                    testing: None,
+                },
+                newest_version: None,
+            }),
+            hs10: None,
+            issue: None,
+            ref_version: Some("2.0".into()),
+        };
+        assert!(result.is_outdated());
+    }
+
+    #[test]
+    fn test_is_outdated_never_built_without_ref() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: None,
+                    testing: None,
+                },
+                newest_version: None,
+            }),
+            hs10: None,
+            issue: None,
+            ref_version: None,
+        };
+        assert!(!result.is_outdated());
     }
 
     #[test]
