@@ -92,7 +92,13 @@ impl Fedrq {
     }
 
     /// Return source package names that require any of the given packages.
+    ///
+    /// Returns an empty list if `packages` is empty (the package may not
+    /// exist on this branch).
     pub fn whatrequires(&self, packages: &[String]) -> Result<Vec<String>, Error> {
+        if packages.is_empty() {
+            return Ok(vec![]);
+        }
         let mut cmd = Command::new("fedrq");
         cmd.args(["whatrequires", "-F", "source_name"]);
         self.apply_opts(&mut cmd);
@@ -152,5 +158,12 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("fedrq exited with"));
         assert!(!msg.contains("package not found"));
+    }
+
+    #[test]
+    fn whatrequires_empty_packages_returns_empty() {
+        let fq = Fedrq::default();
+        let result = fq.whatrequires(&[]).unwrap();
+        assert!(result.is_empty());
     }
 }
