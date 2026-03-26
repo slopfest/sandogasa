@@ -2,6 +2,14 @@
 
 # Changelog
 
+## 0.4.0 - 2026-03-26
+
+- Automatically close tracking issues when all targeted Hyperscale distros
+  have up-to-date release builds, with a comment linking to each CBS build
+  page labelled by distro
+- Set issue status to "In progress" when a build is in testing
+- Treat never-built packages as outdated when a reference version is known
+
 ## 0.3.0 - 2026-03-09
 
 - Add `list-issues` command to list all GitLab issues labeled `rfe::new-version`
