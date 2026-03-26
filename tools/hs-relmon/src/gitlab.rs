@@ -183,6 +183,133 @@ impl Client {
         Ok(parse_work_item_status(&json))
     }
 
+    /// Set the work-item status for an issue via GraphQL.
+    ///
+    /// Resolves `status` (e.g. "In progress") to its Global ID
+    /// by querying the project's allowed statuses, then sends a
+    /// `workItemUpdate` mutation.
+    pub fn set_work_item_status(
+        &self,
+        iid: u64,
+        status: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let work_item_id = self.get_work_item_id(iid)?;
+        let status_id =
+            self.resolve_status_id(status)?;
+        let query = format!(
+            r#"mutation {{
+                workItemUpdate(input: {{
+                    id: "{work_item_id}"
+                    statusWidget: {{ status: "{status_id}" }}
+                }}) {{
+                    errors
+                }}
+            }}"#,
+        );
+        let body = serde_json::json!({ "query": query });
+        let resp = self
+            .http
+            .post(&self.graphql_url())
+            .json(&body)
+            .send()?;
+        if !resp.status().is_success() {
+            let http_status = resp.status();
+            let text = resp.text()?;
+            return Err(format!(
+                "GitLab GraphQL error {http_status}: {text}"
+            )
+            .into());
+        }
+        let json: serde_json::Value = resp.json()?;
+        if let Some(errors) = parse_mutation_errors(&json)
+        {
+            return Err(format!(
+                "workItemUpdate errors: {errors:?}"
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Fetch the global ID of a work item by IID.
+    fn get_work_item_id(
+        &self,
+        iid: u64,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let query = format!(
+            r#"{{ project(fullPath: "{}") {{
+                workItems(iids: ["{}"])  {{
+                    nodes {{ id }}
+                }}
+            }} }}"#,
+            self.project_path, iid
+        );
+        let body = serde_json::json!({ "query": query });
+        let resp = self
+            .http
+            .post(&self.graphql_url())
+            .json(&body)
+            .send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!(
+                "GitLab GraphQL error {status}: {text}"
+            )
+            .into());
+        }
+        let json: serde_json::Value = resp.json()?;
+        parse_work_item_id(&json).ok_or_else(|| {
+            "work item not found".into()
+        })
+    }
+
+    /// Resolve a status name to its Global ID.
+    ///
+    /// Queries the allowed statuses for Issue work items in
+    /// this project and finds the one matching `name`.
+    fn resolve_status_id(
+        &self,
+        name: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let query = format!(
+            r#"{{ project(fullPath: "{}") {{
+                workItemTypes(name: ISSUE) {{
+                    nodes {{
+                        widgetDefinitions {{
+                            type
+                            ... on WorkItemWidgetDefinitionStatus {{
+                                allowedStatuses {{ id name }}
+                            }}
+                        }}
+                    }}
+                }}
+            }} }}"#,
+            self.project_path
+        );
+        let body = serde_json::json!({ "query": query });
+        let resp = self
+            .http
+            .post(&self.graphql_url())
+            .json(&body)
+            .send()?;
+        if !resp.status().is_success() {
+            let http_status = resp.status();
+            let text = resp.text()?;
+            return Err(format!(
+                "GitLab GraphQL error {http_status}: {text}"
+            )
+            .into());
+        }
+        let json: serde_json::Value = resp.json()?;
+        parse_status_id(&json, name).ok_or_else(|| {
+            format!(
+                "status {name:?} not found in project"
+            )
+            .into()
+        })
+    }
+
     fn issues_url(&self) -> String {
         let encoded = self.project_path.replace('/', "%2F");
         format!(
@@ -211,6 +338,75 @@ fn parse_work_item_status(
         .and_then(|w| w.pointer("/status/name"))
         .and_then(|n| n.as_str())
         .map(String::from)
+}
+
+/// Extract the global ID from a GraphQL work-item response.
+fn parse_work_item_id(
+    json: &serde_json::Value,
+) -> Option<String> {
+    json.pointer("/data/project/workItems/nodes/0/id")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+/// Extract mutation errors from a workItemUpdate response.
+///
+/// Returns the error strings if any are present, `None` otherwise.
+fn parse_mutation_errors(
+    json: &serde_json::Value,
+) -> Option<Vec<String>> {
+    let errors = json
+        .pointer("/data/workItemUpdate/errors")?
+        .as_array()?;
+    if errors.is_empty() {
+        return None;
+    }
+    Some(
+        errors
+            .iter()
+            .filter_map(|e| e.as_str().map(String::from))
+            .collect(),
+    )
+}
+
+/// Find the Global ID of a status by name from an
+/// `allowedStatuses` GraphQL response.
+fn parse_status_id(
+    json: &serde_json::Value,
+    name: &str,
+) -> Option<String> {
+    let types = json
+        .pointer(
+            "/data/project/workItemTypes/nodes",
+        )?
+        .as_array()?;
+    for work_item_type in types {
+        let defs = work_item_type
+            .get("widgetDefinitions")?
+            .as_array()?;
+        for def in defs {
+            if def.get("type").and_then(|t| t.as_str())
+                != Some("STATUS")
+            {
+                continue;
+            }
+            let statuses =
+                def.get("allowedStatuses")?.as_array()?;
+            for status in statuses {
+                if status
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    == Some(name)
+                {
+                    return status
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Client for group-level GitLab API queries.
@@ -777,6 +973,147 @@ mod tests {
             "gitlab.com/group/project"
         )
         .is_none());
+    }
+
+    #[test]
+    fn test_parse_work_item_id_found() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "data": {
+                    "project": {
+                        "workItems": {
+                            "nodes": [{
+                                "id": "gid://gitlab/WorkItem/42"
+                            }]
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_work_item_id(&json).as_deref(),
+            Some("gid://gitlab/WorkItem/42")
+        );
+    }
+
+    #[test]
+    fn test_parse_work_item_id_empty() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "data": {
+                    "project": {
+                        "workItems": {
+                            "nodes": []
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(parse_work_item_id(&json).is_none());
+    }
+
+    #[test]
+    fn test_parse_mutation_errors_none() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "data": {
+                    "workItemUpdate": {
+                        "errors": []
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(parse_mutation_errors(&json).is_none());
+    }
+
+    #[test]
+    fn test_parse_mutation_errors_present() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "data": {
+                    "workItemUpdate": {
+                        "errors": ["something went wrong"]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        let errors =
+            parse_mutation_errors(&json).unwrap();
+        assert_eq!(errors, vec!["something went wrong"]);
+    }
+
+    #[test]
+    fn test_parse_status_id_found() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "data": {
+                    "project": {
+                        "workItemTypes": {
+                            "nodes": [{
+                                "widgetDefinitions": [
+                                    { "type": "ASSIGNEES" },
+                                    {
+                                        "type": "STATUS",
+                                        "allowedStatuses": [
+                                            {
+                                                "id": "gid://gitlab/WorkItems::Statuses::Custom::Status/1",
+                                                "name": "To do"
+                                            },
+                                            {
+                                                "id": "gid://gitlab/WorkItems::Statuses::Custom::Status/2",
+                                                "name": "In progress"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }]
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_status_id(&json, "In progress")
+                .as_deref(),
+            Some("gid://gitlab/WorkItems::Statuses::Custom::Status/2")
+        );
+    }
+
+    #[test]
+    fn test_parse_status_id_not_found() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "data": {
+                    "project": {
+                        "workItemTypes": {
+                            "nodes": [{
+                                "widgetDefinitions": [
+                                    {
+                                        "type": "STATUS",
+                                        "allowedStatuses": [
+                                            {
+                                                "id": "gid://id/1",
+                                                "name": "To do"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }]
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(
+            parse_status_id(&json, "In progress")
+                .is_none()
+        );
     }
 
     #[test]

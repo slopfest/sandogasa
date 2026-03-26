@@ -204,6 +204,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     result.issue =
                         lookup_issue(&project_url)?;
                 }
+                if result.is_in_testing() {
+                    let mut errors = 0u32;
+                    maybe_set_in_progress(
+                        &mut result,
+                        &project_url,
+                        &package,
+                        &mut errors,
+                    );
+                    if errors > 0 {
+                        return Err(
+                            "failed to set issue status"
+                                .into(),
+                        );
+                    }
+                }
             }
 
             if json {
@@ -319,6 +334,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                    }
+                    // When the build is in testing,
+                    // transition the issue to
+                    // "In progress" so it is not
+                    // mistaken for un-started work.
+                    if result.is_in_testing() {
+                        maybe_set_in_progress(
+                            &mut result,
+                            &project_url,
+                            &pkg.name,
+                            &mut errors,
+                        );
                     }
                 }
 
@@ -477,6 +504,58 @@ fn default_issue_url(package: &str) -> String {
         "https://gitlab.com/CentOS/\
         Hyperscale/rpms/{package}"
     )
+}
+
+const IN_PROGRESS: &str = "In progress";
+
+/// Transition an existing issue to "In progress" if it is not already.
+///
+/// When there is no issue yet this is a no-op.
+fn maybe_set_in_progress(
+    result: &mut check_latest::CheckResult,
+    project_url: &str,
+    package: &str,
+    errors: &mut u32,
+) {
+    let issue = match &result.issue {
+        Some(i) => i,
+        None => return,
+    };
+    if issue.status == IN_PROGRESS {
+        return;
+    }
+    let client = match gitlab::Client::from_project_url(
+        project_url,
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "{package}: setting status: {e}"
+            );
+            *errors += 1;
+            return;
+        }
+    };
+    match client.set_work_item_status(
+        issue.iid,
+        IN_PROGRESS,
+    ) {
+        Ok(()) => {
+            eprintln!(
+                "Set issue #{} to {IN_PROGRESS}: {}",
+                issue.iid, issue.url
+            );
+            if let Some(ref mut issue) = result.issue {
+                issue.status = IN_PROGRESS.to_string();
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "{package}: setting status: {e}"
+            );
+            *errors += 1;
+        }
+    }
 }
 
 fn maybe_file_issue(

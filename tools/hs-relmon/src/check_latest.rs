@@ -202,6 +202,33 @@ impl CheckResult {
             })
     }
 
+    /// Whether any Hyperscale distro has an up-to-date build still in
+    /// testing (not yet promoted to release).
+    ///
+    /// This covers two cases:
+    /// - only a testing build exists and it matches the reference, or
+    /// - a release build exists but is outdated while a newer testing
+    ///   build matches the reference.
+    pub fn is_in_testing(&self) -> bool {
+        let ref_ver = match &self.ref_version {
+            Some(v) => v,
+            None => return false,
+        };
+        [&self.hs9, &self.hs10]
+            .iter()
+            .filter_map(|r| r.as_ref())
+            .any(|r| {
+                if let Some(testing) = &r.summary.testing {
+                    crate::rpmvercmp::rpmvercmp(
+                        &testing.version,
+                        ref_ver,
+                    ) != std::cmp::Ordering::Less
+                } else {
+                    false
+                }
+            })
+    }
+
     /// The reference version used for tracking.
     pub fn ref_version(&self) -> Option<&str> {
         self.ref_version.as_deref()
@@ -1118,6 +1145,135 @@ mod tests {
             ref_version: None,
         };
         assert!(!result.is_outdated());
+    }
+
+    #[test]
+    fn test_is_in_testing_true() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: None,
+                    testing: Some(make_build(
+                        "2.0",
+                        "pkg-2.0-1.hs.el9",
+                    )),
+                },
+                newest_version: Some(true),
+            }),
+            hs10: None,
+            issue: None,
+            ref_version: Some("2.0".into()),
+        };
+        assert!(result.is_in_testing());
+    }
+
+    #[test]
+    fn test_is_in_testing_with_outdated_release() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: Some(make_build(
+                        "1.0",
+                        "pkg-1.0-1.hs.el9",
+                    )),
+                    testing: Some(make_build(
+                        "2.0",
+                        "pkg-2.0-1.hs.el9",
+                    )),
+                },
+                newest_version: Some(false),
+            }),
+            hs10: None,
+            issue: None,
+            ref_version: Some("2.0".into()),
+        };
+        assert!(result.is_in_testing());
+        assert!(result.is_outdated());
+    }
+
+    #[test]
+    fn test_is_in_testing_false_when_released() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: Some(make_build(
+                        "2.0",
+                        "pkg-2.0-1.hs.el9",
+                    )),
+                    testing: None,
+                },
+                newest_version: Some(true),
+            }),
+            hs10: None,
+            issue: None,
+            ref_version: Some("2.0".into()),
+        };
+        assert!(!result.is_in_testing());
+    }
+
+    #[test]
+    fn test_is_in_testing_false_no_ref() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: None,
+                    testing: Some(make_build(
+                        "2.0",
+                        "pkg-2.0-1.hs.el9",
+                    )),
+                },
+                newest_version: None,
+            }),
+            hs10: None,
+            issue: None,
+            ref_version: None,
+        };
+        assert!(!result.is_in_testing());
+    }
+
+    #[test]
+    fn test_is_in_testing_false_testing_outdated() {
+        let result = CheckResult {
+            package: "pkg".into(),
+            upstream: None,
+            fedora_rawhide: None,
+            fedora_stable: None,
+            centos_stream: None,
+            hs9: Some(HyperscaleResult {
+                summary: HyperscaleSummary {
+                    release: None,
+                    testing: Some(make_build(
+                        "1.0",
+                        "pkg-1.0-1.hs.el9",
+                    )),
+                },
+                newest_version: Some(false),
+            }),
+            hs10: None,
+            issue: None,
+            ref_version: Some("2.0".into()),
+        };
+        assert!(!result.is_in_testing());
     }
 
     #[test]
