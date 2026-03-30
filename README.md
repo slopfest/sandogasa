@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icon.svg" width="128" height="128" alt="sandogasa logo">
+</p>
+
 # sandogasa
 
 A collection of tools and libraries for Fedora package maintenance
