@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use clap::{Parser, Subcommand};
-use hs_intake::{compare, compare_buildrequires, compare_provides, compare_requires, fedrq, safe_to_backport};
+use hs_intake::{
+    compare, compare_buildrequires, compare_provides, compare_requires, fedrq, safe_to_backport,
+};
 
 #[derive(Parser)]
 #[command(about = "Hyperscale package intake tool")]
@@ -108,12 +110,16 @@ fn main() {
             json,
             show_unchanged,
         } => {
-            let result = compare_buildrequires::compare_buildrequires(
-                &srpm,
+            let result =
+                compare_buildrequires::compare_buildrequires(&srpm, &source_branch, &target_branch);
+            run_compare(
+                result,
+                "BuildRequire",
                 &source_branch,
                 &target_branch,
+                json,
+                show_unchanged,
             );
-            run_compare(result, "BuildRequire", &source_branch, &target_branch, json, show_unchanged);
         }
         Commands::CompareProvides {
             srpm,
@@ -122,9 +128,15 @@ fn main() {
             json,
             show_unchanged,
         } => {
-            let result =
-                compare_provides::compare_provides(&srpm, &source_branch, &target_branch);
-            run_compare(result, "Provide", &source_branch, &target_branch, json, show_unchanged);
+            let result = compare_provides::compare_provides(&srpm, &source_branch, &target_branch);
+            run_compare(
+                result,
+                "Provide",
+                &source_branch,
+                &target_branch,
+                json,
+                show_unchanged,
+            );
         }
         Commands::CompareRequires {
             srpm,
@@ -133,9 +145,15 @@ fn main() {
             json,
             show_unchanged,
         } => {
-            let result =
-                compare_requires::compare_requires(&srpm, &source_branch, &target_branch);
-            run_compare(result, "Require", &source_branch, &target_branch, json, show_unchanged);
+            let result = compare_requires::compare_requires(&srpm, &source_branch, &target_branch);
+            run_compare(
+                result,
+                "Require",
+                &source_branch,
+                &target_branch,
+                json,
+                show_unchanged,
+            );
         }
         Commands::SafeToBackport {
             srpm,
@@ -144,7 +162,12 @@ fn main() {
             json,
             also_check,
         } => {
-            match safe_to_backport::safe_to_backport(&srpm, &target_branch, &source_branch, &also_check) {
+            match safe_to_backport::safe_to_backport(
+                &srpm,
+                &target_branch,
+                &source_branch,
+                &also_check,
+            ) {
                 Ok(result) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&result).unwrap());

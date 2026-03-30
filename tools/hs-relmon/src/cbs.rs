@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 use serde::Serialize;
 
 /// Build the CBS web URL for a given build ID.
 pub fn build_url(build_id: i64) -> String {
-    format!(
-        "https://cbs.centos.org/koji/buildinfo?buildID={build_id}"
-    )
+    format!("https://cbs.centos.org/koji/buildinfo?buildID={build_id}")
 }
 
 /// The highest promotion stage a build has reached in Hyperscale tags.
@@ -671,7 +669,9 @@ mod tests {
         }
     }
 
-    fn mock_tags(mapping: &[(i64, &[&str])]) -> impl Fn(i64) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    fn mock_tags(
+        mapping: &[(i64, &[&str])],
+    ) -> impl Fn(i64) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let map: std::collections::HashMap<i64, Vec<String>> = mapping
             .iter()
             .map(|(id, tags)| (*id, tags.iter().map(|s| s.to_string()).collect()))
@@ -681,12 +681,8 @@ mod tests {
 
     #[test]
     fn test_resolve_summary_release_only() {
-        let builds = vec![
-            make_build(3, "6.15", "3.hs.el9"),
-        ];
-        let tags = mock_tags(&[
-            (3, &["hyperscale9s-packages-main-release"]),
-        ]);
+        let builds = vec![make_build(3, "6.15", "3.hs.el9")];
+        let tags = mock_tags(&[(3, &["hyperscale9s-packages-main-release"])]);
         let summary = resolve_summary(&builds, 9, tags).unwrap();
         assert_eq!(summary.release.as_ref().unwrap().build_id, 3);
         assert!(summary.testing.is_none());
@@ -710,12 +706,8 @@ mod tests {
 
     #[test]
     fn test_resolve_summary_testing_only() {
-        let builds = vec![
-            make_build(4, "260~rc2", "20260309.hs.el10"),
-        ];
-        let tags = mock_tags(&[
-            (4, &["hyperscale10s-packages-main-testing"]),
-        ]);
+        let builds = vec![make_build(4, "260~rc2", "20260309.hs.el10")];
+        let tags = mock_tags(&[(4, &["hyperscale10s-packages-main-testing"])]);
         let summary = resolve_summary(&builds, 10, tags).unwrap();
         assert!(summary.release.is_none());
         assert_eq!(summary.testing.as_ref().unwrap().version, "260~rc2");

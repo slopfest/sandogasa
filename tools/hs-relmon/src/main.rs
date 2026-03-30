@@ -28,7 +28,10 @@ enum Command {
         package: String,
 
         /// Comma-separated list of distros to check.
-        #[arg(short, long, long_help = "\
+        #[arg(
+            short,
+            long,
+            long_help = "\
 Comma-separated list of distros to check.
 
 Valid names:
@@ -40,17 +43,25 @@ Valid names:
   centos-stream    Latest CentOS Stream
   hyperscale / hs  Hyperscale EL9 + EL10
   hs9              Hyperscale EL9 only
-  hs10             Hyperscale EL10 only")]
+  hs10             Hyperscale EL10 only"
+        )]
         distros: Option<String>,
 
         /// Override Repology project name.
-        #[arg(long, value_name = "PROJECT", long_help = "\
+        #[arg(
+            long,
+            value_name = "PROJECT",
+            long_help = "\
 Override Repology project name when it differs
-from the package (e.g. linux for perf).")]
+from the package (e.g. linux for perf)."
+        )]
         repology_name: Option<String>,
 
         /// Reference distribution.
-        #[arg(long, default_value = "upstream", long_help = "\
+        #[arg(
+            long,
+            default_value = "upstream",
+            long_help = "\
 Distribution to compare Hyperscale builds against.
 
 Valid names:
@@ -58,7 +69,8 @@ Valid names:
   fedora-rawhide   Fedora Rawhide
   fedora-stable    Latest stable Fedora
   centos           Latest CentOS Stream
-  centos-stream    Latest CentOS Stream")]
+  centos-stream    Latest CentOS Stream"
+        )]
         track: String,
 
         /// Output as JSON instead of a table.
@@ -88,7 +100,10 @@ GITLAB_TOKEN env var as an override.")]
         json: bool,
 
         /// Only show packages whose issue matches this status.
-        #[arg(long, value_name = "STATUS", long_help = "\
+        #[arg(
+            long,
+            value_name = "STATUS",
+            long_help = "\
 Only show packages whose GitLab issue matches this
 work-item status. Packages without an issue are
 excluded. Issues that do not match are not updated.
@@ -97,43 +112,52 @@ Default statuses:
   To do          Planned but not started
   In progress    Currently being worked on
   Done           Completed
-  Canceled       Will not be done")]
+  Canceled       Will not be done"
+        )]
         issue_status: Option<String>,
 
         /// Only show packages whose issue is assigned to this user.
-        #[arg(long, value_name = "USERNAME", long_help = "\
+        #[arg(
+            long,
+            value_name = "USERNAME",
+            long_help = "\
 Only show packages whose GitLab issue is assigned
 to this username. Use \"none\" to match unassigned
 issues. Packages without an issue or without a
-matching assignee are excluded.")]
+matching assignee are excluded."
+        )]
         issue_assignee: Option<String>,
     },
 
     /// List GitLab issues labeled rfe::new-version.
     ListIssues {
         /// GitLab group URL to search.
-        #[arg(
-            long,
-            default_value =
-                "https://gitlab.com/CentOS/Hyperscale/rpms"
-        )]
+        #[arg(long, default_value = "https://gitlab.com/CentOS/Hyperscale/rpms")]
         group: String,
 
         /// Only show issues matching this status.
-        #[arg(long, value_name = "STATUS", long_help = "\
+        #[arg(
+            long,
+            value_name = "STATUS",
+            long_help = "\
 Only show issues matching this work-item status.
 
 Default statuses:
   To do          Planned but not started
   In progress    Currently being worked on
   Done           Completed
-  Canceled       Will not be done")]
+  Canceled       Will not be done"
+        )]
         issue_status: Option<String>,
 
         /// Only show issues assigned to this user.
-        #[arg(long, value_name = "USERNAME", long_help = "\
+        #[arg(
+            long,
+            value_name = "USERNAME",
+            long_help = "\
 Only show issues assigned to this username.
-Use \"none\" to match unassigned issues.")]
+Use \"none\" to match unassigned issues."
+        )]
         issue_assignee: Option<String>,
 
         /// Output as JSON instead of a table.
@@ -141,17 +165,25 @@ Use \"none\" to match unassigned issues.")]
         json: bool,
 
         /// TOML manifest to compare against.
-        #[arg(long, value_name = "PATH", long_help = "\
+        #[arg(
+            long,
+            value_name = "PATH",
+            long_help = "\
 Path to a TOML manifest file. When provided, the
 output shows which packages with rfe::new-version
-issues are missing from the manifest.")]
+issues are missing from the manifest."
+        )]
         manifest: Option<PathBuf>,
 
         /// Add missing packages to the manifest.
-        #[arg(long, requires = "manifest", long_help = "\
+        #[arg(
+            long,
+            requires = "manifest",
+            long_help = "\
 Add packages that have rfe::new-version issues but
 are missing from the manifest. Requires --manifest.
-Packages are inserted in sorted order.")]
+Packages are inserted in sorted order."
+        )]
         add_missing: bool,
     },
 
@@ -196,42 +228,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     url_override.clone()
                 };
                 if result.is_outdated() {
-                    let issue_ref = maybe_file_issue(
-                        &package, &result, &project_url,
-                    )?;
+                    let issue_ref = maybe_file_issue(&package, &result, &project_url)?;
                     result.issue = Some(issue_ref);
                 } else {
-                    result.issue =
-                        lookup_issue(&project_url)?;
+                    result.issue = lookup_issue(&project_url)?;
                 }
                 if result.is_in_testing() {
                     let mut errors = 0u32;
-                    maybe_set_in_progress(
-                        &mut result,
-                        &project_url,
-                        &package,
-                        &mut errors,
-                    );
+                    maybe_set_in_progress(&mut result, &project_url, &package, &mut errors);
                     if errors > 0 {
-                        return Err(
-                            "failed to set issue status"
-                                .into(),
-                        );
+                        return Err("failed to set issue status".into());
                     }
                 }
                 if result.is_released() {
                     let mut errors = 0u32;
-                    maybe_close_issue(
-                        &mut result,
-                        &project_url,
-                        &package,
-                        &mut errors,
-                    );
+                    maybe_close_issue(&mut result, &project_url, &package, &mut errors);
                     if errors > 0 {
-                        return Err(
-                            "failed to close issue"
-                                .into(),
-                        );
+                        return Err("failed to close issue".into());
                     }
                 }
             }
@@ -250,8 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let m = manifest::Manifest::load(&manifest)?;
             let packages = m.resolve()?;
-            let filtering = issue_status.is_some()
-                || issue_assignee.is_some();
+            let filtering = issue_status.is_some() || issue_assignee.is_some();
 
             let repology_client = repology::Client::new();
             let cbs_client = cbs::Client::new();
@@ -259,10 +271,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut errors = 0u32;
 
             for pkg in &packages {
-                let repology_name = pkg
-                    .repology_name
-                    .as_deref()
-                    .unwrap_or(&pkg.name);
+                let repology_name = pkg.repology_name.as_deref().unwrap_or(&pkg.name);
 
                 let result = check_latest::check(
                     &repology_client,
@@ -286,24 +295,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .issue_url
                         .as_deref()
                         .map(String::from)
-                        .unwrap_or_else(|| {
-                            default_issue_url(&pkg.name)
-                        });
+                        .unwrap_or_else(|| default_issue_url(&pkg.name));
                     if result.is_outdated() && !filtering {
-                        match maybe_file_issue(
-                            &pkg.name,
-                            &result,
-                            &project_url,
-                        ) {
+                        match maybe_file_issue(&pkg.name, &result, &project_url) {
                             Ok(issue_ref) => {
-                                result.issue =
-                                    Some(issue_ref);
+                                result.issue = Some(issue_ref);
                             }
                             Err(e) => {
-                                eprintln!(
-                                    "{}: filing issue: {e}",
-                                    pkg.name
-                                );
+                                eprintln!("{}: filing issue: {e}", pkg.name);
                                 errors += 1;
                             }
                         }
@@ -330,14 +329,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 issue_assignee.as_deref(),
                             )
                         {
-                            match maybe_file_issue(
-                                &pkg.name,
-                                &result,
-                                &project_url,
-                            ) {
+                            match maybe_file_issue(&pkg.name, &result, &project_url) {
                                 Ok(issue_ref) => {
-                                    result.issue =
-                                        Some(issue_ref);
+                                    result.issue = Some(issue_ref);
                                 }
                                 Err(e) => {
                                     eprintln!(
@@ -355,23 +349,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // "In progress" so it is not
                     // mistaken for un-started work.
                     if result.is_in_testing() {
-                        maybe_set_in_progress(
-                            &mut result,
-                            &project_url,
-                            &pkg.name,
-                            &mut errors,
-                        );
+                        maybe_set_in_progress(&mut result, &project_url, &pkg.name, &mut errors);
                     }
                     // When every distro has an
                     // up-to-date release build, close
                     // the issue with a comment.
                     if result.is_released() {
-                        maybe_close_issue(
-                            &mut result,
-                            &project_url,
-                            &pkg.name,
-                            &mut errors,
-                        );
+                        maybe_close_issue(&mut result, &project_url, &pkg.name, &mut errors);
                     }
                 }
 
@@ -381,10 +365,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let results: Vec<_> = if filtering {
                 results
                     .into_iter()
-                    .filter(|r| r.matches_issue_filter(
-                        issue_status.as_deref(),
-                        issue_assignee.as_deref(),
-                    ))
+                    .filter(|r| {
+                        r.matches_issue_filter(issue_status.as_deref(), issue_assignee.as_deref())
+                    })
                     .collect()
             } else {
                 results
@@ -402,10 +385,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if errors > 0 {
-                return Err(format!(
-                    "{errors} package(s) had errors"
-                )
-                .into());
+                return Err(format!("{errors} package(s) had errors").into());
             }
         }
         Command::ListIssues {
@@ -416,21 +396,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             manifest,
             add_missing,
         } => {
-            let client =
-                gitlab::GroupClient::from_group_url(&group)?;
-            let issues = client.list_issues(
-                ISSUE_LABEL,
-                None,
-            )?;
+            let client = gitlab::GroupClient::from_group_url(&group)?;
+            let issues = client.list_issues(ISSUE_LABEL, None)?;
 
             let manifest_names = match &manifest {
                 Some(path) => {
                     let m = manifest::Manifest::load(path)?;
-                    let names: HashSet<String> = m
-                        .packages
-                        .iter()
-                        .map(|p| p.name.clone())
-                        .collect();
+                    let names: HashSet<String> =
+                        m.packages.iter().map(|p| p.name.clone()).collect();
                     Some(names)
                 }
                 None => None,
@@ -454,24 +427,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let path = manifest.as_ref().unwrap();
                 let missing: Vec<String> = entries
                     .iter()
-                    .filter(|e| {
-                        e.in_manifest == Some(false)
-                    })
+                    .filter(|e| e.in_manifest == Some(false))
                     .map(|e| e.package.clone())
                     .collect();
                 if missing.is_empty() {
-                    eprintln!(
-                        "No missing packages to add."
-                    );
+                    eprintln!("No missing packages to add.");
                 } else {
-                    manifest::add_packages_to_file(
-                        path, &missing,
-                    )?;
-                    eprintln!(
-                        "Added {} package(s) to {}",
-                        missing.len(),
-                        path.display()
-                    );
+                    manifest::add_packages_to_file(path, &missing)?;
+                    eprintln!("Added {} package(s) to {}", missing.len(), path.display());
                 }
             }
         }
@@ -550,35 +513,23 @@ fn maybe_set_in_progress(
     if issue.status == IN_PROGRESS {
         return;
     }
-    let client = match gitlab::Client::from_project_url(
-        project_url,
-    ) {
+    let client = match gitlab::Client::from_project_url(project_url) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
-                "{package}: setting status: {e}"
-            );
+            eprintln!("{package}: setting status: {e}");
             *errors += 1;
             return;
         }
     };
-    match client.set_work_item_status(
-        issue.iid,
-        IN_PROGRESS,
-    ) {
+    match client.set_work_item_status(issue.iid, IN_PROGRESS) {
         Ok(()) => {
-            eprintln!(
-                "Set issue #{} to {IN_PROGRESS}: {}",
-                issue.iid, issue.url
-            );
+            eprintln!("Set issue #{} to {IN_PROGRESS}: {}", issue.iid, issue.url);
             if let Some(ref mut issue) = result.issue {
                 issue.status = IN_PROGRESS.to_string();
             }
         }
         Err(e) => {
-            eprintln!(
-                "{package}: setting status: {e}"
-            );
+            eprintln!("{package}: setting status: {e}");
             *errors += 1;
         }
     }
@@ -602,9 +553,7 @@ fn maybe_close_issue(
     if issue.state != "opened" {
         return;
     }
-    let client = match gitlab::Client::from_project_url(
-        project_url,
-    ) {
+    let client = match gitlab::Client::from_project_url(project_url) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{package}: closing issue: {e}");
@@ -613,8 +562,7 @@ fn maybe_close_issue(
         }
     };
     let comment = result.close_comment();
-    if let Err(e) = client.add_note(issue.iid, &comment)
-    {
+    if let Err(e) = client.add_note(issue.iid, &comment) {
         eprintln!("{package}: adding comment: {e}");
         *errors += 1;
         return;
@@ -625,18 +573,13 @@ fn maybe_close_issue(
     };
     match client.edit_issue(issue.iid, &updates) {
         Ok(closed) => {
-            eprintln!(
-                "Closed issue #{}: {}",
-                closed.iid, closed.web_url
-            );
+            eprintln!("Closed issue #{}: {}", closed.iid, closed.web_url);
             if let Some(ref mut issue) = result.issue {
                 issue.status = "closed".to_string();
             }
         }
         Err(e) => {
-            eprintln!(
-                "{package}: closing issue: {e}"
-            );
+            eprintln!("{package}: closing issue: {e}");
             *errors += 1;
         }
     }
@@ -651,10 +594,7 @@ fn maybe_file_issue(
         .ref_version()
         .ok_or("no reference version available")?;
     let title = format!("{package}-{ref_ver} is available");
-    let description = format!(
-        "```\n{}```",
-        check_latest::format_table(result)
-    );
+    let description = format!("```\n{}```", check_latest::format_table(result));
     file_or_update_issue(project_url, &title, &description)
 }
 
@@ -663,31 +603,18 @@ const ISSUE_LABEL: &str = "rfe::new-version";
 fn resolve_issue_ref(
     client: &gitlab::Client,
     issue: &gitlab::Issue,
-) -> Result<
-    check_latest::IssueRef,
-    Box<dyn std::error::Error>,
-> {
-    let status =
-        client.get_work_item_status(issue.iid)?;
-    Ok(check_latest::IssueRef::from_gitlab_issue(
-        issue, status,
-    ))
+) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
+    let status = client.get_work_item_status(issue.iid)?;
+    Ok(check_latest::IssueRef::from_gitlab_issue(issue, status))
 }
 
 fn lookup_issue(
     project_url: &str,
-) -> Result<
-    Option<check_latest::IssueRef>,
-    Box<dyn std::error::Error>,
-> {
-    let client =
-        gitlab::Client::from_project_url(project_url)?;
-    let issues =
-        client.list_issues(ISSUE_LABEL, None)?;
+) -> Result<Option<check_latest::IssueRef>, Box<dyn std::error::Error>> {
+    let client = gitlab::Client::from_project_url(project_url)?;
+    let issues = client.list_issues(ISSUE_LABEL, None)?;
     match issues.first() {
-        Some(issue) => {
-            Ok(Some(resolve_issue_ref(&client, issue)?))
-        }
+        Some(issue) => Ok(Some(resolve_issue_ref(&client, issue)?)),
         None => Ok(None),
     }
 }
@@ -698,15 +625,11 @@ fn file_or_update_issue(
     description: &str,
 ) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
     let client = gitlab::Client::from_project_url(project_url)?;
-    let issues =
-        client.list_issues(ISSUE_LABEL, Some("opened"))?;
+    let issues = client.list_issues(ISSUE_LABEL, Some("opened"))?;
 
     if let Some(existing) = issues.first() {
         let title_changed = existing.title != title;
-        let desc_changed = existing
-            .description
-            .as_deref()
-            != Some(description);
+        let desc_changed = existing.description.as_deref() != Some(description);
         if title_changed || desc_changed {
             let updates = gitlab::IssueUpdate {
                 title: if title_changed {
@@ -721,12 +644,8 @@ fn file_or_update_issue(
                 },
                 ..Default::default()
             };
-            let updated =
-                client.edit_issue(existing.iid, &updates)?;
-            eprintln!(
-                "Updated issue #{}: {}",
-                updated.iid, updated.web_url
-            );
+            let updated = client.edit_issue(existing.iid, &updates)?;
+            eprintln!("Updated issue #{}: {}", updated.iid, updated.web_url);
             resolve_issue_ref(&client, &updated)
         } else {
             eprintln!(
@@ -736,15 +655,8 @@ fn file_or_update_issue(
             resolve_issue_ref(&client, existing)
         }
     } else {
-        let issue = client.create_issue(
-            title,
-            Some(description),
-            Some(ISSUE_LABEL),
-        )?;
-        eprintln!(
-            "Created issue #{}: {}",
-            issue.iid, issue.web_url
-        );
+        let issue = client.create_issue(title, Some(description), Some(ISSUE_LABEL))?;
+        eprintln!("Created issue #{}: {}", issue.iid, issue.web_url);
         resolve_issue_ref(&client, &issue)
     }
 }

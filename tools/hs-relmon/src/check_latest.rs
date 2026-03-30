@@ -164,21 +164,13 @@ impl IssueRef {
     /// `status` is the resolved work-item status
     /// (e.g. "To do"), falling back to `issue.state` if
     /// the GraphQL status is unavailable.
-    pub fn from_gitlab_issue(
-        issue: &crate::gitlab::Issue,
-        status: Option<String>,
-    ) -> Self {
+    pub fn from_gitlab_issue(issue: &crate::gitlab::Issue, status: Option<String>) -> Self {
         Self {
             iid: issue.iid,
             url: issue.web_url.clone(),
             state: issue.state.clone(),
-            status: status
-                .unwrap_or_else(|| issue.state.clone()),
-            assignees: issue
-                .assignees
-                .iter()
-                .map(|a| a.username.clone())
-                .collect(),
+            status: status.unwrap_or_else(|| issue.state.clone()),
+            assignees: issue.assignees.iter().map(|a| a.username.clone()).collect(),
         }
     }
 }
@@ -223,10 +215,8 @@ impl CheckResult {
             .filter_map(|r| r.as_ref())
             .any(|r| {
                 if let Some(testing) = &r.summary.testing {
-                    crate::rpmvercmp::rpmvercmp(
-                        &testing.version,
-                        ref_ver,
-                    ) != std::cmp::Ordering::Less
+                    crate::rpmvercmp::rpmvercmp(&testing.version, ref_ver)
+                        != std::cmp::Ordering::Less
                 } else {
                     false
                 }
@@ -246,10 +236,9 @@ impl CheckResult {
         if results.is_empty() {
             return false;
         }
-        results.iter().all(|r| {
-            r.summary.release.is_some()
-                && r.newest_version == Some(true)
-        })
+        results
+            .iter()
+            .all(|r| r.summary.release.is_some() && r.newest_version == Some(true))
     }
 
     /// Up-to-date release builds with their distro labels.
@@ -257,20 +246,14 @@ impl CheckResult {
     /// Returns `(label, build_id)` pairs for each
     /// Hyperscale distro that has a current release build.
     pub fn release_builds(&self) -> Vec<(&str, i64)> {
-        let entries: [(&str, &Option<HyperscaleResult>);
-            2] = [
-            ("Hyperscale 9", &self.hs9),
-            ("Hyperscale 10", &self.hs10),
-        ];
+        let entries: [(&str, &Option<HyperscaleResult>); 2] =
+            [("Hyperscale 9", &self.hs9), ("Hyperscale 10", &self.hs10)];
         entries
             .iter()
             .filter_map(|(label, opt)| {
                 let r = opt.as_ref()?;
                 if r.newest_version == Some(true) {
-                    r.summary
-                        .release
-                        .as_ref()
-                        .map(|b| (*label, b.build_id))
+                    r.summary.release.as_ref().map(|b| (*label, b.build_id))
                 } else {
                     None
                 }
@@ -286,12 +269,7 @@ impl CheckResult {
         let links: Vec<String> = self
             .release_builds()
             .iter()
-            .map(|(label, id)| {
-                format!(
-                    "- {label}: {}",
-                    crate::cbs::build_url(*id)
-                )
-            })
+            .map(|(label, id)| format!("- {label}: {}", crate::cbs::build_url(*id)))
             .collect();
         format!("Released:\n{}", links.join("\n"))
     }
@@ -305,21 +283,12 @@ impl CheckResult {
     ///
     /// Returns `false` if there is no issue. Both filters
     /// must match when provided.
-    pub fn matches_issue_filter(
-        &self,
-        status: Option<&str>,
-        assignee: Option<&str>,
-    ) -> bool {
+    pub fn matches_issue_filter(&self, status: Option<&str>, assignee: Option<&str>) -> bool {
         let issue = match &self.issue {
             Some(i) => i,
             None => return false,
         };
-        matches_filter(
-            &issue.status,
-            &issue.assignees,
-            status,
-            assignee,
-        )
+        matches_filter(&issue.status, &issue.assignees, status, assignee)
     }
 }
 
@@ -385,16 +354,15 @@ pub fn check(
         result.upstream = repology::find_newest(&packages).map(|p| p.version.clone());
     }
     if distros.fedora_rawhide {
-        result.fedora_rawhide = repology::latest_for_repo(&packages, "fedora_rawhide")
-            .map(|p| p.version.clone());
+        result.fedora_rawhide =
+            repology::latest_for_repo(&packages, "fedora_rawhide").map(|p| p.version.clone());
     }
     if distros.fedora_stable {
-        result.fedora_stable = repology::latest_fedora_stable(&packages).map(|p| {
-            VersionWithDetail {
+        result.fedora_stable =
+            repology::latest_fedora_stable(&packages).map(|p| VersionWithDetail {
                 version: p.version.clone(),
                 detail: p.repo.clone(),
-            }
-        });
+            });
     }
     if distros.centos_stream {
         result.centos_stream =
@@ -441,7 +409,10 @@ pub fn check(
 ///
 /// Uses the release build version, falling back to testing if no release exists.
 /// Returns `None` if the reference version is unknown.
-fn compute_newest_version(summary: &HyperscaleSummary, ref_version: &Option<String>) -> Option<bool> {
+fn compute_newest_version(
+    summary: &HyperscaleSummary,
+    ref_version: &Option<String>,
+) -> Option<bool> {
     let ref_ver = ref_version.as_ref()?;
     let effective = summary.release.as_ref().or(summary.testing.as_ref())?;
     Some(crate::rpmvercmp::rpmvercmp(&effective.version, ref_ver) != std::cmp::Ordering::Less)
@@ -492,10 +463,20 @@ fn result_to_rows(result: &CheckResult) -> Vec<Row> {
         });
     }
     if let Some(hs_result) = &result.hs9 {
-        hs_rows(&mut rows, "Hyperscale 9", &hs_result.summary, result.ref_version.as_deref());
+        hs_rows(
+            &mut rows,
+            "Hyperscale 9",
+            &hs_result.summary,
+            result.ref_version.as_deref(),
+        );
     }
     if let Some(hs_result) = &result.hs10 {
-        hs_rows(&mut rows, "Hyperscale 10", &hs_result.summary, result.ref_version.as_deref());
+        hs_rows(
+            &mut rows,
+            "Hyperscale 10",
+            &hs_result.summary,
+            result.ref_version.as_deref(),
+        );
     }
 
     rows
@@ -514,7 +495,12 @@ fn version_status(version: &str, ref_version: Option<&str>) -> String {
     }
 }
 
-fn hs_rows(rows: &mut Vec<Row>, label: &str, summary: &HyperscaleSummary, ref_version: Option<&str>) {
+fn hs_rows(
+    rows: &mut Vec<Row>,
+    label: &str,
+    summary: &HyperscaleSummary,
+    ref_version: Option<&str>,
+) {
     match (&summary.release, &summary.testing) {
         (Some(rel), Some(test)) => {
             rows.push(Row {
@@ -576,9 +562,7 @@ pub fn print_json(result: &CheckResult) -> Result<(), Box<dyn std::error::Error>
 }
 
 /// Format multiple results as a JSON array and print to stdout.
-pub fn print_json_array(
-    results: &[CheckResult],
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn print_json_array(results: &[CheckResult]) -> Result<(), Box<dyn std::error::Error>> {
     write_json_array(results, &mut std::io::stdout().lock())
 }
 
@@ -590,17 +574,24 @@ fn write_json_array(
     Ok(())
 }
 
-fn write_table(
-    result: &CheckResult,
-    w: &mut dyn std::io::Write,
-) -> std::io::Result<()> {
+fn write_table(result: &CheckResult, w: &mut dyn std::io::Write) -> std::io::Result<()> {
     let rows = result_to_rows(result);
     if rows.is_empty() {
         return Ok(());
     }
 
-    let distro_w = rows.iter().map(|r| r.distro.len()).max().unwrap_or(0).max("Distribution".len());
-    let version_w = rows.iter().map(|r| r.version.len()).max().unwrap_or(0).max("Version".len());
+    let distro_w = rows
+        .iter()
+        .map(|r| r.distro.len())
+        .max()
+        .unwrap_or(0)
+        .max("Distribution".len());
+    let version_w = rows
+        .iter()
+        .map(|r| r.version.len())
+        .max()
+        .unwrap_or(0)
+        .max("Version".len());
     let has_status = rows.iter().any(|r| !r.status.is_empty());
     let detail_w = rows
         .iter()
@@ -759,11 +750,7 @@ mod tests {
         make_build_with_id(1, version, nvr)
     }
 
-    fn make_build_with_id(
-        id: i64,
-        version: &str,
-        nvr: &str,
-    ) -> Build {
+    fn make_build_with_id(id: i64, version: &str, nvr: &str) -> Build {
         Build {
             build_id: id,
             name: "pkg".into(),
@@ -784,10 +771,7 @@ mod tests {
             TrackRef::parse("fedora-stable").unwrap(),
             TrackRef::FedoraStable
         );
-        assert_eq!(
-            TrackRef::parse("centos").unwrap(),
-            TrackRef::CentosStream
-        );
+        assert_eq!(TrackRef::parse("centos").unwrap(), TrackRef::CentosStream);
         assert_eq!(
             TrackRef::parse("centos-stream").unwrap(),
             TrackRef::CentosStream
@@ -797,10 +781,7 @@ mod tests {
 
     #[test]
     fn test_track_ref_parse_trims_spaces() {
-        assert_eq!(
-            TrackRef::parse("  upstream  ").unwrap(),
-            TrackRef::Upstream
-        );
+        assert_eq!(TrackRef::parse("  upstream  ").unwrap(), TrackRef::Upstream);
     }
 
     fn make_hs_result(summary: HyperscaleSummary) -> HyperscaleResult {
@@ -1035,10 +1016,7 @@ mod tests {
             release: None,
             testing: None,
         };
-        assert_eq!(
-            compute_newest_version(&summary, &Some("6.19".into())),
-            None
-        );
+        assert_eq!(compute_newest_version(&summary, &Some("6.19".into())), None);
     }
 
     #[test]
@@ -1233,10 +1211,7 @@ mod tests {
             hs9: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
                     release: None,
-                    testing: Some(make_build(
-                        "2.0",
-                        "pkg-2.0-1.hs.el9",
-                    )),
+                    testing: Some(make_build("2.0", "pkg-2.0-1.hs.el9")),
                 },
                 newest_version: Some(true),
             }),
@@ -1257,14 +1232,8 @@ mod tests {
             centos_stream: None,
             hs9: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
-                    release: Some(make_build(
-                        "1.0",
-                        "pkg-1.0-1.hs.el9",
-                    )),
-                    testing: Some(make_build(
-                        "2.0",
-                        "pkg-2.0-1.hs.el9",
-                    )),
+                    release: Some(make_build("1.0", "pkg-1.0-1.hs.el9")),
+                    testing: Some(make_build("2.0", "pkg-2.0-1.hs.el9")),
                 },
                 newest_version: Some(false),
             }),
@@ -1286,10 +1255,7 @@ mod tests {
             centos_stream: None,
             hs9: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
-                    release: Some(make_build(
-                        "2.0",
-                        "pkg-2.0-1.hs.el9",
-                    )),
+                    release: Some(make_build("2.0", "pkg-2.0-1.hs.el9")),
                     testing: None,
                 },
                 newest_version: Some(true),
@@ -1312,10 +1278,7 @@ mod tests {
             hs9: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
                     release: None,
-                    testing: Some(make_build(
-                        "2.0",
-                        "pkg-2.0-1.hs.el9",
-                    )),
+                    testing: Some(make_build("2.0", "pkg-2.0-1.hs.el9")),
                 },
                 newest_version: None,
             }),
@@ -1337,10 +1300,7 @@ mod tests {
             hs9: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
                     release: None,
-                    testing: Some(make_build(
-                        "1.0",
-                        "pkg-1.0-1.hs.el9",
-                    )),
+                    testing: Some(make_build("1.0", "pkg-1.0-1.hs.el9")),
                 },
                 newest_version: Some(false),
             }),
@@ -1361,10 +1321,7 @@ mod tests {
             centos_stream: None,
             hs9: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
-                    release: Some(make_build(
-                        "2.0",
-                        "pkg-2.0-1.hs.el9",
-                    )),
+                    release: Some(make_build("2.0", "pkg-2.0-1.hs.el9")),
                     testing: None,
                 },
                 newest_version: Some(true),
@@ -1374,10 +1331,7 @@ mod tests {
             ref_version: Some("2.0".into()),
         };
         assert!(result.is_released());
-        assert_eq!(
-            result.release_builds(),
-            vec![("Hyperscale 9", 1)]
-        );
+        assert_eq!(result.release_builds(), vec![("Hyperscale 9", 1)]);
         assert_eq!(
             result.close_comment(),
             "Released:\n\
@@ -1397,10 +1351,7 @@ mod tests {
             hs9: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
                     release: None,
-                    testing: Some(make_build(
-                        "2.0",
-                        "pkg-2.0-1.hs.el9",
-                    )),
+                    testing: Some(make_build("2.0", "pkg-2.0-1.hs.el9")),
                 },
                 newest_version: Some(true),
             }),
@@ -1422,10 +1373,7 @@ mod tests {
             centos_stream: None,
             hs9: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
-                    release: Some(make_build(
-                        "1.0",
-                        "pkg-1.0-1.hs.el9",
-                    )),
+                    release: Some(make_build("1.0", "pkg-1.0-1.hs.el9")),
                     testing: None,
                 },
                 newest_version: Some(false),
@@ -1464,10 +1412,7 @@ mod tests {
             centos_stream: None,
             hs9: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
-                    release: Some(make_build(
-                        "2.0",
-                        "pkg-2.0-1.hs.el9",
-                    )),
+                    release: Some(make_build("2.0", "pkg-2.0-1.hs.el9")),
                     testing: None,
                 },
                 newest_version: Some(true),
@@ -1475,10 +1420,7 @@ mod tests {
             hs10: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
                     release: None,
-                    testing: Some(make_build(
-                        "2.0",
-                        "pkg-2.0-1.hs.el10",
-                    )),
+                    testing: Some(make_build("2.0", "pkg-2.0-1.hs.el10")),
                 },
                 newest_version: Some(true),
             }),
@@ -1487,10 +1429,7 @@ mod tests {
         };
         assert!(!result.is_released());
         // Only hs9 has a release build
-        assert_eq!(
-            result.release_builds(),
-            vec![("Hyperscale 9", 1)]
-        );
+        assert_eq!(result.release_builds(), vec![("Hyperscale 9", 1)]);
     }
 
     #[test]
@@ -1503,22 +1442,14 @@ mod tests {
             centos_stream: None,
             hs9: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
-                    release: Some(make_build_with_id(
-                        100,
-                        "6.11",
-                        "ethtool-6.11-1.hs.el9",
-                    )),
+                    release: Some(make_build_with_id(100, "6.11", "ethtool-6.11-1.hs.el9")),
                     testing: None,
                 },
                 newest_version: Some(true),
             }),
             hs10: Some(HyperscaleResult {
                 summary: HyperscaleSummary {
-                    release: Some(make_build_with_id(
-                        200,
-                        "6.11",
-                        "ethtool-6.11-1.hs.el10",
-                    )),
+                    release: Some(make_build_with_id(200, "6.11", "ethtool-6.11-1.hs.el10")),
                     testing: None,
                 },
                 newest_version: Some(true),
@@ -1529,10 +1460,7 @@ mod tests {
         assert!(result.is_released());
         assert_eq!(
             result.release_builds(),
-            vec![
-                ("Hyperscale 9", 100),
-                ("Hyperscale 10", 200),
-            ]
+            vec![("Hyperscale 9", 100), ("Hyperscale 10", 200),]
         );
         assert_eq!(
             result.close_comment(),
@@ -1678,8 +1606,7 @@ mod tests {
         let mut buf = Vec::new();
         write_json(&result, &mut buf).unwrap();
         let output = String::from_utf8(buf).unwrap();
-        let json: serde_json::Value =
-            serde_json::from_str(&output).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(json["issue"]["iid"], 5);
         assert_eq!(json["issue"]["status"], "opened");
         assert_eq!(json["issue"]["assignees"][0], "alice");
@@ -1720,8 +1647,7 @@ mod tests {
         let mut buf = Vec::new();
         write_json_array(&results, &mut buf).unwrap();
         let output = String::from_utf8(buf).unwrap();
-        let json: serde_json::Value =
-            serde_json::from_str(&output).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&output).unwrap();
         let arr = json.as_array().unwrap();
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0]["package"], "a");
@@ -1766,8 +1692,7 @@ mod tests {
             hs10: None,
             issue: Some(IssueRef {
                 iid: 42,
-                url: "https://gitlab.com/test/pkg/-/issues/42"
-                    .into(),
+                url: "https://gitlab.com/test/pkg/-/issues/42".into(),
                 status: "opened".into(),
                 state: "opened".into(),
                 assignees: vec!["alice".into()],
@@ -1850,10 +1775,7 @@ mod tests {
                 },
             ],
         };
-        let r = IssueRef::from_gitlab_issue(
-            &issue,
-            Some("To do".into()),
-        );
+        let r = IssueRef::from_gitlab_issue(&issue, Some("To do".into()));
         assert_eq!(r.iid, 7);
         assert_eq!(r.url, "https://example.com/issues/7");
         assert_eq!(r.status, "To do");
@@ -1878,9 +1800,7 @@ mod tests {
         assert!(r.assignees.is_empty());
     }
 
-    fn make_result_with_issue(
-        issue: Option<IssueRef>,
-    ) -> CheckResult {
+    fn make_result_with_issue(issue: Option<IssueRef>) -> CheckResult {
         CheckResult {
             package: "pkg".into(),
             upstream: None,
@@ -1898,10 +1818,7 @@ mod tests {
     fn test_matches_issue_filter_no_issue() {
         let r = make_result_with_issue(None);
         assert!(!r.matches_issue_filter(None, None));
-        assert!(!r.matches_issue_filter(
-            Some("opened"),
-            None,
-        ));
+        assert!(!r.matches_issue_filter(Some("opened"), None,));
     }
 
     #[test]
@@ -1913,14 +1830,8 @@ mod tests {
             state: "opened".into(),
             assignees: vec![],
         }));
-        assert!(r.matches_issue_filter(
-            Some("opened"),
-            None,
-        ));
-        assert!(!r.matches_issue_filter(
-            Some("closed"),
-            None,
-        ));
+        assert!(r.matches_issue_filter(Some("opened"), None,));
+        assert!(!r.matches_issue_filter(Some("closed"), None,));
     }
 
     #[test]
@@ -1930,23 +1841,11 @@ mod tests {
             url: "u".into(),
             status: "opened".into(),
             state: "opened".into(),
-            assignees: vec![
-                "alice".into(),
-                "bob".into(),
-            ],
+            assignees: vec!["alice".into(), "bob".into()],
         }));
-        assert!(r.matches_issue_filter(
-            None,
-            Some("alice"),
-        ));
-        assert!(r.matches_issue_filter(
-            None,
-            Some("bob"),
-        ));
-        assert!(!r.matches_issue_filter(
-            None,
-            Some("eve"),
-        ));
+        assert!(r.matches_issue_filter(None, Some("alice"),));
+        assert!(r.matches_issue_filter(None, Some("bob"),));
+        assert!(!r.matches_issue_filter(None, Some("eve"),));
     }
 
     #[test]
@@ -1958,18 +1857,9 @@ mod tests {
             state: "opened".into(),
             assignees: vec!["alice".into()],
         }));
-        assert!(r.matches_issue_filter(
-            Some("opened"),
-            Some("alice"),
-        ));
-        assert!(!r.matches_issue_filter(
-            Some("closed"),
-            Some("alice"),
-        ));
-        assert!(!r.matches_issue_filter(
-            Some("opened"),
-            Some("bob"),
-        ));
+        assert!(r.matches_issue_filter(Some("opened"), Some("alice"),));
+        assert!(!r.matches_issue_filter(Some("closed"), Some("alice"),));
+        assert!(!r.matches_issue_filter(Some("opened"), Some("bob"),));
     }
 
     #[test]
@@ -1993,10 +1883,7 @@ mod tests {
             state: "opened".into(),
             assignees: vec![],
         }));
-        assert!(unassigned.matches_issue_filter(
-            None,
-            Some("none"),
-        ));
+        assert!(unassigned.matches_issue_filter(None, Some("none"),));
 
         let assigned = make_result_with_issue(Some(IssueRef {
             iid: 2,
@@ -2005,63 +1892,30 @@ mod tests {
             state: "opened".into(),
             assignees: vec!["alice".into()],
         }));
-        assert!(!assigned.matches_issue_filter(
-            None,
-            Some("none"),
-        ));
+        assert!(!assigned.matches_issue_filter(None, Some("none"),));
     }
 
     #[test]
     fn test_matches_filter_no_filters() {
-        assert!(matches_filter(
-            "To do",
-            &["alice".into()],
-            None,
-            None,
-        ));
+        assert!(matches_filter("To do", &["alice".into()], None, None,));
     }
 
     #[test]
     fn test_matches_filter_status() {
-        assert!(matches_filter(
-            "To do",
-            &[],
-            Some("To do"),
-            None,
-        ));
-        assert!(!matches_filter(
-            "Done",
-            &[],
-            Some("To do"),
-            None,
-        ));
+        assert!(matches_filter("To do", &[], Some("To do"), None,));
+        assert!(!matches_filter("Done", &[], Some("To do"), None,));
     }
 
     #[test]
     fn test_matches_filter_assignee() {
         let a: Vec<String> = vec!["alice".into()];
-        assert!(matches_filter(
-            "To do",
-            &a,
-            None,
-            Some("alice"),
-        ));
-        assert!(!matches_filter(
-            "To do",
-            &a,
-            None,
-            Some("bob"),
-        ));
+        assert!(matches_filter("To do", &a, None, Some("alice"),));
+        assert!(!matches_filter("To do", &a, None, Some("bob"),));
     }
 
     #[test]
     fn test_matches_filter_none_assignee() {
-        assert!(matches_filter(
-            "To do",
-            &[],
-            None,
-            Some("none"),
-        ));
+        assert!(matches_filter("To do", &[], None, Some("none"),));
         assert!(!matches_filter(
             "To do",
             &["alice".into()],
@@ -2073,23 +1927,8 @@ mod tests {
     #[test]
     fn test_matches_filter_both() {
         let a: Vec<String> = vec!["alice".into()];
-        assert!(matches_filter(
-            "To do",
-            &a,
-            Some("To do"),
-            Some("alice"),
-        ));
-        assert!(!matches_filter(
-            "Done",
-            &a,
-            Some("To do"),
-            Some("alice"),
-        ));
-        assert!(!matches_filter(
-            "To do",
-            &a,
-            Some("To do"),
-            Some("bob"),
-        ));
+        assert!(matches_filter("To do", &a, Some("To do"), Some("alice"),));
+        assert!(!matches_filter("Done", &a, Some("To do"), Some("alice"),));
+        assert!(!matches_filter("To do", &a, Some("To do"), Some("bob"),));
     }
 }

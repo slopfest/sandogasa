@@ -129,7 +129,14 @@ pub fn evaluate(
 
     let safe = concerns.is_empty();
 
-    BackportResult { safe, concerns, build_requires, provides, requires, reverse_deps }
+    BackportResult {
+        safe,
+        concerns,
+        build_requires,
+        provides,
+        requires,
+        reverse_deps,
+    }
 }
 
 /// Build the detailed reverse-dependency list by cross-referencing each
@@ -266,7 +273,13 @@ pub fn safe_to_backport(
         reverse_deps.insert(branch.clone(), affected);
     }
 
-    Ok(evaluate(build_requires, provides, requires, reverse_deps, target_branch))
+    Ok(evaluate(
+        build_requires,
+        provides,
+        requires,
+        reverse_deps,
+        target_branch,
+    ))
 }
 
 /// Format a `BackportResult` as a human-readable string.
@@ -280,10 +293,17 @@ pub fn format_result(
     let mut out = String::new();
 
     if result.safe {
-        writeln!(out, "Backporting {srpm} from {source_branch} to {target_branch}: SAFE").unwrap();
+        writeln!(
+            out,
+            "Backporting {srpm} from {source_branch} to {target_branch}: SAFE"
+        )
+        .unwrap();
     } else {
-        writeln!(out, "Backporting {srpm} from {source_branch} to {target_branch}: NOT SAFE")
-            .unwrap();
+        writeln!(
+            out,
+            "Backporting {srpm} from {source_branch} to {target_branch}: NOT SAFE"
+        )
+        .unwrap();
         writeln!(out).unwrap();
         writeln!(out, "Concerns:").unwrap();
         for c in &result.concerns {
@@ -306,8 +326,12 @@ pub fn format_result(
             continue;
         }
         writeln!(out).unwrap();
-        write!(out, "{}", compare::format_result(cmp, label, target_branch, source_branch, false))
-            .unwrap();
+        write!(
+            out,
+            "{}",
+            compare::format_result(cmp, label, target_branch, source_branch, false)
+        )
+        .unwrap();
     }
 
     for (branch, deps) in &result.reverse_deps {
@@ -346,13 +370,11 @@ pub fn format_result(
 }
 
 /// Print a `BackportResult` in human-readable format.
-pub fn print_result(
-    result: &BackportResult,
-    srpm: &str,
-    target_branch: &str,
-    source_branch: &str,
-) {
-    print!("{}", format_result(result, srpm, target_branch, source_branch));
+pub fn print_result(result: &BackportResult, srpm: &str, target_branch: &str, source_branch: &str) {
+    print!(
+        "{}",
+        format_result(result, srpm, target_branch, source_branch)
+    );
 }
 
 #[cfg(test)]

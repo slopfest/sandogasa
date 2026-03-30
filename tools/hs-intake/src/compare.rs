@@ -158,8 +158,14 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
     let mut upgraded = Vec::new();
     let mut downgraded = Vec::new();
     for c in changed {
-        let src = c.source_version.strip_prefix(">= ").unwrap_or(&c.source_version);
-        let tgt = c.target_version.strip_prefix(">= ").unwrap_or(&c.target_version);
+        let src = c
+            .source_version
+            .strip_prefix(">= ")
+            .unwrap_or(&c.source_version);
+        let tgt = c
+            .target_version
+            .strip_prefix(">= ")
+            .unwrap_or(&c.target_version);
         match compare_evr(src, tgt) {
             Ordering::Less => upgraded.push(c),
             Ordering::Greater => downgraded.push(c),
@@ -167,7 +173,13 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
         }
     }
 
-    CompareResult { added: final_added, removed, upgraded, downgraded, unchanged }
+    CompareResult {
+        added: final_added,
+        removed,
+        upgraded,
+        downgraded,
+        unchanged,
+    }
 }
 
 /// Format a `CompareResult` as a human-readable string.
@@ -293,7 +305,10 @@ pub fn print_result(
     target_branch: &str,
     show_unchanged: bool,
 ) {
-    print!("{}", format_result(result, label, source_branch, target_branch, show_unchanged));
+    print!(
+        "{}",
+        format_result(result, label, source_branch, target_branch, show_unchanged)
+    );
 }
 
 #[cfg(test)]
@@ -309,16 +324,14 @@ mod tests {
             "kernel-headers".to_string(),
             "libbpf.so.1()(64bit)".to_string(),
         ];
-        let self_names: BTreeSet<String> =
-            ["libbpf", "libbpf-devel"].iter().map(|s| s.to_string()).collect();
+        let self_names: BTreeSet<String> = ["libbpf", "libbpf-devel"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let filtered = filter_self_deps(entries, &self_names);
         assert_eq!(
             filtered,
-            vec![
-                "glibc >= 2.28",
-                "kernel-headers",
-                "libbpf.so.1()(64bit)",
-            ]
+            vec!["glibc >= 2.28", "kernel-headers", "libbpf.so.1()(64bit)",]
         );
     }
 
@@ -411,14 +424,8 @@ mod tests {
 
     #[test]
     fn diff_mixed_changes() {
-        let source = vec![
-            "libfoo = 1.0".to_string(),
-            "libold".to_string(),
-        ];
-        let target = vec![
-            "libfoo = 2.0".to_string(),
-            "libnew".to_string(),
-        ];
+        let source = vec!["libfoo = 1.0".to_string(), "libold".to_string()];
+        let target = vec!["libfoo = 2.0".to_string(), "libnew".to_string()];
         let result = diff(source, target);
         assert_eq!(result.added, vec!["libnew"]);
         assert_eq!(result.removed, vec!["libold"]);

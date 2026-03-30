@@ -1,0 +1,15 @@
+[package]
+name = "sandogasa-gitlab"
+description = "GitLab REST and GraphQL API client for issues and work items"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+mockito = { workspace = true }

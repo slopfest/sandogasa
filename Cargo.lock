@@ -542,6 +542,9 @@ dependencies = [
  "quick-xml",
  "reqwest",
  "rpassword",
+ "sandogasa-gitlab",
+ "sandogasa-repology",
+ "sandogasa-rpmvercmp",
  "serde",
  "serde_json",
  "toml",
@@ -1442,6 +1445,16 @@ name = "sandogasa-fedrq"
 version = "0.6.2"
 
 [[package]]
+name = "sandogasa-gitlab"
+version = "0.6.2"
+dependencies = [
+ "mockito",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "sandogasa-hattrack"
 version = "0.6.2"
 dependencies = [
@@ -1494,6 +1507,16 @@ dependencies = [
  "tokio",
  "toml",
  "wiremock",
+]
+
+[[package]]
+name = "sandogasa-repology"
+version = "0.6.2"
+dependencies = [
+ "reqwest",
+ "sandogasa-rpmvercmp",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

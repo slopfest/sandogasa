@@ -21,7 +21,10 @@ pub enum Error {
     /// Failed to spawn the fedrq process.
     Spawn(std::io::Error),
     /// fedrq exited with a non-zero status.
-    Exit { status: std::process::ExitStatus, stderr: String },
+    Exit {
+        status: std::process::ExitStatus,
+        stderr: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -133,7 +136,10 @@ mod tests {
 
     #[test]
     fn display_spawn_error() {
-        let err = Error::Spawn(std::io::Error::new(std::io::ErrorKind::NotFound, "not found"));
+        let err = Error::Spawn(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not found",
+        ));
         let msg = err.to_string();
         assert!(msg.contains("failed to run fedrq"));
         assert!(msg.contains("not found"));

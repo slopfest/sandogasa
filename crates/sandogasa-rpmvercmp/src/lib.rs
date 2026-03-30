@@ -2,86 +2,151 @@
 
 //! RPM version comparison algorithm.
 //!
-//! Implements the same logic as `rpmvercmp()` in librpm, used to compare
-//! version and release strings in RPM packages.
+//! Implements the same logic as `rpmvercmp()` in librpm, including
+//! special handling for `~` (pre-release) and `^` (post-release
+//! snapshot) characters.
 
 use std::cmp::Ordering;
 
 /// Compare two version strings using the RPM vercmp algorithm.
 ///
-/// The algorithm splits each string into segments of consecutive digits or
-/// consecutive ASCII letters, discarding all other characters as separators.
-/// Segments are compared pairwise: digit segments numerically, letter segments
-/// lexicographically. A digit segment is always considered newer than a letter
-/// segment. If all compared segments are equal, the string with more segments
-/// is considered newer.
+/// Key behaviours:
+/// - `~` sorts *before* the version without it:
+///   `1.0~rc1 < 1.0 < 1.0.1`
+/// - `^` sorts *after* the base version but before a new segment:
+///   `1.0 < 1.0^post1 < 1.0.1`
+/// - Digit segments compare numerically (leading zeros ignored).
+/// - Letter segments compare lexicographically.
+/// - A digit segment is always newer than a letter segment.
+/// - More segments means newer when all preceding segments are
+///   equal.
 pub fn rpmvercmp(a: &str, b: &str) -> Ordering {
-    let a_segs = segments(a);
-    let b_segs = segments(b);
+    let mut a = a.as_bytes();
+    let mut b = b.as_bytes();
 
-    for (sa, sb) in a_segs.iter().zip(b_segs.iter()) {
-        let is_a_num = sa.chars().next().is_some_and(|c| c.is_ascii_digit());
-        let is_b_num = sb.chars().next().is_some_and(|c| c.is_ascii_digit());
+    loop {
+        // Skip non-alphanumeric characters that are not ~ or ^.
+        a = skip_separators(a);
+        b = skip_separators(b);
+
+        // Handle ~ (pre-release): sorts before everything,
+        // including end-of-string.
+        match (a.first() == Some(&b'~'), b.first() == Some(&b'~')) {
+            (true, true) => {
+                a = &a[1..];
+                b = &b[1..];
+                continue;
+            }
+            (true, false) => return Ordering::Less,
+            (false, true) => return Ordering::Greater,
+            _ => {}
+        }
+
+        // Handle ^ (post-release snapshot): sorts after
+        // end-of-string but before any other segment.
+        match (a.first() == Some(&b'^'), b.first() == Some(&b'^')) {
+            (true, true) => {
+                a = &a[1..];
+                b = &b[1..];
+                continue;
+            }
+            (true, false) => {
+                return if b.is_empty() {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                };
+            }
+            (false, true) => {
+                return if a.is_empty() {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                };
+            }
+            _ => {}
+        }
+
+        // Both exhausted → equal.
+        if a.is_empty() && b.is_empty() {
+            return Ordering::Equal;
+        }
+        // One exhausted → the one with more segments is newer.
+        if a.is_empty() {
+            return Ordering::Less;
+        }
+        if b.is_empty() {
+            return Ordering::Greater;
+        }
+
+        // Extract the next segment (run of digits or run of
+        // letters).
+        let (seg_a, rest_a) = next_segment(a);
+        let (seg_b, rest_b) = next_segment(b);
+        a = rest_a;
+        b = rest_b;
+
+        let is_a_num = seg_a.first().is_some_and(|c| c.is_ascii_digit());
+        let is_b_num = seg_b.first().is_some_and(|c| c.is_ascii_digit());
 
         match (is_a_num, is_b_num) {
+            // Digit segment always beats letter segment.
             (true, false) => return Ordering::Greater,
             (false, true) => return Ordering::Less,
             (true, true) => {
-                // Compare numerically: strip leading zeros and compare by
-                // length first (longer = bigger), then lexicographically.
-                let a_trimmed = sa.trim_start_matches('0');
-                let b_trimmed = sb.trim_start_matches('0');
-                match a_trimmed.len().cmp(&b_trimmed.len()) {
-                    Ordering::Equal => match a_trimmed.cmp(b_trimmed) {
+                // Compare numerically: strip leading zeros,
+                // longer number is bigger; same length →
+                // lexicographic.
+                let at = trim_leading_zeros(seg_a);
+                let bt = trim_leading_zeros(seg_b);
+                match at.len().cmp(&bt.len()) {
+                    Ordering::Equal => match at.cmp(bt) {
                         Ordering::Equal => continue,
                         ord => return ord,
                     },
                     ord => return ord,
                 }
             }
-            (false, false) => match sa.cmp(sb) {
+            (false, false) => match seg_a.cmp(seg_b) {
                 Ordering::Equal => continue,
                 ord => return ord,
             },
         }
     }
-
-    a_segs.len().cmp(&b_segs.len())
 }
 
-/// Split a version string into segments of consecutive digits or consecutive
-/// ASCII letters, discarding everything else.
-fn segments(s: &str) -> Vec<&str> {
-    let mut segs = Vec::new();
-    let mut chars = s.as_bytes();
-    while !chars.is_empty() {
-        // Skip non-alphanumeric characters.
-        let skip = chars
-            .iter()
-            .position(|c| c.is_ascii_alphanumeric())
-            .unwrap_or(chars.len());
-        chars = &chars[skip..];
-        if chars.is_empty() {
-            break;
-        }
+/// Skip bytes that are not alphanumeric and not `~` or `^`.
+fn skip_separators(s: &[u8]) -> &[u8] {
+    let n = s
+        .iter()
+        .position(|c| c.is_ascii_alphanumeric() || *c == b'~' || *c == b'^')
+        .unwrap_or(s.len());
+    &s[n..]
+}
 
-        let is_digit = chars[0].is_ascii_digit();
-        let len = chars
-            .iter()
-            .position(|c| {
-                if is_digit {
-                    !c.is_ascii_digit()
-                } else {
-                    !c.is_ascii_alphabetic()
-                }
-            })
-            .unwrap_or(chars.len());
-
-        // SAFETY: we only split on ASCII boundaries.
-        segs.push(std::str::from_utf8(&chars[..len]).unwrap());
-        chars = &chars[len..];
+/// Extract the next segment: a run of digits or a run of ASCII
+/// letters. Returns (segment, rest).
+fn next_segment(s: &[u8]) -> (&[u8], &[u8]) {
+    if s.is_empty() {
+        return (s, s);
     }
-    segs
+    let is_digit = s[0].is_ascii_digit();
+    let len = s
+        .iter()
+        .position(|c| {
+            if is_digit {
+                !c.is_ascii_digit()
+            } else {
+                !c.is_ascii_alphabetic()
+            }
+        })
+        .unwrap_or(s.len());
+    (&s[..len], &s[len..])
+}
+
+fn trim_leading_zeros(s: &[u8]) -> &[u8] {
+    let n = s.iter().position(|c| *c != b'0').unwrap_or(s.len());
+    &s[n..]
 }
 
 /// Compare two EVR (epoch:version-release) strings.
@@ -128,6 +193,8 @@ fn parse_evr(evr: &str) -> (u64, &str, Option<&str>) {
 mod tests {
     use super::*;
 
+    // --- rpmvercmp tests ---
+
     #[test]
     fn test_rpmvercmp_equal() {
         assert_eq!(rpmvercmp("1.0", "1.0"), Ordering::Equal);
@@ -169,12 +236,66 @@ mod tests {
     }
 
     #[test]
-    fn test_rpmvercmp_tilde_separators() {
-        // Tildes are just separators in our segment parser, so "1~rc1" -> ["1", "rc", "1"]
-        // This differs from RPM's actual tilde handling but matches the simple algorithm.
-        // For our use case (comparing versions from the same distro family), this is fine.
-        assert_eq!(rpmvercmp("1.0", "1.0"), Ordering::Equal);
+    fn test_rpmvercmp_empty() {
+        assert_eq!(rpmvercmp("", ""), Ordering::Equal);
+        assert_eq!(rpmvercmp("1.0", ""), Ordering::Greater);
+        assert_eq!(rpmvercmp("", "1.0"), Ordering::Less);
     }
+
+    #[test]
+    fn test_tilde_prerelease() {
+        assert_eq!(rpmvercmp("1.0~rc1", "1.0"), Ordering::Less);
+        assert_eq!(rpmvercmp("1.0", "1.0~rc1"), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_tilde_both() {
+        assert_eq!(rpmvercmp("1.0~rc1", "1.0~rc2"), Ordering::Less);
+        assert_eq!(rpmvercmp("1.0~rc2", "1.0~rc1"), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_tilde_less_than_release() {
+        assert_eq!(rpmvercmp("6.19~rc6", "6.19"), Ordering::Less);
+        assert_eq!(rpmvercmp("6.19~rc6", "6.19.6"), Ordering::Less);
+        assert_eq!(rpmvercmp("6.19", "6.19.6"), Ordering::Less);
+    }
+
+    #[test]
+    fn test_caret_postrelease() {
+        assert_eq!(rpmvercmp("1.0^post1", "1.0"), Ordering::Greater);
+        assert_eq!(rpmvercmp("1.0^post1", "1.0.1"), Ordering::Less);
+    }
+
+    #[test]
+    fn test_caret_both() {
+        assert_eq!(rpmvercmp("1.0^post1", "1.0^post2"), Ordering::Less);
+    }
+
+    #[test]
+    fn test_tilde_before_caret() {
+        assert_eq!(rpmvercmp("1.0~rc1", "1.0^post1"), Ordering::Less);
+    }
+
+    #[test]
+    fn test_real_world_kernel() {
+        assert_eq!(rpmvercmp("6.19.6", "6.19~rc6"), Ordering::Greater);
+        assert_eq!(rpmvercmp("6.19~rc6", "6.19.6"), Ordering::Less);
+    }
+
+    #[test]
+    fn test_kernel_versions() {
+        assert_eq!(rpmvercmp("6.18.16", "6.18.3"), Ordering::Greater);
+        assert_eq!(rpmvercmp("7.0.0", "5.7.9"), Ordering::Greater);
+        assert_eq!(rpmvercmp("10.0", "9.0"), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_rc_comparison() {
+        assert_eq!(rpmvercmp("7.0.0~rc2", "6.19.6"), Ordering::Greater);
+    }
+
+    // --- compare_evr tests ---
 
     #[test]
     fn test_compare_evr_simple() {

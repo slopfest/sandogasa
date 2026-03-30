@@ -28,19 +28,11 @@ pub fn entry_from_issue(
     status: Option<String>,
     manifest_names: Option<&HashSet<String>>,
 ) -> Option<IssueEntry> {
-    let package =
-        gitlab::package_from_issue_url(&issue.web_url)?
-            .to_string();
+    let package = gitlab::package_from_issue_url(&issue.web_url)?.to_string();
 
-    let status =
-        status.unwrap_or_else(|| issue.state.clone());
-    let assignees: Vec<String> = issue
-        .assignees
-        .iter()
-        .map(|a| a.username.clone())
-        .collect();
-    let in_manifest =
-        manifest_names.map(|names| names.contains(&package));
+    let status = status.unwrap_or_else(|| issue.state.clone());
+    let assignees: Vec<String> = issue.assignees.iter().map(|a| a.username.clone()).collect();
+    let in_manifest = manifest_names.map(|names| names.contains(&package));
 
     Some(IssueEntry {
         package,
@@ -62,12 +54,7 @@ pub fn filter_and_sort(
     let mut filtered: Vec<_> = entries
         .into_iter()
         .filter(|e| {
-            check_latest::matches_filter(
-                &e.status,
-                &e.assignees,
-                filter_status,
-                filter_assignee,
-            )
+            check_latest::matches_filter(&e.status, &e.assignees, filter_status, filter_assignee)
         })
         .collect();
     filtered.sort_by(|a, b| a.package.cmp(&b.package));
@@ -88,24 +75,12 @@ pub fn build_entries(
 ) -> Vec<IssueEntry> {
     let mut entries = Vec::new();
     for issue in issues {
-        let project_path =
-            gitlab::project_path_from_issue_url(
-                &issue.web_url,
-            );
-        let status = project_path.as_deref().and_then(
-            |path| {
-                client
-                    .get_work_item_status(path, issue.iid)
-                    .ok()
-                    .flatten()
-            },
-        );
+        let project_path = gitlab::project_path_from_issue_url(&issue.web_url);
+        let status = project_path
+            .as_deref()
+            .and_then(|path| client.get_work_item_status(path, issue.iid).ok().flatten());
 
-        match entry_from_issue(
-            issue,
-            status,
-            manifest_names,
-        ) {
+        match entry_from_issue(issue, status, manifest_names) {
             Some(entry) => entries.push(entry),
             None => {
                 eprintln!(
@@ -120,9 +95,7 @@ pub fn build_entries(
 }
 
 /// Print issue entries as a JSON array.
-pub fn print_json(
-    entries: &[IssueEntry],
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn print_json(entries: &[IssueEntry]) -> Result<(), Box<dyn std::error::Error>> {
     let mut buf = Vec::new();
     write_json(&mut buf, entries)?;
     print!("{}", String::from_utf8(buf)?);
@@ -150,9 +123,7 @@ pub fn format_table(entries: &[IssueEntry]) -> String {
         return String::from("No matching issues found.\n");
     }
 
-    let show_manifest = entries
-        .iter()
-        .any(|e| e.in_manifest.is_some());
+    let show_manifest = entries.iter().any(|e| e.in_manifest.is_some());
 
     // Compute column widths.
     let mut w_pkg = "Package".len();
@@ -191,15 +162,9 @@ pub fn format_table(entries: &[IssueEntry]) -> String {
         "", "", "", "",
     ));
     if show_manifest {
-        out.push_str(&format!(
-            "  {:\u{2500}<8}",
-            "",
-        ));
+        out.push_str(&format!("  {:\u{2500}<8}", "",));
     }
-    out.push_str(&format!(
-        "  {:\u{2500}<30}\n",
-        "",
-    ));
+    out.push_str(&format!("  {:\u{2500}<30}\n", "",));
 
     // Rows
     for e in entries {
@@ -248,27 +213,17 @@ mod tests {
                 {package}/-/issues/{iid}"
             ),
             status: status.into(),
-            assignees: assignees
-                .into_iter()
-                .map(String::from)
-                .collect(),
+            assignees: assignees.into_iter().map(String::from).collect(),
             in_manifest,
         }
     }
 
     #[test]
     fn test_json_serialization() {
-        let entries = vec![make_entry(
-            "ethtool",
-            1,
-            "To do",
-            vec!["alice"],
-            None,
-        )];
+        let entries = vec![make_entry("ethtool", 1, "To do", vec!["alice"], None)];
         let mut buf = Vec::new();
         write_json(&mut buf, &entries).unwrap();
-        let json: serde_json::Value =
-            serde_json::from_slice(&buf).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         let arr = json.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["package"], "ethtool");
@@ -281,25 +236,12 @@ mod tests {
     #[test]
     fn test_json_with_manifest() {
         let entries = vec![
-            make_entry(
-                "ethtool",
-                1,
-                "To do",
-                vec![],
-                Some(true),
-            ),
-            make_entry(
-                "foobar",
-                2,
-                "To do",
-                vec![],
-                Some(false),
-            ),
+            make_entry("ethtool", 1, "To do", vec![], Some(true)),
+            make_entry("foobar", 2, "To do", vec![], Some(false)),
         ];
         let mut buf = Vec::new();
         write_json(&mut buf, &entries).unwrap();
-        let json: serde_json::Value =
-            serde_json::from_slice(&buf).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         let arr = json.as_array().unwrap();
         assert_eq!(arr[0]["in_manifest"], true);
         assert_eq!(arr[1]["in_manifest"], false);
@@ -307,17 +249,10 @@ mod tests {
 
     #[test]
     fn test_json_no_assignees_omitted() {
-        let entries = vec![make_entry(
-            "ethtool",
-            1,
-            "To do",
-            vec![],
-            None,
-        )];
+        let entries = vec![make_entry("ethtool", 1, "To do", vec![], None)];
         let mut buf = Vec::new();
         write_json(&mut buf, &entries).unwrap();
-        let json: serde_json::Value =
-            serde_json::from_slice(&buf).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert!(json[0].get("assignees").is_none());
     }
 
@@ -329,13 +264,7 @@ mod tests {
 
     #[test]
     fn test_format_table_basic() {
-        let entries = vec![make_entry(
-            "ethtool",
-            3,
-            "To do",
-            vec!["alice"],
-            None,
-        )];
+        let entries = vec![make_entry("ethtool", 3, "To do", vec!["alice"], None)];
         let out = format_table(&entries);
         assert!(out.contains("Package"));
         assert!(out.contains("ethtool"));
@@ -350,20 +279,8 @@ mod tests {
     #[test]
     fn test_format_table_with_manifest() {
         let entries = vec![
-            make_entry(
-                "ethtool",
-                1,
-                "To do",
-                vec!["alice"],
-                Some(true),
-            ),
-            make_entry(
-                "foobar",
-                2,
-                "To do",
-                vec![],
-                Some(false),
-            ),
+            make_entry("ethtool", 1, "To do", vec!["alice"], Some(true)),
+            make_entry("foobar", 2, "To do", vec![], Some(false)),
         ];
         let out = format_table(&entries);
         assert!(out.contains("Manifest"));
@@ -374,26 +291,14 @@ mod tests {
 
     #[test]
     fn test_format_table_unassigned() {
-        let entries = vec![make_entry(
-            "pkg",
-            1,
-            "To do",
-            vec![],
-            None,
-        )];
+        let entries = vec![make_entry("pkg", 1, "To do", vec![], None)];
         let out = format_table(&entries);
         assert!(out.contains("(none)"));
     }
 
     #[test]
     fn test_format_table_multiple_assignees() {
-        let entries = vec![make_entry(
-            "pkg",
-            1,
-            "To do",
-            vec!["alice", "bob"],
-            None,
-        )];
+        let entries = vec![make_entry("pkg", 1, "To do", vec!["alice", "bob"], None)];
         let out = format_table(&entries);
         assert!(out.contains("alice,bob"));
     }
@@ -401,27 +306,9 @@ mod tests {
     #[test]
     fn test_format_table_manifest_column_alignment() {
         let entries = vec![
-            make_entry(
-                "ethtool",
-                1,
-                "To do",
-                vec![],
-                Some(true),
-            ),
-            make_entry(
-                "systemd",
-                2,
-                "In progress",
-                vec!["bob"],
-                Some(true),
-            ),
-            make_entry(
-                "foobar",
-                3,
-                "To do",
-                vec![],
-                Some(false),
-            ),
+            make_entry("ethtool", 1, "To do", vec![], Some(true)),
+            make_entry("systemd", 2, "In progress", vec!["bob"], Some(true)),
+            make_entry("foobar", 3, "To do", vec![], Some(false)),
         ];
         let out = format_table(&entries);
         assert!(out.contains("Manifest"));
@@ -460,27 +347,15 @@ mod tests {
             ),
             assignees: assignees
                 .into_iter()
-                .map(|u| gitlab::Assignee {
-                    username: u.into(),
-                })
+                .map(|u| gitlab::Assignee { username: u.into() })
                 .collect(),
         }
     }
 
     #[test]
     fn test_entry_from_issue_basic() {
-        let issue = make_gitlab_issue(
-            1,
-            "ethtool",
-            "opened",
-            vec!["alice"],
-        );
-        let entry = entry_from_issue(
-            &issue,
-            Some("To do".into()),
-            None,
-        )
-        .unwrap();
+        let issue = make_gitlab_issue(1, "ethtool", "opened", vec!["alice"]);
+        let entry = entry_from_issue(&issue, Some("To do".into()), None).unwrap();
         assert_eq!(entry.package, "ethtool");
         assert_eq!(entry.iid, 1);
         assert_eq!(entry.status, "To do");
@@ -490,47 +365,21 @@ mod tests {
 
     #[test]
     fn test_entry_from_issue_falls_back_to_state() {
-        let issue = make_gitlab_issue(
-            1,
-            "ethtool",
-            "opened",
-            vec![],
-        );
-        let entry =
-            entry_from_issue(&issue, None, None).unwrap();
+        let issue = make_gitlab_issue(1, "ethtool", "opened", vec![]);
+        let entry = entry_from_issue(&issue, None, None).unwrap();
         assert_eq!(entry.status, "opened");
     }
 
     #[test]
     fn test_entry_from_issue_with_manifest() {
-        let issue = make_gitlab_issue(
-            1,
-            "ethtool",
-            "opened",
-            vec![],
-        );
+        let issue = make_gitlab_issue(1, "ethtool", "opened", vec![]);
         let mut names = HashSet::new();
         names.insert("ethtool".to_string());
-        let entry = entry_from_issue(
-            &issue,
-            None,
-            Some(&names),
-        )
-        .unwrap();
+        let entry = entry_from_issue(&issue, None, Some(&names)).unwrap();
         assert_eq!(entry.in_manifest, Some(true));
 
-        let issue2 = make_gitlab_issue(
-            2,
-            "foobar",
-            "opened",
-            vec![],
-        );
-        let entry2 = entry_from_issue(
-            &issue2,
-            None,
-            Some(&names),
-        )
-        .unwrap();
+        let issue2 = make_gitlab_issue(2, "foobar", "opened", vec![]);
+        let entry2 = entry_from_issue(&issue2, None, Some(&names)).unwrap();
         assert_eq!(entry2.in_manifest, Some(false));
     }
 
@@ -550,26 +399,10 @@ mod tests {
     #[test]
     fn test_filter_and_sort_by_status() {
         let entries = vec![
-            make_entry(
-                "b-pkg",
-                2,
-                "Done",
-                vec![],
-                None,
-            ),
-            make_entry(
-                "a-pkg",
-                1,
-                "To do",
-                vec!["alice"],
-                None,
-            ),
+            make_entry("b-pkg", 2, "Done", vec![], None),
+            make_entry("a-pkg", 1, "To do", vec!["alice"], None),
         ];
-        let filtered = filter_and_sort(
-            entries,
-            Some("To do"),
-            None,
-        );
+        let filtered = filter_and_sort(entries, Some("To do"), None);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].package, "a-pkg");
     }
@@ -577,26 +410,10 @@ mod tests {
     #[test]
     fn test_filter_and_sort_by_assignee() {
         let entries = vec![
-            make_entry(
-                "pkg-a",
-                1,
-                "To do",
-                vec!["alice"],
-                None,
-            ),
-            make_entry(
-                "pkg-b",
-                2,
-                "To do",
-                vec![],
-                None,
-            ),
+            make_entry("pkg-a", 1, "To do", vec!["alice"], None),
+            make_entry("pkg-b", 2, "To do", vec![], None),
         ];
-        let filtered = filter_and_sort(
-            entries,
-            None,
-            Some("none"),
-        );
+        let filtered = filter_and_sort(entries, None, Some("none"));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].package, "pkg-b");
     }
@@ -616,13 +433,7 @@ mod tests {
     fn test_build_entries_sorting() {
         let entries = vec![
             make_entry("b-pkg", 2, "Done", vec![], None),
-            make_entry(
-                "a-pkg",
-                1,
-                "To do",
-                vec!["alice"],
-                None,
-            ),
+            make_entry("a-pkg", 1, "To do", vec!["alice"], None),
         ];
         let mut sorted = entries;
         sorted.sort_by(|a, b| a.package.cmp(&b.package));

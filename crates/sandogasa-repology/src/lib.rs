@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
+//! Rust client for the [Repology](https://repology.org/) package version
+//! tracking API.
+
 use serde::Deserialize;
 
 /// Package version status as reported by Repology.
@@ -64,7 +67,7 @@ impl Client {
     /// Create a client with a custom base URL (useful for testing).
     pub fn with_base_url(base_url: &str) -> Self {
         let http = reqwest::blocking::Client::builder()
-            .user_agent("hs-relmon/0.2.1")
+            .user_agent("sandogasa-repology/0.6.2")
             .build()
             .expect("failed to build HTTP client");
         Self {
@@ -105,7 +108,7 @@ pub fn latest_for_repo<'a>(packages: &'a [Package], repo: &str) -> Option<&'a Pa
         .max_by(|a, b| {
             status_priority(&a.status)
                 .cmp(&status_priority(&b.status))
-                .then_with(|| crate::rpmvercmp::rpmvercmp(&a.version, &b.version))
+                .then_with(|| sandogasa_rpmvercmp::rpmvercmp(&a.version, &b.version))
         })
         .copied()
 }
@@ -154,7 +157,7 @@ pub fn latest_centos_stream(packages: &[Package]) -> Option<&Package> {
         .max_by(|a, b| {
             status_priority(&a.status)
                 .cmp(&status_priority(&b.status))
-                .then_with(|| crate::rpmvercmp::rpmvercmp(&a.version, &b.version))
+                .then_with(|| sandogasa_rpmvercmp::rpmvercmp(&a.version, &b.version))
         })
         .copied()
 }
@@ -287,13 +290,16 @@ mod tests {
         let packages: Vec<Package> = vec![
             serde_json::from_str(
                 r#"{"repo":"fedora_rawhide","version":"5.7.9","status":"outdated","srcname":"usbip"}"#,
-            ).unwrap(),
+            )
+            .unwrap(),
             serde_json::from_str(
                 r#"{"repo":"fedora_rawhide","version":"7.0.0","status":"incorrect","srcname":"kernel"}"#,
-            ).unwrap(),
+            )
+            .unwrap(),
             serde_json::from_str(
                 r#"{"repo":"fedora_rawhide","version":"6.19","status":"newest","srcname":"kernel"}"#,
-            ).unwrap(),
+            )
+            .unwrap(),
         ];
         let pkg = latest_for_repo(&packages, "fedora_rawhide").unwrap();
         assert_eq!(pkg.version, "6.19");
@@ -301,15 +307,15 @@ mod tests {
 
     #[test]
     fn test_latest_for_repo_picks_highest_version_on_same_status() {
-        // Simulates linux project in fedora_rawhide: no newest entries,
-        // outdated usbip and incorrect kernel/kernel-headers.
         let packages: Vec<Package> = vec![
             serde_json::from_str(
                 r#"{"repo":"fedora_rawhide","version":"5.7.9","status":"outdated","srcname":"usbip"}"#,
-            ).unwrap(),
+            )
+            .unwrap(),
             serde_json::from_str(
                 r#"{"repo":"fedora_rawhide","version":"7.0.0","status":"outdated","srcname":"kernel"}"#,
-            ).unwrap(),
+            )
+            .unwrap(),
         ];
         let pkg = latest_for_repo(&packages, "fedora_rawhide").unwrap();
         assert_eq!(pkg.version, "7.0.0");
@@ -336,16 +342,14 @@ mod tests {
 
     #[test]
     fn test_fedora_release_number() {
-        let pkg: Package =
-            serde_json::from_str(r#"{"repo":"fedora_43","version":"1"}"#).unwrap();
+        let pkg: Package = serde_json::from_str(r#"{"repo":"fedora_43","version":"1"}"#).unwrap();
         assert_eq!(fedora_release_number(&pkg), Some(43));
 
         let rawhide: Package =
             serde_json::from_str(r#"{"repo":"fedora_rawhide","version":"1"}"#).unwrap();
         assert_eq!(fedora_release_number(&rawhide), None);
 
-        let other: Package =
-            serde_json::from_str(r#"{"repo":"arch","version":"1"}"#).unwrap();
+        let other: Package = serde_json::from_str(r#"{"repo":"arch","version":"1"}"#).unwrap();
         assert_eq!(fedora_release_number(&other), None);
     }
 
@@ -374,21 +378,20 @@ mod tests {
             serde_json::from_str(r#"{"repo":"centos_stream_10","version":"1"}"#).unwrap();
         assert_eq!(centos_stream_release_number(&pkg), Some(10));
 
-        let old: Package =
-            serde_json::from_str(r#"{"repo":"centos_8","version":"1"}"#).unwrap();
+        let old: Package = serde_json::from_str(r#"{"repo":"centos_8","version":"1"}"#).unwrap();
         assert_eq!(centos_stream_release_number(&old), None);
 
-        let other: Package =
-            serde_json::from_str(r#"{"repo":"fedora_43","version":"1"}"#).unwrap();
+        let other: Package = serde_json::from_str(r#"{"repo":"fedora_43","version":"1"}"#).unwrap();
         assert_eq!(centos_stream_release_number(&other), None);
     }
-
 
     #[test]
     fn test_status_priority_ordering() {
         assert!(status_priority(&Some(Status::Newest)) > status_priority(&Some(Status::Outdated)));
         assert!(status_priority(&Some(Status::Outdated)) > status_priority(&Some(Status::Legacy)));
-        assert!(status_priority(&Some(Status::Outdated)) == status_priority(&Some(Status::Incorrect)));
+        assert!(
+            status_priority(&Some(Status::Outdated)) == status_priority(&Some(Status::Incorrect))
+        );
         assert!(status_priority(&Some(Status::Devel)) > status_priority(&Some(Status::Outdated)));
     }
 
