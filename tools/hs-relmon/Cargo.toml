@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MPL-2.0
+
+[package]
+name = "hs-relmon"
+version = "0.4.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "Release monitoring tool for CentOS Hyperscale SIG packages"
+repository = "https://gitlab.com/CentOS/hyperscale/releng/hs-relmon"
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+quick-xml = "0.37"
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+toml_edit = "0.22"
+rpassword = "7"
+
+[dev-dependencies]
+mockito = "1"

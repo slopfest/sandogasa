@@ -1,0 +1,21 @@
+<?xml version='1.0'?>
+<methodResponse>
+<params>
+<param>
+<value><array><data>
+<value><struct>
+<member><name>id</name><value><int>3080</int></value></member>
+<member><name>name</name><value><string>hyperscale9s-packages-main-candidate</string></value></member>
+</struct></value>
+<value><struct>
+<member><name>id</name><value><int>3081</int></value></member>
+<member><name>name</name><value><string>hyperscale9s-packages-main-testing</string></value></member>
+</struct></value>
+<value><struct>
+<member><name>id</name><value><int>3082</int></value></member>
+<member><name>name</name><value><string>hyperscale9s-packages-main-release</string></value></member>
+</struct></value>
+</data></array></value>
+</param>
+</params>
+</methodResponse>

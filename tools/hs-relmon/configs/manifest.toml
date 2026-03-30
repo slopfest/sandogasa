@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MPL-2.0
+
+# Default settings applied to all packages unless overridden.
+[defaults]
+distros = "upstream,fedora,centos,hyperscale"
+track = "upstream"
+file_issue = true
+
+# Each [[package]] entry defines a package to check.
+# All fields except 'name' are optional and override the defaults.
+
+[[package]]
+name = "dracut"
+track = "fedora-rawhide"
+
+[[package]]
+name = "ethtool"
+
+[[package]]
+name = "perf"
+repology_name = "linux"
+
+[[package]]
+name = "rubygem-asciidoctor"
+repology_name = "asciidoctor"
+distros = "upstream,fedora,centos,hs9"
+track = "fedora-stable"
+
+[[package]]
+name = "selinux-policy"
+distros = "upstream,fedora,centos,hs10"
+track = "fedora-rawhide"
+
+[[package]]
+name = "systemd"
+track = "fedora-rawhide"
+file_issue = false

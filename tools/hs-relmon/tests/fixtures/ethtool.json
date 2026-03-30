@@ -1,0 +1,147 @@
+[
+  {
+    "repo": "arch",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.19",
+    "origversion": "2:6.19-1",
+    "status": "newest",
+    "summary": "Settings tool for Ethernet NICs",
+    "licenses": ["GPL-2.0-only"],
+    "categories": ["Networking"]
+  },
+  {
+    "repo": "alpine_edge",
+    "subrepo": "main",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.19",
+    "status": "newest",
+    "summary": "Settings tool for Ethernet NICs"
+  },
+  {
+    "repo": "fedora_rawhide",
+    "subrepo": "development",
+    "srcname": "ethtool",
+    "binnames": ["ethtool"],
+    "visiblename": "ethtool",
+    "version": "6.19",
+    "origversion": "2:6.19-1.fc45",
+    "status": "newest",
+    "summary": "Settings tool for Ethernet NICs",
+    "licenses": ["GPL-2.0-only AND GPL-2.0-or-later"],
+    "categories": ["Unspecified"]
+  },
+  {
+    "repo": "fedora_43",
+    "subrepo": "updates",
+    "srcname": "ethtool",
+    "binnames": ["ethtool"],
+    "visiblename": "ethtool",
+    "version": "6.19",
+    "origversion": "2:6.19-1.fc43",
+    "status": "newest",
+    "summary": "Settings tool for Ethernet NICs",
+    "licenses": ["GPL-2.0-only AND GPL-2.0-or-later"],
+    "categories": ["Unspecified"]
+  },
+  {
+    "repo": "fedora_43",
+    "subrepo": "release",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.15",
+    "origversion": "2:6.15-3.fc43",
+    "status": "legacy",
+    "summary": "Settings tool for Ethernet NICs"
+  },
+  {
+    "repo": "fedora_42",
+    "subrepo": "updates",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.15",
+    "origversion": "2:6.15-3.fc42",
+    "status": "outdated",
+    "summary": "Settings tool for Ethernet NICs"
+  },
+  {
+    "repo": "fedora_42",
+    "subrepo": "release",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.11",
+    "origversion": "2:6.11-2.fc42",
+    "status": "legacy",
+    "summary": "Settings tool for Ethernet NICs"
+  },
+  {
+    "repo": "fedora_41",
+    "subrepo": "updates",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.15",
+    "origversion": "2:6.15-3.fc41",
+    "status": "outdated",
+    "summary": "Settings tool for Ethernet NICs"
+  },
+  {
+    "repo": "debian_13",
+    "subrepo": "main",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.11",
+    "origversion": "1:6.11-1",
+    "status": "outdated",
+    "summary": "display or change Ethernet device settings"
+  },
+  {
+    "repo": "ubuntu_24_04",
+    "subrepo": "main",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.7",
+    "status": "outdated",
+    "summary": "display or change Ethernet device settings"
+  },
+  {
+    "repo": "centos_stream_10",
+    "subrepo": "BaseOS",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.11",
+    "origversion": "2:6.11-5.el10",
+    "status": "legacy",
+    "summary": "Settings tool for Ethernet NICs"
+  },
+  {
+    "repo": "centos_stream_10",
+    "subrepo": "BaseOS",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.15",
+    "origversion": "2:6.15-2.el10",
+    "status": "outdated",
+    "summary": "Settings tool for Ethernet NICs"
+  },
+  {
+    "repo": "centos_stream_9",
+    "subrepo": "BaseOS",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "6.15",
+    "origversion": "2:6.15-2.el9",
+    "status": "outdated",
+    "summary": "Settings tool for Ethernet NICs"
+  },
+  {
+    "repo": "centos_stream_9",
+    "subrepo": "BaseOS",
+    "srcname": "ethtool",
+    "visiblename": "ethtool",
+    "version": "5.10",
+    "origversion": "2:5.10-4.el9",
+    "status": "legacy",
+    "summary": "Settings tool for Ethernet NICs"
+  }
+]
