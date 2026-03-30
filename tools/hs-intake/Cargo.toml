@@ -1,12 +1,14 @@
 [package]
 name = "hs-intake"
 version = "0.1.4"
-edition = "2024"
-license = "MPL-2.0"
 description = "Hyperscale package intake tool — compare RPM package metadata between branches"
-repository = "https://gitlab.com/CentOS/Hyperscale/misc/hs-intake"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-clap = { version = "4.5.60", features = ["derive"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+clap = { workspace = true }
+sandogasa-fedrq = { workspace = true }
+sandogasa-rpmvercmp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

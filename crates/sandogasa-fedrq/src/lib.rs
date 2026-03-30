@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
+//! Rust wrapper for the [fedrq](https://github.com/gotmax23/fedrq) CLI tool
+//! for querying Fedora and EPEL RPM repositories.
+
 use std::fmt;
 use std::process::Command;
 
