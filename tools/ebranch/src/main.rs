@@ -46,6 +46,10 @@ struct ResolveArgs {
     #[arg(long)]
     json: bool,
 
+    /// Output build-order as a Koji chain build string.
+    #[arg(long)]
+    koji: bool,
+
     /// Maximum recursion depth (0 = unlimited).
     #[arg(long, default_value = "0")]
     max_depth: usize,
@@ -139,7 +143,9 @@ fn main() -> ExitCode {
             let edges = closure.to_edges();
             match dag::topological_layers(&edges) {
                 Ok(phases) => {
-                    if args.json {
+                    if args.koji {
+                        print_koji_chain(&phases);
+                    } else if args.json {
                         print_json(&serde_json::json!({
                             "source_branch": closure.source_branch,
                             "target_branch": closure.target_branch,
@@ -186,6 +192,14 @@ enum Mode {
     Resolve,
     BuildOrder,
     FindCycles,
+}
+
+fn print_koji_chain(phases: &[dag::BuildPhase]) {
+    let chain: Vec<String> = phases
+        .iter()
+        .map(|phase| phase.packages.join(" "))
+        .collect();
+    println!("{}", chain.join(" : "));
 }
 
 fn print_json(value: &impl serde::Serialize) {

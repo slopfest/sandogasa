@@ -50,11 +50,24 @@ ebranch find-cycles systemd util-linux \
     --source rawhide --target c10s --target-repo '@epel'
 ```
 
+### Koji chain build output
+
+Use `--koji` with `build-order` to get output suitable for
+`koji chain-build`:
+
+```console
+$ ebranch build-order --koji rust-base64-simd \
+    --source rawhide \
+    --target-repo '@koji:epel10.3-build-side-133542'
+rust-const-str rust-outref : rust-vsimd : rust-base64-simd
+```
+
 ### Useful flags
 
 - `--verbose` / `-v` — print progress to stderr as packages are resolved
 - `--max-depth N` — limit recursion depth (useful for exploring large
   dependency trees incrementally)
+- `--koji` — output build-order as a Koji chain build string
 - `--json` — machine-readable JSON output
 
 ## License
