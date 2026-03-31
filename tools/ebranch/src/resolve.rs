@@ -76,6 +76,10 @@ pub trait DepResolver {
 
     /// Resolve a dependency name to source package(s) on the target branch.
     fn resolve_target(&self, dep: &str) -> Result<Vec<String>, String>;
+
+    /// Return the Requires of all subpackages of a source package
+    /// (queried on the source branch).
+    fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String>;
 }
 
 /// Options for controlling the resolution process.
@@ -243,6 +247,225 @@ pub fn resolve_closure_with_options(
     })
 }
 
+/// A subpackage Requires that cannot be satisfied on the target.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnsatisfiedRequires {
+    /// The raw Requires string.
+    pub dep: String,
+    /// The source package that provides this on the source branch,
+    /// or `None` if it cannot be resolved at all.
+    pub provided_by: Option<String>,
+}
+
+/// Installability check result for a single source package.
+#[derive(Debug, Serialize)]
+pub struct InstallabilityEntry {
+    /// Subpackage Requires that are not satisfiable.
+    pub unsatisfied: Vec<UnsatisfiedRequires>,
+}
+
+/// Result of the installability check across the closure.
+#[derive(Debug, Serialize)]
+pub struct InstallabilityReport {
+    /// Packages with installability issues (only those with problems).
+    pub issues: BTreeMap<String, InstallabilityEntry>,
+    /// Source packages that need to be added to the closure.
+    pub additional_packages: BTreeSet<String>,
+}
+
+/// Check that subpackages of all closure packages are installable.
+///
+/// For each package in the closure, queries its subpackage Requires
+/// from the source branch and checks whether each is satisfiable by:
+/// 1. The target repository (already available), or
+/// 2. A package in the closure (will be built).
+///
+/// Returns issues found and any additional packages that would need
+/// to be added to the closure to fix them.
+pub fn check_installability(
+    resolver: &dyn DepResolver,
+    closure: &Closure,
+    verbose: bool,
+) -> InstallabilityReport {
+    let mut issues: BTreeMap<String, InstallabilityEntry> = BTreeMap::new();
+    let mut additional_packages: BTreeSet<String> = BTreeSet::new();
+
+    // Cache: dep string -> resolution result on target/source.
+    let mut target_cache: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut source_cache: BTreeMap<String, Option<String>> = BTreeMap::new();
+
+    let closure_pkgs: BTreeSet<&String> = closure.closure.keys().collect();
+
+    for pkg in closure.closure.keys() {
+        if verbose {
+            eprintln!("[installability] checking subpackages of {pkg}");
+        }
+
+        let requires = match resolver.subpkg_requires(pkg) {
+            Ok(r) => r,
+            Err(e) => {
+                // Record as an issue with no specific dep.
+                eprintln!(
+                    "warning: {pkg}: failed to query subpackage \
+                     Requires: {e}"
+                );
+                continue;
+            }
+        };
+
+        let mut unsatisfied: Vec<UnsatisfiedRequires> = Vec::new();
+        let mut seen_providers: BTreeSet<String> = BTreeSet::new();
+
+        for raw_dep in &requires {
+            let dep_str = raw_dep.trim();
+
+            // Skip rpmlib/auto deps.
+            if dep_str.starts_with("rpmlib(")
+                || dep_str.starts_with("auto(")
+                || dep_str.starts_with("config(")
+            {
+                continue;
+            }
+
+            // Check if satisfied on target.
+            let target_resolved = target_cache
+                .entry(dep_str.to_string())
+                .or_insert_with(|| {
+                    resolver
+                        .resolve_target(dep_str)
+                        .ok()
+                        .and_then(|v| v.into_iter().find(|s| s != "(none)"))
+                })
+                .clone();
+
+            if target_resolved.is_some() {
+                continue;
+            }
+
+            // Resolve on source.
+            let source_resolved = source_cache
+                .entry(dep_str.to_string())
+                .or_insert_with(|| {
+                    resolver
+                        .resolve_source(dep_str)
+                        .ok()
+                        .and_then(|v| v.into_iter().find(|s| s != "(none)"))
+                })
+                .clone();
+
+            match &source_resolved {
+                Some(provider) if provider == pkg => {
+                    // Self-provided by the same source package — OK.
+                    continue;
+                }
+                Some(provider) if closure_pkgs.contains(provider) => {
+                    // Provided by another package in the closure — OK.
+                    continue;
+                }
+                Some(provider) => {
+                    // Provider exists on source but not in closure.
+                    if seen_providers.insert(provider.clone()) {
+                        unsatisfied.push(UnsatisfiedRequires {
+                            dep: raw_dep.clone(),
+                            provided_by: Some(provider.clone()),
+                        });
+                        additional_packages.insert(provider.clone());
+                    }
+                }
+                None => {
+                    // Can't resolve on source either.
+                    unsatisfied.push(UnsatisfiedRequires {
+                        dep: raw_dep.clone(),
+                        provided_by: None,
+                    });
+                }
+            }
+        }
+
+        if !unsatisfied.is_empty() {
+            issues.insert(pkg.clone(), InstallabilityEntry { unsatisfied });
+        }
+    }
+
+    InstallabilityReport {
+        issues,
+        additional_packages,
+    }
+}
+
+/// Resolve the dependency closure and iteratively expand it until
+/// all subpackage Requires are satisfiable.
+///
+/// Runs `resolve_closure_with_options`, then `check_installability`.
+/// Any additional packages discovered by the installability check
+/// are fed back into a new resolution round. Repeats until no new
+/// packages are needed (fixed point).
+pub fn resolve_with_installability(
+    resolver: &dyn DepResolver,
+    packages: &[String],
+    source_branch: &str,
+    target_branch: &str,
+    options: &ResolveOptions,
+) -> Result<(Closure, InstallabilityReport), String> {
+    let mut all_packages: BTreeSet<String> = packages.iter().cloned().collect();
+    let requested: Vec<String> = packages.to_vec();
+
+    loop {
+        let pkg_list: Vec<String> = all_packages.iter().cloned().collect();
+
+        if options.verbose {
+            eprintln!(
+                "[installability] resolving with {} package(s)",
+                pkg_list.len()
+            );
+        }
+
+        let mut closure = resolve_closure_with_options(
+            resolver,
+            &pkg_list,
+            source_branch,
+            target_branch,
+            options,
+        )?;
+
+        let report = check_installability(resolver, &closure, options.verbose);
+
+        if report.additional_packages.is_empty() {
+            // Fixed point reached. Restore original requested list.
+            closure.requested = requested;
+            return Ok((closure, report));
+        }
+
+        let before = all_packages.len();
+        all_packages.extend(report.additional_packages.iter().cloned());
+
+        if all_packages.len() == before {
+            // No new packages were actually added (all were already
+            // in the set). This shouldn't happen given the check
+            // above, but guard against infinite loops.
+            closure.requested = requested;
+            return Ok((closure, report));
+        }
+
+        if options.verbose {
+            let new_pkgs: Vec<&String> = report
+                .additional_packages
+                .iter()
+                .filter(|p| !closure.closure.contains_key(*p))
+                .collect();
+            eprintln!(
+                "[installability] adding {} package(s): {}",
+                new_pkgs.len(),
+                new_pkgs
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+}
+
 /// Real resolver backed by `sandogasa_fedrq::Fedrq`.
 pub struct FedrqResolver {
     pub source: sandogasa_fedrq::Fedrq,
@@ -278,6 +501,12 @@ impl DepResolver for FedrqResolver {
             .resolve_to_source(dep)
             .map_err(|e| e.to_string())
     }
+
+    fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
+        self.source
+            .subpkgs_requires(srpm)
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -291,6 +520,8 @@ mod tests {
         source_resolve: BTreeMap<String, String>,
         /// dep -> source package on target branch
         target_resolve: BTreeMap<String, String>,
+        /// srpm -> subpackage Requires (source branch)
+        subpkg_requires: BTreeMap<String, Vec<String>>,
     }
 
     impl MockResolver {
@@ -299,6 +530,7 @@ mod tests {
                 buildrequires: BTreeMap::new(),
                 source_resolve: BTreeMap::new(),
                 target_resolve: BTreeMap::new(),
+                subpkg_requires: BTreeMap::new(),
             }
         }
 
@@ -317,6 +549,13 @@ mod tests {
         fn add_target_resolve(&mut self, dep: &str, source: &str) {
             self.target_resolve
                 .insert(dep.to_string(), source.to_string());
+        }
+
+        fn add_subpkg_requires(&mut self, srpm: &str, reqs: &[&str]) {
+            self.subpkg_requires.insert(
+                srpm.to_string(),
+                reqs.iter().map(|s| s.to_string()).collect(),
+            );
         }
     }
 
@@ -342,6 +581,10 @@ mod tests {
                 .get(dep)
                 .map(|s| vec![s.clone()])
                 .unwrap_or_default())
+        }
+
+        fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
+            Ok(self.subpkg_requires.get(srpm).cloned().unwrap_or_default())
         }
     }
 
@@ -504,5 +747,270 @@ mod tests {
         let edges = closure.to_edges();
         assert_eq!(edges["a"], BTreeSet::from(["b".to_string()]));
         assert!(edges["b"].is_empty());
+    }
+
+    // --- Installability check tests ---
+
+    #[test]
+    fn test_installability_all_satisfied() {
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &[]);
+        resolver.add_subpkg_requires("mypkg", &["glibc", "bash"]);
+        resolver.add_target_resolve("glibc", "glibc");
+        resolver.add_target_resolve("bash", "bash");
+
+        let closure =
+            resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
+        let report = check_installability(&resolver, &closure, false);
+        assert!(report.issues.is_empty());
+        assert!(report.additional_packages.is_empty());
+    }
+
+    #[test]
+    fn test_installability_missing_requires() {
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &[]);
+        // Subpackage requires libwidget, not on target
+        resolver.add_subpkg_requires("mypkg", &["libwidget"]);
+        resolver.add_source_resolve("libwidget", "widget");
+
+        let closure =
+            resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
+        let report = check_installability(&resolver, &closure, false);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues["mypkg"].unsatisfied.len(), 1);
+        assert_eq!(report.issues["mypkg"].unsatisfied[0].dep, "libwidget");
+        assert_eq!(
+            report.issues["mypkg"].unsatisfied[0].provided_by,
+            Some("widget".to_string())
+        );
+        assert!(report.additional_packages.contains("widget"));
+    }
+
+    #[test]
+    fn test_installability_satisfied_by_closure() {
+        let mut resolver = MockResolver::new();
+        // a and b are both in closure; a's subpackage requires something from b
+        resolver.add_buildrequires("a", &["libb-devel"]);
+        resolver.add_source_resolve("libb-devel", "b");
+        resolver.add_buildrequires("b", &[]);
+        resolver.add_subpkg_requires("a", &["libb"]);
+        resolver.add_source_resolve("libb", "b");
+        resolver.add_subpkg_requires("b", &[]);
+
+        let closure = resolve_closure(&resolver, &["a".to_string()], "rawhide", "epel10").unwrap();
+        // b is in the closure (pulled in via BuildRequires)
+        assert!(closure.closure.contains_key("b"));
+        let report = check_installability(&resolver, &closure, false);
+        assert!(report.issues.is_empty());
+    }
+
+    #[test]
+    fn test_installability_self_provides_ok() {
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &[]);
+        // Subpackage requires something provided by another subpackage
+        // of the same source package
+        resolver.add_subpkg_requires("mypkg", &["mypkg-libs"]);
+        resolver.add_source_resolve("mypkg-libs", "mypkg");
+
+        let closure =
+            resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
+        let report = check_installability(&resolver, &closure, false);
+        assert!(report.issues.is_empty());
+    }
+
+    #[test]
+    fn test_installability_rpmlib_skipped() {
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &[]);
+        resolver.add_subpkg_requires("mypkg", &["rpmlib(CompressedFileNames)", "config(mypkg)"]);
+
+        let closure =
+            resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
+        let report = check_installability(&resolver, &closure, false);
+        assert!(report.issues.is_empty());
+    }
+
+    #[test]
+    fn test_installability_unresolvable_dep() {
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &[]);
+        // Subpackage requires something that can't be resolved anywhere
+        resolver.add_subpkg_requires("mypkg", &["nonexistent-lib"]);
+
+        let closure =
+            resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
+        let report = check_installability(&resolver, &closure, false);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues["mypkg"].unsatisfied[0].provided_by, None);
+    }
+
+    #[test]
+    fn test_installability_dedup_providers() {
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &[]);
+        // Two different requires both provided by the same source package
+        resolver.add_subpkg_requires("mypkg", &["libwidget", "libwidget-data"]);
+        resolver.add_source_resolve("libwidget", "widget");
+        resolver.add_source_resolve("libwidget-data", "widget");
+
+        let closure =
+            resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
+        let report = check_installability(&resolver, &closure, false);
+        assert_eq!(report.issues["mypkg"].unsatisfied.len(), 1);
+        assert_eq!(report.additional_packages.len(), 1);
+    }
+
+    #[test]
+    fn test_installability_no_subpkg_requires() {
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &[]);
+        // No subpkg_requires configured -> defaults to empty vec
+
+        let closure =
+            resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
+        let report = check_installability(&resolver, &closure, false);
+        assert!(report.issues.is_empty());
+    }
+
+    // --- Iterative installability expansion tests ---
+
+    #[test]
+    fn test_iterative_no_install_issues() {
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["glibc"]);
+        resolver.add_target_resolve("glibc", "glibc");
+
+        let (closure, report) = resolve_with_installability(
+            &resolver,
+            &["a".to_string()],
+            "rawhide",
+            "epel10",
+            &ResolveOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(closure.closure.len(), 1);
+        assert!(report.issues.is_empty());
+        assert_eq!(closure.requested, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn test_iterative_expands_closure() {
+        // a builds fine but its subpackage requires libwidget,
+        // which is provided by "widget" — not in initial closure.
+        // widget itself builds fine with no install issues.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["libwidget"]);
+        resolver.add_source_resolve("libwidget", "widget");
+        resolver.add_buildrequires("widget", &[]);
+        resolver.add_subpkg_requires("widget", &[]);
+
+        let (closure, report) = resolve_with_installability(
+            &resolver,
+            &["a".to_string()],
+            "rawhide",
+            "epel10",
+            &ResolveOptions::default(),
+        )
+        .unwrap();
+        // widget should now be in the closure
+        assert!(closure.closure.contains_key("widget"));
+        assert_eq!(closure.closure.len(), 2);
+        assert!(report.issues.is_empty());
+        // Original requested list preserved
+        assert_eq!(closure.requested, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn test_iterative_transitive_expansion() {
+        // a's subpackage needs libwidget (from widget).
+        // widget's subpackage needs libgadget (from gadget).
+        // gadget has no install issues.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["libwidget"]);
+        resolver.add_source_resolve("libwidget", "widget");
+
+        resolver.add_buildrequires("widget", &[]);
+        resolver.add_subpkg_requires("widget", &["libgadget"]);
+        resolver.add_source_resolve("libgadget", "gadget");
+
+        resolver.add_buildrequires("gadget", &[]);
+        resolver.add_subpkg_requires("gadget", &[]);
+
+        let (closure, report) = resolve_with_installability(
+            &resolver,
+            &["a".to_string()],
+            "rawhide",
+            "epel10",
+            &ResolveOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(closure.closure.len(), 3);
+        assert!(closure.closure.contains_key("widget"));
+        assert!(closure.closure.contains_key("gadget"));
+        assert!(report.issues.is_empty());
+    }
+
+    #[test]
+    fn test_iterative_with_unresolvable() {
+        // a's subpackage needs libwidget (expandable) and
+        // libmystery (unresolvable on source).
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["libwidget", "libmystery"]);
+        resolver.add_source_resolve("libwidget", "widget");
+
+        resolver.add_buildrequires("widget", &[]);
+        resolver.add_subpkg_requires("widget", &[]);
+
+        let (closure, report) = resolve_with_installability(
+            &resolver,
+            &["a".to_string()],
+            "rawhide",
+            "epel10",
+            &ResolveOptions::default(),
+        )
+        .unwrap();
+        // widget got added, but libmystery remains an issue
+        assert!(closure.closure.contains_key("widget"));
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues["a"].unsatisfied.len(), 1);
+        assert_eq!(report.issues["a"].unsatisfied[0].dep, "libmystery");
+    }
+
+    #[test]
+    fn test_iterative_buildrequires_of_added_pkg() {
+        // a's subpackage needs libwidget (from widget).
+        // widget has a BuildRequires on libhelper-devel (from helper),
+        // which is missing on target.
+        // So the expansion should pull in both widget AND helper.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["libwidget"]);
+        resolver.add_source_resolve("libwidget", "widget");
+
+        resolver.add_buildrequires("widget", &["libhelper-devel"]);
+        resolver.add_source_resolve("libhelper-devel", "helper");
+        resolver.add_subpkg_requires("widget", &[]);
+
+        resolver.add_buildrequires("helper", &[]);
+        resolver.add_subpkg_requires("helper", &[]);
+
+        let (closure, report) = resolve_with_installability(
+            &resolver,
+            &["a".to_string()],
+            "rawhide",
+            "epel10",
+            &ResolveOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(closure.closure.len(), 3);
+        assert!(closure.closure.contains_key("widget"));
+        assert!(closure.closure.contains_key("helper"));
+        assert!(report.issues.is_empty());
     }
 }

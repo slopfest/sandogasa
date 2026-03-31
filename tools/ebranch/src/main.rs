@@ -7,7 +7,9 @@ use clap::{Parser, Subcommand};
 mod dag;
 mod resolve;
 
-use resolve::{FedrqResolver, ResolveOptions, resolve_closure_with_options};
+use resolve::{
+    FedrqResolver, ResolveOptions, resolve_closure_with_options, resolve_with_installability,
+};
 
 #[derive(Parser)]
 #[command(
@@ -57,7 +59,20 @@ struct ResolveArgs {
     #[arg(long)]
     copr: bool,
 
-    /// Maximum recursion depth (0 = unlimited).
+    /// Check that subpackages are installable.
+    #[arg(
+        long,
+        long_help = "\
+Check that subpackages are installable.
+
+Verifies that the Requires of every
+subpackage in the closure can be satisfied
+by the target repo or by other packages
+in the closure."
+    )]
+    check_install: bool,
+
+    /// Max recursion depth (0 = unlimited).
     #[arg(long, default_value = "0")]
     max_depth: usize,
 
@@ -119,17 +134,33 @@ fn main() -> ExitCode {
         max_depth: args.max_depth,
         verbose: args.verbose,
     };
-    let closure = match resolve_closure_with_options(
-        &resolver,
-        &args.packages,
-        &source_label,
-        &target_label,
-        &options,
-    ) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
+    let (closure, install_report) = if args.check_install {
+        match resolve_with_installability(
+            &resolver,
+            &args.packages,
+            &source_label,
+            &target_label,
+            &options,
+        ) {
+            Ok((c, r)) => (c, Some(r)),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        match resolve_closure_with_options(
+            &resolver,
+            &args.packages,
+            &source_label,
+            &target_label,
+            &options,
+        ) {
+            Ok(c) => (c, None),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
         }
     };
 
@@ -137,12 +168,42 @@ fn main() -> ExitCode {
         eprintln!("warning: {w}");
     }
 
+    if let Some(report) = &install_report {
+        for (pkg, entry) in &report.issues {
+            for u in &entry.unsatisfied {
+                match &u.provided_by {
+                    Some(provider) => {
+                        eprintln!("install: {pkg}: {dep} (needs {provider})", dep = u.dep)
+                    }
+                    None => eprintln!("install: {pkg}: {dep} (unresolvable)", dep = u.dep),
+                }
+            }
+        }
+    }
+
     match mode {
         Mode::Resolve => {
             if args.json {
-                print_json(&closure);
+                if let Some(report) = &install_report {
+                    print_json(&serde_json::json!({
+                        "source_branch": closure.source_branch,
+                        "target_branch": closure.target_branch,
+                        "requested": closure.requested,
+                        "closure": closure.closure,
+                        "warnings": closure.warnings,
+                        "installability": {
+                            "issues": report.issues,
+                            "additional_packages": report.additional_packages,
+                        },
+                    }));
+                } else {
+                    print_json(&closure);
+                }
             } else {
                 print_resolve(&closure);
+                if let Some(report) = &install_report {
+                    print_installability(report);
+                }
             }
             ExitCode::SUCCESS
         }
@@ -155,14 +216,25 @@ fn main() -> ExitCode {
                     } else if args.koji {
                         print_koji_chain(&phases);
                     } else if args.json {
-                        print_json(&serde_json::json!({
+                        let mut json = serde_json::json!({
                             "source_branch": closure.source_branch,
                             "target_branch": closure.target_branch,
                             "requested": closure.requested,
                             "build_order": phases,
-                        }));
+                        });
+                        if let Some(report) = &install_report {
+                            json["installability"] = serde_json::json!({
+                                "issues": report.issues,
+                                "additional_packages":
+                                    report.additional_packages,
+                            });
+                        }
+                        print_json(&json);
                     } else {
                         print_build_order(&phases, &closure);
+                        if let Some(report) = &install_report {
+                            print_installability(report);
+                        }
                     }
                     ExitCode::SUCCESS
                 }
@@ -311,6 +383,35 @@ fn print_build_order(phases: &[dag::BuildPhase], closure: &resolve::Closure) {
         closure.closure.len(),
         phases.len()
     );
+}
+
+fn print_installability(report: &resolve::InstallabilityReport) {
+    if report.issues.is_empty() {
+        println!("\nInstallability: all subpackage Requires satisfied.");
+        return;
+    }
+
+    println!("\nInstallability issues:\n");
+    for (pkg, entry) in &report.issues {
+        println!("  {pkg}:");
+        for u in &entry.unsatisfied {
+            match &u.provided_by {
+                Some(provider) => {
+                    println!("    - {} (needs {})", u.dep, provider);
+                }
+                None => {
+                    println!("    - {} (unresolvable)", u.dep);
+                }
+            }
+        }
+    }
+
+    if !report.additional_packages.is_empty() {
+        println!("\nAdditional packages needed for installability:");
+        for pkg in &report.additional_packages {
+            println!("  - {pkg}");
+        }
+    }
 }
 
 fn print_cycles(cycles: &[dag::Cycle], closure: &resolve::Closure) {
