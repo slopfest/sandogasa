@@ -13,6 +13,7 @@ members = [
     "crates/sandogasa-nvd",
     "crates/sandogasa-repology",
     "crates/sandogasa-rpmvercmp",
+    "tools/ebranch",
     "tools/fedora-cve-triage",
     "tools/hs-intake",
     "tools/hs-relmon",

@@ -112,6 +112,19 @@ impl Fedrq {
         Self::run(&mut cmd)
     }
 
+    /// Resolve a dependency name to the source package(s) that provide it.
+    ///
+    /// Uses `fedrq pkgs -P -S -F source_name <dep>` to find which source
+    /// RPM provides a given capability (package name, virtual Provide, or
+    /// file path).
+    pub fn resolve_to_source(&self, dep: &str) -> Result<Vec<String>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["pkgs", "-P", "-S", "-F", "source_name"]);
+        self.apply_opts(&mut cmd);
+        cmd.arg(dep);
+        Self::run(&mut cmd)
+    }
+
     /// Return the BuildRequires of a source package.
     pub fn src_buildrequires(&self, srpm: &str) -> Result<Vec<String>, Error> {
         let mut cmd = Command::new("fedrq");

@@ -1,0 +1,13 @@
+[package]
+name = "ebranch"
+version = "0.1.0"
+description = "Build dependency resolver — compute build order for cross-branch package porting"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+sandogasa-fedrq = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

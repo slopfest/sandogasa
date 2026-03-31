@@ -270,6 +270,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ebranch"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "sandogasa-fedrq",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "emojis"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
