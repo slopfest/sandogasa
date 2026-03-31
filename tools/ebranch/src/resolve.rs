@@ -88,6 +88,7 @@ pub struct ResolveOptions {
 }
 
 /// Resolve the full transitive closure of missing build dependencies.
+#[cfg(test)]
 pub fn resolve_closure(
     resolver: &dyn DepResolver,
     packages: &[String],
