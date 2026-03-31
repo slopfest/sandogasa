@@ -62,12 +62,30 @@ $ ebranch build-order --koji rust-base64-simd \
 rust-const-str rust-outref : rust-vsimd : rust-base64-simd
 ```
 
+### Copr batch build script
+
+Use `--copr` with `build-order` to generate a shell script that uses
+`copr build-package` with `--after-build-id` and `--with-build-id` to
+preserve phase ordering:
+
+```sh
+ebranch build-order --copr rust-base64-simd \
+    --source rawhide \
+    --target-repo '@koji:epel10.3-build-side-133542' > build.sh
+chmod +x build.sh
+./build.sh @myuser/myproject --chroot epel-10-x86_64
+```
+
+The script takes the Copr repo as its first argument, and passes any
+remaining arguments through to every `copr build-package` call.
+
 ### Useful flags
 
 - `--verbose` / `-v` — print progress to stderr as packages are resolved
 - `--max-depth N` — limit recursion depth (useful for exploring large
   dependency trees incrementally)
 - `--koji` — output build-order as a Koji chain build string
+- `--copr` — generate a Copr batch build shell script
 - `--json` — machine-readable JSON output
 
 ## License
