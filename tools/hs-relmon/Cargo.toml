@@ -2,7 +2,7 @@
 
 [package]
 name = "hs-relmon"
-version = "0.4.0"
+version.workspace = true
 description = "Release monitoring tool for CentOS Hyperscale SIG packages"
 edition.workspace = true
 license.workspace = true

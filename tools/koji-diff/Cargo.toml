@@ -1,6 +1,6 @@
 [package]
 name = "koji-diff"
-version = "0.1.0"
+version.workspace = true
 description = "Koji build log differ — compare buildroot and build logs between two Koji builds"
 edition.workspace = true
 license.workspace = true

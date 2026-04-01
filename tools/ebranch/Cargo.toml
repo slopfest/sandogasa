@@ -1,6 +1,6 @@
 [package]
 name = "ebranch"
-version = "0.1.0"
+version.workspace = true
 description = "Build dependency resolver — compute build order for cross-branch package porting"
 edition.workspace = true
 license.workspace = true

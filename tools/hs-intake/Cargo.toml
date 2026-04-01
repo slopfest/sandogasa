@@ -1,6 +1,6 @@
 [package]
 name = "hs-intake"
-version = "0.1.4"
+version.workspace = true
 description = "Hyperscale package intake tool — compare RPM package metadata between branches"
 edition.workspace = true
 license.workspace = true

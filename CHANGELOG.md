@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.6.3
+
+### New: koji-diff tool
+
+- Compare buildroot and build logs between two Koji builds
+- Accepts Koji build URLs, task URLs, or `build:<ID>`/`task:<ID>` refs
+- Resolves builds to buildArch tasks via Koji XML-RPC API
+- Downloads logs using `koji download-logs` with profile support
+  (koji.fedoraproject.org, cbs.centos.org, kojihub.stream.centos.org)
+- Parses installed packages from the DNF transaction table in root.log
+  (supports both DNF4 and DNF5)
+- Color-coded version change output using Rust semver rules:
+  green (same version), yellow (compatible), orange (0.x minor break),
+  red (major break)
+- Shows mock_output.log for dependency resolution failures, build.log
+  for rpmbuild failures
+- `--json` flag for machine-readable output
+- `--arch` to select architecture (default: x86_64)
+
+### New: ebranch tool
+
+- Build dependency resolver for cross-branch package porting
+  (Rust rewrite of the Python ebranch tool)
+- Compute build order for porting packages between branches
+- `--koji` flag for chain build command output
+- `--copr` flag for batch build script generation
+- `--check-install` for subpackage installability verification
+
+### New library crates
+
+- **sandogasa-fedrq**: wrapper for the fedrq CLI tool (RPM repo queries)
+- **sandogasa-rpmvercmp**: pure Rust implementation of RPM's rpmvercmp
+  algorithm with epoch-version-release comparison
+- **sandogasa-gitlab**: GitLab REST and GraphQL API client
+- **sandogasa-repology**: Repology package version tracking API client
+
+### Workspace
+
+- Unify all tool versions to use `version.workspace = true`
+- Integrate hs-intake and hs-relmon into the workspace, refactored to
+  use shared library crates (sandogasa-fedrq, sandogasa-rpmvercmp,
+  sandogasa-gitlab, sandogasa-repology)
+
 ## v0.6.2
 
 ### sandogasa-hattrack
