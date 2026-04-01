@@ -68,8 +68,13 @@ struct JsonRef {
 #[derive(serde::Serialize)]
 struct JsonBuildFailure {
     task_id: i64,
-    log_name: String,
-    log_tail: String,
+    logs: Vec<FailureLog>,
+}
+
+#[derive(serde::Serialize)]
+struct FailureLog {
+    name: String,
+    tail: String,
 }
 
 fn main() -> ExitCode {
@@ -197,15 +202,26 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         diff::print_diff(&pkg_diff, &label1, &label2, color);
 
         if let Some(failure) = &build_failure {
-            println!(
-                "\n--- Build failure in task {} ({} tail) ---",
-                failure.task_id, failure.log_name
-            );
-            println!("{}", failure.log_tail);
+            for log in &failure.logs {
+                println!(
+                    "\n--- Build failure in task {} ({} tail) ---",
+                    failure.task_id, log.name
+                );
+                println!("{}", log.tail);
+            }
         }
     }
 
     Ok(())
+}
+
+fn tail_log(name: &str, content: &str, lines: usize) -> FailureLog {
+    let all_lines: Vec<_> = content.lines().collect();
+    let start = all_lines.len().saturating_sub(lines);
+    FailureLog {
+        name: name.to_string(),
+        tail: all_lines[start..].join("\n"),
+    }
 }
 
 /// Try to read a file by name from a directory, searching recursively.
@@ -321,25 +337,37 @@ fn fetch_build_failure(
 
     // `koji download-logs` already downloaded all logs for this task.
     // Files may be in a subdirectory (koji uses arch-taskid dirs).
-    // Prefer mock_output.log (shows dep resolution failures), fall back
-    // to build.log (shows rpmbuild failures).
-    let log_names = ["mock_output.log", "build.log"];
-    for log_name in &log_names {
-        let content = find_and_read(tmpdir, log_name);
-        if let Some(text) = content {
-            let all_lines: Vec<_> = text.lines().collect();
-            let start = all_lines.len().saturating_sub(lines);
-            let tail = all_lines[start..].join("\n");
-            return Some(JsonBuildFailure {
-                task_id: failed_task.id,
-                log_name: log_name.to_string(),
-                log_tail: tail,
-            });
+    //
+    // Always show mock_output.log if present (it has the mock/dep error).
+    // Also show build.log unless mock_output.log already shows a dep
+    // resolution failure ("Problem: nothing provides"), in which case
+    // build.log adds no useful info.
+    let mut logs = Vec::new();
+
+    let mock_output = find_and_read(tmpdir, "mock_output.log");
+    let has_dep_error = mock_output
+        .as_ref()
+        .is_some_and(|t| t.contains("Problem: nothing provides"));
+
+    if let Some(text) = mock_output {
+        logs.push(tail_log("mock_output.log", &text, lines));
+    }
+
+    if !has_dep_error {
+        if let Some(text) = find_and_read(tmpdir, "build.log") {
+            logs.push(tail_log("build.log", &text, lines));
         }
     }
 
-    if !quiet {
-        eprintln!("(no failure logs found for task {})", failed_task.id);
+    if logs.is_empty() {
+        if !quiet {
+            eprintln!("(no failure logs found for task {})", failed_task.id);
+        }
+        return None;
     }
-    None
+
+    Some(JsonBuildFailure {
+        task_id: failed_task.id,
+        logs,
+    })
 }
