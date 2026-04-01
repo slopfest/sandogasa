@@ -1,0 +1,15 @@
+[package]
+name = "koji-diff"
+version = "0.1.0"
+description = "Koji build log differ — compare buildroot and build logs between two Koji builds"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+quick-xml = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }

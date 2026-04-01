@@ -16,6 +16,7 @@ members = [
     "tools/ebranch",
     "tools/fedora-cve-triage",
     "tools/hs-intake",
+    "tools/koji-diff",
     "tools/hs-relmon",
     "tools/sandogasa-hattrack",
     "tools/sandogasa-pkg-acl",
