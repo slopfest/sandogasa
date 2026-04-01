@@ -6,12 +6,6 @@ dist-git API.
 ## Installation
 
 ```
-cargo binstall sandogasa-pkg-acl
-```
-
-Or build from source:
-
-```
 cargo install sandogasa-pkg-acl
 ```
 

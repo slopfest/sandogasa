@@ -9,8 +9,8 @@ repository queries.
 
 ## Installation
 
-```sh
-cargo install --path .
+```
+cargo install hs-intake
 ```
 
 Requires `fedrq` to be installed and available in `$PATH`.

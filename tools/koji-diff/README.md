@@ -3,6 +3,14 @@
 Koji build log differ -- compare buildroot and build logs between two Koji
 builds.
 
+## Installation
+
+```
+cargo install koji-diff
+```
+
+Requires the `koji` CLI to be installed and available in `$PATH`.
+
 ## Usage
 
 ```

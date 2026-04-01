@@ -11,6 +11,14 @@ be installable after building, expanding the closure as needed.
 Shells out to [fedrq](https://src.fedoraproject.org/rpms/fedrq) for
 repository queries.
 
+## Installation
+
+```
+cargo install ebranch
+```
+
+Requires `fedrq` to be installed and available in `$PATH`.
+
 ## Usage
 
 At least one of `--source` / `--source-repo` and one of `--target` /

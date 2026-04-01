@@ -7,6 +7,12 @@ Release monitoring tool for [CentOS Hyperscale SIG](https://sigs.centos.org/hype
 Compares package versions across upstream, Fedora, CentOS Stream, and
 Hyperscale to identify outdated packages.
 
+## Installation
+
+```
+cargo install hs-relmon
+```
+
 ## Usage
 
 ```

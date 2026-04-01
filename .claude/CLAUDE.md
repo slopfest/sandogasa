@@ -22,6 +22,7 @@
 ## Workspace layout
 - Library crates go in `crates/`, binary crates go in `tools/`
 - Each crate (library or tool) must have its own README.md
+- Tool README.md files must include an Installation section with `cargo install <crate>` (and any required external tools like `fedrq` or `koji`). Do not include `cargo binstall` instructions since we do not provide binary downloads
 - Symlink the root LICENSE file into each crate subdirectory so it is included when publishing to crates.io
 - All dependencies (external and internal) are declared in `[workspace.dependencies]` in the root `Cargo.toml`, then referenced as `{ workspace = true }` in member crates
 

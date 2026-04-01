@@ -5,12 +5,6 @@ Look up a Fedora contributor's activity across services.
 ## Installation
 
 ```
-cargo binstall sandogasa-hattrack
-```
-
-Or build from source:
-
-```
 cargo install sandogasa-hattrack
 ```
 
