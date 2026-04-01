@@ -225,22 +225,120 @@ pub fn diff_packages(old: &[InstalledPackage], new: &[InstalledPackage]) -> Pack
     }
 }
 
+/// How significant is a version change under Rust semver rules?
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ChangeLevel {
+    /// Same upstream version, only release/dist differs.
+    Same,
+    /// Compatible: patch change, or minor change on >= 1.0.
+    Compatible,
+    /// Breaking for 0.x: minor version changed on a 0.x version.
+    MinorBreaking,
+    /// Major version differs.
+    MajorBreaking,
+}
+
+/// Classify a version change using Rust semver rules.
+///
+/// For versions >= 1.0, a different minor is compatible.
+/// For 0.x versions, a different minor is breaking.
+pub fn classify_change(old_evr: &str, new_evr: &str) -> ChangeLevel {
+    let old_ver = extract_upstream_version(old_evr);
+    let new_ver = extract_upstream_version(new_evr);
+
+    let old_parts = parse_semver_components(&old_ver);
+    let new_parts = parse_semver_components(&new_ver);
+
+    if old_parts == new_parts {
+        return ChangeLevel::Same;
+    }
+
+    let (old_major, old_minor, _) = old_parts;
+    let (new_major, new_minor, _) = new_parts;
+
+    if old_major != new_major {
+        return ChangeLevel::MajorBreaking;
+    }
+
+    if old_minor != new_minor && old_major == 0 {
+        return ChangeLevel::MinorBreaking;
+    }
+
+    ChangeLevel::Compatible
+}
+
+/// Extract the upstream version from an EVR string.
+///
+/// `1:4.7.0-10.el10` -> `4.7.0`
+/// `2.0.18-1.fc42` -> `2.0.18`
+fn extract_upstream_version(evr: &str) -> String {
+    // Strip epoch.
+    let without_epoch = match evr.find(':') {
+        Some(pos) => &evr[pos + 1..],
+        None => evr,
+    };
+    // Take everything before the first `-` (version, not release).
+    match without_epoch.find('-') {
+        Some(pos) => without_epoch[..pos].to_string(),
+        None => without_epoch.to_string(),
+    }
+}
+
+/// Parse a version string into (major, minor, patch) components.
+///
+/// Non-numeric or missing components default to 0.
+fn parse_semver_components(version: &str) -> (u64, u64, u64) {
+    let mut parts = version.split('.');
+    let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let patch = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (major, minor, patch)
+}
+
+impl ChangeLevel {
+    fn ansi_color(self) -> &'static str {
+        match self {
+            ChangeLevel::Same => "\x1b[32m",                // green
+            ChangeLevel::Compatible => "\x1b[33m",          // yellow
+            ChangeLevel::MinorBreaking => "\x1b[38;5;208m", // orange (256-color)
+            ChangeLevel::MajorBreaking => "\x1b[31m",       // red
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            ChangeLevel::Same => "=",
+            ChangeLevel::Compatible => "~",
+            ChangeLevel::MinorBreaking => "!",
+            ChangeLevel::MajorBreaking => "!!",
+        }
+    }
+}
+
 /// Print the package diff in human-readable format.
-pub fn print_diff(diff: &PackageDiff, ref1_label: &str, ref2_label: &str) {
+pub fn print_diff(diff: &PackageDiff, ref1_label: &str, ref2_label: &str, color: bool) {
     if diff.added.is_empty() && diff.removed.is_empty() && diff.changed.is_empty() {
         println!("No differences in installed packages.");
         println!("({} packages unchanged)", diff.unchanged_count);
         return;
     }
 
+    let reset = if color { "\x1b[0m" } else { "" };
+
     println!("Buildroot package changes (root.log):");
 
     if !diff.changed.is_empty() {
         println!("  Changed ({}):", diff.changed.len());
         for pkg in &diff.changed {
+            let level = classify_change(&pkg.old_evr, &pkg.new_evr);
+            let c = if color { level.ansi_color() } else { "" };
             println!(
-                "    {}.{}: {} -> {}",
-                pkg.name, pkg.arch, pkg.old_evr, pkg.new_evr
+                "    {c}{} {}.{}: {} -> {}{reset}",
+                level.label(),
+                pkg.name,
+                pkg.arch,
+                pkg.old_evr,
+                pkg.new_evr
             );
         }
     }
@@ -566,5 +664,91 @@ DEBUG util.py:463:   bash                         x86_64  5.2.26-6.el10         
         assert_eq!(diff.added.len(), 1);
         assert_eq!(diff.removed.len(), 1);
         assert_eq!(diff.unchanged_count, 1);
+    }
+
+    // --- Semver classification ---
+
+    #[test]
+    fn test_classify_same_version() {
+        // Only release/dist differs.
+        assert_eq!(
+            classify_change("2.0.18-1.fc42", "2.0.18-1.el10_2"),
+            ChangeLevel::Same
+        );
+    }
+
+    #[test]
+    fn test_classify_same_version_with_epoch() {
+        assert_eq!(
+            classify_change("1:1.14.10-5.fc42", "1:1.14.10-5.el10"),
+            ChangeLevel::Same
+        );
+    }
+
+    #[test]
+    fn test_classify_compatible_minor_change() {
+        // Major >= 1, minor differs -> compatible.
+        assert_eq!(
+            classify_change("4.5.2-1.fc42", "4.4.36-10.el10"),
+            ChangeLevel::Compatible
+        );
+    }
+
+    #[test]
+    fn test_classify_compatible_patch_change() {
+        // Same major.minor, patch differs.
+        assert_eq!(
+            classify_change("1.5.2-1.fc42", "1.5.9-1.el10"),
+            ChangeLevel::Compatible
+        );
+    }
+
+    #[test]
+    fn test_classify_minor_breaking_0x() {
+        // 0.x: minor change is breaking under Rust semver.
+        assert_eq!(
+            classify_change("0.5.2-1.fc42", "0.6.0-1.el10"),
+            ChangeLevel::MinorBreaking
+        );
+    }
+
+    #[test]
+    fn test_classify_compatible_0x_patch() {
+        // 0.x: patch-only change is compatible.
+        assert_eq!(
+            classify_change("0.5.2-1.fc42", "0.5.9-1.el10"),
+            ChangeLevel::Compatible
+        );
+    }
+
+    #[test]
+    fn test_classify_major_breaking() {
+        assert_eq!(
+            classify_change("1.0.0-1.fc42", "2.0.0-1.el10"),
+            ChangeLevel::MajorBreaking
+        );
+    }
+
+    #[test]
+    fn test_classify_major_breaking_0_to_1() {
+        assert_eq!(
+            classify_change("0.9.0-1.fc42", "1.0.0-1.el10"),
+            ChangeLevel::MajorBreaking
+        );
+    }
+
+    #[test]
+    fn test_extract_upstream_version() {
+        assert_eq!(extract_upstream_version("4.7.0-10.el10"), "4.7.0");
+        assert_eq!(extract_upstream_version("1:1.14.10-5.el10"), "1.14.10");
+        assert_eq!(extract_upstream_version("20260216-1.el10"), "20260216");
+    }
+
+    #[test]
+    fn test_parse_semver_components() {
+        assert_eq!(parse_semver_components("4.7.0"), (4, 7, 0));
+        assert_eq!(parse_semver_components("1.14.10"), (1, 14, 10));
+        assert_eq!(parse_semver_components("20260216"), (20260216, 0, 0));
+        assert_eq!(parse_semver_components("2.39"), (2, 39, 0));
     }
 }
