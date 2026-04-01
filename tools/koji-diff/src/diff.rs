@@ -299,17 +299,18 @@ impl ChangeLevel {
     fn ansi_color(self) -> &'static str {
         match self {
             ChangeLevel::Same => "\x1b[32m",                // green
-            ChangeLevel::Compatible => "\x1b[33m",          // yellow
-            ChangeLevel::MinorBreaking => "\x1b[38;5;208m", // orange (256-color)
+            ChangeLevel::Compatible => "\x1b[38;5;228m",    // bright yellow
+            ChangeLevel::MinorBreaking => "\x1b[38;5;208m", // orange
             ChangeLevel::MajorBreaking => "\x1b[31m",       // red
         }
     }
 
+    /// Two-char-wide label for aligned output.
     fn label(self) -> &'static str {
         match self {
-            ChangeLevel::Same => "=",
-            ChangeLevel::Compatible => "~",
-            ChangeLevel::MinorBreaking => "!",
+            ChangeLevel::Same => "= ",
+            ChangeLevel::Compatible => "~ ",
+            ChangeLevel::MinorBreaking => "! ",
             ChangeLevel::MajorBreaking => "!!",
         }
     }
