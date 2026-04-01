@@ -4,6 +4,7 @@
 //! for querying Fedora and EPEL RPM repositories.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::process::Command;
 
 /// Options for fedrq queries.
@@ -43,6 +44,27 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// Return the fedrq smartcache directory (`$XDG_CACHE_HOME/fedrq`).
+pub fn cache_dir() -> PathBuf {
+    let base = std::env::var("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").expect("HOME not set");
+            PathBuf::from(home).join(".cache")
+        });
+    base.join("fedrq")
+}
+
+/// Remove the fedrq smartcache directory so the next query fetches
+/// fresh repository metadata.
+pub fn clear_cache() -> std::io::Result<()> {
+    let dir = cache_dir();
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)?;
+    }
+    Ok(())
+}
 
 impl Fedrq {
     fn apply_opts(&self, cmd: &mut Command) {
@@ -180,6 +202,15 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("fedrq exited with"));
         assert!(!msg.contains("package not found"));
+    }
+
+    #[test]
+    fn cache_dir_ends_with_fedrq() {
+        let dir = super::cache_dir();
+        assert!(
+            dir.ends_with("fedrq"),
+            "cache_dir should end with 'fedrq', got: {dir:?}"
+        );
     }
 
     #[test]

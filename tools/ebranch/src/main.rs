@@ -79,6 +79,10 @@ in the closure."
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
+
+    /// Clear fedrq repo metadata cache before querying.
+    #[arg(long)]
+    refresh: bool,
 }
 
 #[derive(Subcommand)]
@@ -106,6 +110,16 @@ fn main() -> ExitCode {
     if args.target.is_none() && args.target_repo.is_none() {
         eprintln!("error: at least one of --target or --target-repo is required");
         return ExitCode::FAILURE;
+    }
+
+    if args.refresh {
+        if let Err(e) = sandogasa_fedrq::clear_cache() {
+            eprintln!("error: failed to clear fedrq cache: {e}");
+            return ExitCode::FAILURE;
+        }
+        if args.verbose {
+            eprintln!("cleared fedrq cache");
+        }
     }
 
     let resolver = FedrqResolver {
