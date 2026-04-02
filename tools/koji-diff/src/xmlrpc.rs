@@ -78,6 +78,32 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+impl Error {
+    /// Return `true` if this error is likely transient and the
+    /// operation should be retried (e.g. HTTP 502/503/504).
+    pub fn is_retriable(&self) -> bool {
+        match self {
+            // Connection or transport failures are often transient.
+            Error::Http(_) => true,
+            // XML parse failures after a successful HTTP request
+            // usually mean we got an HTML error page instead of XML
+            // (e.g. a 502 gateway error page).
+            Error::Xml(_) => true,
+            // Koji CLI errors mentioning server errors.
+            Error::Parse(msg) => {
+                msg.contains("502")
+                    || msg.contains("503")
+                    || msg.contains("504")
+                    || msg.contains("Bad Gateway")
+                    || msg.contains("Service Unavailable")
+                    || msg.contains("Gateway Timeout")
+            }
+            // XML-RPC faults are legitimate API errors.
+            Error::Fault { .. } => false,
+        }
+    }
+}
+
 impl From<reqwest::Error> for Error {
     fn from(e: reqwest::Error) -> Self {
         Error::Http(e)
@@ -582,5 +608,39 @@ mod tests {
             </param></params></methodResponse>"#;
         let v = parse_response(xml).unwrap();
         assert_eq!(v.as_str(), Some("bare text"));
+    }
+
+    #[test]
+    fn test_is_retriable_http_error() {
+        // reqwest errors are retriable (connection failures, etc.)
+        let err = Error::Xml("unexpected token".into());
+        assert!(err.is_retriable());
+    }
+
+    #[test]
+    fn test_is_retriable_parse_502() {
+        let err = Error::Parse("koji download-logs failed: 502 Bad Gateway".into());
+        assert!(err.is_retriable());
+    }
+
+    #[test]
+    fn test_is_retriable_parse_503() {
+        let err = Error::Parse("503 Service Unavailable".into());
+        assert!(err.is_retriable());
+    }
+
+    #[test]
+    fn test_is_not_retriable_fault() {
+        let err = Error::Fault {
+            code: 1000,
+            message: "No such build".into(),
+        };
+        assert!(!err.is_retriable());
+    }
+
+    #[test]
+    fn test_is_not_retriable_parse_not_found() {
+        let err = Error::Parse("root.log not found for task 123".into());
+        assert!(!err.is_retriable());
     }
 }

@@ -7,9 +7,37 @@ use std::process::Command;
 
 use crate::xmlrpc::{Client, Error, Value};
 
+/// Default number of retry attempts for transient failures.
+const DEFAULT_RETRIES: u32 = 3;
+
 /// Task state constants from Koji.
 pub const TASK_CLOSED: i64 = 2;
 pub const TASK_FAILED: i64 = 5;
+
+/// Retry an operation with exponential backoff on retriable errors.
+fn retry<T, F: Fn() -> Result<T, Error>>(retries: u32, f: F) -> Result<T, Error> {
+    let mut last_err = None;
+    for attempt in 0..=retries {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if attempt < retries && e.is_retriable() {
+                    let delay = std::time::Duration::from_secs(1 << attempt);
+                    eprintln!(
+                        "  retrying in {}s ({}/{retries}): {e}",
+                        delay.as_secs(),
+                        attempt + 1,
+                    );
+                    std::thread::sleep(delay);
+                    last_err = Some(e);
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
 
 /// Koji API client.
 pub struct KojiClient {
@@ -67,7 +95,9 @@ impl KojiClient {
 
     /// Fetch build information by build ID.
     pub fn get_build(&self, build_id: i64) -> Result<BuildInfo, Error> {
-        let result = self.client.call("getBuild", &[Value::Int(build_id)])?;
+        let result = retry(DEFAULT_RETRIES, || {
+            self.client.call("getBuild", &[Value::Int(build_id)])
+        })?;
         Ok(BuildInfo {
             id: result
                 .get("id")
@@ -103,7 +133,9 @@ impl KojiClient {
 
     /// Fetch task information by task ID.
     pub fn get_task_info(&self, task_id: i64) -> Result<TaskInfo, Error> {
-        let result = self.client.call("getTaskInfo", &[Value::Int(task_id)])?;
+        let result = retry(DEFAULT_RETRIES, || {
+            self.client.call("getTaskInfo", &[Value::Int(task_id)])
+        })?;
         Ok(TaskInfo {
             id: result.get("id").and_then(|v| v.as_int()).unwrap_or(task_id),
             method: result
@@ -122,9 +154,9 @@ impl KojiClient {
 
     /// Fetch child tasks of a parent task.
     pub fn get_task_children(&self, task_id: i64) -> Result<Vec<TaskInfo>, Error> {
-        let result = self
-            .client
-            .call("getTaskChildren", &[Value::Int(task_id)])?;
+        let result = retry(DEFAULT_RETRIES, || {
+            self.client.call("getTaskChildren", &[Value::Int(task_id)])
+        })?;
         let items = result
             .as_array()
             .ok_or_else(|| Error::Parse("expected array for task children".into()))?;
@@ -197,26 +229,27 @@ impl KojiClient {
         filename: &str,
         dest_dir: &Path,
     ) -> Result<String, Error> {
-        let mut cmd = Command::new("koji");
-
-        if let Some(profile) = self.koji_profile() {
-            cmd.arg("-p").arg(profile);
-        }
-
-        let output = cmd
-            .arg("download-logs")
-            .arg("--dir")
-            .arg(dest_dir)
-            .arg(task_id.to_string())
-            .output()
-            .map_err(|e| Error::Parse(format!("failed to run koji download-logs: {e}")))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(Error::Parse(format!(
-                "koji download-logs {task_id} failed: {stderr}"
-            )));
-        }
+        let profile = self.koji_profile();
+        retry(DEFAULT_RETRIES, || {
+            let mut cmd = Command::new("koji");
+            if let Some(p) = profile {
+                cmd.arg("-p").arg(p);
+            }
+            let output = cmd
+                .arg("download-logs")
+                .arg("--dir")
+                .arg(dest_dir)
+                .arg(task_id.to_string())
+                .output()
+                .map_err(|e| Error::Parse(format!("failed to run koji download-logs: {e}")))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(Error::Parse(format!(
+                    "koji download-logs {task_id} failed: {stderr}"
+                )));
+            }
+            Ok(())
+        })?;
 
         let path = dest_dir.join(filename);
         if path.exists() {
@@ -274,14 +307,16 @@ impl KojiClient {
             version = build.version,
             release = build.release,
         );
-        let response = reqwest::blocking::get(&url)
-            .map_err(|e| Error::Parse(format!("failed to fetch {url}: {e}")))?;
-        if !response.status().is_success() {
-            return Err(Error::Parse(format!("{url}: HTTP {}", response.status())));
-        }
-        response
-            .text()
-            .map_err(|e| Error::Parse(format!("failed to read {url}: {e}")))
+        retry(DEFAULT_RETRIES, || {
+            let response = reqwest::blocking::get(&url)
+                .map_err(|e| Error::Parse(format!("failed to fetch {url}: {e}")))?;
+            if !response.status().is_success() {
+                return Err(Error::Parse(format!("{url}: HTTP {}", response.status())));
+            }
+            response
+                .text()
+                .map_err(|e| Error::Parse(format!("failed to read {url}: {e}")))
+        })
     }
 
     /// Return the packages base URL for this instance, if known.
