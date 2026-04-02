@@ -53,10 +53,15 @@ struct ResolveArgs {
     koji: bool,
 
     /// Generate a shell script for Copr batch builds.
-    ///
-    /// The script accepts the Copr repo as its first argument,
-    /// followed by any extra flags to pass to copr build-package.
-    #[arg(long)]
+    #[arg(
+        long,
+        long_help = "\
+Generate a shell script for Copr batch builds.
+
+The script accepts the Copr repo as its first
+argument, followed by any extra flags to pass
+to copr build-package."
+    )]
     copr: bool,
 
     /// Check that subpackages are installable.
@@ -71,6 +76,25 @@ by the target repo or by other packages
 in the closure."
     )]
     check_install: bool,
+
+    /// Exclude packages from installability checks.
+    #[arg(
+        long,
+        value_name = "PKG,...",
+        value_delimiter = ',',
+        long_help = "\
+Exclude packages from installability checks.
+
+Comma-separated list of source packages.
+Deps provided by these packages are treated
+as satisfied and they will not be pulled into
+the closure. Useful for packages like glibc
+whose version mismatch between Rawhide and
+older releases is expected.
+
+May be passed multiple times."
+    )]
+    exclude_install: Vec<String>,
 
     /// Max recursion depth (0 = unlimited).
     #[arg(long, default_value = "0")]
@@ -147,6 +171,7 @@ fn main() -> ExitCode {
     let options = ResolveOptions {
         max_depth: args.max_depth,
         verbose: args.verbose,
+        exclude_install: args.exclude_install.iter().cloned().collect(),
     };
     let (closure, install_report) = if args.check_install {
         match resolve_with_installability(

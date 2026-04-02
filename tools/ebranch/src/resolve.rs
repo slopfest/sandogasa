@@ -89,6 +89,8 @@ pub struct ResolveOptions {
     pub max_depth: usize,
     /// Print progress to stderr.
     pub verbose: bool,
+    /// Source packages to exclude from installability expansion.
+    pub exclude_install: BTreeSet<String>,
 }
 
 /// Resolve the full transitive closure of missing build dependencies.
@@ -285,7 +287,8 @@ pub struct InstallabilityReport {
 pub fn check_installability(
     resolver: &dyn DepResolver,
     closure: &Closure,
-    verbose: bool,
+    options: &ResolveOptions,
+    skip: &BTreeSet<String>,
 ) -> InstallabilityReport {
     let mut issues: BTreeMap<String, InstallabilityEntry> = BTreeMap::new();
     let mut additional_packages: BTreeSet<String> = BTreeSet::new();
@@ -297,7 +300,11 @@ pub fn check_installability(
     let closure_pkgs: BTreeSet<&String> = closure.closure.keys().collect();
 
     for pkg in closure.closure.keys() {
-        if verbose {
+        if skip.contains(pkg) {
+            continue;
+        }
+
+        if options.verbose {
             eprintln!("[installability] checking subpackages of {pkg}");
         }
 
@@ -358,8 +365,12 @@ pub fn check_installability(
                     // Self-provided by the same source package — OK.
                     continue;
                 }
-                Some(provider) if closure_pkgs.contains(provider) => {
-                    // Provided by another package in the closure — OK.
+                Some(provider)
+                    if closure_pkgs.contains(provider)
+                        || options.exclude_install.contains(provider) =>
+                {
+                    // Provided by another package in the closure or
+                    // in the exclude list — OK.
                     continue;
                 }
                 Some(provider) => {
@@ -409,6 +420,8 @@ pub fn resolve_with_installability(
 ) -> Result<(Closure, InstallabilityReport), String> {
     let mut all_packages: BTreeSet<String> = packages.iter().cloned().collect();
     let requested: Vec<String> = packages.to_vec();
+    // Packages whose installability already passed — skip on future iterations.
+    let mut passed: BTreeSet<String> = BTreeSet::new();
 
     loop {
         let pkg_list: Vec<String> = all_packages.iter().cloned().collect();
@@ -428,7 +441,14 @@ pub fn resolve_with_installability(
             options,
         )?;
 
-        let report = check_installability(resolver, &closure, options.verbose);
+        let report = check_installability(resolver, &closure, options, &passed);
+
+        // Record packages that passed this round.
+        for pkg in closure.closure.keys() {
+            if !passed.contains(pkg) && !report.issues.contains_key(pkg) {
+                passed.insert(pkg.clone());
+            }
+        }
 
         if report.additional_packages.is_empty() {
             // Fixed point reached. Restore original requested list.
@@ -761,7 +781,12 @@ mod tests {
 
         let closure =
             resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
-        let report = check_installability(&resolver, &closure, false);
+        let report = check_installability(
+            &resolver,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
         assert!(report.issues.is_empty());
         assert!(report.additional_packages.is_empty());
     }
@@ -776,7 +801,12 @@ mod tests {
 
         let closure =
             resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
-        let report = check_installability(&resolver, &closure, false);
+        let report = check_installability(
+            &resolver,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
         assert_eq!(report.issues.len(), 1);
         assert_eq!(report.issues["mypkg"].unsatisfied.len(), 1);
         assert_eq!(report.issues["mypkg"].unsatisfied[0].dep, "libwidget");
@@ -801,7 +831,12 @@ mod tests {
         let closure = resolve_closure(&resolver, &["a".to_string()], "rawhide", "epel10").unwrap();
         // b is in the closure (pulled in via BuildRequires)
         assert!(closure.closure.contains_key("b"));
-        let report = check_installability(&resolver, &closure, false);
+        let report = check_installability(
+            &resolver,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
         assert!(report.issues.is_empty());
     }
 
@@ -816,7 +851,12 @@ mod tests {
 
         let closure =
             resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
-        let report = check_installability(&resolver, &closure, false);
+        let report = check_installability(
+            &resolver,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
         assert!(report.issues.is_empty());
     }
 
@@ -828,7 +868,12 @@ mod tests {
 
         let closure =
             resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
-        let report = check_installability(&resolver, &closure, false);
+        let report = check_installability(
+            &resolver,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
         assert!(report.issues.is_empty());
     }
 
@@ -841,7 +886,12 @@ mod tests {
 
         let closure =
             resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
-        let report = check_installability(&resolver, &closure, false);
+        let report = check_installability(
+            &resolver,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
         assert_eq!(report.issues.len(), 1);
         assert_eq!(report.issues["mypkg"].unsatisfied[0].provided_by, None);
     }
@@ -857,7 +907,12 @@ mod tests {
 
         let closure =
             resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
-        let report = check_installability(&resolver, &closure, false);
+        let report = check_installability(
+            &resolver,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
         assert_eq!(report.issues["mypkg"].unsatisfied.len(), 1);
         assert_eq!(report.additional_packages.len(), 1);
     }
@@ -870,7 +925,12 @@ mod tests {
 
         let closure =
             resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
-        let report = check_installability(&resolver, &closure, false);
+        let report = check_installability(
+            &resolver,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
         assert!(report.issues.is_empty());
     }
 
@@ -1012,5 +1072,121 @@ mod tests {
         assert!(closure.closure.contains_key("widget"));
         assert!(closure.closure.contains_key("helper"));
         assert!(report.issues.is_empty());
+    }
+
+    // --- Exclude-install tests ---
+
+    #[test]
+    fn test_exclude_install_skips_provider() {
+        // a's subpackage requires libfoo, provided by "foo" on source.
+        // With foo excluded, it should not be pulled into the closure
+        // and a should be considered installable.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["libfoo"]);
+        resolver.add_source_resolve("libfoo", "foo");
+
+        let options = ResolveOptions {
+            exclude_install: BTreeSet::from(["foo".to_string()]),
+            ..Default::default()
+        };
+        let closure = resolve_closure(&resolver, &["a".to_string()], "rawhide", "epel10").unwrap();
+        let report = check_installability(&resolver, &closure, &options, &BTreeSet::new());
+        assert!(report.issues.is_empty());
+        assert!(report.additional_packages.is_empty());
+    }
+
+    #[test]
+    fn test_exclude_install_iterative() {
+        // Same as test_iterative_expands_closure but with widget excluded.
+        // Widget should NOT be pulled into the closure.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["libwidget"]);
+        resolver.add_source_resolve("libwidget", "widget");
+
+        let options = ResolveOptions {
+            exclude_install: BTreeSet::from(["widget".to_string()]),
+            ..Default::default()
+        };
+        let (closure, report) = resolve_with_installability(
+            &resolver,
+            &["a".to_string()],
+            "rawhide",
+            "epel10",
+            &options,
+        )
+        .unwrap();
+        assert_eq!(closure.closure.len(), 1);
+        assert!(!closure.closure.contains_key("widget"));
+        assert!(report.issues.is_empty());
+    }
+
+    #[test]
+    fn test_exclude_install_partial() {
+        // a needs libfoo (from foo, excluded) and libbar (from bar, not excluded).
+        // Only bar should be pulled in; libfoo should be treated as satisfied.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["libfoo", "libbar"]);
+        resolver.add_source_resolve("libfoo", "foo");
+        resolver.add_source_resolve("libbar", "bar");
+        resolver.add_buildrequires("bar", &[]);
+        resolver.add_subpkg_requires("bar", &[]);
+
+        let options = ResolveOptions {
+            exclude_install: BTreeSet::from(["foo".to_string()]),
+            ..Default::default()
+        };
+        let (closure, report) = resolve_with_installability(
+            &resolver,
+            &["a".to_string()],
+            "rawhide",
+            "epel10",
+            &options,
+        )
+        .unwrap();
+        assert!(closure.closure.contains_key("bar"));
+        assert!(!closure.closure.contains_key("foo"));
+        assert!(report.issues.is_empty());
+    }
+
+    // --- Skip (already-passed) tests ---
+
+    #[test]
+    fn test_skip_already_passed_packages() {
+        // Directly test that the skip set prevents re-checking.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_buildrequires("b", &[]);
+        resolver.add_subpkg_requires("a", &["glibc"]);
+        resolver.add_subpkg_requires("b", &["libwidget"]);
+        resolver.add_target_resolve("glibc", "glibc");
+        resolver.add_source_resolve("libwidget", "widget");
+
+        let closure = resolve_closure(
+            &resolver,
+            &["a".to_string(), "b".to_string()],
+            "rawhide",
+            "epel10",
+        )
+        .unwrap();
+
+        // Without skip: b has an issue.
+        let report = check_installability(
+            &resolver,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
+        assert!(report.issues.contains_key("b"));
+        assert!(report.additional_packages.contains("widget"));
+
+        // With a in skip set: same result (a was fine anyway),
+        // but proves skipping works without error.
+        let skip = BTreeSet::from(["a".to_string()]);
+        let report = check_installability(&resolver, &closure, &ResolveOptions::default(), &skip);
+        assert!(report.issues.contains_key("b"));
+        assert!(!report.issues.contains_key("a"));
     }
 }
