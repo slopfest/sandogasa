@@ -125,6 +125,12 @@ install time (as a Requires of a subpackage) would be missed.
   dependency trees incrementally)
 - `--check-install` — verify subpackage installability and expand the
   closure with any additionally needed packages
+- `--exclude-install PKG,...` — exclude source packages from
+  installability checks (deps they provide are treated as satisfied)
+- `--no-auto-exclude` — disable automatic exclusion of solib symbol
+  version deps (e.g. `libc.so.6(GLIBC_2.38)(64bit)`) from
+  installability checks
+- `--refresh` — clear fedrq repo metadata cache before querying
 - `--koji` — output build-order as a Koji chain build string
 - `--copr` — generate a Copr batch build shell script
 - `--json` — machine-readable JSON output

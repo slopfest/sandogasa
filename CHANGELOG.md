@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.7.0
+
+### New: sandogasa-depfilter library crate
+
+- Shared RPM dependency filtering for cross-branch analysis
+- Classifies solib symbol version deps, soname deps, and RPM-internal
+  deps (rpmlib, auto, config)
+
+### ebranch
+
+- Auto-exclude solib symbol version deps (e.g.
+  `libc.so.6(GLIBC_2.38)(64bit)`) from installability checks — removes
+  the need to manually `--exclude-install glibc` in most cases
+- `--no-auto-exclude` flag to disable auto-exclusion
+- Use shared dep filtering from sandogasa-depfilter
+
+### koji-diff
+
+- Fall back to build storage HTTP download when task logs have been
+  garbage collected (requires build reference, not task reference)
+- Retry with exponential backoff on transient server errors (502/503/504)
+- **Breaking**: `BuildInfo` struct has new public fields (`name`,
+  `version`, `release`)
+
+### hs-intake
+
+- Use shared solib detection from sandogasa-depfilter
+
+### Workspace
+
+- Fix all clippy warnings across workspace
+- Add clippy cleanliness rule to CLAUDE.md
+
 ## v0.6.3
 
 ### New: koji-diff tool

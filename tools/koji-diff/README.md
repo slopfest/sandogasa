@@ -52,7 +52,8 @@ koji-diff task:143889060 task:143927217 \
 
 1. Resolves each reference to a buildArch task for the requested architecture
    via the Koji XML-RPC API
-2. Downloads logs using `koji download-logs`
+2. Downloads logs using `koji download-logs`, falling back to HTTP download
+   from build storage when task logs have been garbage collected
 3. Parses installed packages from the DNF transaction table in `root.log`
    (supports both DNF4 and DNF5)
 4. Shows which packages were added, removed, or changed between the two builds

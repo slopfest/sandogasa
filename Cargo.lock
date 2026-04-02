@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "ebranch"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "clap",
  "sandogasa-depfilter",
@@ -313,7 +313,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fedora-cve-triage"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "clap",
@@ -535,7 +535,7 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "hs-intake"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "clap",
  "sandogasa-depfilter",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "hs-relmon"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "clap",
  "mockito",
@@ -855,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "koji-diff"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "clap",
  "quick-xml",
@@ -1400,7 +1400,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sandogasa-bodhi"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -1411,7 +1411,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-bugzilla"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "reqwest",
@@ -1423,7 +1423,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-config"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "dirs",
  "rpassword",
@@ -1434,11 +1434,11 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-depfilter"
-version = "0.6.3"
+version = "0.7.0"
 
 [[package]]
 name = "sandogasa-discourse"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "reqwest",
@@ -1450,7 +1450,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-distgit"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -1461,7 +1461,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-fasjson"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1470,11 +1470,11 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-fedrq"
-version = "0.6.3"
+version = "0.7.0"
 
 [[package]]
 name = "sandogasa-gitlab"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "mockito",
  "reqwest",
@@ -1484,7 +1484,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-hattrack"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "clap",
@@ -1502,7 +1502,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-mailman"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -1513,7 +1513,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-nvd"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -1524,7 +1524,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-pkg-acl"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "clap",
  "sandogasa-config",
@@ -1539,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-repology"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "reqwest",
  "sandogasa-rpmvercmp",
@@ -1549,7 +1549,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-rpmvercmp"
-version = "0.6.3"
+version = "0.7.0"
 
 [[package]]
 name = "scopeguard"
