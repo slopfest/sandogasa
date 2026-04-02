@@ -22,6 +22,9 @@ pub struct KojiClient {
 pub struct BuildInfo {
     pub id: i64,
     pub task_id: i64,
+    pub name: String,
+    pub version: String,
+    pub release: String,
     pub nvr: String,
     pub state: i64,
 }
@@ -74,6 +77,21 @@ impl KojiClient {
                 .get("task_id")
                 .and_then(|v| v.as_int())
                 .ok_or_else(|| Error::Parse("missing task_id in build info".into()))?,
+            name: result
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            version: result
+                .get("version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            release: result
+                .get("release")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             nvr: result
                 .get("nvr")
                 .and_then(|v| v.as_str())
@@ -230,6 +248,50 @@ impl KojiClient {
                     .join(", ")
             }
         )))
+    }
+
+    /// Download a log file from a build's persistent storage via HTTP.
+    ///
+    /// Build logs are stored at:
+    /// `https://{topurl}/packages/{name}/{version}/{release}/data/logs/{arch}/{filename}`
+    ///
+    /// These persist even after task logs are garbage collected.
+    pub fn download_build_log(
+        &self,
+        build: &BuildInfo,
+        arch: &str,
+        filename: &str,
+    ) -> Result<String, Error> {
+        let topurl = self.packages_url().ok_or_else(|| {
+            Error::Parse(format!(
+                "no known packages URL for instance {}",
+                self.instance
+            ))
+        })?;
+        let url = format!(
+            "{topurl}/packages/{name}/{version}/{release}/data/logs/{arch}/{filename}",
+            name = build.name,
+            version = build.version,
+            release = build.release,
+        );
+        let response = reqwest::blocking::get(&url)
+            .map_err(|e| Error::Parse(format!("failed to fetch {url}: {e}")))?;
+        if !response.status().is_success() {
+            return Err(Error::Parse(format!("{url}: HTTP {}", response.status())));
+        }
+        response
+            .text()
+            .map_err(|e| Error::Parse(format!("failed to read {url}: {e}")))
+    }
+
+    /// Return the packages base URL for this instance, if known.
+    fn packages_url(&self) -> Option<&'static str> {
+        match self.instance.as_str() {
+            "koji.fedoraproject.org" => Some("https://kojipkgs.fedoraproject.org"),
+            "cbs.centos.org" => Some("https://cbs.centos.org/kojifiles"),
+            "kojihub.stream.centos.org" => Some("https://kojihub.stream.centos.org/kojifiles"),
+            _ => None,
+        }
     }
 
     /// Return the koji CLI profile for this instance, if any.

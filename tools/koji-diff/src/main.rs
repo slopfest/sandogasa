@@ -108,9 +108,9 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("koji-diff: comparing builds on {}", koji_client.instance());
     }
 
-    // Resolve build IDs to task IDs.
-    let task_id1 = resolve_task_id(&koji_client, &ref1)?;
-    let task_id2 = resolve_task_id(&koji_client, &ref2)?;
+    // Resolve build IDs to task IDs (and BuildInfo when available).
+    let (task_id1, build1) = resolve_ref(&koji_client, &ref1)?;
+    let (task_id2, build2) = resolve_ref(&koji_client, &ref2)?;
 
     // Resolve to buildArch tasks.
     let arch_task1 = koji_client.resolve_build_arch_task(task_id1, &cli.arch)?;
@@ -128,19 +128,28 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!();
     }
 
-    // Download logs from both tasks into temp directories.
+    // Download root.log from both builds/tasks.
+    // Prefer build-based HTTP download (persists after task GC),
+    // fall back to koji download-logs (task-based).
     let tmpdir1 = tempfile::tempdir()?;
     let tmpdir2 = tempfile::tempdir()?;
 
-    if !cli.json {
-        eprintln!("Downloading logs from task {}...", arch_task1.id);
-    }
-    let root_log1 = koji_client.download_log(arch_task1.id, "root.log", tmpdir1.path())?;
-
-    if !cli.json {
-        eprintln!("Downloading logs from task {}...", arch_task2.id);
-    }
-    let root_log2 = koji_client.download_log(arch_task2.id, "root.log", tmpdir2.path())?;
+    let root_log1 = download_root_log(
+        &koji_client,
+        build1.as_ref(),
+        &arch_task1,
+        &cli.arch,
+        tmpdir1.path(),
+        cli.json,
+    )?;
+    let root_log2 = download_root_log(
+        &koji_client,
+        build2.as_ref(),
+        &arch_task2,
+        &cli.arch,
+        tmpdir2.path(),
+        cli.json,
+    )?;
 
     if cli.debug {
         debug_log_info("ref1", &root_log1, tmpdir1.path());
@@ -164,11 +173,21 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // Check for build failure and fetch build.log tail.
     // Reuse tmpdir if the failed task already had its logs downloaded,
     // otherwise create a new one.
+    let resolved1 = ResolvedRef {
+        arch_task: &arch_task1,
+        build: build1.as_ref(),
+        tmpdir: tmpdir1.path(),
+    };
+    let resolved2 = ResolvedRef {
+        arch_task: &arch_task2,
+        build: build2.as_ref(),
+        tmpdir: tmpdir2.path(),
+    };
     let build_failure = fetch_build_failure(
-        &arch_task1,
-        &arch_task2,
-        tmpdir1.path(),
-        tmpdir2.path(),
+        &koji_client,
+        &resolved1,
+        &resolved2,
+        &cli.arch,
         cli.build_log_lines,
         cli.json,
     );
@@ -261,12 +280,53 @@ fn debug_log_info(label: &str, log_content: &str, tmpdir: &std::path::Path) {
     eprintln!("---");
 }
 
-fn resolve_task_id(koji_client: &KojiClient, koji_ref: &KojiRef) -> Result<i64, xmlrpc::Error> {
+/// Download root.log using `koji download-logs` (task-based), falling
+/// back to HTTP download from the build's persistent storage when task
+/// logs have been garbage collected.
+fn download_root_log(
+    koji_client: &KojiClient,
+    build: Option<&koji::BuildInfo>,
+    arch_task: &TaskInfo,
+    arch: &str,
+    tmpdir: &std::path::Path,
+    quiet: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if !quiet {
+        eprintln!("Downloading logs from task {}...", arch_task.id);
+    }
+    match koji_client.download_log(arch_task.id, "root.log", tmpdir) {
+        Ok(content) => return Ok(content),
+        Err(e) => {
+            if build.is_none() {
+                return Err(e.into());
+            }
+            if !quiet {
+                eprintln!("  task log download failed, trying build storage: {e}");
+            }
+        }
+    }
+
+    let build = build.unwrap();
+    if !quiet {
+        eprintln!("Downloading logs for {} (build {})...", build.nvr, build.id);
+    }
+    Ok(koji_client.download_build_log(build, arch, "root.log")?)
+}
+
+/// Resolve a reference to (task_id, Option<BuildInfo>).
+///
+/// Build refs return the BuildInfo so we can download logs from the
+/// build's persistent storage when task logs have been garbage collected.
+fn resolve_ref(
+    koji_client: &KojiClient,
+    koji_ref: &KojiRef,
+) -> Result<(i64, Option<koji::BuildInfo>), xmlrpc::Error> {
     match koji_ref.ref_type {
-        RefType::Task => Ok(koji_ref.id),
+        RefType::Task => Ok((koji_ref.id, None)),
         RefType::Build => {
             let build = koji_client.get_build(koji_ref.id)?;
-            Ok(build.task_id)
+            let task_id = build.task_id;
+            Ok((task_id, Some(build)))
         }
     }
 }
@@ -319,32 +379,47 @@ fn format_resolution(
     format!("{input} -> {arch_suffix}")
 }
 
+/// Resolved state for one side of the comparison.
+struct ResolvedRef<'a> {
+    arch_task: &'a TaskInfo,
+    build: Option<&'a koji::BuildInfo>,
+    tmpdir: &'a std::path::Path,
+}
+
 fn fetch_build_failure(
-    task1: &TaskInfo,
-    task2: &TaskInfo,
-    tmpdir1: &std::path::Path,
-    tmpdir2: &std::path::Path,
+    koji_client: &KojiClient,
+    ref1: &ResolvedRef<'_>,
+    ref2: &ResolvedRef<'_>,
+    arch: &str,
     lines: usize,
     quiet: bool,
 ) -> Option<JsonBuildFailure> {
-    let (failed_task, tmpdir) = if task1.state == koji::TASK_FAILED {
-        (task1, tmpdir1)
-    } else if task2.state == koji::TASK_FAILED {
-        (task2, tmpdir2)
+    let failed = if ref1.arch_task.state == koji::TASK_FAILED {
+        ref1
+    } else if ref2.arch_task.state == koji::TASK_FAILED {
+        ref2
     } else {
         return None;
     };
 
-    // `koji download-logs` already downloaded all logs for this task.
-    // Files may be in a subdirectory (koji uses arch-taskid dirs).
-    //
+    // Try to read failure logs from the tmpdir first (already downloaded
+    // by koji download-logs if that path was used), then fall back to
+    // build-based HTTP download.
+    let read_log = |name: &str| -> Option<String> {
+        find_and_read(failed.tmpdir, name).or_else(|| {
+            failed
+                .build
+                .and_then(|b| koji_client.download_build_log(b, arch, name).ok())
+        })
+    };
+
     // Always show mock_output.log if present (it has the mock/dep error).
     // Also show build.log unless mock_output.log already shows a dep
     // resolution failure ("Problem: nothing provides"), in which case
     // build.log adds no useful info.
     let mut logs = Vec::new();
 
-    let mock_output = find_and_read(tmpdir, "mock_output.log");
+    let mock_output = read_log("mock_output.log");
     let has_dep_error = mock_output
         .as_ref()
         .is_some_and(|t| t.contains("Problem: nothing provides"));
@@ -353,19 +428,19 @@ fn fetch_build_failure(
         logs.push(tail_log("mock_output.log", &text, lines));
     }
 
-    if !has_dep_error && let Some(text) = find_and_read(tmpdir, "build.log") {
+    if !has_dep_error && let Some(text) = read_log("build.log") {
         logs.push(tail_log("build.log", &text, lines));
     }
 
     if logs.is_empty() {
         if !quiet {
-            eprintln!("(no failure logs found for task {})", failed_task.id);
+            eprintln!("(no failure logs found for task {})", failed.arch_task.id);
         }
         return None;
     }
 
     Some(JsonBuildFailure {
-        task_id: failed_task.id,
+        task_id: failed.arch_task.id,
         logs,
     })
 }
