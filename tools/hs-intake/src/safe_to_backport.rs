@@ -91,7 +91,7 @@ pub fn evaluate(
     let non_solib_upgraded: Vec<_> = requires
         .upgraded
         .iter()
-        .filter(|c| !c.name.contains(".so."))
+        .filter(|c| !sandogasa_depfilter::is_solib_dep(&c.name))
         .collect();
     if !non_solib_upgraded.is_empty() {
         concerns.push(format!(

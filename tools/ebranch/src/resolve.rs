@@ -91,6 +91,9 @@ pub struct ResolveOptions {
     pub verbose: bool,
     /// Source packages to exclude from installability expansion.
     pub exclude_install: BTreeSet<String>,
+    /// When true, auto-exclude default packages (e.g. glibc)
+    /// from installability checks.
+    pub auto_exclude: bool,
 }
 
 /// Resolve the full transitive closure of missing build dependencies.
@@ -326,11 +329,10 @@ pub fn check_installability(
         for raw_dep in &requires {
             let dep_str = raw_dep.trim();
 
-            // Skip rpmlib/auto deps.
-            if dep_str.starts_with("rpmlib(")
-                || dep_str.starts_with("auto(")
-                || dep_str.starts_with("config(")
-            {
+            if sandogasa_depfilter::is_rpm_internal_dep(dep_str) {
+                continue;
+            }
+            if options.auto_exclude && sandogasa_depfilter::is_solib_symbol_dep(dep_str) {
                 continue;
             }
 
@@ -1148,6 +1150,94 @@ mod tests {
         .unwrap();
         assert!(closure.closure.contains_key("bar"));
         assert!(!closure.closure.contains_key("foo"));
+        assert!(report.issues.is_empty());
+    }
+
+    // --- Auto-exclude and solib filtering tests ---
+
+    #[test]
+    fn test_solib_symbol_deps_skipped_with_auto_exclude() {
+        // a's subpackage requires a solib symbol version dep.
+        // With auto_exclude, these are skipped (auto-generated at build time).
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["libc.so.6(GLIBC_2.38)(64bit)"]);
+
+        let options = ResolveOptions {
+            auto_exclude: true,
+            ..Default::default()
+        };
+        let closure = resolve_closure(&resolver, &["a".to_string()], "rawhide", "epel10").unwrap();
+        let report = check_installability(&resolver, &closure, &options, &BTreeSet::new());
+        assert!(report.issues.is_empty());
+        assert!(report.additional_packages.is_empty());
+    }
+
+    #[test]
+    fn test_solib_symbol_deps_not_skipped_without_auto_exclude() {
+        // Without auto_exclude, solib symbol deps are checked normally.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["libc.so.6(GLIBC_2.38)(64bit)"]);
+        resolver.add_source_resolve("libc.so.6(GLIBC_2.38)(64bit)", "glibc");
+
+        let options = ResolveOptions::default(); // auto_exclude: false
+        let closure = resolve_closure(&resolver, &["a".to_string()], "rawhide", "epel10").unwrap();
+        let report = check_installability(&resolver, &closure, &options, &BTreeSet::new());
+        assert!(report.issues.contains_key("a"));
+        assert!(report.additional_packages.contains("glibc"));
+    }
+
+    #[test]
+    fn test_soname_deps_not_skipped_with_auto_exclude() {
+        // Soname deps (empty first parens) are real ABI deps and
+        // must NOT be skipped even with auto_exclude.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["libbpf.so.1()(64bit)"]);
+        resolver.add_source_resolve("libbpf.so.1()(64bit)", "libbpf");
+        resolver.add_buildrequires("libbpf", &[]);
+        resolver.add_subpkg_requires("libbpf", &[]);
+
+        let options = ResolveOptions {
+            auto_exclude: true,
+            ..Default::default()
+        };
+        let (closure, _report) = resolve_with_installability(
+            &resolver,
+            &["a".to_string()],
+            "rawhide",
+            "epel10",
+            &options,
+        )
+        .unwrap();
+        // libbpf should be pulled into the closure (soname dep is real).
+        assert!(closure.closure.contains_key("libbpf"));
+    }
+
+    #[test]
+    fn test_auto_exclude_iterative_skips_symbol_deps() {
+        // With auto_exclude, solib symbol deps should not pull
+        // packages into the closure during iterative resolution.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("a", &[]);
+        resolver.add_subpkg_requires("a", &["libc.so.6(GLIBC_2.38)(64bit)"]);
+        resolver.add_source_resolve("libc.so.6(GLIBC_2.38)(64bit)", "glibc");
+
+        let options = ResolveOptions {
+            auto_exclude: true,
+            ..Default::default()
+        };
+        let (closure, report) = resolve_with_installability(
+            &resolver,
+            &["a".to_string()],
+            "rawhide",
+            "epel10",
+            &options,
+        )
+        .unwrap();
+        assert_eq!(closure.closure.len(), 1);
+        assert!(!closure.closure.contains_key("glibc"));
         assert!(report.issues.is_empty());
     }
 

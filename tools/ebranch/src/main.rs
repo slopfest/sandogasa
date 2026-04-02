@@ -96,6 +96,19 @@ May be passed multiple times."
     )]
     exclude_install: Vec<String>,
 
+    /// Disable auto-exclusion of default packages.
+    #[arg(
+        long,
+        long_help = "\
+Disable auto-exclusion of default packages
+(e.g. glibc) from installability checks.
+
+By default, packages whose version mismatch
+between branches is expected and harmless
+are excluded automatically."
+    )]
+    no_auto_exclude: bool,
+
     /// Max recursion depth (0 = unlimited).
     #[arg(long, default_value = "0")]
     max_depth: usize,
@@ -172,6 +185,7 @@ fn main() -> ExitCode {
         max_depth: args.max_depth,
         verbose: args.verbose,
         exclude_install: args.exclude_install.iter().cloned().collect(),
+        auto_exclude: !args.no_auto_exclude,
     };
     let (closure, install_report) = if args.check_install {
         match resolve_with_installability(

@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 clap = { workspace = true }
+sandogasa-depfilter = { workspace = true }
 sandogasa-fedrq = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

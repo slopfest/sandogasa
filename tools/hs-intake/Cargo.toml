@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 clap = { workspace = true }
+sandogasa-depfilter = { workspace = true }
 sandogasa-fedrq = { workspace = true }
 sandogasa-rpmvercmp = { workspace = true }
 serde = { workspace = true }

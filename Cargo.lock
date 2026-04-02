@@ -274,6 +274,7 @@ name = "ebranch"
 version = "0.6.3"
 dependencies = [
  "clap",
+ "sandogasa-depfilter",
  "sandogasa-fedrq",
  "serde",
  "serde_json",
@@ -537,6 +538,7 @@ name = "hs-intake"
 version = "0.6.3"
 dependencies = [
  "clap",
+ "sandogasa-depfilter",
  "sandogasa-fedrq",
  "sandogasa-rpmvercmp",
  "serde",
@@ -1429,6 +1431,10 @@ dependencies = [
  "tempfile",
  "toml",
 ]
+
+[[package]]
+name = "sandogasa-depfilter"
+version = "0.6.3"
 
 [[package]]
 name = "sandogasa-discourse"
