@@ -58,10 +58,16 @@ pub struct Client {
     base_url: String,
 }
 
+impl Default for Client {
+    fn default() -> Self {
+        Self::with_base_url("https://repology.org/api/v1")
+    }
+}
+
 impl Client {
     /// Create a new client using the default Repology API URL.
     pub fn new() -> Self {
-        Self::with_base_url("https://repology.org/api/v1")
+        Self::default()
     }
 
     /// Create a client with a custom base URL (useful for testing).
@@ -131,10 +137,7 @@ fn status_priority(status: &Option<Status>) -> u8 {
 /// Looks for `fedora_NN` repos (excluding `fedora_rawhide`), picks the
 /// highest release number, and prefers the "updates" subrepo.
 pub fn latest_fedora_stable(packages: &[Package]) -> Option<&Package> {
-    let max_release = packages
-        .iter()
-        .filter_map(|p| fedora_release_number(p))
-        .max()?;
+    let max_release = packages.iter().filter_map(fedora_release_number).max()?;
 
     let repo = format!("fedora_{}", max_release);
     latest_for_repo(packages, &repo)
@@ -147,7 +150,7 @@ pub fn latest_fedora_stable(packages: &[Package]) -> Option<&Package> {
 pub fn latest_centos_stream(packages: &[Package]) -> Option<&Package> {
     let max_release = packages
         .iter()
-        .filter_map(|p| centos_stream_release_number(p))
+        .filter_map(centos_stream_release_number)
         .max()?;
 
     let repo = format!("centos_stream_{}", max_release);

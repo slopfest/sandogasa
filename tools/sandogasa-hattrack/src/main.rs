@@ -501,10 +501,10 @@ fn resolve_emails(
                             emails.push(email);
                         }
                     }
-                    if let Some(rhbz) = user.rhbzemail {
-                        if !emails.contains(&rhbz) {
-                            emails.push(rhbz);
-                        }
+                    if let Some(rhbz) = user.rhbzemail
+                        && !emails.contains(&rhbz)
+                    {
+                        emails.push(rhbz);
                     }
                 }
                 Err(e) => {
@@ -1038,17 +1038,17 @@ async fn check_bugzilla(emails: &[String]) -> ServiceLastSeen {
         let bugs = client
             .search(&format!("creator={email}&limit=1&order=bug_id%20DESC"), 1)
             .await;
-        if let Ok(bugs) = bugs {
-            if let Some(bug) = bugs.into_iter().next() {
-                return ServiceLastSeen {
-                    service: "Bugzilla".to_string(),
-                    last_active: Some(bug.creation_time.to_rfc3339()),
-                    detail: Some(format!("#{} {}", bug.id, bug.summary)),
-                    error: None,
-                    status: None,
-                    status_expires: None,
-                };
-            }
+        if let Ok(bugs) = bugs
+            && let Some(bug) = bugs.into_iter().next()
+        {
+            return ServiceLastSeen {
+                service: "Bugzilla".to_string(),
+                last_active: Some(bug.creation_time.to_rfc3339()),
+                detail: Some(format!("#{} {}", bug.id, bug.summary)),
+                error: None,
+                status: None,
+                status_expires: None,
+            };
         }
     }
     ServiceLastSeen {
@@ -1064,24 +1064,23 @@ async fn check_bugzilla(emails: &[String]) -> ServiceLastSeen {
 async fn check_mailman(emails: &[String], lists: &[String], max_pages: u32) -> ServiceLastSeen {
     let client = sandogasa_mailman::MailmanClient::new();
     for list in lists {
-        if let Ok(Some(id)) = client.find_sender_id(list, emails, max_pages).await {
-            if let Ok(posts) = client.sender_emails(&id, 1).await {
-                if let Some(post) = posts.into_iter().next() {
-                    let rfc3339 = post.date.as_deref().and_then(|s| {
-                        s.parse::<DateTime<chrono::FixedOffset>>()
-                            .ok()
-                            .map(|dt| dt.with_timezone(&Utc).to_rfc3339())
-                    });
-                    return ServiceLastSeen {
-                        service: "Mailing lists".to_string(),
-                        last_active: rfc3339,
-                        detail: Some(post.subject),
-                        error: None,
-                        status: None,
-                        status_expires: None,
-                    };
-                }
-            }
+        if let Ok(Some(id)) = client.find_sender_id(list, emails, max_pages).await
+            && let Ok(posts) = client.sender_emails(&id, 1).await
+            && let Some(post) = posts.into_iter().next()
+        {
+            let rfc3339 = post.date.as_deref().and_then(|s| {
+                s.parse::<DateTime<chrono::FixedOffset>>()
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc).to_rfc3339())
+            });
+            return ServiceLastSeen {
+                service: "Mailing lists".to_string(),
+                last_active: rfc3339,
+                detail: Some(post.subject),
+                error: None,
+                status: None,
+                status_expires: None,
+            };
         }
     }
     ServiceLastSeen {

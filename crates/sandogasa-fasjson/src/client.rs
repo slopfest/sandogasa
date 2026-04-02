@@ -10,6 +10,12 @@ pub struct FasjsonClient {
     base_url: String,
 }
 
+impl Default for FasjsonClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FasjsonClient {
     pub fn new() -> Self {
         Self {

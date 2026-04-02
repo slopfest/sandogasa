@@ -353,10 +353,8 @@ fn fetch_build_failure(
         logs.push(tail_log("mock_output.log", &text, lines));
     }
 
-    if !has_dep_error {
-        if let Some(text) = find_and_read(tmpdir, "build.log") {
-            logs.push(tail_log("build.log", &text, lines));
-        }
+    if !has_dep_error && let Some(text) = find_and_read(tmpdir, "build.log") {
+        logs.push(tail_log("build.log", &text, lines));
     }
 
     if logs.is_empty() {

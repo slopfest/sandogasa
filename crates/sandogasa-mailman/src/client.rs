@@ -11,6 +11,12 @@ pub struct MailmanClient {
     client: Client,
 }
 
+impl Default for MailmanClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MailmanClient {
     pub fn new() -> Self {
         Self {
@@ -55,10 +61,10 @@ impl MailmanClient {
             };
 
             for e in &resp.results {
-                if let Some(sender) = &e.sender {
-                    if obfuscated.iter().any(|o| o == &sender.address) {
-                        return Ok(Some(sender.mailman_id.clone()));
-                    }
+                if let Some(sender) = &e.sender
+                    && obfuscated.iter().any(|o| o == &sender.address)
+                {
+                    return Ok(Some(sender.mailman_id.clone()));
                 }
             }
 

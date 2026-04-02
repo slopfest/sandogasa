@@ -70,7 +70,7 @@ impl BzClient {
 
         loop {
             let limit = if max_results > 0 {
-                PAGE_SIZE.min(max_results - offset as u64)
+                PAGE_SIZE.min(max_results - offset)
             } else {
                 PAGE_SIZE
             };

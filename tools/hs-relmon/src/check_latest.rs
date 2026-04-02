@@ -301,10 +301,10 @@ pub fn matches_filter(
     filter_status: Option<&str>,
     filter_assignee: Option<&str>,
 ) -> bool {
-    if let Some(s) = filter_status {
-        if status != s {
-            return false;
-        }
+    if let Some(s) = filter_status
+        && status != s
+    {
+        return false;
     }
     if let Some(a) = filter_assignee {
         if a == "none" {
@@ -604,29 +604,27 @@ fn write_table(result: &CheckResult, w: &mut dyn std::io::Write) -> std::io::Res
     if has_status {
         writeln!(
             w,
-            "  {:<distro_w$}  {:<version_w$}  {:<detail_w$}  {}",
-            "Distribution", "Version", "Detail", "Status"
-        )?;
-        writeln!(
-            w,
-            "  {:<distro_w$}  {:<version_w$}  {:<detail_w$}  {}",
-            "─".repeat(distro_w),
-            "─".repeat(version_w),
-            "─".repeat(detail_w),
-            "──────"
-        )?;
-    } else {
-        writeln!(
-            w,
-            "  {:<distro_w$}  {:<version_w$}  {}",
+            "  {:<distro_w$}  {:<version_w$}  {:<detail_w$}  Status",
             "Distribution", "Version", "Detail"
         )?;
         writeln!(
             w,
-            "  {:<distro_w$}  {:<version_w$}  {}",
+            "  {:<distro_w$}  {:<version_w$}  {:<detail_w$}  ──────",
             "─".repeat(distro_w),
             "─".repeat(version_w),
-            "──────"
+            "─".repeat(detail_w)
+        )?;
+    } else {
+        writeln!(
+            w,
+            "  {:<distro_w$}  {:<version_w$}  Detail",
+            "Distribution", "Version"
+        )?;
+        writeln!(
+            w,
+            "  {:<distro_w$}  {:<version_w$}  ──────",
+            "─".repeat(distro_w),
+            "─".repeat(version_w)
         )?;
     }
     for row in &rows {

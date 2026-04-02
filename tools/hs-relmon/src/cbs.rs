@@ -63,6 +63,12 @@ pub struct Client {
     hub_url: String,
 }
 
+impl Default for Client {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Client {
     pub fn new() -> Self {
         Self::with_hub_url("https://cbs.centos.org/kojihub")
@@ -489,10 +495,10 @@ fn parse_tag_names(xml: &str) -> Result<Vec<String>, Box<dyn std::error::Error>>
             continue;
         };
         for (key, val) in &members {
-            if key == "name" {
-                if let XmlRpcValue::Str(v) = val {
-                    names.push(v.clone());
-                }
+            if key == "name"
+                && let XmlRpcValue::Str(v) = val
+            {
+                names.push(v.clone());
             }
         }
     }
@@ -525,10 +531,10 @@ fn parse_builds(xml: &str) -> Result<Vec<Build>, Box<dyn std::error::Error>> {
                     }
                 }
                 "name" | "package_name" => {
-                    if let XmlRpcValue::Str(v) = val {
-                        if name.is_empty() {
-                            name = v.clone();
-                        }
+                    if let XmlRpcValue::Str(v) = val
+                        && name.is_empty()
+                    {
+                        name = v.clone();
                     }
                 }
                 "version" => {

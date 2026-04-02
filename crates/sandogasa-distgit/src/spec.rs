@@ -160,10 +160,10 @@ pub fn shipped_binaries(spec: &str) -> Vec<String> {
             continue;
         }
 
-        if let Some(binary) = extract_binary(trimmed, name.as_deref()) {
-            if !binaries.contains(&binary) {
-                binaries.push(binary);
-            }
+        if let Some(binary) = extract_binary(trimmed, name.as_deref())
+            && !binaries.contains(&binary)
+        {
+            binaries.push(binary);
         }
     }
 

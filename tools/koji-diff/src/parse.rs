@@ -94,24 +94,24 @@ fn parse_url(url: &str) -> Result<KojiRef, ParseError> {
 
     let instance = host.to_string();
 
-    if path_and_query.contains("buildinfo") || path_and_query.contains("buildID") {
-        if let Some(id) = extract_param(url, "buildID") {
-            return Ok(KojiRef {
-                instance,
-                ref_type: RefType::Build,
-                id,
-            });
-        }
+    if (path_and_query.contains("buildinfo") || path_and_query.contains("buildID"))
+        && let Some(id) = extract_param(url, "buildID")
+    {
+        return Ok(KojiRef {
+            instance,
+            ref_type: RefType::Build,
+            id,
+        });
     }
 
-    if path_and_query.contains("taskinfo") || path_and_query.contains("taskID") {
-        if let Some(id) = extract_param(url, "taskID") {
-            return Ok(KojiRef {
-                instance,
-                ref_type: RefType::Task,
-                id,
-            });
-        }
+    if (path_and_query.contains("taskinfo") || path_and_query.contains("taskID"))
+        && let Some(id) = extract_param(url, "taskID")
+    {
+        return Ok(KojiRef {
+            instance,
+            ref_type: RefType::Task,
+            id,
+        });
     }
 
     Err(ParseError(format!(

@@ -183,10 +183,10 @@ pub fn add_packages_to_file(
 
     let mut new_arr = toml_edit::ArrayOfTables::new();
     for (i, (_, mut table)) in pkg_tables.into_iter().enumerate() {
-        if i == 0 {
-            if let Some(prefix) = &first_prefix {
-                table.decor_mut().set_prefix(prefix.clone());
-            }
+        if i == 0
+            && let Some(prefix) = &first_prefix
+        {
+            table.decor_mut().set_prefix(prefix.clone());
         }
         new_arr.push(table);
     }

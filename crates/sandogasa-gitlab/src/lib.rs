@@ -79,7 +79,7 @@ impl Client {
             body["labels"] = labels.into();
         }
 
-        let resp = self.http.post(&self.issues_url()).json(&body).send()?;
+        let resp = self.http.post(self.issues_url()).json(&body).send()?;
         check_response(resp)
     }
 
@@ -93,7 +93,7 @@ impl Client {
         if let Some(s) = state {
             query.push(("state", s));
         }
-        let resp = self.http.get(&self.issues_url()).query(&query).send()?;
+        let resp = self.http.get(self.issues_url()).query(&query).send()?;
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text()?;
@@ -107,7 +107,7 @@ impl Client {
         let payload = serde_json::json!({ "body": body });
         let resp = self
             .http
-            .post(&format!("{}/{iid}/notes", self.issues_url()))
+            .post(format!("{}/{iid}/notes", self.issues_url()))
             .json(&payload)
             .send()?;
         if !resp.status().is_success() {
@@ -127,7 +127,7 @@ impl Client {
         let body = serde_json::to_value(updates)?;
         let resp = self
             .http
-            .put(&format!("{}/{iid}", self.issues_url()))
+            .put(format!("{}/{iid}", self.issues_url()))
             .json(&body)
             .send()?;
         check_response(resp)
@@ -155,7 +155,7 @@ impl Client {
             self.project_path, iid
         );
         let body = serde_json::json!({ "query": query });
-        let resp = self.http.post(&self.graphql_url()).json(&body).send()?;
+        let resp = self.http.post(self.graphql_url()).json(&body).send()?;
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text()?;
@@ -188,7 +188,7 @@ impl Client {
             }}"#,
         );
         let body = serde_json::json!({ "query": query });
-        let resp = self.http.post(&self.graphql_url()).json(&body).send()?;
+        let resp = self.http.post(self.graphql_url()).json(&body).send()?;
         if !resp.status().is_success() {
             let http_status = resp.status();
             let text = resp.text()?;
@@ -212,7 +212,7 @@ impl Client {
             self.project_path, iid
         );
         let body = serde_json::json!({ "query": query });
-        let resp = self.http.post(&self.graphql_url()).json(&body).send()?;
+        let resp = self.http.post(self.graphql_url()).json(&body).send()?;
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text()?;
@@ -240,7 +240,7 @@ impl Client {
             self.project_path
         );
         let body = serde_json::json!({ "query": query });
-        let resp = self.http.post(&self.graphql_url()).json(&body).send()?;
+        let resp = self.http.post(self.graphql_url()).json(&body).send()?;
         if !resp.status().is_success() {
             let http_status = resp.status();
             let text = resp.text()?;
@@ -361,7 +361,7 @@ impl GroupClient {
             if let Some(s) = state {
                 query.push(("state", s));
             }
-            let resp = self.http.get(&self.issues_url()).query(&query).send()?;
+            let resp = self.http.get(self.issues_url()).query(&query).send()?;
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text()?;
@@ -403,7 +403,7 @@ impl GroupClient {
             project_path, iid
         );
         let body = serde_json::json!({ "query": query });
-        let resp = self.http.post(&self.graphql_url()).json(&body).send()?;
+        let resp = self.http.post(self.graphql_url()).json(&body).send()?;
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text()?;

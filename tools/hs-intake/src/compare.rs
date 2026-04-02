@@ -132,16 +132,16 @@ pub fn diff(source: Vec<String>, target: Vec<String>) -> CompareResult {
     let mut solib_changed_originals: BTreeSet<String> = BTreeSet::new();
     let mut final_added = Vec::new();
     for a in &added {
-        if let Some((pattern, target_v)) = split_solib(a) {
-            if let Some((original, source_v)) = solib_removed_by_pattern.get(&pattern) {
-                changed.push(VersionChange {
-                    name: pattern,
-                    source_version: source_v.to_string(),
-                    target_version: target_v.to_string(),
-                });
-                solib_changed_originals.insert(original.clone());
-                continue;
-            }
+        if let Some((pattern, target_v)) = split_solib(a)
+            && let Some((original, source_v)) = solib_removed_by_pattern.get(&pattern)
+        {
+            changed.push(VersionChange {
+                name: pattern,
+                source_version: source_v.to_string(),
+                target_version: target_v.to_string(),
+            });
+            solib_changed_originals.insert(original.clone());
+            continue;
         }
         final_added.push(a.clone());
     }

@@ -13,6 +13,12 @@ pub struct BodhiClient {
     client: Client,
 }
 
+impl Default for BodhiClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BodhiClient {
     pub fn new() -> Self {
         Self {

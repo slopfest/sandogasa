@@ -52,6 +52,12 @@ pub struct DistGitClient {
     api_token: Option<String>,
 }
 
+impl Default for DistGitClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DistGitClient {
     pub fn new() -> Self {
         Self {
@@ -216,10 +222,10 @@ impl DistGitClient {
         required: AccessLevel,
     ) -> Result<AccessResult, Box<dyn std::error::Error>> {
         // Check direct access first
-        if let Some(level) = acls.user_level(username) {
-            if level >= required {
-                return Ok(AccessResult::Direct(level));
-            }
+        if let Some(level) = acls.user_level(username)
+            && level >= required
+        {
+            return Ok(AccessResult::Direct(level));
         }
 
         // Check groups with sufficient access

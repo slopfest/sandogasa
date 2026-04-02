@@ -3,7 +3,7 @@
 mod config;
 
 use std::io::{self, Write as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -170,10 +170,10 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn resolve_token() -> Result<String, Box<dyn std::error::Error>> {
-    if let Ok(token) = std::env::var("PAGURE_API_TOKEN") {
-        if !token.is_empty() {
-            return Ok(token);
-        }
+    if let Ok(token) = std::env::var("PAGURE_API_TOKEN")
+        && !token.is_empty()
+    {
+        return Ok(token);
     }
     let cf = ConfigFile::for_tool(TOOL_NAME);
     let config: AppConfig = cf.load()?;
@@ -476,16 +476,16 @@ async fn require_owner(
 /// Save the username into the config file if it's not already cached.
 fn cache_username(username: &str) {
     let cf = ConfigFile::for_tool(TOOL_NAME);
-    if let Ok(config) = cf.load::<AppConfig>() {
-        if config.dist_git.username != username {
-            let updated = AppConfig {
-                dist_git: DistGitConfig {
-                    api_token: config.dist_git.api_token,
-                    username: username.to_string(),
-                },
-            };
-            let _ = cf.save(&updated);
-        }
+    if let Ok(config) = cf.load::<AppConfig>()
+        && config.dist_git.username != username
+    {
+        let updated = AppConfig {
+            dist_git: DistGitConfig {
+                api_token: config.dist_git.api_token,
+                username: username.to_string(),
+            },
+        };
+        let _ = cf.save(&updated);
     }
 }
 
@@ -718,7 +718,7 @@ struct ApplyEntry {
 }
 
 async fn cmd_apply(
-    config_path: &PathBuf,
+    config_path: &Path,
     packages: &[String],
     token: &str,
     strict: bool,
@@ -783,8 +783,8 @@ async fn cmd_apply(
             }
 
             // Check for skip (only when setting, not removing)
-            if !is_remove {
-                if let Some(action) = check_skip(
+            if !is_remove
+                && let Some(action) = check_skip(
                     "user",
                     name,
                     level,
@@ -792,12 +792,12 @@ async fn cmd_apply(
                     strict,
                     package,
                     json,
-                ) {
-                    if json {
-                        entries.push(action);
-                    }
-                    continue;
+                )
+            {
+                if json {
+                    entries.push(action);
                 }
+                continue;
             }
 
             let result = if is_remove {
@@ -843,8 +843,8 @@ async fn cmd_apply(
         for (name, level) in &config.groups {
             let is_remove = level == "remove";
 
-            if !is_remove {
-                if let Some(action) = check_skip(
+            if !is_remove
+                && let Some(action) = check_skip(
                     "group",
                     name,
                     level,
@@ -852,12 +852,12 @@ async fn cmd_apply(
                     strict,
                     package,
                     json,
-                ) {
-                    if json {
-                        entries.push(action);
-                    }
-                    continue;
+                )
+            {
+                if json {
+                    entries.push(action);
                 }
+                continue;
             }
 
             let result = if is_remove {

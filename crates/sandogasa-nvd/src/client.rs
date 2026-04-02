@@ -11,6 +11,12 @@ pub struct NvdClient {
 
 const NVD_API_BASE: &str = "https://services.nvd.nist.gov/rest/json/cves/2.0";
 
+impl Default for NvdClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NvdClient {
     pub fn new() -> Self {
         Self {

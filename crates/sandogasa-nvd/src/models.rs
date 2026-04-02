@@ -119,10 +119,10 @@ impl CveResponse {
         let mut repos = Vec::new();
         for v in &self.vulnerabilities {
             for r in &v.cve.references {
-                if let Some((owner, repo)) = parse_github_repo(&r.url) {
-                    if !repos.contains(&(owner.clone(), repo.clone())) {
-                        repos.push((owner, repo));
-                    }
+                if let Some((owner, repo)) = parse_github_repo(&r.url)
+                    && !repos.contains(&(owner.clone(), repo.clone()))
+                {
+                    repos.push((owner, repo));
                 }
             }
         }
@@ -273,7 +273,7 @@ fn extract_tool_names_from_text(text: &str) -> Vec<String> {
     for i in 0..words.len().saturating_sub(1) {
         let next_lower = words[i + 1].to_lowercase();
         let next_clean = next_lower.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-        if TOOL_QUALIFIERS.iter().any(|q| next_clean == *q) {
+        if TOOL_QUALIFIERS.contains(&next_clean) {
             let candidate = clean_word(words[i]);
             if looks_like_binary_name(&candidate) {
                 tools.push(candidate);

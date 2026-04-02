@@ -11,6 +11,7 @@
 
 ## Code Style
 - Always run `cargo fmt` before committing
+- Commits must not introduce `cargo clippy --workspace` warnings or errors. Fix any clippy issues in code you touch
 - Every source file must start with `// SPDX-License-Identifier: MPL-2.0`
 - CLI help text (`-h` and `--help`) must not exceed 80 characters per line
 - Keep the `Command` enum variants in `main.rs` sorted alphabetically (this determines the order in `--help` output)

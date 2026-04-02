@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+/// Validator function for [`prompt_field`].
+type Validator<'a> = Option<&'a dyn Fn(&str) -> Result<(), String>>;
+
 /// Manages a TOML config file at `~/.config/{tool}/config.toml`.
 pub struct ConfigFile {
     path: PathBuf,
@@ -68,7 +71,7 @@ pub fn prompt_field(
     section: &str,
     label: &str,
     sensitive: bool,
-    validate: Option<&dyn Fn(&str) -> Result<(), String>>,
+    validate: Validator<'_>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     loop {
         print!("Enter {section} {label}: ");

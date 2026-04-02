@@ -374,22 +374,23 @@ fn parse_array_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
     let mut items = Vec::new();
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) => match e.name().as_ref() {
-                b"data" => loop {
-                    match reader.read_event() {
-                        Ok(Event::Start(e2)) if e2.name().as_ref() == b"value" => {
-                            items.push(parse_value_content(reader)?);
+            Ok(Event::Start(e)) => {
+                if e.name().as_ref() == b"data" {
+                    loop {
+                        match reader.read_event() {
+                            Ok(Event::Start(e2)) if e2.name().as_ref() == b"value" => {
+                                items.push(parse_value_content(reader)?);
+                            }
+                            Ok(Event::End(e2)) if e2.name().as_ref() == b"data" => break,
+                            Ok(Event::Eof) => {
+                                return Err(Error::Parse("unexpected EOF in array data".into()));
+                            }
+                            Err(e) => return Err(e.into()),
+                            _ => {}
                         }
-                        Ok(Event::End(e2)) if e2.name().as_ref() == b"data" => break,
-                        Ok(Event::Eof) => {
-                            return Err(Error::Parse("unexpected EOF in array data".into()));
-                        }
-                        Err(e) => return Err(e.into()),
-                        _ => {}
                     }
-                },
-                _ => {}
-            },
+                }
+            }
             Ok(Event::End(e)) if e.name().as_ref() == b"array" => {
                 return Ok(Value::Array(items));
             }
