@@ -32,6 +32,7 @@
 - Side tag repos are standalone — do not pass `-b` with `-r @koji:<tag>`
 - `fedrq whatrequires` requires `-F source` (not `-F source_name`)
 - `fedrq` may return `(none)` as a result — always filter it out
+- EPEL 10+ `@testing` repos are not yet supported by fedrq (the metalink URLs don't exist for `epel10`). The `@testing` probe will fail silently and fall back to side tag or reverse dep listing
 
 ## Dependencies
 - Before starting feature work, run `cargo audit` and address any reported vulnerabilities first (patch bump or `cargo update -p <crate> --precise <version>`)
