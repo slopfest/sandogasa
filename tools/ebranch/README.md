@@ -122,20 +122,22 @@ install time (as a Requires of a subpackage) would be missed.
 
 Use `check-update` to verify that a Koji side tag or Bodhi update
 won't break packages that depend on the updated packages. It compares
-old vs new subpackage Provides, finds any that were removed, and
-reports reverse dependencies that need the removed Provides:
+old vs new subpackage Provides, classifying each as updated (version
+bump) or removed, then finds reverse dependencies that would break:
 
 ```console
-$ ebranch check-update epel9-build-side-133287 \
+$ ebranch check-update epel9-build-side-134436 \
     -b c9s -r @epel -v
-[check-update] updated packages: rust-uucore, rust-uucore_procs
-[check-update] comparing old vs new provides
-[check-update] 0 removed provides found
-Checking update: epel9-build-side-133287
-Branch: c9s
-Updated packages: rust-uucore, rust-uucore_procs
+[check-update] updated packages: rust-tokio, rust-tokio-macros
+[check-update] using @testing for new provides
+[check-update] 4 changed provides (4 updated, 0 removed)
+...
+Updated Provides (4):
+  - crate(tokio-macros) (2.6.1 -> 2.7.0)
+  - crate(tokio-macros/default) (2.6.1 -> 2.7.0)
+  ...
 
-No removed Provides detected. No breakage expected.
+No packages depend on the changed Provides. No breakage expected.
 ```
 
 The input can also be a Bodhi update alias or URL:
@@ -145,9 +147,16 @@ ebranch check-update FEDORA-EPEL-2026-f9eaa11e18 -b c9s -r @epel
 ebranch check-update https://bodhi.fedoraproject.org/updates/FEDORA-EPEL-2026-f9eaa11e18
 ```
 
-When the update is backed by a side tag (detected via Bodhi's
-`from_side_tag` field), ebranch queries the side tag for the full
-package list and compares Provides against the stable repo.
+For new provides, ebranch checks these sources in order:
+1. **@testing** — if the update has been pushed to testing
+   (authoritative metadata, preferred)
+2. **Side tag** — via `koji buildinfo` + `fedrq pkg_provides`
+   (warns if the side tag repo is stale)
+3. **Reverse deps only** — lists affected packages for manual review
+
+For EPEL side tags, the testing branch is auto-detected from the
+side tag name (e.g. `epel9-build-side-*` uses `epel9`). Use
+`--testing-branch` to override if needed.
 
 ### Useful flags
 

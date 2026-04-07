@@ -140,8 +140,16 @@ struct CheckUpdateArgs {
     #[arg(short = 'r', long, value_name = "REPO")]
     repo: Option<String>,
 
-    /// Branch for @testing queries (defaults to -b).
-    #[arg(long)]
+    /// Override branch for @testing queries.
+    #[arg(
+        long,
+        long_help = "\
+Override branch for @testing queries.
+
+Auto-detected for EPEL side tags
+(e.g. epel9-build-side-* uses epel9).
+Otherwise defaults to --branch."
+    )]
     testing_branch: Option<String>,
 
     /// Koji CLI profile (e.g. cbs for CentOS).
