@@ -27,6 +27,12 @@
 - Symlink the root LICENSE file into each crate subdirectory so it is included when publishing to crates.io
 - All dependencies (external and internal) are declared in `[workspace.dependencies]` in the root `Cargo.toml`, then referenced as `{ workspace = true }` in member crates
 
+## fedrq quirks
+- Koji side tag repos (`-r @koji:<tag>`) only index binary RPMs, not source RPMs. `fedrq subpkgs -S` returns nothing for side tags. To query side tag contents, use `fedrq pkgs -r @koji:<tag> '*'` (but this includes inherited packages) or resolve binary RPM names via `koji buildinfo <nvr>` first
+- Side tag repos are standalone — do not pass `-b` with `-r @koji:<tag>`
+- `fedrq whatrequires` requires `-F source` (not `-F source_name`)
+- `fedrq` may return `(none)` as a result — always filter it out
+
 ## Dependencies
 - Before starting feature work, run `cargo audit` and address any reported vulnerabilities first (patch bump or `cargo update -p <crate> --precise <version>`)
 - Before a semver-breaking release, run `cargo outdated` and consider bumping deps that themselves require a major version bump — bundle breaking dep upgrades with your own breaking release

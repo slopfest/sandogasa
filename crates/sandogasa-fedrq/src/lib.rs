@@ -166,6 +166,15 @@ impl Fedrq {
         Self::run(&mut cmd)
     }
 
+    /// Return the Provides of a binary package.
+    pub fn pkg_provides(&self, name: &str) -> Result<Vec<String>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["pkgs", "-F", "provides"]);
+        self.apply_opts(&mut cmd);
+        cmd.arg(name);
+        Self::run(&mut cmd)
+    }
+
     /// Return the BuildRequires of a source package.
     pub fn src_buildrequires(&self, srpm: &str) -> Result<Vec<String>, Error> {
         let mut cmd = Command::new("fedrq");
