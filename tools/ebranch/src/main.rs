@@ -117,6 +117,10 @@ are excluded automatically."
     #[arg(short, long)]
     verbose: bool,
 
+    /// Number of parallel fedrq queries (0 = CPUs).
+    #[arg(short = 'j', long, default_value = "0")]
+    jobs: usize,
+
     /// Clear fedrq repo metadata cache before querying.
     #[arg(long)]
     refresh: bool,
@@ -157,6 +161,13 @@ fn main() -> ExitCode {
         if args.verbose {
             eprintln!("cleared fedrq cache");
         }
+    }
+
+    if args.jobs > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.jobs)
+            .build_global()
+            .expect("failed to configure thread pool");
     }
 
     let resolver = FedrqResolver {

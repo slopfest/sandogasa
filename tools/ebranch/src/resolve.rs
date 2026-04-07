@@ -6,8 +6,11 @@
 //! on a target branch in order to satisfy the BuildRequires of a set
 //! of requested packages.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Mutex;
 
+use dashmap::DashMap;
+use rayon::prelude::*;
 use serde::Serialize;
 
 /// A BuildRequires entry that is missing on the target branch.
@@ -59,7 +62,7 @@ impl Closure {
 }
 
 /// Trait abstracting fedrq operations for testability.
-pub trait DepResolver {
+pub trait DepResolver: Send + Sync {
     /// Validate that the source and target configurations are usable.
     /// Called once before resolution begins. Return an error message
     /// if the configuration is invalid (e.g. bad fedrq branch/repo).
@@ -96,6 +99,25 @@ pub struct ResolveOptions {
     pub auto_exclude: bool,
 }
 
+/// Thread-safe dependency resolution cache.
+///
+/// Shared between `resolve_closure_with_options` and
+/// `check_installability` so that repeated queries for the same
+/// dependency string are not sent to fedrq twice.
+pub struct ResolveCache {
+    target: DashMap<String, Option<String>>,
+    source: DashMap<String, Option<String>>,
+}
+
+impl ResolveCache {
+    pub fn new() -> Self {
+        Self {
+            target: DashMap::new(),
+            source: DashMap::new(),
+        }
+    }
+}
+
 /// Resolve the full transitive closure of missing build dependencies.
 #[cfg(test)]
 pub fn resolve_closure(
@@ -121,126 +143,180 @@ pub fn resolve_closure_with_options(
     target_branch: &str,
     options: &ResolveOptions,
 ) -> Result<Closure, String> {
+    resolve_closure_with_cache(
+        resolver,
+        packages,
+        source_branch,
+        target_branch,
+        options,
+        &ResolveCache::new(),
+    )
+}
+
+/// Resolve the full transitive closure, reusing an existing cache.
+fn resolve_closure_with_cache(
+    resolver: &dyn DepResolver,
+    packages: &[String],
+    source_branch: &str,
+    target_branch: &str,
+    options: &ResolveOptions,
+    cache: &ResolveCache,
+) -> Result<Closure, String> {
     resolver.validate()?;
     let mut closure: BTreeMap<String, ClosureEntry> = BTreeMap::new();
     let mut visited: BTreeSet<String> = BTreeSet::new();
-    // Track depth per package: requested packages are depth 1.
     let mut depth: BTreeMap<String, usize> = BTreeMap::new();
-    let mut queue: VecDeque<String> = VecDeque::new();
     for p in packages {
-        queue.push_back(p.clone());
         depth.insert(p.clone(), 1);
     }
     let mut warnings: Vec<String> = Vec::new();
 
-    // Cache: dep string -> Option<source package name> on each branch.
-    let mut target_cache: BTreeMap<String, Option<String>> = BTreeMap::new();
-    let mut source_cache: BTreeMap<String, Option<String>> = BTreeMap::new();
+    // Level-parallel BFS: process all packages at the same depth
+    // concurrently, then collect new packages for the next level.
+    let mut current_level: Vec<String> = packages.to_vec();
 
-    while let Some(pkg) = queue.pop_front() {
-        if visited.contains(&pkg) {
-            continue;
+    while !current_level.is_empty() {
+        // Filter to unvisited packages within depth limit.
+        let to_process: Vec<(String, usize)> = current_level
+            .iter()
+            .filter(|pkg| !visited.contains(*pkg))
+            .filter_map(|pkg| {
+                let d = depth[pkg];
+                if options.max_depth > 0 && d > options.max_depth {
+                    None
+                } else {
+                    Some((pkg.clone(), d))
+                }
+            })
+            .collect();
+
+        if to_process.is_empty() {
+            break;
         }
-        let pkg_depth = depth[&pkg];
-        if options.max_depth > 0 && pkg_depth > options.max_depth {
-            continue;
-        }
-        visited.insert(pkg.clone());
 
         if options.verbose {
+            let names: Vec<&str> =
+                to_process.iter().map(|(p, _)| p.as_str()).collect();
             eprintln!(
-                "[depth {}] resolving {pkg} ({} queued, {} resolved)",
-                pkg_depth,
-                queue.len(),
+                "[level] processing {} package(s) ({} resolved so far): {}",
+                to_process.len(),
                 closure.len(),
+                names.join(", "),
             );
         }
 
-        // Query BuildRequires on the source branch.
-        let build_reqs = match resolver.buildrequires(&pkg) {
-            Ok(reqs) => reqs,
-            Err(e) => {
-                warnings.push(format!("{pkg}: failed to query BuildRequires: {e}"));
-                closure.insert(
-                    pkg,
-                    ClosureEntry {
-                        missing_deps: vec![],
-                    },
-                );
-                continue;
-            }
-        };
+        // Resolve all packages at this level in parallel.
+        // Each returns: (pkg, entry, new_packages, pkg_warnings)
+        let results: Vec<_> = to_process
+            .par_iter()
+            .map(|(pkg, pkg_depth)| {
+                let mut log = Vec::new();
+                if options.verbose {
+                    log.push(format!("[depth {pkg_depth}] resolving {pkg}",));
+                }
 
-        let mut missing_deps: Vec<MissingDep> = Vec::new();
-        // Track which source packages we've already recorded as missing
-        // for this package to avoid duplicate entries.
-        let mut seen_providers: BTreeSet<String> = BTreeSet::new();
+                let build_reqs = match resolver.buildrequires(pkg) {
+                    Ok(reqs) => reqs,
+                    Err(e) => {
+                        let warn = format!("{pkg}: failed to query BuildRequires: {e}");
+                        return (
+                            pkg.clone(),
+                            ClosureEntry {
+                                missing_deps: vec![],
+                            },
+                            vec![],
+                            vec![warn],
+                            log,
+                        );
+                    }
+                };
 
-        for raw_dep in &build_reqs {
-            let dep_str = raw_dep.trim();
+                let mut missing_deps: Vec<MissingDep> = Vec::new();
+                let mut seen_providers: BTreeSet<String> = BTreeSet::new();
+                let mut new_packages: Vec<String> = Vec::new();
 
-            // Skip rpmlib/auto dependencies (provided by RPM itself).
-            if dep_str.starts_with("rpmlib(") || dep_str.starts_with("auto(") {
-                continue;
-            }
+                for raw_dep in &build_reqs {
+                    let dep_str = raw_dep.trim();
 
-            // Check if the versioned requirement is satisfied on target.
-            // We use the full dep string (including version constraints)
-            // so that fedrq checks whether the available version actually
-            // meets the requirement.
-            let target_resolved = target_cache
-                .entry(dep_str.to_string())
-                .or_insert_with(|| {
-                    resolver
-                        .resolve_target(dep_str)
-                        .ok()
-                        .and_then(|v| v.into_iter().find(|s| s != "(none)"))
-                })
-                .clone();
+                    if dep_str.starts_with("rpmlib(") || dep_str.starts_with("auto(") {
+                        continue;
+                    }
 
-            if target_resolved.is_some() {
-                // Satisfied (with correct version) on target, skip.
-                continue;
-            }
+                    let target_resolved = cache
+                        .target
+                        .entry(dep_str.to_string())
+                        .or_insert_with(|| {
+                            resolver
+                                .resolve_target(dep_str)
+                                .ok()
+                                .and_then(|v| v.into_iter().find(|s| s != "(none)"))
+                        })
+                        .clone();
 
-            // Resolve on source to find which package provides it.
-            // Use the full versioned string here too so we get the
-            // provider that actually satisfies the constraint.
-            let source_resolved = source_cache
-                .entry(dep_str.to_string())
-                .or_insert_with(|| {
-                    resolver
-                        .resolve_source(dep_str)
-                        .ok()
-                        .and_then(|v| v.into_iter().find(|s| s != "(none)"))
-                })
-                .clone();
+                    if target_resolved.is_some() {
+                        continue;
+                    }
 
-            let Some(provider) = source_resolved else {
-                // Can't resolve on source either — likely a base system dep.
-                continue;
-            };
+                    let source_resolved = cache
+                        .source
+                        .entry(dep_str.to_string())
+                        .or_insert_with(|| {
+                            resolver
+                                .resolve_source(dep_str)
+                                .ok()
+                                .and_then(|v| v.into_iter().find(|s| s != "(none)"))
+                        })
+                        .clone();
 
-            // Don't record self-dependencies.
-            if provider == pkg {
-                continue;
-            }
+                    let Some(provider) = source_resolved else {
+                        continue;
+                    };
 
-            if seen_providers.insert(provider.clone()) {
-                missing_deps.push(MissingDep {
-                    dep: raw_dep.clone(),
-                    provided_by: provider.clone(),
-                });
+                    if provider == *pkg {
+                        continue;
+                    }
 
-                // Queue the provider for recursive resolution.
-                if !visited.contains(&provider) {
-                    depth.entry(provider.clone()).or_insert(pkg_depth + 1);
-                    queue.push_back(provider);
+                    if seen_providers.insert(provider.clone()) {
+                        missing_deps.push(MissingDep {
+                            dep: raw_dep.clone(),
+                            provided_by: provider.clone(),
+                        });
+                        new_packages.push(provider);
+                    }
+                }
+
+                (
+                    pkg.clone(),
+                    ClosureEntry { missing_deps },
+                    new_packages,
+                    vec![],
+                    log,
+                )
+            })
+            .collect();
+
+        // Collect results sequentially: update closure, queue next level.
+        let mut next_level: Vec<String> = Vec::new();
+        for (pkg, entry, new_pkgs, warns, log) in results {
+            if options.verbose {
+                for line in log {
+                    eprintln!("{line}");
                 }
             }
+            let pkg_depth = depth[&pkg];
+            visited.insert(pkg.clone());
+            warnings.extend(warns);
+            for new_pkg in new_pkgs {
+                if !visited.contains(&new_pkg) {
+                    depth.entry(new_pkg.clone()).or_insert(pkg_depth + 1);
+                    next_level.push(new_pkg);
+                }
+            }
+            closure.insert(pkg, entry);
         }
-
-        closure.insert(pkg, ClosureEntry { missing_deps });
+        next_level.sort();
+        next_level.dedup();
+        current_level = next_level;
     }
 
     Ok(Closure {
@@ -287,117 +363,147 @@ pub struct InstallabilityReport {
 ///
 /// Returns issues found and any additional packages that would need
 /// to be added to the closure to fix them.
+#[cfg(test)]
 pub fn check_installability(
     resolver: &dyn DepResolver,
     closure: &Closure,
     options: &ResolveOptions,
     skip: &BTreeSet<String>,
 ) -> InstallabilityReport {
-    let mut issues: BTreeMap<String, InstallabilityEntry> = BTreeMap::new();
-    let mut additional_packages: BTreeSet<String> = BTreeSet::new();
+    check_installability_with_cache(resolver, closure, options, skip, &ResolveCache::new())
+}
 
-    // Cache: dep string -> resolution result on target/source.
-    let mut target_cache: BTreeMap<String, Option<String>> = BTreeMap::new();
-    let mut source_cache: BTreeMap<String, Option<String>> = BTreeMap::new();
-
+/// Check installability, reusing an existing resolution cache.
+fn check_installability_with_cache(
+    resolver: &dyn DepResolver,
+    closure: &Closure,
+    options: &ResolveOptions,
+    skip: &BTreeSet<String>,
+    cache: &ResolveCache,
+) -> InstallabilityReport {
     let closure_pkgs: BTreeSet<&String> = closure.closure.keys().collect();
 
-    for pkg in closure.closure.keys() {
-        if skip.contains(pkg) {
-            continue;
-        }
+    let pkgs_to_check: Vec<&String> = closure
+        .closure
+        .keys()
+        .filter(|pkg| !skip.contains(*pkg))
+        .collect();
 
-        if options.verbose {
-            eprintln!("[installability] checking subpackages of {pkg}");
-        }
+    if options.verbose {
+        let names: Vec<&str> =
+            pkgs_to_check.iter().map(|p| p.as_str()).collect();
+        eprintln!(
+            "[installability] checking {} package(s): {}",
+            pkgs_to_check.len(),
+            names.join(", "),
+        );
+    }
 
-        let requires = match resolver.subpkg_requires(pkg) {
-            Ok(r) => r,
-            Err(e) => {
-                // Record as an issue with no specific dep.
-                eprintln!(
-                    "warning: {pkg}: failed to query subpackage \
-                     Requires: {e}"
-                );
-                continue;
-            }
-        };
+    // Collect warnings from parallel subpkg_requires failures.
+    let warn_collector: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-        let mut unsatisfied: Vec<UnsatisfiedRequires> = Vec::new();
-        let mut seen_providers: BTreeSet<String> = BTreeSet::new();
+    // Process all packages in parallel.
+    let results: Vec<_> = pkgs_to_check
+        .par_iter()
+        .filter_map(|pkg| {
+            let requires = match resolver.subpkg_requires(pkg) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn_collector.lock().unwrap().push(format!(
+                        "warning: {pkg}: failed to query subpackage \
+                         Requires: {e}"
+                    ));
+                    return None;
+                }
+            };
 
-        for raw_dep in &requires {
-            let dep_str = raw_dep.trim();
+            let mut unsatisfied: Vec<UnsatisfiedRequires> = Vec::new();
+            let mut seen_providers: BTreeSet<String> = BTreeSet::new();
+            let mut additional: Vec<String> = Vec::new();
 
-            if sandogasa_depfilter::is_rpm_internal_dep(dep_str) {
-                continue;
-            }
-            if options.auto_exclude && sandogasa_depfilter::is_solib_symbol_dep(dep_str) {
-                continue;
-            }
+            for raw_dep in &requires {
+                let dep_str = raw_dep.trim();
 
-            // Check if satisfied on target.
-            let target_resolved = target_cache
-                .entry(dep_str.to_string())
-                .or_insert_with(|| {
-                    resolver
-                        .resolve_target(dep_str)
-                        .ok()
-                        .and_then(|v| v.into_iter().find(|s| s != "(none)"))
-                })
-                .clone();
-
-            if target_resolved.is_some() {
-                continue;
-            }
-
-            // Resolve on source.
-            let source_resolved = source_cache
-                .entry(dep_str.to_string())
-                .or_insert_with(|| {
-                    resolver
-                        .resolve_source(dep_str)
-                        .ok()
-                        .and_then(|v| v.into_iter().find(|s| s != "(none)"))
-                })
-                .clone();
-
-            match &source_resolved {
-                Some(provider) if provider == pkg => {
-                    // Self-provided by the same source package — OK.
+                if sandogasa_depfilter::is_rpm_internal_dep(dep_str) {
                     continue;
                 }
-                Some(provider)
-                    if closure_pkgs.contains(provider)
-                        || options.exclude_install.contains(provider) =>
-                {
-                    // Provided by another package in the closure or
-                    // in the exclude list — OK.
+                if options.auto_exclude && sandogasa_depfilter::is_solib_symbol_dep(dep_str) {
                     continue;
                 }
-                Some(provider) => {
-                    // Provider exists on source but not in closure.
-                    if seen_providers.insert(provider.clone()) {
+
+                let target_resolved = cache
+                    .target
+                    .entry(dep_str.to_string())
+                    .or_insert_with(|| {
+                        resolver
+                            .resolve_target(dep_str)
+                            .ok()
+                            .and_then(|v| v.into_iter().find(|s| s != "(none)"))
+                    })
+                    .clone();
+
+                if target_resolved.is_some() {
+                    continue;
+                }
+
+                let source_resolved = cache
+                    .source
+                    .entry(dep_str.to_string())
+                    .or_insert_with(|| {
+                        resolver
+                            .resolve_source(dep_str)
+                            .ok()
+                            .and_then(|v| v.into_iter().find(|s| s != "(none)"))
+                    })
+                    .clone();
+
+                match &source_resolved {
+                    Some(provider) if provider == *pkg => {
+                        continue;
+                    }
+                    Some(provider)
+                        if closure_pkgs.contains(provider)
+                            || options.exclude_install.contains(provider) =>
+                    {
+                        continue;
+                    }
+                    Some(provider) => {
+                        if seen_providers.insert(provider.clone()) {
+                            unsatisfied.push(UnsatisfiedRequires {
+                                dep: raw_dep.clone(),
+                                provided_by: Some(provider.clone()),
+                            });
+                            additional.push(provider.clone());
+                        }
+                    }
+                    None => {
                         unsatisfied.push(UnsatisfiedRequires {
                             dep: raw_dep.clone(),
-                            provided_by: Some(provider.clone()),
+                            provided_by: None,
                         });
-                        additional_packages.insert(provider.clone());
                     }
                 }
-                None => {
-                    // Can't resolve on source either.
-                    unsatisfied.push(UnsatisfiedRequires {
-                        dep: raw_dep.clone(),
-                        provided_by: None,
-                    });
-                }
             }
-        }
 
-        if !unsatisfied.is_empty() {
-            issues.insert(pkg.clone(), InstallabilityEntry { unsatisfied });
-        }
+            if unsatisfied.is_empty() {
+                None
+            } else {
+                Some((pkg.to_string(), unsatisfied, additional))
+            }
+        })
+        .collect();
+
+    // Print warnings collected from parallel section.
+    for warn in warn_collector.into_inner().unwrap() {
+        eprintln!("{warn}");
+    }
+
+    // Merge results.
+    let mut issues: BTreeMap<String, InstallabilityEntry> = BTreeMap::new();
+    let mut additional_packages: BTreeSet<String> = BTreeSet::new();
+    for (pkg, unsatisfied, additional) in results {
+        issues.insert(pkg, InstallabilityEntry { unsatisfied });
+        additional_packages.extend(additional);
     }
 
     InstallabilityReport {
@@ -424,26 +530,30 @@ pub fn resolve_with_installability(
     let requested: Vec<String> = packages.to_vec();
     // Packages whose installability already passed — skip on future iterations.
     let mut passed: BTreeSet<String> = BTreeSet::new();
+    // Shared cache across all resolution and installability iterations.
+    let cache = ResolveCache::new();
 
     loop {
         let pkg_list: Vec<String> = all_packages.iter().cloned().collect();
 
         if options.verbose {
             eprintln!(
-                "[installability] resolving with {} package(s)",
-                pkg_list.len()
+                "[installability] resolving with {} package(s): {}",
+                pkg_list.len(),
+                pkg_list.join(", "),
             );
         }
 
-        let mut closure = resolve_closure_with_options(
+        let mut closure = resolve_closure_with_cache(
             resolver,
             &pkg_list,
             source_branch,
             target_branch,
             options,
+            &cache,
         )?;
 
-        let report = check_installability(resolver, &closure, options, &passed);
+        let report = check_installability_with_cache(resolver, &closure, options, &passed, &cache);
 
         // Record packages that passed this round.
         for pkg in closure.closure.keys() {
@@ -496,13 +606,22 @@ pub struct FedrqResolver {
 
 impl DepResolver for FedrqResolver {
     fn validate(&self) -> Result<(), String> {
-        // Probe both branches with a no-op query to catch bad configs early.
-        self.source
-            .resolve_to_source("bash")
-            .map_err(|e| format!("source branch config error: {e}"))?;
-        self.target
-            .resolve_to_source("bash")
-            .map_err(|e| format!("target branch config error: {e}"))?;
+        // Probe both branches in parallel to catch bad configs early
+        // and warm up the fedrq cache if needed.
+        let (src, tgt) = rayon::join(
+            || {
+                self.source
+                    .resolve_to_source("bash")
+                    .map_err(|e| format!("source branch config error: {e}"))
+            },
+            || {
+                self.target
+                    .resolve_to_source("bash")
+                    .map_err(|e| format!("target branch config error: {e}"))
+            },
+        );
+        src?;
+        tgt?;
         Ok(())
     }
 

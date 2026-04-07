@@ -102,14 +102,14 @@ $ ebranch build-order rust-uucore \
     --source rawhide \
     --target-repo '@koji:epel10.3-build-side-133542' \
     --check-install --verbose --koji
-[installability] resolving with 1 package(s)
-[depth 1] resolving rust-uucore (0 queued, 0 resolved)
-[installability] checking subpackages of rust-uucore
+[installability] resolving with 1 package(s): rust-uucore
+[level] processing 1 package(s) (0 resolved so far): rust-uucore
+[installability] checking 1 package(s): rust-uucore
 [installability] adding 7 package(s): rust-base64-simd, ...
-[installability] resolving with 8 package(s)
+[installability] resolving with 8 package(s): rust-base64-simd, ...
 ...
 [installability] adding 1 package(s): rust-const-str-proc-macro
-[installability] resolving with 9 package(s)
+[installability] resolving with 9 package(s): rust-base64-simd, ...
 ...
 rust-const-str rust-const-str-proc-macro rust-core_maths ...
 ```
@@ -130,6 +130,8 @@ install time (as a Requires of a subpackage) would be missed.
 - `--no-auto-exclude` — disable automatic exclusion of solib symbol
   version deps (e.g. `libc.so.6(GLIBC_2.38)(64bit)`) from
   installability checks
+- `-j N` / `--jobs N` — number of parallel fedrq queries
+  (0 = number of CPUs, the default)
 - `--refresh` — clear fedrq repo metadata cache before querying
 - `--koji` — output build-order as a Koji chain build string
 - `--copr` — generate a Copr batch build shell script
