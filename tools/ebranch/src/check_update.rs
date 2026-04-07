@@ -446,6 +446,46 @@ fn run_provides_analysis(
     })
 }
 
+/// Warn if any package from koji list-tagged has no changed provides,
+/// which suggests the side tag repo metadata is stale.
+fn check_side_tag_staleness(nvrs: &[String], changed: &[ChangedProvide]) {
+    // Collect all provide name strings that changed.
+    let changed_old: BTreeSet<&str> = changed.iter().map(|c| c.old.as_str()).collect();
+
+    // For each NVR, check if the version from the NVR appears in any
+    // changed provide. If the NVR says 1.51.0 but no provide mentions
+    // 1.51.0, the side tag repo is likely stale for that package.
+    for nvr in nvrs {
+        let Some(name) = parse_nvr(nvr) else {
+            continue;
+        };
+        // Extract version from NVR.
+        let version = nvr
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .and_then(|vr| vr.split_once('-'))
+            .map(|(v, _)| v);
+        let Some(version) = version else {
+            continue;
+        };
+
+        // Check if any changed provide references this package's
+        // version (from the NVR).
+        let has_version_match = changed_old
+            .iter()
+            .any(|p| p.contains(name) || p.contains(version));
+
+        if !has_version_match {
+            eprintln!(
+                "warning: {name}: side tag repo may be stale \
+                 (expected version {version} from {nvr} not found \
+                 in changed provides); consider running \
+                 'koji regen-repo' or using @testing if available"
+            );
+        }
+    }
+}
+
 /// Run the check-update analysis.
 pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdateReport, String> {
     // Phase 0: Determine side tag, NVRs, and branch.
@@ -547,8 +587,36 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         repo: Some(format!("@koji:{tag}")),
     });
 
+    // Prefer @testing when the update has been pushed to testing,
+    // since it has authoritative repo metadata (no staleness issue).
+    let testing_fedrq = sandogasa_fedrq::Fedrq {
+        branch: Some(new_branch),
+        repo: Some("@testing".to_string()),
+    };
+
+    let has_testing = updated_packages
+        .first()
+        .and_then(|pkg| testing_fedrq.subpkgs_names(pkg).ok())
+        .map(filter_none)
+        .is_some_and(|names| !names.is_empty());
+
+    if has_testing {
+        if opts.verbose {
+            eprintln!("[check-update] using @testing for new provides");
+        }
+        let changed =
+            compute_changed_provides_via_subpkgs(&updated_packages, &stable_fedrq, &testing_fedrq);
+        return run_provides_analysis(
+            input,
+            &branch,
+            &updated_packages,
+            changed,
+            &stable_fedrq,
+            opts,
+        );
+    }
+
     if let Some(ref side_fq) = side_tag_fedrq {
-        // Full analysis via koji buildinfo + fedrq pkg_provides.
         if opts.verbose {
             eprintln!("[check-update] comparing provides via koji + side tag");
         }
@@ -560,94 +628,63 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             opts.koji_profile.as_deref(),
             opts.verbose,
         );
-        run_provides_analysis(
+
+        // Warn if the side tag repo appears stale.
+        check_side_tag_staleness(&nvrs, &changed);
+
+        return run_provides_analysis(
             input,
             &branch,
             &updated_packages,
             changed,
             &stable_fedrq,
             opts,
-        )
-    } else {
-        // No side tag: use @testing repo for new provides if
-        // the update is in testing, otherwise just list reverse deps.
-        let testing_fedrq = Some(sandogasa_fedrq::Fedrq {
-            branch: Some(new_branch.clone()),
-            repo: Some("@testing".to_string()),
-        });
-
-        // Probe whether the package exists in @testing.
-        let has_testing = testing_fedrq.as_ref().is_some_and(|fq| {
-            updated_packages
-                .first()
-                .and_then(|pkg| fq.subpkgs_names(pkg).ok())
-                .map(filter_none)
-                .is_some_and(|names| !names.is_empty())
-        });
-
-        if has_testing {
-            if opts.verbose {
-                eprintln!("[check-update] using @testing for new provides");
-            }
-            let changed = compute_changed_provides_via_subpkgs(
-                &updated_packages,
-                &stable_fedrq,
-                testing_fedrq.as_ref().unwrap(),
-            );
-            run_provides_analysis(
-                input,
-                &branch,
-                &updated_packages,
-                changed,
-                &stable_fedrq,
-                opts,
-            )
-        } else {
-            // Package not in @testing; just list reverse deps.
-            if opts.verbose {
-                eprintln!(
-                    "[check-update] package not found in @testing; \
-                     listing reverse deps only"
-                );
-            }
-
-            let rev_dep_sources = filter_none(
-                stable_fedrq
-                    .whatrequires(&all_subpkg_names)
-                    .map_err(|e| format!("whatrequires failed: {e}"))?,
-            );
-
-            let updated_set: BTreeSet<&str> = updated_packages.iter().map(|s| s.as_str()).collect();
-            let rev_deps: Vec<String> = rev_dep_sources
-                .into_iter()
-                .filter(|pkg| !updated_set.contains(pkg.as_str()))
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-
-            let reverse_deps: BTreeMap<String, RevDepResult> = rev_deps
-                .into_iter()
-                .map(|pkg| {
-                    (
-                        pkg,
-                        RevDepResult {
-                            status: "unknown".to_string(),
-                            issues: vec![],
-                        },
-                    )
-                })
-                .collect();
-
-            Ok(CheckUpdateReport {
-                input: input.to_string(),
-                branch,
-                updated_packages,
-                full_analysis: false,
-                changed_provides: vec![],
-                reverse_deps,
-            })
-        }
+        );
     }
+
+    // No side tag and not in @testing: just list reverse deps.
+    if opts.verbose {
+        eprintln!(
+            "[check-update] no side tag or @testing available; \
+             listing reverse deps only"
+        );
+    }
+
+    let rev_dep_sources = filter_none(
+        stable_fedrq
+            .whatrequires(&all_subpkg_names)
+            .map_err(|e| format!("whatrequires failed: {e}"))?,
+    );
+
+    let updated_set: BTreeSet<&str> = updated_packages.iter().map(|s| s.as_str()).collect();
+    let rev_deps: Vec<String> = rev_dep_sources
+        .into_iter()
+        .filter(|pkg| !updated_set.contains(pkg.as_str()))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    let reverse_deps: BTreeMap<String, RevDepResult> = rev_deps
+        .into_iter()
+        .map(|pkg| {
+            (
+                pkg,
+                RevDepResult {
+                    status: "unknown".to_string(),
+                    issues: vec![],
+                },
+            )
+        })
+        .collect();
+
+    Ok(CheckUpdateReport {
+        input: input.to_string(),
+        branch,
+        updated_packages,
+        full_analysis: false,
+        changed_provides: vec![],
+        reverse_deps,
+    })
 }
 
 /// Print a human-readable report to stdout.
