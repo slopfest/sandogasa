@@ -140,6 +140,10 @@ struct CheckUpdateArgs {
     #[arg(short = 'r', long, value_name = "REPO")]
     repo: Option<String>,
 
+    /// Branch for @testing queries (defaults to -b).
+    #[arg(long)]
+    testing_branch: Option<String>,
+
     /// Koji CLI profile (e.g. cbs for CentOS).
     #[arg(long)]
     koji_profile: Option<String>,
@@ -183,6 +187,7 @@ fn main() -> ExitCode {
         let opts = check_update::CheckUpdateOptions {
             branch: a.branch.clone(),
             repo: a.repo.clone(),
+            testing_branch: a.testing_branch.clone(),
             koji_profile: a.koji_profile.clone(),
             verbose: a.verbose,
         };

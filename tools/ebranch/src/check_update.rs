@@ -32,6 +32,8 @@ pub enum InputKind {
 pub struct CheckUpdateOptions {
     pub branch: Option<String>,
     pub repo: Option<String>,
+    /// Override branch for @testing queries (defaults to branch).
+    pub testing_branch: Option<String>,
     pub koji_profile: Option<String>,
     pub verbose: bool,
 }
@@ -61,8 +63,8 @@ pub struct CheckUpdateReport {
     pub input: String,
     pub branch: String,
     pub updated_packages: Vec<String>,
-    /// Whether a side tag was available for full provides comparison.
-    pub has_side_tag: bool,
+    /// Whether full provides comparison was performed.
+    pub full_analysis: bool,
     pub removed_provides: Vec<String>,
     pub reverse_deps: BTreeMap<String, RevDepResult>,
 }
@@ -204,7 +206,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             input: input.to_string(),
             branch: branch.clone(),
             updated_packages: vec![],
-            has_side_tag: side_tag.is_some(),
+            full_analysis: side_tag.is_some(),
             removed_provides: vec![],
             reverse_deps: BTreeMap::new(),
         });
@@ -283,7 +285,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
                 input: input.to_string(),
                 branch,
                 updated_packages,
-                has_side_tag: true,
+                full_analysis: true,
                 removed_provides: vec![],
                 reverse_deps: BTreeMap::new(),
             });
@@ -357,54 +359,190 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             input: input.to_string(),
             branch,
             updated_packages,
-            has_side_tag: true,
+            full_analysis: true,
             removed_provides: removed_list,
             reverse_deps,
         })
     } else {
-        // No side tag: just list reverse deps without breakage analysis.
-        if opts.verbose {
-            eprintln!(
-                "[check-update] no side tag available; \
-                 listing reverse deps only"
+        // No side tag: use @testing repo for new provides if
+        // the update is in testing, otherwise just list reverse deps.
+        let testing_branch = opts.testing_branch.clone().or_else(|| Some(branch.clone()));
+        let testing_fedrq = testing_branch.map(|tb| sandogasa_fedrq::Fedrq {
+            branch: Some(tb),
+            repo: Some("@testing".to_string()),
+        });
+
+        // Probe whether the package exists in @testing.
+        let has_testing = testing_fedrq.as_ref().is_some_and(|fq| {
+            updated_packages
+                .first()
+                .and_then(|pkg| fq.subpkgs_names(pkg).ok())
+                .map(filter_none)
+                .is_some_and(|names| !names.is_empty())
+        });
+
+        if has_testing {
+            // Full analysis using @testing as the new-provides source.
+            if opts.verbose {
+                eprintln!("[check-update] using @testing for new provides");
+            }
+
+            let testing_fq = testing_fedrq.as_ref().unwrap();
+
+            let removed_provides: BTreeSet<String> = updated_packages
+                .par_iter()
+                .flat_map(|srpm| {
+                    let old_provides: BTreeSet<String> =
+                        filter_none(stable_fedrq.subpkgs_provides(srpm).unwrap_or_default())
+                            .into_iter()
+                            .collect();
+
+                    let new_provides: BTreeSet<String> = testing_fq
+                        .subpkgs_provides(srpm)
+                        .ok()
+                        .map(|v| filter_none(v).into_iter().collect())
+                        .unwrap_or_default();
+
+                    old_provides
+                        .difference(&new_provides)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+
+            if opts.verbose {
+                eprintln!(
+                    "[check-update] {} removed provides found",
+                    removed_provides.len()
+                );
+            }
+
+            if removed_provides.is_empty() {
+                return Ok(CheckUpdateReport {
+                    input: input.to_string(),
+                    branch,
+                    updated_packages,
+                    full_analysis: true,
+                    removed_provides: vec![],
+                    reverse_deps: BTreeMap::new(),
+                });
+            }
+
+            let removed_list: Vec<String> = removed_provides.iter().cloned().collect();
+
+            if opts.verbose {
+                eprintln!("[check-update] finding reverse dependencies");
+            }
+
+            let rev_dep_sources = filter_none(
+                stable_fedrq
+                    .whatrequires(&removed_list)
+                    .map_err(|e| format!("whatrequires failed: {e}"))?,
             );
-        }
 
-        let rev_dep_sources = filter_none(
-            stable_fedrq
-                .whatrequires(&all_subpkg_names)
-                .map_err(|e| format!("whatrequires failed: {e}"))?,
-        );
+            let updated_set: BTreeSet<&str> = updated_packages.iter().map(|s| s.as_str()).collect();
+            let rev_deps: Vec<String> = rev_dep_sources
+                .into_iter()
+                .filter(|pkg| !updated_set.contains(pkg.as_str()))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
 
-        let updated_set: BTreeSet<&str> = updated_packages.iter().map(|s| s.as_str()).collect();
-        let rev_deps: Vec<String> = rev_dep_sources
-            .into_iter()
-            .filter(|pkg| !updated_set.contains(pkg.as_str()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+            if opts.verbose {
+                eprintln!(
+                    "[check-update] {} reverse dependencies to \
+                     check: {}",
+                    rev_deps.len(),
+                    rev_deps.join(", "),
+                );
+            }
 
-        let reverse_deps: BTreeMap<String, RevDepResult> = rev_deps
-            .into_iter()
-            .map(|pkg| {
-                (
-                    pkg,
-                    RevDepResult {
-                        status: "unknown".to_string(),
-                        issues: vec![],
-                    },
-                )
+            let results: Vec<(String, RevDepResult)> = rev_deps
+                .par_iter()
+                .map(|pkg| {
+                    let requires = stable_fedrq.subpkgs_requires(pkg).unwrap_or_default();
+
+                    let issues: Vec<BrokenRequires> = requires
+                        .iter()
+                        .filter_map(|dep| {
+                            let dep_str = dep.trim();
+                            if removed_provides.contains(dep_str) {
+                                Some(BrokenRequires {
+                                    dep: dep_str.to_string(),
+                                    removed_provide: dep_str.to_string(),
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    let status = if issues.is_empty() { "ok" } else { "broken" };
+                    (
+                        pkg.clone(),
+                        RevDepResult {
+                            status: status.to_string(),
+                            issues,
+                        },
+                    )
+                })
+                .collect();
+
+            let reverse_deps: BTreeMap<String, RevDepResult> = results.into_iter().collect();
+
+            Ok(CheckUpdateReport {
+                input: input.to_string(),
+                branch,
+                updated_packages,
+                full_analysis: true,
+                removed_provides: removed_list,
+                reverse_deps,
             })
-            .collect();
+        } else {
+            // Package not in @testing; just list reverse deps.
+            if opts.verbose {
+                eprintln!(
+                    "[check-update] package not found in @testing; \
+                     listing reverse deps only"
+                );
+            }
 
-        Ok(CheckUpdateReport {
-            input: input.to_string(),
-            branch,
-            updated_packages,
-            has_side_tag: false,
-            removed_provides: vec![],
-            reverse_deps,
-        })
+            let rev_dep_sources = filter_none(
+                stable_fedrq
+                    .whatrequires(&all_subpkg_names)
+                    .map_err(|e| format!("whatrequires failed: {e}"))?,
+            );
+
+            let updated_set: BTreeSet<&str> = updated_packages.iter().map(|s| s.as_str()).collect();
+            let rev_deps: Vec<String> = rev_dep_sources
+                .into_iter()
+                .filter(|pkg| !updated_set.contains(pkg.as_str()))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+
+            let reverse_deps: BTreeMap<String, RevDepResult> = rev_deps
+                .into_iter()
+                .map(|pkg| {
+                    (
+                        pkg,
+                        RevDepResult {
+                            status: "unknown".to_string(),
+                            issues: vec![],
+                        },
+                    )
+                })
+                .collect();
+
+            Ok(CheckUpdateReport {
+                input: input.to_string(),
+                branch,
+                updated_packages,
+                full_analysis: false,
+                removed_provides: vec![],
+                reverse_deps,
+            })
+        }
     }
 }
 
@@ -414,7 +552,7 @@ pub fn print_report(report: &CheckUpdateReport) {
     println!("Branch: {}", report.branch);
     println!("Updated packages: {}\n", report.updated_packages.join(", "));
 
-    if !report.has_side_tag {
+    if !report.full_analysis {
         // No side tag available — informational mode.
         println!("Note: no side tag available; cannot compare Provides.");
         println!("Listing reverse dependencies for manual review.\n");
@@ -433,15 +571,21 @@ pub fn print_report(report: &CheckUpdateReport) {
         return;
     }
 
-    if !report.removed_provides.is_empty() {
-        println!("Removed Provides ({}):", report.removed_provides.len());
-        for p in &report.removed_provides {
-            println!("  - {p}");
-        }
+    if report.removed_provides.is_empty() {
+        println!("No removed Provides. No breakage expected.");
+        return;
+    }
+
+    println!("Removed Provides ({}):", report.removed_provides.len());
+    for p in &report.removed_provides {
+        println!("  - {p}");
     }
 
     if report.reverse_deps.is_empty() {
-        println!("No removed Provides detected. No breakage expected.");
+        println!(
+            "\nNo packages depend on the removed Provides. \
+             No breakage expected."
+        );
         return;
     }
 
