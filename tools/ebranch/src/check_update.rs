@@ -55,6 +55,17 @@ fn compare_provides(old: &BTreeSet<String>, new: &BTreeSet<String>) -> Vec<Chang
     changed
 }
 
+/// Extract a testing branch from a side tag name.
+///
+/// E.g. "epel9-build-side-133287" → "epel9",
+///      "epel10.0-build-side-12345" → "epel10.0"
+fn testing_branch_from_side_tag(tag: Option<&str>) -> Option<String> {
+    let tag = tag?;
+    let rest = tag.strip_prefix("epel")?;
+    let release_end = rest.find("-build-side-")?;
+    Some(format!("epel{}", &rest[..release_end]))
+}
+
 /// What kind of input the user provided.
 pub enum InputKind {
     /// A Koji side tag name (e.g. "epel9-build-side-133287").
@@ -580,6 +591,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
     let new_branch = opts
         .testing_branch
         .clone()
+        .or_else(|| testing_branch_from_side_tag(side_tag.as_deref()))
         .unwrap_or_else(|| branch.clone());
 
     let side_tag_fedrq = side_tag.as_ref().map(|tag| sandogasa_fedrq::Fedrq {
@@ -883,6 +895,37 @@ mod tests {
         let new: BTreeSet<String> = ["bash".to_string()].into();
         let changed = compare_provides(&old, &new);
         assert!(changed.is_empty());
+    }
+
+    // --- testing_branch_from_side_tag ---
+
+    #[test]
+    fn testing_branch_epel9() {
+        assert_eq!(
+            testing_branch_from_side_tag(Some("epel9-build-side-133287")),
+            Some("epel9".to_string())
+        );
+    }
+
+    #[test]
+    fn testing_branch_epel10() {
+        assert_eq!(
+            testing_branch_from_side_tag(Some("epel10.0-build-side-12345")),
+            Some("epel10.0".to_string())
+        );
+    }
+
+    #[test]
+    fn testing_branch_not_epel() {
+        assert_eq!(
+            testing_branch_from_side_tag(Some("f44-build-side-99999")),
+            None
+        );
+    }
+
+    #[test]
+    fn testing_branch_none() {
+        assert_eq!(testing_branch_from_side_tag(None), None);
     }
 
     // --- detect_input_type ---
