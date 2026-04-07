@@ -27,6 +27,12 @@
 - Symlink the root LICENSE file into each crate subdirectory so it is included when publishing to crates.io
 - All dependencies (external and internal) are declared in `[workspace.dependencies]` in the root `Cargo.toml`, then referenced as `{ workspace = true }` in member crates
 
+## Dependencies
+- Before starting feature work, run `cargo audit` and address any reported vulnerabilities first (patch bump or `cargo update -p <crate> --precise <version>`)
+- Before a semver-breaking release, run `cargo outdated` and consider bumping deps that themselves require a major version bump — bundle breaking dep upgrades with your own breaking release
+- Routine `cargo update` (semver-compatible bumps) should be a separate commit from feature work so it is easy to revert if something regresses
+- After any dependency change, run `cargo clippy --workspace && cargo cov` to verify nothing broke
+
 ## Testing
 - Always write corresponding tests when adding or modifying features
 - Run `cargo cov` before committing to verify tests pass and coverage does not regress
