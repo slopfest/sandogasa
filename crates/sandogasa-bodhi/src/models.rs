@@ -39,6 +39,8 @@ pub struct BodhiBug {
 #[derive(Debug, Deserialize)]
 pub struct Release {
     pub name: String,
+    #[serde(default)]
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

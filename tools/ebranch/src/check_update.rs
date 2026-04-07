@@ -250,6 +250,8 @@ struct BodhiUpdateInfo {
     side_tag: Option<String>,
     nvrs: Vec<String>,
     release_name: Option<String>,
+    /// Branch from the Bodhi release (e.g. "epel9", "f44").
+    release_branch: Option<String>,
 }
 
 /// Fetch a Bodhi update and extract its key fields.
@@ -263,12 +265,14 @@ fn fetch_bodhi_update(alias: &str) -> Result<BodhiUpdateInfo, String> {
         })
         .map_err(|e| format!("failed to fetch Bodhi update {alias}: {e}"))?;
 
-    let release_name = update.release.map(|r| r.name);
+    let release_name = update.release.as_ref().map(|r| r.name.clone());
+    let release_branch = update.release.as_ref().and_then(|r| r.branch.clone());
     let nvrs: Vec<String> = update.builds.iter().map(|b| b.nvr.clone()).collect();
     Ok(BodhiUpdateInfo {
         side_tag: update.from_side_tag,
         nvrs,
         release_name,
+        release_branch,
     })
 }
 
@@ -499,15 +503,15 @@ fn check_side_tag_staleness(nvrs: &[String], changed: &[ChangedProvide]) {
 
 /// Run the check-update analysis.
 pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdateReport, String> {
-    // Phase 0: Determine side tag, NVRs, and branch.
-    let (side_tag, nvrs, branch) = match detect_input_type(input) {
+    // Phase 0: Determine side tag, NVRs, branch, and Bodhi release branch.
+    let (side_tag, nvrs, branch, bodhi_branch) = match detect_input_type(input) {
         InputKind::SideTag(tag) => {
             let branch = opts
                 .branch
                 .clone()
                 .ok_or("--branch is required for side tag input")?;
             let nvrs = koji_list_tagged(&tag, opts.koji_profile.as_deref())?;
-            (Some(tag), nvrs, branch)
+            (Some(tag), nvrs, branch, None)
         }
         InputKind::BodhiAlias(alias) => {
             let info = fetch_bodhi_update(&alias)?;
@@ -528,7 +532,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
                 (None, info.nvrs)
             };
 
-            (side_tag, nvrs, branch)
+            (side_tag, nvrs, branch, info.release_branch)
         }
     };
 
@@ -592,6 +596,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         .testing_branch
         .clone()
         .or_else(|| testing_branch_from_side_tag(side_tag.as_deref()))
+        .or(bodhi_branch)
         .unwrap_or_else(|| branch.clone());
 
     let side_tag_fedrq = side_tag.as_ref().map(|tag| sandogasa_fedrq::Fedrq {
