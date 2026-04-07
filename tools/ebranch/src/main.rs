@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod check_update;
 mod dag;
 mod resolve;
 
@@ -126,10 +127,42 @@ are excluded automatically."
     refresh: bool,
 }
 
+#[derive(clap::Args, Clone)]
+struct CheckUpdateArgs {
+    /// Koji side tag, Bodhi update alias, or Bodhi URL.
+    input: String,
+
+    /// Branch to check against (e.g. epel9).
+    #[arg(short = 'b', long)]
+    branch: Option<String>,
+
+    /// Repository class for the branch (fedrq -r).
+    #[arg(short = 'r', long, value_name = "REPO")]
+    repo: Option<String>,
+
+    /// Koji CLI profile (e.g. cbs for CentOS).
+    #[arg(long)]
+    koji_profile: Option<String>,
+
+    /// Machine-readable JSON output.
+    #[arg(long)]
+    json: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Parallel fedrq queries (0 = CPUs).
+    #[arg(short = 'j', long, default_value = "0", hide_default_value = true)]
+    jobs: usize,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Compute parallel build phases for porting packages.
     BuildOrder(ResolveArgs),
+    /// Check if an update would break reverse dependencies.
+    CheckUpdate(CheckUpdateArgs),
     /// Detect dependency cycles in the build graph.
     FindCycles(ResolveArgs),
     /// Resolve the full dependency closure for porting.
@@ -138,8 +171,45 @@ enum Command {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    // CheckUpdate has its own args structure; handle it separately.
+    if let Command::CheckUpdate(a) = &cli.command {
+        if a.jobs > 0 {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(a.jobs)
+                .build_global()
+                .expect("failed to configure thread pool");
+        }
+        let opts = check_update::CheckUpdateOptions {
+            branch: a.branch.clone(),
+            repo: a.repo.clone(),
+            koji_profile: a.koji_profile.clone(),
+            verbose: a.verbose,
+        };
+        return match check_update::check_update(&a.input, &opts) {
+            Ok(report) => {
+                if a.json {
+                    print_json(&report);
+                } else {
+                    check_update::print_report(&report);
+                }
+                let has_broken = report.reverse_deps.values().any(|r| r.status == "broken");
+                if has_broken {
+                    ExitCode::FAILURE
+                } else {
+                    ExitCode::SUCCESS
+                }
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     let (args, mode) = match &cli.command {
         Command::BuildOrder(a) => (a, Mode::BuildOrder),
+        Command::CheckUpdate(_) => unreachable!(),
         Command::FindCycles(a) => (a, Mode::FindCycles),
         Command::Resolve(a) => (a, Mode::Resolve),
     };

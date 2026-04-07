@@ -17,6 +17,8 @@ pub struct Update {
     #[serde(default)]
     pub builds: Vec<Build>,
     #[serde(default)]
+    pub from_side_tag: Option<String>,
+    #[serde(default)]
     pub bugs: Vec<BodhiBug>,
     #[serde(default)]
     pub release: Option<Release>,
@@ -37,6 +39,11 @@ pub struct BodhiBug {
 #[derive(Debug, Deserialize)]
 pub struct Release {
     pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SingleUpdateResponse {
+    pub update: Update,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,6 +127,36 @@ mod tests {
         assert_eq!(resp.total, 1);
         assert_eq!(resp.page, 1);
         assert_eq!(resp.pages, 1);
+    }
+
+    #[test]
+    fn deserialize_update_with_side_tag() {
+        let json = r#"{
+            "alias": "FEDORA-EPEL-2026-abc123",
+            "status": "testing",
+            "from_side_tag": "epel9-build-side-133287",
+            "builds": [
+                {"nvr": "rust-uucore-0.0.28-2.el9"}
+            ]
+        }"#;
+
+        let update: Update = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            update.from_side_tag.as_deref(),
+            Some("epel9-build-side-133287")
+        );
+    }
+
+    #[test]
+    fn deserialize_update_without_side_tag() {
+        let json = r#"{
+            "alias": "FEDORA-2026-xyz",
+            "status": "testing",
+            "builds": [{"nvr": "foo-1.0-1.fc42"}]
+        }"#;
+
+        let update: Update = serde_json::from_str(json).unwrap();
+        assert!(update.from_side_tag.is_none());
     }
 
     #[test]

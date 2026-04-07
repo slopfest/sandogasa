@@ -118,6 +118,37 @@ Without `--check-install`, ebranch only checks BuildRequires.
 Packages like `rust-const-str-proc-macro` that are only needed at
 install time (as a Requires of a subpackage) would be missed.
 
+### Check if an update would break reverse dependencies
+
+Use `check-update` to verify that a Koji side tag or Bodhi update
+won't break packages that depend on the updated packages. It compares
+old vs new subpackage Provides, finds any that were removed, and
+reports reverse dependencies that need the removed Provides:
+
+```console
+$ ebranch check-update epel9-build-side-133287 \
+    -b c9s -r @epel -v
+[check-update] updated packages: rust-uucore, rust-uucore_procs
+[check-update] comparing old vs new provides
+[check-update] 0 removed provides found
+Checking update: epel9-build-side-133287
+Branch: c9s
+Updated packages: rust-uucore, rust-uucore_procs
+
+No removed Provides detected. No breakage expected.
+```
+
+The input can also be a Bodhi update alias or URL:
+
+```sh
+ebranch check-update FEDORA-EPEL-2026-f9eaa11e18 -b c9s -r @epel
+ebranch check-update https://bodhi.fedoraproject.org/updates/FEDORA-EPEL-2026-f9eaa11e18
+```
+
+When the update is backed by a side tag (detected via Bodhi's
+`from_side_tag` field), ebranch queries the side tag for the full
+package list and compares Provides against the stable repo.
+
 ### Useful flags
 
 - `--verbose` / `-v` — print progress to stderr as packages are resolved

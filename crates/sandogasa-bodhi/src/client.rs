@@ -3,7 +3,8 @@
 use reqwest::Client;
 
 use crate::models::{
-    BodhiRelease, Comment, CommentsResponse, ReleasesResponse, Update, UpdatesResponse,
+    BodhiRelease, Comment, CommentsResponse, ReleasesResponse, SingleUpdateResponse, Update,
+    UpdatesResponse,
 };
 
 const BODHI_API_BASE: &str = "https://bodhi.fedoraproject.org";
@@ -101,6 +102,20 @@ impl BodhiClient {
             .collect();
 
         Ok(active)
+    }
+
+    /// Fetch a single update by its alias (e.g. "FEDORA-EPEL-2026-f9eaa11e18").
+    pub async fn update_by_alias(&self, alias: &str) -> Result<Update, reqwest::Error> {
+        let url = format!("{}/updates/{}", self.base_url, alias);
+        let resp: SingleUpdateResponse = self
+            .client
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(resp.update)
     }
 
     /// Fetch the most recent updates submitted by a user.
@@ -249,6 +264,73 @@ mod tests {
         let releases = client.active_releases().await.unwrap();
         let names: Vec<_> = releases.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["F43", "EPEL-9"]);
+    }
+
+    // ---- update_by_alias ----
+
+    #[tokio::test]
+    async fn update_by_alias_returns_update() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path_regex("/updates/FEDORA-EPEL-2026-abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "update": {
+                    "alias": "FEDORA-EPEL-2026-abc123",
+                    "status": "testing",
+                    "from_side_tag": "epel9-build-side-133287",
+                    "builds": [
+                        {"nvr": "rust-uucore-0.0.28-2.el9"}
+                    ],
+                    "bugs": [],
+                    "release": {"name": "EPEL-9"}
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let update = client
+            .update_by_alias("FEDORA-EPEL-2026-abc123")
+            .await
+            .unwrap();
+        assert_eq!(update.alias, "FEDORA-EPEL-2026-abc123");
+        assert_eq!(
+            update.from_side_tag.as_deref(),
+            Some("epel9-build-side-133287")
+        );
+        assert_eq!(update.builds.len(), 1);
+        assert_eq!(update.builds[0].nvr, "rust-uucore-0.0.28-2.el9");
+    }
+
+    #[tokio::test]
+    async fn update_by_alias_without_side_tag() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path_regex("/updates/FEDORA-2026-xyz"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "update": {
+                    "alias": "FEDORA-2026-xyz",
+                    "status": "stable",
+                    "builds": [
+                        {"nvr": "foo-1.0-1.fc42"},
+                        {"nvr": "bar-2.0-1.fc42"}
+                    ],
+                    "bugs": [],
+                    "release": {"name": "F42"}
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let update = client.update_by_alias("FEDORA-2026-xyz").await.unwrap();
+        assert_eq!(update.alias, "FEDORA-2026-xyz");
+        assert!(update.from_side_tag.is_none());
+        assert_eq!(update.builds.len(), 2);
     }
 
     // ---- updates_for_user ----

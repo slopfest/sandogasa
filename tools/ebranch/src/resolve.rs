@@ -195,8 +195,7 @@ fn resolve_closure_with_cache(
         }
 
         if options.verbose {
-            let names: Vec<&str> =
-                to_process.iter().map(|(p, _)| p.as_str()).collect();
+            let names: Vec<&str> = to_process.iter().map(|(p, _)| p.as_str()).collect();
             eprintln!(
                 "[level] processing {} package(s) ({} resolved so far): {}",
                 to_process.len(),
@@ -390,8 +389,7 @@ fn check_installability_with_cache(
         .collect();
 
     if options.verbose {
-        let names: Vec<&str> =
-            pkgs_to_check.iter().map(|p| p.as_str()).collect();
+        let names: Vec<&str> = pkgs_to_check.iter().map(|p| p.as_str()).collect();
         eprintln!(
             "[installability] checking {} package(s): {}",
             pkgs_to_check.len(),

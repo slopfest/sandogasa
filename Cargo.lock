@@ -315,10 +315,12 @@ dependencies = [
  "clap",
  "dashmap",
  "rayon",
+ "sandogasa-bodhi",
  "sandogasa-depfilter",
  "sandogasa-fedrq",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

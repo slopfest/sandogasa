@@ -147,7 +147,7 @@ impl Fedrq {
             return Ok(vec![]);
         }
         let mut cmd = Command::new("fedrq");
-        cmd.args(["whatrequires", "-F", "source_name"]);
+        cmd.args(["whatrequires", "-F", "source"]);
         self.apply_opts(&mut cmd);
         cmd.args(packages);
         Self::run(&mut cmd)
