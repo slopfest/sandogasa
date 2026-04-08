@@ -7,10 +7,12 @@
 //! whether the available version satisfies the crate's version requirement,
 //! or if it is missing entirely.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+
+use crate::dag;
 
 // ---- Public types ----
 
@@ -22,6 +24,7 @@ pub struct CheckCrateOptions {
     pub transitive: bool,
     pub include_dev: bool,
     pub include_optional: bool,
+    pub include_too_old: bool,
     pub exclude: HashSet<String>,
 }
 
@@ -76,6 +79,8 @@ pub struct CheckCrateReport {
     pub dependencies: Vec<DepResult>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub transitive_missing: Vec<TransitiveDep>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub transitive_build_order: Vec<dag::BuildPhase>,
 }
 
 // ---- Public functions ----
@@ -137,10 +142,25 @@ pub fn check_crate(
         })
         .collect();
 
-    let transitive_missing = if opts.transitive {
-        expand_transitive(&rt, &fedrq, &dependencies, opts)?
+    let (transitive_missing, transitive_build_order) = if opts.transitive {
+        let (deps, edges) = expand_transitive(&rt, &fedrq, &dependencies, opts)?;
+        let phases = if edges.is_empty() {
+            vec![]
+        } else {
+            match dag::topological_layers(&edges) {
+                Ok(p) => p,
+                Err(_) => {
+                    eprintln!(
+                        "warning: transitive dependency graph has cycles; \
+                         build order unavailable"
+                    );
+                    vec![]
+                }
+            }
+        };
+        (deps, phases)
     } else {
-        vec![]
+        (vec![], vec![])
     };
 
     Ok(CheckCrateReport {
@@ -149,6 +169,7 @@ pub fn check_crate(
         branch: opts.branch.clone(),
         dependencies,
         transitive_missing,
+        transitive_build_order,
     })
 }
 
@@ -240,7 +261,30 @@ pub fn print_report(report: &CheckCrateReport) {
         println!();
     }
 
-    if !report.transitive_missing.is_empty() {
+    if !report.transitive_build_order.is_empty() {
+        let total: usize = report
+            .transitive_build_order
+            .iter()
+            .map(|p| p.packages.len())
+            .sum();
+        println!(
+            "Build order ({total} package(s) in {} phase(s)):",
+            report.transitive_build_order.len()
+        );
+        for phase in &report.transitive_build_order {
+            println!("\n  Phase {}:", phase.phase);
+            for pkg in &phase.packages {
+                println!("    - rust-{pkg}");
+            }
+        }
+        if !report.transitive_missing.is_empty() {
+            println!(
+                "\n  ({} discovered transitively)",
+                report.transitive_missing.len()
+            );
+        }
+        println!();
+    } else if !report.transitive_missing.is_empty() {
         println!("Transitive missing ({}):", report.transitive_missing.len());
         for d in &report.transitive_missing {
             println!("  - {} {} (via {})", d.name, d.version_req, d.pulled_by);
@@ -273,6 +317,9 @@ fn opt_label(d: &DepResult) -> &str {
     if d.dep.optional { ", optional" } else { "" }
 }
 
+/// Dependency edges: `edges[A] = {B, C}` means A depends on B and C.
+type DepEdges = BTreeMap<String, BTreeSet<String>>;
+
 /// Whether a dependency should be expanded in transitive mode.
 fn should_expand(dep: &CrateDep, opts: &CheckCrateOptions) -> bool {
     if dep.optional && !opts.include_optional {
@@ -289,27 +336,40 @@ fn should_expand(dep: &CrateDep, opts: &CheckCrateOptions) -> bool {
 ///
 /// For each missing direct dep, fetches its dependencies from crates.io,
 /// checks them against the repo, and recurses into any that are also
-/// missing. Returns a deduplicated list of transitively-missing crates.
+/// missing. Returns a deduplicated list of transitively-missing crates
+/// and a dependency edge map for build-order computation.
 fn expand_transitive(
     rt: &tokio::runtime::Runtime,
     fedrq: &sandogasa_fedrq::Fedrq,
     direct_results: &[DepResult],
     opts: &CheckCrateOptions,
-) -> Result<Vec<TransitiveDep>, String> {
+) -> Result<(Vec<TransitiveDep>, DepEdges), String> {
     let mut visited: HashSet<String> = opts.exclude.clone();
     let mut result: Vec<TransitiveDep> = Vec::new();
+    // All missing crate names (direct + transitive) for edge filtering.
+    let mut all_missing: HashSet<String> = HashSet::new();
+    // edges[A] = {B, C} means A depends on missing crates B and C.
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // Deferred edge recording: (parent_crate, Vec<missing_dep_names>).
+    let mut pending_edges: Vec<(String, Vec<String>)> = Vec::new();
 
-    // Seed: direct missing deps that pass the kind filter.
-    let mut queue: VecDeque<(String, String)> = VecDeque::new(); // (crate_name, pulled_by)
+    let needs_rebuild = |status: &DepStatus| -> bool {
+        matches!(status, DepStatus::Missing)
+            || (opts.include_too_old && matches!(status, DepStatus::TooOld { .. }))
+    };
+
+    // Seed: direct deps that need (re)building and pass the kind filter.
+    let mut queue: VecDeque<String> = VecDeque::new();
     for dr in direct_results {
         let excluded = visited.contains(&dr.dep.name);
         visited.insert(dr.dep.name.clone());
-        if !excluded && matches!(dr.status, DepStatus::Missing) && should_expand(&dr.dep, opts) {
-            queue.push_back((dr.dep.name.clone(), dr.dep.name.clone()));
+        if !excluded && needs_rebuild(&dr.status) && should_expand(&dr.dep, opts) {
+            all_missing.insert(dr.dep.name.clone());
+            queue.push_back(dr.dep.name.clone());
         }
     }
 
-    while let Some((crate_name, pulled_by)) = queue.pop_front() {
+    while let Some(crate_name) = queue.pop_front() {
         if opts.verbose {
             eprintln!("[check-crate] expanding transitive deps for {crate_name}");
         }
@@ -351,22 +411,49 @@ fn expand_transitive(
             })
             .collect();
 
+        let mut rebuild_deps_of_crate: Vec<String> = Vec::new();
+
         for dr in &results {
+            if !needs_rebuild(&dr.status) {
+                continue;
+            }
+
+            // Dev deps don't create build-order edges (they're only
+            // needed for %check, not the actual RPM build), but we
+            // still expand them transitively below.
+            if dr.dep.kind != "dev" {
+                rebuild_deps_of_crate.push(dr.dep.name.clone());
+            }
+
             if visited.contains(&dr.dep.name) {
                 continue;
             }
             visited.insert(dr.dep.name.clone());
 
-            if matches!(dr.status, DepStatus::Missing) {
-                result.push(TransitiveDep {
-                    name: dr.dep.name.clone(),
-                    version: version.clone(),
-                    version_req: dr.dep.version_req.clone(),
-                    pulled_by: pulled_by.clone(),
-                });
-                queue.push_back((dr.dep.name.clone(), dr.dep.name.clone()));
-            }
+            all_missing.insert(dr.dep.name.clone());
+            result.push(TransitiveDep {
+                name: dr.dep.name.clone(),
+                version: version.clone(),
+                version_req: dr.dep.version_req.clone(),
+                pulled_by: crate_name.clone(),
+            });
+            queue.push_back(dr.dep.name.clone());
         }
+
+        pending_edges.push((crate_name, rebuild_deps_of_crate));
+    }
+
+    // Build final edges: only include deps that are in all_missing.
+    for (parent, deps) in pending_edges {
+        let dep_set: BTreeSet<String> = deps
+            .into_iter()
+            .filter(|d| all_missing.contains(d))
+            .collect();
+        edges.insert(parent, dep_set);
+    }
+    // Ensure all missing crates have an entry (even if no missing deps).
+    for name in &all_missing {
+        edges.entry(name.clone()).or_default();
     }
 
     if opts.verbose && !result.is_empty() {
@@ -376,7 +463,7 @@ fn expand_transitive(
         );
     }
 
-    Ok(result)
+    Ok((result, edges))
 }
 
 /// crates.io API response for crate info.
@@ -585,6 +672,7 @@ mod tests {
             transitive,
             include_dev,
             include_optional,
+            include_too_old: false,
             exclude: HashSet::new(),
         }
     }
