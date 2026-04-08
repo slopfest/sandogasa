@@ -198,9 +198,9 @@ struct CheckCrateArgs {
     #[arg(long, requires = "transitive")]
     include_optional: bool,
 
-    /// Include too-old deps in transitive expansion.
+    /// Include unmet-version deps in transitive expansion.
     #[arg(long, requires = "transitive")]
-    include_too_old: bool,
+    include_unmet: bool,
 
     /// Exclude crates from transitive expansion.
     #[arg(
@@ -272,7 +272,7 @@ fn main() -> ExitCode {
             transitive: a.transitive,
             include_dev: a.include_dev,
             include_optional: a.include_optional,
-            include_too_old: a.include_too_old,
+            include_too_old: a.include_unmet,
             exclude: a.exclude.iter().cloned().collect(),
         };
         return match check_crate::check_crate(&a.name, a.version.as_deref(), &opts) {

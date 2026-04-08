@@ -44,9 +44,12 @@ pub enum DepStatus {
     /// The RPM provides a version that satisfies the requirement.
     #[serde(rename = "satisfied")]
     Satisfied { version: String },
-    /// The RPM exists but its version is too old.
-    #[serde(rename = "too_old")]
-    TooOld { have: String, need: String },
+    /// The RPM exists but no version satisfies the requirement.
+    #[serde(rename = "unmet")]
+    Unmet {
+        available: Vec<String>,
+        need: String,
+    },
     /// No RPM provides this crate.
     #[serde(rename = "missing")]
     Missing,
@@ -221,10 +224,10 @@ pub fn print_report(report: &CheckCrateReport) {
         .iter()
         .filter(|d| matches!(d.status, DepStatus::Missing))
         .collect();
-    let too_old: Vec<&DepResult> = report
+    let unmet: Vec<&DepResult> = report
         .dependencies
         .iter()
-        .filter(|d| matches!(d.status, DepStatus::TooOld { .. }))
+        .filter(|d| matches!(d.status, DepStatus::Unmet { .. }))
         .collect();
     let satisfied: Vec<&DepResult> = report
         .dependencies
@@ -246,10 +249,10 @@ pub fn print_report(report: &CheckCrateReport) {
         println!();
     }
 
-    if !too_old.is_empty() {
-        print_section_header("Too old", &too_old);
-        for d in &too_old {
-            if let DepStatus::TooOld { have, need } = &d.status {
+    if !unmet.is_empty() {
+        print_section_header("No matching version", &unmet);
+        for d in &unmet {
+            if let DepStatus::Unmet { available, need } = &d.status {
                 println!(
                     "  - {} {} ({}{})",
                     d.dep.name,
@@ -257,7 +260,7 @@ pub fn print_report(report: &CheckCrateReport) {
                     d.dep.kind,
                     opt_label(d)
                 );
-                println!("    have: {have}, need: {need}");
+                println!("    available: {}, need: {need}", available.join(", "));
             }
         }
         println!();
@@ -325,14 +328,14 @@ pub fn print_report(report: &CheckCrateReport) {
     }
 
     let n_missing = unique_crate_count(&missing);
-    let n_too_old = unique_crate_count(&too_old);
+    let n_unmet = unique_crate_count(&unmet);
     let n_satisfied = unique_crate_count(&satisfied);
     if report.transitive_missing.is_empty() {
-        println!("Summary: {n_missing} missing, {n_too_old} too old, {n_satisfied} satisfied.");
+        println!("Summary: {n_missing} missing, {n_unmet} unmet, {n_satisfied} satisfied.");
     } else {
         println!(
             "Summary: {n_missing} missing (+ {} transitive), \
-             {n_too_old} too old, {n_satisfied} satisfied.",
+             {n_unmet} unmet, {n_satisfied} satisfied.",
             report.transitive_missing.len(),
         );
     }
@@ -471,7 +474,7 @@ fn expand_transitive(
 
     let needs_rebuild = |status: &DepStatus| -> bool {
         matches!(status, DepStatus::Missing)
-            || (opts.include_too_old && matches!(status, DepStatus::TooOld { .. }))
+            || (opts.include_too_old && matches!(status, DepStatus::Unmet { .. }))
     };
 
     // Seed: direct deps that need (re)building and pass the kind filter.
@@ -729,47 +732,49 @@ fn check_dep_in_repo(fedrq: &sandogasa_fedrq::Fedrq, dep: &CrateDep) -> DepStatu
         .provides_of_provider(&provide_name)
         .unwrap_or_default();
 
-    // Parse the provided version from output like "crate(foo) = 1.2.3".
-    let version = extract_crate_version(&provides, &dep.name);
+    // Extract all provided versions (multiple packages may provide
+    // different versions, e.g. rust-rand and rust-rand0.9).
+    let versions = extract_crate_versions(&provides, &dep.name);
 
-    let Some(version_str) = version else {
+    if versions.is_empty() {
         return DepStatus::Missing;
-    };
-
-    // Parse with semver.
-    let Ok(version) = semver::Version::parse(&version_str) else {
-        return DepStatus::Missing;
-    };
+    }
 
     let Ok(req) = semver::VersionReq::parse(&dep.version_req) else {
         // Can't parse the requirement — treat as satisfied to avoid
         // false positives.
         return DepStatus::Satisfied {
-            version: version_str,
+            version: versions[0].clone(),
         };
     };
 
-    if req.matches(&version) {
-        DepStatus::Satisfied {
-            version: version_str,
+    // Check if any provided version satisfies the requirement.
+    for ver_str in &versions {
+        if let Ok(ver) = semver::Version::parse(ver_str)
+            && req.matches(&ver)
+        {
+            return DepStatus::Satisfied {
+                version: ver_str.clone(),
+            };
         }
-    } else {
-        DepStatus::TooOld {
-            have: version_str,
-            need: dep.version_req.clone(),
-        }
+    }
+
+    DepStatus::Unmet {
+        available: versions,
+        need: dep.version_req.clone(),
     }
 }
 
-/// Extract the version from fedrq provides output for a crate.
+/// Extract all versions from fedrq provides output for a crate.
 ///
-/// Looks for a line like `crate(foo) = 1.2.3` (without feature
-/// suffix) and returns the version string.
-fn extract_crate_version(provides: &[String], crate_name: &str) -> Option<String> {
+/// Looks for lines like `crate(foo) = 1.2.3` (without feature
+/// suffix) and returns all version strings.
+fn extract_crate_versions(provides: &[String], crate_name: &str) -> Vec<String> {
     let prefix = format!("crate({crate_name}) = ");
     provides
         .iter()
-        .find_map(|line| line.strip_prefix(&prefix).map(|v| v.trim().to_string()))
+        .filter_map(|line| line.strip_prefix(&prefix).map(|v| v.trim().to_string()))
+        .collect()
 }
 
 // ---- Tests ----
@@ -786,20 +791,20 @@ mod tests {
             "rust-tokio+default-devel = 1.51.0-1.el9".to_string(),
         ];
         assert_eq!(
-            extract_crate_version(&provides, "tokio"),
-            Some("1.51.0".to_string())
+            extract_crate_versions(&provides, "tokio"),
+            vec!["1.51.0".to_string()]
         );
     }
 
     #[test]
     fn extract_version_missing() {
         let provides = vec!["crate(other) = 1.0.0".to_string()];
-        assert_eq!(extract_crate_version(&provides, "tokio"), None);
+        assert!(extract_crate_versions(&provides, "tokio").is_empty());
     }
 
     #[test]
     fn extract_version_empty() {
-        assert_eq!(extract_crate_version(&[], "tokio"), None);
+        assert!(extract_crate_versions(&[], "tokio").is_empty());
     }
 
     #[test]
@@ -810,8 +815,25 @@ mod tests {
             "crate(tokio) = 1.51.0".to_string(),
         ];
         assert_eq!(
-            extract_crate_version(&provides, "tokio"),
-            Some("1.51.0".to_string())
+            extract_crate_versions(&provides, "tokio"),
+            vec!["1.51.0".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_version_multiple_providers() {
+        let provides = vec![
+            "crate(rand) = 0.10.0".to_string(),
+            "crate(rand) = 0.9.2".to_string(),
+            "crate(rand) = 0.8.5".to_string(),
+        ];
+        assert_eq!(
+            extract_crate_versions(&provides, "rand"),
+            vec![
+                "0.10.0".to_string(),
+                "0.9.2".to_string(),
+                "0.8.5".to_string()
+            ]
         );
     }
 
