@@ -198,6 +198,15 @@ struct CheckCrateArgs {
     #[arg(long, requires = "transitive")]
     include_optional: bool,
 
+    /// Exclude crates from transitive expansion.
+    #[arg(
+        long,
+        requires = "transitive",
+        value_delimiter = ',',
+        value_name = "CRATE,..."
+    )]
+    exclude: Vec<String>,
+
     /// Machine-readable JSON output.
     #[arg(long)]
     json: bool,
@@ -255,6 +264,7 @@ fn main() -> ExitCode {
             transitive: a.transitive,
             include_dev: a.include_dev,
             include_optional: a.include_optional,
+            exclude: a.exclude.iter().cloned().collect(),
         };
         return match check_crate::check_crate(&a.name, a.version.as_deref(), &opts) {
             Ok(report) => {

@@ -22,6 +22,7 @@ pub struct CheckCrateOptions {
     pub transitive: bool,
     pub include_dev: bool,
     pub include_optional: bool,
+    pub exclude: HashSet<String>,
 }
 
 /// A dependency from crates.io.
@@ -295,14 +296,15 @@ fn expand_transitive(
     direct_results: &[DepResult],
     opts: &CheckCrateOptions,
 ) -> Result<Vec<TransitiveDep>, String> {
-    let mut visited: HashSet<String> = HashSet::new();
+    let mut visited: HashSet<String> = opts.exclude.clone();
     let mut result: Vec<TransitiveDep> = Vec::new();
 
     // Seed: direct missing deps that pass the kind filter.
     let mut queue: VecDeque<(String, String)> = VecDeque::new(); // (crate_name, pulled_by)
     for dr in direct_results {
+        let excluded = visited.contains(&dr.dep.name);
         visited.insert(dr.dep.name.clone());
-        if matches!(dr.status, DepStatus::Missing) && should_expand(&dr.dep, opts) {
+        if !excluded && matches!(dr.status, DepStatus::Missing) && should_expand(&dr.dep, opts) {
             queue.push_back((dr.dep.name.clone(), dr.dep.name.clone()));
         }
     }
@@ -583,6 +585,7 @@ mod tests {
             transitive,
             include_dev,
             include_optional,
+            exclude: HashSet::new(),
         }
     }
 
