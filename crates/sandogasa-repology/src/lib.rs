@@ -119,19 +119,6 @@ pub fn latest_for_repo<'a>(packages: &'a [Package], repo: &str) -> Option<&'a Pa
         .copied()
 }
 
-/// Ranking for Repology status values (higher = more preferred).
-fn status_priority(status: &Option<Status>) -> u8 {
-    match status.as_ref() {
-        Some(Status::Newest) => 6,
-        Some(Status::Devel) => 5,
-        Some(Status::Unique) => 4,
-        Some(Status::Rolling) => 3,
-        Some(Status::Outdated) | Some(Status::Incorrect) => 2,
-        Some(Status::Legacy) => 0,
-        _ => 1,
-    }
-}
-
 /// Find the package from the latest stable Fedora release.
 ///
 /// Looks for `fedora_NN` repos (excluding `fedora_rawhide`), picks the
@@ -165,12 +152,17 @@ pub fn latest_centos_stream(packages: &[Package]) -> Option<&Package> {
         .copied()
 }
 
-/// Extract the numeric release from a `centos_stream_NN` repo name.
-fn centos_stream_release_number(package: &Package) -> Option<u32> {
-    package
-        .repo
-        .strip_prefix("centos_stream_")
-        .and_then(|s| s.parse::<u32>().ok())
+/// Ranking for Repology status values (higher = more preferred).
+fn status_priority(status: &Option<Status>) -> u8 {
+    match status.as_ref() {
+        Some(Status::Newest) => 6,
+        Some(Status::Devel) => 5,
+        Some(Status::Unique) => 4,
+        Some(Status::Rolling) => 3,
+        Some(Status::Outdated) | Some(Status::Incorrect) => 2,
+        Some(Status::Legacy) => 0,
+        _ => 1,
+    }
 }
 
 /// Extract the numeric release from a `fedora_NN` repo name.
@@ -178,6 +170,14 @@ fn fedora_release_number(package: &Package) -> Option<u32> {
     package
         .repo
         .strip_prefix("fedora_")
+        .and_then(|s| s.parse::<u32>().ok())
+}
+
+/// Extract the numeric release from a `centos_stream_NN` repo name.
+fn centos_stream_release_number(package: &Package) -> Option<u32> {
+    package
+        .repo
+        .strip_prefix("centos_stream_")
         .and_then(|s| s.parse::<u32>().ok())
 }
 

@@ -115,6 +115,33 @@ pub fn rpmvercmp(a: &str, b: &str) -> Ordering {
     }
 }
 
+/// Compare two EVR (epoch:version-release) strings.
+///
+/// Parses the optional `epoch:` prefix and optional `-release` suffix,
+/// then compares epoch numerically, version with `rpmvercmp`, and release
+/// with `rpmvercmp`.
+pub fn compare_evr(a: &str, b: &str) -> Ordering {
+    let (a_epoch, a_ver, a_rel) = parse_evr(a);
+    let (b_epoch, b_ver, b_rel) = parse_evr(b);
+
+    match a_epoch.cmp(&b_epoch) {
+        Ordering::Equal => {}
+        ord => return ord,
+    }
+
+    match rpmvercmp(a_ver, b_ver) {
+        Ordering::Equal => {}
+        ord => return ord,
+    }
+
+    match (a_rel, b_rel) {
+        (Some(ar), Some(br)) => rpmvercmp(ar, br),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => Ordering::Equal,
+    }
+}
+
 /// Skip bytes that are not alphanumeric and not `~` or `^`.
 fn skip_separators(s: &[u8]) -> &[u8] {
     let n = s
@@ -147,33 +174,6 @@ fn next_segment(s: &[u8]) -> (&[u8], &[u8]) {
 fn trim_leading_zeros(s: &[u8]) -> &[u8] {
     let n = s.iter().position(|c| *c != b'0').unwrap_or(s.len());
     &s[n..]
-}
-
-/// Compare two EVR (epoch:version-release) strings.
-///
-/// Parses the optional `epoch:` prefix and optional `-release` suffix,
-/// then compares epoch numerically, version with `rpmvercmp`, and release
-/// with `rpmvercmp`.
-pub fn compare_evr(a: &str, b: &str) -> Ordering {
-    let (a_epoch, a_ver, a_rel) = parse_evr(a);
-    let (b_epoch, b_ver, b_rel) = parse_evr(b);
-
-    match a_epoch.cmp(&b_epoch) {
-        Ordering::Equal => {}
-        ord => return ord,
-    }
-
-    match rpmvercmp(a_ver, b_ver) {
-        Ordering::Equal => {}
-        ord => return ord,
-    }
-
-    match (a_rel, b_rel) {
-        (Some(ar), Some(br)) => rpmvercmp(ar, br),
-        (Some(_), None) => Ordering::Greater,
-        (None, Some(_)) => Ordering::Less,
-        (None, None) => Ordering::Equal,
-    }
 }
 
 /// Parse an EVR string into (epoch, version, release).
