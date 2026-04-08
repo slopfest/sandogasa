@@ -211,6 +211,10 @@ struct CheckCrateArgs {
     )]
     exclude: Vec<String>,
 
+    /// Output dependency graph in Graphviz DOT format.
+    #[arg(long, requires = "transitive")]
+    dot: bool,
+
     /// Machine-readable JSON output.
     #[arg(long)]
     json: bool,
@@ -273,7 +277,9 @@ fn main() -> ExitCode {
         };
         return match check_crate::check_crate(&a.name, a.version.as_deref(), &opts) {
             Ok(report) => {
-                if a.json {
+                if a.dot {
+                    check_crate::print_dot(&report);
+                } else if a.json {
                     print_json(&report);
                 } else {
                     check_crate::print_report(&report);

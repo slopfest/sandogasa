@@ -81,6 +81,8 @@ pub struct CheckCrateReport {
     pub transitive_missing: Vec<TransitiveDep>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub transitive_build_order: Vec<dag::BuildPhase>,
+    #[serde(skip)]
+    pub transitive_edges: DepEdges,
 }
 
 // ---- Public functions ----
@@ -147,7 +149,7 @@ pub fn check_crate(
         })
         .collect();
 
-    let (transitive_missing, transitive_build_order) = if opts.transitive {
+    let (transitive_missing, transitive_build_order, transitive_edges) = if opts.transitive {
         let (deps, edges) = expand_transitive(&rt, &fedrq, &dependencies, opts)?;
         let phases = if edges.is_empty() {
             vec![]
@@ -163,9 +165,9 @@ pub fn check_crate(
                 }
             }
         };
-        (deps, phases)
+        (deps, phases, edges)
     } else {
-        (vec![], vec![])
+        (vec![], vec![], BTreeMap::new())
     };
 
     // Filter out excluded crates from the direct dependency list.
@@ -185,6 +187,7 @@ pub fn check_crate(
         dependencies,
         transitive_missing,
         transitive_build_order,
+        transitive_edges,
     })
 }
 
@@ -319,6 +322,57 @@ pub fn print_report(report: &CheckCrateReport) {
             report.transitive_missing.len(),
         );
     }
+}
+
+/// Print the transitive dependency graph in Graphviz DOT format.
+///
+/// Nodes are `rust-<crate>` package names. Edges point from a
+/// package to its dependencies (what must be built/reviewed first).
+/// Nodes are grouped by build phase when available.
+pub fn print_dot(report: &CheckCrateReport) {
+    println!("digraph {{");
+    println!("  rankdir=BT;");
+    println!(
+        "  label=\"rust-{} {} — {}\";",
+        report.crate_name, report.crate_version, report.branch
+    );
+    println!("  labelloc=t;");
+    println!("  node [shape=box, style=filled, fillcolor=lightyellow];");
+
+    // Group nodes by phase for visual clarity.
+    if !report.transitive_build_order.is_empty() {
+        for phase in &report.transitive_build_order {
+            println!("  {{ rank=same;");
+            for pkg in &phase.packages {
+                println!("    \"rust-{pkg}\";");
+            }
+            println!("  }}");
+        }
+    }
+
+    // Root crate as a distinct node.
+    println!("  \"rust-{}\" [fillcolor=lightblue];", report.crate_name);
+
+    // Edges: package → dependency (dep must be built first).
+    for (parent, deps) in &report.transitive_edges {
+        for dep in deps {
+            println!("  \"rust-{parent}\" -> \"rust-{dep}\";");
+        }
+    }
+
+    // Direct missing deps connect to the root crate.
+    for dr in &report.dependencies {
+        if matches!(dr.status, DepStatus::Missing)
+            && report.transitive_edges.contains_key(&dr.dep.name)
+        {
+            println!(
+                "  \"rust-{}\" -> \"rust-{}\";",
+                report.crate_name, dr.dep.name
+            );
+        }
+    }
+
+    println!("}}");
 }
 
 // ---- Private helpers ----
