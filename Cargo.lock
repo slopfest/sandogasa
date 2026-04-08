@@ -317,6 +317,7 @@ dependencies = [
  "rayon",
  "reqwest",
  "sandogasa-bodhi",
+ "sandogasa-cli",
  "sandogasa-depfilter",
  "sandogasa-fedrq",
  "semver",
@@ -919,6 +920,7 @@ dependencies = [
  "clap",
  "quick-xml",
  "reqwest",
+ "sandogasa-cli",
  "serde",
  "serde_json",
  "tempfile",
@@ -1499,6 +1501,10 @@ dependencies = [
  "tokio",
  "wiremock",
 ]
+
+[[package]]
+name = "sandogasa-cli"
+version = "0.7.0"
 
 [[package]]
 name = "sandogasa-config"

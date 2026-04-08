@@ -12,6 +12,7 @@ dashmap = { workspace = true }
 rayon = { workspace = true }
 reqwest = { workspace = true }
 sandogasa-bodhi = { workspace = true }
+sandogasa-cli = { workspace = true }
 sandogasa-depfilter = { workspace = true }
 sandogasa-fedrq = { workspace = true }
 semver = { workspace = true }

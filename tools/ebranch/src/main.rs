@@ -222,6 +222,12 @@ enum Mode {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    // All subcommands need fedrq.
+    if let Err(e) = sandogasa_cli::require_tool("fedrq", "sudo dnf install fedrq") {
+        eprintln!("error: {e}");
+        return ExitCode::FAILURE;
+    }
+
     // CheckCrate and CheckUpdate have their own args; handle separately.
     if let Command::CheckCrate(a) = &cli.command {
         if a.jobs > 0 {
@@ -252,6 +258,11 @@ fn main() -> ExitCode {
     }
 
     if let Command::CheckUpdate(a) = &cli.command {
+        // check-update also needs koji for side tag queries.
+        if let Err(e) = sandogasa_cli::require_tool("koji", "sudo dnf install koji") {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
         if a.jobs > 0 {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(a.jobs)

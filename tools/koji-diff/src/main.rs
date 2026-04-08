@@ -80,6 +80,11 @@ struct FailureLog {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    if let Err(e) = sandogasa_cli::require_tool("koji", "sudo dnf install koji") {
+        eprintln!("error: {e}");
+        return ExitCode::FAILURE;
+    }
+
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
