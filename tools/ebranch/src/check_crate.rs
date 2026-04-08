@@ -163,6 +163,16 @@ pub fn check_crate(
         (vec![], vec![])
     };
 
+    // Filter out excluded crates from the direct dependency list.
+    let dependencies = if opts.exclude.is_empty() {
+        dependencies
+    } else {
+        dependencies
+            .into_iter()
+            .filter(|d| !opts.exclude.contains(&d.dep.name))
+            .collect()
+    };
+
     Ok(CheckCrateReport {
         crate_name: name.to_string(),
         crate_version: version,
@@ -215,7 +225,7 @@ pub fn print_report(report: &CheckCrateReport) {
         .collect();
 
     if !missing.is_empty() {
-        println!("Missing ({}):", missing.len());
+        print_section_header("Missing", &missing);
         for d in &missing {
             println!(
                 "  - {} {} ({}{})",
@@ -229,7 +239,7 @@ pub fn print_report(report: &CheckCrateReport) {
     }
 
     if !too_old.is_empty() {
-        println!("Too old ({}):", too_old.len());
+        print_section_header("Too old", &too_old);
         for d in &too_old {
             if let DepStatus::TooOld { have, need } = &d.status {
                 println!(
@@ -246,7 +256,7 @@ pub fn print_report(report: &CheckCrateReport) {
     }
 
     if !satisfied.is_empty() {
-        println!("Satisfied ({}):", satisfied.len());
+        print_section_header("Satisfied", &satisfied);
         for d in &satisfied {
             if let DepStatus::Satisfied { version } = &d.status {
                 println!(
@@ -292,21 +302,16 @@ pub fn print_report(report: &CheckCrateReport) {
         println!();
     }
 
+    let n_missing = unique_crate_count(&missing);
+    let n_too_old = unique_crate_count(&too_old);
+    let n_satisfied = unique_crate_count(&satisfied);
     if report.transitive_missing.is_empty() {
-        println!(
-            "Summary: {} missing, {} too old, {} satisfied.",
-            missing.len(),
-            too_old.len(),
-            satisfied.len()
-        );
+        println!("Summary: {n_missing} missing, {n_too_old} too old, {n_satisfied} satisfied.");
     } else {
         println!(
-            "Summary: {} missing (+ {} transitive), {} too old, \
-             {} satisfied.",
-            missing.len(),
+            "Summary: {n_missing} missing (+ {} transitive), \
+             {n_too_old} too old, {n_satisfied} satisfied.",
             report.transitive_missing.len(),
-            too_old.len(),
-            satisfied.len()
         );
     }
 }
@@ -315,6 +320,22 @@ pub fn print_report(report: &CheckCrateReport) {
 
 fn opt_label(d: &DepResult) -> &str {
     if d.dep.optional { ", optional" } else { "" }
+}
+
+/// Count unique crate names in a list of dep results.
+fn unique_crate_count(deps: &[&DepResult]) -> usize {
+    let names: HashSet<&str> = deps.iter().map(|d| d.dep.name.as_str()).collect();
+    names.len()
+}
+
+/// Print a section header with entry count and unique crate count.
+fn print_section_header(label: &str, deps: &[&DepResult]) {
+    let unique = unique_crate_count(deps);
+    if unique == deps.len() {
+        println!("{label} ({unique}):");
+    } else {
+        println!("{label} ({unique} crate(s), {} entries):", deps.len());
+    }
 }
 
 /// Dependency edges: `edges[A] = {B, C}` means A depends on B and C.
