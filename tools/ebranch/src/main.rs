@@ -190,9 +190,9 @@ struct CheckCrateArgs {
     #[arg(short = 't', long)]
     transitive: bool,
 
-    /// Include dev dependencies in transitive expansion.
+    /// Exclude dev dependencies from transitive expansion.
     #[arg(long, requires = "transitive")]
-    include_dev: bool,
+    exclude_dev: bool,
 
     /// Include optional dependencies in transitive expansion.
     #[arg(long, requires = "transitive")]
@@ -270,7 +270,7 @@ fn main() -> ExitCode {
             repo: a.repo.clone(),
             verbose: a.verbose,
             transitive: a.transitive,
-            include_dev: a.include_dev,
+            exclude_dev: a.exclude_dev,
             include_optional: a.include_optional,
             include_too_old: a.include_unmet,
             exclude: a.exclude.iter().cloned().collect(),

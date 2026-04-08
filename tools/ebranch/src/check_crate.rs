@@ -22,7 +22,7 @@ pub struct CheckCrateOptions {
     pub repo: Option<String>,
     pub verbose: bool,
     pub transitive: bool,
-    pub include_dev: bool,
+    pub exclude_dev: bool,
     pub include_optional: bool,
     pub include_too_old: bool,
     pub exclude: HashSet<String>,
@@ -452,7 +452,7 @@ fn should_expand(dep: &CrateDep, opts: &CheckCrateOptions) -> bool {
     }
     match dep.kind.as_str() {
         "normal" | "build" => true,
-        "dev" => opts.include_dev,
+        "dev" => !opts.exclude_dev,
         _ => false,
     }
 }
@@ -617,6 +617,18 @@ struct RawDep {
     optional: bool,
 }
 
+/// crates.io API response for version info (features).
+#[derive(Deserialize)]
+struct VersionInfoResponse {
+    version: VersionInfo,
+}
+
+#[derive(Deserialize)]
+struct VersionInfo {
+    #[serde(default)]
+    features: std::collections::HashMap<String, Vec<String>>,
+}
+
 /// Fetch all non-yanked versions of a crate from crates.io.
 async fn fetch_versions(name: &str) -> Result<Vec<String>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}");
@@ -698,7 +710,84 @@ async fn resolve_version(name: &str, partial: &str) -> Result<String, String> {
         .ok_or_else(|| format!("no version matching {partial} found for {name}"))
 }
 
+/// Resolve default features into a set of optional dep names
+/// that are activated by default.
+///
+/// In Cargo, enabling an optional dep `foo` implicitly creates a
+/// feature named `foo`. A feature can also list `dep:foo` to
+/// activate a dep. We follow both forms transitively from `default`.
+fn resolve_default_deps(
+    features: &std::collections::HashMap<String, Vec<String>>,
+    all_optional_deps: &HashSet<String>,
+) -> HashSet<String> {
+    let mut activated = HashSet::new();
+    let mut queue: VecDeque<&str> = VecDeque::new();
+    let mut visited_features: HashSet<&str> = HashSet::new();
+
+    if let Some(defaults) = features.get("default") {
+        for f in defaults {
+            queue.push_back(f.as_str());
+        }
+    }
+
+    while let Some(feat) = queue.pop_front() {
+        if !visited_features.insert(feat) {
+            continue;
+        }
+
+        // `dep:foo` syntax explicitly activates optional dep foo.
+        if let Some(dep_name) = feat.strip_prefix("dep:") {
+            activated.insert(dep_name.to_string());
+            continue;
+        }
+
+        // A feature named after an optional dep activates it.
+        if all_optional_deps.contains(feat) {
+            activated.insert(feat.to_string());
+        }
+
+        // Recurse into sub-features.
+        if let Some(sub) = features.get(feat) {
+            for s in sub {
+                // Handle "feat/subfeat" (feature of a dep) — the
+                // dep part before the slash is what gets activated.
+                let base = s.split('/').next().unwrap_or(s);
+                queue.push_back(base);
+            }
+        }
+    }
+
+    activated
+}
+
+/// Fetch version info (features) for a specific crate version.
+async fn fetch_features(
+    name: &str,
+    version: &str,
+) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
+    let url = format!("https://crates.io/api/v1/crates/{name}/{version}");
+    let client = reqwest::Client::builder()
+        .user_agent("sandogasa-ebranch")
+        .build()
+        .map_err(|e| format!("failed to create HTTP client: {e}"))?;
+    let resp: VersionInfoResponse = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("failed to fetch version info: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("crates.io error: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse version info: {e}"))?;
+
+    Ok(resp.version.features)
+}
+
 /// Fetch the dependency list for a specific crate version.
+///
+/// Resolves default features to mark optional deps activated by
+/// defaults as non-optional (since RPMs are built with defaults).
 async fn fetch_dependencies(name: &str, version: &str) -> Result<Vec<CrateDep>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}/dependencies");
     let client = reqwest::Client::builder()
@@ -716,14 +805,33 @@ async fn fetch_dependencies(name: &str, version: &str) -> Result<Vec<CrateDep>, 
         .await
         .map_err(|e| format!("failed to parse dependencies: {e}"))?;
 
+    // Resolve default features to find which optional deps are
+    // activated by default (RPMs are built with default features).
+    let all_optional: HashSet<String> = resp
+        .dependencies
+        .iter()
+        .filter(|d| d.optional)
+        .map(|d| d.crate_id.clone())
+        .collect();
+
+    let default_activated = if all_optional.is_empty() {
+        HashSet::new()
+    } else {
+        let features = fetch_features(name, version).await.unwrap_or_default();
+        resolve_default_deps(&features, &all_optional)
+    };
+
     Ok(resp
         .dependencies
         .into_iter()
-        .map(|d| CrateDep {
-            name: d.crate_id,
-            version_req: d.req,
-            kind: d.kind.unwrap_or_else(|| "normal".to_string()),
-            optional: d.optional,
+        .map(|d| {
+            let activated = d.optional && default_activated.contains(&d.crate_id);
+            CrateDep {
+                name: d.crate_id,
+                version_req: d.req,
+                kind: d.kind.unwrap_or_else(|| "normal".to_string()),
+                optional: d.optional && !activated,
+            }
         })
         .collect())
 }
@@ -874,13 +982,13 @@ mod tests {
         assert!(req.matches(&version));
     }
 
-    fn make_opts(transitive: bool, include_dev: bool, include_optional: bool) -> CheckCrateOptions {
+    fn make_opts(transitive: bool, exclude_dev: bool, include_optional: bool) -> CheckCrateOptions {
         CheckCrateOptions {
             branch: "rawhide".to_string(),
             repo: None,
             verbose: false,
             transitive,
-            include_dev,
+            exclude_dev,
             include_optional,
             include_too_old: false,
             exclude: HashSet::new(),
@@ -909,15 +1017,15 @@ mod tests {
     }
 
     #[test]
-    fn should_expand_dev_excluded_by_default() {
+    fn should_expand_dev_included_by_default() {
         let opts = make_opts(true, false, false);
-        assert!(!should_expand(&make_dep("foo", "dev", false), &opts));
+        assert!(should_expand(&make_dep("foo", "dev", false), &opts));
     }
 
     #[test]
-    fn should_expand_dev_when_included() {
+    fn should_expand_dev_excluded_when_requested() {
         let opts = make_opts(true, true, false);
-        assert!(should_expand(&make_dep("foo", "dev", false), &opts));
+        assert!(!should_expand(&make_dep("foo", "dev", false), &opts));
     }
 
     #[test]
@@ -930,5 +1038,53 @@ mod tests {
     fn should_expand_optional_when_included() {
         let opts = make_opts(true, false, true);
         assert!(should_expand(&make_dep("foo", "normal", true), &opts));
+    }
+
+    #[test]
+    fn resolve_default_deps_basic() {
+        let features = std::collections::HashMap::from([
+            (
+                "default".to_string(),
+                vec!["write".to_string(), "parse".to_string()],
+            ),
+            (
+                "write".to_string(),
+                vec![
+                    "dep:lexical-write-integer".to_string(),
+                    "dep:lexical-write-float".to_string(),
+                ],
+            ),
+            ("parse".to_string(), vec!["dep:lexical-parse".to_string()]),
+        ]);
+        let optional = HashSet::from([
+            "lexical-write-integer".to_string(),
+            "lexical-write-float".to_string(),
+            "lexical-parse".to_string(),
+            "serde".to_string(),
+        ]);
+        let activated = resolve_default_deps(&features, &optional);
+        assert!(activated.contains("lexical-write-integer"));
+        assert!(activated.contains("lexical-write-float"));
+        assert!(activated.contains("lexical-parse"));
+        assert!(!activated.contains("serde"));
+    }
+
+    #[test]
+    fn resolve_default_deps_implicit_feature() {
+        // Optional dep `foo` implicitly creates feature `foo`.
+        let features =
+            std::collections::HashMap::from([("default".to_string(), vec!["foo".to_string()])]);
+        let optional = HashSet::from(["foo".to_string(), "bar".to_string()]);
+        let activated = resolve_default_deps(&features, &optional);
+        assert!(activated.contains("foo"));
+        assert!(!activated.contains("bar"));
+    }
+
+    #[test]
+    fn resolve_default_deps_no_defaults() {
+        let features = std::collections::HashMap::new();
+        let optional = HashSet::from(["foo".to_string()]);
+        let activated = resolve_default_deps(&features, &optional);
+        assert!(activated.is_empty());
     }
 }
