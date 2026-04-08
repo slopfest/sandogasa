@@ -15,6 +15,7 @@
 - Every source file must start with `// SPDX-License-Identifier: MPL-2.0`
 - CLI help text (`-h` and `--help`) must not exceed 80 characters per line
 - Keep the `Command` enum variants in `main.rs` sorted alphabetically (this determines the order in `--help` output)
+- Order definitions in source files top-down: module docs and imports, public types (structs/enums/traits), public functions, trait impls (grouped by type), private helpers, `#[cfg(test)] mod tests`. Within each group, define callees before callers so a reader encounters helpers before the functions that use them. Review file order before committing
 
 ## CLI behavior
 - Non-interactive subcommands (e.g. `show`, `search`) must support a `--json` flag that outputs pretty-printed, machine-readable JSON instead of human-readable text
