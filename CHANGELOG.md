@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.8.0
+
+### New: sandogasa-cli library crate
+
+- Shared `require_tool()` function for checking external tool
+  availability at startup with clear install hints
+
+### ebranch
+
+- **New: `check-crate` command** — analyze a crates.io crate's
+  dependencies against a target RPM repo
+  - Shows missing, too-old, and satisfied dependencies with semver
+    version matching
+  - `--transitive` / `-t` expands missing deps recursively with
+    phased build order (topological sort)
+  - `--include-dev`, `--include-optional`, `--include-too-old` to
+    widen transitive expansion
+  - `--exclude CRATE,...` to skip crates (e.g. criterion) from
+    transitive expansion
+  - Partial version resolution: `57` resolves to highest `57.x.y`,
+    `57.3` to highest `57.3.y`
+  - Deduped crate counts when the same crate appears with different
+    dependency kinds
+- **`check-update` improvements**:
+  - Prefer `@testing` repo (authoritative metadata) over side tag
+  - Auto-detect testing branch from EPEL side tag names and Bodhi
+    release metadata
+  - Warn on stale side tag repos
+  - Document EPEL 10 `@testing` limitation
+- Parallelize fedrq queries with rayon (~4x speedup on 4 cores)
+- Check for `fedrq` and `koji` availability at startup with clear
+  error messages
+
+### hs-relmon
+
+- Reopen closed GitLab issues with matching title instead of creating
+  duplicates
+
+### sandogasa-bodhi (**breaking**)
+
+- Add `from_side_tag` field to `Update` struct
+- Add `branch` field to `Release` struct
+- Add `update_by_alias()` for single-update API lookup
+
+### Workspace
+
+- External tool dependency checks: tools that shell out to fedrq or
+  koji now verify availability at startup
+- Move tool configs to top-level `configs/` directory
+- Add source file ordering convention to CLAUDE.md
+- Add dependency management guidelines to CLAUDE.md
+
 ## v0.7.0
 
 ### New: sandogasa-depfilter library crate

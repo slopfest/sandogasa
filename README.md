@@ -13,22 +13,33 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 
 ## Tools
 
+- **[ebranch](tools/ebranch/)** — build dependency resolver for cross-branch package porting
 - **[fedora-cve-triage](tools/fedora-cve-triage/)** — triage CVEs reported against Fedora components in Red Hat Bugzilla
-- **[sandogasa-pkg-acl](tools/sandogasa-pkg-acl/)** — view and manage Fedora package ACLs via the Pagure dist-git API
+- **[hs-intake](tools/hs-intake/)** — Haskell package intake analysis for Fedora
+- **[hs-relmon](tools/hs-relmon/)** — Haskell release monitoring via Repology
+- **[koji-diff](tools/koji-diff/)** — compare buildroot and build logs between Koji builds
 - **[sandogasa-hattrack](tools/sandogasa-hattrack/)** — look up a Fedora contributor's activity across services
+- **[sandogasa-pkg-acl](tools/sandogasa-pkg-acl/)** — view and manage Fedora package ACLs via the Pagure dist-git API
 
 ## Library crates
 
-The underlying API clients are published as reusable library crates:
+The underlying API clients and utilities are published as reusable
+library crates:
 
 - **sandogasa-bodhi** — Bodhi API client for Fedora update queries
 - **sandogasa-bugzilla** — Bugzilla REST API client
+- **sandogasa-cli** — shared CLI utilities (external tool availability checks)
 - **sandogasa-config** — shared config file management and interactive prompting
+- **sandogasa-depfilter** — RPM dependency filtering for cross-branch analysis
 - **sandogasa-discourse** — Discourse forum API client
 - **sandogasa-distgit** — Fedora dist-git client, ACL management, and RPM spec file parser
 - **sandogasa-fasjson** — FASJSON (Fedora Account System) API client with Kerberos auth
+- **sandogasa-fedrq** — wrapper for the fedrq RPM repository query tool
+- **sandogasa-gitlab** — GitLab REST and GraphQL API client
 - **sandogasa-mailman** — HyperKitty (Mailman 3) archive API client
 - **sandogasa-nvd** — NVD (National Vulnerability Database) API client
+- **sandogasa-repology** — Repology package version tracking API client
+- **sandogasa-rpmvercmp** — RPM version comparison algorithm
 
 ## Building
 

@@ -26,9 +26,7 @@ pub fn require_tool(name: &str, install_hint: &str) -> Result<(), String> {
             "{name} exited with {s}; is it installed correctly? \
              Install it with: {install_hint}"
         )),
-        Err(_) => Err(format!(
-            "{name} not found. Install it with: {install_hint}"
-        )),
+        Err(_) => Err(format!("{name} not found. Install it with: {install_hint}")),
     }
 }
 
