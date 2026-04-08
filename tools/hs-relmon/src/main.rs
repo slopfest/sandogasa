@@ -625,38 +625,73 @@ fn file_or_update_issue(
     description: &str,
 ) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
     let client = gitlab::Client::from_project_url(project_url)?;
-    let issues = client.list_issues(ISSUE_LABEL, Some("opened"))?;
 
-    if let Some(existing) = issues.first() {
-        let title_changed = existing.title != title;
-        let desc_changed = existing.description.as_deref() != Some(description);
-        if title_changed || desc_changed {
-            let updates = gitlab::IssueUpdate {
-                title: if title_changed {
-                    Some(title.to_string())
-                } else {
-                    None
-                },
-                description: if desc_changed {
-                    Some(description.to_string())
-                } else {
-                    None
-                },
-                ..Default::default()
-            };
-            let updated = client.edit_issue(existing.iid, &updates)?;
-            eprintln!("Updated issue #{}: {}", updated.iid, updated.web_url);
-            resolve_issue_ref(&client, &updated)
-        } else {
-            eprintln!(
-                "Issue #{} already up to date: {}",
-                existing.iid, existing.web_url
-            );
-            resolve_issue_ref(&client, existing)
-        }
-    } else {
-        let issue = client.create_issue(title, Some(description), Some(ISSUE_LABEL))?;
-        eprintln!("Created issue #{}: {}", issue.iid, issue.web_url);
-        resolve_issue_ref(&client, &issue)
+    // Check for an existing open issue first.
+    let open_issues = client.list_issues(ISSUE_LABEL, Some("opened"))?;
+    if let Some(existing) = open_issues.first() {
+        return update_existing_issue(&client, existing, title, description);
     }
+
+    // Check for a closed issue with the same title that we can reopen.
+    let closed_issues = client.list_issues(ISSUE_LABEL, Some("closed"))?;
+    if let Some(existing) = closed_issues.iter().find(|i| i.title == title) {
+        return reopen_issue(&client, existing, title, description);
+    }
+
+    // No existing issue — create a new one.
+    let issue = client.create_issue(title, Some(description), Some(ISSUE_LABEL))?;
+    eprintln!("Created issue #{}: {}", issue.iid, issue.web_url);
+    resolve_issue_ref(&client, &issue)
+}
+
+fn update_existing_issue(
+    client: &gitlab::Client,
+    existing: &gitlab::Issue,
+    title: &str,
+    description: &str,
+) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
+    let title_changed = existing.title != title;
+    let desc_changed = existing.description.as_deref() != Some(description);
+    if title_changed || desc_changed {
+        let updates = gitlab::IssueUpdate {
+            title: if title_changed {
+                Some(title.to_string())
+            } else {
+                None
+            },
+            description: if desc_changed {
+                Some(description.to_string())
+            } else {
+                None
+            },
+            ..Default::default()
+        };
+        let updated = client.edit_issue(existing.iid, &updates)?;
+        eprintln!("Updated issue #{}: {}", updated.iid, updated.web_url);
+        resolve_issue_ref(client, &updated)
+    } else {
+        eprintln!(
+            "Issue #{} already up to date: {}",
+            existing.iid, existing.web_url
+        );
+        resolve_issue_ref(client, existing)
+    }
+}
+
+fn reopen_issue(
+    client: &gitlab::Client,
+    existing: &gitlab::Issue,
+    title: &str,
+    description: &str,
+) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
+    let updates = gitlab::IssueUpdate {
+        title: Some(title.to_string()),
+        description: Some(description.to_string()),
+        add_labels: Some("reopened".to_string()),
+        state_event: Some("reopen".to_string()),
+        ..Default::default()
+    };
+    let updated = client.edit_issue(existing.iid, &updates)?;
+    eprintln!("Reopened issue #{}: {}", updated.iid, updated.web_url);
+    resolve_issue_ref(client, &updated)
 }

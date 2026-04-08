@@ -99,6 +99,9 @@ $ hs-relmon check-latest ethtool --file-issue
 
 This creates (or updates) an issue labeled `rfe::new-version` in the
 default project `https://gitlab.com/CentOS/Hyperscale/rpms/ethtool`.
+If a closed issue with the same title already exists, it is reopened
+and labeled `reopened` instead of creating a duplicate.
+
 Override the project URL:
 
 ```
