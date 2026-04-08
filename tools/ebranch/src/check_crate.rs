@@ -43,7 +43,12 @@ pub struct CrateDep {
 pub enum DepStatus {
     /// The RPM provides a version that satisfies the requirement.
     #[serde(rename = "satisfied")]
-    Satisfied { version: String },
+    Satisfied {
+        version: String,
+        /// True when satisfied by a compat package, not the latest.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        compat: bool,
+    },
     /// The RPM exists but no version satisfies the requirement.
     #[serde(rename = "unmet")]
     Unmet {
@@ -269,9 +274,10 @@ pub fn print_report(report: &CheckCrateReport) {
     if !satisfied.is_empty() {
         print_section_header("Satisfied", &satisfied);
         for d in &satisfied {
-            if let DepStatus::Satisfied { version } = &d.status {
+            if let DepStatus::Satisfied { version, compat } = &d.status {
+                let compat_label = if *compat { " (compat)" } else { "" };
                 println!(
-                    "  - {} {} ({}{}) — {version}",
+                    "  - {} {} ({}{}) — {version}{compat_label}",
                     d.dep.name,
                     d.dep.version_req,
                     d.dep.kind,
@@ -745,16 +751,26 @@ fn check_dep_in_repo(fedrq: &sandogasa_fedrq::Fedrq, dep: &CrateDep) -> DepStatu
         // false positives.
         return DepStatus::Satisfied {
             version: versions[0].clone(),
+            compat: false,
         };
     };
+
+    // Find the highest version across all providers.
+    let latest = versions
+        .iter()
+        .filter_map(|v| semver::Version::parse(v).ok().map(|p| (v.as_str(), p)))
+        .max_by(|(_, a), (_, b)| a.cmp(b))
+        .map(|(s, _)| s);
 
     // Check if any provided version satisfies the requirement.
     for ver_str in &versions {
         if let Ok(ver) = semver::Version::parse(ver_str)
             && req.matches(&ver)
         {
+            let is_compat = latest.is_some_and(|l| l != ver_str);
             return DepStatus::Satisfied {
                 version: ver_str.clone(),
+                compat: is_compat,
             };
         }
     }
