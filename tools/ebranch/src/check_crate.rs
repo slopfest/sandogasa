@@ -96,7 +96,12 @@ pub fn check_crate(
 
     // Resolve version.
     let version = match version {
-        Some(v) => v.to_string(),
+        Some(v) => {
+            if opts.verbose {
+                eprintln!("[check-crate] resolving version {v} for {name}");
+            }
+            rt.block_on(resolve_version(name, v))?
+        }
         None => {
             if opts.verbose {
                 eprintln!("[check-crate] fetching latest version for {name}");
@@ -513,8 +518,8 @@ struct RawDep {
     optional: bool,
 }
 
-/// Fetch the latest non-yanked version of a crate from crates.io.
-async fn fetch_latest_version(name: &str) -> Result<String, String> {
+/// Fetch all non-yanked versions of a crate from crates.io.
+async fn fetch_versions(name: &str) -> Result<Vec<String>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}");
     let client = reqwest::Client::builder()
         .user_agent("sandogasa-ebranch")
@@ -531,11 +536,67 @@ async fn fetch_latest_version(name: &str) -> Result<String, String> {
         .await
         .map_err(|e| format!("failed to parse crate info: {e}"))?;
 
-    resp.versions
-        .iter()
-        .find(|v| !v.yanked)
-        .map(|v| v.num.clone())
+    Ok(resp
+        .versions
+        .into_iter()
+        .filter(|v| !v.yanked)
+        .map(|v| v.num)
+        .collect())
+}
+
+/// Fetch the latest non-yanked version of a crate from crates.io.
+async fn fetch_latest_version(name: &str) -> Result<String, String> {
+    let versions = fetch_versions(name).await?;
+    versions
+        .into_iter()
+        .next()
         .ok_or_else(|| format!("no non-yanked versions found for {name}"))
+}
+
+/// Resolve a partial version string to the best matching version.
+///
+/// - `"57"` matches the highest `57.x.y`
+/// - `"57.3"` matches the highest `57.3.y`
+/// - `"57.3.0"` matches exactly, or falls back to resolve
+async fn resolve_version(name: &str, partial: &str) -> Result<String, String> {
+    let parts: Vec<&str> = partial.split('.').collect();
+    let req_str = match parts.len() {
+        1 => format!(
+            ">={partial}.0.0, <{}.0.0",
+            parts[0]
+                .parse::<u64>()
+                .map_err(|_| { format!("invalid version: {partial}") })?
+                + 1
+        ),
+        2 => format!(
+            ">={partial}.0, <{}.{}.0",
+            parts[0],
+            parts[1]
+                .parse::<u64>()
+                .map_err(|_| { format!("invalid version: {partial}") })?
+                + 1
+        ),
+        3 => return Ok(partial.to_string()),
+        _ => return Err(format!("invalid version: {partial}")),
+    };
+
+    let req = semver::VersionReq::parse(&req_str)
+        .map_err(|e| format!("invalid version range {req_str}: {e}"))?;
+
+    let versions = fetch_versions(name).await?;
+    versions
+        .into_iter()
+        .filter_map(|v| {
+            let parsed = semver::Version::parse(&v).ok()?;
+            if req.matches(&parsed) {
+                Some((v, parsed))
+            } else {
+                None
+            }
+        })
+        .max_by(|(_, a), (_, b)| a.cmp(b))
+        .map(|(v, _)| v)
+        .ok_or_else(|| format!("no version matching {partial} found for {name}"))
 }
 
 /// Fetch the dependency list for a specific crate version.
