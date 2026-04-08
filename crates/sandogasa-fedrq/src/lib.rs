@@ -166,12 +166,23 @@ impl Fedrq {
         Self::run(&mut cmd)
     }
 
-    /// Return the Provides of a binary package.
+    /// Return the Provides of a binary package (by name).
     pub fn pkg_provides(&self, name: &str) -> Result<Vec<String>, Error> {
         let mut cmd = Command::new("fedrq");
         cmd.args(["pkgs", "-F", "provides"]);
         self.apply_opts(&mut cmd);
         cmd.arg(name);
+        Self::run(&mut cmd)
+    }
+
+    /// Return the Provides of packages that provide a given capability.
+    ///
+    /// Uses `-P` to search by Provides rather than package name.
+    pub fn provides_of_provider(&self, capability: &str) -> Result<Vec<String>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["pkgs", "-P", "-F", "provides"]);
+        self.apply_opts(&mut cmd);
+        cmd.arg(capability);
         Self::run(&mut cmd)
     }
 

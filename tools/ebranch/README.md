@@ -158,6 +158,41 @@ For EPEL side tags, the testing branch is auto-detected from the
 side tag name (e.g. `epel9-build-side-*` uses `epel9`). Use
 `--testing-branch` to override if needed.
 
+### Analyze a crates.io crate's dependencies
+
+Use `check-crate` to check which dependencies of a Rust crate are
+available in a target RPM repo, which are too old, and which are
+missing entirely:
+
+```console
+$ ebranch check-crate semcode -b rawhide
+Checking crate: semcode 0.14.0
+Branch: rawhide
+
+Dependencies (35 normal, 0 build, 16 dev):
+
+Missing (8):
+  - semcode-core ^0.14.0 (normal)
+  ...
+
+Too old (8):
+  - tree-sitter ^0.26 (normal)
+    have: 0.25.10, need: ^0.26
+  ...
+
+Satisfied (35):
+  - libc ^0.2 (normal) — 0.2.182
+  ...
+
+Summary: 8 missing, 8 too old, 35 satisfied.
+```
+
+Specify a version (defaults to latest):
+
+```sh
+ebranch check-crate tokio 1.51.0 -b epel9 -r @epel
+```
+
 ### Useful flags
 
 - `--verbose` / `-v` — print progress to stderr as packages are resolved

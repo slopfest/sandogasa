@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod check_crate;
 mod check_update;
 mod dag;
 mod resolve;
@@ -169,10 +170,41 @@ Otherwise defaults to --branch."
     jobs: usize,
 }
 
+#[derive(clap::Args, Clone)]
+struct CheckCrateArgs {
+    /// Crate name on crates.io.
+    name: String,
+
+    /// Crate version (default: latest).
+    version: Option<String>,
+
+    /// Target branch (e.g. epel9, rawhide).
+    #[arg(short = 'b', long)]
+    branch: String,
+
+    /// Repository class for the branch (fedrq -r).
+    #[arg(short = 'r', long, value_name = "REPO")]
+    repo: Option<String>,
+
+    /// Machine-readable JSON output.
+    #[arg(long)]
+    json: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Parallel fedrq queries (0 = CPUs).
+    #[arg(short = 'j', long, default_value = "0", hide_default_value = true)]
+    jobs: usize,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Compute parallel build phases for porting packages.
     BuildOrder(ResolveArgs),
+    /// Analyze a crates.io crate's dependencies.
+    CheckCrate(CheckCrateArgs),
     /// Check if an update would break reverse dependencies.
     CheckUpdate(CheckUpdateArgs),
     /// Detect dependency cycles in the build graph.
@@ -190,7 +222,35 @@ enum Mode {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // CheckUpdate has its own args structure; handle it separately.
+    // CheckCrate and CheckUpdate have their own args; handle separately.
+    if let Command::CheckCrate(a) = &cli.command {
+        if a.jobs > 0 {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(a.jobs)
+                .build_global()
+                .expect("failed to configure thread pool");
+        }
+        let opts = check_crate::CheckCrateOptions {
+            branch: a.branch.clone(),
+            repo: a.repo.clone(),
+            verbose: a.verbose,
+        };
+        return match check_crate::check_crate(&a.name, a.version.as_deref(), &opts) {
+            Ok(report) => {
+                if a.json {
+                    print_json(&report);
+                } else {
+                    check_crate::print_report(&report);
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     if let Command::CheckUpdate(a) = &cli.command {
         if a.jobs > 0 {
             rayon::ThreadPoolBuilder::new()
@@ -228,6 +288,7 @@ fn main() -> ExitCode {
 
     let (args, mode) = match &cli.command {
         Command::BuildOrder(a) => (a, Mode::BuildOrder),
+        Command::CheckCrate(_) => unreachable!(),
         Command::CheckUpdate(_) => unreachable!(),
         Command::FindCycles(a) => (a, Mode::FindCycles),
         Command::Resolve(a) => (a, Mode::Resolve),
