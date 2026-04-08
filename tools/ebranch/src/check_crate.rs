@@ -279,7 +279,29 @@ pub fn print_report(report: &CheckCrateReport) {
         println!();
     }
 
+    if !report.transitive_missing.is_empty() {
+        println!("Transitive missing ({}):", report.transitive_missing.len());
+        for d in &report.transitive_missing {
+            println!("  - {} {} (via {})", d.name, d.version_req, d.pulled_by);
+        }
+        println!();
+    }
+
     if !report.transitive_build_order.is_empty() {
+        // Build a version lookup: crate name → version_req.
+        let versions: std::collections::HashMap<&str, &str> = report
+            .transitive_missing
+            .iter()
+            .map(|d| (d.name.as_str(), d.version_req.as_str()))
+            .chain(
+                report
+                    .dependencies
+                    .iter()
+                    .filter(|d| matches!(d.status, DepStatus::Missing))
+                    .map(|d| (d.dep.name.as_str(), d.dep.version_req.as_str())),
+            )
+            .collect();
+
         let total: usize = report
             .transitive_build_order
             .iter()
@@ -292,20 +314,12 @@ pub fn print_report(report: &CheckCrateReport) {
         for phase in &report.transitive_build_order {
             println!("\n  Phase {}:", phase.phase);
             for pkg in &phase.packages {
-                println!("    - rust-{pkg}");
+                if let Some(ver) = versions.get(pkg.as_str()) {
+                    println!("    - rust-{pkg} {ver}");
+                } else {
+                    println!("    - rust-{pkg}");
+                }
             }
-        }
-        if !report.transitive_missing.is_empty() {
-            println!(
-                "\n  ({} discovered transitively)",
-                report.transitive_missing.len()
-            );
-        }
-        println!();
-    } else if !report.transitive_missing.is_empty() {
-        println!("Transitive missing ({}):", report.transitive_missing.len());
-        for d in &report.transitive_missing {
-            println!("  - {} {} (via {})", d.name, d.version_req, d.pulled_by);
         }
         println!();
     }
@@ -330,6 +344,20 @@ pub fn print_report(report: &CheckCrateReport) {
 /// package to its dependencies (what must be built/reviewed first).
 /// Nodes are grouped by build phase when available.
 pub fn print_dot(report: &CheckCrateReport) {
+    // Build a version lookup: crate name → version_req.
+    let versions: std::collections::HashMap<&str, &str> = report
+        .transitive_missing
+        .iter()
+        .map(|d| (d.name.as_str(), d.version_req.as_str()))
+        .chain(
+            report
+                .dependencies
+                .iter()
+                .filter(|d| matches!(d.status, DepStatus::Missing))
+                .map(|d| (d.dep.name.as_str(), d.dep.version_req.as_str())),
+        )
+        .collect();
+
     println!("digraph {{");
     println!("  rankdir=BT;");
     println!(
@@ -338,6 +366,11 @@ pub fn print_dot(report: &CheckCrateReport) {
     );
     println!("  labelloc=t;");
     println!("  node [shape=box, style=filled, fillcolor=lightyellow];");
+
+    // Declare nodes with version labels.
+    for (name, ver) in &versions {
+        println!("  \"rust-{name}\" [label=\"rust-{name}\\n{ver}\"];");
+    }
 
     // Group nodes by phase for visual clarity.
     if !report.transitive_build_order.is_empty() {
@@ -351,7 +384,10 @@ pub fn print_dot(report: &CheckCrateReport) {
     }
 
     // Root crate as a distinct node.
-    println!("  \"rust-{}\" [fillcolor=lightblue];", report.crate_name);
+    println!(
+        "  \"rust-{}\" [label=\"rust-{}\\n{}\", fillcolor=lightblue];",
+        report.crate_name, report.crate_name, report.crate_version
+    );
 
     // Edges: package → dependency (dep must be built first).
     for (parent, deps) in &report.transitive_edges {
