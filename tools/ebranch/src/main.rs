@@ -186,6 +186,18 @@ struct CheckCrateArgs {
     #[arg(short = 'r', long, value_name = "REPO")]
     repo: Option<String>,
 
+    /// Expand missing deps transitively.
+    #[arg(short = 't', long)]
+    transitive: bool,
+
+    /// Include dev dependencies in transitive expansion.
+    #[arg(long, requires = "transitive")]
+    include_dev: bool,
+
+    /// Include optional dependencies in transitive expansion.
+    #[arg(long, requires = "transitive")]
+    include_optional: bool,
+
     /// Machine-readable JSON output.
     #[arg(long)]
     json: bool,
@@ -240,6 +252,9 @@ fn main() -> ExitCode {
             branch: a.branch.clone(),
             repo: a.repo.clone(),
             verbose: a.verbose,
+            transitive: a.transitive,
+            include_dev: a.include_dev,
+            include_optional: a.include_optional,
         };
         return match check_crate::check_crate(&a.name, a.version.as_deref(), &opts) {
             Ok(report) => {

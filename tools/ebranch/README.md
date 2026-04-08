@@ -193,8 +193,21 @@ Specify a version (defaults to latest):
 ebranch check-crate tokio 1.51.0 -b epel9 -r @epel
 ```
 
+Use `--transitive` / `-t` to expand missing dependencies transitively,
+showing the full set of crates that need to be packaged:
+
+```sh
+ebranch check-crate arrow 57.3.0 -b rawhide -t -v
+```
+
+By default, normal and build dependencies are expanded. Add
+`--include-dev` or `--include-optional` to also expand those kinds.
+
 ### Useful flags
 
+- `--transitive` / `-t` — expand missing `check-crate` deps transitively
+- `--include-dev` — also expand dev deps in transitive expansion
+- `--include-optional` — also expand optional deps in transitive expansion
 - `--verbose` / `-v` — print progress to stderr as packages are resolved
 - `--max-depth N` — limit recursion depth (useful for exploring large
   dependency trees incrementally)

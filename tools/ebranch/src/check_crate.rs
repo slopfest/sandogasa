@@ -7,6 +7,8 @@
 //! whether the available version satisfies the crate's version requirement,
 //! or if it is missing entirely.
 
+use std::collections::{HashSet, VecDeque};
+
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +19,9 @@ pub struct CheckCrateOptions {
     pub branch: String,
     pub repo: Option<String>,
     pub verbose: bool,
+    pub transitive: bool,
+    pub include_dev: bool,
+    pub include_optional: bool,
 }
 
 /// A dependency from crates.io.
@@ -52,6 +57,15 @@ pub struct DepResult {
     pub status: DepStatus,
 }
 
+/// A transitively-missing dependency.
+#[derive(Debug, Clone, Serialize)]
+pub struct TransitiveDep {
+    pub name: String,
+    pub version: String,
+    pub version_req: String,
+    pub pulled_by: String,
+}
+
 /// Full report for a crate check.
 #[derive(Debug, Serialize)]
 pub struct CheckCrateReport {
@@ -59,6 +73,8 @@ pub struct CheckCrateReport {
     pub crate_version: String,
     pub branch: String,
     pub dependencies: Vec<DepResult>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub transitive_missing: Vec<TransitiveDep>,
 }
 
 // ---- Public functions ----
@@ -120,11 +136,18 @@ pub fn check_crate(
         })
         .collect();
 
+    let transitive_missing = if opts.transitive {
+        expand_transitive(&rt, &fedrq, &dependencies, opts)?
+    } else {
+        vec![]
+    };
+
     Ok(CheckCrateReport {
         crate_name: name.to_string(),
         crate_version: version,
         branch: opts.branch.clone(),
         dependencies,
+        transitive_missing,
     })
 }
 
@@ -216,18 +239,142 @@ pub fn print_report(report: &CheckCrateReport) {
         println!();
     }
 
-    println!(
-        "Summary: {} missing, {} too old, {} satisfied.",
-        missing.len(),
-        too_old.len(),
-        satisfied.len()
-    );
+    if !report.transitive_missing.is_empty() {
+        println!("Transitive missing ({}):", report.transitive_missing.len());
+        for d in &report.transitive_missing {
+            println!("  - {} {} (via {})", d.name, d.version_req, d.pulled_by);
+        }
+        println!();
+    }
+
+    if report.transitive_missing.is_empty() {
+        println!(
+            "Summary: {} missing, {} too old, {} satisfied.",
+            missing.len(),
+            too_old.len(),
+            satisfied.len()
+        );
+    } else {
+        println!(
+            "Summary: {} missing (+ {} transitive), {} too old, \
+             {} satisfied.",
+            missing.len(),
+            report.transitive_missing.len(),
+            too_old.len(),
+            satisfied.len()
+        );
+    }
 }
 
 // ---- Private helpers ----
 
 fn opt_label(d: &DepResult) -> &str {
     if d.dep.optional { ", optional" } else { "" }
+}
+
+/// Whether a dependency should be expanded in transitive mode.
+fn should_expand(dep: &CrateDep, opts: &CheckCrateOptions) -> bool {
+    if dep.optional && !opts.include_optional {
+        return false;
+    }
+    match dep.kind.as_str() {
+        "normal" | "build" => true,
+        "dev" => opts.include_dev,
+        _ => false,
+    }
+}
+
+/// BFS expansion of missing dependencies.
+///
+/// For each missing direct dep, fetches its dependencies from crates.io,
+/// checks them against the repo, and recurses into any that are also
+/// missing. Returns a deduplicated list of transitively-missing crates.
+fn expand_transitive(
+    rt: &tokio::runtime::Runtime,
+    fedrq: &sandogasa_fedrq::Fedrq,
+    direct_results: &[DepResult],
+    opts: &CheckCrateOptions,
+) -> Result<Vec<TransitiveDep>, String> {
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut result: Vec<TransitiveDep> = Vec::new();
+
+    // Seed: direct missing deps that pass the kind filter.
+    let mut queue: VecDeque<(String, String)> = VecDeque::new(); // (crate_name, pulled_by)
+    for dr in direct_results {
+        visited.insert(dr.dep.name.clone());
+        if matches!(dr.status, DepStatus::Missing) && should_expand(&dr.dep, opts) {
+            queue.push_back((dr.dep.name.clone(), dr.dep.name.clone()));
+        }
+    }
+
+    while let Some((crate_name, pulled_by)) = queue.pop_front() {
+        if opts.verbose {
+            eprintln!("[check-crate] expanding transitive deps for {crate_name}");
+        }
+
+        let version = match rt.block_on(fetch_latest_version(&crate_name)) {
+            Ok(v) => v,
+            Err(e) => {
+                if opts.verbose {
+                    eprintln!("[check-crate] warning: failed to fetch {crate_name}: {e}");
+                }
+                continue;
+            }
+        };
+
+        let deps = match rt.block_on(fetch_dependencies(&crate_name, &version)) {
+            Ok(d) => d,
+            Err(e) => {
+                if opts.verbose {
+                    eprintln!(
+                        "[check-crate] warning: failed to fetch deps \
+                         for {crate_name} {version}: {e}"
+                    );
+                }
+                continue;
+            }
+        };
+
+        // Filter to relevant kinds and check against repo in parallel.
+        let relevant: Vec<&CrateDep> = deps.iter().filter(|d| should_expand(d, opts)).collect();
+
+        let results: Vec<DepResult> = relevant
+            .par_iter()
+            .map(|dep| {
+                let status = check_dep_in_repo(fedrq, dep);
+                DepResult {
+                    dep: (*dep).clone(),
+                    status,
+                }
+            })
+            .collect();
+
+        for dr in &results {
+            if visited.contains(&dr.dep.name) {
+                continue;
+            }
+            visited.insert(dr.dep.name.clone());
+
+            if matches!(dr.status, DepStatus::Missing) {
+                result.push(TransitiveDep {
+                    name: dr.dep.name.clone(),
+                    version: version.clone(),
+                    version_req: dr.dep.version_req.clone(),
+                    pulled_by: pulled_by.clone(),
+                });
+                queue.push_back((dr.dep.name.clone(), dr.dep.name.clone()));
+            }
+        }
+    }
+
+    if opts.verbose && !result.is_empty() {
+        eprintln!(
+            "[check-crate] found {} transitive missing dependencies",
+            result.len()
+        );
+    }
+
+    Ok(result)
 }
 
 /// crates.io API response for crate info.
@@ -426,5 +573,61 @@ mod tests {
         let version = semver::Version::parse("1.0.0").unwrap();
         let req = semver::VersionReq::parse("=1.0.0").unwrap();
         assert!(req.matches(&version));
+    }
+
+    fn make_opts(transitive: bool, include_dev: bool, include_optional: bool) -> CheckCrateOptions {
+        CheckCrateOptions {
+            branch: "rawhide".to_string(),
+            repo: None,
+            verbose: false,
+            transitive,
+            include_dev,
+            include_optional,
+        }
+    }
+
+    fn make_dep(name: &str, kind: &str, optional: bool) -> CrateDep {
+        CrateDep {
+            name: name.to_string(),
+            version_req: "^1.0".to_string(),
+            kind: kind.to_string(),
+            optional,
+        }
+    }
+
+    #[test]
+    fn should_expand_normal() {
+        let opts = make_opts(true, false, false);
+        assert!(should_expand(&make_dep("foo", "normal", false), &opts));
+    }
+
+    #[test]
+    fn should_expand_build() {
+        let opts = make_opts(true, false, false);
+        assert!(should_expand(&make_dep("foo", "build", false), &opts));
+    }
+
+    #[test]
+    fn should_expand_dev_excluded_by_default() {
+        let opts = make_opts(true, false, false);
+        assert!(!should_expand(&make_dep("foo", "dev", false), &opts));
+    }
+
+    #[test]
+    fn should_expand_dev_when_included() {
+        let opts = make_opts(true, true, false);
+        assert!(should_expand(&make_dep("foo", "dev", false), &opts));
+    }
+
+    #[test]
+    fn should_expand_optional_excluded_by_default() {
+        let opts = make_opts(true, false, false);
+        assert!(!should_expand(&make_dep("foo", "normal", true), &opts));
+    }
+
+    #[test]
+    fn should_expand_optional_when_included() {
+        let opts = make_opts(true, false, true);
+        assert!(should_expand(&make_dep("foo", "normal", true), &opts));
     }
 }
