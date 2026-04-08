@@ -118,6 +118,38 @@ impl ResolveCache {
     }
 }
 
+/// A subpackage Requires that cannot be satisfied on the target.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnsatisfiedRequires {
+    /// The raw Requires string.
+    pub dep: String,
+    /// The source package that provides this on the source branch,
+    /// or `None` if it cannot be resolved at all.
+    pub provided_by: Option<String>,
+}
+
+/// Installability check result for a single source package.
+#[derive(Debug, Serialize)]
+pub struct InstallabilityEntry {
+    /// Subpackage Requires that are not satisfiable.
+    pub unsatisfied: Vec<UnsatisfiedRequires>,
+}
+
+/// Result of the installability check across the closure.
+#[derive(Debug, Serialize)]
+pub struct InstallabilityReport {
+    /// Packages with installability issues (only those with problems).
+    pub issues: BTreeMap<String, InstallabilityEntry>,
+    /// Source packages that need to be added to the closure.
+    pub additional_packages: BTreeSet<String>,
+}
+
+/// Real resolver backed by `sandogasa_fedrq::Fedrq`.
+pub struct FedrqResolver {
+    pub source: sandogasa_fedrq::Fedrq,
+    pub target: sandogasa_fedrq::Fedrq,
+}
+
 /// Resolve the full transitive closure of missing build dependencies.
 #[cfg(test)]
 pub fn resolve_closure(
@@ -325,32 +357,6 @@ fn resolve_closure_with_cache(
         closure,
         warnings,
     })
-}
-
-/// A subpackage Requires that cannot be satisfied on the target.
-#[derive(Debug, Clone, Serialize)]
-pub struct UnsatisfiedRequires {
-    /// The raw Requires string.
-    pub dep: String,
-    /// The source package that provides this on the source branch,
-    /// or `None` if it cannot be resolved at all.
-    pub provided_by: Option<String>,
-}
-
-/// Installability check result for a single source package.
-#[derive(Debug, Serialize)]
-pub struct InstallabilityEntry {
-    /// Subpackage Requires that are not satisfiable.
-    pub unsatisfied: Vec<UnsatisfiedRequires>,
-}
-
-/// Result of the installability check across the closure.
-#[derive(Debug, Serialize)]
-pub struct InstallabilityReport {
-    /// Packages with installability issues (only those with problems).
-    pub issues: BTreeMap<String, InstallabilityEntry>,
-    /// Source packages that need to be added to the closure.
-    pub additional_packages: BTreeSet<String>,
 }
 
 /// Check that subpackages of all closure packages are installable.
@@ -594,12 +600,6 @@ pub fn resolve_with_installability(
             );
         }
     }
-}
-
-/// Real resolver backed by `sandogasa_fedrq::Fedrq`.
-pub struct FedrqResolver {
-    pub source: sandogasa_fedrq::Fedrq,
-    pub target: sandogasa_fedrq::Fedrq,
 }
 
 impl DepResolver for FedrqResolver {

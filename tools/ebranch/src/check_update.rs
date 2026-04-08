@@ -12,59 +12,7 @@ use std::process::Command;
 use rayon::prelude::*;
 use serde::Serialize;
 
-/// Filter out fedrq's "(none)" placeholder from results.
-fn filter_none(items: Vec<String>) -> Vec<String> {
-    items
-        .into_iter()
-        .filter(|s| !s.is_empty() && s != "(none)")
-        .collect()
-}
-
-/// Extract the name part of a Provide string.
-///
-/// E.g. "tor = 0.4.9.5-1.el9" → "tor",
-///      "config(tor) = 0.4.9.5-1.el9" → "config(tor)",
-///      "libthing.so.1()(64bit)" → "libthing.so.1()(64bit)"
-fn provide_name(provide: &str) -> &str {
-    // Split on version operators: " = ", " < ", " > ", " <= ", " >= "
-    provide
-        .split_once(" = ")
-        .or_else(|| provide.split_once(" < "))
-        .or_else(|| provide.split_once(" > "))
-        .or_else(|| provide.split_once(" <= "))
-        .or_else(|| provide.split_once(" >= "))
-        .map(|(name, _)| name)
-        .unwrap_or(provide)
-}
-
-/// Compare old and new provides, classifying each as updated or removed.
-fn compare_provides(old: &BTreeSet<String>, new: &BTreeSet<String>) -> Vec<ChangedProvide> {
-    // Build a map from provide name → full provide string for new provides.
-    let new_by_name: BTreeMap<&str, &str> =
-        new.iter().map(|p| (provide_name(p), p.as_str())).collect();
-
-    let mut changed = Vec::new();
-    for old_provide in old.difference(new) {
-        let name = provide_name(old_provide);
-        let new_match = new_by_name.get(name).map(|s| s.to_string());
-        changed.push(ChangedProvide {
-            old: old_provide.clone(),
-            new: new_match,
-        });
-    }
-    changed
-}
-
-/// Extract a testing branch from a side tag name.
-///
-/// E.g. "epel9-build-side-133287" → "epel9",
-///      "epel10.0-build-side-12345" → "epel10.0"
-fn testing_branch_from_side_tag(tag: Option<&str>) -> Option<String> {
-    let tag = tag?;
-    let rest = tag.strip_prefix("epel")?;
-    let release_end = rest.find("-build-side-")?;
-    Some(format!("epel{}", &rest[..release_end]))
-}
+// ---- Public types ----
 
 /// What kind of input the user provided.
 pub enum InputKind {
@@ -133,6 +81,8 @@ pub struct CheckUpdateReport {
     pub changed_provides: Vec<ChangedProvide>,
     pub reverse_deps: BTreeMap<String, RevDepResult>,
 }
+
+// ---- Public functions ----
 
 /// Detect what kind of input the user provided.
 pub fn detect_input_type(input: &str) -> InputKind {
@@ -246,261 +196,6 @@ pub fn koji_build_rpms(nvr: &str, profile: Option<&str>) -> Result<Vec<String>, 
     Ok(names)
 }
 
-struct BodhiUpdateInfo {
-    side_tag: Option<String>,
-    nvrs: Vec<String>,
-    release_name: Option<String>,
-    /// Branch from the Bodhi release (e.g. "epel9", "f44").
-    release_branch: Option<String>,
-}
-
-/// Fetch a Bodhi update and extract its key fields.
-fn fetch_bodhi_update(alias: &str) -> Result<BodhiUpdateInfo, String> {
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| format!("failed to create async runtime: {e}"))?;
-    let update = rt
-        .block_on(async {
-            let client = sandogasa_bodhi::BodhiClient::new();
-            client.update_by_alias(alias).await
-        })
-        .map_err(|e| format!("failed to fetch Bodhi update {alias}: {e}"))?;
-
-    let release_name = update.release.as_ref().map(|r| r.name.clone());
-    let release_branch = update.release.as_ref().and_then(|r| r.branch.clone());
-    let nvrs: Vec<String> = update.builds.iter().map(|b| b.nvr.clone()).collect();
-    Ok(BodhiUpdateInfo {
-        side_tag: update.from_side_tag,
-        nvrs,
-        release_name,
-        release_branch,
-    })
-}
-
-/// Compute changed provides using `subpkgs_provides` on both repos.
-///
-/// Works for @testing and any repo where source RPM queries work.
-fn compute_changed_provides_via_subpkgs(
-    updated_packages: &[String],
-    stable_fedrq: &sandogasa_fedrq::Fedrq,
-    new_fedrq: &sandogasa_fedrq::Fedrq,
-) -> Vec<ChangedProvide> {
-    updated_packages
-        .par_iter()
-        .flat_map(|srpm| {
-            let old_provides: BTreeSet<String> =
-                filter_none(stable_fedrq.subpkgs_provides(srpm).unwrap_or_default())
-                    .into_iter()
-                    .collect();
-
-            let new_provides: BTreeSet<String> = new_fedrq
-                .subpkgs_provides(srpm)
-                .ok()
-                .map(|v| filter_none(v).into_iter().collect())
-                .unwrap_or_default();
-
-            compare_provides(&old_provides, &new_provides)
-        })
-        .collect()
-}
-
-/// Compute changed provides for side tags using `koji buildinfo`
-/// + `fedrq pkg_provides`.
-///
-/// Side tags don't index source RPMs, so we get binary RPM names
-/// from koji and query their provides individually.
-fn compute_changed_provides_via_koji(
-    nvrs: &[String],
-    updated_packages: &[String],
-    stable_fedrq: &sandogasa_fedrq::Fedrq,
-    side_tag_fedrq: &sandogasa_fedrq::Fedrq,
-    koji_profile: Option<&str>,
-    verbose: bool,
-) -> Vec<ChangedProvide> {
-    // Get old provides from stable repo (source-based query works here).
-    let old_provides: BTreeSet<String> = updated_packages
-        .par_iter()
-        .flat_map(|srpm| filter_none(stable_fedrq.subpkgs_provides(srpm).unwrap_or_default()))
-        .collect();
-
-    // Get new provides: binary RPM names via koji, then query
-    // each one's provides from the side tag repo.
-    let binary_names: Vec<String> = nvrs
-        .iter()
-        .flat_map(|nvr| {
-            koji_build_rpms(nvr, koji_profile).unwrap_or_else(|e| {
-                if verbose {
-                    eprintln!(
-                        "[check-update] warning: \
-                         koji buildinfo {nvr} failed: {e}"
-                    );
-                }
-                vec![]
-            })
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-
-    if verbose {
-        eprintln!(
-            "[check-update] {} binary packages from koji: {}",
-            binary_names.len(),
-            binary_names.join(", "),
-        );
-    }
-
-    let new_provides: BTreeSet<String> = binary_names
-        .par_iter()
-        .flat_map(|name| filter_none(side_tag_fedrq.pkg_provides(name).unwrap_or_default()))
-        .collect();
-
-    compare_provides(&old_provides, &new_provides)
-}
-
-/// Given old and new provides per source package, classify changes,
-/// find affected reverse deps, and check their Requires.
-fn run_provides_analysis(
-    input: &str,
-    branch: &str,
-    updated_packages: &[String],
-    changed_provides: Vec<ChangedProvide>,
-    stable_fedrq: &sandogasa_fedrq::Fedrq,
-    opts: &CheckUpdateOptions,
-) -> Result<CheckUpdateReport, String> {
-    if opts.verbose {
-        let updated_count = changed_provides.iter().filter(|c| c.is_updated()).count();
-        let removed_count = changed_provides.iter().filter(|c| !c.is_updated()).count();
-        eprintln!(
-            "[check-update] {} changed provides \
-             ({updated_count} updated, {removed_count} removed)",
-            changed_provides.len()
-        );
-    }
-
-    if changed_provides.is_empty() {
-        return Ok(CheckUpdateReport {
-            input: input.to_string(),
-            branch: branch.to_string(),
-            updated_packages: updated_packages.to_vec(),
-            full_analysis: true,
-            changed_provides: vec![],
-            reverse_deps: BTreeMap::new(),
-        });
-    }
-
-    // Use old provide strings for whatrequires lookup.
-    let old_provide_strings: Vec<String> = changed_provides.iter().map(|c| c.old.clone()).collect();
-    let old_provide_set: BTreeSet<&str> = old_provide_strings.iter().map(|s| s.as_str()).collect();
-
-    if opts.verbose {
-        eprintln!("[check-update] finding reverse dependencies");
-    }
-
-    let rev_dep_sources = filter_none(
-        stable_fedrq
-            .whatrequires(&old_provide_strings)
-            .map_err(|e| format!("whatrequires failed: {e}"))?,
-    );
-
-    let updated_set: BTreeSet<&str> = updated_packages.iter().map(|s| s.as_str()).collect();
-    let rev_deps: Vec<String> = rev_dep_sources
-        .into_iter()
-        .filter(|pkg| !updated_set.contains(pkg.as_str()))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-
-    if opts.verbose {
-        eprintln!(
-            "[check-update] {} reverse dependencies to check: {}",
-            rev_deps.len(),
-            rev_deps.join(", "),
-        );
-    }
-
-    let results: Vec<(String, RevDepResult)> = rev_deps
-        .par_iter()
-        .map(|pkg| {
-            let requires = stable_fedrq.subpkgs_requires(pkg).unwrap_or_default();
-
-            let issues: Vec<BrokenRequires> = requires
-                .iter()
-                .filter_map(|dep| {
-                    let dep_str = dep.trim();
-                    if old_provide_set.contains(dep_str) {
-                        Some(BrokenRequires {
-                            dep: dep_str.to_string(),
-                            changed_provide: dep_str.to_string(),
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            let status = if issues.is_empty() { "ok" } else { "broken" };
-            (
-                pkg.clone(),
-                RevDepResult {
-                    status: status.to_string(),
-                    issues,
-                },
-            )
-        })
-        .collect();
-
-    let reverse_deps: BTreeMap<String, RevDepResult> = results.into_iter().collect();
-
-    Ok(CheckUpdateReport {
-        input: input.to_string(),
-        branch: branch.to_string(),
-        updated_packages: updated_packages.to_vec(),
-        full_analysis: true,
-        changed_provides,
-        reverse_deps,
-    })
-}
-
-/// Warn if any package from koji list-tagged has no changed provides,
-/// which suggests the side tag repo metadata is stale.
-fn check_side_tag_staleness(nvrs: &[String], changed: &[ChangedProvide]) {
-    // Collect all provide name strings that changed.
-    let changed_old: BTreeSet<&str> = changed.iter().map(|c| c.old.as_str()).collect();
-
-    // For each NVR, check if the version from the NVR appears in any
-    // changed provide. If the NVR says 1.51.0 but no provide mentions
-    // 1.51.0, the side tag repo is likely stale for that package.
-    for nvr in nvrs {
-        let Some(name) = parse_nvr(nvr) else {
-            continue;
-        };
-        // Extract version from NVR.
-        let version = nvr
-            .strip_prefix(name)
-            .and_then(|rest| rest.strip_prefix('-'))
-            .and_then(|vr| vr.split_once('-'))
-            .map(|(v, _)| v);
-        let Some(version) = version else {
-            continue;
-        };
-
-        // Check if any changed provide references this package's
-        // version (from the NVR).
-        let has_version_match = changed_old
-            .iter()
-            .any(|p| p.contains(name) || p.contains(version));
-
-        if !has_version_match {
-            eprintln!(
-                "warning: {name}: side tag repo may be stale \
-                 (expected version {version} from {nvr} not found \
-                 in changed provides); consider running \
-                 'koji regen-repo' or using @testing if available"
-            );
-        }
-    }
-}
-
 /// Run the check-update analysis.
 pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdateReport, String> {
     // Phase 0: Determine side tag, NVRs, branch, and Bodhi release branch.
@@ -589,9 +284,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         );
     }
 
-    // Without a side tag we cannot compare old vs new provides,
-    // so we fall back to listing all reverse deps without a
-    // broken/ok judgment.
+    // Determine the branch for querying new provides (@testing or side tag).
     let new_branch = opts
         .testing_branch
         .clone()
@@ -807,6 +500,319 @@ pub fn print_report(report: &CheckUpdateReport) {
         println!("\nSummary: all {total} reverse dependencies OK.");
     }
 }
+
+// ---- Private helpers ----
+
+/// Filter out fedrq's "(none)" placeholder from results.
+fn filter_none(items: Vec<String>) -> Vec<String> {
+    items
+        .into_iter()
+        .filter(|s| !s.is_empty() && s != "(none)")
+        .collect()
+}
+
+/// Extract the name part of a Provide string.
+///
+/// E.g. "tor = 0.4.9.5-1.el9" → "tor",
+///      "config(tor) = 0.4.9.5-1.el9" → "config(tor)",
+///      "libthing.so.1()(64bit)" → "libthing.so.1()(64bit)"
+fn provide_name(provide: &str) -> &str {
+    // Split on version operators: " = ", " < ", " > ", " <= ", " >= "
+    provide
+        .split_once(" = ")
+        .or_else(|| provide.split_once(" < "))
+        .or_else(|| provide.split_once(" > "))
+        .or_else(|| provide.split_once(" <= "))
+        .or_else(|| provide.split_once(" >= "))
+        .map(|(name, _)| name)
+        .unwrap_or(provide)
+}
+
+/// Compare old and new provides, classifying each as updated or removed.
+fn compare_provides(old: &BTreeSet<String>, new: &BTreeSet<String>) -> Vec<ChangedProvide> {
+    // Build a map from provide name → full provide string for new provides.
+    let new_by_name: BTreeMap<&str, &str> =
+        new.iter().map(|p| (provide_name(p), p.as_str())).collect();
+
+    let mut changed = Vec::new();
+    for old_provide in old.difference(new) {
+        let name = provide_name(old_provide);
+        let new_match = new_by_name.get(name).map(|s| s.to_string());
+        changed.push(ChangedProvide {
+            old: old_provide.clone(),
+            new: new_match,
+        });
+    }
+    changed
+}
+
+/// Extract a testing branch from a side tag name.
+///
+/// E.g. "epel9-build-side-133287" → "epel9",
+///      "epel10.0-build-side-12345" → "epel10.0"
+fn testing_branch_from_side_tag(tag: Option<&str>) -> Option<String> {
+    let tag = tag?;
+    let rest = tag.strip_prefix("epel")?;
+    let release_end = rest.find("-build-side-")?;
+    Some(format!("epel{}", &rest[..release_end]))
+}
+
+struct BodhiUpdateInfo {
+    side_tag: Option<String>,
+    nvrs: Vec<String>,
+    release_name: Option<String>,
+    /// Branch from the Bodhi release (e.g. "epel9", "f44").
+    release_branch: Option<String>,
+}
+
+/// Fetch a Bodhi update and extract its key fields.
+fn fetch_bodhi_update(alias: &str) -> Result<BodhiUpdateInfo, String> {
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| format!("failed to create async runtime: {e}"))?;
+    let update = rt
+        .block_on(async {
+            let client = sandogasa_bodhi::BodhiClient::new();
+            client.update_by_alias(alias).await
+        })
+        .map_err(|e| format!("failed to fetch Bodhi update {alias}: {e}"))?;
+
+    let release_name = update.release.as_ref().map(|r| r.name.clone());
+    let release_branch = update.release.as_ref().and_then(|r| r.branch.clone());
+    let nvrs: Vec<String> = update.builds.iter().map(|b| b.nvr.clone()).collect();
+    Ok(BodhiUpdateInfo {
+        side_tag: update.from_side_tag,
+        nvrs,
+        release_name,
+        release_branch,
+    })
+}
+
+/// Compute changed provides using `subpkgs_provides` on both repos.
+///
+/// Works for @testing and any repo where source RPM queries work.
+fn compute_changed_provides_via_subpkgs(
+    updated_packages: &[String],
+    stable_fedrq: &sandogasa_fedrq::Fedrq,
+    new_fedrq: &sandogasa_fedrq::Fedrq,
+) -> Vec<ChangedProvide> {
+    updated_packages
+        .par_iter()
+        .flat_map(|srpm| {
+            let old_provides: BTreeSet<String> =
+                filter_none(stable_fedrq.subpkgs_provides(srpm).unwrap_or_default())
+                    .into_iter()
+                    .collect();
+
+            let new_provides: BTreeSet<String> = new_fedrq
+                .subpkgs_provides(srpm)
+                .ok()
+                .map(|v| filter_none(v).into_iter().collect())
+                .unwrap_or_default();
+
+            compare_provides(&old_provides, &new_provides)
+        })
+        .collect()
+}
+
+/// Compute changed provides for side tags using `koji buildinfo`
+/// + `fedrq pkg_provides`.
+///
+/// Side tags don't index source RPMs, so we get binary RPM names
+/// from koji and query their provides individually.
+fn compute_changed_provides_via_koji(
+    nvrs: &[String],
+    updated_packages: &[String],
+    stable_fedrq: &sandogasa_fedrq::Fedrq,
+    side_tag_fedrq: &sandogasa_fedrq::Fedrq,
+    koji_profile: Option<&str>,
+    verbose: bool,
+) -> Vec<ChangedProvide> {
+    // Get old provides from stable repo (source-based query works here).
+    let old_provides: BTreeSet<String> = updated_packages
+        .par_iter()
+        .flat_map(|srpm| filter_none(stable_fedrq.subpkgs_provides(srpm).unwrap_or_default()))
+        .collect();
+
+    // Get new provides: binary RPM names via koji, then query
+    // each one's provides from the side tag repo.
+    let binary_names: Vec<String> = nvrs
+        .iter()
+        .flat_map(|nvr| {
+            koji_build_rpms(nvr, koji_profile).unwrap_or_else(|e| {
+                if verbose {
+                    eprintln!(
+                        "[check-update] warning: \
+                         koji buildinfo {nvr} failed: {e}"
+                    );
+                }
+                vec![]
+            })
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    if verbose {
+        eprintln!(
+            "[check-update] {} binary packages from koji: {}",
+            binary_names.len(),
+            binary_names.join(", "),
+        );
+    }
+
+    let new_provides: BTreeSet<String> = binary_names
+        .par_iter()
+        .flat_map(|name| filter_none(side_tag_fedrq.pkg_provides(name).unwrap_or_default()))
+        .collect();
+
+    compare_provides(&old_provides, &new_provides)
+}
+
+/// Given changed provides, find affected reverse deps and check
+/// their Requires.
+fn run_provides_analysis(
+    input: &str,
+    branch: &str,
+    updated_packages: &[String],
+    changed_provides: Vec<ChangedProvide>,
+    stable_fedrq: &sandogasa_fedrq::Fedrq,
+    opts: &CheckUpdateOptions,
+) -> Result<CheckUpdateReport, String> {
+    if opts.verbose {
+        let updated_count = changed_provides.iter().filter(|c| c.is_updated()).count();
+        let removed_count = changed_provides.iter().filter(|c| !c.is_updated()).count();
+        eprintln!(
+            "[check-update] {} changed provides \
+             ({updated_count} updated, {removed_count} removed)",
+            changed_provides.len()
+        );
+    }
+
+    if changed_provides.is_empty() {
+        return Ok(CheckUpdateReport {
+            input: input.to_string(),
+            branch: branch.to_string(),
+            updated_packages: updated_packages.to_vec(),
+            full_analysis: true,
+            changed_provides: vec![],
+            reverse_deps: BTreeMap::new(),
+        });
+    }
+
+    // Use old provide strings for whatrequires lookup.
+    let old_provide_strings: Vec<String> = changed_provides.iter().map(|c| c.old.clone()).collect();
+    let old_provide_set: BTreeSet<&str> = old_provide_strings.iter().map(|s| s.as_str()).collect();
+
+    if opts.verbose {
+        eprintln!("[check-update] finding reverse dependencies");
+    }
+
+    let rev_dep_sources = filter_none(
+        stable_fedrq
+            .whatrequires(&old_provide_strings)
+            .map_err(|e| format!("whatrequires failed: {e}"))?,
+    );
+
+    let updated_set: BTreeSet<&str> = updated_packages.iter().map(|s| s.as_str()).collect();
+    let rev_deps: Vec<String> = rev_dep_sources
+        .into_iter()
+        .filter(|pkg| !updated_set.contains(pkg.as_str()))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    if opts.verbose {
+        eprintln!(
+            "[check-update] {} reverse dependencies to check: {}",
+            rev_deps.len(),
+            rev_deps.join(", "),
+        );
+    }
+
+    let results: Vec<(String, RevDepResult)> = rev_deps
+        .par_iter()
+        .map(|pkg| {
+            let requires = stable_fedrq.subpkgs_requires(pkg).unwrap_or_default();
+
+            let issues: Vec<BrokenRequires> = requires
+                .iter()
+                .filter_map(|dep| {
+                    let dep_str = dep.trim();
+                    if old_provide_set.contains(dep_str) {
+                        Some(BrokenRequires {
+                            dep: dep_str.to_string(),
+                            changed_provide: dep_str.to_string(),
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let status = if issues.is_empty() { "ok" } else { "broken" };
+            (
+                pkg.clone(),
+                RevDepResult {
+                    status: status.to_string(),
+                    issues,
+                },
+            )
+        })
+        .collect();
+
+    let reverse_deps: BTreeMap<String, RevDepResult> = results.into_iter().collect();
+
+    Ok(CheckUpdateReport {
+        input: input.to_string(),
+        branch: branch.to_string(),
+        updated_packages: updated_packages.to_vec(),
+        full_analysis: true,
+        changed_provides,
+        reverse_deps,
+    })
+}
+
+/// Warn if any package from koji list-tagged has no changed provides,
+/// which suggests the side tag repo metadata is stale.
+fn check_side_tag_staleness(nvrs: &[String], changed: &[ChangedProvide]) {
+    // Collect all provide name strings that changed.
+    let changed_old: BTreeSet<&str> = changed.iter().map(|c| c.old.as_str()).collect();
+
+    // For each NVR, check if the version from the NVR appears in any
+    // changed provide. If the NVR says 1.51.0 but no provide mentions
+    // 1.51.0, the side tag repo is likely stale for that package.
+    for nvr in nvrs {
+        let Some(name) = parse_nvr(nvr) else {
+            continue;
+        };
+        // Extract version from NVR.
+        let version = nvr
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .and_then(|vr| vr.split_once('-'))
+            .map(|(v, _)| v);
+        let Some(version) = version else {
+            continue;
+        };
+
+        // Check if any changed provide references this package's
+        // version (from the NVR).
+        let has_version_match = changed_old
+            .iter()
+            .any(|p| p.contains(name) || p.contains(version));
+
+        if !has_version_match {
+            eprintln!(
+                "warning: {name}: side tag repo may be stale \
+                 (expected version {version} from {nvr} not found \
+                 in changed provides); consider running \
+                 'koji regen-repo' or using @testing if available"
+            );
+        }
+    }
+}
+
+// ---- Tests ----
 
 #[cfg(test)]
 mod tests {

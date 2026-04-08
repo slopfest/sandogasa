@@ -181,6 +181,12 @@ enum Command {
     Resolve(ResolveArgs),
 }
 
+enum Mode {
+    Resolve,
+    BuildOrder,
+    FindCycles,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -414,12 +420,6 @@ fn main() -> ExitCode {
             }
         }
     }
-}
-
-enum Mode {
-    Resolve,
-    BuildOrder,
-    FindCycles,
 }
 
 fn print_copr_script(phases: &[dag::BuildPhase]) {
