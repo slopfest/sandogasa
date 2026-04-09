@@ -211,6 +211,10 @@ struct CheckCrateArgs {
     )]
     exclude: Vec<String>,
 
+    /// Write analysis to a TOML file.
+    #[arg(long, value_name = "PATH", requires = "transitive")]
+    toml: Option<String>,
+
     /// Output dependency graph in Graphviz DOT format.
     #[arg(long, requires = "transitive")]
     dot: bool,
@@ -277,6 +281,12 @@ fn main() -> ExitCode {
         };
         return match check_crate::check_crate(&a.name, a.version.as_deref(), &opts) {
             Ok(report) => {
+                if let Some(ref path) = a.toml
+                    && let Err(e) = check_crate::write_toml(&report, path)
+                {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
                 if a.dot {
                     check_crate::print_dot(&report);
                 } else if a.json {

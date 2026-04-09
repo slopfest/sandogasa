@@ -29,7 +29,7 @@ pub struct CheckCrateOptions {
 }
 
 /// A dependency from crates.io.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrateDep {
     pub name: String,
     pub version_req: String,
@@ -38,7 +38,7 @@ pub struct CrateDep {
 }
 
 /// Status of a dependency in the target repo.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status")]
 pub enum DepStatus {
     /// The RPM provides a version that satisfies the requirement.
@@ -46,7 +46,7 @@ pub enum DepStatus {
     Satisfied {
         version: String,
         /// True when satisfied by a compat package, not the latest.
-        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         compat: bool,
     },
     /// The RPM exists but no version satisfies the requirement.
@@ -61,7 +61,7 @@ pub enum DepStatus {
 }
 
 /// A dependency check result.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DepResult {
     #[serde(flatten)]
     pub dep: CrateDep,
@@ -70,7 +70,7 @@ pub struct DepResult {
 }
 
 /// A transitively-missing dependency.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransitiveDep {
     pub name: String,
     pub version: String,
@@ -79,17 +79,17 @@ pub struct TransitiveDep {
 }
 
 /// Full report for a crate check.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CheckCrateReport {
     pub crate_name: String,
     pub crate_version: String,
     pub branch: String,
     pub dependencies: Vec<DepResult>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transitive_missing: Vec<TransitiveDep>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transitive_build_order: Vec<dag::BuildPhase>,
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub transitive_edges: DepEdges,
 }
 
@@ -420,6 +420,30 @@ pub fn print_dot(report: &CheckCrateReport) {
     println!("}}");
 }
 
+/// Write the report to a TOML file.
+///
+/// Uses serde_json as an intermediate format to avoid issues with
+/// `#[serde(flatten)]` and `#[serde(tag)]` in the TOML crate.
+pub fn write_toml(report: &CheckCrateReport, path: &str) -> Result<(), String> {
+    let json_value: serde_json::Value =
+        serde_json::to_value(report).map_err(|e| format!("serialization failed: {e}"))?;
+    let content =
+        toml::to_string_pretty(&json_value).map_err(|e| format!("TOML conversion failed: {e}"))?;
+    std::fs::write(path, content).map_err(|e| format!("failed to write {path}: {e}"))?;
+    eprintln!("Wrote analysis to {path}");
+    Ok(())
+}
+
+/// Load a report from a TOML file.
+#[allow(dead_code)] // used by review_deps
+pub fn load_report(path: &str) -> Result<CheckCrateReport, String> {
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
+    let json_value: serde_json::Value =
+        toml::from_str(&content).map_err(|e| format!("failed to parse TOML: {e}"))?;
+    serde_json::from_value(json_value).map_err(|e| format!("failed to deserialize report: {e}"))
+}
+
 // ---- Private helpers ----
 
 fn opt_label(d: &DepResult) -> &str {
@@ -443,7 +467,7 @@ fn print_section_header(label: &str, deps: &[&DepResult]) {
 }
 
 /// Dependency edges: `edges[A] = {B, C}` means A depends on B and C.
-type DepEdges = BTreeMap<String, BTreeSet<String>>;
+pub type DepEdges = BTreeMap<String, BTreeSet<String>>;
 
 /// Whether a dependency should be expanded in transitive mode.
 fn should_expand(dep: &CrateDep, opts: &CheckCrateOptions) -> bool {
@@ -1086,5 +1110,83 @@ mod tests {
         let optional = HashSet::from(["foo".to_string()]);
         let activated = resolve_default_deps(&features, &optional);
         assert!(activated.is_empty());
+    }
+
+    #[test]
+    fn toml_round_trip() {
+        let report = CheckCrateReport {
+            crate_name: "test-crate".to_string(),
+            crate_version: "1.0.0".to_string(),
+            branch: "rawhide".to_string(),
+            dependencies: vec![
+                DepResult {
+                    dep: CrateDep {
+                        name: "serde".to_string(),
+                        version_req: "^1.0".to_string(),
+                        kind: "normal".to_string(),
+                        optional: false,
+                    },
+                    status: DepStatus::Satisfied {
+                        version: "1.0.210".to_string(),
+                        compat: false,
+                    },
+                },
+                DepResult {
+                    dep: CrateDep {
+                        name: "missing-dep".to_string(),
+                        version_req: "^0.5".to_string(),
+                        kind: "normal".to_string(),
+                        optional: false,
+                    },
+                    status: DepStatus::Missing,
+                },
+                DepResult {
+                    dep: CrateDep {
+                        name: "old-dep".to_string(),
+                        version_req: "^2.0".to_string(),
+                        kind: "dev".to_string(),
+                        optional: false,
+                    },
+                    status: DepStatus::Unmet {
+                        available: vec!["1.5.0".to_string()],
+                        need: "^2.0".to_string(),
+                    },
+                },
+            ],
+            transitive_missing: vec![TransitiveDep {
+                name: "transitive-dep".to_string(),
+                version: "0.3.0".to_string(),
+                version_req: "^0.3".to_string(),
+                pulled_by: "missing-dep".to_string(),
+            }],
+            transitive_build_order: vec![dag::BuildPhase {
+                phase: 1,
+                packages: vec!["transitive-dep".to_string(), "missing-dep".to_string()],
+            }],
+            transitive_edges: BTreeMap::from([
+                (
+                    "missing-dep".to_string(),
+                    BTreeSet::from(["transitive-dep".to_string()]),
+                ),
+                ("transitive-dep".to_string(), BTreeSet::new()),
+            ]),
+        };
+
+        // Serialize via JSON intermediate to TOML string.
+        let json_value = serde_json::to_value(&report).unwrap();
+        let toml_str = toml::to_string_pretty(&json_value).unwrap();
+
+        // Deserialize back via JSON intermediate.
+        let parsed_value: serde_json::Value = toml::from_str(&toml_str).unwrap();
+        let parsed: CheckCrateReport = serde_json::from_value(parsed_value).unwrap();
+
+        assert_eq!(parsed.crate_name, "test-crate");
+        assert_eq!(parsed.crate_version, "1.0.0");
+        assert_eq!(parsed.dependencies.len(), 3);
+        assert_eq!(parsed.transitive_missing.len(), 1);
+        assert_eq!(parsed.transitive_missing[0].name, "transitive-dep");
+        assert_eq!(parsed.transitive_build_order.len(), 1);
+        assert_eq!(parsed.transitive_edges.len(), 2);
+        assert!(parsed.transitive_edges["missing-dep"].contains("transitive-dep"));
     }
 }
