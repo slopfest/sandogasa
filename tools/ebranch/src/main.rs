@@ -52,13 +52,18 @@ struct ResolveArgs {
     #[arg(long)]
     json: bool,
 
-    /// Output build-order as a Koji chain build string.
+    /// Group output into parallel build phases.
     #[arg(long)]
+    phases: bool,
+
+    /// Output build-order as a Koji chain build string.
+    #[arg(long, requires = "phases")]
     koji: bool,
 
     /// Generate a shell script for Copr batch builds.
     #[arg(
         long,
+        requires = "phases",
         long_help = "\
 Generate a shell script for Copr batch builds.
 
@@ -236,8 +241,6 @@ struct CheckCrateArgs {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Compute parallel build phases for porting packages.
-    BuildOrder(ResolveArgs),
     /// Analyze a crates.io crate's dependencies.
     CheckCrate(CheckCrateArgs),
     /// Find and link Bugzilla package review requests.
@@ -276,7 +279,6 @@ struct CheckPkgReviewsArgs {
 
 enum Mode {
     Resolve,
-    BuildOrder,
     FindCycles,
 }
 
@@ -408,7 +410,6 @@ fn main() -> ExitCode {
     }
 
     let (args, mode) = match &cli.command {
-        Command::BuildOrder(a) => (a, Mode::BuildOrder),
         Command::CheckCrate(_)
         | Command::CheckPkgReviews(_)
         | Command::CheckUpdate(_)
@@ -520,68 +521,69 @@ fn main() -> ExitCode {
 
     match mode {
         Mode::Resolve => {
-            if args.json {
-                if let Some(report) = &install_report {
-                    print_json(&serde_json::json!({
-                        "source_branch": closure.source_branch,
-                        "target_branch": closure.target_branch,
-                        "requested": closure.requested,
-                        "closure": closure.closure,
-                        "warnings": closure.warnings,
-                        "installability": {
-                            "issues": report.issues,
-                            "additional_packages": report.additional_packages,
-                        },
-                    }));
-                } else {
-                    print_json(&closure);
+            if args.phases {
+                let edges = closure.to_edges();
+                match dag::topological_layers(&edges) {
+                    Ok(phases) => {
+                        if args.copr {
+                            print_copr_script(&phases);
+                        } else if args.koji {
+                            print_koji_chain(&phases);
+                        } else if args.json {
+                            let mut json = serde_json::json!({
+                                "source_branch": closure.source_branch,
+                                "target_branch": closure.target_branch,
+                                "requested": closure.requested,
+                                "build_order": phases,
+                            });
+                            if let Some(report) = &install_report {
+                                json["installability"] = serde_json::json!({
+                                    "issues": report.issues,
+                                    "additional_packages":
+                                        report.additional_packages,
+                                });
+                            }
+                            print_json(&json);
+                        } else {
+                            print_build_order(&phases, &closure);
+                            if let Some(report) = &install_report {
+                                print_installability(report);
+                            }
+                        }
+                        ExitCode::SUCCESS
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "error: dependency graph contains cycles; \
+                            run 'find-cycles' for details"
+                        );
+                        ExitCode::FAILURE
+                    }
                 }
             } else {
-                print_resolve(&closure);
-                if let Some(report) = &install_report {
-                    print_installability(report);
-                }
-            }
-            ExitCode::SUCCESS
-        }
-        Mode::BuildOrder => {
-            let edges = closure.to_edges();
-            match dag::topological_layers(&edges) {
-                Ok(phases) => {
-                    if args.copr {
-                        print_copr_script(&phases);
-                    } else if args.koji {
-                        print_koji_chain(&phases);
-                    } else if args.json {
-                        let mut json = serde_json::json!({
+                if args.json {
+                    if let Some(report) = &install_report {
+                        print_json(&serde_json::json!({
                             "source_branch": closure.source_branch,
                             "target_branch": closure.target_branch,
                             "requested": closure.requested,
-                            "build_order": phases,
-                        });
-                        if let Some(report) = &install_report {
-                            json["installability"] = serde_json::json!({
+                            "closure": closure.closure,
+                            "warnings": closure.warnings,
+                            "installability": {
                                 "issues": report.issues,
-                                "additional_packages":
-                                    report.additional_packages,
-                            });
-                        }
-                        print_json(&json);
+                                "additional_packages": report.additional_packages,
+                            },
+                        }));
                     } else {
-                        print_build_order(&phases, &closure);
-                        if let Some(report) = &install_report {
-                            print_installability(report);
-                        }
+                        print_json(&closure);
                     }
-                    ExitCode::SUCCESS
+                } else {
+                    print_resolve(&closure);
+                    if let Some(report) = &install_report {
+                        print_installability(report);
+                    }
                 }
-                Err(_) => {
-                    eprintln!(
-                        "error: dependency graph contains cycles; \
-                        run 'find-cycles' for details"
-                    );
-                    ExitCode::FAILURE
-                }
+                ExitCode::SUCCESS
             }
         }
         Mode::FindCycles => {

@@ -26,84 +26,6 @@ At least one of `--source` / `--source-repo` and one of `--target` /
 fedrq combines them (e.g. `--target c10s --target-repo @epel` queries
 CentOS Stream 10 base repos plus EPEL).
 
-### Compute parallel build phases
-
-```console
-$ ebranch build-order rust-base64-simd \
-    --source rawhide \
-    --target-repo '@koji:epel10.3-build-side-133542'
-Build order from rawhide to @koji:epel10.3-build-side-133542:
-
-  Phase 1:
-    - rust-const-str
-    - rust-outref
-  Phase 2:
-    - rust-vsimd
-  Phase 3:
-    - rust-base64-simd
-
-4 package(s) in 3 phase(s).
-```
-
-### Koji chain build output
-
-Use `--koji` with `build-order` to get output suitable for
-`koji chain-build`:
-
-```console
-$ ebranch build-order --koji rust-base64-simd \
-    --source rawhide \
-    --target-repo '@koji:epel10.3-build-side-133542'
-rust-const-str rust-outref : rust-vsimd : rust-base64-simd
-```
-
-### Copr batch build script
-
-Use `--copr` with `build-order` to generate a shell script that uses
-`copr build-package` with `--after-build-id` and `--with-build-id` to
-preserve phase ordering:
-
-```sh
-ebranch build-order --copr rust-base64-simd \
-    --source rawhide \
-    --target-repo '@koji:epel10.3-build-side-133542' > build.sh
-chmod +x build.sh
-./build.sh @myuser/myproject --chroot epel-10-x86_64
-```
-
-The script takes the Copr repo as its first argument, and passes any
-remaining arguments through to every `copr build-package` call.
-
-### Installability check
-
-Use `--check-install` to verify that every subpackage in the closure
-will be installable after building. This checks that all Requires of
-each subpackage are satisfiable by either the target repo or another
-package in the closure. If additional packages are needed, ebranch
-automatically expands the closure and re-resolves until everything is
-installable:
-
-```console
-$ ebranch build-order rust-uucore \
-    --source rawhide \
-    --target-repo '@koji:epel10.3-build-side-133542' \
-    --check-install --verbose --koji
-[installability] resolving with 1 package(s): rust-uucore
-[level] processing 1 package(s) (0 resolved so far): rust-uucore
-[installability] checking 1 package(s): rust-uucore
-[installability] adding 7 package(s): rust-base64-simd, ...
-[installability] resolving with 8 package(s): rust-base64-simd, ...
-...
-[installability] adding 1 package(s): rust-const-str-proc-macro
-[installability] resolving with 9 package(s): rust-base64-simd, ...
-...
-rust-const-str rust-const-str-proc-macro rust-core_maths ...
-```
-
-Without `--check-install`, ebranch only checks BuildRequires.
-Packages like `rust-const-str-proc-macro` that are only needed at
-install time (as a Requires of a subpackage) would be missed.
-
 ### Analyze a crates.io crate's dependencies
 
 Use `check-crate` to check which dependencies of a Rust crate are
@@ -174,9 +96,10 @@ deps. The output includes a phased build order showing which
   installability checks
 - `-j N` / `--jobs N` — number of parallel fedrq queries
   (0 = number of CPUs, the default)
+- `--phases` — group `resolve` output into parallel build phases
+- `--koji` — output as a Koji chain build string (requires `--phases`)
+- `--copr` — generate a Copr batch build script (requires `--phases`)
 - `--refresh` — clear fedrq repo metadata cache before querying
-- `--koji` — output build-order as a Koji chain build string
-- `--copr` — generate a Copr batch build shell script
 - `--json` — machine-readable JSON output
 
 ### Link Bugzilla review requests
@@ -256,6 +179,40 @@ ebranch find-cycles systemd util-linux \
 ebranch resolve systemd --source rawhide --target c10s --target-repo '@epel'
 ebranch resolve systemd --source rawhide --target c10s --json
 ```
+
+Use `--phases` to group the closure into parallel build phases:
+
+```console
+$ ebranch resolve --phases rust-base64-simd \
+    --source rawhide \
+    --target-repo '@koji:epel10.3-build-side-133542'
+Build order from rawhide to @koji:epel10.3-build-side-133542:
+
+  Phase 1:
+    - rust-const-str
+    - rust-outref
+  Phase 2:
+    - rust-vsimd
+  Phase 3:
+    - rust-base64-simd
+
+4 package(s) in 3 phase(s).
+```
+
+Add `--koji` for Koji chain-build output or `--copr` for a Copr
+batch build script:
+
+```sh
+ebranch resolve --phases --koji rust-base64-simd \
+    --source rawhide --target-repo '@koji:epel10.3-build-side-133542'
+
+ebranch resolve --phases --copr rust-base64-simd \
+    --source rawhide --target-repo '@koji:epel10.3-build-side-133542' \
+    > build.sh
+```
+
+Use `--check-install` to verify that every subpackage in the closure
+will be installable after building:
 
 ## License
 
