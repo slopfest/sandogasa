@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -13,36 +12,20 @@ pub struct GitlabConfig {
     pub access_token: String,
 }
 
-pub fn config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let config_dir = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            PathBuf::from(home).join(".config")
-        });
-    Ok(config_dir.join("hs-relmon").join("config.toml"))
+fn config_file() -> sandogasa_config::ConfigFile {
+    sandogasa_config::ConfigFile::for_tool("hs-relmon")
+}
+
+pub fn config_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    Ok(config_file().path().to_path_buf())
 }
 
 pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
-    load_from(&config_path()?)
+    config_file().load()
 }
 
 pub fn save(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
-    save_to(config, &config_path()?)
-}
-
-pub fn load_from(path: &std::path::Path) -> Result<Config, Box<dyn std::error::Error>> {
-    let contents = std::fs::read_to_string(path)?;
-    Ok(toml::from_str(&contents)?)
-}
-
-pub fn save_to(config: &Config, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let contents = toml::to_string_pretty(config)?;
-    std::fs::write(path, contents)?;
-    Ok(())
+    config_file().save(config)
 }
 
 #[cfg(test)]
@@ -97,22 +80,22 @@ access_token = "glpat-abc123"
 
     #[test]
     fn test_save_and_load() {
-        let dir = std::env::temp_dir().join("hs-relmon-test");
-        let path = dir.join("config.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let cf = sandogasa_config::ConfigFile::from_path(dir.path().join("config.toml"));
         let config = Config {
             gitlab: Some(GitlabConfig {
                 access_token: "test-save-load".into(),
             }),
         };
-        save_to(&config, &path).unwrap();
-        let loaded = load_from(&path).unwrap();
+        cf.save(&config).unwrap();
+        let loaded: Config = cf.load().unwrap();
         assert_eq!(loaded.gitlab.unwrap().access_token, "test-save-load");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_load_missing_file() {
-        let path = PathBuf::from("/tmp/hs-relmon-nonexistent/x");
-        assert!(load_from(&path).is_err());
+        let cf = sandogasa_config::ConfigFile::from_path("/tmp/hs-relmon-nonexistent/x".into());
+        let result: Result<Config, _> = cf.load();
+        assert!(result.is_err());
     }
 }

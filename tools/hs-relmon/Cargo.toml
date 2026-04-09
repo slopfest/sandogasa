@@ -13,6 +13,7 @@ clap = { workspace = true }
 quick-xml = { workspace = true }
 reqwest = { workspace = true }
 rpassword = { workspace = true }
+sandogasa-config = { workspace = true }
 sandogasa-gitlab = { workspace = true }
 sandogasa-repology = { workspace = true }
 sandogasa-rpmvercmp = { workspace = true }
@@ -23,3 +24,4 @@ toml_edit = { workspace = true }
 
 [dev-dependencies]
 mockito = { workspace = true }
+tempfile = { workspace = true }
