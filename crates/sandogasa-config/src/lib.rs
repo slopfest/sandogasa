@@ -49,13 +49,16 @@ impl ConfigFile {
     }
 
     /// Serialize and save the config file, creating parent directories
-    /// as needed.
+    /// as needed. Sets directory permissions to 700 and file permissions
+    /// to 600 to protect sensitive data like API keys.
     pub fn save<T: Serialize>(&self, config: &T) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
+            set_dir_permissions(parent)?;
         }
         let contents = toml::to_string_pretty(config)?;
-        std::fs::write(&self.path, contents)?;
+        std::fs::write(&self.path, &contents)?;
+        set_file_permissions(&self.path)?;
         Ok(())
     }
 }
@@ -115,6 +118,22 @@ pub fn validate_email(value: &str) -> Result<(), String> {
     if local.is_empty() || domain.is_empty() || !domain.contains('.') {
         return Err("invalid email address".to_string());
     }
+    Ok(())
+}
+
+/// Set directory permissions to 700 (owner-only access).
+fn set_dir_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = std::fs::Permissions::from_mode(0o700);
+    std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+/// Set file permissions to 600 (owner read/write only).
+fn set_file_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = std::fs::Permissions::from_mode(0o600);
+    std::fs::set_permissions(path, perms)?;
     Ok(())
 }
 
@@ -223,6 +242,31 @@ mod tests {
         let cf = ConfigFile::from_path(path);
         let result: Result<TestConfig, _> = cf.load();
         assert!(result.is_err());
+    }
+
+    // ---- permissions ----
+
+    #[test]
+    fn save_sets_secure_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("secure-tool");
+        let cf = ConfigFile::from_path(config_dir.join("config.toml"));
+
+        let config = TestConfig {
+            my_section: TestSection {
+                key: "secret".to_string(),
+                optional: "".to_string(),
+            },
+        };
+        cf.save(&config).unwrap();
+
+        let dir_perms = std::fs::metadata(&config_dir).unwrap().permissions();
+        assert_eq!(dir_perms.mode() & 0o777, 0o700);
+
+        let file_perms = std::fs::metadata(cf.path()).unwrap().permissions();
+        assert_eq!(file_perms.mode() & 0o777, 0o600);
     }
 
     // ---- validate_email ----

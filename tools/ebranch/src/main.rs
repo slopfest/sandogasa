@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 
 mod check_crate;
 mod check_update;
+mod config;
 mod dag;
 mod resolve;
 mod review_deps;
@@ -239,14 +240,16 @@ enum Command {
     BuildOrder(ResolveArgs),
     /// Analyze a crates.io crate's dependencies.
     CheckCrate(CheckCrateArgs),
+    /// Find and link Bugzilla package review requests.
+    CheckPkgReviews(CheckPkgReviewsArgs),
     /// Check if an update would break reverse dependencies.
     CheckUpdate(CheckUpdateArgs),
+    /// Set up Bugzilla API key and other settings.
+    Config,
     /// Detect dependency cycles in the build graph.
     FindCycles(ResolveArgs),
     /// Resolve the full dependency closure for porting.
     Resolve(ResolveArgs),
-    /// Find and link Bugzilla package review requests.
-    CheckPkgReviews(CheckPkgReviewsArgs),
 }
 
 #[derive(clap::Args, Clone)]
@@ -280,15 +283,23 @@ enum Mode {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // review-deps only needs Bugzilla, not fedrq.
+    // config and check-pkg-reviews don't need fedrq.
+    if matches!(cli.command, Command::Config) {
+        let rt = tokio::runtime::Runtime::new().expect("failed to create async runtime");
+        return match rt.block_on(config::cmd_config()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     if let Command::CheckPkgReviews(a) = &cli.command {
-        let api_key = match &a.api_key {
-            Some(k) => k.clone(),
-            None => {
-                eprintln!(
-                    "error: Bugzilla API key required. \
-                     Pass --api-key or set BUGZILLA_API_KEY."
-                );
+        let api_key = match config::resolve_api_key(a.api_key.as_deref()) {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("error: {e}");
                 return ExitCode::FAILURE;
             }
         };
@@ -398,11 +409,12 @@ fn main() -> ExitCode {
 
     let (args, mode) = match &cli.command {
         Command::BuildOrder(a) => (a, Mode::BuildOrder),
-        Command::CheckCrate(_) => unreachable!(),
-        Command::CheckUpdate(_) => unreachable!(),
+        Command::CheckCrate(_)
+        | Command::CheckPkgReviews(_)
+        | Command::CheckUpdate(_)
+        | Command::Config => unreachable!(),
         Command::FindCycles(a) => (a, Mode::FindCycles),
         Command::Resolve(a) => (a, Mode::Resolve),
-        Command::CheckPkgReviews(_) => unreachable!(),
     };
 
     if args.source.is_none() && args.source_repo.is_none() {
