@@ -20,14 +20,14 @@ Requires `fedrq` to be installed and available in `$PATH`.
 ### Comparing packages between branches
 
 ```sh
+# Compare BuildRequires
+hs-intake compare-build-requires systemd c9s f44
+
 # Compare Provides
 hs-intake compare-provides systemd c9s f44
 
 # Compare Requires
 hs-intake compare-requires systemd c9s f44
-
-# Compare BuildRequires
-hs-intake compare-build-requires systemd c9s f44
 
 # Include unchanged entries
 hs-intake compare-requires systemd c9s f44 --show-unchanged

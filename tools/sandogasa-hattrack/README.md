@@ -32,12 +32,12 @@ Last seen: salimma
 
 ### Subcommands
 
-- `last-seen` — summary of last activity across all services, including
-  Discourse custom status and expiration
-- `discourse` — Discourse profile and activity
 - `bodhi` — recent Bodhi updates and comments
 - `bugzilla` — recent Bugzilla activity
 - `distgit` — dist-git activity, PRs filed, and PRs awaiting review
+- `discourse` — Discourse profile and activity
+- `last-seen` — summary of last activity across all services, including
+  Discourse custom status and expiration
 - `mailman` — mailing list posts via HyperKitty
 
 ### Email discovery

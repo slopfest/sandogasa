@@ -20,10 +20,10 @@ hs-relmon check-latest <package> [--distros <list>] [--track <distro>]
     [--repology-name <project>] [--json] [--file-issue [<url>]]
 hs-relmon check-manifest <manifest> [--json]
     [--issue-status <status>] [--issue-assignee <username>]
+hs-relmon config
 hs-relmon list-issues [--group <url>] [--json]
     [--issue-status <status>] [--issue-assignee <username>]
     [--manifest <path>] [--add-missing]
-hs-relmon config
 ```
 
 ### Examples
@@ -147,6 +147,20 @@ $ hs-relmon check-manifest packages.toml --issue-assignee alice
 
 Available issue statuses: `To do`, `In progress`, `Done`, `Canceled`.
 
+### Configuration
+
+Set up GitLab authentication (token stored in
+`~/.config/hs-relmon/config.toml`):
+
+```
+$ hs-relmon config
+Paste a GitLab personal access token with 'api' scope:
+Validating token... valid.
+Saved to /home/user/.config/hs-relmon/config.toml.
+```
+
+The `GITLAB_TOKEN` environment variable overrides the config file token.
+
 ### Listing issues
 
 List all `rfe::new-version` issues under a GitLab group:
@@ -173,20 +187,6 @@ Automatically add missing packages to the manifest (preserves comments):
 ```
 $ hs-relmon list-issues --manifest packages.toml --add-missing
 ```
-
-### Configuration
-
-Set up GitLab authentication (token stored in
-`~/.config/hs-relmon/config.toml`):
-
-```
-$ hs-relmon config
-Paste a GitLab personal access token with 'api' scope:
-Validating token... valid.
-Saved to /home/user/.config/hs-relmon/config.toml.
-```
-
-The `GITLAB_TOKEN` environment variable overrides the config file token.
 
 ## Data sources
 
