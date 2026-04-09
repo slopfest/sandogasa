@@ -48,12 +48,10 @@ pub fn resolve_api_key(cli_key: Option<&str>) -> Result<String, String> {
         return Ok(config.bugzilla.api_key);
     }
 
-    Err(
-        "Bugzilla API key not found.\n\
+    Err("Bugzilla API key not found.\n\
          Set it up with: ebranch config\n\
          Or pass --api-key or set BUGZILLA_API_KEY."
-            .to_string(),
-    )
+        .to_string())
 }
 
 /// Interactive config setup.
@@ -85,16 +83,16 @@ pub async fn cmd_config() -> Result<(), String> {
         println!("Bugzilla API key: (set)");
     }
 
-    // Validate the key.
-    println!("\nValidating API key...");
+    // Validate the key with a minimal search.
+    print!("Validating API key... ");
     let bz = sandogasa_bugzilla::BzClient::new(&config.bugzilla.url)
         .with_api_key(config.bugzilla.api_key.clone());
 
-    // A simple validation: try fetching bug 1 (always exists).
-    match bz.bug(1).await {
-        Ok(_) => println!("API key is valid."),
+    match bz.search("product=Fedora&limit=1", 1).await {
+        Ok(_) => println!("valid."),
         Err(e) => {
-            eprintln!("warning: API key validation failed: {e}");
+            println!("failed.");
+            eprintln!("warning: {e}");
             eprintln!("The key was saved but may not work.");
         }
     }
