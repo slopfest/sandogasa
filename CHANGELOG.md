@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.8.1
+
+### ebranch
+
+- **New: `check-pkg-reviews` subcommand** — find and link Bugzilla
+  package review requests based on the dependency graph from
+  `check-crate --toml`. Caches bug IDs in the TOML file, batch-fetches
+  bugs for speed, and prompts before applying changes
+- **New: `config` subcommand** — interactive Bugzilla API key setup,
+  stored securely at `~/.config/ebranch/config.toml`
+- **New: `--toml` flag for `check-crate`** — save the full analysis
+  (dependencies, edges, build phases) to a TOML file for reuse by
+  `check-pkg-reviews` and other tools
+- **New: `--dot` flag for `check-crate`** — output the dependency graph
+  in Graphviz DOT format with version labels and build-phase grouping
+- check-crate now resolves default Cargo features to find optional deps
+  activated by default (e.g. `lexical-write-integer` via `lexical-core`)
+- check-crate dev deps included by default (`--exclude-dev` to skip),
+  matching Fedora's `%check`-enabled builds
+- check-crate checks all RPM provider versions, finding compat packages
+  (e.g. `rust-rand0.9`). Deps satisfied by compat packages are flagged
+- check-crate resolves transitive dep versions matching the parent's
+  semver requirement instead of always fetching the latest
+- Rename `TooOld` to `Unmet` with full available-versions list
+- Rename `--include-too-old` to `--include-unmet`
+- Transitive deps now carry a `status` field (`missing` vs `unmet`)
+  and a `package` field (RPM source package name)
+
+### sandogasa-config
+
+- Config files are now saved with 600 permissions and directories
+  with 700, protecting API keys similar to SSH key files
+- `load()` automatically fixes permissions on existing config files
+
+### sandogasa-bugzilla
+
+- New `bugs()` method for batch-fetching multiple bugs in one request
+
+### hs-relmon
+
+- Migrate config storage to `sandogasa-config`, gaining automatic
+  secure file permissions for the GitLab access token
+
+### Workspace
+
+- Alphabetize subcommand sections in all tool READMEs to match
+  `--help` output order
+
 ## v0.8.0
 
 ### New: sandogasa-cli library crate

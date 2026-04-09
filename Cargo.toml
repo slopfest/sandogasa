@@ -28,7 +28,7 @@ members = [
 # "slum" or post-apocalyptic robots in popular culture.
 
 [workspace.package]
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 license = "MPL-2.0"
 repository = "https://github.com/slopfest/fedora-cve-triage"
