@@ -317,6 +317,7 @@ dependencies = [
  "rayon",
  "reqwest",
  "sandogasa-bodhi",
+ "sandogasa-bugzilla",
  "sandogasa-cli",
  "sandogasa-depfilter",
  "sandogasa-fedrq",
@@ -324,6 +325,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "toml",
 ]
 
 [[package]]

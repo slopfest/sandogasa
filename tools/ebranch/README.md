@@ -215,6 +215,7 @@ deps. The output includes a phased build order showing which
 - `--include-unmet` — include unmet-version deps in transitive expansion
 - `--exclude CRATE,...` — skip specific crates in transitive expansion
 - `--dot` — output dependency graph in Graphviz DOT format
+- `--toml PATH` — save full analysis to a TOML file for reuse
 - `--verbose` / `-v` — print progress to stderr as packages are resolved
 - `--max-depth N` — limit recursion depth (useful for exploring large
   dependency trees incrementally)
@@ -231,6 +232,30 @@ deps. The output includes a phased build order showing which
 - `--koji` — output build-order as a Koji chain build string
 - `--copr` — generate a Copr batch build shell script
 - `--json` — machine-readable JSON output
+
+### Link Bugzilla review requests
+
+Use `check-pkg-reviews` to find and link Bugzilla package review
+requests based on the dependency graph from `check-crate --toml`:
+
+```sh
+# 1. Run analysis and save to TOML
+ebranch check-crate arrow 57 -b rawhide -t --toml arrow.toml
+
+# 2. Find review bugs and show proposed Depends On changes
+ebranch check-pkg-reviews arrow.toml --dry-run -v
+
+# 3. Apply the changes (requires Bugzilla API key)
+export BUGZILLA_API_KEY=your-key
+ebranch check-pkg-reviews arrow.toml -v
+```
+
+Found bug IDs are cached in the TOML file under `[review_bugs]`,
+so subsequent runs skip the Bugzilla search for already-found bugs.
+
+The tool only links missing packages (not unmet-version deps that
+already exist in the repo). It preserves existing Depends On links
+to bugs outside the dependency set.
 
 ## License
 

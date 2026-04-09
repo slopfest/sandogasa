@@ -61,6 +61,23 @@ impl BzClient {
         Ok(resp.bugs.into_iter().next().unwrap())
     }
 
+    /// Fetch multiple bugs by ID in a single request.
+    pub async fn bugs(&self, ids: &[u64]) -> Result<Vec<Bug>, reqwest::Error> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let id_params: Vec<String> = ids.iter().map(|id| format!("id={id}")).collect();
+        let query = id_params.join("&");
+        let resp: BugSearchResponse = self
+            .request(&format!("bug?{query}"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(resp.bugs)
+    }
+
     /// Search bugs with a query string (e.g. "product=Fedora&component=kernel&status=NEW").
     /// Paginates through all results up to `max_results`. Pass 0 for no limit.
     pub async fn search(&self, query: &str, max_results: u64) -> Result<Vec<Bug>, reqwest::Error> {

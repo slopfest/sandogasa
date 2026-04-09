@@ -69,13 +69,25 @@ pub struct DepResult {
     pub status: DepStatus,
 }
 
-/// A transitively-missing dependency.
+/// A transitively-discovered dependency that needs action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransitiveDep {
     pub name: String,
+    pub package: String,
+    pub status: TransitiveStatus,
     pub version: String,
     pub version_req: String,
     pub pulled_by: String,
+}
+
+/// Why a transitive dependency needs action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitiveStatus {
+    /// Not available in the target repo at all.
+    Missing,
+    /// Available but no version satisfies the requirement.
+    Unmet,
 }
 
 /// Full report for a crate check.
@@ -83,6 +95,7 @@ pub struct TransitiveDep {
 pub struct CheckCrateReport {
     pub crate_name: String,
     pub crate_version: String,
+    pub package: String,
     pub branch: String,
     pub dependencies: Vec<DepResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -91,6 +104,9 @@ pub struct CheckCrateReport {
     pub transitive_build_order: Vec<dag::BuildPhase>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub transitive_edges: DepEdges,
+    /// Package name → Bugzilla review bug ID, populated by check-pkg-reviews.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub review_bugs: BTreeMap<String, u64>,
 }
 
 // ---- Public functions ----
@@ -190,12 +206,14 @@ pub fn check_crate(
 
     Ok(CheckCrateReport {
         crate_name: name.to_string(),
-        crate_version: version,
+        crate_version: version.clone(),
+        package: format!("rust-{name}"),
         branch: opts.branch.clone(),
         dependencies,
         transitive_missing,
         transitive_build_order,
         transitive_edges,
+        review_bugs: BTreeMap::new(),
     })
 }
 
@@ -495,6 +513,9 @@ fn expand_transitive(
 ) -> Result<(Vec<TransitiveDep>, DepEdges), String> {
     let mut visited: HashSet<String> = opts.exclude.clone();
     let mut result: Vec<TransitiveDep> = Vec::new();
+    // Resolved versions: crate name → latest version from crates.io.
+    let mut resolved_versions: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     // All missing crate names (direct + transitive) for edge filtering.
     let mut all_missing: HashSet<String> = HashSet::new();
     // edges[A] = {B, C} means A depends on missing crates B and C.
@@ -508,22 +529,23 @@ fn expand_transitive(
     };
 
     // Seed: direct deps that need (re)building and pass the kind filter.
-    let mut queue: VecDeque<String> = VecDeque::new();
+    // Queue entries: (crate_name, version_req from parent).
+    let mut queue: VecDeque<(String, String)> = VecDeque::new();
     for dr in direct_results {
         let excluded = visited.contains(&dr.dep.name);
         visited.insert(dr.dep.name.clone());
         if !excluded && needs_rebuild(&dr.status) && should_expand(&dr.dep, opts) {
             all_missing.insert(dr.dep.name.clone());
-            queue.push_back(dr.dep.name.clone());
+            queue.push_back((dr.dep.name.clone(), dr.dep.version_req.clone()));
         }
     }
 
-    while let Some(crate_name) = queue.pop_front() {
+    while let Some((crate_name, version_req)) = queue.pop_front() {
         if opts.verbose {
             eprintln!("[check-crate] expanding transitive deps for {crate_name}");
         }
 
-        let version = match rt.block_on(fetch_latest_version(&crate_name)) {
+        let version = match rt.block_on(resolve_matching_version(&crate_name, &version_req)) {
             Ok(v) => v,
             Err(e) => {
                 if opts.verbose {
@@ -532,6 +554,7 @@ fn expand_transitive(
                 continue;
             }
         };
+        resolved_versions.insert(crate_name.clone(), version.clone());
 
         let deps = match rt.block_on(fetch_dependencies(&crate_name, &version)) {
             Ok(d) => d,
@@ -579,14 +602,21 @@ fn expand_transitive(
             }
             visited.insert(dr.dep.name.clone());
 
+            let status = if matches!(dr.status, DepStatus::Missing) {
+                TransitiveStatus::Missing
+            } else {
+                TransitiveStatus::Unmet
+            };
             all_missing.insert(dr.dep.name.clone());
             result.push(TransitiveDep {
                 name: dr.dep.name.clone(),
-                version: version.clone(),
+                package: format!("rust-{}", dr.dep.name),
+                status,
+                version: String::new(),
                 version_req: dr.dep.version_req.clone(),
                 pulled_by: crate_name.clone(),
             });
-            queue.push_back(dr.dep.name.clone());
+            queue.push_back((dr.dep.name.clone(), dr.dep.version_req.clone()));
         }
 
         pending_edges.push((crate_name, rebuild_deps_of_crate));
@@ -603,6 +633,13 @@ fn expand_transitive(
     // Ensure all missing crates have an entry (even if no missing deps).
     for name in &all_missing {
         edges.entry(name.clone()).or_default();
+    }
+
+    // Fill in resolved versions for transitive deps.
+    for dep in &mut result {
+        if let Some(ver) = resolved_versions.get(&dep.name) {
+            dep.version = ver.clone();
+        }
     }
 
     if opts.verbose && !result.is_empty() {
@@ -806,6 +843,38 @@ async fn fetch_features(
         .map_err(|e| format!("failed to parse version info: {e}"))?;
 
     Ok(resp.version.features)
+}
+
+/// Find the highest version of a crate matching a semver requirement.
+///
+/// Falls back to the latest version if the requirement can't be parsed.
+async fn resolve_matching_version(name: &str, version_req: &str) -> Result<String, String> {
+    let versions = fetch_versions(name).await?;
+
+    if let Ok(req) = semver::VersionReq::parse(version_req) {
+        let matched = versions
+            .iter()
+            .filter_map(|v| {
+                let parsed = semver::Version::parse(v).ok()?;
+                if req.matches(&parsed) {
+                    Some((v.clone(), parsed))
+                } else {
+                    None
+                }
+            })
+            .max_by(|(_, a), (_, b)| a.cmp(b))
+            .map(|(v, _)| v);
+
+        if let Some(v) = matched {
+            return Ok(v);
+        }
+    }
+
+    // Fallback: latest non-yanked version.
+    versions
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("no versions found for {name}"))
 }
 
 /// Fetch the dependency list for a specific crate version.
@@ -1117,6 +1186,7 @@ mod tests {
         let report = CheckCrateReport {
             crate_name: "test-crate".to_string(),
             crate_version: "1.0.0".to_string(),
+            package: "rust-test-crate".to_string(),
             branch: "rawhide".to_string(),
             dependencies: vec![
                 DepResult {
@@ -1155,6 +1225,8 @@ mod tests {
             ],
             transitive_missing: vec![TransitiveDep {
                 name: "transitive-dep".to_string(),
+                package: "rust-transitive-dep".to_string(),
+                status: TransitiveStatus::Missing,
                 version: "0.3.0".to_string(),
                 version_req: "^0.3".to_string(),
                 pulled_by: "missing-dep".to_string(),
@@ -1170,6 +1242,7 @@ mod tests {
                 ),
                 ("transitive-dep".to_string(), BTreeSet::new()),
             ]),
+            review_bugs: BTreeMap::new(),
         };
 
         // Serialize via JSON intermediate to TOML string.

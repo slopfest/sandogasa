@@ -8,6 +8,7 @@ mod check_crate;
 mod check_update;
 mod dag;
 mod resolve;
+mod review_deps;
 
 use resolve::{
     FedrqResolver, ResolveOptions, resolve_closure_with_options, resolve_with_installability,
@@ -244,6 +245,30 @@ enum Command {
     FindCycles(ResolveArgs),
     /// Resolve the full dependency closure for porting.
     Resolve(ResolveArgs),
+    /// Find and link Bugzilla package review requests.
+    CheckPkgReviews(CheckPkgReviewsArgs),
+}
+
+#[derive(clap::Args, Clone)]
+struct CheckPkgReviewsArgs {
+    /// Path to TOML analysis file from check-crate --toml.
+    toml: String,
+
+    /// Bugzilla base URL.
+    #[arg(long, default_value = "https://bugzilla.redhat.com")]
+    bugzilla_url: String,
+
+    /// Bugzilla API key (or set BUGZILLA_API_KEY env var).
+    #[arg(long, env = "BUGZILLA_API_KEY")]
+    api_key: Option<String>,
+
+    /// Show changes without applying them.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 enum Mode {
@@ -255,7 +280,35 @@ enum Mode {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // All subcommands need fedrq.
+    // review-deps only needs Bugzilla, not fedrq.
+    if let Command::CheckPkgReviews(a) = &cli.command {
+        let api_key = match &a.api_key {
+            Some(k) => k.clone(),
+            None => {
+                eprintln!(
+                    "error: Bugzilla API key required. \
+                     Pass --api-key or set BUGZILLA_API_KEY."
+                );
+                return ExitCode::FAILURE;
+            }
+        };
+        let opts = review_deps::CheckPkgReviewsOptions {
+            toml_path: a.toml.clone(),
+            bugzilla_url: a.bugzilla_url.clone(),
+            api_key,
+            dry_run: a.dry_run,
+            verbose: a.verbose,
+        };
+        return match review_deps::check_pkg_reviews(&opts) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    // All other subcommands need fedrq.
     if let Err(e) = sandogasa_cli::require_tool("fedrq", "sudo dnf install fedrq") {
         eprintln!("error: {e}");
         return ExitCode::FAILURE;
@@ -349,6 +402,7 @@ fn main() -> ExitCode {
         Command::CheckUpdate(_) => unreachable!(),
         Command::FindCycles(a) => (a, Mode::FindCycles),
         Command::Resolve(a) => (a, Mode::Resolve),
+        Command::CheckPkgReviews(_) => unreachable!(),
     };
 
     if args.source.is_none() && args.source_repo.is_none() {
