@@ -37,6 +37,10 @@ impl ConfigFile {
     }
 
     /// Load and deserialize the config file.
+    ///
+    /// Also fixes permissions on the file and its parent directory
+    /// if they are too open (e.g. configs created before the
+    /// permission hardening was added).
     pub fn load<T: DeserializeOwned>(&self) -> Result<T, Box<dyn std::error::Error>> {
         let contents = std::fs::read_to_string(&self.path).map_err(|e| {
             format!(
@@ -44,6 +48,12 @@ impl ConfigFile {
                 self.path.display()
             )
         })?;
+        // Best-effort permission fix — don't fail the load if it
+        // doesn't work (e.g. file owned by another user).
+        let _ = set_file_permissions(&self.path);
+        if let Some(parent) = self.path.parent() {
+            let _ = set_dir_permissions(parent);
+        }
         let config: T = toml::from_str(&contents)?;
         Ok(config)
     }
@@ -122,18 +132,34 @@ pub fn validate_email(value: &str) -> Result<(), String> {
 }
 
 /// Set directory permissions to 700 (owner-only access).
+/// Logs to stderr if permissions are changed.
 fn set_dir_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::fs::PermissionsExt;
-    let perms = std::fs::Permissions::from_mode(0o700);
-    std::fs::set_permissions(path, perms)?;
+    let current = std::fs::metadata(path)?.permissions().mode() & 0o777;
+    if current != 0o700 {
+        eprintln!(
+            "Fixing directory permissions on {}: {:03o} -> 700",
+            path.display(),
+            current
+        );
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
     Ok(())
 }
 
 /// Set file permissions to 600 (owner read/write only).
+/// Logs to stderr if permissions are changed.
 fn set_file_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::fs::PermissionsExt;
-    let perms = std::fs::Permissions::from_mode(0o600);
-    std::fs::set_permissions(path, perms)?;
+    let current = std::fs::metadata(path)?.permissions().mode() & 0o777;
+    if current != 0o600 {
+        eprintln!(
+            "Fixing file permissions on {}: {:03o} -> 600",
+            path.display(),
+            current
+        );
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
     Ok(())
 }
 
