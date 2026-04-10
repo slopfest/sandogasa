@@ -16,6 +16,10 @@ pub struct BodhiReport {
     pub total_updates: usize,
     /// Total builds across all updates.
     pub total_builds: usize,
+    /// State summary.
+    pub submitted: usize,
+    pub pushed_to_testing: usize,
+    pub pushed_to_stable: usize,
     /// Per-release breakdown: release name → list of updates.
     pub by_release: BTreeMap<String, Vec<UpdateEntry>>,
 }
@@ -27,6 +31,8 @@ pub struct UpdateEntry {
     pub status: String,
     pub builds: Vec<String>,
     pub date_submitted: Option<String>,
+    pub date_testing: Option<String>,
+    pub date_stable: Option<String>,
 }
 
 /// Parse a Bodhi date string like "2026-02-25 11:55:26" into a NaiveDate.
@@ -64,31 +70,45 @@ pub async fn bodhi_report(
         eprintln!("[bodhi] fetching updates for {username}");
     }
 
-    // Fetch a large batch — Bodhi returns most recent first.
-    // We stop when we see updates older than our period.
+    // Fetch a large batch — Bodhi returns most recent first by
+    // date_submitted. We stop when submissions are older than our
+    // period, but also include updates submitted earlier that had
+    // a state change (testing/stable) during the period.
     let updates = client
         .updates_for_user(username, 500)
         .await
         .map_err(|e| format!("Bodhi query failed: {e}"))?;
 
+    let in_period = |date_str: Option<&str>| -> bool {
+        date_str
+            .and_then(parse_bodhi_date)
+            .is_some_and(|d| d >= since && d <= until)
+    };
+
     let mut by_release: BTreeMap<String, Vec<UpdateEntry>> = BTreeMap::new();
     let mut total_updates = 0;
     let mut total_builds = 0;
+    let mut submitted = 0;
+    let mut pushed_to_testing = 0;
+    let mut pushed_to_stable = 0;
 
     for update in &updates {
-        // Filter by date.
-        let date = update.date_submitted.as_deref().and_then(parse_bodhi_date);
+        let submitted_date = update.date_submitted.as_deref().and_then(parse_bodhi_date);
 
-        if let Some(d) = date {
-            if d < since {
-                // Updates are sorted most recent first — we're past
-                // the period, stop.
-                break;
+        // An update is relevant if any event happened in the period.
+        let was_submitted = in_period(update.date_submitted.as_deref());
+        let was_tested = in_period(update.date_testing.as_deref());
+        let was_stabled = in_period(update.date_stable.as_deref());
+
+        if !was_submitted && !was_tested && !was_stabled {
+            // If the submission is before our period and no state
+            // changes happened in the period, skip. If submission
+            // is after, keep scanning (Bodhi sorts by submitted).
+            if let Some(d) = submitted_date {
+                if d < since {
+                    break;
+                }
             }
-            if d > until {
-                continue;
-            }
-        } else {
             continue;
         }
 
@@ -103,11 +123,23 @@ pub async fn bodhi_report(
             continue;
         }
 
+        if was_submitted {
+            submitted += 1;
+        }
+        if was_tested {
+            pushed_to_testing += 1;
+        }
+        if was_stabled {
+            pushed_to_stable += 1;
+        }
+
         let entry = UpdateEntry {
             alias: update.alias.clone(),
             status: update.status.clone(),
             builds: update.builds.iter().map(|b| b.nvr.clone()).collect(),
             date_submitted: update.date_submitted.clone(),
+            date_testing: update.date_testing.clone(),
+            date_stable: update.date_stable.clone(),
         };
 
         total_builds += entry.builds.len();
@@ -116,12 +148,19 @@ pub async fn bodhi_report(
     }
 
     if verbose {
-        eprintln!("[bodhi] {total_updates} update(s), {total_builds} build(s)");
+        eprintln!(
+            "[bodhi] {total_updates} update(s), {total_builds} build(s) \
+             ({submitted} submitted, {pushed_to_testing} tested, \
+             {pushed_to_stable} stable)"
+        );
     }
 
     Ok(BodhiReport {
         total_updates,
         total_builds,
+        submitted,
+        pushed_to_testing,
+        pushed_to_stable,
         by_release,
     })
 }
@@ -160,6 +199,11 @@ pub fn format_markdown(report: &BodhiReport, detailed: bool) -> String {
         report.total_updates,
         report.total_builds,
         report.by_release.len()
+    ));
+
+    out.push_str(&format!(
+        "- **{}** submitted, **{}** pushed to testing, **{}** pushed to stable\n\n",
+        report.submitted, report.pushed_to_testing, report.pushed_to_stable
     ));
 
     let releases = sorted_releases(&report.by_release);

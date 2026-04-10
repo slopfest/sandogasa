@@ -24,6 +24,10 @@ pub struct Update {
     pub release: Option<Release>,
     #[serde(default)]
     pub date_submitted: Option<String>,
+    #[serde(default)]
+    pub date_testing: Option<String>,
+    #[serde(default)]
+    pub date_stable: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
