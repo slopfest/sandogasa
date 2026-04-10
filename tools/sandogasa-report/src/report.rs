@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::Serialize;
 
-use crate::{bugzilla, koji};
+use crate::{bodhi, bugzilla, koji};
 
 /// Full activity report.
 #[derive(Debug, Serialize)]
@@ -23,10 +23,12 @@ pub struct Report {
     /// Bugzilla section (if applicable).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bugzilla: Option<bugzilla::BugzillaReport>,
+    /// Bodhi section (if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bodhi: Option<bodhi::BodhiReport>,
     /// Koji CBS section (if applicable).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub koji: Option<koji::KojiReport>,
-    // TODO: pub bodhi: Option<BodhiSection>,
 }
 
 /// Format the full report as Markdown.
@@ -52,12 +54,15 @@ pub fn format_markdown(
         out.push_str(&bugzilla::format_markdown(bz_report, detailed));
     }
 
+    // Bodhi section.
+    if let Some(ref bodhi_report) = report.bodhi {
+        out.push_str(&bodhi::format_markdown(bodhi_report, detailed));
+    }
+
     // Koji section.
     if let Some(ref koji_report) = report.koji {
         out.push_str(&koji::format_markdown(koji_report, detailed, groups, None));
     }
-
-    // TODO: Bodhi section
 
     out
 }

@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use chrono::NaiveDate;
 use clap::Parser;
 
+mod bodhi;
 mod brace;
 mod bugzilla;
 mod config;
@@ -44,6 +45,18 @@ struct Cli {
     /// Reporting period (e.g. 2026Q1, 2026H1).
     #[arg(long, group = "date_range")]
     period: Option<String>,
+
+    /// Skip Bugzilla queries.
+    #[arg(long)]
+    no_bugzilla: bool,
+
+    /// Skip Bodhi queries.
+    #[arg(long)]
+    no_bodhi: bool,
+
+    /// Skip Koji queries.
+    #[arg(long)]
+    no_koji: bool,
 
     /// Include per-item details, not just counts.
     #[arg(long)]
@@ -193,16 +206,18 @@ fn main() -> ExitCode {
         since,
         until,
         bugzilla: None,
+        bodhi: None,
         koji: None,
     };
 
     // Collect across all domains.
     let mut needs_bugzilla = false;
+    let mut bodhi_domains: Vec<(&str, &config::DomainConfig)> = Vec::new();
     let mut all_koji_domains = Vec::new();
     let mut fedora_versions: Vec<u32> = Vec::new();
 
-    for (_, domain) in &domains {
-        if domain.bugzilla {
+    for (name, domain) in &domains {
+        if domain.bugzilla && !cli.no_bugzilla {
             needs_bugzilla = true;
             for &v in &domain.fedora_versions {
                 if !fedora_versions.contains(&v) {
@@ -210,7 +225,10 @@ fn main() -> ExitCode {
                 }
             }
         }
-        if !domain.koji_tags.is_empty() {
+        if domain.bodhi && !cli.no_bodhi {
+            bodhi_domains.push((name, domain));
+        }
+        if !domain.koji_tags.is_empty() && !cli.no_koji {
             all_koji_domains.push(*domain);
         }
     }
@@ -277,9 +295,39 @@ fn main() -> ExitCode {
         }
     }
 
-    // TODO: Bodhi reporting (domain.bodhi)
+    // Bodhi reporting.
+    if !bodhi_domains.is_empty() {
+        if let Some(ref user) = cli.user {
+            for (_, domain) in &bodhi_domains {
+                match rt.block_on(bodhi::bodhi_report(user, domain, since, until, cli.verbose)) {
+                    Ok(bodhi_report) => {
+                        if let Some(ref mut existing) = unified.bodhi {
+                            // Merge: add updates from additional domains.
+                            existing.total_updates += bodhi_report.total_updates;
+                            existing.total_builds += bodhi_report.total_builds;
+                            for (release, updates) in bodhi_report.by_release {
+                                existing
+                                    .by_release
+                                    .entry(release)
+                                    .or_default()
+                                    .extend(updates);
+                            }
+                        } else {
+                            unified.bodhi = Some(bodhi_report);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("error: bodhi: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+        } else {
+            eprintln!("warning: --user required for Bodhi reporting, skipping");
+        }
+    }
 
-    if unified.bugzilla.is_none() && unified.koji.is_none() {
+    if unified.bugzilla.is_none() && unified.bodhi.is_none() && unified.koji.is_none() {
         eprintln!("No data sources configured for the selected domain(s).");
         return ExitCode::FAILURE;
     }
