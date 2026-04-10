@@ -71,16 +71,43 @@ fn distro_from_tag(tag: &str) -> String {
 }
 
 /// Query a tag snapshot: package name → (version, distro, owner).
+/// Snapshot type: package name → distro → (version, release, owner).
+type TagSnapshot = BTreeMap<String, BTreeMap<String, (String, String, String)>>;
+
+/// Merge builds from a single tag into a snapshot.
+fn merge_builds_into_snapshot(
+    snapshot: &mut TagSnapshot,
+    builds: &[sandogasa_koji::TaggedBuild],
+    distro: &str,
+) {
+    for b in builds {
+        let Some((name, version, release)) = sandogasa_koji::parse_nvr(&b.nvr) else {
+            continue;
+        };
+        let distro_map = snapshot.entry(name.to_string()).or_default();
+        distro_map
+            .entry(distro.to_string())
+            .and_modify(|(old_ver, old_rel, old_owner)| {
+                if version > old_ver.as_str()
+                    || (version == old_ver.as_str() && release > old_rel.as_str())
+                {
+                    *old_ver = version.to_string();
+                    *old_rel = release.to_string();
+                    *old_owner = b.owner.clone();
+                }
+            })
+            .or_insert((version.to_string(), release.to_string(), b.owner.clone()));
+    }
+}
+
 fn query_tag_snapshot(
     tags: &[String],
     profile: Option<&str>,
     timestamp: Option<i64>,
     user: Option<&str>,
     verbose: bool,
-) -> BTreeMap<String, BTreeMap<String, (String, String, String)>> {
-    // package name → distro → (version, release, owner)
-    let mut packages: BTreeMap<String, BTreeMap<String, (String, String, String)>> =
-        BTreeMap::new();
+) -> TagSnapshot {
+    let mut packages: TagSnapshot = BTreeMap::new();
 
     for tag in tags {
         if verbose {
@@ -105,27 +132,7 @@ fn query_tag_snapshot(
         }
 
         let distro = distro_from_tag(tag);
-
-        for b in &builds {
-            let Some((name, version, release)) = sandogasa_koji::parse_nvr(&b.nvr) else {
-                continue;
-            };
-            let distro_map = packages.entry(name.to_string()).or_default();
-            // Keep the newest version if the same package appears in
-            // multiple tags for the same distro.
-            distro_map
-                .entry(distro.clone())
-                .and_modify(|(old_ver, old_rel, old_owner)| {
-                    if version > old_ver.as_str()
-                        || (version == old_ver.as_str() && release > old_rel.as_str())
-                    {
-                        *old_ver = version.to_string();
-                        *old_rel = release.to_string();
-                        *old_owner = b.owner.clone();
-                    }
-                })
-                .or_insert((version.to_string(), release.to_string(), b.owner.clone()));
-        }
+        merge_builds_into_snapshot(&mut packages, &builds, &distro);
     }
 
     packages
@@ -167,13 +174,17 @@ pub fn koji_report(
     let before = query_tag_snapshot(&tags, profile, Some(start_ts), user, verbose);
     let after = query_tag_snapshot(&tags, profile, Some(end_ts), user, verbose);
 
-    // Diff: find new and updated packages.
+    let packages = diff_snapshots(&before, &after);
+    Ok(KojiReport { packages })
+}
+
+/// Diff two tag snapshots to find new and updated packages.
+fn diff_snapshots(before: &TagSnapshot, after: &TagSnapshot) -> BTreeMap<String, PackageEntry> {
     let mut packages: BTreeMap<String, PackageEntry> = BTreeMap::new();
 
-    for (name, after_versions) in &after {
+    for (name, after_versions) in after {
         let before_versions = before.get(name);
 
-        // Build the version map for the report entry.
         let mut versions = BTreeMap::new();
         let mut any_change = false;
         let mut is_new = before_versions.is_none();
@@ -182,10 +193,7 @@ pub fn koji_report(
             let changed = match before_versions.and_then(|bv| bv.get(distro)) {
                 Some((old_ver, _, _)) => old_ver != version,
                 None => {
-                    // This distro wasn't present before.
                     if before_versions.is_some() {
-                        // Package existed in other distros — this is
-                        // a new distro build, treat as update.
                         true
                     } else {
                         is_new = true;
@@ -232,7 +240,7 @@ pub fn koji_report(
         );
     }
 
-    Ok(KojiReport { packages })
+    packages
 }
 
 /// Prettify a group key: replace hyphens with spaces, capitalize
@@ -740,5 +748,132 @@ mod tests {
         let report = KojiReport { packages };
         let md = format_markdown(&report, true, &BTreeMap::new(), None);
         assert!(md.contains("**mesa** 24.3 (el10), 24.0 (el9) added"));
+    }
+
+    #[test]
+    fn merge_builds_keeps_newest() {
+        let mut snapshot = TagSnapshot::new();
+        let builds = vec![
+            sandogasa_koji::TaggedBuild {
+                nvr: "foo-1.0-1.hs.el10".to_string(),
+                tag: "tag1".to_string(),
+                owner: "user1".to_string(),
+            },
+            sandogasa_koji::TaggedBuild {
+                nvr: "foo-2.0-1.hs.el10".to_string(),
+                tag: "tag2".to_string(),
+                owner: "user2".to_string(),
+            },
+        ];
+        merge_builds_into_snapshot(&mut snapshot, &builds, "el10");
+        let (ver, _, owner) = &snapshot["foo"]["el10"];
+        assert_eq!(ver, "2.0");
+        assert_eq!(owner, "user2");
+    }
+
+    #[test]
+    fn merge_builds_multiple_distros() {
+        let mut snapshot = TagSnapshot::new();
+        let el9 = vec![sandogasa_koji::TaggedBuild {
+            nvr: "foo-1.0-1.el9".to_string(),
+            tag: "tag9".to_string(),
+            owner: "user".to_string(),
+        }];
+        let el10 = vec![sandogasa_koji::TaggedBuild {
+            nvr: "foo-2.0-1.el10".to_string(),
+            tag: "tag10".to_string(),
+            owner: "user".to_string(),
+        }];
+        merge_builds_into_snapshot(&mut snapshot, &el9, "el9");
+        merge_builds_into_snapshot(&mut snapshot, &el10, "el10");
+        assert_eq!(snapshot["foo"]["el9"].0, "1.0");
+        assert_eq!(snapshot["foo"]["el10"].0, "2.0");
+    }
+
+    #[test]
+    fn diff_detects_new_package() {
+        let before = TagSnapshot::new();
+        let mut after = TagSnapshot::new();
+        after.insert(
+            "foo".to_string(),
+            BTreeMap::from([(
+                "el10".to_string(),
+                ("1.0".to_string(), "1.el10".to_string(), "user".to_string()),
+            )]),
+        );
+        let result = diff_snapshots(&before, &after);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result["foo"].change, ChangeKind::New);
+    }
+
+    #[test]
+    fn diff_detects_updated_package() {
+        let mut before = TagSnapshot::new();
+        before.insert(
+            "foo".to_string(),
+            BTreeMap::from([(
+                "el10".to_string(),
+                ("1.0".to_string(), "1.el10".to_string(), "user".to_string()),
+            )]),
+        );
+        let mut after = TagSnapshot::new();
+        after.insert(
+            "foo".to_string(),
+            BTreeMap::from([(
+                "el10".to_string(),
+                ("2.0".to_string(), "1.el10".to_string(), "user".to_string()),
+            )]),
+        );
+        let result = diff_snapshots(&before, &after);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result["foo"].change, ChangeKind::Updated);
+        assert_eq!(result["foo"].versions["el10"].version, "2.0");
+    }
+
+    #[test]
+    fn diff_ignores_unchanged() {
+        let mut before = TagSnapshot::new();
+        before.insert(
+            "foo".to_string(),
+            BTreeMap::from([(
+                "el10".to_string(),
+                ("1.0".to_string(), "1.el10".to_string(), "user".to_string()),
+            )]),
+        );
+        let result = diff_snapshots(&before, &before);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn diff_new_distro_is_update() {
+        let mut before = TagSnapshot::new();
+        before.insert(
+            "foo".to_string(),
+            BTreeMap::from([(
+                "el9".to_string(),
+                ("1.0".to_string(), "1.el9".to_string(), "user".to_string()),
+            )]),
+        );
+        let mut after = TagSnapshot::new();
+        after.insert(
+            "foo".to_string(),
+            BTreeMap::from([
+                (
+                    "el9".to_string(),
+                    ("1.0".to_string(), "1.el9".to_string(), "user".to_string()),
+                ),
+                (
+                    "el10".to_string(),
+                    ("1.0".to_string(), "1.el10".to_string(), "user".to_string()),
+                ),
+            ]),
+        );
+        let result = diff_snapshots(&before, &after);
+        assert_eq!(result.len(), 1);
+        // Existing in el9 (unchanged) but new in el10 → update, not new.
+        assert_eq!(result["foo"].change, ChangeKind::Updated);
+        // Only the changed distro appears in versions.
+        assert!(result["foo"].versions.contains_key("el10"));
+        assert!(!result["foo"].versions.contains_key("el9"));
     }
 }
