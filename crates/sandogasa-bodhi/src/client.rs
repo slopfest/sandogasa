@@ -279,7 +279,7 @@ mod tests {
                 "update": {
                     "alias": "FEDORA-EPEL-2026-abc123",
                     "status": "testing",
-                    "from_side_tag": "epel9-build-side-133287",
+                    "from_tag": "epel9-build-side-133287",
                     "builds": [
                         {"nvr": "rust-uucore-0.0.28-2.el9"}
                     ],
@@ -296,10 +296,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(update.alias, "FEDORA-EPEL-2026-abc123");
-        assert_eq!(
-            update.from_side_tag.as_deref(),
-            Some("epel9-build-side-133287")
-        );
+        assert_eq!(update.from_tag.as_deref(), Some("epel9-build-side-133287"));
         assert_eq!(update.builds.len(), 1);
         assert_eq!(update.builds[0].nvr, "rust-uucore-0.0.28-2.el9");
     }
@@ -329,7 +326,7 @@ mod tests {
 
         let update = client.update_by_alias("FEDORA-2026-xyz").await.unwrap();
         assert_eq!(update.alias, "FEDORA-2026-xyz");
-        assert!(update.from_side_tag.is_none());
+        assert!(update.from_tag.is_none());
         assert_eq!(update.builds.len(), 2);
     }
 

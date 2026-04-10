@@ -507,8 +507,9 @@ fn fetch_bodhi_update(alias: &str) -> Result<BodhiUpdateInfo, String> {
     let release_name = update.release.as_ref().map(|r| r.name.clone());
     let release_branch = update.release.as_ref().and_then(|r| r.branch.clone());
     let nvrs: Vec<String> = update.builds.iter().map(|b| b.nvr.clone()).collect();
+    let side_tag = update.from_tag.filter(|t| t.contains("-side-"));
     Ok(BodhiUpdateInfo {
-        side_tag: update.from_side_tag,
+        side_tag,
         nvrs,
         release_name,
         release_branch,
