@@ -308,4 +308,77 @@ mod tests {
             vec!["F45", "F42", "EPEL-10.3", "EPEL-10.1", "EPEL-9"]
         );
     }
+
+    fn make_report() -> BodhiReport {
+        let mut by_release = BTreeMap::new();
+        by_release.insert(
+            "F45".to_string(),
+            vec![
+                UpdateEntry {
+                    alias: "FEDORA-2026-abc123".to_string(),
+                    status: "stable".to_string(),
+                    builds: vec!["foo-1.0-1.fc45".to_string()],
+                    date_submitted: Some("2026-01-15 10:00:00".to_string()),
+                    date_testing: Some("2026-01-15 12:00:00".to_string()),
+                    date_stable: Some("2026-01-16 10:00:00".to_string()),
+                },
+                UpdateEntry {
+                    alias: "FEDORA-2026-def456".to_string(),
+                    status: "testing".to_string(),
+                    builds: vec![
+                        "bar-2.0-1.fc45".to_string(),
+                        "bar-extra-2.0-1.fc45".to_string(),
+                    ],
+                    date_submitted: Some("2026-02-01 09:00:00".to_string()),
+                    date_testing: Some("2026-02-01 11:00:00".to_string()),
+                    date_stable: None,
+                },
+            ],
+        );
+        by_release.insert(
+            "EPEL-9".to_string(),
+            vec![UpdateEntry {
+                alias: "FEDORA-EPEL-2026-ghi789".to_string(),
+                status: "stable".to_string(),
+                builds: vec!["baz-3.0-1.el9".to_string()],
+                date_submitted: Some("2026-01-20 08:00:00".to_string()),
+                date_testing: None,
+                date_stable: Some("2026-01-21 08:00:00".to_string()),
+            }],
+        );
+        BodhiReport {
+            total_updates: 3,
+            total_builds: 4,
+            submitted: 3,
+            pushed_to_testing: 2,
+            pushed_to_stable: 2,
+            by_release,
+        }
+    }
+
+    #[test]
+    fn format_summary() {
+        let report = make_report();
+        let md = format_markdown(&report, false);
+        assert!(md.contains("**3** update(s)"));
+        assert!(md.contains("**4** build(s)"));
+        assert!(md.contains("**3** submitted"));
+        assert!(md.contains("**2** pushed to stable"));
+        // Newest first.
+        let f45_pos = md.find("**F45**").unwrap();
+        let epel9_pos = md.find("**EPEL-9**").unwrap();
+        assert!(f45_pos < epel9_pos);
+    }
+
+    #[test]
+    fn format_detailed() {
+        let report = make_report();
+        let md = format_markdown(&report, true);
+        assert!(md.contains("### F45"));
+        assert!(md.contains("FEDORA-2026-abc123"));
+        assert!(md.contains("foo-1.0-1.fc45"));
+        assert!(md.contains("bar-2.0-1.fc45"));
+        assert!(md.contains("### EPEL-9"));
+        assert!(md.contains("FEDORA-EPEL-2026-ghi789"));
+    }
 }

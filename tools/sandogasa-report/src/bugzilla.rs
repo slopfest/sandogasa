@@ -755,4 +755,77 @@ mod tests {
         assert!(md.contains("**1** review request(s) submitted"));
         assert!(md.contains("## Bugzilla"));
     }
+
+    #[test]
+    fn format_detailed_shows_sections() {
+        let report = BugzillaReport {
+            reviews: ReviewSection {
+                submitted: vec![BugEntry {
+                    id: 100,
+                    summary: "Review Request: rust-foo - Foo library".to_string(),
+                    status: "CLOSED".to_string(),
+                    resolution: "NEXTRELEASE".to_string(),
+                    component: "Package Review".to_string(),
+                }],
+                completed: vec![BugEntry {
+                    id: 100,
+                    summary: "Review Request: rust-foo - Foo library".to_string(),
+                    status: "CLOSED".to_string(),
+                    resolution: "NEXTRELEASE".to_string(),
+                    component: "Package Review".to_string(),
+                }],
+                done_for_others: vec![],
+                done_completed: vec![],
+            },
+            security: BugCategory {
+                filed: vec![],
+                closed: vec![BugEntry {
+                    id: 200,
+                    summary: "CVE-2026-1234 foo: overflow".to_string(),
+                    status: "CLOSED".to_string(),
+                    resolution: "ERRATA".to_string(),
+                    component: "foo".to_string(),
+                }],
+            },
+            updates: BugCategory::default(),
+            branches: BugCategory::default(),
+            ftbfs: BugCategory {
+                filed: vec![],
+                closed: vec![BugEntry {
+                    id: 300,
+                    summary: "bar: FTBFS in F45".to_string(),
+                    status: "CLOSED".to_string(),
+                    resolution: "RAWHIDE".to_string(),
+                    component: "bar".to_string(),
+                }],
+            },
+            fti: BugCategory::default(),
+            other: BugCategory::default(),
+        };
+        let md = format_markdown(&report, true);
+        assert!(md.contains("(1 completed)"));
+        assert!(md.contains("Completed"));
+        assert!(md.contains("#### Review requests submitted"));
+        assert!(md.contains("### Security / CVE"));
+        assert!(md.contains("CVE-2026-1234"));
+        assert!(md.contains("### FTBFS"));
+        assert!(md.contains("| Security / CVE | 0 | 1 |"));
+        assert!(md.contains("| FTBFS | 0 | 1 |"));
+    }
+
+    #[test]
+    fn format_table_only_shows_nonempty() {
+        let report = BugzillaReport {
+            reviews: ReviewSection::default(),
+            security: BugCategory::default(),
+            updates: BugCategory::default(),
+            branches: BugCategory::default(),
+            ftbfs: BugCategory::default(),
+            fti: BugCategory::default(),
+            other: BugCategory::default(),
+        };
+        let md = format_markdown(&report, false);
+        // No table if all categories are empty.
+        assert!(!md.contains("| Category |"));
+    }
 }
