@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use chrono::NaiveDate;
 use clap::Parser;
 
+mod brace;
 mod config;
 
 #[derive(Parser)]
