@@ -80,3 +80,43 @@ pub fn load_config(path: Option<&str>) -> Result<ReportConfig, String> {
     cf.load::<ReportConfig>()
         .map_err(|e| format!("failed to load config from {}: {e}", cf.path().display()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_config_no_file_returns_default() {
+        let cfg = load_config(None).unwrap();
+        assert!(cfg.domains.is_empty());
+        assert!(cfg.users.is_empty());
+        assert!(cfg.groups.is_empty());
+    }
+
+    #[test]
+    fn load_config_explicit_missing_errors() {
+        let result = load_config(Some("/tmp/nonexistent-sandogasa-report-test.toml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_config_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[domains.test]
+bugzilla = true
+
+[groups.mygroup]
+packages = ["pkg1", "pkg2"]
+"#,
+        )
+        .unwrap();
+        let cfg = load_config(Some(path.to_str().unwrap())).unwrap();
+        assert!(cfg.domains.contains_key("test"));
+        assert!(cfg.domains["test"].bugzilla);
+        assert_eq!(cfg.groups["mygroup"].packages, vec!["pkg1", "pkg2"]);
+    }
+}

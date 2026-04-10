@@ -66,3 +66,42 @@ pub fn format_markdown(
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    #[test]
+    fn format_header() {
+        let report = Report {
+            user: Some("testuser".to_string()),
+            domain: "fedora".to_string(),
+            since: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            until: NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            bugzilla: None,
+            bodhi: None,
+            koji: None,
+        };
+        let md = format_markdown(&report, false, &BTreeMap::new());
+        assert!(md.contains("# Activity Report: fedora"));
+        assert!(md.contains("**User:** testuser"));
+        assert!(md.contains("**Period:** 2026-01-01 to 2026-03-31"));
+    }
+
+    #[test]
+    fn format_empty_report() {
+        let report = Report {
+            user: None,
+            domain: "test".to_string(),
+            since: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            until: NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            bugzilla: None,
+            bodhi: None,
+            koji: None,
+        };
+        let md = format_markdown(&report, false, &BTreeMap::new());
+        assert!(md.contains("# Activity Report: test"));
+        assert!(!md.contains("**User:**"));
+    }
+}

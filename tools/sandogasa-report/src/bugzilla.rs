@@ -613,3 +613,146 @@ pub fn format_markdown(report: &BugzillaReport, detailed: bool) -> String {
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_bug(
+        summary: &str,
+        component: &str,
+        keywords: &[&str],
+        blocks: &[u64],
+    ) -> sandogasa_bugzilla::models::Bug {
+        sandogasa_bugzilla::models::Bug {
+            id: 1,
+            summary: summary.to_string(),
+            status: "NEW".to_string(),
+            resolution: String::new(),
+            product: "Fedora".to_string(),
+            component: vec![component.to_string()],
+            severity: String::new(),
+            priority: String::new(),
+            assigned_to: String::new(),
+            creator: String::new(),
+            creation_time: chrono::Utc::now(),
+            last_change_time: chrono::Utc::now(),
+            keywords: keywords.iter().map(|s| s.to_string()).collect(),
+            alias: vec![],
+            depends_on: vec![],
+            blocks: blocks.to_vec(),
+            see_also: vec![],
+            cc: vec![],
+            flags: vec![],
+            version: vec![],
+            cf_fixed_in: String::new(),
+        }
+    }
+
+    #[test]
+    fn classify_review() {
+        let trackers = TrackerIds {
+            ftbfs: HashSet::new(),
+            fti: HashSet::new(),
+        };
+        let bug = make_bug("Review Request: rust-foo", "Package Review", &[], &[]);
+        assert_eq!(classify(&bug, &trackers), BugKind::Review);
+    }
+
+    #[test]
+    fn classify_security_by_summary() {
+        let trackers = TrackerIds {
+            ftbfs: HashSet::new(),
+            fti: HashSet::new(),
+        };
+        let bug = make_bug("CVE-2026-1234 foo: buffer overflow", "foo", &[], &[]);
+        assert_eq!(classify(&bug, &trackers), BugKind::Security);
+    }
+
+    #[test]
+    fn classify_security_by_keyword() {
+        let trackers = TrackerIds {
+            ftbfs: HashSet::new(),
+            fti: HashSet::new(),
+        };
+        let bug = make_bug("foo: buffer overflow", "foo", &["SecurityTracking"], &[]);
+        assert_eq!(classify(&bug, &trackers), BugKind::Security);
+    }
+
+    #[test]
+    fn classify_update_request() {
+        let trackers = TrackerIds {
+            ftbfs: HashSet::new(),
+            fti: HashSet::new(),
+        };
+        let bug = make_bug("fish-4.0 is available", "fish", &["FutureFeature"], &[]);
+        assert_eq!(classify(&bug, &trackers), BugKind::Update);
+    }
+
+    #[test]
+    fn classify_branch_request() {
+        let trackers = TrackerIds {
+            ftbfs: HashSet::new(),
+            fti: HashSet::new(),
+        };
+        let bug = make_bug("Please branch rust-foo for epel10", "foo", &[], &[]);
+        assert_eq!(classify(&bug, &trackers), BugKind::Branch);
+    }
+
+    #[test]
+    fn classify_ftbfs() {
+        let trackers = TrackerIds {
+            ftbfs: HashSet::from([999]),
+            fti: HashSet::new(),
+        };
+        let bug = make_bug("foo FTBFS in rawhide", "foo", &[], &[999]);
+        assert_eq!(classify(&bug, &trackers), BugKind::Ftbfs);
+    }
+
+    #[test]
+    fn classify_fti() {
+        let trackers = TrackerIds {
+            ftbfs: HashSet::new(),
+            fti: HashSet::from([888]),
+        };
+        let bug = make_bug("foo fails to install", "foo", &[], &[888]);
+        assert_eq!(classify(&bug, &trackers), BugKind::Fti);
+    }
+
+    #[test]
+    fn classify_other() {
+        let trackers = TrackerIds {
+            ftbfs: HashSet::new(),
+            fti: HashSet::new(),
+        };
+        let bug = make_bug("foo crashes on startup", "foo", &[], &[]);
+        assert_eq!(classify(&bug, &trackers), BugKind::Other);
+    }
+
+    #[test]
+    fn format_summary_shows_table() {
+        let report = BugzillaReport {
+            reviews: ReviewSection {
+                submitted: vec![BugEntry {
+                    id: 1,
+                    summary: "Review Request: rust-foo".to_string(),
+                    status: "NEW".to_string(),
+                    resolution: String::new(),
+                    component: "Package Review".to_string(),
+                }],
+                completed: vec![],
+                done_for_others: vec![],
+                done_completed: vec![],
+            },
+            security: BugCategory::default(),
+            updates: BugCategory::default(),
+            branches: BugCategory::default(),
+            ftbfs: BugCategory::default(),
+            fti: BugCategory::default(),
+            other: BugCategory::default(),
+        };
+        let md = format_markdown(&report, false);
+        assert!(md.contains("**1** review request(s) submitted"));
+        assert!(md.contains("## Bugzilla"));
+    }
+}
