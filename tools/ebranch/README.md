@@ -91,7 +91,7 @@ deps. The output includes a phased build order showing which
   closure with any additionally needed packages
 - `--exclude-install PKG,...` — exclude source packages from
   installability checks (deps they provide are treated as satisfied)
-- `--no-auto-exclude` — disable automatic exclusion of solib symbol
+- `--no-auto-exclude-install` — disable automatic exclusion of solib symbol
   version deps (e.g. `libc.so.6(GLIBC_2.38)(64bit)`) from
   installability checks
 - `-j N` / `--jobs N` — number of parallel fedrq queries

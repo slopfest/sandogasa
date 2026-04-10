@@ -86,6 +86,24 @@ in the closure."
     )]
     check_install: bool,
 
+    /// Exclude packages from the closure.
+    #[arg(
+        long,
+        value_name = "PKG,...",
+        value_delimiter = ',',
+        long_help = "\
+Exclude source packages from the closure.
+
+Comma-separated list of source packages to
+treat as already available on the target. Their
+BuildRequires will not be resolved and they will
+not appear in the closure. Useful for packages
+you plan to excise from the build requirements.
+
+May be passed multiple times."
+    )]
+    exclude: Vec<String>,
+
     /// Exclude packages from installability checks.
     #[arg(
         long,
@@ -105,7 +123,7 @@ May be passed multiple times."
     )]
     exclude_install: Vec<String>,
 
-    /// Disable auto-exclusion of default packages.
+    /// Disable auto-exclusion from installability checks.
     #[arg(
         long,
         long_help = "\
@@ -116,7 +134,7 @@ By default, packages whose version mismatch
 between branches is expected and harmless
 are excluded automatically."
     )]
-    no_auto_exclude: bool,
+    no_auto_exclude_install: bool,
 
     /// Max recursion depth (0 = unlimited).
     #[arg(long, default_value = "0")]
@@ -469,8 +487,9 @@ fn main() -> ExitCode {
     let options = ResolveOptions {
         max_depth: args.max_depth,
         verbose: args.verbose,
+        exclude: args.exclude.iter().cloned().collect(),
         exclude_install: args.exclude_install.iter().cloned().collect(),
-        auto_exclude: !args.no_auto_exclude,
+        auto_exclude: !args.no_auto_exclude_install,
     };
     let (closure, install_report) = if args.check_install {
         match resolve_with_installability(

@@ -92,6 +92,9 @@ pub struct ResolveOptions {
     pub max_depth: usize,
     /// Print progress to stderr.
     pub verbose: bool,
+    /// Source packages to exclude from the closure entirely.
+    /// Their deps are treated as satisfied on the target.
+    pub exclude: BTreeSet<String>,
     /// Source packages to exclude from installability expansion.
     pub exclude_install: BTreeSet<String>,
     /// When true, auto-exclude default packages (e.g. glibc)
@@ -303,7 +306,7 @@ fn resolve_closure_with_cache(
                         continue;
                     };
 
-                    if provider == *pkg {
+                    if provider == *pkg || options.exclude.contains(&provider) {
                         continue;
                     }
 
@@ -467,6 +470,7 @@ fn check_installability_with_cache(
                     }
                     Some(provider)
                         if closure_pkgs.contains(provider)
+                            || options.exclude.contains(provider)
                             || options.exclude_install.contains(provider) =>
                     {
                         continue;
