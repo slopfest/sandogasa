@@ -11,6 +11,7 @@ members = [
     "crates/sandogasa-fasjson",
     "crates/sandogasa-fedrq",
     "crates/sandogasa-gitlab",
+    "crates/sandogasa-koji",
     "crates/sandogasa-mailman",
     "crates/sandogasa-nvd",
     "crates/sandogasa-repology",
@@ -55,6 +56,7 @@ sandogasa-distgit = { version = "0.8", path = "crates/sandogasa-distgit" }
 sandogasa-fasjson = { version = "0.8", path = "crates/sandogasa-fasjson" }
 sandogasa-fedrq = { version = "0.8", path = "crates/sandogasa-fedrq" }
 sandogasa-gitlab = { version = "0.8", path = "crates/sandogasa-gitlab" }
+sandogasa-koji = { version = "0.8", path = "crates/sandogasa-koji" }
 sandogasa-mailman = { version = "0.8", path = "crates/sandogasa-mailman" }
 sandogasa-nvd = { version = "0.8", path = "crates/sandogasa-nvd" }
 sandogasa-repology = { version = "0.8", path = "crates/sandogasa-repology" }

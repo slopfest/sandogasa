@@ -389,7 +389,9 @@ fn main() -> ExitCode {
 
     if let Command::CheckUpdate(a) = &cli.command {
         // check-update also needs koji for side tag queries.
-        if let Err(e) = sandogasa_cli::require_tool("koji", "sudo dnf install koji") {
+        if let Err(e) =
+            sandogasa_cli::require_tool_with_arg("koji", "version", "sudo dnf install koji")
+        {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }

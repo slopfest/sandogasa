@@ -7,6 +7,7 @@ use clap::Parser;
 
 mod brace;
 mod config;
+mod koji;
 
 #[derive(Parser)]
 #[command(
@@ -158,9 +159,43 @@ fn main() -> ExitCode {
         }
     }
 
-    // TODO: run reports based on domain config
-    let _ = domain;
-    eprintln!("sandogasa-report is not yet fully implemented");
+    let mut output = String::new();
+
+    // Koji CBS reporting.
+    if !domain.koji_tags.is_empty() {
+        match koji::koji_report(domain, cli.user.as_deref(), cli.verbose) {
+            Ok(report) => {
+                if cli.json {
+                    // TODO: JSON output
+                } else {
+                    output.push_str(&koji::format_markdown(&report, cli.detailed, &cfg.groups));
+                }
+            }
+            Err(e) => {
+                eprintln!("error: koji: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    // TODO: Bugzilla reporting (domain.bugzilla)
+    // TODO: Bodhi reporting (domain.bodhi)
+
+    if output.is_empty() {
+        eprintln!("No data sources configured for domain '{}'.", cli.domain);
+        return ExitCode::FAILURE;
+    }
+
+    // Write output.
+    if let Some(ref path) = cli.output {
+        if let Err(e) = std::fs::write(path, &output) {
+            eprintln!("error: failed to write {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+        eprintln!("Wrote report to {path}");
+    } else {
+        print!("{output}");
+    }
 
     ExitCode::SUCCESS
 }

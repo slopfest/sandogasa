@@ -322,6 +322,7 @@ dependencies = [
  "sandogasa-config",
  "sandogasa-depfilter",
  "sandogasa-fedrq",
+ "sandogasa-koji",
  "semver",
  "serde",
  "serde_json",
@@ -1591,6 +1592,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandogasa-koji"
+version = "0.8.1"
+
+[[package]]
 name = "sandogasa-mailman"
 version = "0.8.1"
 dependencies = [
@@ -1648,6 +1653,7 @@ dependencies = [
  "sandogasa-bugzilla",
  "sandogasa-config",
  "sandogasa-fasjson",
+ "sandogasa-koji",
  "serde",
  "serde_json",
  "tokio",

@@ -7,7 +7,6 @@
 //! then finds reverse dependencies in the stable repo that would break.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::process::Command;
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -109,34 +108,12 @@ pub fn detect_input_type(input: &str) -> InputKind {
 ///
 /// E.g. "rust-uucore-0.0.28-2.el9" → "rust-uucore"
 pub fn parse_nvr(nvr: &str) -> Option<&str> {
-    let mut parts = nvr.rsplitn(3, '-');
-    let _release = parts.next()?;
-    let _version = parts.next()?;
-    let name = parts.next()?;
-    if name.is_empty() { None } else { Some(name) }
+    sandogasa_koji::parse_nvr_name(nvr)
 }
 
 /// List NVRs in a Koji tag via `koji list-tagged --quiet`.
 pub fn koji_list_tagged(tag: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
-    let mut cmd = Command::new("koji");
-    if let Some(p) = profile {
-        cmd.args(["--profile", p]);
-    }
-    cmd.args(["list-tagged", "--quiet", tag]);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run koji: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("koji list-tagged failed: {}", stderr.trim()));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| l.split_whitespace().next())
-        .map(|s| s.to_string())
-        .collect())
+    sandogasa_koji::list_tagged_nvrs(tag, profile)
 }
 
 /// List binary RPM names for a build via `koji buildinfo`.
@@ -144,56 +121,7 @@ pub fn koji_list_tagged(tag: &str, profile: Option<&str>) -> Result<Vec<String>,
 /// Parses the RPMs section, returning binary package names
 /// (excluding `.src.rpm` entries).
 pub fn koji_build_rpms(nvr: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
-    let mut cmd = Command::new("koji");
-    if let Some(p) = profile {
-        cmd.args(["--profile", p]);
-    }
-    cmd.args(["buildinfo", nvr]);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run koji: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("koji buildinfo failed: {}", stderr.trim()));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Parse RPMs section. Lines after "RPMs:" are paths like:
-    //   /mnt/koji/.../name-ver-rel.arch.rpm\tSignatures: ...
-    let mut in_rpms = false;
-    let mut names = Vec::new();
-    for line in stdout.lines() {
-        if line.starts_with("RPMs:") {
-            in_rpms = true;
-            continue;
-        }
-        if !in_rpms {
-            continue;
-        }
-        let path = line.split('\t').next().unwrap_or("").trim();
-        if path.is_empty() {
-            continue;
-        }
-        // Extract filename from path.
-        let filename = path.rsplit('/').next().unwrap_or(path);
-        // Skip source RPMs.
-        if filename.ends_with(".src.rpm") {
-            continue;
-        }
-        // Strip .arch.rpm to get the binary package name.
-        // Format: name-version-release.arch.rpm
-        if let Some(without_rpm) = filename.strip_suffix(".rpm") {
-            // Remove .arch suffix (last dot-separated segment).
-            if let Some(dot_pos) = without_rpm.rfind('.') {
-                let name = &without_rpm[..dot_pos];
-                // Extract just the package name (without version-release).
-                if let Some(parsed) = parse_nvr(name) {
-                    names.push(parsed.to_string());
-                }
-            }
-        }
-    }
-    Ok(names)
+    sandogasa_koji::build_rpms(nvr, profile)
 }
 
 /// Run the check-update analysis.

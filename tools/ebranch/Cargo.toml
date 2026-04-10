@@ -17,6 +17,7 @@ sandogasa-config = { workspace = true }
 sandogasa-cli = { workspace = true }
 sandogasa-depfilter = { workspace = true }
 sandogasa-fedrq = { workspace = true }
+sandogasa-koji = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
