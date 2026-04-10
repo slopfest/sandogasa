@@ -10,9 +10,22 @@
 ### New: sandogasa-report tool
 
 - Activity reporting for Fedora, EPEL, and CentOS SIG packaging work
-- Koji CBS reporting with brace expansion for tag patterns
-- Configurable domains, package groups, and user→email mapping
-- `--period` flag for quarters (2026Q1) and halves (2026H1)
+- **Bugzilla**: review requests submitted/completed, reviews done for
+  others, CVE/security, update requests, branch requests, FTBFS/FTI
+  (classified via tracker bug aliases)
+- **Bodhi**: updates submitted, pushed to testing, pushed to stable,
+  with per-release breakdown sorted newest first
+- **Koji CBS**: new packages and version updates detected by comparing
+  tag snapshots at period start/end. Per-distro version merging,
+  quarterly report style output
+- Multi-domain support (`-d fedora -d hyperscale`)
+- `--period` flag for years (2026), halves (2026H1), and quarters
+  (2026Q1), plus `--since`/`--until` for arbitrary date ranges
+- `--config` for project-level config (domains, groups, users)
+- `--no-bugzilla`, `--no-bodhi`, `--no-koji` to skip data sources
+- Brace expansion for Koji tag patterns
+- Package groups with optional descriptions for categorical reporting
+- User email resolution via FASJSON (rhbzemail) or config mapping
 
 ### ebranch
 
@@ -28,6 +41,12 @@
 
 - Rename `from_side_tag` to `from_tag` on `Update` struct (matching
   the actual Bodhi API field name)
+- Add `date_testing` and `date_stable` fields to `Update`
+
+### sandogasa-config
+
+- Only enforce 600/700 permissions for user config files
+  (`for_tool`), not project-level configs (`from_path`)
 
 ### sandogasa-cli
 

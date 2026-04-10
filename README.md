@@ -20,6 +20,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 - **[koji-diff](tools/koji-diff/)** — compare buildroot and build logs between Koji builds
 - **[sandogasa-hattrack](tools/sandogasa-hattrack/)** — look up a Fedora contributor's activity across services
 - **[sandogasa-pkg-acl](tools/sandogasa-pkg-acl/)** — view and manage Fedora package ACLs via the Pagure dist-git API
+- **[sandogasa-report](tools/sandogasa-report/)** — activity reporting for Fedora, EPEL, and CentOS SIG packaging
 
 ## Library crates
 
@@ -36,6 +37,7 @@ library crates:
 - **sandogasa-fasjson** — FASJSON (Fedora Account System) API client with Kerberos auth
 - **sandogasa-fedrq** — wrapper for the fedrq RPM repository query tool
 - **sandogasa-gitlab** — GitLab REST and GraphQL API client
+- **sandogasa-koji** — Koji build system CLI wrapper
 - **sandogasa-mailman** — HyperKitty (Mailman 3) archive API client
 - **sandogasa-nvd** — NVD (National Vulnerability Database) API client
 - **sandogasa-repology** — Repology package version tracking API client

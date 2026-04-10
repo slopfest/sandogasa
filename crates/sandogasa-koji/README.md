@@ -8,7 +8,8 @@ CentOS Build System).
 
 ## Functions
 
-- `list_tagged(tag, profile)` — list builds with NVR, tag, and owner
+- `list_tagged(tag, profile, timestamp)` — list builds with NVR, tag,
+  and owner (optional timestamp for historical queries)
 - `list_tagged_nvrs(tag, profile)` — list NVRs only (quiet mode)
 - `build_rpms(nvr, profile)` — list binary RPM names from buildinfo
 - `parse_nvr(nvr)` — split NVR into (name, version, release)
