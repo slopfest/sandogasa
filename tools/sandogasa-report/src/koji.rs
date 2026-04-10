@@ -586,4 +586,159 @@ mod tests {
         let md = format_markdown(&report, true, &groups, None);
         assert!(md.contains("**Developer Tools:**"));
     }
+
+    #[test]
+    fn format_new_packages() {
+        let mut packages = BTreeMap::new();
+        packages.insert(
+            "neovim".to_string(),
+            PackageEntry {
+                name: "neovim".to_string(),
+                change: ChangeKind::New,
+                versions: BTreeMap::from([(
+                    "el10".to_string(),
+                    BuildVersion {
+                        version: "0.10.0".to_string(),
+                        release: "1.hs.el10".to_string(),
+                        tag: "tag".to_string(),
+                    },
+                )]),
+                owner: "user".to_string(),
+            },
+        );
+        let report = KojiReport { packages };
+        let md = format_markdown(&report, true, &BTreeMap::new(), None);
+        assert!(md.contains("### New packages"));
+        assert!(md.contains("**neovim** 0.10.0 added"));
+        assert!(!md.contains("rebased to"));
+    }
+
+    #[test]
+    fn format_mixed_new_and_updated() {
+        let mut packages = BTreeMap::new();
+        packages.insert(
+            "fish".to_string(),
+            PackageEntry {
+                name: "fish".to_string(),
+                change: ChangeKind::New,
+                versions: BTreeMap::from([(
+                    "el10".to_string(),
+                    BuildVersion {
+                        version: "4.0".to_string(),
+                        release: "1.el10".to_string(),
+                        tag: "tag".to_string(),
+                    },
+                )]),
+                owner: "user".to_string(),
+            },
+        );
+        packages.insert(
+            "systemd".to_string(),
+            PackageEntry {
+                name: "systemd".to_string(),
+                change: ChangeKind::Updated,
+                versions: BTreeMap::from([(
+                    "el10".to_string(),
+                    BuildVersion {
+                        version: "256.12".to_string(),
+                        release: "1.hs.el10".to_string(),
+                        tag: "tag".to_string(),
+                    },
+                )]),
+                owner: "user".to_string(),
+            },
+        );
+        let report = KojiReport { packages };
+        let md = format_markdown(&report, true, &BTreeMap::new(), None);
+        assert!(md.contains("### New packages"));
+        assert!(md.contains("**fish** 4.0 added"));
+        assert!(md.contains("### Package updates"));
+        assert!(md.contains("**systemd** rebased to 256.12"));
+    }
+
+    #[test]
+    fn format_summary_only() {
+        let mut packages = BTreeMap::new();
+        packages.insert(
+            "foo".to_string(),
+            PackageEntry {
+                name: "foo".to_string(),
+                change: ChangeKind::New,
+                versions: BTreeMap::from([(
+                    "el10".to_string(),
+                    BuildVersion {
+                        version: "1.0".to_string(),
+                        release: "1.el10".to_string(),
+                        tag: "tag".to_string(),
+                    },
+                )]),
+                owner: "user".to_string(),
+            },
+        );
+        packages.insert(
+            "bar".to_string(),
+            PackageEntry {
+                name: "bar".to_string(),
+                change: ChangeKind::Updated,
+                versions: BTreeMap::from([(
+                    "el10".to_string(),
+                    BuildVersion {
+                        version: "2.0".to_string(),
+                        release: "1.el10".to_string(),
+                        tag: "tag".to_string(),
+                    },
+                )]),
+                owner: "user".to_string(),
+            },
+        );
+        let report = KojiReport { packages };
+        let md = format_markdown(&report, false, &BTreeMap::new(), None);
+        assert!(md.contains("**1** new package(s)"));
+        assert!(md.contains("**1** updated package(s)"));
+        // Summary should not have detailed sections.
+        assert!(!md.contains("### New packages"));
+    }
+
+    #[test]
+    fn format_empty_report() {
+        let report = KojiReport {
+            packages: BTreeMap::new(),
+        };
+        let md = format_markdown(&report, true, &BTreeMap::new(), None);
+        assert!(md.contains("No Koji CBS packages found"));
+    }
+
+    #[test]
+    fn format_new_different_versions() {
+        let mut packages = BTreeMap::new();
+        packages.insert(
+            "mesa".to_string(),
+            PackageEntry {
+                name: "mesa".to_string(),
+                change: ChangeKind::New,
+                versions: BTreeMap::from([
+                    (
+                        "el9".to_string(),
+                        BuildVersion {
+                            version: "24.0".to_string(),
+                            release: "1.el9".to_string(),
+                            tag: "tag".to_string(),
+                        },
+                    ),
+                    (
+                        "el10".to_string(),
+                        BuildVersion {
+                            version: "24.3".to_string(),
+                            release: "1.el10".to_string(),
+                            tag: "tag".to_string(),
+                        },
+                    ),
+                ]),
+                owner: "user".to_string(),
+            },
+        );
+        let report = KojiReport { packages };
+        let md = format_markdown(&report, true, &BTreeMap::new(), None);
+        assert!(md.contains("**mesa** 24.3 (el10), 24.0 (el9) added"));
+    }
 }

@@ -210,12 +210,8 @@ async fn lookup_trackers(bz: &BzClient, versions: &[u32], verbose: bool) -> Trac
     let mut ftbfs = HashSet::new();
     let mut fti = HashSet::new();
 
-    if versions.is_empty() {
-        return TrackerIds { ftbfs, fti };
-    }
-
-    // Build alias queries for the configured Fedora releases
-    // plus the permanent Rawhide trackers.
+    // Always look up the permanent Rawhide trackers, plus any
+    // configured Fedora version trackers.
     let mut aliases = vec![
         "RAWHIDEFTBFS".to_string(),
         "RAWHIDEFailsToInstall".to_string(),
@@ -263,10 +259,27 @@ pub async fn bugzilla_report(
     until: NaiveDate,
     verbose: bool,
 ) -> Result<BugzillaReport, String> {
-    let bz = BzClient::new("https://bugzilla.redhat.com");
+    bugzilla_report_with_client(
+        &BzClient::new("https://bugzilla.redhat.com"),
+        email,
+        fedora_versions,
+        since,
+        until,
+        verbose,
+    )
+    .await
+}
 
+async fn bugzilla_report_with_client(
+    bz: &BzClient,
+    email: &str,
+    fedora_versions: &[u32],
+    since: NaiveDate,
+    until: NaiveDate,
+    verbose: bool,
+) -> Result<BugzillaReport, String> {
     // Look up FTBFS and FTI tracker bug IDs.
-    let trackers = lookup_trackers(&bz, fedora_versions, verbose).await;
+    let trackers = lookup_trackers(bz, fedora_versions, verbose).await;
 
     let since_str = since.format("%Y-%m-%d").to_string();
     let until_str = until
@@ -617,6 +630,8 @@ pub fn format_markdown(report: &BugzillaReport, detailed: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn make_bug(
         summary: &str,
@@ -827,5 +842,178 @@ mod tests {
         let md = format_markdown(&report, false);
         // No table if all categories are empty.
         assert!(!md.contains("| Category |"));
+    }
+
+    /// Helper: mock Bugzilla REST API returning a set of bugs for any search.
+    fn bug_json(
+        id: u64,
+        summary: &str,
+        component: &str,
+        status: &str,
+        keywords: &[&str],
+        creator: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "summary": summary,
+            "status": status,
+            "resolution": if status == "CLOSED" { "RAWHIDE" } else { "" },
+            "product": "Fedora",
+            "component": [component],
+            "severity": "unspecified",
+            "priority": "unspecified",
+            "assigned_to": "test@example.com",
+            "creator": creator,
+            "creation_time": "2026-02-01T10:00:00Z",
+            "last_change_time": "2026-02-15T10:00:00Z",
+            "keywords": keywords,
+            "alias": [],
+            "depends_on": [],
+            "blocks": [],
+            "see_also": [],
+            "cc": [],
+            "flags": [],
+            "version": ["rawhide"],
+            "cf_fixed_in": ""
+        })
+    }
+
+    #[tokio::test]
+    async fn bugzilla_report_classifies_bugs() {
+        let server = MockServer::start().await;
+        let bz = BzClient::new(&server.uri());
+
+        // All search queries return the same set of bugs for simplicity.
+        let bugs = serde_json::json!({
+            "bugs": [
+                bug_json(1, "Review Request: rust-foo - Foo", "Package Review", "NEW", &[], "test@example.com"),
+                bug_json(2, "CVE-2026-1234 bar: overflow", "bar", "CLOSED", &["SecurityTracking"], "other@example.com"),
+                bug_json(3, "fish-4.0 is available", "fish", "CLOSED", &["FutureFeature"], "other@example.com"),
+                bug_json(4, "Please branch rust-baz for epel10", "rust-baz", "CLOSED", &[], "test@example.com"),
+                bug_json(5, "qux crashes on startup", "qux", "NEW", &[], "test@example.com"),
+            ],
+            "total_matches": 5
+        });
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&bugs))
+            .mount(&server)
+            .await;
+
+        let report = bugzilla_report_with_client(
+            &bz,
+            "test@example.com",
+            &[],
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Review filed by user.
+        assert_eq!(report.reviews.submitted.len(), 1);
+        assert_eq!(report.reviews.submitted[0].id, 1);
+
+        // CVE closed (assigned to user).
+        assert!(!report.security.closed.is_empty());
+
+        // Update request closed.
+        assert!(!report.updates.closed.is_empty());
+
+        // Branch request.
+        assert!(!report.branches.filed.is_empty() || !report.branches.closed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn bugzilla_report_with_ftbfs_trackers() {
+        let server = MockServer::start().await;
+        let bz = BzClient::new(&server.uri());
+
+        // First call: tracker lookup returns one FTBFS tracker.
+        // Subsequent calls: return a bug that blocks it.
+        let tracker_response = serde_json::json!({
+            "bugs": [{
+                "id": 999,
+                "summary": "RAWHIDE FTBFS Tracker",
+                "status": "NEW",
+                "resolution": "",
+                "product": "Fedora",
+                "component": ["Tracking"],
+                "severity": "unspecified",
+                "priority": "unspecified",
+                "assigned_to": "nobody",
+                "creator": "admin",
+                "creation_time": "2025-01-01T00:00:00Z",
+                "last_change_time": "2025-01-01T00:00:00Z",
+                "keywords": [],
+                "alias": ["RAWHIDEFTBFS"],
+                "depends_on": [],
+                "blocks": [],
+                "see_also": [],
+                "cc": [],
+                "flags": [],
+                "version": [],
+                "cf_fixed_in": ""
+            }],
+            "total_matches": 1
+        });
+
+        let ftbfs_bug = serde_json::json!({
+            "bugs": [{
+                "id": 500,
+                "summary": "foo: FTBFS in rawhide",
+                "status": "CLOSED",
+                "resolution": "RAWHIDE",
+                "product": "Fedora",
+                "component": ["foo"],
+                "severity": "unspecified",
+                "priority": "unspecified",
+                "assigned_to": "test@example.com",
+                "creator": "releng@fedoraproject.org",
+                "creation_time": "2026-01-15T00:00:00Z",
+                "last_change_time": "2026-02-01T00:00:00Z",
+                "keywords": [],
+                "alias": [],
+                "depends_on": [],
+                "blocks": [999],
+                "see_also": [],
+                "cc": [],
+                "flags": [],
+                "version": ["rawhide"],
+                "cf_fixed_in": ""
+            }],
+            "total_matches": 1
+        });
+
+        // Return both the tracker and the FTBFS bug for all queries.
+        // The report function will filter appropriately.
+        let combined = serde_json::json!({
+            "bugs": [
+                tracker_response["bugs"][0],
+                ftbfs_bug["bugs"][0]
+            ],
+            "total_matches": 2
+        });
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&combined))
+            .mount(&server)
+            .await;
+
+        let report = bugzilla_report_with_client(
+            &bz,
+            "test@example.com",
+            &[],
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // The FTBFS bug should be classified as FTBFS.
+        assert!(!report.ftbfs.closed.is_empty());
+        assert_eq!(report.ftbfs.closed[0].id, 500);
     }
 }

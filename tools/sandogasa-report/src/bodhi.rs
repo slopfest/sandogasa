@@ -64,8 +64,25 @@ pub async fn bodhi_report(
     until: NaiveDate,
     verbose: bool,
 ) -> Result<BodhiReport, String> {
-    let client = sandogasa_bodhi::BodhiClient::new();
+    bodhi_report_with_client(
+        &sandogasa_bodhi::BodhiClient::new(),
+        username,
+        domain,
+        since,
+        until,
+        verbose,
+    )
+    .await
+}
 
+async fn bodhi_report_with_client(
+    client: &sandogasa_bodhi::BodhiClient,
+    username: &str,
+    domain: &DomainConfig,
+    since: NaiveDate,
+    until: NaiveDate,
+    verbose: bool,
+) -> Result<BodhiReport, String> {
     if verbose {
         eprintln!("[bodhi] fetching updates for {username}");
     }
@@ -251,6 +268,8 @@ pub fn format_markdown(report: &BodhiReport, detailed: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn parse_bodhi_date_valid() {
@@ -380,5 +399,126 @@ mod tests {
         assert!(md.contains("bar-2.0-1.fc45"));
         assert!(md.contains("### EPEL-9"));
         assert!(md.contains("FEDORA-EPEL-2026-ghi789"));
+    }
+
+    #[tokio::test]
+    async fn bodhi_report_filters_by_date_and_release() {
+        let server = MockServer::start().await;
+        let client = sandogasa_bodhi::BodhiClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path_regex("/updates/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": [
+                    {
+                        "alias": "FEDORA-2026-in-range",
+                        "status": "stable",
+                        "builds": [{"nvr": "foo-1.0-1.fc45"}],
+                        "release": {"name": "F45"},
+                        "date_submitted": "2026-02-15 10:00:00",
+                        "date_stable": "2026-02-16 10:00:00"
+                    },
+                    {
+                        "alias": "FEDORA-2026-too-new",
+                        "status": "pending",
+                        "builds": [{"nvr": "bar-2.0-1.fc45"}],
+                        "release": {"name": "F45"},
+                        "date_submitted": "2026-04-01 10:00:00"
+                    },
+                    {
+                        "alias": "FEDORA-2026-too-old",
+                        "status": "stable",
+                        "builds": [{"nvr": "baz-3.0-1.fc45"}],
+                        "release": {"name": "F45"},
+                        "date_submitted": "2025-12-01 10:00:00",
+                        "date_stable": "2025-12-02 10:00:00"
+                    },
+                    {
+                        "alias": "EPEL-2026-wrong-release",
+                        "status": "stable",
+                        "builds": [{"nvr": "qux-1.0-1.el9"}],
+                        "release": {"name": "EPEL-9"},
+                        "date_submitted": "2026-02-20 10:00:00"
+                    }
+                ],
+                "total": 4,
+                "page": 1,
+                "pages": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let domain = DomainConfig {
+            bodhi: true,
+            bodhi_releases: vec!["F*".to_string()],
+            ..Default::default()
+        };
+
+        let report = bodhi_report_with_client(
+            &client,
+            "testuser",
+            &domain,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.total_updates, 1);
+        assert_eq!(report.submitted, 1);
+        assert_eq!(report.pushed_to_stable, 1);
+        assert!(report.by_release.contains_key("F45"));
+        assert!(!report.by_release.contains_key("EPEL-9"));
+    }
+
+    #[tokio::test]
+    async fn bodhi_report_includes_state_change_in_period() {
+        let server = MockServer::start().await;
+        let client = sandogasa_bodhi::BodhiClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path_regex("/updates/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": [
+                    {
+                        "alias": "FEDORA-2026-stabled-in-q1",
+                        "status": "stable",
+                        "builds": [{"nvr": "old-pkg-1.0-1.fc45"}],
+                        "release": {"name": "F45"},
+                        "date_submitted": "2025-12-15 10:00:00",
+                        "date_testing": "2025-12-16 10:00:00",
+                        "date_stable": "2026-01-05 10:00:00"
+                    }
+                ],
+                "total": 1,
+                "page": 1,
+                "pages": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let domain = DomainConfig {
+            bodhi: true,
+            ..Default::default()
+        };
+
+        let report = bodhi_report_with_client(
+            &client,
+            "testuser",
+            &domain,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Submitted before Q1, but pushed to stable during Q1.
+        assert_eq!(report.total_updates, 1);
+        assert_eq!(report.submitted, 0);
+        assert_eq!(report.pushed_to_stable, 1);
     }
 }
