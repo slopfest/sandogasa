@@ -22,6 +22,7 @@ members = [
     "tools/hs-relmon",
     "tools/sandogasa-hattrack",
     "tools/sandogasa-pkg-acl",
+    "tools/sandogasa-report",
 ]
 
 # sandogasa (菅笠, a Japanese straw hat) is often associated with

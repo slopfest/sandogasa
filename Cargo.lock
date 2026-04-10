@@ -1638,6 +1638,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandogasa-report"
+version = "0.8.1"
+dependencies = [
+ "chrono",
+ "clap",
+ "reqwest",
+ "sandogasa-bodhi",
+ "sandogasa-bugzilla",
+ "sandogasa-config",
+ "sandogasa-fasjson",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "sandogasa-rpmvercmp"
 version = "0.8.1"
 
