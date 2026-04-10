@@ -25,7 +25,7 @@ bodhi_releases = ["EPEL-*"]
 [domains.hyperscale]
 koji_profile = "cbs"
 koji_tags = [
-    "hyperscale{9,10}s-packages-{main,facebook,spin}-release",
+    "hyperscale{9,10}s-packages-{main,experimental,spin}-release",
     "hyperscale10s-packages-kernel-release",
 ]
 
