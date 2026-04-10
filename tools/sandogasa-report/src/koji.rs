@@ -2,7 +2,7 @@
 
 //! Koji CBS reporting — query packages tagged in CentOS SIG release tags.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::Serialize;
 
@@ -178,7 +178,7 @@ pub fn koji_report(
         let mut any_change = false;
         let mut is_new = before_versions.is_none();
 
-        for (distro, (version, release, owner)) in after_versions {
+        for (distro, (version, release, _owner)) in after_versions {
             let changed = match before_versions.and_then(|bv| bv.get(distro)) {
                 Some((old_ver, _, _)) => old_ver != version,
                 None => {

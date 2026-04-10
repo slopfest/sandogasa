@@ -104,10 +104,10 @@ pub async fn bodhi_report(
             // If the submission is before our period and no state
             // changes happened in the period, skip. If submission
             // is after, keep scanning (Bodhi sorts by submitted).
-            if let Some(d) = submitted_date {
-                if d < since {
-                    break;
-                }
+            if let Some(d) = submitted_date
+                && d < since
+            {
+                break;
             }
             continue;
         }
@@ -185,7 +185,7 @@ fn release_sort_key(name: &str) -> (u32, u32) {
 /// Sort release names by version number, newest first.
 fn sorted_releases(by_release: &BTreeMap<String, Vec<UpdateEntry>>) -> Vec<&str> {
     let mut releases: Vec<&str> = by_release.keys().map(|s| s.as_str()).collect();
-    releases.sort_by(|a, b| release_sort_key(b).cmp(&release_sort_key(a)));
+    releases.sort_by_key(|r| std::cmp::Reverse(release_sort_key(r)));
     releases
 }
 
