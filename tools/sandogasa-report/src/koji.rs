@@ -110,10 +110,21 @@ fn query_tag_snapshot(
             let Some((name, version, release)) = sandogasa_koji::parse_nvr(&b.nvr) else {
                 continue;
             };
-            packages.entry(name.to_string()).or_default().insert(
-                distro.clone(),
-                (version.to_string(), release.to_string(), b.owner.clone()),
-            );
+            let distro_map = packages.entry(name.to_string()).or_default();
+            // Keep the newest version if the same package appears in
+            // multiple tags for the same distro.
+            distro_map
+                .entry(distro.clone())
+                .and_modify(|(old_ver, old_rel, old_owner)| {
+                    if version > old_ver.as_str()
+                        || (version == old_ver.as_str() && release > old_rel.as_str())
+                    {
+                        *old_ver = version.to_string();
+                        *old_rel = release.to_string();
+                        *old_owner = b.owner.clone();
+                    }
+                })
+                .or_insert((version.to_string(), release.to_string(), b.owner.clone()));
         }
     }
 
