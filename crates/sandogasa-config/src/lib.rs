@@ -12,23 +12,33 @@ type Validator<'a> = Option<&'a dyn Fn(&str) -> Result<(), String>>;
 /// Manages a TOML config file at `~/.config/{tool}/config.toml`.
 pub struct ConfigFile {
     path: PathBuf,
+    /// Whether to enforce secure permissions (700/600).
+    /// Only true for user config files under ~/.config.
+    secure: bool,
 }
 
 impl ConfigFile {
     /// Create a `ConfigFile` for the given tool name.
     ///
     /// The config path will be `~/.config/{tool_name}/config.toml`.
+    /// Permissions are enforced (700 for dir, 600 for file).
     pub fn for_tool(tool_name: &str) -> Self {
         let path = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("~/.config"))
             .join(tool_name)
             .join("config.toml");
-        Self { path }
+        Self { path, secure: true }
     }
 
-    /// Create a `ConfigFile` with an explicit path (useful for testing).
+    /// Create a `ConfigFile` with an explicit path.
+    ///
+    /// No permission hardening is applied — use this for project-level
+    /// config files that don't contain secrets.
     pub fn from_path(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            secure: false,
+        }
     }
 
     /// Return the config file path.
@@ -48,27 +58,32 @@ impl ConfigFile {
                 self.path.display()
             )
         })?;
-        // Best-effort permission fix — don't fail the load if it
-        // doesn't work (e.g. file owned by another user).
-        let _ = set_file_permissions(&self.path);
-        if let Some(parent) = self.path.parent() {
-            let _ = set_dir_permissions(parent);
+        // Best-effort permission fix for user config files.
+        if self.secure {
+            let _ = set_file_permissions(&self.path);
+            if let Some(parent) = self.path.parent() {
+                let _ = set_dir_permissions(parent);
+            }
         }
         let config: T = toml::from_str(&contents)?;
         Ok(config)
     }
 
     /// Serialize and save the config file, creating parent directories
-    /// as needed. Sets directory permissions to 700 and file permissions
-    /// to 600 to protect sensitive data like API keys.
+    /// as needed. For user config files (`for_tool`), sets directory
+    /// permissions to 700 and file permissions to 600.
     pub fn save<T: Serialize>(&self, config: &T) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
-            set_dir_permissions(parent)?;
+            if self.secure {
+                set_dir_permissions(parent)?;
+            }
         }
         let contents = toml::to_string_pretty(config)?;
         std::fs::write(&self.path, &contents)?;
-        set_file_permissions(&self.path)?;
+        if self.secure {
+            set_file_permissions(&self.path)?;
+        }
         Ok(())
     }
 }
@@ -278,7 +293,10 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join("secure-tool");
-        let cf = ConfigFile::from_path(config_dir.join("config.toml"));
+        let cf = ConfigFile {
+            path: config_dir.join("config.toml"),
+            secure: true,
+        };
 
         let config = TestConfig {
             my_section: TestSection {
