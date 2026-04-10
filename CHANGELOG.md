@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+### New: sandogasa-koji library crate
+
+- Shared Koji CLI wrappers: `list_tagged`, `list_tagged_nvrs`,
+  `build_rpms`, `parse_nvr`, `parse_nvr_name`
+
+### New: sandogasa-report tool
+
+- Activity reporting for Fedora, EPEL, and CentOS SIG packaging work
+- Koji CBS reporting with brace expansion for tag patterns
+- Configurable domains, package groups, and user→email mapping
+- `--period` flag for quarters (2026Q1) and halves (2026H1)
+
+### ebranch
+
+- **Breaking**: remove `build-order` subcommand; merged into
+  `resolve --phases`
+- `--exclude` flag for resolve: treat packages as already available
+  on the target
+- Rename `--no-auto-exclude` to `--no-auto-exclude-install`
+- Fix side tag detection: use Bodhi's `from_tag` field (was
+  incorrectly reading non-existent `from_side_tag`)
+
+### sandogasa-bodhi (**breaking**)
+
+- Rename `from_side_tag` to `from_tag` on `Update` struct (matching
+  the actual Bodhi API field name)
+
+### sandogasa-cli
+
+- New `require_tool_with_arg` for tools that use subcommands instead
+  of `--version` (e.g. `koji version`)
+
 ## v0.8.1
 
 ### ebranch

@@ -4,7 +4,8 @@
 - Do not commit without explicit user confirmation — always ask before running `git commit`
 - Always use `git commit -s` (sign-off) when committing
 - Always use `git tag -s` (GPG sign) when tagging
-- Before tagging a release, update CHANGELOG.md and any README.md files affected by the changes (root, tool, or library crate). Use the tag message identical to the new CHANGELOG.md entry
+- Changelog entries for released versions are immutable — never edit them. When making significant changes, add them to an `## Unreleased` section at the top of CHANGELOG.md. At release time, rename `Unreleased` to the version number
+- Before tagging a release, review the `Unreleased` section in CHANGELOG.md, rename it to the version, and update any README.md files affected by the changes (root, tool, or library crate). Use the tag message identical to the new CHANGELOG.md entry
 - Before tagging, verify there are no uncommitted changes (`git status` must be clean)
 - Before bumping versions, run `cargo semver-checks` on each library crate to determine the correct version bump (patch, minor, or major). If semver-checks reports breaking changes, the bump must be at least minor (or major if already ≥1.0). If it reports no breaking changes, a patch bump is sufficient unless new public API surface was added (which requires at least minor)
 - Before tagging, publish all crates to crates.io with `cargo publish --workspace` (handles dependency ordering automatically and skips already-published versions). If any publish fails, fix the issue before tagging so the tag always corresponds to a successful publish
