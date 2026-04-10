@@ -6,8 +6,10 @@ use chrono::NaiveDate;
 use clap::Parser;
 
 mod brace;
+mod bugzilla;
 mod config;
 mod koji;
+mod report;
 
 #[derive(Parser)]
 #[command(
@@ -19,13 +21,17 @@ mod koji;
     )
 )]
 struct Cli {
+    /// Path to config file (domains, groups).
+    #[arg(short, long, value_name = "PATH")]
+    config: Option<String>,
+
     /// FAS username to report on.
     #[arg(short, long)]
     user: Option<String>,
 
-    /// Domain to report on (defined in config).
-    #[arg(short, long)]
-    domain: String,
+    /// Domain(s) to report on (defined in config).
+    #[arg(short, long, required = true)]
+    domain: Vec<String>,
 
     /// Start date (inclusive, YYYY-MM-DD).
     #[arg(long, group = "date_range")]
@@ -56,12 +62,12 @@ struct Cli {
     verbose: bool,
 }
 
-/// Parse a period string like "2026Q1" or "2026H1" into a date range.
+/// Parse a period string like "2026", "2026Q1", or "2026H1" into a date range.
 fn parse_period(period: &str) -> Result<(NaiveDate, NaiveDate), String> {
     let period = period.trim();
-    if period.len() < 5 {
+    if period.len() < 4 {
         return Err(format!(
-            "invalid period: {period} (expected e.g. 2026Q1 or 2026H1)"
+            "invalid period: {period} (expected e.g. 2026, 2026Q1, or 2026H1)"
         ));
     }
 
@@ -69,6 +75,13 @@ fn parse_period(period: &str) -> Result<(NaiveDate, NaiveDate), String> {
     let year: i32 = year_str
         .parse()
         .map_err(|_| format!("invalid year in period: {period}"))?;
+
+    if kind.is_empty() {
+        return Ok((
+            NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
+        ));
+    }
 
     let kind_upper = kind.to_uppercase();
     match kind_upper.as_str() {
@@ -131,7 +144,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let cfg = match config::load_config() {
+    let cfg = match config::load_config(cli.config.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("error: {e}");
@@ -139,36 +152,109 @@ fn main() -> ExitCode {
         }
     };
 
-    let domain = match cfg.domains.get(&cli.domain) {
-        Some(d) => d,
-        None => {
-            let available: Vec<&str> = cfg.domains.keys().map(|s| s.as_str()).collect();
-            eprintln!(
-                "error: unknown domain '{}'. Available: {}",
-                cli.domain,
-                available.join(", ")
-            );
-            return ExitCode::FAILURE;
+    // Resolve domains.
+    let mut domains = Vec::new();
+    for name in &cli.domain {
+        match cfg.domains.get(name) {
+            Some(d) => domains.push((name.as_str(), d)),
+            None => {
+                if cfg.domains.is_empty() {
+                    eprintln!(
+                        "error: no domains configured. \
+                         Pass --config with a config file defining domains."
+                    );
+                } else {
+                    let available: Vec<&str> = cfg.domains.keys().map(|s| s.as_str()).collect();
+                    eprintln!(
+                        "error: unknown domain '{name}'. Available: {}",
+                        available.join(", ")
+                    );
+                }
+                return ExitCode::FAILURE;
+            }
         }
-    };
+    }
+
+    let domain_label = cli.domain.join(" + ");
 
     if cli.verbose {
-        eprintln!("[report] domain={}, period={since} to {until}", cli.domain);
+        eprintln!("[report] domain={domain_label}, period={since} to {until}");
         if let Some(ref user) = cli.user {
             eprintln!("[report] user={user}");
         }
     }
 
-    let mut output = String::new();
+    let rt = tokio::runtime::Runtime::new().expect("failed to create async runtime");
 
-    // Koji CBS reporting.
-    if !domain.koji_tags.is_empty() {
-        match koji::koji_report(domain, cli.user.as_deref(), cli.verbose) {
-            Ok(report) => {
-                if cli.json {
-                    // TODO: JSON output
+    // Build the unified report.
+    let mut unified = report::Report {
+        user: cli.user.clone(),
+        domain: domain_label,
+        since,
+        until,
+        bugzilla: None,
+        koji: None,
+    };
+
+    // Collect across all domains.
+    let mut needs_bugzilla = false;
+    let mut all_koji_domains = Vec::new();
+
+    for (_, domain) in &domains {
+        if domain.bugzilla {
+            needs_bugzilla = true;
+        }
+        if !domain.koji_tags.is_empty() {
+            all_koji_domains.push(*domain);
+        }
+    }
+
+    // Bugzilla reporting (only once, regardless of how many domains).
+    if needs_bugzilla {
+        if let Some(ref user) = cli.user {
+            let email = match bugzilla::resolve_email(user, &cfg.users, cli.verbose) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match rt.block_on(bugzilla::bugzilla_report(&email, since, until, cli.verbose)) {
+                Ok(bz_report) => {
+                    unified.bugzilla = Some(bz_report);
+                }
+                Err(e) => {
+                    eprintln!("error: bugzilla: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        } else {
+            eprintln!("warning: --user required for Bugzilla reporting, skipping");
+        }
+    }
+
+    // Koji CBS reporting (merge across all domains).
+    for domain in &all_koji_domains {
+        match koji::koji_report(domain, cli.user.as_deref(), since, until, cli.verbose) {
+            Ok(koji_report) => {
+                if let Some(ref mut existing) = unified.koji {
+                    // Merge packages from additional domains.
+                    for (name, entry) in koji_report.packages {
+                        existing
+                            .packages
+                            .entry(name)
+                            .and_modify(|e| {
+                                // Merge version maps.
+                                for (distro, ver) in &entry.versions {
+                                    e.versions
+                                        .entry(distro.clone())
+                                        .or_insert_with(|| ver.clone());
+                                }
+                            })
+                            .or_insert(entry);
+                    }
                 } else {
-                    output.push_str(&koji::format_markdown(&report, cli.detailed, &cfg.groups));
+                    unified.koji = Some(koji_report);
                 }
             }
             Err(e) => {
@@ -178,13 +264,19 @@ fn main() -> ExitCode {
         }
     }
 
-    // TODO: Bugzilla reporting (domain.bugzilla)
     // TODO: Bodhi reporting (domain.bodhi)
 
-    if output.is_empty() {
-        eprintln!("No data sources configured for domain '{}'.", cli.domain);
+    if unified.bugzilla.is_none() && unified.koji.is_none() {
+        eprintln!("No data sources configured for the selected domain(s).");
         return ExitCode::FAILURE;
     }
+
+    // Format output.
+    let output = if cli.json {
+        serde_json::to_string_pretty(&unified).expect("JSON serialization failed")
+    } else {
+        report::format_markdown(&unified, cli.detailed, &cfg.groups)
+    };
 
     // Write output.
     if let Some(ref path) = cli.output {
@@ -239,9 +331,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_year() {
+        let (s, e) = parse_period("2026").unwrap();
+        assert_eq!(s, NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
+        assert_eq!(e, NaiveDate::from_ymd_opt(2026, 12, 31).unwrap());
+    }
+
+    #[test]
     fn parse_period_invalid() {
         assert!(parse_period("2026X1").is_err());
-        assert!(parse_period("abcd").is_err());
+        assert!(parse_period("abc").is_err());
         assert!(parse_period("2026Q5").is_err());
     }
 }

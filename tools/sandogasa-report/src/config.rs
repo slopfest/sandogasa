@@ -19,7 +19,18 @@ pub struct ReportConfig {
 
     /// Package groups for categorical reporting.
     #[serde(default)]
-    pub groups: BTreeMap<String, Vec<String>>,
+    pub groups: BTreeMap<String, GroupConfig>,
+}
+
+/// A package group with an optional description.
+#[derive(Debug, Default, Deserialize)]
+pub struct GroupConfig {
+    /// Human-readable description (optional).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Package names in this group.
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 /// Configuration for a reporting domain.
@@ -46,14 +57,22 @@ pub struct DomainConfig {
     pub koji_tags: Vec<String>,
 }
 
-/// Load the config from `~/.config/sandogasa-report/config.toml`.
-pub fn load_config() -> Result<ReportConfig, String> {
-    let cf = sandogasa_config::ConfigFile::for_tool("sandogasa-report");
-    match cf.load::<ReportConfig>() {
-        Ok(config) => Ok(config),
-        Err(e) => {
-            let path = cf.path().display();
-            Err(format!("failed to load config from {path}: {e}"))
+/// Load the config file.
+///
+/// If `path` is given, loads from that file. Otherwise looks for
+/// `~/.config/sandogasa-report/config.toml` and returns empty
+/// defaults if it doesn't exist.
+pub fn load_config(path: Option<&str>) -> Result<ReportConfig, String> {
+    let cf = match path {
+        Some(p) => sandogasa_config::ConfigFile::from_path(p.into()),
+        None => sandogasa_config::ConfigFile::for_tool("sandogasa-report"),
+    };
+    if !cf.path().exists() {
+        if path.is_some() {
+            return Err(format!("config file not found: {}", cf.path().display()));
         }
+        return Ok(ReportConfig::default());
     }
+    cf.load::<ReportConfig>()
+        .map_err(|e| format!("failed to load config from {}: {e}", cf.path().display()))
 }

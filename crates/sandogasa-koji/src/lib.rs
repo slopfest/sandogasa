@@ -81,8 +81,21 @@ fn run_koji(profile: Option<&str>, args: &[&str]) -> Result<String, String> {
 ///
 /// Returns the NVR, tag, and owner for each build.
 /// Uses `--latest` to only show the latest build of each package.
-pub fn list_tagged(tag: &str, profile: Option<&str>) -> Result<Vec<TaggedBuild>, String> {
-    let stdout = run_koji(profile, &["list-tagged", "--latest", tag])?;
+/// If `timestamp` is given, queries the tag state at that Unix
+/// timestamp.
+pub fn list_tagged(
+    tag: &str,
+    profile: Option<&str>,
+    timestamp: Option<i64>,
+) -> Result<Vec<TaggedBuild>, String> {
+    let ts_str = timestamp.map(|t| t.to_string());
+    let mut args = vec!["list-tagged", "--latest"];
+    if let Some(ref ts) = ts_str {
+        args.push("--ts");
+        args.push(ts);
+    }
+    args.push(tag);
+    let stdout = run_koji(profile, &args)?;
     let mut builds = Vec::new();
 
     for line in stdout.lines().skip(2) {

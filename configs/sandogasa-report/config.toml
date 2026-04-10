@@ -1,0 +1,51 @@
+# sandogasa-report configuration
+#
+# Domains define which data sources to query for a report.
+# Use with: sandogasa-report -c configs/sandogasa-report/config.toml -d <domain>
+
+# FAS username → Bugzilla email mapping.
+# If not set, looked up via FASJSON (requires Kerberos).
+[users]
+# username = "user"
+
+# --- Fedora domains ---
+
+[domains.fedora]
+bugzilla = true
+bodhi = true
+bodhi_releases = ["F*", "EPEL-*"]
+
+[domains.epel]
+bugzilla = true
+bodhi = true
+bodhi_releases = ["EPEL-*"]
+
+# --- CentOS SIG domains ---
+
+[domains.hyperscale]
+koji_profile = "cbs"
+koji_tags = [
+    "hyperscale{9,10}{,s}-packages-{main,facebook,kernel,spin}-release",
+]
+
+[domains.proposed-updates]
+koji_profile = "cbs"
+koji_tags = [
+    "proposed_updates{9,10}s-packages-main-release",
+]
+
+# --- Package groups for categorical reporting ---
+# Each group has an optional description and a list of packages.
+# The group key is prettified for the heading
+# (e.g. "developer-tools" → "Developer Tools").
+# If a description is set, it appears as a paragraph below the heading.
+
+[groups.hardware-enablement]
+description = "Hardware enablement and GPU support"
+packages = ["intel-gpu-tools", "libdrm", "mesa"]
+
+[groups.developer-tools]
+packages = ["neovim", "helix", "fish"]
+
+[groups.benchmarking]
+packages = ["fio", "sysbench", "stress-ng"]
