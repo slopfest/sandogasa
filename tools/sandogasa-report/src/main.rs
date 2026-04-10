@@ -199,15 +199,22 @@ fn main() -> ExitCode {
     // Collect across all domains.
     let mut needs_bugzilla = false;
     let mut all_koji_domains = Vec::new();
+    let mut fedora_versions: Vec<u32> = Vec::new();
 
     for (_, domain) in &domains {
         if domain.bugzilla {
             needs_bugzilla = true;
+            for &v in &domain.fedora_versions {
+                if !fedora_versions.contains(&v) {
+                    fedora_versions.push(v);
+                }
+            }
         }
         if !domain.koji_tags.is_empty() {
             all_koji_domains.push(*domain);
         }
     }
+    fedora_versions.sort();
 
     // Bugzilla reporting (only once, regardless of how many domains).
     if needs_bugzilla {
@@ -219,7 +226,13 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            match rt.block_on(bugzilla::bugzilla_report(&email, since, until, cli.verbose)) {
+            match rt.block_on(bugzilla::bugzilla_report(
+                &email,
+                &fedora_versions,
+                since,
+                until,
+                cli.verbose,
+            )) {
                 Ok(bz_report) => {
                     unified.bugzilla = Some(bz_report);
                 }

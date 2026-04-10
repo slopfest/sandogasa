@@ -40,6 +40,10 @@ pub struct DomainConfig {
     #[serde(default)]
     pub bugzilla: bool,
 
+    /// Fedora versions for FTBFS/FTI tracker lookup (e.g. [43, 44, 45]).
+    #[serde(default)]
+    pub fedora_versions: Vec<u32>,
+
     /// Include Bodhi queries.
     #[serde(default)]
     pub bodhi: bool,

@@ -14,6 +14,7 @@
 bugzilla = true
 bodhi = true
 bodhi_releases = ["F*", "EPEL-*"]
+fedora_versions = [42, 43, 44]
 
 [domains.epel]
 bugzilla = true

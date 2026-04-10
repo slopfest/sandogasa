@@ -21,6 +21,10 @@ pub struct BugzillaReport {
     pub updates: BugCategory,
     /// Branch requests.
     pub branches: BugCategory,
+    /// FTBFS (Fails To Build From Source) bugs.
+    pub ftbfs: BugCategory,
+    /// FTI (Fails To Install) bugs.
+    pub fti: BugCategory,
     /// Other bugs.
     pub other: BugCategory,
 }
@@ -62,6 +66,8 @@ impl BugzillaReport {
             BugKind::Security => Some(&mut self.security),
             BugKind::Update => Some(&mut self.updates),
             BugKind::Branch => Some(&mut self.branches),
+            BugKind::Ftbfs => Some(&mut self.ftbfs),
+            BugKind::Fti => Some(&mut self.fti),
             BugKind::Other => Some(&mut self.other),
         }
     }
@@ -96,14 +102,30 @@ enum BugKind {
     Security,
     Update,
     Branch,
+    Ftbfs,
+    Fti,
     Other,
+}
+
+/// Tracker bug IDs for FTBFS and FTI classification.
+struct TrackerIds {
+    ftbfs: HashSet<u64>,
+    fti: HashSet<u64>,
 }
 
 /// Classify a bug. Returns `Review` for Package Review bugs
 /// (handled separately by the caller).
-fn classify(bug: &sandogasa_bugzilla::models::Bug) -> BugKind {
+fn classify(bug: &sandogasa_bugzilla::models::Bug, trackers: &TrackerIds) -> BugKind {
     if bug.component.iter().any(|c| c == "Package Review") {
         return BugKind::Review;
+    }
+
+    // FTBFS / FTI: check if the bug blocks a known tracker.
+    if bug.blocks.iter().any(|id| trackers.ftbfs.contains(id)) {
+        return BugKind::Ftbfs;
+    }
+    if bug.blocks.iter().any(|id| trackers.fti.contains(id)) {
+        return BugKind::Fti;
     }
 
     // Security: summary starts with CVE- or SecurityTracking keyword.
@@ -183,14 +205,68 @@ pub fn resolve_email(
     }
 }
 
+/// Look up FTBFS and FTI tracker bug IDs for specified Fedora versions.
+async fn lookup_trackers(bz: &BzClient, versions: &[u32], verbose: bool) -> TrackerIds {
+    let mut ftbfs = HashSet::new();
+    let mut fti = HashSet::new();
+
+    if versions.is_empty() {
+        return TrackerIds { ftbfs, fti };
+    }
+
+    // Build alias queries for the configured Fedora releases
+    // plus the permanent Rawhide trackers.
+    let mut aliases = vec![
+        "RAWHIDEFTBFS".to_string(),
+        "RAWHIDEFailsToInstall".to_string(),
+    ];
+    for ver in versions {
+        aliases.push(format!("F{ver}FTBFS"));
+        aliases.push(format!("F{ver}FailsToInstall"));
+    }
+
+    if verbose {
+        eprintln!("[bugzilla] looking up FTBFS/FTI tracker bugs");
+    }
+
+    // Batch lookup by alias.
+    let alias_params: Vec<String> = aliases.iter().map(|a| format!("alias={a}")).collect();
+    let query = alias_params.join("&");
+    if let Ok(bugs) = bz.search(&query, 0).await {
+        for bug in &bugs {
+            for alias in &bug.alias {
+                if alias.ends_with("FTBFS") {
+                    ftbfs.insert(bug.id);
+                } else if alias.ends_with("FailsToInstall") {
+                    fti.insert(bug.id);
+                }
+            }
+        }
+    }
+
+    if verbose {
+        eprintln!(
+            "[bugzilla] found {} FTBFS and {} FTI tracker(s)",
+            ftbfs.len(),
+            fti.len()
+        );
+    }
+
+    TrackerIds { ftbfs, fti }
+}
+
 /// Run Bugzilla activity reporting.
 pub async fn bugzilla_report(
     email: &str,
+    fedora_versions: &[u32],
     since: NaiveDate,
     until: NaiveDate,
     verbose: bool,
 ) -> Result<BugzillaReport, String> {
     let bz = BzClient::new("https://bugzilla.redhat.com");
+
+    // Look up FTBFS and FTI tracker bug IDs.
+    let trackers = lookup_trackers(&bz, fedora_versions, verbose).await;
 
     let since_str = since.format("%Y-%m-%d").to_string();
     let until_str = until
@@ -333,6 +409,8 @@ pub async fn bugzilla_report(
         security: BugCategory::default(),
         updates: BugCategory::default(),
         branches: BugCategory::default(),
+        ftbfs: BugCategory::default(),
+        fti: BugCategory::default(),
         other: BugCategory::default(),
     };
 
@@ -365,7 +443,7 @@ pub async fn bugzilla_report(
 
     // Non-review filed bugs.
     for bug in &bugs_filed {
-        let kind = classify(bug);
+        let kind = classify(bug, &trackers);
         if let Some(cat) = report.category_mut(kind) {
             cat.filed.push(BugEntry::from(bug));
         }
@@ -377,7 +455,7 @@ pub async fn bugzilla_report(
         if !seen.insert(bug.id) {
             continue;
         }
-        let kind = classify(bug);
+        let kind = classify(bug, &trackers);
         if let Some(cat) = report.category_mut(kind) {
             cat.closed.push(BugEntry::from(bug));
         }
@@ -419,6 +497,8 @@ pub fn format_markdown(report: &BugzillaReport, detailed: bool) -> String {
     if !report.security.is_empty()
         || !report.updates.is_empty()
         || !report.branches.is_empty()
+        || !report.ftbfs.is_empty()
+        || !report.fti.is_empty()
         || !report.other.is_empty()
     {
         out.push_str("| Category | Filed | Closed |\n");
@@ -438,6 +518,8 @@ pub fn format_markdown(report: &BugzillaReport, detailed: bool) -> String {
         row(&mut out, "Security / CVE", &report.security);
         row(&mut out, "Update requests", &report.updates);
         row(&mut out, "Branch requests", &report.branches);
+        row(&mut out, "FTBFS", &report.ftbfs);
+        row(&mut out, "Fails to install", &report.fti);
         row(&mut out, "Other", &report.other);
         out.push('\n');
     }
@@ -525,6 +607,8 @@ pub fn format_markdown(report: &BugzillaReport, detailed: bool) -> String {
     format_category(&mut out, "Security / CVE", &report.security);
     format_category(&mut out, "Update requests", &report.updates);
     format_category(&mut out, "Branch requests", &report.branches);
+    format_category(&mut out, "FTBFS", &report.ftbfs);
+    format_category(&mut out, "Fails to install", &report.fti);
     format_category(&mut out, "Other bugs", &report.other);
 
     out
