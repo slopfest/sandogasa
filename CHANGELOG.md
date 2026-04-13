@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### New: sandogasa-inventory library crate
+
+- TOML-based package-of-interest inventory data model
+- Content-resolver YAML export (feedback-pipeline-workload format)
+- hs-relmon manifest TOML export
+- Import from legacy poi-tracker JSON format
+- Domain-level defaults, private field stripping, multi-inventory merge
+
+### New: poi-tracker tool
+
+- Package-of-interest tracker for Fedora, EPEL, and CentOS SIGs
+- Commands: add, remove, show, validate, export, import
+- Multi-inventory merge for exports
+- Content-resolver export defaults to {name}.yaml filename
+
 ## v0.9.0
 
 ### New: sandogasa-koji library crate

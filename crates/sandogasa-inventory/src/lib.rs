@@ -141,4 +141,108 @@ domains = ["hyperscale"]
         assert_eq!(inv.package.len(), inv2.package.len());
         assert_eq!(inv.package[0].name, inv2.package[0].name);
     }
+
+    #[test]
+    fn load_nonexistent_errors() {
+        assert!(load("/tmp/nonexistent-sandogasa-inv-test.toml").is_err());
+    }
+
+    #[test]
+    fn save_and_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.toml");
+        let inv = parse(
+            r#"
+[inventory]
+name = "roundtrip"
+description = "d"
+maintainer = "m"
+
+[[package]]
+name = "pkg1"
+"#,
+        )
+        .unwrap();
+        save(&inv, path.to_str().unwrap()).unwrap();
+        let loaded = load(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.inventory.name, "roundtrip");
+        assert_eq!(loaded.package.len(), 1);
+    }
+
+    #[test]
+    fn load_and_merge_multiple() {
+        let dir = tempfile::tempdir().unwrap();
+        let p1 = dir.path().join("inv1.toml");
+        let p2 = dir.path().join("inv2.toml");
+
+        std::fs::write(
+            &p1,
+            r#"
+[inventory]
+name = "first"
+description = "d"
+maintainer = "m"
+
+[[package]]
+name = "aaa"
+
+[[package]]
+name = "bbb"
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            &p2,
+            r#"
+[inventory]
+name = "second"
+description = "d2"
+maintainer = "m2"
+
+[[package]]
+name = "ccc"
+
+[[package]]
+name = "bbb"
+reason = "updated"
+"#,
+        )
+        .unwrap();
+
+        let paths = vec![
+            p1.to_str().unwrap().to_string(),
+            p2.to_str().unwrap().to_string(),
+        ];
+        let merged = load_and_merge(&paths).unwrap();
+
+        // Metadata from first file.
+        assert_eq!(merged.inventory.name, "first");
+        // 3 packages: aaa, bbb (replaced), ccc.
+        assert_eq!(merged.package.len(), 3);
+        // bbb should have the updated reason from second file.
+        let bbb = merged.find_package("bbb").unwrap();
+        assert_eq!(bbb.reason.as_deref(), Some("updated"));
+    }
+
+    #[test]
+    fn parse_invalid_errors() {
+        assert!(parse("this is not valid toml [[[").is_err());
+    }
+
+    #[test]
+    fn parse_with_default_domains() {
+        let toml = r#"
+[inventory]
+name = "test"
+description = "d"
+maintainer = "m"
+domains = ["hyperscale"]
+
+[[package]]
+name = "foo"
+"#;
+        let inv = parse(toml).unwrap();
+        assert_eq!(inv.inventory.domains, vec!["hyperscale"]);
+    }
 }

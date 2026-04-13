@@ -293,4 +293,38 @@ mod tests {
         assert_eq!(inv.package.len(), 1);
         assert!(!inv.remove_package("nonexistent"));
     }
+
+    #[test]
+    fn merge_inventories() {
+        let mut inv1 = make_inventory();
+        let inv2 = Inventory {
+            inventory: InventoryMeta {
+                name: "other".to_string(),
+                description: "other".to_string(),
+                maintainer: "other".to_string(),
+                labels: vec![],
+                domains: vec![],
+                private_fields: vec![],
+            },
+            package: vec![Package {
+                name: "new-pkg".to_string(),
+                poc: None,
+                reason: None,
+                team: None,
+                task: None,
+                rpms: None,
+                arch_rpms: None,
+                domains: None,
+                track: None,
+                repology_name: None,
+                distros: None,
+                file_issue: None,
+            }],
+        };
+        inv1.merge(&inv2);
+        assert_eq!(inv1.package.len(), 3);
+        assert!(inv1.find_package("new-pkg").is_some());
+        // Metadata stays from inv1.
+        assert_eq!(inv1.inventory.name, "test");
+    }
 }
