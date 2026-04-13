@@ -8,6 +8,7 @@
 //! hs-relmon manifest formats.
 
 pub mod content_resolver;
+pub mod hs_relmon;
 mod model;
 
 pub use model::{Inventory, InventoryMeta, Package};
