@@ -14,6 +14,23 @@ mod model;
 
 pub use model::{Inventory, InventoryMeta, Package};
 
+/// Load multiple inventories and merge them into one.
+///
+/// The first inventory provides the metadata (name, description,
+/// etc.). Packages from subsequent inventories are merged in.
+pub fn load_and_merge(paths: &[String]) -> Result<Inventory, String> {
+    let mut iter = paths.iter();
+    let first = iter
+        .next()
+        .ok_or("at least one inventory file is required")?;
+    let mut inventory = load(first)?;
+    for path in iter {
+        let other = load(path)?;
+        inventory.merge(&other);
+    }
+    Ok(inventory)
+}
+
 /// Load an inventory from a TOML file.
 pub fn load(path: &str) -> Result<Inventory, String> {
     let content =

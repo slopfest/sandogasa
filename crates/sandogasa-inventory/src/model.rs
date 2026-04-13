@@ -136,6 +136,17 @@ impl Inventory {
         self.package.retain(|p| p.name != name);
         self.package.len() < len
     }
+
+    /// Merge another inventory into this one.
+    ///
+    /// Packages from `other` are added (or replace existing ones with
+    /// the same name). Metadata (name, description, etc.) is kept
+    /// from the original.
+    pub fn merge(&mut self, other: &Inventory) {
+        for pkg in &other.package {
+            self.add_package(pkg.clone());
+        }
+    }
 }
 
 #[cfg(test)]

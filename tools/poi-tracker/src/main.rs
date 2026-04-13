@@ -14,9 +14,9 @@ use clap::{Parser, Subcommand};
     )
 )]
 struct Cli {
-    /// Path to the inventory TOML file.
+    /// Path(s) to inventory TOML file(s).
     #[arg(short, long, default_value = "inventory.toml")]
-    inventory: String,
+    inventory: Vec<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -106,12 +106,18 @@ enum ExportFormat {
         /// Filter by domain.
         #[arg(long)]
         domain: Option<String>,
+        /// Output file (default: {inventory-name}.yaml).
+        #[arg(short, long)]
+        output: Option<String>,
     },
     /// Export as hs-relmon manifest TOML.
     HsRelmon {
         /// Filter by domain.
         #[arg(long)]
         domain: Option<String>,
+        /// Output file (default: stdout).
+        #[arg(short, long)]
+        output: Option<String>,
 
         /// Default distros list.
         #[arg(long, default_value = "upstream,fedora,centos,hyperscale")]
@@ -148,14 +154,15 @@ fn main() -> ExitCode {
         Command::Show(args) => cmd_show(&cli.inventory, args),
         Command::Validate => cmd_validate(&cli.inventory),
         Command::Export(args) => cmd_export(&cli.inventory, args),
-        Command::Add(args) => cmd_add(&cli.inventory, args),
-        Command::Remove(args) => cmd_remove(&cli.inventory, args),
+        // Mutating commands operate on the first inventory file only.
+        Command::Add(args) => cmd_add(&cli.inventory[0], args),
+        Command::Remove(args) => cmd_remove(&cli.inventory[0], args),
         Command::Import(args) => cmd_import(args),
     }
 }
 
-fn cmd_show(path: &str, args: &ShowArgs) -> ExitCode {
-    let inventory = match sandogasa_inventory::load(path) {
+fn cmd_show(paths: &[String], args: &ShowArgs) -> ExitCode {
+    let inventory = match sandogasa_inventory::load_and_merge(paths) {
         Ok(inv) => inv,
         Err(e) => {
             eprintln!("error: {e}");
@@ -201,8 +208,8 @@ fn cmd_show(path: &str, args: &ShowArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn cmd_validate(path: &str) -> ExitCode {
-    let inventory = match sandogasa_inventory::load(path) {
+fn cmd_validate(paths: &[String]) -> ExitCode {
+    let inventory = match sandogasa_inventory::load_and_merge(paths) {
         Ok(inv) => inv,
         Err(e) => {
             eprintln!("error: {e}");
@@ -248,8 +255,8 @@ fn cmd_validate(path: &str) -> ExitCode {
     }
 }
 
-fn cmd_export(path: &str, args: &ExportArgs) -> ExitCode {
-    let inventory = match sandogasa_inventory::load(path) {
+fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
+    let inventory = match sandogasa_inventory::load_and_merge(paths) {
         Ok(inv) => inv,
         Err(e) => {
             eprintln!("error: {e}");
@@ -257,15 +264,17 @@ fn cmd_export(path: &str, args: &ExportArgs) -> ExitCode {
         }
     };
 
-    match &args.format {
-        ExportFormat::ContentResolver { domain } => {
+    let (content, default_filename) = match &args.format {
+        ExportFormat::ContentResolver { domain, .. } => {
             let yaml = sandogasa_inventory::content_resolver::export(&inventory, domain.as_deref());
-            print!("{yaml}");
+            let filename = format!("{}.yaml", inventory.inventory.name.replace(' ', "_"));
+            (yaml, Some(filename))
         }
         ExportFormat::HsRelmon {
             domain,
             distros,
             track,
+            ..
         } => {
             let defaults = sandogasa_inventory::hs_relmon::RelmonDefaults {
                 distros: distros.clone(),
@@ -274,8 +283,24 @@ fn cmd_export(path: &str, args: &ExportArgs) -> ExitCode {
             };
             let toml =
                 sandogasa_inventory::hs_relmon::export(&inventory, domain.as_deref(), &defaults);
-            print!("{toml}");
+            (toml, None)
         }
+    };
+
+    let output_path = match &args.format {
+        ExportFormat::ContentResolver { output, .. } | ExportFormat::HsRelmon { output, .. } => {
+            output.clone().or(default_filename)
+        }
+    };
+
+    if let Some(ref path) = output_path {
+        if let Err(e) = std::fs::write(path, &content) {
+            eprintln!("error: failed to write {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+        eprintln!("Wrote {path}");
+    } else {
+        print!("{content}");
     }
 
     ExitCode::SUCCESS
