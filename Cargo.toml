@@ -34,7 +34,7 @@ members = [
 [workspace.package]
 version = "0.9.1"
 edition = "2024"
-license = "MPL-2.0"
+license = "Apache-2.0 OR MIT"
 repository = "https://github.com/slopfest/fedora-cve-triage"
 
 [workspace.dependencies]

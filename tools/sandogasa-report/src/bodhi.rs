@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Bodhi activity reporting — updates pushed, per-release breakdown.
 

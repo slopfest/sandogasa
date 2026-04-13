@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Export to hs-relmon manifest format.
 
@@ -30,7 +30,7 @@ pub fn export(inventory: &Inventory, domain: Option<&str>, defaults: &RelmonDefa
     let relmon_packages: Vec<&&Package> = packages.iter().filter(|p| p.track.is_some()).collect();
 
     let mut out = String::new();
-    out.push_str("# SPDX-License-Identifier: MPL-2.0\n\n");
+    out.push_str("# SPDX-License-Identifier: Apache-2.0 OR MIT\n\n");
     out.push_str("[defaults]\n");
     out.push_str(&format!("distros = \"{}\"\n", defaults.distros));
     out.push_str(&format!("track = \"{}\"\n", defaults.track));

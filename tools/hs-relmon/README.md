@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: MPL-2.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
 
 # hs-relmon
 
@@ -209,4 +209,9 @@ cargo cov
 
 ## License
 
-[MPL-2.0](LICENSE)
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.

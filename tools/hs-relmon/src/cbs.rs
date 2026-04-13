@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use quick_xml::Reader;
 use quick_xml::events::Event;

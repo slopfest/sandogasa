@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 /// Known package ecosystems detectable from Fedora package names and spec files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

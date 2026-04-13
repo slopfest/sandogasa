@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Thin wrapper around [`sandogasa_gitlab`] that adds token loading
 //! from the local config file and provides convenience constructors

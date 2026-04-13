@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Analyze a crates.io crate's dependencies against a target RPM repo.
 //!

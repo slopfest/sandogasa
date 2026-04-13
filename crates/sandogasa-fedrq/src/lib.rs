@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Rust wrapper for the [fedrq](https://github.com/gotmax23/fedrq) CLI tool
 //! for querying Fedora and EPEL RPM repositories.

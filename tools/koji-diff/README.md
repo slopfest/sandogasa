@@ -77,4 +77,9 @@ Changed packages are color-coded by semver severity (using Rust semver rules):
 
 ## License
 
-MPL-2.0
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.

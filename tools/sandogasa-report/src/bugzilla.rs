@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Bugzilla activity reporting — review requests, CVE fixes,
 //! update requests, branch requests, and general bugs.

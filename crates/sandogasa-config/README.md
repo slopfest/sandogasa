@@ -13,4 +13,9 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
 
 ## License
 
-MPL-2.0
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.

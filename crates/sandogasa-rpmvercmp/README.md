@@ -21,4 +21,9 @@ assert_eq!(compare_evr("2:1.0-1", "1:2.0-1"), Ordering::Greater);
 
 ## License
 
-This project is licensed under the [Mozilla Public License 2.0](https://mozilla.org/MPL/2.0/).
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.

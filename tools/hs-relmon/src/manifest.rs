@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::check_latest::{Distros, TrackRef};
 use serde::{Deserialize, Serialize};
@@ -470,7 +470,7 @@ repology_name = "linux"
     #[test]
     fn test_add_packages_to_file() {
         let original = "\
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: Apache-2.0 OR MIT
 
 # Default settings.
 [defaults]

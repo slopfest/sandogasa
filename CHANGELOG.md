@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Workspace
+
+- Relicense from MPL-2.0 to Apache-2.0 OR MIT
+
 ## v0.9.1
 
 ### New: sandogasa-inventory library crate
