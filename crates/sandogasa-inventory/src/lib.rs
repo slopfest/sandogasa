@@ -7,6 +7,7 @@
 //! content-resolver YAML (feedback-pipeline-workload) and
 //! hs-relmon manifest formats.
 
+pub mod content_resolver;
 mod model;
 
 pub use model::{Inventory, InventoryMeta, Package};
