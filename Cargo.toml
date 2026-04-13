@@ -23,6 +23,7 @@ members = [
     "tools/koji-diff",
     "tools/hs-relmon",
     "tools/sandogasa-hattrack",
+    "tools/poi-tracker",
     "tools/sandogasa-pkg-acl",
     "tools/sandogasa-report",
 ]

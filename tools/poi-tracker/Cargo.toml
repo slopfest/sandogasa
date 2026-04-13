@@ -1,0 +1,13 @@
+[package]
+name = "poi-tracker"
+description = "Package-of-interest tracker for Fedora, EPEL, and CentOS SIGs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+sandogasa-inventory = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
