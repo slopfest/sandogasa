@@ -15,8 +15,12 @@ use clap::{Parser, Subcommand};
 )]
 struct Cli {
     /// Path(s) to inventory TOML file(s).
-    #[arg(short, long, default_value = "inventory.toml")]
+    #[arg(short, long)]
     inventory: Vec<String>,
+
+    /// Directory to scan for *.toml inventory files.
+    #[arg(short = 'I', long, value_name = "DIR")]
+    inventory_dir: Vec<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -28,6 +32,8 @@ enum Command {
     Add(AddArgs),
     /// Export inventory to another format.
     Export(ExportArgs),
+    /// Find which inventory file(s) contain a package.
+    Find(FindArgs),
     /// Import from legacy JSON format.
     Import(ImportArgs),
     /// Remove a package from the inventory.
@@ -59,17 +65,23 @@ struct AddArgs {
     #[arg(long)]
     task: Option<String>,
 
-    /// Binary RPM subpackage(s) to track.
+    /// Binary RPM subpackage(s) to track (comma-separated or repeated).
     #[arg(long, value_delimiter = ',')]
     rpm: Vec<String>,
 
-    /// Domain tag(s).
+    /// Domain tag(s) (comma-separated or repeated).
     #[arg(long, value_delimiter = ',')]
     domain: Vec<String>,
 
     /// Track branch for hs-relmon (e.g. upstream, fedora-rawhide).
     #[arg(long)]
     track: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct FindArgs {
+    /// Source RPM name to search for.
+    name: String,
 }
 
 #[derive(clap::Args)]
@@ -147,16 +159,45 @@ struct ImportArgs {
     domain: Vec<String>,
 }
 
+/// Collect inventory paths from -i and -I flags.
+fn resolve_inventory_paths(cli: &Cli) -> Vec<String> {
+    let mut paths = cli.inventory.clone();
+
+    for dir in &cli.inventory_dir {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            let mut dir_paths: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
+                .map(|e| e.path().to_string_lossy().to_string())
+                .collect();
+            dir_paths.sort();
+            paths.extend(dir_paths);
+        } else {
+            eprintln!("warning: could not read directory: {dir}");
+        }
+    }
+
+    paths
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let paths = resolve_inventory_paths(&cli);
+
+    if paths.is_empty() {
+        eprintln!("error: no inventory files specified. Use -i or -I.");
+        return ExitCode::FAILURE;
+    }
 
     match &cli.command {
-        Command::Show(args) => cmd_show(&cli.inventory, args),
-        Command::Validate => cmd_validate(&cli.inventory),
-        Command::Export(args) => cmd_export(&cli.inventory, args),
-        // Mutating commands operate on the first inventory file only.
-        Command::Add(args) => cmd_add(&cli.inventory[0], args),
-        Command::Remove(args) => cmd_remove(&cli.inventory[0], args),
+        Command::Show(args) => cmd_show(&paths, args),
+        Command::Validate => cmd_validate(&paths),
+        Command::Export(args) => cmd_export(&paths, args),
+        Command::Find(args) => cmd_find(&paths, args),
+        // Add searches all inventories, falls back to first file.
+        Command::Add(args) => cmd_add(&paths, args),
+        // Remove operates on the first inventory file.
+        Command::Remove(args) => cmd_remove(&paths[0], args),
         Command::Import(args) => cmd_import(args),
     }
 }
@@ -306,8 +347,99 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn cmd_add(path: &str, args: &AddArgs) -> ExitCode {
-    let mut inventory = match sandogasa_inventory::load(path) {
+fn cmd_find(paths: &[String], args: &FindArgs) -> ExitCode {
+    let mut found = false;
+    for path in paths {
+        let inventory = match sandogasa_inventory::load(path) {
+            Ok(inv) => inv,
+            Err(e) => {
+                eprintln!("warning: {path}: {e}");
+                continue;
+            }
+        };
+        if let Some(pkg) = inventory.find_package(&args.name) {
+            found = true;
+            println!("{path}: {}", pkg.name);
+            if let Some(ref poc) = pkg.poc {
+                println!("  poc: {poc}");
+            }
+            if let Some(ref reason) = pkg.reason {
+                println!("  reason: {reason}");
+            }
+            if let Some(ref rpms) = pkg.rpms {
+                println!("  rpms: {}", rpms.join(", "));
+            }
+            if let Some(ref domains) = pkg.domains {
+                println!("  domains: {}", domains.join(", "));
+            }
+            if let Some(ref track) = pkg.track {
+                println!("  track: {track}");
+            }
+        }
+    }
+    if !found {
+        eprintln!("{} not found in any inventory.", args.name);
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+/// Merge new fields into an existing package without overwriting.
+fn merge_into_package(existing: &mut sandogasa_inventory::Package, args: &AddArgs) {
+    // Append RPMs (don't replace).
+    if !args.rpm.is_empty() {
+        let rpms = existing.rpms.get_or_insert_with(Vec::new);
+        for rpm in &args.rpm {
+            if !rpms.contains(rpm) {
+                rpms.push(rpm.clone());
+            }
+        }
+        rpms.sort();
+    }
+    // Append domains (don't replace).
+    if !args.domain.is_empty() {
+        let domains = existing.domains.get_or_insert_with(Vec::new);
+        for d in &args.domain {
+            if !domains.contains(d) {
+                domains.push(d.clone());
+            }
+        }
+        domains.sort();
+    }
+    // Only set metadata if not already present.
+    if existing.poc.is_none() {
+        existing.poc.clone_from(&args.poc);
+    }
+    if existing.reason.is_none() {
+        existing.reason.clone_from(&args.reason);
+    }
+    if existing.team.is_none() {
+        existing.team.clone_from(&args.team);
+    }
+    if existing.task.is_none() {
+        existing.task.clone_from(&args.task);
+    }
+    if existing.track.is_none() {
+        existing.track.clone_from(&args.track);
+    }
+}
+
+fn cmd_add(paths: &[String], args: &AddArgs) -> ExitCode {
+    // Search all inventories for the package.
+    let mut target_path = None;
+    for path in paths {
+        if let Ok(inv) = sandogasa_inventory::load(path)
+            && inv.find_package(&args.name).is_some()
+        {
+            target_path = Some(path.clone());
+            break;
+        }
+    }
+
+    // Fall back to first inventory file.
+    let target_path = target_path.unwrap_or_else(|| paths[0].clone());
+
+    let mut inventory = match sandogasa_inventory::load(&target_path) {
         Ok(inv) => inv,
         Err(e) => {
             eprintln!("error: {e}");
@@ -315,41 +447,41 @@ fn cmd_add(path: &str, args: &AddArgs) -> ExitCode {
         }
     };
 
-    let pkg = sandogasa_inventory::Package {
-        name: args.name.clone(),
-        poc: args.poc.clone(),
-        reason: args.reason.clone(),
-        team: args.team.clone(),
-        task: args.task.clone(),
-        rpms: if args.rpm.is_empty() {
-            None
-        } else {
-            Some(args.rpm.clone())
-        },
-        arch_rpms: None,
-        domains: if args.domain.is_empty() {
-            None
-        } else {
-            Some(args.domain.clone())
-        },
-        track: args.track.clone(),
-        repology_name: None,
-        distros: None,
-        file_issue: None,
-    };
-
-    let replacing = inventory.find_package(&args.name).is_some();
-    inventory.add_package(pkg);
-
-    if let Err(e) = sandogasa_inventory::save(&inventory, path) {
-        eprintln!("error: {e}");
-        return ExitCode::FAILURE;
+    if let Some(existing) = inventory.find_package_mut(&args.name) {
+        // Merge into existing package.
+        merge_into_package(existing, args);
+        eprintln!("Updated {} in {target_path}", args.name);
+    } else {
+        // Add new package.
+        let pkg = sandogasa_inventory::Package {
+            name: args.name.clone(),
+            poc: args.poc.clone(),
+            reason: args.reason.clone(),
+            team: args.team.clone(),
+            task: args.task.clone(),
+            rpms: if args.rpm.is_empty() {
+                None
+            } else {
+                Some(args.rpm.clone())
+            },
+            arch_rpms: None,
+            domains: if args.domain.is_empty() {
+                None
+            } else {
+                Some(args.domain.clone())
+            },
+            track: args.track.clone(),
+            repology_name: None,
+            distros: None,
+            file_issue: None,
+        };
+        inventory.add_package(pkg);
+        eprintln!("Added {} to {target_path}", args.name);
     }
 
-    if replacing {
-        eprintln!("Updated {} in {path}", args.name);
-    } else {
-        eprintln!("Added {} to {path}", args.name);
+    if let Err(e) = sandogasa_inventory::save(&inventory, &target_path) {
+        eprintln!("error: {e}");
+        return ExitCode::FAILURE;
     }
 
     ExitCode::SUCCESS
