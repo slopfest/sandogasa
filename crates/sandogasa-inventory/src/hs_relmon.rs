@@ -94,6 +94,7 @@ mod tests {
                 description: "test".to_string(),
                 maintainer: "tester".to_string(),
                 labels: vec![],
+                domains: vec![],
                 private_fields: vec![],
             },
             package: packages,

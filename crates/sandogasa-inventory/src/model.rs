@@ -28,6 +28,9 @@ pub struct InventoryMeta {
     /// Labels/tags for the inventory (e.g. "eln-extras").
     #[serde(default)]
     pub labels: Vec<String>,
+    /// Default domain(s) for packages that don't specify their own.
+    #[serde(default)]
+    pub domains: Vec<String>,
     /// Field names to strip from all packages on export.
     #[serde(default)]
     pub private_fields: Vec<String>,
@@ -88,18 +91,22 @@ impl Inventory {
     }
 
     /// Get packages filtered by domain. Returns all if domain is None.
+    ///
+    /// Packages without explicit domains inherit the inventory-level
+    /// default domains.
     pub fn packages_for_domain(&self, domain: Option<&str>) -> Vec<&Package> {
         match domain {
             None => self.package.iter().collect(),
-            Some(d) => self
-                .package
-                .iter()
-                .filter(|p| {
-                    p.domains
-                        .as_ref()
-                        .is_some_and(|domains| domains.iter().any(|dom| dom == d))
-                })
-                .collect(),
+            Some(d) => {
+                let default_match = self.inventory.domains.iter().any(|dom| dom == d);
+                self.package
+                    .iter()
+                    .filter(|p| match &p.domains {
+                        Some(domains) => domains.iter().any(|dom| dom == d),
+                        None => default_match,
+                    })
+                    .collect()
+            }
         }
     }
 
@@ -142,6 +149,7 @@ mod tests {
                 description: "test".to_string(),
                 maintainer: "tester".to_string(),
                 labels: vec![],
+                domains: vec![],
                 private_fields: vec!["poc".to_string(), "team".to_string()],
             },
             package: vec![
@@ -196,6 +204,33 @@ mod tests {
         assert_eq!(epel[0].name, "foo");
         let all = inv.packages_for_domain(None);
         assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn packages_for_domain_inherits_default() {
+        let mut inv = make_inventory();
+        inv.inventory.domains = vec!["hyperscale".to_string()];
+        // Add a package with no explicit domains.
+        inv.add_package(Package {
+            name: "nodomain".to_string(),
+            poc: None,
+            reason: None,
+            team: None,
+            task: None,
+            rpms: None,
+            arch_rpms: None,
+            domains: None,
+            track: None,
+            repology_name: None,
+            distros: None,
+            file_issue: None,
+        });
+        // Should inherit "hyperscale" from inventory default.
+        let hs = inv.packages_for_domain(Some("hyperscale"));
+        assert!(hs.iter().any(|p| p.name == "nodomain"));
+        // But not "epel".
+        let epel = inv.packages_for_domain(Some("epel"));
+        assert!(!epel.iter().any(|p| p.name == "nodomain"));
     }
 
     #[test]

@@ -93,6 +93,7 @@ pub fn import(json_str: &str) -> Result<Inventory, String> {
             description: json.description,
             maintainer: json.maintainer,
             labels: json.labels,
+            domains: vec![],
             private_fields: vec![],
         },
         package: packages,

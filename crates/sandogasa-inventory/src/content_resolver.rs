@@ -110,6 +110,7 @@ mod tests {
                 description: "Test packages".to_string(),
                 maintainer: "test-sig".to_string(),
                 labels: vec!["eln-extras".to_string()],
+                domains: vec![],
                 private_fields: vec!["poc".to_string()],
             },
             package: vec![
