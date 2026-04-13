@@ -1592,6 +1592,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandogasa-inventory"
+version = "0.9.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "sandogasa-koji"
 version = "0.9.0"
 
