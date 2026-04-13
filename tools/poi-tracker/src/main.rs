@@ -131,6 +131,14 @@ struct ImportArgs {
     /// Output path for TOML inventory.
     #[arg(short, long, default_value = "inventory.toml")]
     output: String,
+
+    /// Fields to mark as private (stripped on export).
+    #[arg(long, value_delimiter = ',', value_name = "FIELD,...")]
+    private_fields: Vec<String>,
+
+    /// Domain tag(s) to apply to all imported packages.
+    #[arg(long, value_delimiter = ',', value_name = "DOMAIN,...")]
+    domain: Vec<String>,
 }
 
 fn main() -> ExitCode {
@@ -367,7 +375,34 @@ fn cmd_remove(path: &str, args: &RemoveArgs) -> ExitCode {
 }
 
 fn cmd_import(args: &ImportArgs) -> ExitCode {
-    eprintln!("Import from JSON is not yet implemented.");
-    let _ = args;
-    ExitCode::FAILURE
+    let mut inventory = match sandogasa_inventory::import_json::import_file(&args.json_file) {
+        Ok(inv) => inv,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if !args.private_fields.is_empty() {
+        inventory.inventory.private_fields = args.private_fields.clone();
+    }
+
+    if !args.domain.is_empty() {
+        for pkg in &mut inventory.package {
+            pkg.domains = Some(args.domain.clone());
+        }
+    }
+
+    if let Err(e) = sandogasa_inventory::save(&inventory, &args.output) {
+        eprintln!("error: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    eprintln!(
+        "Imported {} package(s) from {} to {}",
+        inventory.package.len(),
+        args.json_file,
+        args.output
+    );
+    ExitCode::SUCCESS
 }

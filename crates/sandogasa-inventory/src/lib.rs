@@ -9,6 +9,7 @@
 
 pub mod content_resolver;
 pub mod hs_relmon;
+pub mod import_json;
 mod model;
 
 pub use model::{Inventory, InventoryMeta, Package};
