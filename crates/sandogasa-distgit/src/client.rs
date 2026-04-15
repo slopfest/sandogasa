@@ -71,7 +71,7 @@ struct GroupProjectsResponse {
 }
 
 /// Remove duplicate projects by name, keeping the first occurrence.
-fn dedup_projects(projects: &mut Vec<ProjectInfo>) {
+pub fn dedup_projects(projects: &mut Vec<ProjectInfo>) {
     let mut seen = std::collections::HashSet::new();
     projects.retain(|p| seen.insert(p.name.clone()));
 }
@@ -346,17 +346,21 @@ impl DistGitClient {
     ///
     /// Paginates automatically, returning all pages. Retries on
     /// transient server errors (502/503/504). Deduplicates by name.
+    /// An optional `pattern` filters by project name (supports `*`
+    /// wildcards, e.g. `"python-*"`).
     pub async fn user_projects(
         &self,
         username: &str,
         per_page: u32,
+        pattern: Option<&str>,
     ) -> Result<Vec<ProjectInfo>, Box<dyn std::error::Error>> {
         let mut all = Vec::new();
         let mut page = 1u64;
+        let pattern_param = pattern.map(|p| format!("&pattern={p}")).unwrap_or_default();
         loop {
             let url = format!(
-                "{}/api/0/projects?namespace=rpms&username={}&per_page={}&page={}",
-                self.base_url, username, per_page, page
+                "{}/api/0/projects?namespace=rpms&username={}&per_page={}&page={}{}",
+                self.base_url, username, per_page, page, pattern_param
             );
             eprint!("\r  fetching page {page}...");
             let resp = self.get_with_retry(&url).await?;
@@ -376,17 +380,21 @@ impl DistGitClient {
     ///
     /// Paginates automatically, returning all pages. Retries on
     /// transient server errors (502/503/504). Deduplicates by name.
+    /// An optional `pattern` filters by project name (supports `*`
+    /// wildcards, e.g. `"python-*"`).
     pub async fn group_projects(
         &self,
         group: &str,
         per_page: u32,
+        pattern: Option<&str>,
     ) -> Result<Vec<ProjectInfo>, Box<dyn std::error::Error>> {
         let mut all = Vec::new();
         let mut page = 1u64;
+        let pattern_param = pattern.map(|p| format!("&pattern={p}")).unwrap_or_default();
         loop {
             let url = format!(
-                "{}/api/0/group/{}?projects=true&per_page={}&page={}",
-                self.base_url, group, per_page, page
+                "{}/api/0/group/{}?projects=true&per_page={}&page={}{}",
+                self.base_url, group, per_page, page, pattern_param
             );
             eprint!("\r  fetching page {page}...");
             let resp = self.get_with_retry(&url).await?;
@@ -1320,7 +1328,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let projects = client.user_projects("salimma", 100).await.unwrap();
+        let projects = client.user_projects("salimma", 100, None).await.unwrap();
         assert_eq!(projects.len(), 2);
         assert_eq!(projects[0].name, "freerdp");
         assert_eq!(projects[1].name, "systemd");
@@ -1362,7 +1370,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let projects = client.user_projects("salimma", 100).await.unwrap();
+        let projects = client.user_projects("salimma", 100, None).await.unwrap();
         assert_eq!(projects.len(), 2);
         assert_eq!(projects[0].name, "aaa");
         assert_eq!(projects[1].name, "zzz");
@@ -1383,7 +1391,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let projects = client.user_projects("nobody", 100).await.unwrap();
+        let projects = client.user_projects("nobody", 100, None).await.unwrap();
         assert!(projects.is_empty());
     }
 
@@ -1409,7 +1417,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let projects = client.group_projects("hyperscale-sig", 100).await.unwrap();
+        let projects = client
+            .group_projects("hyperscale-sig", 100, None)
+            .await
+            .unwrap();
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "systemd");
     }
@@ -1425,7 +1436,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let result = client.group_projects("nonexistent", 100).await;
+        let result = client.group_projects("nonexistent", 100, None).await;
         assert!(result.is_err());
     }
 }

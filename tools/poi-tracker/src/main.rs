@@ -201,6 +201,14 @@ struct SyncDistgitArgs {
     #[arg(long, value_delimiter = ',', value_name = "GROUP,...")]
     exclude_group: Vec<String>,
 
+    /// Package name pattern (* wildcards).
+    #[arg(long, conflicts_with = "auto_prefix")]
+    pattern: Option<String>,
+
+    /// Query by a-z/0-9 prefix to avoid timeouts.
+    #[arg(long, conflicts_with = "pattern")]
+    auto_prefix: bool,
+
     /// Remove packages no longer in dist-git results.
     #[arg(long)]
     prune: bool,
@@ -696,12 +704,43 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         }
     }
 
+    let patterns = if args.auto_prefix {
+        ('a'..='z')
+            .chain('0'..='9')
+            .map(|c| format!("{c}*"))
+            .collect::<Vec<_>>()
+    } else {
+        vec![args.pattern.clone().unwrap_or_default()]
+    };
+
     let (projects, source_label) = if let Some(ref user) = args.user {
-        let projects = client.user_projects(user, args.per_page).await?;
-        (projects, format!("user:{user}"))
+        let mut all = Vec::new();
+        for pat in &patterns {
+            let p = if pat.is_empty() {
+                client.user_projects(user, args.per_page, None).await?
+            } else {
+                eprintln!("  pattern: {pat}");
+                client.user_projects(user, args.per_page, Some(pat)).await?
+            };
+            all.extend(p);
+        }
+        sandogasa_distgit::client::dedup_projects(&mut all);
+        (all, format!("user:{user}"))
     } else if let Some(ref group) = args.group {
-        let projects = client.group_projects(group, args.per_page).await?;
-        (projects, format!("group:{group}"))
+        let mut all = Vec::new();
+        for pat in &patterns {
+            let p = if pat.is_empty() {
+                client.group_projects(group, args.per_page, None).await?
+            } else {
+                eprintln!("  pattern: {pat}");
+                client
+                    .group_projects(group, args.per_page, Some(pat))
+                    .await?
+            };
+            all.extend(p);
+        }
+        sandogasa_distgit::client::dedup_projects(&mut all);
+        (all, format!("group:{group}"))
     } else {
         unreachable!("clap enforces --user or --group");
     };
@@ -893,6 +932,8 @@ mod tests {
             no_groups: false,
             include_group: vec![],
             exclude_group: vec![],
+            pattern: None,
+            auto_prefix: false,
             prune: false,
             per_page: 100,
             domain: vec![],
