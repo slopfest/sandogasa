@@ -549,7 +549,7 @@ mod tests {
                 "groups": {
                     "admin": [],
                     "collaborators": [
-                        {"branches": "epel*", "user": "epel-packagers-sig"}
+                        {"branches": "epel*", "user": "btrfs-sig"}
                     ],
                     "commit": [],
                     "ticket": []
@@ -571,10 +571,7 @@ mod tests {
             .unwrap();
         assert_eq!(contribs.users.admin, vec!["orion"]);
         assert_eq!(contribs.groups.collaborators.len(), 1);
-        assert_eq!(
-            contribs.groups.collaborators[0].name(),
-            "epel-packagers-sig"
-        );
+        assert_eq!(contribs.groups.collaborators[0].name(), "btrfs-sig");
         assert_eq!(contribs.groups.collaborators[0].branches(), Some("epel*"));
     }
 
@@ -834,10 +831,10 @@ mod tests {
         let client = DistGitClient::with_base_url(&server.uri());
 
         Mock::given(method("GET"))
-            .and(path("/api/0/group/python-sig"))
+            .and(path("/api/0/group/python-packagers-sig"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "members": ["salimma", "dcavalca"],
-                "name": "python-sig"
+                "name": "python-packagers-sig"
             })))
             .expect(1)
             .mount(&server)
@@ -852,7 +849,7 @@ mod tests {
                 ticket: vec![],
             },
             access_groups: AccessGroups {
-                admin: vec!["python-sig".to_string()],
+                admin: vec!["python-packagers-sig".to_string()],
                 commit: vec![],
                 collaborator: vec![],
                 ticket: vec![],
@@ -867,7 +864,7 @@ mod tests {
         match result {
             AccessResult::ViaGroup { level, group } => {
                 assert_eq!(level, AccessLevel::Admin);
-                assert_eq!(group, "python-sig");
+                assert_eq!(group, "python-packagers-sig");
             }
             _ => panic!("expected ViaGroup"),
         }
@@ -947,10 +944,10 @@ mod tests {
         let client = DistGitClient::with_base_url(&server.uri());
 
         Mock::given(method("GET"))
-            .and(path("/api/0/group/python-sig"))
+            .and(path("/api/0/group/python-packagers-sig"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "members": ["dcavalca"],
-                "name": "python-sig"
+                "name": "python-packagers-sig"
             })))
             .expect(1)
             .mount(&server)
@@ -965,7 +962,7 @@ mod tests {
                 ticket: vec![],
             },
             access_groups: AccessGroups {
-                admin: vec!["python-sig".to_string()],
+                admin: vec!["python-packagers-sig".to_string()],
                 commit: vec![],
                 collaborator: vec![],
                 ticket: vec![],
@@ -1320,7 +1317,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "projects": [
                     project_json("freerdp", "salimma", &[]),
-                    project_json("systemd", "ngompa", &["hyperscale-sig"])
+                    project_json("systemd", "ngompa", &["btrfs-sig"])
                 ],
                 "pagination": { "pages": 1, "per_page": 100 }
             })))
@@ -1338,7 +1335,7 @@ mod tests {
                 .owner
                 .contains(&"salimma".to_string())
         );
-        assert!(projects[1].access_groups.contains_group("hyperscale-sig"));
+        assert!(projects[1].access_groups.contains_group("btrfs-sig"));
     }
 
     #[tokio::test]
@@ -1403,13 +1400,13 @@ mod tests {
         let client = DistGitClient::with_base_url(&server.uri());
 
         Mock::given(method("GET"))
-            .and(path("/api/0/group/hyperscale-sig"))
+            .and(path("/api/0/group/btrfs-sig"))
             .and(query_param("projects", "true"))
             .and(query_param("page", "1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "members": ["salimma", "dcavalca"],
                 "projects": [
-                    project_json("systemd", "ngompa", &["hyperscale-sig"])
+                    project_json("systemd", "ngompa", &["btrfs-sig"])
                 ],
                 "pagination": { "pages": 1, "per_page": 100 }
             })))
@@ -1417,10 +1414,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let projects = client
-            .group_projects("hyperscale-sig", 100, None)
-            .await
-            .unwrap();
+        let projects = client.group_projects("btrfs-sig", 100, None).await.unwrap();
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "systemd");
     }

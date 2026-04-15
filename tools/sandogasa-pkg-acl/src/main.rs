@@ -1322,7 +1322,7 @@ mod tests {
     fn check_skip_same_ticket_level() {
         let result = check_skip(
             "group",
-            "python-sig",
+            "python-packagers-sig",
             "ticket",
             Some(AccessLevel::Ticket),
             false,
@@ -1331,7 +1331,7 @@ mod tests {
         );
         let entry = result.expect("should skip same level");
         assert_eq!(entry.level, Some("ticket".to_string()));
-        assert_eq!(entry.name, "python-sig");
+        assert_eq!(entry.name, "python-packagers-sig");
     }
 
     // ---- multi-package apply result serialization ----

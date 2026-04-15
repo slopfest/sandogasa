@@ -78,7 +78,7 @@ packages without overwriting existing entries or annotations.
 poi-tracker sync-distgit --user salimma -o my.toml
 
 # All packages for a group
-poi-tracker sync-distgit --group hyperscale-sig -o hs.toml
+poi-tracker sync-distgit --group kde-sig -o kde.toml
 
 # Exclude packages with only group-based access
 poi-tracker sync-distgit --user salimma --no-groups
@@ -92,8 +92,8 @@ poi-tracker sync-distgit --user salimma \
     --exclude-group rust-sig
 
 # Add domain tags to all imported packages
-poi-tracker sync-distgit --group hyperscale-sig \
-    --domain hyperscale -o hs.toml
+poi-tracker sync-distgit --group kde-sig \
+    --domain kde -o kde.toml
 
 # Remove packages no longer in dist-git results
 poi-tracker sync-distgit --user salimma --prune -o my.toml

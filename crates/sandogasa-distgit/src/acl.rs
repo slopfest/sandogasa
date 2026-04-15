@@ -431,7 +431,7 @@ mod tests {
             },
             access_groups: AccessGroups {
                 admin: vec!["kde-sig".to_string()],
-                commit: vec!["python-sig".to_string()],
+                commit: vec!["python-packagers-sig".to_string()],
                 collaborator: vec![],
                 ticket: vec![],
             },
@@ -451,12 +451,15 @@ mod tests {
             },
             access_groups: AccessGroups {
                 admin: vec![],
-                commit: vec!["python-sig".to_string()],
+                commit: vec!["python-packagers-sig".to_string()],
                 collaborator: vec![],
                 ticket: vec![],
             },
         };
-        assert_eq!(acls.group_level("python-sig"), Some(AccessLevel::Commit));
+        assert_eq!(
+            acls.group_level("python-packagers-sig"),
+            Some(AccessLevel::Commit)
+        );
     }
 
     #[test]
@@ -601,7 +604,7 @@ mod tests {
             "groups": {
                 "admin": [],
                 "collaborators": [
-                    {"branches": "epel*", "user": "epel-packagers-sig"}
+                    {"branches": "epel*", "user": "btrfs-sig"}
                 ],
                 "commit": [],
                 "ticket": []
@@ -617,10 +620,7 @@ mod tests {
         assert_eq!(contribs.users.admin, vec!["abompard", "orion"]);
         assert!(contribs.users.collaborators.is_empty());
         assert_eq!(contribs.groups.collaborators.len(), 1);
-        assert_eq!(
-            contribs.groups.collaborators[0].name(),
-            "epel-packagers-sig"
-        );
+        assert_eq!(contribs.groups.collaborators[0].name(), "btrfs-sig");
         assert_eq!(contribs.groups.collaborators[0].branches(), Some("epel*"));
     }
 
@@ -728,8 +728,8 @@ mod tests {
 
     #[test]
     fn contains_group_in_commit() {
-        let groups = make_groups(vec![], vec!["python-sig"], vec![], vec![]);
-        assert!(groups.contains_group("python-sig"));
+        let groups = make_groups(vec![], vec!["python-packagers-sig"], vec![], vec![]);
+        assert!(groups.contains_group("python-packagers-sig"));
     }
 
     #[test]
@@ -740,13 +740,18 @@ mod tests {
 
     #[test]
     fn contains_group_in_ticket() {
-        let groups = make_groups(vec![], vec![], vec![], vec!["epel-sig"]);
-        assert!(groups.contains_group("epel-sig"));
+        let groups = make_groups(vec![], vec![], vec![], vec!["btrfs-sig"]);
+        assert!(groups.contains_group("btrfs-sig"));
     }
 
     #[test]
     fn contains_group_not_present() {
-        let groups = make_groups(vec!["rust-sig"], vec!["python-sig"], vec![], vec![]);
+        let groups = make_groups(
+            vec!["rust-sig"],
+            vec!["python-packagers-sig"],
+            vec![],
+            vec![],
+        );
         assert!(!groups.contains_group("kde-sig"));
     }
 

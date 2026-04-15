@@ -997,7 +997,7 @@ mod tests {
     fn filter_include_group_matches() {
         let projects = vec![
             make_project_with_commit("a", "bob", &[], &["rust-sig"]),
-            make_project_with_commit("b", "bob", &[], &["python-sig"]),
+            make_project_with_commit("b", "bob", &[], &["python-packagers-sig"]),
         ];
         let mut args = default_args();
         args.include_group = vec!["rust-sig".to_string()];
@@ -1010,12 +1010,12 @@ mod tests {
     fn filter_include_group_still_keeps_direct() {
         let projects = vec![
             make_project("owned", "alice", &[]),
-            make_project_with_commit("group-only", "bob", &[], &["python-sig"]),
+            make_project_with_commit("group-only", "bob", &[], &["python-packagers-sig"]),
         ];
         let mut args = default_args();
         args.include_group = vec!["rust-sig".to_string()];
         let result = filter_projects(&projects, &args);
-        // owned (direct) is kept, group-only (python-sig != rust-sig) is excluded
+        // owned (direct) is kept, group-only (python-packagers-sig != rust-sig) is excluded
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "owned");
     }
@@ -1024,7 +1024,7 @@ mod tests {
     fn filter_exclude_group_removes_matching() {
         let projects = vec![
             make_project_with_commit("a", "bob", &[], &["rust-sig"]),
-            make_project_with_commit("b", "bob", &[], &["python-sig"]),
+            make_project_with_commit("b", "bob", &[], &["python-packagers-sig"]),
         ];
         let mut args = default_args();
         args.exclude_group = vec!["rust-sig".to_string()];
@@ -1050,11 +1050,11 @@ mod tests {
     fn filter_include_multiple_groups() {
         let projects = vec![
             make_project_with_commit("a", "bob", &[], &["rust-sig"]),
-            make_project_with_commit("b", "bob", &[], &["python-sig"]),
+            make_project_with_commit("b", "bob", &[], &["python-packagers-sig"]),
             make_project_with_commit("c", "bob", &[], &["kde-sig"]),
         ];
         let mut args = default_args();
-        args.include_group = vec!["rust-sig".to_string(), "python-sig".to_string()];
+        args.include_group = vec!["rust-sig".to_string(), "python-packagers-sig".to_string()];
         let result = filter_projects(&projects, &args);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "a");
