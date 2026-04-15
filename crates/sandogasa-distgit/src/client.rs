@@ -410,7 +410,7 @@ impl DistGitClient {
         Ok(all)
     }
 
-    /// GET with retry on transient server errors (502/503/504).
+    /// GET with retry on transient server errors (500/502/503/504).
     async fn get_with_retry(
         &self,
         url: &str,
@@ -419,7 +419,8 @@ impl DistGitClient {
         for attempt in 0..=3u32 {
             let resp = self.client.get(url).send().await?;
             let status = resp.status();
-            if status == reqwest::StatusCode::BAD_GATEWAY
+            if status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
+                || status == reqwest::StatusCode::BAD_GATEWAY
                 || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
                 || status == reqwest::StatusCode::GATEWAY_TIMEOUT
             {

@@ -201,12 +201,12 @@ struct SyncDistgitArgs {
     #[arg(long, value_delimiter = ',', value_name = "GROUP,...")]
     exclude_group: Vec<String>,
 
-    /// Package name pattern (* wildcards).
-    #[arg(long, conflicts_with = "auto_prefix")]
+    /// Name pattern, or --auto-prefix start point.
+    #[arg(long)]
     pattern: Option<String>,
 
     /// Query by a-z/0-9 prefix to avoid timeouts.
-    #[arg(long, conflicts_with = "pattern")]
+    #[arg(long)]
     auto_prefix: bool,
 
     /// Remove packages no longer in dist-git results.
@@ -720,46 +720,70 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         }
     }
 
+    let all_prefixes: Vec<String> = ('a'..='z')
+        .chain('0'..='9')
+        .map(|c| format!("{c}*"))
+        .collect();
+
     let patterns = if args.auto_prefix {
-        ('a'..='z')
-            .chain('0'..='9')
-            .map(|c| format!("{c}*"))
-            .collect::<Vec<_>>()
+        // With --pattern, start from that prefix (e.g. --pattern 'p*'
+        // skips a*..o* and starts at p*).
+        let start = args
+            .pattern
+            .as_deref()
+            .map(|p| p.trim_end_matches('*'))
+            .unwrap_or("");
+        if start.is_empty() {
+            all_prefixes
+        } else {
+            all_prefixes
+                .into_iter()
+                .skip_while(|p| !p.starts_with(start))
+                .collect()
+        }
     } else {
         vec![args.pattern.clone().unwrap_or_default()]
     };
 
-    let (projects, source_label) = if let Some(ref user) = args.user {
-        let mut all = Vec::new();
-        for pat in &patterns {
-            let p = if pat.is_empty() {
-                client.user_projects(user, args.per_page, None).await?
-            } else {
-                eprintln!("  pattern: {pat}");
-                client.user_projects(user, args.per_page, Some(pat)).await?
-            };
-            all.extend(p);
-        }
-        sandogasa_distgit::client::dedup_projects(&mut all);
-        (all, format!("user:{user}"))
-    } else if let Some(ref group) = args.group {
-        let mut all = Vec::new();
-        for pat in &patterns {
-            let p = if pat.is_empty() {
-                client.group_projects(group, args.per_page, None).await?
-            } else {
-                eprintln!("  pattern: {pat}");
-                client
-                    .group_projects(group, args.per_page, Some(pat))
-                    .await?
-            };
-            all.extend(p);
-        }
-        sandogasa_distgit::client::dedup_projects(&mut all);
-        (all, format!("group:{group}"))
+    let source_label = if let Some(ref user) = args.user {
+        format!("user:{user}")
     } else {
-        unreachable!("clap enforces --user or --group");
+        format!("group:{}", args.group.as_deref().unwrap())
     };
+
+    let mut all_projects = Vec::new();
+    let mut fetch_error = None;
+    for pat in &patterns {
+        let result = if pat.is_empty() {
+            if let Some(ref user) = args.user {
+                client.user_projects(user, args.per_page, None).await
+            } else {
+                client
+                    .group_projects(args.group.as_ref().unwrap(), args.per_page, None)
+                    .await
+            }
+        } else {
+            eprintln!("  pattern: {pat}");
+            if let Some(ref user) = args.user {
+                client.user_projects(user, args.per_page, Some(pat)).await
+            } else {
+                client
+                    .group_projects(args.group.as_ref().unwrap(), args.per_page, Some(pat))
+                    .await
+            }
+        };
+        match result {
+            Ok(p) => all_projects.extend(p),
+            Err(e) => {
+                eprintln!("error: {e}");
+                fetch_error = Some(e);
+                break;
+            }
+        }
+    }
+    sandogasa_distgit::client::dedup_projects(&mut all_projects);
+
+    let projects = all_projects;
 
     let filtered = filter_projects(&projects, args);
 
@@ -817,6 +841,18 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
             file_issue: None,
         });
         added += 1;
+    }
+
+    // On fetch error, save partial results and bail.
+    if let Some(e) = fetch_error {
+        let partial = format!("{}.partial", args.output);
+        sandogasa_inventory::save(&inventory, &partial)?;
+        eprintln!(
+            "Saved {} package(s) to {partial} (incomplete, \
+             verify before renaming)",
+            inventory.package.len()
+        );
+        return Err(e);
     }
 
     // Detect packages in the inventory but not in dist-git results.
