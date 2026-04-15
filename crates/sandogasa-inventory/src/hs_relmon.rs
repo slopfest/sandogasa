@@ -65,6 +65,154 @@ pub fn export(inventory: &Inventory, domain: Option<&str>, defaults: &RelmonDefa
     out
 }
 
+/// Result of a manifest merge operation.
+pub struct MergeResult {
+    /// The merged TOML content.
+    pub content: String,
+    /// Number of packages added.
+    pub added: usize,
+    /// Number of packages pruned.
+    pub pruned: usize,
+    /// Package names in the manifest but not in the inventory.
+    pub stale: Vec<String>,
+    /// Total packages in the result.
+    pub total: usize,
+}
+
+/// Merge inventory packages into an existing hs-relmon manifest file.
+///
+/// Existing entries are preserved (including fields like `issue_url`
+/// that the inventory doesn't have). New packages from the inventory
+/// are added with their relmon fields. When `prune` is true, entries
+/// not in the inventory are removed. Entries are sorted by name.
+pub fn merge_into_manifest(
+    manifest_path: &str,
+    inventory: &Inventory,
+    domain: Option<&str>,
+    defaults: &RelmonDefaults,
+    prune: bool,
+) -> Result<MergeResult, String> {
+    use toml_edit::DocumentMut;
+
+    let contents = std::fs::read_to_string(manifest_path)
+        .map_err(|e| format!("failed to read {manifest_path}: {e}"))?;
+    let mut doc: DocumentMut = contents
+        .parse()
+        .map_err(|e| format!("failed to parse {manifest_path}: {e}"))?;
+
+    // Collect existing package names.
+    let existing: std::collections::HashSet<String> = doc
+        .get("package")
+        .and_then(|i| i.as_array_of_tables())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.get("name").and_then(|v| v.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Build the set of inventory package names for stale detection.
+    let packages = inventory.packages_for_domain(domain);
+    let inv_names: std::collections::HashSet<&str> =
+        packages.iter().map(|p| p.name.as_str()).collect();
+
+    // Packages in the manifest but not in the inventory.
+    let stale: Vec<String> = existing
+        .iter()
+        .filter(|n| !inv_names.contains(n.as_str()))
+        .cloned()
+        .collect();
+
+    // New packages from the inventory not already in the manifest.
+    let new_packages: Vec<&&Package> = packages
+        .iter()
+        .filter(|p| !existing.contains(&p.name))
+        .collect();
+    let added = new_packages.len();
+
+    // Ensure the [[package]] array exists.
+    if doc.get("package").is_none() {
+        doc.insert(
+            "package",
+            toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()),
+        );
+    }
+
+    let arr = doc["package"]
+        .as_array_of_tables_mut()
+        .ok_or("'package' is not an array of tables")?;
+
+    for pkg in &new_packages {
+        let mut table = toml_edit::Table::new();
+        table.insert("name", toml_edit::value(&pkg.name));
+
+        if let Some(ref track) = pkg.track
+            && track != &defaults.track
+        {
+            table.insert("track", toml_edit::value(track.as_str()));
+        }
+        if let Some(ref repology_name) = pkg.repology_name {
+            table.insert("repology_name", toml_edit::value(repology_name.as_str()));
+        }
+        if let Some(ref distros) = pkg.distros
+            && distros != &defaults.distros
+        {
+            table.insert("distros", toml_edit::value(distros.as_str()));
+        }
+        if let Some(file_issue) = pkg.file_issue
+            && file_issue != defaults.file_issue
+        {
+            table.insert("file_issue", toml_edit::value(file_issue));
+        }
+
+        arr.push(table);
+    }
+
+    // Rebuild sorted, optionally pruning stale entries.
+    let prune_set: std::collections::HashSet<&str> = if prune {
+        stale.iter().map(|s| s.as_str()).collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+
+    let mut entries: Vec<(String, toml_edit::Table)> = Vec::new();
+    let arr = doc["package"].as_array_of_tables().unwrap();
+    for table in arr.iter() {
+        let name = table
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if prune_set.contains(name.as_str()) {
+            continue;
+        }
+        let mut new_table = toml_edit::Table::new();
+        for (key, item) in table.iter() {
+            new_table.insert(key, item.clone());
+        }
+        entries.push((name, new_table));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let pruned = if prune { stale.len() } else { 0 };
+    let total = entries.len();
+
+    let mut new_arr = toml_edit::ArrayOfTables::new();
+    for (_, table) in entries {
+        new_arr.push(table);
+    }
+    doc.remove("package");
+    doc.insert("package", toml_edit::Item::ArrayOfTables(new_arr));
+
+    Ok(MergeResult {
+        content: doc.to_string(),
+        added,
+        pruned,
+        stale,
+        total,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

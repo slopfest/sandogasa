@@ -143,6 +143,10 @@ enum ExportFormat {
         /// Default tracking branch.
         #[arg(long, default_value = "upstream")]
         track: String,
+
+        /// Remove manifest entries not in the inventory.
+        #[arg(long)]
+        prune: bool,
     },
 }
 
@@ -439,43 +443,90 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
         }
     };
 
-    let (content, default_filename) = match &args.format {
-        ExportFormat::ContentResolver { domain, .. } => {
+    match &args.format {
+        ExportFormat::ContentResolver { domain, output } => {
             let yaml = sandogasa_inventory::content_resolver::export(&inventory, domain.as_deref());
-            let filename = format!("{}.yaml", inventory.inventory.name.replace(' ', "_"));
-            (yaml, Some(filename))
+            let default_filename = format!("{}.yaml", inventory.inventory.name.replace(' ', "_"));
+            let path = output.as_deref().unwrap_or(&default_filename);
+            if let Err(e) = std::fs::write(path, &yaml) {
+                eprintln!("error: failed to write {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+            eprintln!("Wrote {path}");
         }
         ExportFormat::HsRelmon {
             domain,
             distros,
             track,
-            ..
+            output,
+            prune,
         } => {
             let defaults = sandogasa_inventory::hs_relmon::RelmonDefaults {
                 distros: distros.clone(),
                 track: track.clone(),
                 file_issue: true,
             };
-            let toml =
-                sandogasa_inventory::hs_relmon::export(&inventory, domain.as_deref(), &defaults);
-            (toml, None)
-        }
-    };
 
-    let output_path = match &args.format {
-        ExportFormat::ContentResolver { output, .. } | ExportFormat::HsRelmon { output, .. } => {
-            output.clone().or(default_filename)
-        }
-    };
+            if let Some(path) = output
+                && std::path::Path::new(path).exists()
+            {
+                let result = match sandogasa_inventory::hs_relmon::merge_into_manifest(
+                    path,
+                    &inventory,
+                    domain.as_deref(),
+                    &defaults,
+                    *prune,
+                ) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
 
-    if let Some(ref path) = output_path {
-        if let Err(e) = std::fs::write(path, &content) {
-            eprintln!("error: failed to write {path}: {e}");
-            return ExitCode::FAILURE;
+                if !result.stale.is_empty() && !prune {
+                    eprintln!(
+                        "warning: {} manifest entry/entries not in \
+                         inventory (use --prune to remove):",
+                        result.stale.len()
+                    );
+                    for name in &result.stale {
+                        eprintln!("  {name}");
+                    }
+                }
+
+                if let Err(e) = std::fs::write(path, &result.content) {
+                    eprintln!("error: failed to write {path}: {e}");
+                    return ExitCode::FAILURE;
+                }
+
+                let pruned_msg = if result.pruned > 0 {
+                    format!(", {} pruned", result.pruned)
+                } else {
+                    String::new()
+                };
+                eprintln!(
+                    "Merged into {path}: {} new{pruned_msg}, {} total",
+                    result.added, result.total
+                );
+            } else {
+                // Fresh export.
+                let toml = sandogasa_inventory::hs_relmon::export(
+                    &inventory,
+                    domain.as_deref(),
+                    &defaults,
+                );
+                if let Some(path) = output {
+                    if let Err(e) = std::fs::write(path, &toml) {
+                        eprintln!("error: failed to write {path}: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                    eprintln!("Wrote {path}");
+                } else {
+                    print!("{toml}");
+                }
+            }
         }
-        eprintln!("Wrote {path}");
-    } else {
-        print!("{content}");
     }
 
     ExitCode::SUCCESS
