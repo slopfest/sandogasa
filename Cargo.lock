@@ -1130,6 +1130,7 @@ version = "0.9.1"
 dependencies = [
  "clap",
  "sandogasa-distgit",
+ "sandogasa-gitlab",
  "sandogasa-inventory",
  "serde_json",
  "tokio",
@@ -1611,6 +1612,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]
