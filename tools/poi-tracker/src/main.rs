@@ -201,6 +201,10 @@ struct SyncDistgitArgs {
     #[arg(long, value_delimiter = ',', value_name = "GROUP,...")]
     exclude_group: Vec<String>,
 
+    /// Exclude packages by glob (CSV or repeated).
+    #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
+    exclude: Vec<String>,
+
     /// Name pattern, or --auto-prefix start point.
     #[arg(long)]
     pattern: Option<String>,
@@ -796,10 +800,24 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
     sandogasa_distgit::client::dedup_projects(&mut all_projects);
 
     let total_fetched = all_projects.len();
-    let filtered = filter_projects(&all_projects, args);
-    let excluded = total_fetched - filtered.len();
-    if excluded > 0 {
-        eprintln!("  {total_fetched} unique, {excluded} excluded by group filter");
+    let mut filtered = filter_projects(&all_projects, args);
+    let group_excluded = total_fetched - filtered.len();
+
+    // Apply --exclude globs.
+    if !args.exclude.is_empty() {
+        filtered.retain(|p| !matches_any_pattern(&p.name, &args.exclude));
+    }
+    let pkg_excluded = total_fetched - group_excluded - filtered.len();
+
+    if group_excluded > 0 || pkg_excluded > 0 {
+        let mut parts = vec![format!("{total_fetched} unique")];
+        if group_excluded > 0 {
+            parts.push(format!("{group_excluded} excluded by group filter"));
+        }
+        if pkg_excluded > 0 {
+            parts.push(format!("{pkg_excluded} excluded by --exclude"));
+        }
+        eprintln!("  {}", parts.join(", "));
     }
 
     // Load existing inventory or create a new one.
@@ -870,9 +888,10 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         return Err(e);
     }
 
-    // Detect packages in the inventory but not in dist-git results.
-    // When a pattern is active, only consider packages that match it;
-    // otherwise --prune with --pattern 'a*' would drop all non-a* packages.
+    // Detect packages in the inventory but not in the filtered results.
+    // Scoped to the active pattern(s) so --prune with --pattern 'a*'
+    // won't drop non-a* packages. Excluded packages naturally fall
+    // out of remote_names since they were filtered above.
     let stale: Vec<String> = inventory
         .package
         .iter()
@@ -889,7 +908,7 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
             }
         } else {
             eprintln!(
-                "warning: {} package(s) not in dist-git results \
+                "warning: {} package(s) not in sync scope \
                  (use --prune to remove):",
                 stale.len()
             );
@@ -1002,6 +1021,7 @@ mod tests {
             no_groups: false,
             include_group: vec![],
             exclude_group: vec![],
+            exclude: vec![],
             pattern: None,
             end_pattern: None,
             auto_prefix: false,
