@@ -646,6 +646,17 @@ async fn cmd_set(
         }
     }
 
+    if current.is_none() {
+        let exists = if user_type == "user" {
+            client.user_exists(name).await?
+        } else {
+            client.group_exists(name).await?
+        };
+        if !exists {
+            return Err(format!("{user_type} '{name}' does not exist on dist-git").into());
+        }
+    }
+
     client.set_acl(package, user_type, name, level).await?;
     if json {
         println!(

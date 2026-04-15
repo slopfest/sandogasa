@@ -198,6 +198,13 @@ impl DistGitClient {
         Ok(resp.status().is_success())
     }
 
+    /// Check whether a group exists on the Pagure instance.
+    pub async fn group_exists(&self, group: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/0/group/{}", self.base_url, group);
+        let resp = self.client.get(&url).send().await?;
+        Ok(resp.status().is_success())
+    }
+
     /// Fetch members of a Pagure group.
     pub async fn get_group_members(
         &self,
