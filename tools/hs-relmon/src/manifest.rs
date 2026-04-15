@@ -102,13 +102,27 @@ impl Manifest {
         let distros_str = pkg.distros.as_ref().or(self.defaults.distros.as_ref());
         let distros = match distros_str {
             Some(s) => Distros::parse(s).map_err(|e| format!("{}: {e}", pkg.name))?,
-            None => Distros::all(),
+            None => {
+                eprintln!(
+                    "warning: {}: no distros set (package or defaults), \
+                     using all",
+                    pkg.name
+                );
+                Distros::all()
+            }
         };
 
         let track_str = pkg.track.as_ref().or(self.defaults.track.as_ref());
         let track = match track_str {
             Some(s) => TrackRef::parse(s).map_err(|e| format!("{}: {e}", pkg.name))?,
-            None => TrackRef::Upstream,
+            None => {
+                eprintln!(
+                    "warning: {}: no track set (package or defaults), \
+                     using upstream",
+                    pkg.name
+                );
+                TrackRef::Upstream
+            }
         };
 
         let repology_name = pkg
