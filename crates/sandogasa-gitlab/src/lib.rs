@@ -491,6 +491,85 @@ pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::
     Ok(resp.status().is_success())
 }
 
+/// A project name returned by the GitLab group projects API.
+#[derive(Debug, Deserialize)]
+pub struct GroupProject {
+    pub name: String,
+    pub path: String,
+}
+
+/// List all projects under a GitLab group (public, no auth needed).
+///
+/// `group_url` is the full URL, e.g.
+/// `https://gitlab.com/CentOS/Hyperscale/rpms`.
+/// Paginates automatically and retries on 500/502/503/504.
+pub fn list_group_projects(
+    group_url: &str,
+) -> Result<Vec<GroupProject>, Box<dyn std::error::Error>> {
+    let (base_url, group_path) = parse_project_url(group_url)?;
+    let encoded = group_path.replace('/', "%2F");
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("sandogasa-gitlab")
+        .build()?;
+    let mut all = Vec::new();
+    let mut page = 1u32;
+    loop {
+        let url = format!(
+            "{}/api/v4/groups/{}/projects?per_page=100&page={}&simple=true&include_subgroups=false",
+            base_url, encoded, page
+        );
+        eprint!("\r  fetching page {page}...");
+        let resp = get_with_retry_blocking(&client, &url)?;
+        let next_page = resp
+            .headers()
+            .get("x-next-page")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let projects: Vec<GroupProject> = resp.json()?;
+        all.extend(projects);
+        if next_page.is_empty() {
+            break;
+        }
+        page = next_page.parse()?;
+    }
+    eprintln!("\r  fetched {} project(s)", all.len());
+    Ok(all)
+}
+
+/// Blocking GET with retry on transient server errors.
+fn get_with_retry_blocking(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> Result<reqwest::blocking::Response, Box<dyn std::error::Error>> {
+    let mut last_err = None;
+    for attempt in 0..=3u32 {
+        let resp = client.get(url).send()?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
+            || status == reqwest::StatusCode::BAD_GATEWAY
+            || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+            || status == reqwest::StatusCode::GATEWAY_TIMEOUT
+        {
+            let delay = std::time::Duration::from_secs(1 << attempt);
+            eprintln!(
+                "  {status}, retrying in {}s ({}/3)",
+                delay.as_secs(),
+                attempt + 1,
+            );
+            std::thread::sleep(delay);
+            last_err = Some(format!("{status} for {url}"));
+            continue;
+        }
+        if !resp.status().is_success() {
+            let text = resp.text()?;
+            return Err(format!("GitLab API error {status}: {text}").into());
+        }
+        return Ok(resp);
+    }
+    Err(last_err.unwrap().into())
+}
+
 /// Parse a GitLab project URL into (base_url, project_path).
 ///
 /// Example: `https://gitlab.com/CentOS/Hyperscale/rpms/perf`

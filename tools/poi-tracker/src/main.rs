@@ -43,6 +43,8 @@ enum Command {
     Show(ShowArgs),
     /// Sync inventory from Fedora dist-git (Pagure) access.
     SyncDistgit(SyncDistgitArgs),
+    /// Sync inventory from a GitLab RPM group.
+    SyncGitlab(SyncGitlabArgs),
     /// Validate inventory consistency.
     Validate,
 }
@@ -234,6 +236,55 @@ struct SyncDistgitArgs {
     name: Option<String>,
 }
 
+/// Well-known GitLab RPM group presets.
+const GITLAB_PRESETS: &[(&str, &str)] = &[
+    ("hyperscale", "https://gitlab.com/CentOS/Hyperscale/rpms"),
+    (
+        "proposed-updates",
+        "https://gitlab.com/CentOS/proposed_updates/rpms",
+    ),
+    (
+        "centos-stream",
+        "https://gitlab.com/redhat/centos-stream/rpms",
+    ),
+];
+
+#[derive(clap::Args)]
+#[command(group(
+    clap::ArgGroup::new("source")
+        .required(true)
+        .args(["url", "preset"])
+))]
+struct SyncGitlabArgs {
+    /// GitLab group URL.
+    #[arg(long)]
+    url: Option<String>,
+
+    /// Preset: hyperscale, proposed-updates, centos-stream.
+    #[arg(long)]
+    preset: Option<String>,
+
+    /// Output TOML file.
+    #[arg(short, long, default_value = "inventory.toml")]
+    output: String,
+
+    /// Exclude packages by glob (CSV or repeated).
+    #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
+    exclude: Vec<String>,
+
+    /// Remove packages no longer in GitLab results.
+    #[arg(long)]
+    prune: bool,
+
+    /// Domain tags (CSV or repeated).
+    #[arg(long, value_delimiter = ',', value_name = "DOMAIN,...")]
+    domain: Vec<String>,
+
+    /// Inventory name (default: derived from group).
+    #[arg(long)]
+    name: Option<String>,
+}
+
 /// Collect inventory paths from -i and -I flags.
 fn resolve_inventory_paths(cli: &Cli) -> Vec<String> {
     let mut paths = cli.inventory.clone();
@@ -260,7 +311,10 @@ fn main() -> ExitCode {
 
     // Import/sync commands produce new files and don't need existing
     // inventory paths.
-    let needs_paths = !matches!(cli.command, Command::Import(_) | Command::SyncDistgit(_));
+    let needs_paths = !matches!(
+        cli.command,
+        Command::Import(_) | Command::SyncDistgit(_) | Command::SyncGitlab(_)
+    );
 
     let paths = resolve_inventory_paths(&cli);
 
@@ -277,6 +331,7 @@ fn main() -> ExitCode {
         Command::Remove(args) => cmd_remove(&paths[0], args),
         Command::Show(args) => cmd_show(&paths, args),
         Command::SyncDistgit(args) => cmd_sync_distgit(args),
+        Command::SyncGitlab(args) => cmd_sync_gitlab(args),
         Command::Validate => cmd_validate(&paths),
     }
 }
@@ -961,6 +1016,163 @@ fn cmd_sync_distgit(args: &SyncDistgitArgs) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn resolve_gitlab_url(args: &SyncGitlabArgs) -> Result<String, String> {
+    if let Some(ref url) = args.url {
+        return Ok(url.clone());
+    }
+    if let Some(ref preset) = args.preset {
+        for &(name, url) in GITLAB_PRESETS {
+            if name == preset.as_str() {
+                return Ok(url.to_string());
+            }
+        }
+        let valid: Vec<&str> = GITLAB_PRESETS.iter().map(|(n, _)| *n).collect();
+        return Err(format!(
+            "unknown preset '{preset}'. Valid: {}",
+            valid.join(", ")
+        ));
+    }
+    Err("specify --url or --preset".to_string())
+}
+
+fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
+    let group_url = match resolve_gitlab_url(args) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let source_label = args.preset.clone().unwrap_or_else(|| group_url.clone());
+
+    let projects = match sandogasa_gitlab::list_group_projects(&group_url) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let total_fetched = projects.len();
+
+    // Apply --exclude globs.
+    let names: Vec<&str> = if args.exclude.is_empty() {
+        projects.iter().map(|p| p.name.as_str()).collect()
+    } else {
+        projects
+            .iter()
+            .map(|p| p.name.as_str())
+            .filter(|n| !matches_any_pattern(n, &args.exclude))
+            .collect()
+    };
+
+    let pkg_excluded = total_fetched - names.len();
+    if pkg_excluded > 0 {
+        eprintln!("  {total_fetched} fetched, {pkg_excluded} excluded");
+    }
+
+    // Load existing inventory or create a new one.
+    let mut inventory = if std::path::Path::new(&args.output).exists() {
+        match sandogasa_inventory::load(&args.output) {
+            Ok(inv) => inv,
+            Err(e) => {
+                eprintln!("error: {}: {e}", args.output);
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        let inv_name = args.name.clone().unwrap_or_else(|| source_label.clone());
+        sandogasa_inventory::Inventory {
+            inventory: sandogasa_inventory::InventoryMeta {
+                name: inv_name,
+                description: format!("Packages synced from GitLab ({source_label})"),
+                maintainer: source_label.clone(),
+                labels: vec![],
+                domains: args.domain.clone(),
+                private_fields: vec![],
+            },
+            package: vec![],
+        }
+    };
+
+    if let Some(ref name) = args.name {
+        inventory.inventory.name.clone_from(name);
+    }
+
+    let remote_names: std::collections::HashSet<&str> = names.iter().copied().collect();
+
+    let mut added = 0usize;
+    for name in &names {
+        if inventory.find_package(name).is_some() {
+            continue;
+        }
+        inventory.add_package(sandogasa_inventory::Package {
+            name: name.to_string(),
+            poc: None,
+            reason: None,
+            team: None,
+            task: None,
+            rpms: None,
+            arch_rpms: None,
+            domains: if args.domain.is_empty() {
+                None
+            } else {
+                Some(args.domain.clone())
+            },
+            track: None,
+            repology_name: None,
+            distros: None,
+            file_issue: None,
+        });
+        added += 1;
+    }
+
+    // Detect stale packages.
+    let stale: Vec<String> = inventory
+        .package
+        .iter()
+        .filter(|p| !remote_names.contains(p.name.as_str()))
+        .map(|p| p.name.clone())
+        .collect();
+
+    let pruned = stale.len();
+    if !stale.is_empty() {
+        if args.prune {
+            for name in &stale {
+                inventory.remove_package(name);
+            }
+        } else {
+            eprintln!(
+                "warning: {} package(s) not in sync scope \
+                 (use --prune to remove):",
+                stale.len()
+            );
+            for name in &stale {
+                eprintln!("  {name}");
+            }
+        }
+    }
+
+    if let Err(e) = sandogasa_inventory::save(&inventory, &args.output) {
+        eprintln!("error: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    let pruned_msg = if args.prune && pruned > 0 {
+        format!(", {pruned} pruned")
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "Synced {source_label}: {added} new{pruned_msg}, \
+         {} total in {}",
+        inventory.package.len(),
+        args.output
+    );
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
