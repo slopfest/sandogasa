@@ -641,16 +641,18 @@ fn cmd_import(args: &ImportArgs) -> ExitCode {
 
 /// Check if a package name matches any of the Pagure patterns.
 /// An empty pattern list (no --pattern / no --auto-prefix) matches everything.
+/// Case-insensitive to match Pagure's ILIKE behavior.
 fn matches_any_pattern(name: &str, patterns: &[String]) -> bool {
     // No pattern means "all packages" — everything matches.
     if patterns.is_empty() || (patterns.len() == 1 && patterns[0].is_empty()) {
         return true;
     }
+    let lower = name.to_ascii_lowercase();
     patterns.iter().any(|pat| {
         if let Some(prefix) = pat.strip_suffix('*') {
-            name.starts_with(prefix)
+            lower.starts_with(&prefix.to_ascii_lowercase())
         } else {
-            name == pat
+            lower == pat.to_ascii_lowercase()
         }
     })
 }
@@ -1158,5 +1160,13 @@ mod tests {
         assert!(matches_any_pattern("autoconf", &pats));
         assert!(matches_any_pattern("btrfs-progs", &pats));
         assert!(!matches_any_pattern("cmake", &pats));
+    }
+
+    #[test]
+    fn pattern_case_insensitive() {
+        let pats = vec!["p*".to_string()];
+        assert!(matches_any_pattern("python-psutil", &pats));
+        assert!(matches_any_pattern("PackageKit", &pats));
+        assert!(!matches_any_pattern("systemd", &pats));
     }
 }
