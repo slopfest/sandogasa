@@ -3,6 +3,7 @@
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use sandogasa_distgit::DistGitClient;
 
 #[derive(Parser)]
 #[command(
@@ -40,6 +41,8 @@ enum Command {
     Remove(RemoveArgs),
     /// Show inventory contents.
     Show(ShowArgs),
+    /// Sync inventory from Fedora dist-git (Pagure) access.
+    SyncDistgit(SyncDistgitArgs),
     /// Validate inventory consistency.
     Validate,
 }
@@ -159,6 +162,62 @@ struct ImportArgs {
     domain: Vec<String>,
 }
 
+#[derive(clap::Args)]
+#[command(group(
+    clap::ArgGroup::new("source")
+        .required(true)
+        .args(["user", "group"])
+))]
+struct SyncDistgitArgs {
+    /// Import packages for this dist-git user.
+    #[arg(long)]
+    user: Option<String>,
+
+    /// Import packages for this dist-git group.
+    #[arg(long)]
+    group: Option<String>,
+
+    /// Output TOML file.
+    #[arg(short, long, default_value = "inventory.toml")]
+    output: String,
+
+    /// Exclude group-only access.
+    #[arg(
+        long,
+        conflicts_with_all = ["include_group", "exclude_group"]
+    )]
+    no_groups: bool,
+
+    /// Keep only these groups (CSV or repeated).
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "GROUP,...",
+        conflicts_with = "exclude_group"
+    )]
+    include_group: Vec<String>,
+
+    /// Drop these groups (CSV or repeated).
+    #[arg(long, value_delimiter = ',', value_name = "GROUP,...")]
+    exclude_group: Vec<String>,
+
+    /// Remove packages no longer in dist-git results.
+    #[arg(long)]
+    prune: bool,
+
+    /// Pagure API page size.
+    #[arg(long, default_value = "100")]
+    per_page: u32,
+
+    /// Domain tags (CSV or repeated).
+    #[arg(long, value_delimiter = ',', value_name = "DOMAIN,...")]
+    domain: Vec<String>,
+
+    /// Inventory name (default: user/group).
+    #[arg(long)]
+    name: Option<String>,
+}
+
 /// Collect inventory paths from -i and -I flags.
 fn resolve_inventory_paths(cli: &Cli) -> Vec<String> {
     let mut paths = cli.inventory.clone();
@@ -182,23 +241,27 @@ fn resolve_inventory_paths(cli: &Cli) -> Vec<String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    // Import/sync commands produce new files and don't need existing
+    // inventory paths.
+    let needs_paths = !matches!(cli.command, Command::Import(_) | Command::SyncDistgit(_));
+
     let paths = resolve_inventory_paths(&cli);
 
-    if paths.is_empty() {
+    if needs_paths && paths.is_empty() {
         eprintln!("error: no inventory files specified. Use -i or -I.");
         return ExitCode::FAILURE;
     }
 
     match &cli.command {
-        Command::Show(args) => cmd_show(&paths, args),
-        Command::Validate => cmd_validate(&paths),
+        Command::Add(args) => cmd_add(&paths, args),
         Command::Export(args) => cmd_export(&paths, args),
         Command::Find(args) => cmd_find(&paths, args),
-        // Add searches all inventories, falls back to first file.
-        Command::Add(args) => cmd_add(&paths, args),
-        // Remove operates on the first inventory file.
-        Command::Remove(args) => cmd_remove(&paths[0], args),
         Command::Import(args) => cmd_import(args),
+        Command::Remove(args) => cmd_remove(&paths[0], args),
+        Command::Show(args) => cmd_show(&paths, args),
+        Command::SyncDistgit(args) => cmd_sync_distgit(args),
+        Command::Validate => cmd_validate(&paths),
     }
 }
 
@@ -562,4 +625,398 @@ fn cmd_import(args: &ImportArgs) -> ExitCode {
         args.output
     );
     ExitCode::SUCCESS
+}
+
+/// Filter projects based on the user's group-access preferences.
+fn filter_projects<'a>(
+    projects: &'a [sandogasa_distgit::ProjectInfo],
+    args: &SyncDistgitArgs,
+) -> Vec<&'a sandogasa_distgit::ProjectInfo> {
+    let Some(ref username) = args.user else {
+        // Group mode: no filtering, return all.
+        return projects.iter().collect();
+    };
+
+    projects
+        .iter()
+        .filter(|p| {
+            let u = username.as_str();
+            let has_direct = p.access_users.owner.iter().any(|x| x == u)
+                || p.access_users.admin.iter().any(|x| x == u)
+                || p.access_users.commit.iter().any(|x| x == u)
+                || p.access_users.collaborator.iter().any(|x| x == u)
+                || p.access_users.ticket.iter().any(|x| x == u);
+
+            // Packages with direct access are always included.
+            if has_direct {
+                return true;
+            }
+
+            // User has only group-based access. Apply filters.
+            if args.no_groups {
+                return false;
+            }
+
+            if !args.include_group.is_empty() {
+                return args
+                    .include_group
+                    .iter()
+                    .any(|g| p.access_groups.contains_group(g));
+            }
+
+            if !args.exclude_group.is_empty() {
+                return !args
+                    .exclude_group
+                    .iter()
+                    .any(|g| p.access_groups.contains_group(g));
+            }
+
+            // Default: include all.
+            true
+        })
+        .collect()
+}
+
+async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let client = DistGitClient::new();
+
+    // Validate group filters against actual membership.
+    if let Some(ref user) = args.user {
+        for group in &args.include_group {
+            let members = client.get_group_members(group).await?;
+            if !members.iter().any(|m| m == user) {
+                return Err(format!("user '{user}' is not a member of group '{group}'").into());
+            }
+        }
+        for group in &args.exclude_group {
+            let members = client.get_group_members(group).await?;
+            if !members.iter().any(|m| m == user) {
+                eprintln!("warning: user '{user}' is not a member of group '{group}'");
+            }
+        }
+    }
+
+    let (projects, source_label) = if let Some(ref user) = args.user {
+        let projects = client.user_projects(user, args.per_page).await?;
+        (projects, format!("user:{user}"))
+    } else if let Some(ref group) = args.group {
+        let projects = client.group_projects(group, args.per_page).await?;
+        (projects, format!("group:{group}"))
+    } else {
+        unreachable!("clap enforces --user or --group");
+    };
+
+    let filtered = filter_projects(&projects, args);
+
+    // Load existing inventory or create a new one.
+    let mut inventory = if std::path::Path::new(&args.output).exists() {
+        sandogasa_inventory::load(&args.output).map_err(|e| format!("{}: {e}", args.output))?
+    } else {
+        let inv_name = args
+            .name
+            .clone()
+            .unwrap_or_else(|| source_label.replace(':', "-"));
+        sandogasa_inventory::Inventory {
+            inventory: sandogasa_inventory::InventoryMeta {
+                name: inv_name,
+                description: format!("Packages synced from dist-git ({source_label})"),
+                maintainer: source_label.clone(),
+                labels: vec![],
+                domains: args.domain.clone(),
+                private_fields: vec![],
+            },
+            package: vec![],
+        }
+    };
+
+    // Update inventory name if explicitly provided.
+    if let Some(ref name) = args.name {
+        inventory.inventory.name.clone_from(name);
+    }
+
+    let remote_names: std::collections::HashSet<&str> =
+        filtered.iter().map(|p| p.name.as_str()).collect();
+
+    // Add new packages.
+    let mut added = 0usize;
+    for p in &filtered {
+        if inventory.find_package(&p.name).is_some() {
+            continue;
+        }
+        inventory.add_package(sandogasa_inventory::Package {
+            name: p.name.clone(),
+            poc: None,
+            reason: None,
+            team: None,
+            task: None,
+            rpms: None,
+            arch_rpms: None,
+            domains: if args.domain.is_empty() {
+                None
+            } else {
+                Some(args.domain.clone())
+            },
+            track: None,
+            repology_name: None,
+            distros: None,
+            file_issue: None,
+        });
+        added += 1;
+    }
+
+    // Detect packages in the inventory but not in dist-git results.
+    let stale: Vec<String> = inventory
+        .package
+        .iter()
+        .filter(|p| !remote_names.contains(p.name.as_str()))
+        .map(|p| p.name.clone())
+        .collect();
+
+    let pruned = stale.len();
+    if !stale.is_empty() {
+        if args.prune {
+            for name in &stale {
+                inventory.remove_package(name);
+            }
+        } else {
+            eprintln!(
+                "warning: {} package(s) not in dist-git results \
+                 (use --prune to remove):",
+                stale.len()
+            );
+            for name in &stale {
+                eprintln!("  {name}");
+            }
+        }
+    }
+
+    sandogasa_inventory::save(&inventory, &args.output)?;
+
+    let pruned_msg = if args.prune && pruned > 0 {
+        format!(", {pruned} pruned")
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "Synced {source_label}: {added} new{pruned_msg}, \
+         {} total in {}",
+        inventory.package.len(),
+        args.output
+    );
+    Ok(())
+}
+
+fn cmd_sync_distgit(args: &SyncDistgitArgs) -> ExitCode {
+    // Group filters only apply to user mode.
+    if args.user.is_none()
+        && (args.no_groups || !args.include_group.is_empty() || !args.exclude_group.is_empty())
+    {
+        eprintln!(
+            "error: --no-groups, --include-group, and \
+             --exclude-group only apply with --user"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to create runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match rt.block_on(sync_distgit_async(args)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sandogasa_distgit::ProjectInfo;
+
+    fn make_project(name: &str, owner: &str, groups: &[&str]) -> ProjectInfo {
+        let json = serde_json::json!({
+            "name": name,
+            "access_users": {
+                "owner": [owner],
+                "admin": [],
+                "commit": [],
+                "collaborator": [],
+                "ticket": []
+            },
+            "access_groups": {
+                "admin": [],
+                "commit": groups,
+                "collaborator": [],
+                "ticket": []
+            }
+        });
+        serde_json::from_value(json).unwrap()
+    }
+
+    fn make_project_with_commit(
+        name: &str,
+        owner: &str,
+        commit_users: &[&str],
+        groups: &[&str],
+    ) -> ProjectInfo {
+        let json = serde_json::json!({
+            "name": name,
+            "access_users": {
+                "owner": [owner],
+                "admin": [],
+                "commit": commit_users,
+                "collaborator": [],
+                "ticket": []
+            },
+            "access_groups": {
+                "admin": [],
+                "commit": groups,
+                "collaborator": [],
+                "ticket": []
+            }
+        });
+        serde_json::from_value(json).unwrap()
+    }
+
+    fn default_args() -> SyncDistgitArgs {
+        SyncDistgitArgs {
+            user: Some("alice".to_string()),
+            group: None,
+            output: "out.toml".to_string(),
+            no_groups: false,
+            include_group: vec![],
+            exclude_group: vec![],
+            prune: false,
+            per_page: 100,
+            domain: vec![],
+            name: None,
+        }
+    }
+
+    #[test]
+    fn filter_group_mode_returns_all() {
+        let projects = vec![
+            make_project("aaa", "bob", &["rust-sig"]),
+            make_project("bbb", "carol", &[]),
+        ];
+        let args = SyncDistgitArgs {
+            user: None,
+            group: Some("rust-sig".to_string()),
+            ..default_args()
+        };
+        let result = filter_projects(&projects, &args);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn filter_direct_access_always_included() {
+        let projects = vec![make_project("pkg", "alice", &["rust-sig"])];
+        let mut args = default_args();
+        args.no_groups = true;
+        let result = filter_projects(&projects, &args);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn filter_default_includes_group_only() {
+        // alice has no direct access, only via rust-sig
+        let projects = vec![make_project_with_commit("pkg", "bob", &[], &["rust-sig"])];
+        let args = default_args();
+        let result = filter_projects(&projects, &args);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn filter_no_groups_excludes_group_only() {
+        let projects = vec![make_project_with_commit("pkg", "bob", &[], &["rust-sig"])];
+        let mut args = default_args();
+        args.no_groups = true;
+        let result = filter_projects(&projects, &args);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_no_groups_keeps_direct() {
+        // alice is owner (direct) and also has access via group
+        let projects = vec![make_project("pkg", "alice", &["rust-sig"])];
+        let mut args = default_args();
+        args.no_groups = true;
+        let result = filter_projects(&projects, &args);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn filter_include_group_matches() {
+        let projects = vec![
+            make_project_with_commit("a", "bob", &[], &["rust-sig"]),
+            make_project_with_commit("b", "bob", &[], &["python-sig"]),
+        ];
+        let mut args = default_args();
+        args.include_group = vec!["rust-sig".to_string()];
+        let result = filter_projects(&projects, &args);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "a");
+    }
+
+    #[test]
+    fn filter_include_group_still_keeps_direct() {
+        let projects = vec![
+            make_project("owned", "alice", &[]),
+            make_project_with_commit("group-only", "bob", &[], &["python-sig"]),
+        ];
+        let mut args = default_args();
+        args.include_group = vec!["rust-sig".to_string()];
+        let result = filter_projects(&projects, &args);
+        // owned (direct) is kept, group-only (python-sig != rust-sig) is excluded
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "owned");
+    }
+
+    #[test]
+    fn filter_exclude_group_removes_matching() {
+        let projects = vec![
+            make_project_with_commit("a", "bob", &[], &["rust-sig"]),
+            make_project_with_commit("b", "bob", &[], &["python-sig"]),
+        ];
+        let mut args = default_args();
+        args.exclude_group = vec!["rust-sig".to_string()];
+        let result = filter_projects(&projects, &args);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "b");
+    }
+
+    #[test]
+    fn filter_exclude_group_keeps_direct() {
+        let projects = vec![
+            make_project("owned", "alice", &["rust-sig"]),
+            make_project_with_commit("group-only", "bob", &[], &["rust-sig"]),
+        ];
+        let mut args = default_args();
+        args.exclude_group = vec!["rust-sig".to_string()];
+        let result = filter_projects(&projects, &args);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "owned");
+    }
+
+    #[test]
+    fn filter_include_multiple_groups() {
+        let projects = vec![
+            make_project_with_commit("a", "bob", &[], &["rust-sig"]),
+            make_project_with_commit("b", "bob", &[], &["python-sig"]),
+            make_project_with_commit("c", "bob", &[], &["kde-sig"]),
+        ];
+        let mut args = default_args();
+        args.include_group = vec!["rust-sig".to_string(), "python-sig".to_string()];
+        let result = filter_projects(&projects, &args);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "a");
+        assert_eq!(result[1].name, "b");
+    }
 }

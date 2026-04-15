@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### poi-tracker
+
+- **New: `sync-distgit` subcommand** — create or update an inventory
+  from packages a user or group has access to on Fedora dist-git
+  (Pagure). Merges new packages without overwriting existing entries.
+  `--user` or `--group` mode with group-access filtering via
+  `--no-groups`, `--include-group`, and `--exclude-group`
+
+### sandogasa-distgit
+
+- Add `user_projects()` and `group_projects()` for listing RPM packages
+  by user or group from the Pagure API
+- Add `AccessGroups::contains_group()` helper
+
+### sandogasa-pkg-acl
+
+- Validate user/group existence before setting ACLs, replacing
+  a generic 404 error with a clear message
+
 ### Workspace
 
 - Relicense from MPL-2.0 to Apache-2.0 OR MIT

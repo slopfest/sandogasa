@@ -61,6 +61,50 @@ poi-tracker export hs-relmon -i inventory.toml \
     --domain hyperscale -o manifest.toml
 ```
 
+### Find a package
+
+```sh
+poi-tracker find systemd -i inv1.toml -i inv2.toml
+```
+
+### Sync from dist-git
+
+Create or update an inventory from packages a user or group has
+access to on Fedora dist-git (Pagure). Re-running merges new
+packages without overwriting existing entries or annotations.
+
+```sh
+# All packages for a user
+poi-tracker sync-distgit --user salimma -o my.toml
+
+# All packages for a group
+poi-tracker sync-distgit --group hyperscale-sig -o hs.toml
+
+# Exclude packages with only group-based access
+poi-tracker sync-distgit --user salimma --no-groups
+
+# Only packages from specific groups
+poi-tracker sync-distgit --user salimma \
+    --include-group rust-sig,python-packagers-sig
+
+# Exclude specific groups
+poi-tracker sync-distgit --user salimma \
+    --exclude-group rust-sig
+
+# Add domain tags to all imported packages
+poi-tracker sync-distgit --group hyperscale-sig \
+    --domain hyperscale -o hs.toml
+
+# Remove packages no longer in dist-git results
+poi-tracker sync-distgit --user salimma --prune -o my.toml
+```
+
+Packages where the user has both direct and group-based access
+are always included, regardless of group filters.
+
+Without `--prune`, packages in the inventory that are no longer
+in the dist-git results are listed as a warning but kept.
+
 ### Import from legacy JSON
 
 ```sh

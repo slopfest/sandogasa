@@ -65,7 +65,7 @@ pub struct ProjectAcls {
     pub access_groups: AccessGroups,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct AccessUsers {
     #[serde(default)]
     pub owner: Vec<String>,
@@ -79,7 +79,7 @@ pub struct AccessUsers {
     pub ticket: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct AccessGroups {
     #[serde(default)]
     pub admin: Vec<String>,
@@ -158,6 +158,16 @@ impl ProjectAcls {
             }
         }
         result
+    }
+}
+
+impl AccessGroups {
+    /// Check whether a group has any level of access.
+    pub fn contains_group(&self, group: &str) -> bool {
+        self.admin.iter().any(|g| g == group)
+            || self.commit.iter().any(|g| g == group)
+            || self.collaborator.iter().any(|g| g == group)
+            || self.ticket.iter().any(|g| g == group)
     }
 }
 
@@ -692,5 +702,57 @@ mod tests {
         let acls: ProjectAcls = serde_json::from_str(json).unwrap();
         assert_eq!(acls.access_users.admin, vec!["salimma", "dcavalca"]);
         assert_eq!(acls.access_users.commit, vec!["user1", "user2", "user3"]);
+    }
+
+    // ---- AccessGroups::contains_group ----
+
+    fn make_groups(
+        admin: Vec<&str>,
+        commit: Vec<&str>,
+        collaborator: Vec<&str>,
+        ticket: Vec<&str>,
+    ) -> AccessGroups {
+        AccessGroups {
+            admin: admin.into_iter().map(String::from).collect(),
+            commit: commit.into_iter().map(String::from).collect(),
+            collaborator: collaborator.into_iter().map(String::from).collect(),
+            ticket: ticket.into_iter().map(String::from).collect(),
+        }
+    }
+
+    #[test]
+    fn contains_group_in_admin() {
+        let groups = make_groups(vec!["rust-sig"], vec![], vec![], vec![]);
+        assert!(groups.contains_group("rust-sig"));
+    }
+
+    #[test]
+    fn contains_group_in_commit() {
+        let groups = make_groups(vec![], vec!["python-sig"], vec![], vec![]);
+        assert!(groups.contains_group("python-sig"));
+    }
+
+    #[test]
+    fn contains_group_in_collaborator() {
+        let groups = make_groups(vec![], vec![], vec!["kde-sig"], vec![]);
+        assert!(groups.contains_group("kde-sig"));
+    }
+
+    #[test]
+    fn contains_group_in_ticket() {
+        let groups = make_groups(vec![], vec![], vec![], vec!["epel-sig"]);
+        assert!(groups.contains_group("epel-sig"));
+    }
+
+    #[test]
+    fn contains_group_not_present() {
+        let groups = make_groups(vec!["rust-sig"], vec!["python-sig"], vec![], vec![]);
+        assert!(!groups.contains_group("kde-sig"));
+    }
+
+    #[test]
+    fn contains_group_empty() {
+        let groups = make_groups(vec![], vec![], vec![], vec![]);
+        assert!(!groups.contains_group("rust-sig"));
     }
 }

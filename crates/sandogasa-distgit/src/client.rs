@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::acl::{AccessLevel, AccessResult, Contributors, ProjectAcls};
+use crate::acl::{AccessGroups, AccessLevel, AccessResult, AccessUsers, Contributors, ProjectAcls};
 
 const DISTGIT_BASE: &str = "https://src.fedoraproject.org";
 
@@ -44,6 +44,36 @@ pub struct PullRequest {
 #[derive(Debug, Deserialize)]
 pub struct PullRequestProject {
     pub fullname: String,
+}
+
+/// A project returned by the Pagure projects or group endpoints.
+#[derive(Debug, Deserialize)]
+pub struct ProjectInfo {
+    pub name: String,
+    #[serde(default)]
+    pub access_users: AccessUsers,
+    #[serde(default)]
+    pub access_groups: AccessGroups,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserProjectsResponse {
+    projects: Vec<ProjectInfo>,
+    #[serde(default)]
+    pagination: Option<Pagination>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GroupProjectsResponse {
+    projects: Vec<ProjectInfo>,
+    #[serde(default)]
+    pagination: Option<Pagination>,
+}
+
+/// Remove duplicate projects by name, keeping the first occurrence.
+fn dedup_projects(projects: &mut Vec<ProjectInfo>) {
+    let mut seen = std::collections::HashSet::new();
+    projects.retain(|p| seen.insert(p.name.clone()));
 }
 
 pub struct DistGitClient {
@@ -312,6 +342,94 @@ impl DistGitClient {
         Ok((data.requests, total))
     }
 
+    /// Fetch all RPM packages a user has access to.
+    ///
+    /// Paginates automatically, returning all pages. Retries on
+    /// transient server errors (502/503/504). Deduplicates by name.
+    pub async fn user_projects(
+        &self,
+        username: &str,
+        per_page: u32,
+    ) -> Result<Vec<ProjectInfo>, Box<dyn std::error::Error>> {
+        let mut all = Vec::new();
+        let mut page = 1u64;
+        loop {
+            let url = format!(
+                "{}/api/0/projects?namespace=rpms&username={}&per_page={}&page={}",
+                self.base_url, username, per_page, page
+            );
+            eprint!("\r  fetching page {page}...");
+            let resp = self.get_with_retry(&url).await?;
+            let data: UserProjectsResponse = resp.json().await?;
+            all.extend(data.projects);
+            match data.pagination {
+                Some(ref p) if page < p.pages => page += 1,
+                _ => break,
+            }
+        }
+        dedup_projects(&mut all);
+        eprintln!("\r  fetched {} package(s)", all.len());
+        Ok(all)
+    }
+
+    /// Fetch all RPM packages a group has access to.
+    ///
+    /// Paginates automatically, returning all pages. Retries on
+    /// transient server errors (502/503/504). Deduplicates by name.
+    pub async fn group_projects(
+        &self,
+        group: &str,
+        per_page: u32,
+    ) -> Result<Vec<ProjectInfo>, Box<dyn std::error::Error>> {
+        let mut all = Vec::new();
+        let mut page = 1u64;
+        loop {
+            let url = format!(
+                "{}/api/0/group/{}?projects=true&per_page={}&page={}",
+                self.base_url, group, per_page, page
+            );
+            eprint!("\r  fetching page {page}...");
+            let resp = self.get_with_retry(&url).await?;
+            let data: GroupProjectsResponse = resp.json().await?;
+            all.extend(data.projects);
+            match data.pagination {
+                Some(ref p) if page < p.pages => page += 1,
+                _ => break,
+            }
+        }
+        dedup_projects(&mut all);
+        eprintln!("\r  fetched {} package(s)", all.len());
+        Ok(all)
+    }
+
+    /// GET with retry on transient server errors (502/503/504).
+    async fn get_with_retry(
+        &self,
+        url: &str,
+    ) -> Result<reqwest::Response, Box<dyn std::error::Error>> {
+        let mut last_err = None;
+        for attempt in 0..=3u32 {
+            let resp = self.client.get(url).send().await?;
+            let status = resp.status();
+            if status == reqwest::StatusCode::BAD_GATEWAY
+                || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+                || status == reqwest::StatusCode::GATEWAY_TIMEOUT
+            {
+                let delay = std::time::Duration::from_secs(1 << attempt);
+                eprintln!(
+                    "  {status}, retrying in {}s ({}/3)",
+                    delay.as_secs(),
+                    attempt + 1,
+                );
+                std::thread::sleep(delay);
+                last_err = Some(format!("{status} for {url}"));
+                continue;
+            }
+            return Ok(resp.error_for_status()?);
+        }
+        Err(last_err.unwrap().into())
+    }
+
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(ref token) = self.api_token {
             req.header("Authorization", format!("token {token}"))
@@ -325,7 +443,7 @@ impl DistGitClient {
 mod tests {
     use super::*;
     use crate::acl::{AccessGroups, AccessUsers};
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -1156,6 +1274,158 @@ mod tests {
             .await;
 
         let result = client.fetch_spec("nonexistent", "rawhide").await;
+        assert!(result.is_err());
+    }
+
+    // ---- user_projects ----
+
+    fn project_json(name: &str, owner: &str, groups: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "namespace": "rpms",
+            "access_users": {
+                "owner": [owner],
+                "admin": [],
+                "commit": [],
+                "collaborator": [],
+                "ticket": []
+            },
+            "access_groups": {
+                "admin": [],
+                "commit": groups,
+                "collaborator": [],
+                "ticket": []
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn user_projects_single_page() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/projects"))
+            .and(query_param("namespace", "rpms"))
+            .and(query_param("username", "salimma"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "projects": [
+                    project_json("freerdp", "salimma", &[]),
+                    project_json("systemd", "ngompa", &["hyperscale-sig"])
+                ],
+                "pagination": { "pages": 1, "per_page": 100 }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let projects = client.user_projects("salimma", 100).await.unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].name, "freerdp");
+        assert_eq!(projects[1].name, "systemd");
+        assert!(
+            projects[0]
+                .access_users
+                .owner
+                .contains(&"salimma".to_string())
+        );
+        assert!(projects[1].access_groups.contains_group("hyperscale-sig"));
+    }
+
+    #[tokio::test]
+    async fn user_projects_paginates() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/projects"))
+            .and(query_param("username", "salimma"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "projects": [project_json("aaa", "salimma", &[])],
+                "pagination": { "pages": 2, "per_page": 100 }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/projects"))
+            .and(query_param("username", "salimma"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "projects": [project_json("zzz", "salimma", &[])],
+                "pagination": { "pages": 2, "per_page": 100 }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let projects = client.user_projects("salimma", 100).await.unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].name, "aaa");
+        assert_eq!(projects[1].name, "zzz");
+    }
+
+    #[tokio::test]
+    async fn user_projects_empty() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/projects"))
+            .and(query_param("username", "nobody"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "projects": [] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let projects = client.user_projects("nobody", 100).await.unwrap();
+        assert!(projects.is_empty());
+    }
+
+    // ---- group_projects ----
+
+    #[tokio::test]
+    async fn group_projects_single_page() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/group/hyperscale-sig"))
+            .and(query_param("projects", "true"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "members": ["salimma", "dcavalca"],
+                "projects": [
+                    project_json("systemd", "ngompa", &["hyperscale-sig"])
+                ],
+                "pagination": { "pages": 1, "per_page": 100 }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let projects = client.group_projects("hyperscale-sig", 100).await.unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "systemd");
+    }
+
+    #[tokio::test]
+    async fn group_projects_not_found() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/group/nonexistent"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let result = client.group_projects("nonexistent", 100).await;
         assert!(result.is_err());
     }
 }

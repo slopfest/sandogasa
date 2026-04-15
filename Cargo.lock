@@ -1129,8 +1129,10 @@ name = "poi-tracker"
 version = "0.9.1"
 dependencies = [
  "clap",
+ "sandogasa-distgit",
  "sandogasa-inventory",
  "serde_json",
+ "tokio",
  "toml",
 ]
 
