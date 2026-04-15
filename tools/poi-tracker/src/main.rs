@@ -635,6 +635,22 @@ fn cmd_import(args: &ImportArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Check if a package name matches any of the Pagure patterns.
+/// An empty pattern list (no --pattern / no --auto-prefix) matches everything.
+fn matches_any_pattern(name: &str, patterns: &[String]) -> bool {
+    // No pattern means "all packages" — everything matches.
+    if patterns.is_empty() || (patterns.len() == 1 && patterns[0].is_empty()) {
+        return true;
+    }
+    patterns.iter().any(|pat| {
+        if let Some(prefix) = pat.strip_suffix('*') {
+            name.starts_with(prefix)
+        } else {
+            name == pat
+        }
+    })
+}
+
 /// Filter projects based on the user's group-access preferences.
 fn filter_projects<'a>(
     projects: &'a [sandogasa_distgit::ProjectInfo],
@@ -804,10 +820,13 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
     }
 
     // Detect packages in the inventory but not in dist-git results.
+    // When a pattern is active, only consider packages that match it;
+    // otherwise --prune with --pattern 'a*' would drop all non-a* packages.
     let stale: Vec<String> = inventory
         .package
         .iter()
         .filter(|p| !remote_names.contains(p.name.as_str()))
+        .filter(|p| matches_any_pattern(&p.name, &patterns))
         .map(|p| p.name.clone())
         .collect();
 
@@ -1059,5 +1078,35 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "a");
         assert_eq!(result[1].name, "b");
+    }
+
+    // ---- matches_any_pattern ----
+
+    #[test]
+    fn pattern_empty_matches_all() {
+        assert!(matches_any_pattern("anything", &[]));
+        assert!(matches_any_pattern("anything", &[String::new()]));
+    }
+
+    #[test]
+    fn pattern_prefix_matches() {
+        let pats = vec!["python-*".to_string()];
+        assert!(matches_any_pattern("python-psutil", &pats));
+        assert!(!matches_any_pattern("rust-libc", &pats));
+    }
+
+    #[test]
+    fn pattern_exact_matches() {
+        let pats = vec!["systemd".to_string()];
+        assert!(matches_any_pattern("systemd", &pats));
+        assert!(!matches_any_pattern("systemd-networkd", &pats));
+    }
+
+    #[test]
+    fn pattern_multiple_any_matches() {
+        let pats = vec!["a*".to_string(), "b*".to_string()];
+        assert!(matches_any_pattern("autoconf", &pats));
+        assert!(matches_any_pattern("btrfs-progs", &pats));
+        assert!(!matches_any_pattern("cmake", &pats));
     }
 }
