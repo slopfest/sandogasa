@@ -23,11 +23,11 @@ impl Default for RelmonDefaults {
 
 /// Export an inventory to hs-relmon manifest TOML format.
 ///
-/// Only includes packages that have a `track` field set.
-/// Filters by domain if specified.
+/// Includes all packages (hs-relmon applies defaults for missing
+/// fields). Filters by domain if specified.
 pub fn export(inventory: &Inventory, domain: Option<&str>, defaults: &RelmonDefaults) -> String {
     let packages = inventory.packages_for_domain(domain);
-    let relmon_packages: Vec<&&Package> = packages.iter().filter(|p| p.track.is_some()).collect();
+    let relmon_packages: Vec<&&Package> = packages.iter().collect();
 
     let mut out = String::new();
     out.push_str("# SPDX-License-Identifier: Apache-2.0 OR MIT\n\n");
@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn export_only_tracked_packages() {
+    fn export_includes_all_packages() {
         let inv = make_inventory(vec![
             make_pkg("foo", Some("upstream")),
             make_pkg("bar", None),
@@ -258,8 +258,8 @@ mod tests {
         ]);
         let toml = export(&inv, None, &RelmonDefaults::default());
         assert!(toml.contains("name = \"foo\""));
+        assert!(toml.contains("name = \"bar\""));
         assert!(toml.contains("name = \"baz\""));
-        assert!(!toml.contains("name = \"bar\""));
     }
 
     #[test]
