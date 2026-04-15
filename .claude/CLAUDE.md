@@ -10,6 +10,7 @@
 - Before bumping versions, run `cargo semver-checks` on each library crate to determine the correct version bump (patch, minor, or major). If semver-checks reports breaking changes, the bump must be at least minor (or major if already ≥1.0). If it reports no breaking changes, a patch bump is sufficient unless new public API surface was added (which requires at least minor)
 - Before tagging, publish all crates to crates.io with `cargo publish --workspace` (handles dependency ordering automatically and skips already-published versions). If any publish fails, fix the issue before tagging so the tag always corresponds to a successful publish
 - After publishing and tagging, push with `git push --follow-tags`
+- Before committing, check `git status` for untracked files that should be staged (e.g. `Cargo.lock` after dependency changes). Use `scratch/` for temporary working files — it is in `.gitignore`
 
 ## Code Style
 - Always run `cargo fmt` before committing

@@ -21,6 +21,9 @@ target
 #.idea/
 
 
+# Working files / test outputs
+/scratch/
+
 # Added by cargo
 
 /target
