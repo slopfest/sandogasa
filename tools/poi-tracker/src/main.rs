@@ -205,6 +205,10 @@ struct SyncDistgitArgs {
     #[arg(long)]
     pattern: Option<String>,
 
+    /// Stop --auto-prefix before this prefix.
+    #[arg(long, requires = "auto_prefix")]
+    end_pattern: Option<String>,
+
     /// Query by a-z/0-9 prefix to avoid timeouts.
     #[arg(long)]
     auto_prefix: bool,
@@ -726,20 +730,26 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         .collect();
 
     let patterns = if args.auto_prefix {
-        // With --pattern, start from that prefix (e.g. --pattern 'p*'
-        // skips a*..o* and starts at p*).
         let start = args
             .pattern
             .as_deref()
             .map(|p| p.trim_end_matches('*'))
             .unwrap_or("");
-        if start.is_empty() {
-            all_prefixes
+        let end = args
+            .end_pattern
+            .as_deref()
+            .map(|p| p.trim_end_matches('*'))
+            .unwrap_or("");
+        let iter = all_prefixes.into_iter();
+        let iter: Box<dyn Iterator<Item = String>> = if start.is_empty() {
+            Box::new(iter)
         } else {
-            all_prefixes
-                .into_iter()
-                .skip_while(|p| !p.starts_with(start))
-                .collect()
+            Box::new(iter.skip_while(move |p| !p.starts_with(start)))
+        };
+        if end.is_empty() {
+            iter.collect()
+        } else {
+            iter.take_while(|p| !p.starts_with(end)).collect()
         }
     } else {
         vec![args.pattern.clone().unwrap_or_default()]
@@ -783,9 +793,12 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
     }
     sandogasa_distgit::client::dedup_projects(&mut all_projects);
 
-    let projects = all_projects;
-
-    let filtered = filter_projects(&projects, args);
+    let total_fetched = all_projects.len();
+    let filtered = filter_projects(&all_projects, args);
+    let excluded = total_fetched - filtered.len();
+    if excluded > 0 {
+        eprintln!("  {total_fetched} unique, {excluded} excluded by group filter");
+    }
 
     // Load existing inventory or create a new one.
     let mut inventory = if std::path::Path::new(&args.output).exists() {
@@ -988,6 +1001,7 @@ mod tests {
             include_group: vec![],
             exclude_group: vec![],
             pattern: None,
+            end_pattern: None,
             auto_prefix: false,
             prune: false,
             per_page: 100,
