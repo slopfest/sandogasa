@@ -111,6 +111,23 @@ pub struct CheckCrateReport {
     pub review_bugs: BTreeMap<String, u64>,
 }
 
+impl CheckCrateReport {
+    /// Build phases including the root crate as the final phase.
+    ///
+    /// The stored `transitive_build_order` only contains transitive
+    /// deps. This appends the root crate itself so the result is a
+    /// complete build sequence for koji/copr/human output.
+    pub fn full_build_phases(&self) -> Vec<dag::BuildPhase> {
+        let mut phases = self.transitive_build_order.clone();
+        let next = phases.last().map_or(1, |p| p.phase + 1);
+        phases.push(dag::BuildPhase {
+            phase: next,
+            packages: vec![self.crate_name.clone()],
+        });
+        phases
+    }
+}
+
 // ---- Public functions ----
 
 /// Run the check-crate analysis.
@@ -317,6 +334,8 @@ pub fn print_report(report: &CheckCrateReport) {
     }
 
     if !report.transitive_build_order.is_empty() {
+        let phases = report.full_build_phases();
+
         // Build a version lookup: crate name → version_req.
         let versions: std::collections::HashMap<&str, &str> = report
             .transitive_missing
@@ -331,16 +350,12 @@ pub fn print_report(report: &CheckCrateReport) {
             )
             .collect();
 
-        let total: usize = report
-            .transitive_build_order
-            .iter()
-            .map(|p| p.packages.len())
-            .sum();
+        let total: usize = phases.iter().map(|p| p.packages.len()).sum();
         println!(
             "Build order ({total} package(s) in {} phase(s)):",
-            report.transitive_build_order.len()
+            phases.len()
         );
-        for phase in &report.transitive_build_order {
+        for phase in &phases {
             println!("\n  Phase {}:", phase.phase);
             for pkg in &phase.packages {
                 if let Some(ver) = versions.get(pkg.as_str()) {

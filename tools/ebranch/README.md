@@ -96,9 +96,8 @@ deps. The output includes a phased build order showing which
   installability checks
 - `-j N` / `--jobs N` — number of parallel fedrq queries
   (0 = number of CPUs, the default)
-- `--phases` — group `resolve` output into parallel build phases
-- `--koji` — output as a Koji chain build string (requires `--phases`)
-- `--copr` — generate a Copr batch build script (requires `--phases`)
+- `--koji` — output as a Koji chain build string
+- `--copr` — generate a Copr batch build script
 - `--refresh` — clear fedrq repo metadata cache before querying
 - `--json` — machine-readable JSON output
 
@@ -180,10 +179,10 @@ ebranch resolve systemd --source rawhide --target c10s --target-repo '@epel'
 ebranch resolve systemd --source rawhide --target c10s --json
 ```
 
-Use `--phases` to group the closure into parallel build phases:
+The output groups packages into parallel build phases:
 
 ```console
-$ ebranch resolve --phases rust-base64-simd \
+$ ebranch resolve rust-base64-simd \
     --source rawhide \
     --target-repo '@koji:epel10.3-build-side-133542'
 Build order from rawhide to @koji:epel10.3-build-side-133542:
@@ -203,12 +202,19 @@ Add `--koji` for Koji chain-build output or `--copr` for a Copr
 batch build script:
 
 ```sh
-ebranch resolve --phases --koji rust-base64-simd \
+ebranch resolve --koji rust-base64-simd \
     --source rawhide --target-repo '@koji:epel10.3-build-side-133542'
 
-ebranch resolve --phases --copr rust-base64-simd \
+ebranch resolve --copr rust-base64-simd \
     --source rawhide --target-repo '@koji:epel10.3-build-side-133542' \
     > build.sh
+```
+
+The same `--koji` and `--copr` flags work with `check-crate -t`:
+
+```sh
+ebranch check-crate arrow 57 -b rawhide -t --koji
+ebranch check-crate arrow 57 -b rawhide -t --copr > build.sh
 ```
 
 Use `--check-install` to verify that every subpackage in the closure

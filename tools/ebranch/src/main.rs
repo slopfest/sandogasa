@@ -52,18 +52,13 @@ struct ResolveArgs {
     #[arg(long)]
     json: bool,
 
-    /// Group output into parallel build phases.
-    #[arg(long)]
-    phases: bool,
-
     /// Output build-order as a Koji chain build string.
-    #[arg(long, requires = "phases")]
+    #[arg(long)]
     koji: bool,
 
     /// Generate a shell script for Copr batch builds.
     #[arg(
         long,
-        requires = "phases",
         long_help = "\
 Generate a shell script for Copr batch builds.
 
@@ -236,9 +231,18 @@ struct CheckCrateArgs {
     )]
     exclude: Vec<String>,
 
-    /// Write analysis to a TOML file.
-    #[arg(long, value_name = "PATH", requires = "transitive")]
-    toml: Option<String>,
+    /// Generate a shell script for Copr batch builds.
+    #[arg(
+        long,
+        requires = "transitive",
+        long_help = "\
+Generate a shell script for Copr batch builds.
+
+The script accepts the Copr repo as its first
+argument, followed by any extra flags to pass
+to copr build-package."
+    )]
+    copr: bool,
 
     /// Output dependency graph in Graphviz DOT format.
     #[arg(long, requires = "transitive")]
@@ -247,6 +251,14 @@ struct CheckCrateArgs {
     /// Machine-readable JSON output.
     #[arg(long)]
     json: bool,
+
+    /// Output build-order as a Koji chain build string.
+    #[arg(long, requires = "transitive")]
+    koji: bool,
+
+    /// Write analysis to a TOML file.
+    #[arg(long, value_name = "PATH", requires = "transitive")]
+    toml: Option<String>,
 
     /// Print progress to stderr.
     #[arg(short, long)]
@@ -382,7 +394,16 @@ fn main() -> ExitCode {
                     eprintln!("error: {e}");
                     return ExitCode::FAILURE;
                 }
-                if a.dot {
+                if a.koji || a.copr {
+                    let rpm_phases = map_phase_packages(&report.full_build_phases(), |name| {
+                        format!("rust-{name}")
+                    });
+                    if a.copr {
+                        print_copr_script(&rpm_phases);
+                    } else {
+                        print_koji_chain(&rpm_phases);
+                    }
+                } else if a.dot {
                     check_crate::print_dot(&report);
                 } else if a.json {
                     print_json(&report);
@@ -553,70 +574,51 @@ fn main() -> ExitCode {
 
     match mode {
         Mode::Resolve => {
-            if args.phases {
-                let edges = closure.to_edges();
-                match dag::topological_layers(&edges) {
-                    Ok(phases) => {
-                        if args.copr {
-                            print_copr_script(&phases);
-                        } else if args.koji {
-                            print_koji_chain(&phases);
-                        } else if args.json {
-                            let mut json = serde_json::json!({
-                                "source_branch": closure.source_branch,
-                                "target_branch": closure.target_branch,
-                                "requested": closure.requested,
-                                "build_order": phases,
-                            });
-                            if let Some(report) = &install_report {
-                                json["installability"] = serde_json::json!({
-                                    "issues": report.issues,
-                                    "additional_packages":
-                                        report.additional_packages,
-                                });
-                            }
-                            print_json(&json);
-                        } else {
-                            print_build_order(&phases, &closure);
-                            if let Some(report) = &install_report {
-                                print_installability(report);
-                            }
-                        }
-                        ExitCode::SUCCESS
-                    }
-                    Err(_) => {
-                        eprintln!(
-                            "error: dependency graph contains cycles; \
-                            run 'find-cycles' for details"
-                        );
-                        ExitCode::FAILURE
-                    }
+            let edges = closure.to_edges();
+            let phases = match dag::topological_layers(&edges) {
+                Ok(p) => p,
+                Err(_) => {
+                    eprintln!(
+                        "warning: dependency graph contains cycles; \
+                         build order unavailable \
+                         (run 'find-cycles' for details)"
+                    );
+                    vec![]
                 }
+            };
+
+            if args.copr {
+                print_copr_script(&phases);
+            } else if args.koji {
+                print_koji_chain(&phases);
+            } else if args.json {
+                let mut json = serde_json::json!({
+                    "source_branch": closure.source_branch,
+                    "target_branch": closure.target_branch,
+                    "requested": closure.requested,
+                    "closure": closure.closure,
+                    "warnings": closure.warnings,
+                    "build_order": phases,
+                });
+                if let Some(report) = &install_report {
+                    json["installability"] = serde_json::json!({
+                        "issues": report.issues,
+                        "additional_packages":
+                            report.additional_packages,
+                    });
+                }
+                print_json(&json);
             } else {
-                if args.json {
-                    if let Some(report) = &install_report {
-                        print_json(&serde_json::json!({
-                            "source_branch": closure.source_branch,
-                            "target_branch": closure.target_branch,
-                            "requested": closure.requested,
-                            "closure": closure.closure,
-                            "warnings": closure.warnings,
-                            "installability": {
-                                "issues": report.issues,
-                                "additional_packages": report.additional_packages,
-                            },
-                        }));
-                    } else {
-                        print_json(&closure);
-                    }
-                } else {
+                if phases.is_empty() {
                     print_resolve(&closure);
-                    if let Some(report) = &install_report {
-                        print_installability(report);
-                    }
+                } else {
+                    print_build_order(&phases, &closure);
                 }
-                ExitCode::SUCCESS
+                if let Some(report) = &install_report {
+                    print_installability(report);
+                }
             }
+            ExitCode::SUCCESS
         }
         Mode::FindCycles => {
             let edges = closure.to_edges();
@@ -640,10 +642,24 @@ fn main() -> ExitCode {
     }
 }
 
+/// Map package names in build phases through a transform function.
+fn map_phase_packages(
+    phases: &[dag::BuildPhase],
+    f: impl Fn(&str) -> String,
+) -> Vec<dag::BuildPhase> {
+    phases
+        .iter()
+        .map(|p| dag::BuildPhase {
+            phase: p.phase,
+            packages: p.packages.iter().map(|pkg| f(pkg)).collect(),
+        })
+        .collect()
+}
+
 fn print_copr_script(phases: &[dag::BuildPhase]) {
     println!(
         r#"#!/bin/bash
-# Generated by ebranch build-order --copr
+# Generated by ebranch --copr
 # Usage: ./script.sh <copr-repo> [extra copr build-package flags...]
 set -euo pipefail
 
