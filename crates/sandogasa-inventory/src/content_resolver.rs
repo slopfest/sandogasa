@@ -8,25 +8,46 @@ use crate::model::{Inventory, Package};
 
 /// Export an inventory to content-resolver YAML format.
 ///
-/// Filters by domain if specified. Strips private fields.
-/// Packages are sorted alphabetically.
-pub fn export(inventory: &Inventory, domain: Option<&str>) -> String {
-    let packages = inventory.packages_for_domain(domain);
+/// Filters by workload if specified. When a workload key is given,
+/// per-workload metadata overrides (name, description, maintainer,
+/// labels) are applied from `inventory.workloads[key]`, falling back
+/// to inventory-level values.
+///
+/// Strips private fields. Packages are sorted alphabetically.
+pub fn export(inventory: &Inventory, workload_key: Option<&str>) -> String {
+    let packages = inventory.packages_for_workload(workload_key);
     let (all_rpms, arch_rpms) = collect_rpms(&packages);
+
+    // Resolve metadata: per-workload overrides → inventory defaults.
+    let meta = workload_key.and_then(|k| inventory.inventory.workloads.get(k));
+
+    let name = meta
+        .and_then(|m| m.name.as_deref())
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| match workload_key {
+            Some(k) => format!("{}-{k}", inventory.inventory.name),
+            None => inventory.inventory.name.clone(),
+        });
+
+    let description = meta
+        .and_then(|m| m.description.as_deref())
+        .unwrap_or(&inventory.inventory.description);
+
+    let maintainer = meta
+        .and_then(|m| m.maintainer.as_deref())
+        .unwrap_or(&inventory.inventory.maintainer);
+
+    let labels = meta
+        .and_then(|m| m.labels.as_ref())
+        .unwrap_or(&inventory.inventory.labels);
 
     let mut out = String::new();
     out.push_str("document: feedback-pipeline-workload\n");
     out.push_str("version: 1\n");
     out.push_str("data:\n");
-    out.push_str(&format!("  name: {}\n", inventory.inventory.name));
-    out.push_str(&format!(
-        "  description: {}\n",
-        inventory.inventory.description
-    ));
-    out.push_str(&format!(
-        "  maintainer: {}\n",
-        inventory.inventory.maintainer
-    ));
+    out.push_str(&format!("  name: {name}\n"));
+    out.push_str(&format!("  description: {description}\n"));
+    out.push_str(&format!("  maintainer: {maintainer}\n"));
 
     // Packages: sorted, deduplicated binary RPM names.
     if !all_rpms.is_empty() {
@@ -48,9 +69,9 @@ pub fn export(inventory: &Inventory, domain: Option<&str>) -> String {
     }
 
     // Labels.
-    if !inventory.inventory.labels.is_empty() {
+    if !labels.is_empty() {
         out.push_str("  labels:\n");
-        for label in &inventory.inventory.labels {
+        for label in labels {
             out.push_str(&format!("    - {label}\n"));
         }
     }
@@ -101,7 +122,7 @@ fn collect_rpms(packages: &[&Package]) -> (BTreeSet<String>, BTreeMap<String, BT
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{InventoryMeta, Package};
+    use crate::model::{InventoryMeta, Package, WorkloadMeta};
 
     fn make_inventory() -> Inventory {
         Inventory {
@@ -110,7 +131,22 @@ mod tests {
                 description: "Test packages".to_string(),
                 maintainer: "test-sig".to_string(),
                 labels: vec!["eln-extras".to_string()],
-                domains: vec![],
+                workloads: BTreeMap::from([
+                    (
+                        "hyperscale".to_string(),
+                        WorkloadMeta {
+                            packages: vec!["fish".to_string(), "systemd".to_string()],
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        "epel".to_string(),
+                        WorkloadMeta {
+                            packages: vec!["neovim".to_string()],
+                            ..Default::default()
+                        },
+                    ),
+                ]),
                 private_fields: vec!["poc".to_string()],
             },
             package: vec![
@@ -122,7 +158,6 @@ mod tests {
                     task: None,
                     rpms: Some(vec!["fish".to_string()]),
                     arch_rpms: None,
-                    domains: Some(vec!["hyperscale".to_string()]),
                     track: None,
                     repology_name: None,
                     distros: None,
@@ -145,7 +180,6 @@ mod tests {
                             vec!["systemd-boot-unsigned".to_string()],
                         ),
                     ])),
-                    domains: Some(vec!["hyperscale".to_string()]),
                     track: None,
                     repology_name: None,
                     distros: None,
@@ -159,7 +193,6 @@ mod tests {
                     task: None,
                     rpms: None,
                     arch_rpms: None,
-                    domains: Some(vec!["epel".to_string()]),
                     track: None,
                     repology_name: None,
                     distros: None,
@@ -186,13 +219,32 @@ mod tests {
     }
 
     #[test]
-    fn export_filtered_by_domain() {
+    fn export_filtered_by_workload() {
         let inv = make_inventory();
         let yaml = export(&inv, Some("hyperscale"));
         assert!(yaml.contains("    - fish"));
         assert!(yaml.contains("    - systemd-networkd"));
         // neovim is epel-only, should not appear.
         assert!(!yaml.contains("neovim"));
+        // Name auto-derived: test-packages-hyperscale.
+        assert!(yaml.contains("name: test-packages-hyperscale"));
+    }
+
+    #[test]
+    fn export_with_workload_meta() {
+        let mut inv = make_inventory();
+        let wl = inv.inventory.workloads.get_mut("hyperscale").unwrap();
+        wl.name = Some("hs-packages".to_string());
+        wl.description = Some("Hyperscale SIG".to_string());
+        wl.labels = Some(vec!["hs-label".to_string()]);
+        let yaml = export(&inv, Some("hyperscale"));
+        assert!(yaml.contains("name: hs-packages"));
+        assert!(yaml.contains("description: Hyperscale SIG"));
+        // Maintainer falls back to inventory level.
+        assert!(yaml.contains("maintainer: test-sig"));
+        // Labels from workload meta, not inventory.
+        assert!(yaml.contains("    - hs-label"));
+        assert!(!yaml.contains("eln-extras"));
     }
 
     #[test]

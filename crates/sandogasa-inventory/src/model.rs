@@ -28,12 +28,37 @@ pub struct InventoryMeta {
     /// Labels/tags for the inventory (e.g. "eln-extras").
     #[serde(default)]
     pub labels: Vec<String>,
-    /// Default domain(s) for packages that don't specify their own.
+    /// Workload definitions. Keys are workload identifiers; values
+    /// carry per-workload metadata for content-resolver export.
+    /// Packages without explicit workloads inherit all keys.
     #[serde(default)]
-    pub domains: Vec<String>,
+    pub workloads: BTreeMap<String, WorkloadMeta>,
     /// Field names to strip from all packages on export.
     #[serde(default)]
     pub private_fields: Vec<String>,
+}
+
+/// Per-workload metadata for content-resolver export.
+///
+/// All fields except `packages` are optional — omitted fields
+/// fall back to the inventory-level values.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorkloadMeta {
+    /// Workload name in content-resolver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Human-readable description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Maintainer override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintainer: Option<String>,
+    /// Content-resolver labels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+    /// Source RPM names belonging to this workload.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packages: Vec<String>,
 }
 
 /// A package of interest (source RPM).
@@ -64,11 +89,6 @@ pub struct Package {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arch_rpms: Option<BTreeMap<String, Vec<String>>>,
 
-    // --- Domain tags ---
-    /// Which workloads/SIGs this package belongs to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub domains: Option<Vec<String>>,
-
     // --- hs-relmon fields ---
     /// Which branch/repository to track (upstream, fedora-rawhide, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,23 +110,57 @@ impl Inventory {
         self.inventory.private_fields.iter().any(|f| f == field)
     }
 
-    /// Get packages filtered by domain. Returns all if domain is None.
+    /// Get packages filtered by workload. Returns all if workload is None.
     ///
-    /// Packages without explicit domains inherit the inventory-level
-    /// default domains.
-    pub fn packages_for_domain(&self, domain: Option<&str>) -> Vec<&Package> {
-        match domain {
+    /// When a workload key is given, returns only packages listed in
+    /// that workload's `packages` field.
+    pub fn packages_for_workload(&self, workload: Option<&str>) -> Vec<&Package> {
+        match workload {
             None => self.package.iter().collect(),
-            Some(d) => {
-                let default_match = self.inventory.domains.iter().any(|dom| dom == d);
+            Some(w) => {
+                let pkg_names: std::collections::HashSet<&str> = self
+                    .inventory
+                    .workloads
+                    .get(w)
+                    .map(|wl| wl.packages.iter().map(|s| s.as_str()).collect())
+                    .unwrap_or_default();
                 self.package
                     .iter()
-                    .filter(|p| match &p.domains {
-                        Some(domains) => domains.iter().any(|dom| dom == d),
-                        None => default_match,
-                    })
+                    .filter(|p| pkg_names.contains(p.name.as_str()))
                     .collect()
             }
+        }
+    }
+
+    /// Return the sorted list of workload identifiers.
+    pub fn workload_names(&self) -> Vec<&str> {
+        self.inventory
+            .workloads
+            .keys()
+            .map(|k| k.as_str())
+            .collect()
+    }
+
+    /// Return the workload keys that contain a given package.
+    pub fn workloads_for_package(&self, name: &str) -> Vec<&str> {
+        self.inventory
+            .workloads
+            .iter()
+            .filter(|(_, meta)| meta.packages.iter().any(|p| p == name))
+            .map(|(k, _)| k.as_str())
+            .collect()
+    }
+
+    /// Add a package to a workload, creating the workload if needed.
+    pub fn add_to_workload(&mut self, workload: &str, package: &str) {
+        let meta = self
+            .inventory
+            .workloads
+            .entry(workload.to_string())
+            .or_default();
+        if !meta.packages.iter().any(|p| p == package) {
+            meta.packages.push(package.to_string());
+            meta.packages.sort();
         }
     }
 
@@ -153,47 +207,60 @@ impl Inventory {
 mod tests {
     use super::*;
 
+    fn make_pkg(name: &str) -> Package {
+        Package {
+            name: name.to_string(),
+            poc: None,
+            reason: None,
+            team: None,
+            task: None,
+            rpms: None,
+            arch_rpms: None,
+            track: None,
+            repology_name: None,
+            distros: None,
+            file_issue: None,
+        }
+    }
+
     fn make_inventory() -> Inventory {
-        Inventory {
+        let mut inv = Inventory {
             inventory: InventoryMeta {
                 name: "test".to_string(),
                 description: "test".to_string(),
                 maintainer: "tester".to_string(),
                 labels: vec![],
-                domains: vec![],
+                workloads: BTreeMap::from([
+                    (
+                        "hyperscale".to_string(),
+                        WorkloadMeta {
+                            packages: vec!["bar".to_string(), "foo".to_string()],
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        "epel".to_string(),
+                        WorkloadMeta {
+                            packages: vec!["foo".to_string()],
+                            ..Default::default()
+                        },
+                    ),
+                ]),
                 private_fields: vec!["poc".to_string(), "team".to_string()],
             },
-            package: vec![
-                Package {
-                    name: "bar".to_string(),
-                    poc: Some("Team <t@e.com>".to_string()),
-                    reason: None,
-                    team: Some("infra".to_string()),
-                    task: None,
-                    rpms: None,
-                    arch_rpms: None,
-                    domains: Some(vec!["hyperscale".to_string()]),
-                    track: None,
-                    repology_name: None,
-                    distros: None,
-                    file_issue: None,
-                },
-                Package {
-                    name: "foo".to_string(),
-                    poc: None,
-                    reason: None,
-                    team: None,
-                    task: None,
-                    rpms: Some(vec!["foo".to_string(), "foo-libs".to_string()]),
-                    arch_rpms: None,
-                    domains: Some(vec!["hyperscale".to_string(), "epel".to_string()]),
-                    track: Some("upstream".to_string()),
-                    repology_name: None,
-                    distros: None,
-                    file_issue: None,
-                },
-            ],
-        }
+            package: vec![],
+        };
+        let mut bar = make_pkg("bar");
+        bar.poc = Some("Team <t@e.com>".to_string());
+        bar.team = Some("infra".to_string());
+        inv.package.push(bar);
+
+        let mut foo = make_pkg("foo");
+        foo.rpms = Some(vec!["foo".to_string(), "foo-libs".to_string()]);
+        foo.track = Some("upstream".to_string());
+        inv.package.push(foo);
+
+        inv
     }
 
     #[test]
@@ -206,42 +273,70 @@ mod tests {
     }
 
     #[test]
-    fn packages_for_domain() {
+    fn packages_for_workload() {
         let inv = make_inventory();
-        let hs = inv.packages_for_domain(Some("hyperscale"));
+        let hs = inv.packages_for_workload(Some("hyperscale"));
         assert_eq!(hs.len(), 2);
-        let epel = inv.packages_for_domain(Some("epel"));
+        let epel = inv.packages_for_workload(Some("epel"));
         assert_eq!(epel.len(), 1);
         assert_eq!(epel[0].name, "foo");
-        let all = inv.packages_for_domain(None);
+        let all = inv.packages_for_workload(None);
         assert_eq!(all.len(), 2);
     }
 
     #[test]
-    fn packages_for_domain_inherits_default() {
+    fn unlisted_package_not_in_workload() {
         let mut inv = make_inventory();
-        inv.inventory.domains = vec!["hyperscale".to_string()];
-        // Add a package with no explicit domains.
-        inv.add_package(Package {
-            name: "nodomain".to_string(),
-            poc: None,
-            reason: None,
-            team: None,
-            task: None,
-            rpms: None,
-            arch_rpms: None,
-            domains: None,
-            track: None,
-            repology_name: None,
-            distros: None,
-            file_issue: None,
-        });
-        // Should inherit "hyperscale" from inventory default.
-        let hs = inv.packages_for_domain(Some("hyperscale"));
-        assert!(hs.iter().any(|p| p.name == "nodomain"));
-        // But not "epel".
-        let epel = inv.packages_for_domain(Some("epel"));
-        assert!(!epel.iter().any(|p| p.name == "nodomain"));
+        inv.add_package(make_pkg("unlisted"));
+        // Not listed in any workload's packages.
+        let hs = inv.packages_for_workload(Some("hyperscale"));
+        assert!(!hs.iter().any(|p| p.name == "unlisted"));
+        // But shows up in unfiltered list.
+        let all = inv.packages_for_workload(None);
+        assert!(all.iter().any(|p| p.name == "unlisted"));
+    }
+
+    #[test]
+    fn workload_names() {
+        let inv = make_inventory();
+        assert_eq!(inv.workload_names(), vec!["epel", "hyperscale"]);
+    }
+
+    #[test]
+    fn workloads_for_package() {
+        let inv = make_inventory();
+        assert_eq!(inv.workloads_for_package("bar"), vec!["hyperscale"]);
+        assert_eq!(inv.workloads_for_package("foo"), vec!["epel", "hyperscale"]);
+        assert!(inv.workloads_for_package("nonexistent").is_empty());
+    }
+
+    #[test]
+    fn add_to_workload() {
+        let mut inv = make_inventory();
+        inv.add_to_workload("hyperscale", "newpkg");
+        assert!(
+            inv.inventory.workloads["hyperscale"]
+                .packages
+                .contains(&"newpkg".to_string())
+        );
+        // Duplicate add is a no-op.
+        inv.add_to_workload("hyperscale", "newpkg");
+        assert_eq!(
+            inv.inventory.workloads["hyperscale"]
+                .packages
+                .iter()
+                .filter(|p| *p == "newpkg")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn add_to_workload_creates_workload() {
+        let mut inv = make_inventory();
+        inv.add_to_workload("newwl", "pkg");
+        assert!(inv.inventory.workloads.contains_key("newwl"));
+        assert_eq!(inv.inventory.workloads["newwl"].packages, vec!["pkg"]);
     }
 
     #[test]
@@ -254,20 +349,7 @@ mod tests {
     #[test]
     fn add_package_new() {
         let mut inv = make_inventory();
-        inv.add_package(Package {
-            name: "aaa".to_string(),
-            poc: None,
-            reason: None,
-            team: None,
-            task: None,
-            rpms: None,
-            arch_rpms: None,
-            domains: None,
-            track: None,
-            repology_name: None,
-            distros: None,
-            file_issue: None,
-        });
+        inv.add_package(make_pkg("aaa"));
         assert_eq!(inv.package.len(), 3);
         // Should be sorted: aaa, bar, foo.
         assert_eq!(inv.package[0].name, "aaa");
@@ -303,23 +385,10 @@ mod tests {
                 description: "other".to_string(),
                 maintainer: "other".to_string(),
                 labels: vec![],
-                domains: vec![],
+                workloads: BTreeMap::new(),
                 private_fields: vec![],
             },
-            package: vec![Package {
-                name: "new-pkg".to_string(),
-                poc: None,
-                reason: None,
-                team: None,
-                task: None,
-                rpms: None,
-                arch_rpms: None,
-                domains: None,
-                track: None,
-                repology_name: None,
-                distros: None,
-                file_issue: None,
-            }],
+            package: vec![make_pkg("new-pkg")],
         };
         inv1.merge(&inv2);
         assert_eq!(inv1.package.len(), 3);

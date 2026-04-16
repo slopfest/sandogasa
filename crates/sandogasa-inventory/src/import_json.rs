@@ -77,7 +77,7 @@ pub fn import(json_str: &str) -> Result<Inventory, String> {
             } else {
                 Some(arch_rpms)
             },
-            domains: None,
+
             track: None,
             repology_name: None,
             distros: None,
@@ -93,7 +93,7 @@ pub fn import(json_str: &str) -> Result<Inventory, String> {
             description: json.description,
             maintainer: json.maintainer,
             labels: json.labels,
-            domains: vec![],
+            workloads: BTreeMap::new(),
             private_fields: vec![],
         },
         package: packages,

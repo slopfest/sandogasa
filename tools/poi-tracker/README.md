@@ -18,7 +18,7 @@ cargo install poi-tracker
 
 ```sh
 poi-tracker show -i inventory.toml
-poi-tracker show -i inventory.toml --domain hyperscale
+poi-tracker show -i inventory.toml --workload hyperscale
 poi-tracker show -i inventory.toml --json
 ```
 
@@ -28,7 +28,7 @@ poi-tracker show -i inventory.toml --json
 poi-tracker add systemd -i inventory.toml \
     --poc "Team <team@example.com>" \
     --rpm systemd-networkd \
-    --domain hyperscale \
+    --workload hyperscale \
     --track upstream
 
 poi-tracker remove systemd -i inventory.toml
@@ -38,15 +38,16 @@ poi-tracker remove systemd -i inventory.toml --rpm systemd-networkd
 ### Export to content-resolver YAML
 
 ```sh
-# Writes to {inventory-name}.yaml by default
+# Export all workloads (one YAML per workload)
 poi-tracker export content-resolver -i inventory.toml
 
-# Filter by domain
+# Export a single workload
 poi-tracker export content-resolver -i inventory.toml \
-    --domain hyperscale
+    --workload hyperscale
 
-# Custom output path
-poi-tracker export content-resolver -i inventory.toml -o custom.yaml
+# Custom output path (single workload only)
+poi-tracker export content-resolver -i inventory.toml \
+    --workload hyperscale -o custom.yaml
 ```
 
 ### Export to hs-relmon manifest
@@ -56,9 +57,9 @@ poi-tracker export content-resolver -i inventory.toml -o custom.yaml
 poi-tracker export hs-relmon \
     -i inv-cloud.toml -i inv-hw.toml -o manifest.toml
 
-# Filter by domain
+# Filter by workload
 poi-tracker export hs-relmon -i inventory.toml \
-    --domain hyperscale -o manifest.toml
+    --workload hyperscale -o manifest.toml
 ```
 
 ### Find a package
@@ -91,9 +92,9 @@ poi-tracker sync-distgit --user salimma \
 poi-tracker sync-distgit --user salimma \
     --exclude-group rust-sig
 
-# Add domain tags to all imported packages
+# Add workload tags to all imported packages
 poi-tracker sync-distgit --group kde-sig \
-    --domain kde -o kde.toml
+    --workload kde -o kde.toml
 
 # Remove packages no longer in dist-git results
 poi-tracker sync-distgit --user salimma --prune -o my.toml
@@ -110,7 +111,7 @@ in the dist-git results are listed as a warning but kept.
 ```sh
 poi-tracker import old-inventory.json -o inventory.toml \
     --private-fields poc,reason,team,task \
-    --domain hyperscale
+    --workload hyperscale
 ```
 
 ### Validate
@@ -127,14 +128,23 @@ name = "hyperscale-packages"
 description = "CentOS Hyperscale SIG packages"
 maintainer = "centos-hyperscale"
 labels = ["eln-extras"]
-domains = ["hyperscale"]
 private_fields = ["poc", "reason", "team", "task"]
+
+[inventory.workloads.hyperscale]
+name = "hs-packages"
+description = "Hyperscale SIG workload"
+labels = ["eln-extras"]
+
+[inventory.workloads.epel]
+name = "hs-epel-packages"
+description = "Hyperscale EPEL workload"
 
 [[package]]
 name = "systemd"
 poc = "Linux Userspace <team@example.com>"
 reason = "Core init system"
 rpms = ["systemd-networkd"]
+workloads = ["hyperscale"]
 track = "upstream"
 
 [package.arch_rpms]
@@ -144,6 +154,7 @@ aarch64 = ["systemd-boot-unsigned"]
 [[package]]
 name = "fish"
 rpms = ["fish"]
+workloads = ["hyperscale", "epel"]
 track = "upstream"
 ```
 
@@ -154,8 +165,9 @@ track = "upstream"
 | `name` | inventory/package | Name (required) |
 | `description` | inventory | Human-readable description |
 | `maintainer` | inventory | Maintainer (person or team) |
-| `labels` | inventory | Tags for content-resolver |
-| `domains` | inventory/package | Domain tags for filtering |
+| `labels` | inventory | Default labels for content-resolver |
+| `workloads` | inventory | Workload definitions (map) |
+| `workloads` | package | Workload membership (list) |
 | `private_fields` | inventory | Fields stripped on export |
 | `poc` | package | Point of contact |
 | `reason` | package | Reason for tracking |
@@ -167,6 +179,10 @@ track = "upstream"
 | `repology_name` | package | Repology name override |
 | `distros` | package | hs-relmon distribution list |
 | `file_issue` | package | File GitLab issues |
+
+Each `[inventory.workloads.<key>]` section can override `name`,
+`description`, `maintainer`, and `labels` for content-resolver
+export. Omitted fields fall back to inventory-level values.
 
 ## License
 

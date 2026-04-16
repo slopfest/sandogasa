@@ -12,7 +12,7 @@ pub mod hs_relmon;
 pub mod import_json;
 mod model;
 
-pub use model::{Inventory, InventoryMeta, Package};
+pub use model::{Inventory, InventoryMeta, Package, WorkloadMeta};
 
 /// Load multiple inventories and merge them into one.
 ///
@@ -93,7 +93,6 @@ reason = "Core init"
 team = "userspace"
 task = "T123"
 rpms = ["systemd-networkd"]
-domains = ["hyperscale"]
 track = "upstream"
 repology_name = "systemd"
 distros = "upstream,fedora"
@@ -110,10 +109,6 @@ x86_64 = ["systemd-boot-unsigned"]
         assert_eq!(
             pkg.rpms.as_deref(),
             Some(&["systemd-networkd".to_string()][..])
-        );
-        assert_eq!(
-            pkg.domains.as_deref(),
-            Some(&["hyperscale".to_string()][..])
         );
         assert_eq!(pkg.track.as_deref(), Some("upstream"));
         assert!(pkg.file_issue.unwrap());
@@ -132,7 +127,6 @@ maintainer = "me"
 [[package]]
 name = "foo"
 rpms = ["foo", "foo-libs"]
-domains = ["hyperscale"]
 "#;
         let inv = parse(toml_in).unwrap();
         let toml_out = to_toml(&inv).unwrap();
@@ -231,18 +225,24 @@ reason = "updated"
     }
 
     #[test]
-    fn parse_with_default_domains() {
+    fn parse_with_workloads() {
         let toml = r#"
 [inventory]
 name = "test"
 description = "d"
 maintainer = "m"
-domains = ["hyperscale"]
+
+[inventory.workloads.hyperscale]
+name = "hs-packages"
 
 [[package]]
 name = "foo"
 "#;
         let inv = parse(toml).unwrap();
-        assert_eq!(inv.inventory.domains, vec!["hyperscale"]);
+        assert!(inv.inventory.workloads.contains_key("hyperscale"));
+        assert_eq!(
+            inv.inventory.workloads["hyperscale"].name.as_deref(),
+            Some("hs-packages")
+        );
     }
 }

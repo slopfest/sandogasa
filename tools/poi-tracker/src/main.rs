@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use std::collections::BTreeMap;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -74,9 +75,9 @@ struct AddArgs {
     #[arg(long, value_delimiter = ',')]
     rpm: Vec<String>,
 
-    /// Domain tag(s) (comma-separated or repeated).
+    /// Workload tag(s) (comma-separated or repeated).
     #[arg(long, value_delimiter = ',')]
-    domain: Vec<String>,
+    workload: Vec<String>,
 
     /// Track branch for hs-relmon (e.g. upstream, fedora-rawhide).
     #[arg(long)]
@@ -101,9 +102,9 @@ struct RemoveArgs {
 
 #[derive(clap::Args)]
 struct ShowArgs {
-    /// Filter by domain.
+    /// Filter by workload.
     #[arg(long)]
-    domain: Option<String>,
+    workload: Option<String>,
 
     /// Output as JSON instead of human-readable.
     #[arg(long)]
@@ -120,18 +121,18 @@ struct ExportArgs {
 enum ExportFormat {
     /// Export as content-resolver YAML.
     ContentResolver {
-        /// Filter by domain.
+        /// Export only this workload.
         #[arg(long)]
-        domain: Option<String>,
-        /// Output file (default: {inventory-name}.yaml).
+        workload: Option<String>,
+        /// Output file (default: {workload-name}.yaml).
         #[arg(short, long)]
         output: Option<String>,
     },
     /// Export as hs-relmon manifest TOML.
     HsRelmon {
-        /// Filter by domain.
+        /// Filter by workload.
         #[arg(long)]
-        domain: Option<String>,
+        workload: Option<String>,
         /// Output file (default: stdout).
         #[arg(short, long)]
         output: Option<String>,
@@ -163,9 +164,9 @@ struct ImportArgs {
     #[arg(long, value_delimiter = ',', value_name = "FIELD,...")]
     private_fields: Vec<String>,
 
-    /// Domain tag(s) to apply to all imported packages.
-    #[arg(long, value_delimiter = ',', value_name = "DOMAIN,...")]
-    domain: Vec<String>,
+    /// Workload tag(s) to apply to all imported packages.
+    #[arg(long, value_delimiter = ',', value_name = "WORKLOAD,...")]
+    workload: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -231,9 +232,9 @@ struct SyncDistgitArgs {
     #[arg(long, default_value = "100")]
     per_page: u32,
 
-    /// Domain tags (CSV or repeated).
-    #[arg(long, value_delimiter = ',', value_name = "DOMAIN,...")]
-    domain: Vec<String>,
+    /// Workload tags (CSV or repeated).
+    #[arg(long, value_delimiter = ',', value_name = "WORKLOAD,...")]
+    workload: Vec<String>,
 
     /// Inventory name (default: user/group).
     #[arg(long)]
@@ -280,13 +281,34 @@ struct SyncGitlabArgs {
     #[arg(long)]
     prune: bool,
 
-    /// Domain tags (CSV or repeated).
-    #[arg(long, value_delimiter = ',', value_name = "DOMAIN,...")]
-    domain: Vec<String>,
+    /// Workload tags (CSV or repeated).
+    #[arg(long, value_delimiter = ',', value_name = "WORKLOAD,...")]
+    workload: Vec<String>,
 
     /// Inventory name (default: derived from group).
     #[arg(long)]
     name: Option<String>,
+}
+
+/// Derive a YAML filename for a workload export.
+fn workload_export_filename(
+    inventory: &sandogasa_inventory::Inventory,
+    workload_key: &str,
+) -> String {
+    let meta = inventory.inventory.workloads.get(workload_key);
+    let name = meta
+        .and_then(|m| m.name.as_deref())
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| format!("{}-{workload_key}", inventory.inventory.name));
+    format!("{}.yaml", name.replace(' ', "_"))
+}
+
+/// Build a workloads map from a list of workload names.
+fn workloads_from_names(names: &[String]) -> BTreeMap<String, sandogasa_inventory::WorkloadMeta> {
+    names
+        .iter()
+        .map(|n| (n.clone(), sandogasa_inventory::WorkloadMeta::default()))
+        .collect()
 }
 
 /// Collect inventory paths from -i and -I flags.
@@ -349,7 +371,7 @@ fn cmd_show(paths: &[String], args: &ShowArgs) -> ExitCode {
         }
     };
 
-    let packages = inventory.packages_for_domain(args.domain.as_deref());
+    let packages = inventory.packages_for_workload(args.workload.as_deref());
 
     if args.json {
         println!(
@@ -364,8 +386,9 @@ fn cmd_show(paths: &[String], args: &ShowArgs) -> ExitCode {
         );
         for pkg in &packages {
             print!("  {}", pkg.name);
-            if let Some(ref domains) = pkg.domains {
-                print!(" [{}]", domains.join(", "));
+            let wls = inventory.workloads_for_package(&pkg.name);
+            if !wls.is_empty() {
+                print!(" [{}]", wls.join(", "));
             }
             println!();
 
@@ -444,18 +467,68 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
     };
 
     match &args.format {
-        ExportFormat::ContentResolver { domain, output } => {
-            let yaml = sandogasa_inventory::content_resolver::export(&inventory, domain.as_deref());
-            let default_filename = format!("{}.yaml", inventory.inventory.name.replace(' ', "_"));
-            let path = output.as_deref().unwrap_or(&default_filename);
-            if let Err(e) = std::fs::write(path, &yaml) {
-                eprintln!("error: failed to write {path}: {e}");
-                return ExitCode::FAILURE;
+        ExportFormat::ContentResolver { workload, output } => {
+            // Determine which workloads to export.
+            let workload_keys: Vec<&str> = match workload {
+                Some(w) => vec![w.as_str()],
+                None => {
+                    let names = inventory.workload_names();
+                    if names.is_empty() {
+                        // No workloads defined: single-file export.
+                        vec![]
+                    } else {
+                        names
+                    }
+                }
+            };
+
+            if workload_keys.is_empty() {
+                // Single-file export (no workloads or --workload).
+                let yaml =
+                    sandogasa_inventory::content_resolver::export(&inventory, workload.as_deref());
+                let default_filename =
+                    format!("{}.yaml", inventory.inventory.name.replace(' ', "_"));
+                let path = output.as_deref().unwrap_or(&default_filename);
+                if let Err(e) = std::fs::write(path, &yaml) {
+                    eprintln!("error: failed to write {path}: {e}");
+                    return ExitCode::FAILURE;
+                }
+                eprintln!("Wrote {path}");
+            } else if workload_keys.len() == 1 {
+                // Single workload: respect -o if given.
+                let yaml = sandogasa_inventory::content_resolver::export(
+                    &inventory,
+                    Some(workload_keys[0]),
+                );
+                let wl_name = workload_export_filename(&inventory, workload_keys[0]);
+                let path = output.as_deref().unwrap_or(&wl_name);
+                if let Err(e) = std::fs::write(path, &yaml) {
+                    eprintln!("error: failed to write {path}: {e}");
+                    return ExitCode::FAILURE;
+                }
+                eprintln!("Wrote {path}");
+            } else {
+                // Multi-workload: one file per workload.
+                if output.is_some() {
+                    eprintln!(
+                        "error: -o/--output cannot be used when \
+                         exporting multiple workloads"
+                    );
+                    return ExitCode::FAILURE;
+                }
+                for key in &workload_keys {
+                    let yaml = sandogasa_inventory::content_resolver::export(&inventory, Some(key));
+                    let path = workload_export_filename(&inventory, key);
+                    if let Err(e) = std::fs::write(&path, &yaml) {
+                        eprintln!("error: failed to write {path}: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                    eprintln!("Wrote {path}");
+                }
             }
-            eprintln!("Wrote {path}");
         }
         ExportFormat::HsRelmon {
-            domain,
+            workload,
             distros,
             track,
             output,
@@ -473,7 +546,7 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
                 let result = match sandogasa_inventory::hs_relmon::merge_into_manifest(
                     path,
                     &inventory,
-                    domain.as_deref(),
+                    workload.as_deref(),
                     &defaults,
                     *prune,
                 ) {
@@ -513,7 +586,7 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
                 // Fresh export.
                 let toml = sandogasa_inventory::hs_relmon::export(
                     &inventory,
-                    domain.as_deref(),
+                    workload.as_deref(),
                     &defaults,
                 );
                 if let Some(path) = output {
@@ -554,8 +627,9 @@ fn cmd_find(paths: &[String], args: &FindArgs) -> ExitCode {
             if let Some(ref rpms) = pkg.rpms {
                 println!("  rpms: {}", rpms.join(", "));
             }
-            if let Some(ref domains) = pkg.domains {
-                println!("  domains: {}", domains.join(", "));
+            let wls = inventory.workloads_for_package(&pkg.name);
+            if !wls.is_empty() {
+                println!("  workloads: {}", wls.join(", "));
             }
             if let Some(ref track) = pkg.track {
                 println!("  track: {track}");
@@ -581,16 +655,9 @@ fn merge_into_package(existing: &mut sandogasa_inventory::Package, args: &AddArg
         }
         rpms.sort();
     }
-    // Append domains (don't replace).
-    if !args.domain.is_empty() {
-        let domains = existing.domains.get_or_insert_with(Vec::new);
-        for d in &args.domain {
-            if !domains.contains(d) {
-                domains.push(d.clone());
-            }
-        }
-        domains.sort();
-    }
+    // Workload membership is handled at the inventory level by the
+    // caller (cmd_add) via add_to_workload.
+
     // Only set metadata if not already present.
     if existing.poc.is_none() {
         existing.poc.clone_from(&args.poc);
@@ -650,11 +717,6 @@ fn cmd_add(paths: &[String], args: &AddArgs) -> ExitCode {
                 Some(args.rpm.clone())
             },
             arch_rpms: None,
-            domains: if args.domain.is_empty() {
-                None
-            } else {
-                Some(args.domain.clone())
-            },
             track: args.track.clone(),
             repology_name: None,
             distros: None,
@@ -662,6 +724,11 @@ fn cmd_add(paths: &[String], args: &AddArgs) -> ExitCode {
         };
         inventory.add_package(pkg);
         eprintln!("Added {} to {target_path}", args.name);
+    }
+
+    // Add to workloads at the inventory level.
+    for wl in &args.workload {
+        inventory.add_to_workload(wl, &args.name);
     }
 
     if let Err(e) = sandogasa_inventory::save(&inventory, &target_path) {
@@ -729,9 +796,12 @@ fn cmd_import(args: &ImportArgs) -> ExitCode {
         inventory.inventory.private_fields = args.private_fields.clone();
     }
 
-    if !args.domain.is_empty() {
-        for pkg in &mut inventory.package {
-            pkg.domains = Some(args.domain.clone());
+    if !args.workload.is_empty() {
+        let pkg_names: Vec<String> = inventory.package.iter().map(|p| p.name.clone()).collect();
+        for wl in &args.workload {
+            for name in &pkg_names {
+                inventory.add_to_workload(wl, name);
+            }
         }
     }
 
@@ -940,7 +1010,7 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
                 description: format!("Packages synced from dist-git ({source_label})"),
                 maintainer: source_label.clone(),
                 labels: vec![],
-                domains: args.domain.clone(),
+                workloads: workloads_from_names(&args.workload),
                 private_fields: vec![],
             },
             package: vec![],
@@ -969,16 +1039,14 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
             task: None,
             rpms: None,
             arch_rpms: None,
-            domains: if args.domain.is_empty() {
-                None
-            } else {
-                Some(args.domain.clone())
-            },
             track: None,
             repology_name: None,
             distros: None,
             file_issue: None,
         });
+        for wl in &args.workload {
+            inventory.add_to_workload(wl, &p.name);
+        }
         added += 1;
     }
 
@@ -1142,7 +1210,7 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
                 description: format!("Packages synced from GitLab ({source_label})"),
                 maintainer: source_label.clone(),
                 labels: vec![],
-                domains: args.domain.clone(),
+                workloads: workloads_from_names(&args.workload),
                 private_fields: vec![],
             },
             package: vec![],
@@ -1168,16 +1236,14 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
             task: None,
             rpms: None,
             arch_rpms: None,
-            domains: if args.domain.is_empty() {
-                None
-            } else {
-                Some(args.domain.clone())
-            },
             track: None,
             repology_name: None,
             distros: None,
             file_issue: None,
         });
+        for wl in &args.workload {
+            inventory.add_to_workload(wl, name);
+        }
         added += 1;
     }
 
@@ -1290,7 +1356,7 @@ mod tests {
             auto_prefix: false,
             prune: false,
             per_page: 100,
-            domain: vec![],
+            workload: vec![],
             name: None,
         }
     }
