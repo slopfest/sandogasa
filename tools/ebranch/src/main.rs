@@ -185,6 +185,10 @@ Otherwise defaults to --branch."
     #[arg(short, long)]
     verbose: bool,
 
+    /// Clear fedrq repo metadata cache before querying.
+    #[arg(long)]
+    refresh: bool,
+
     /// Parallel fedrq queries (0 = CPUs).
     #[arg(short = 'j', long, default_value = "0", hide_default_value = true)]
     jobs: usize,
@@ -260,6 +264,10 @@ to copr build-package."
     #[arg(long, value_name = "PATH", requires = "transitive")]
     toml: Option<String>,
 
+    /// Clear fedrq repo metadata cache before querying.
+    #[arg(long)]
+    refresh: bool,
+
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
@@ -312,6 +320,20 @@ enum Mode {
     FindCycles,
 }
 
+/// Clear the fedrq repo metadata cache if `--refresh` was passed.
+fn handle_refresh(refresh: bool, verbose: bool) -> Result<(), ExitCode> {
+    if refresh {
+        if let Err(e) = sandogasa_fedrq::clear_cache() {
+            eprintln!("error: failed to clear fedrq cache: {e}");
+            return Err(ExitCode::FAILURE);
+        }
+        if verbose {
+            eprintln!("cleared fedrq cache");
+        }
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -362,6 +384,9 @@ fn main() -> ExitCode {
         if a.branch.is_none() && a.repo.is_none() {
             eprintln!("error: at least one of --branch or --repo is required");
             return ExitCode::FAILURE;
+        }
+        if let Err(code) = handle_refresh(a.refresh, a.verbose) {
+            return code;
         }
         if a.jobs > 0 {
             rayon::ThreadPoolBuilder::new()
@@ -427,6 +452,9 @@ fn main() -> ExitCode {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
+        if let Err(code) = handle_refresh(a.refresh, a.verbose) {
+            return code;
+        }
         if a.jobs > 0 {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(a.jobs)
@@ -479,14 +507,8 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    if args.refresh {
-        if let Err(e) = sandogasa_fedrq::clear_cache() {
-            eprintln!("error: failed to clear fedrq cache: {e}");
-            return ExitCode::FAILURE;
-        }
-        if args.verbose {
-            eprintln!("cleared fedrq cache");
-        }
+    if let Err(code) = handle_refresh(args.refresh, args.verbose) {
+        return code;
     }
 
     if args.jobs > 0 {
