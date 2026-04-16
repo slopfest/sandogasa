@@ -18,8 +18,10 @@ use crate::dag;
 
 /// Options for the check-crate command.
 pub struct CheckCrateOptions {
-    pub branch: String,
+    pub branch: Option<String>,
     pub repo: Option<String>,
+    /// Human-readable label for the branch/repo combination.
+    pub label: String,
     pub verbose: bool,
     pub transitive: bool,
     pub exclude_dev: bool,
@@ -154,7 +156,7 @@ pub fn check_crate(
     }
 
     let fedrq = sandogasa_fedrq::Fedrq {
-        branch: Some(opts.branch.clone()),
+        branch: opts.branch.clone(),
         repo: opts.repo.clone(),
     };
 
@@ -208,7 +210,7 @@ pub fn check_crate(
         crate_name: name.to_string(),
         crate_version: version.clone(),
         package: format!("rust-{name}"),
-        branch: opts.branch.clone(),
+        branch: opts.label.clone(),
         dependencies,
         transitive_missing,
         transitive_build_order,
@@ -1077,8 +1079,9 @@ mod tests {
 
     fn make_opts(transitive: bool, exclude_dev: bool, include_optional: bool) -> CheckCrateOptions {
         CheckCrateOptions {
-            branch: "rawhide".to_string(),
+            branch: Some("rawhide".to_string()),
             repo: None,
+            label: "rawhide".to_string(),
             verbose: false,
             transitive,
             exclude_dev,

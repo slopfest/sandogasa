@@ -205,7 +205,7 @@ struct CheckCrateArgs {
 
     /// Target branch (e.g. epel9, rawhide).
     #[arg(short = 'b', long)]
-    branch: String,
+    branch: Option<String>,
 
     /// Repository class for the branch (fedrq -r).
     #[arg(short = 'r', long, value_name = "REPO")]
@@ -347,15 +347,26 @@ fn main() -> ExitCode {
 
     // CheckCrate and CheckUpdate have their own args; handle separately.
     if let Command::CheckCrate(a) = &cli.command {
+        if a.branch.is_none() && a.repo.is_none() {
+            eprintln!("error: at least one of --branch or --repo is required");
+            return ExitCode::FAILURE;
+        }
         if a.jobs > 0 {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(a.jobs)
                 .build_global()
                 .expect("failed to configure thread pool");
         }
+        let label = match (&a.branch, &a.repo) {
+            (Some(b), Some(r)) => format!("{b} ({r})"),
+            (Some(b), None) => b.clone(),
+            (None, Some(r)) => r.clone(),
+            (None, None) => unreachable!(),
+        };
         let opts = check_crate::CheckCrateOptions {
             branch: a.branch.clone(),
             repo: a.repo.clone(),
+            label,
             verbose: a.verbose,
             transitive: a.transitive,
             exclude_dev: a.exclude_dev,
