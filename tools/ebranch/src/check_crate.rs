@@ -592,12 +592,7 @@ fn expand_transitive(
                 continue;
             }
 
-            // Dev deps don't create build-order edges (they're only
-            // needed for %check, not the actual RPM build), but we
-            // still expand them transitively below.
-            if dr.dep.kind != "dev" {
-                rebuild_deps_of_crate.push(dr.dep.name.clone());
-            }
+            rebuild_deps_of_crate.push(dr.dep.name.clone());
 
             if visited.contains(&dr.dep.name) {
                 continue;
