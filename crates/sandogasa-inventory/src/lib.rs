@@ -251,4 +251,56 @@ name = "foo"
             Some("hs-packages")
         );
     }
+
+    /// Verify the checked-in JSON Schema matches the current model.
+    ///
+    /// If the schema has changed (e.g. fields added/removed), this
+    /// test fails. To update the checked-in file:
+    ///
+    /// ```sh
+    /// UPDATE_SCHEMA=1 cargo test -p sandogasa-inventory schema_up_to_date
+    /// ```
+    ///
+    /// Review the diff before committing — new required fields are a
+    /// breaking change, new optional fields are a minor change.
+    #[test]
+    fn schema_up_to_date() {
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join("inventory.schema.json");
+        let generated = json_schema();
+
+        if std::env::var("UPDATE_SCHEMA").is_ok() {
+            std::fs::write(&schema_path, &generated).expect("failed to write schema");
+            eprintln!("Updated {}", schema_path.display());
+            return;
+        }
+
+        let committed = std::fs::read_to_string(&schema_path).unwrap_or_else(|_| {
+            panic!(
+                "Schema file not found at {}. Run:\n  \
+                 UPDATE_SCHEMA=1 cargo test -p sandogasa-inventory schema_up_to_date",
+                schema_path.display()
+            )
+        });
+
+        if generated != committed {
+            // Show first differing line for quick diagnosis.
+            for (i, (a, b)) in generated.lines().zip(committed.lines()).enumerate() {
+                if a != b {
+                    panic!(
+                        "Schema is out of date (first difference at line {}). Run:\n  \
+                         UPDATE_SCHEMA=1 cargo test -p sandogasa-inventory schema_up_to_date\n\n\
+                         expected: {a}\n  actual: {b}",
+                        i + 1
+                    );
+                }
+            }
+            // Length difference.
+            panic!(
+                "Schema is out of date (line count differs). Run:\n  \
+                 UPDATE_SCHEMA=1 cargo test -p sandogasa-inventory schema_up_to_date"
+            );
+        }
+    }
 }

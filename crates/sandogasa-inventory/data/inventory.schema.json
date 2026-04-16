@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Inventory",
+  "description": "Top-level inventory document.",
+  "type": "object",
+  "properties": {
+    "inventory": {
+      "description": "Inventory metadata.",
+      "$ref": "#/$defs/InventoryMeta"
+    },
+    "package": {
+      "description": "Packages in the inventory.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Package"
+      }
+    }
+  },
+  "required": [
+    "inventory"
+  ],
+  "$defs": {
+    "InventoryMeta": {
+      "description": "Inventory metadata.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Human-readable description.",
+          "type": "string"
+        },
+        "labels": {
+          "description": "Labels/tags for the inventory (e.g. \"eln-extras\").",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "maintainer": {
+          "description": "Maintainer (person or team).",
+          "type": "string"
+        },
+        "name": {
+          "description": "Inventory name (e.g. \"hyperscale-packages\").",
+          "type": "string"
+        },
+        "private_fields": {
+          "description": "Field names to strip from all packages on export.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "workloads": {
+          "description": "Workload definitions. Keys are workload identifiers; values\ncarry per-workload metadata for content-resolver export.\nPackages without explicit workloads inherit all keys.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/WorkloadMeta"
+          },
+          "default": {}
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "maintainer"
+      ]
+    },
+    "Package": {
+      "description": "A package of interest (source RPM).",
+      "type": "object",
+      "properties": {
+        "arch_rpms": {
+          "description": "Architecture-specific RPMs.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "distros": {
+          "description": "Comma-separated distribution list for hs-relmon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file_issue": {
+          "description": "Whether to file GitLab issues for version updates.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Source RPM name (required).",
+          "type": "string"
+        },
+        "poc": {
+          "description": "Point of contact (\"Name <email>\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Reason for tracking this package.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repology_name": {
+          "description": "Name in Repology if different from RPM name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rpms": {
+          "description": "Binary RPM subpackages to track. If omitted, all are assumed.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "task": {
+          "description": "Internal task/ticket reference.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "team": {
+          "description": "Team responsible.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "track": {
+          "description": "Which branch/repository to track (upstream, fedora-rawhide, etc.).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "WorkloadMeta": {
+      "description": "Per-workload metadata for content-resolver export.\n\nAll fields except `packages` are optional — omitted fields\nfall back to the inventory-level values.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Human-readable description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "labels": {
+          "description": "Content-resolver labels.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "maintainer": {
+          "description": "Maintainer override.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Workload name in content-resolver.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "packages": {
+          "description": "Source RPM names belonging to this workload.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

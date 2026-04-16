@@ -40,8 +40,6 @@ enum Command {
     Import(ImportArgs),
     /// Remove a package from the inventory.
     Remove(RemoveArgs),
-    /// Print the inventory JSON Schema.
-    Schema,
     /// Show inventory contents.
     Show(ShowArgs),
     /// Sync inventory from Fedora dist-git (Pagure) access.
@@ -341,7 +339,7 @@ fn main() -> ExitCode {
     // inventory paths.
     let needs_paths = !matches!(
         cli.command,
-        Command::Import(_) | Command::Schema | Command::SyncDistgit(_) | Command::SyncGitlab(_)
+        Command::Import(_) | Command::SyncDistgit(_) | Command::SyncGitlab(_)
     );
 
     let paths = resolve_inventory_paths(&cli);
@@ -357,10 +355,6 @@ fn main() -> ExitCode {
         Command::Find(args) => cmd_find(&paths, args),
         Command::Import(args) => cmd_import(args),
         Command::Remove(args) => cmd_remove(&paths[0], args),
-        Command::Schema => {
-            println!("{}", sandogasa_inventory::json_schema());
-            ExitCode::SUCCESS
-        }
         Command::Show(args) => cmd_show(&paths, args),
         Command::SyncDistgit(args) => cmd_sync_distgit(args),
         Command::SyncGitlab(args) => cmd_sync_gitlab(args),
