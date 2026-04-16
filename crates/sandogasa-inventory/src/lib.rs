@@ -14,6 +14,12 @@ mod model;
 
 pub use model::{Inventory, InventoryMeta, Package, WorkloadMeta};
 
+/// Generate a JSON Schema for the inventory format.
+pub fn json_schema() -> String {
+    let schema = schemars::schema_for!(Inventory);
+    serde_json::to_string_pretty(&schema).expect("schema serialization failed")
+}
+
 /// Load multiple inventories and merge them into one.
 ///
 /// The first inventory provides the metadata (name, description,

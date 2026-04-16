@@ -4,10 +4,11 @@
 
 use std::collections::BTreeMap;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Top-level inventory document.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Inventory {
     /// Inventory metadata.
     pub inventory: InventoryMeta,
@@ -17,7 +18,7 @@ pub struct Inventory {
 }
 
 /// Inventory metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InventoryMeta {
     /// Inventory name (e.g. "hyperscale-packages").
     pub name: String,
@@ -42,7 +43,7 @@ pub struct InventoryMeta {
 ///
 /// All fields except `packages` are optional — omitted fields
 /// fall back to the inventory-level values.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct WorkloadMeta {
     /// Workload name in content-resolver.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,7 +63,7 @@ pub struct WorkloadMeta {
 }
 
 /// A package of interest (source RPM).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Package {
     /// Source RPM name (required).
     pub name: String,

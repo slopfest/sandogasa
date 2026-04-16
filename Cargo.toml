@@ -48,6 +48,7 @@ quick-xml = "0.37"
 rayon = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rpassword = "7"
+schemars = "1"
 sandogasa-bodhi = { version = "0.9", path = "crates/sandogasa-bodhi" }
 sandogasa-bugzilla = { version = "0.9", path = "crates/sandogasa-bugzilla" }
 sandogasa-cli = { version = "0.9", path = "crates/sandogasa-cli" }
