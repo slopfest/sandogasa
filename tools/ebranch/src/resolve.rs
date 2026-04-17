@@ -635,21 +635,45 @@ impl DepResolver for FedrqResolver {
             ));
         }
 
-        // Probe both branches in parallel to catch bad configs early
-        // and warm up the fedrq cache if needed.
-        let (src, tgt) = rayon::join(
-            || {
-                self.source_srpm()
-                    .resolve_to_source("bash")
-                    .map_err(|e| format!("source config error: {e}"))
-            },
-            || {
-                self.target
-                    .resolve_to_source("bash")
-                    .map_err(|e| format!("target config error: {e}"))
-            },
-        );
+        // Probe all configured repos in parallel to catch bad configs
+        // (e.g. nonexistent Koji repos) early and warm up the cache.
+        let src_label = self
+            .source
+            .repo
+            .as_deref()
+            .or(self.source.branch.as_deref())
+            .unwrap_or("source");
+        let tgt_label = self
+            .target
+            .repo
+            .as_deref()
+            .or(self.target.branch.as_deref())
+            .unwrap_or("target");
+
+        let probe_source = || {
+            self.source
+                .resolve_to_source("bash")
+                .map_err(|e| format!("source repo {src_label}: {e}"))
+        };
+        let probe_source_src = || {
+            if let Some(ref src) = self.source_src {
+                let label = src.repo.as_deref().unwrap_or("source-src");
+                src.resolve_to_source("bash")
+                    .map_err(|e| format!("source repo {label}: {e}"))
+            } else {
+                Ok(vec![])
+            }
+        };
+        let probe_target = || {
+            self.target
+                .resolve_to_source("bash")
+                .map_err(|e| format!("target repo {tgt_label}: {e}"))
+        };
+
+        let ((src, src_src), tgt) =
+            rayon::join(|| rayon::join(probe_source, probe_source_src), probe_target);
         src?;
+        src_src?;
         tgt?;
         Ok(())
     }
