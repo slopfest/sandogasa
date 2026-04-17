@@ -1275,4 +1275,130 @@ mod tests {
         assert_eq!(parsed.transitive_edges.len(), 2);
         assert!(parsed.transitive_edges["missing-dep"].contains("transitive-dep"));
     }
+
+    fn make_report() -> CheckCrateReport {
+        CheckCrateReport {
+            crate_name: "my-crate".to_string(),
+            crate_version: "1.0.0".to_string(),
+            package: "rust-my-crate".to_string(),
+            branch: "rawhide".to_string(),
+            dependencies: vec![
+                DepResult {
+                    dep: make_dep("dep-a", "normal", false),
+                    status: DepStatus::Missing,
+                },
+                DepResult {
+                    dep: make_dep("dep-b", "normal", false),
+                    status: DepStatus::Satisfied {
+                        version: "1.0.0".to_string(),
+                        compat: false,
+                    },
+                },
+            ],
+            transitive_missing: vec![],
+            transitive_build_order: vec![
+                dag::BuildPhase {
+                    phase: 1,
+                    packages: vec!["dep-a".to_string()],
+                },
+                dag::BuildPhase {
+                    phase: 2,
+                    packages: vec!["dep-c".to_string()],
+                },
+            ],
+            transitive_edges: BTreeMap::new(),
+            review_bugs: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn full_build_phases_appends_root() {
+        let report = make_report();
+        let phases = report.full_build_phases();
+        assert_eq!(phases.len(), 3);
+        assert_eq!(phases[2].phase, 3);
+        assert_eq!(phases[2].packages, vec!["my-crate"]);
+    }
+
+    #[test]
+    fn full_build_phases_empty_transitive() {
+        let mut report = make_report();
+        report.transitive_build_order.clear();
+        let phases = report.full_build_phases();
+        assert_eq!(phases.len(), 1);
+        assert_eq!(phases[0].phase, 1);
+        assert_eq!(phases[0].packages, vec!["my-crate"]);
+    }
+
+    #[test]
+    fn write_and_load_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.toml");
+        let path_str = path.to_str().unwrap();
+        let report = make_report();
+        write_toml(&report, path_str).unwrap();
+        let loaded = load_report(path_str).unwrap();
+        assert_eq!(loaded.crate_name, "my-crate");
+        assert_eq!(loaded.crate_version, "1.0.0");
+        assert_eq!(loaded.dependencies.len(), 2);
+    }
+
+    #[test]
+    fn check_dep_in_repo_missing() {
+        let fedrq = sandogasa_fedrq::Fedrq {
+            branch: Some("nonexistent-test-branch-xyz".to_string()),
+            repo: None,
+        };
+        let dep = make_dep("nonexistent-crate-xyz", "normal", false);
+        let status = check_dep_in_repo(&fedrq, &dep);
+        assert!(matches!(status, DepStatus::Missing));
+    }
+
+    #[test]
+    fn extract_versions_duplicate_provides() {
+        let provides = vec![
+            "crate(foo) = 1.0.0".to_string(),
+            "crate(foo) = 1.0.0".to_string(),
+        ];
+        let versions = extract_crate_versions(&provides, "foo");
+        assert_eq!(versions, vec!["1.0.0", "1.0.0"]);
+    }
+
+    #[test]
+    fn opt_label_optional() {
+        let dep = DepResult {
+            dep: make_dep("foo", "normal", true),
+            status: DepStatus::Missing,
+        };
+        assert_eq!(opt_label(&dep), ", optional");
+    }
+
+    #[test]
+    fn opt_label_required() {
+        let dep = DepResult {
+            dep: make_dep("foo", "normal", false),
+            status: DepStatus::Missing,
+        };
+        assert_eq!(opt_label(&dep), "");
+    }
+
+    #[test]
+    fn unique_crate_count_deduplicates() {
+        let deps = vec![
+            DepResult {
+                dep: make_dep("foo", "normal", false),
+                status: DepStatus::Missing,
+            },
+            DepResult {
+                dep: make_dep("foo", "build", false),
+                status: DepStatus::Missing,
+            },
+            DepResult {
+                dep: make_dep("bar", "normal", false),
+                status: DepStatus::Missing,
+            },
+        ];
+        let refs: Vec<&DepResult> = deps.iter().collect();
+        assert_eq!(unique_crate_count(&refs), 2);
+    }
 }
