@@ -150,6 +150,10 @@ pub struct InstallabilityReport {
 /// Real resolver backed by `sandogasa_fedrq::Fedrq`.
 pub struct FedrqResolver {
     pub source: sandogasa_fedrq::Fedrq,
+    /// Source RPM queries when source uses a Koji repo.
+    /// `@koji:` repos only index binary RPMs, so BuildRequires and
+    /// subpackage Requires queries need `@koji-src:` instead.
+    pub source_src: Option<sandogasa_fedrq::Fedrq>,
     pub target: sandogasa_fedrq::Fedrq,
 }
 
@@ -606,11 +610,21 @@ pub fn resolve_with_installability(
     }
 }
 
+impl FedrqResolver {
+    /// The fedrq instance to use for source RPM queries
+    /// (BuildRequires, subpackage Requires).
+    fn source_srpm(&self) -> &sandogasa_fedrq::Fedrq {
+        self.source_src.as_ref().unwrap_or(&self.source)
+    }
+}
+
 impl DepResolver for FedrqResolver {
     fn validate(&self) -> Result<(), String> {
-        // Koji repos only index binary RPMs — BuildRequires queries
-        // on source RPMs return nothing, producing misleading results.
-        if let Some(ref repo) = self.source.repo
+        // Koji repos only index binary RPMs. If source_src is set,
+        // we have a @koji-src: companion for SRPM queries. If not
+        // and the source is a bare @koji: repo, fail early.
+        if self.source_src.is_none()
+            && let Some(ref repo) = self.source.repo
             && repo.starts_with("@koji:")
         {
             return Err(format!(
@@ -625,14 +639,14 @@ impl DepResolver for FedrqResolver {
         // and warm up the fedrq cache if needed.
         let (src, tgt) = rayon::join(
             || {
-                self.source
+                self.source_srpm()
                     .resolve_to_source("bash")
-                    .map_err(|e| format!("source branch config error: {e}"))
+                    .map_err(|e| format!("source config error: {e}"))
             },
             || {
                 self.target
                     .resolve_to_source("bash")
-                    .map_err(|e| format!("target branch config error: {e}"))
+                    .map_err(|e| format!("target config error: {e}"))
             },
         );
         src?;
@@ -641,7 +655,7 @@ impl DepResolver for FedrqResolver {
     }
 
     fn buildrequires(&self, srpm: &str) -> Result<Vec<String>, String> {
-        self.source
+        self.source_srpm()
             .src_buildrequires(srpm)
             .map_err(|e| e.to_string())
     }
@@ -659,7 +673,7 @@ impl DepResolver for FedrqResolver {
     }
 
     fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
-        self.source
+        self.source_srpm()
             .subpkgs_requires(srpm)
             .map_err(|e| e.to_string())
     }

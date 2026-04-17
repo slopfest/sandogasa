@@ -37,6 +37,7 @@
 
 ## fedrq quirks
 - Koji side tag repos (`-r @koji:<tag>`) only index binary RPMs, not source RPMs. `fedrq subpkgs -S` returns nothing for side tags. To query side tag contents, use `fedrq pkgs -r @koji:<tag> '*'` (but this includes inherited packages) or resolve binary RPM names via `koji buildinfo <nvr>` first
+- Use `@koji-src:<tag>` to query source RPMs in a Koji repo (e.g. BuildRequires). ebranch's resolve command does this automatically when given `--source-repo @koji:<tag>`
 - Side tag repos are standalone — do not pass `-b` with `-r @koji:<tag>`
 - `fedrq whatrequires` requires `-F source` (not `-F source_name`)
 - `fedrq` may return `(none)` as a result — always filter it out

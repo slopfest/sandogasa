@@ -518,11 +518,21 @@ fn main() -> ExitCode {
             .expect("failed to configure thread pool");
     }
 
+    // When the source repo is a Koji repo, create a @koji-src:
+    // companion for source RPM queries (BuildRequires, subpkg Requires).
+    let source_src = args.source_repo.as_deref().and_then(|r| {
+        r.strip_prefix("@koji:").map(|tag| sandogasa_fedrq::Fedrq {
+            branch: args.source.clone(),
+            repo: Some(format!("@koji-src:{tag}")),
+        })
+    });
+
     let resolver = FedrqResolver {
         source: sandogasa_fedrq::Fedrq {
             branch: args.source.clone(),
             repo: args.source_repo.clone(),
         },
+        source_src,
         target: sandogasa_fedrq::Fedrq {
             branch: args.target.clone(),
             repo: args.target_repo.clone(),

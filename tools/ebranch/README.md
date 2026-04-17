@@ -26,6 +26,11 @@ At least one of `--source` / `--source-repo` and one of `--target` /
 fedrq combines them (e.g. `--target c10s --target-repo @epel` queries
 CentOS Stream 10 base repos plus EPEL).
 
+Koji repos can be used as source (`--source-repo @koji:f45-build`).
+Since `@koji:` repos only index binary RPMs, ebranch automatically
+uses `@koji-src:` for source RPM queries (BuildRequires, subpackage
+Requires) while keeping `@koji:` for binary RPM resolution.
+
 ### Analyze a crates.io crate's dependencies
 
 Use `check-crate` to check which dependencies of a Rust crate are
