@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### ebranch
+
+- `check-crate`: allow `-r` without `-b` for side tag repos
+- `check-crate`: include dev deps in build-order edges (fixes
+  incorrect phasing for packages with dev-only dependencies like
+  arrow-row → arrow-cast)
+- `check-crate`: add `--koji` and `--copr` output modes
+- `check-crate`: include root crate as the final build phase
+- `check-crate`: add `--refresh` flag
+- `check-update`: add `--refresh` flag
+- `resolve`: remove `--phases` flag (phases are always computed)
+- `resolve`: auto-use `@koji-src:` for source RPM queries when
+  `--source-repo @koji:<tag>` is given
+- `resolve`: validate all configured repos on startup (catches
+  nonexistent Koji repos early)
+- `resolve`: reject bare `@koji:` repos as source with a clear
+  error message
+
 ### poi-tracker
 
 - **New: `sync-distgit` subcommand** — create or update an inventory
@@ -9,6 +27,26 @@
   (Pagure). Merges new packages without overwriting existing entries.
   `--user` or `--group` mode with group-access filtering via
   `--no-groups`, `--include-group`, and `--exclude-group`
+- Rename `domains` to `workloads` (matching content-resolver
+  terminology)
+- Workload membership is now declared at the workload level
+  (`[inventory.workloads.<key>]` with a `packages` list) rather
+  than inline on each package
+- Per-workload metadata overrides (name, description, maintainer,
+  labels) for content-resolver export
+- Multi-workload export: omit `--workload` to produce one YAML
+  per workload
+- Rename `--domain` to `--workload` across all subcommands
+
+### sandogasa-inventory
+
+- Add `WorkloadMeta` struct with per-workload metadata and package
+  list
+- Replace `domains` with `workloads` (`BTreeMap<String, WorkloadMeta>`)
+- Add `workloads_for_package()`, `add_to_workload()`,
+  `workload_names()` methods
+- Add JSON Schema generation via `schemars` (`json_schema()`)
+- Check in schema at `data/inventory.schema.json` with snapshot test
 
 ### sandogasa-distgit
 

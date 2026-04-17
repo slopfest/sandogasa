@@ -321,4 +321,159 @@ mod tests {
         assert!(toml.contains("track = \"upstream\""));
         assert!(toml.contains("file_issue = true"));
     }
+
+    // --- merge_into_manifest tests ---
+
+    fn write_manifest(dir: &tempfile::TempDir, content: &str) -> String {
+        let path = dir.path().join("manifest.toml");
+        std::fs::write(&path, content).unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn merge_adds_new_packages() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            &dir,
+            r#"[defaults]
+distros = "upstream,fedora,centos,hyperscale"
+track = "upstream"
+file_issue = true
+
+[[package]]
+name = "existing"
+"#,
+        );
+        let inv = make_inventory(vec![
+            make_pkg("existing", Some("upstream")),
+            make_pkg("newpkg", Some("upstream")),
+        ]);
+        let result =
+            merge_into_manifest(&path, &inv, None, &RelmonDefaults::default(), false).unwrap();
+        assert_eq!(result.added, 1);
+        assert_eq!(result.total, 2);
+        assert!(result.content.contains("name = \"newpkg\""));
+        assert!(result.content.contains("name = \"existing\""));
+    }
+
+    #[test]
+    fn merge_preserves_existing_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            &dir,
+            r#"[defaults]
+distros = "upstream,fedora"
+track = "upstream"
+file_issue = true
+
+[[package]]
+name = "pkg"
+issue_url = "https://example.com/issue/1"
+"#,
+        );
+        let inv = make_inventory(vec![make_pkg("pkg", Some("upstream"))]);
+        let result =
+            merge_into_manifest(&path, &inv, None, &RelmonDefaults::default(), false).unwrap();
+        assert_eq!(result.added, 0);
+        // Existing fields preserved.
+        assert!(
+            result
+                .content
+                .contains("issue_url = \"https://example.com/issue/1\"")
+        );
+    }
+
+    #[test]
+    fn merge_detects_stale_without_pruning() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            &dir,
+            r#"[defaults]
+track = "upstream"
+
+[[package]]
+name = "stale"
+
+[[package]]
+name = "kept"
+"#,
+        );
+        let inv = make_inventory(vec![make_pkg("kept", Some("upstream"))]);
+        let result =
+            merge_into_manifest(&path, &inv, None, &RelmonDefaults::default(), false).unwrap();
+        assert_eq!(result.stale, vec!["stale"]);
+        assert_eq!(result.pruned, 0);
+        assert_eq!(result.total, 2); // stale not removed
+    }
+
+    #[test]
+    fn merge_prunes_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            &dir,
+            r#"[defaults]
+track = "upstream"
+
+[[package]]
+name = "stale"
+
+[[package]]
+name = "kept"
+"#,
+        );
+        let inv = make_inventory(vec![make_pkg("kept", Some("upstream"))]);
+        let result =
+            merge_into_manifest(&path, &inv, None, &RelmonDefaults::default(), true).unwrap();
+        assert_eq!(result.pruned, 1);
+        assert_eq!(result.total, 1);
+        assert!(!result.content.contains("name = \"stale\""));
+        assert!(result.content.contains("name = \"kept\""));
+    }
+
+    #[test]
+    fn merge_sorts_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            &dir,
+            r#"[defaults]
+track = "upstream"
+
+[[package]]
+name = "zzz"
+"#,
+        );
+        let inv = make_inventory(vec![
+            make_pkg("aaa", Some("upstream")),
+            make_pkg("zzz", Some("upstream")),
+        ]);
+        let result =
+            merge_into_manifest(&path, &inv, None, &RelmonDefaults::default(), false).unwrap();
+        let aaa_pos = result.content.find("name = \"aaa\"").unwrap();
+        let zzz_pos = result.content.find("name = \"zzz\"").unwrap();
+        assert!(aaa_pos < zzz_pos);
+    }
+
+    #[test]
+    fn merge_adds_non_default_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            &dir,
+            r#"[defaults]
+track = "upstream"
+distros = "upstream,fedora,centos,hyperscale"
+file_issue = true
+"#,
+        );
+        let mut pkg = make_pkg("dracut", Some("fedora-rawhide"));
+        pkg.distros = Some("upstream,fedora".to_string());
+        pkg.file_issue = Some(false);
+        pkg.repology_name = Some("dracut".to_string());
+        let inv = make_inventory(vec![pkg]);
+        let result =
+            merge_into_manifest(&path, &inv, None, &RelmonDefaults::default(), false).unwrap();
+        assert!(result.content.contains("track = \"fedora-rawhide\""));
+        assert!(result.content.contains("distros = \"upstream,fedora\""));
+        assert!(result.content.contains("file_issue = false"));
+        assert!(result.content.contains("repology_name = \"dracut\""));
+    }
 }
