@@ -608,6 +608,19 @@ pub fn resolve_with_installability(
 
 impl DepResolver for FedrqResolver {
     fn validate(&self) -> Result<(), String> {
+        // Koji repos only index binary RPMs — BuildRequires queries
+        // on source RPMs return nothing, producing misleading results.
+        if let Some(ref repo) = self.source.repo
+            && repo.starts_with("@koji:")
+        {
+            return Err(format!(
+                "cannot use a Koji repo ({repo}) as the source: \
+                 Koji repos do not index source RPMs, so \
+                 BuildRequires cannot be queried. Use a branch \
+                 (e.g. --source rawhide) instead"
+            ));
+        }
+
         // Probe both branches in parallel to catch bad configs early
         // and warm up the fedrq cache if needed.
         let (src, tgt) = rayon::join(
