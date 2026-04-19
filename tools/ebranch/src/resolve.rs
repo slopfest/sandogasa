@@ -80,6 +80,9 @@ pub trait DepResolver: Send + Sync {
     /// Resolve a dependency name to source package(s) on the target branch.
     fn resolve_target(&self, dep: &str) -> Result<Vec<String>, String>;
 
+    /// Check whether a source package exists on the source branch.
+    fn src_exists(&self, srpm: &str) -> Result<bool, String>;
+
     /// Return the Requires of all subpackages of a source package
     /// (queried on the source branch).
     fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String>;
@@ -202,6 +205,24 @@ fn resolve_closure_with_cache(
     cache: &ResolveCache,
 ) -> Result<Closure, String> {
     resolver.validate()?;
+
+    // Verify requested packages exist on the source before starting
+    // the expensive BFS. A missing package would silently produce
+    // an empty closure.
+    {
+        let missing: Vec<&str> = packages
+            .par_iter()
+            .filter(|pkg| !resolver.src_exists(pkg).unwrap_or(false))
+            .map(|s| s.as_str())
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "package(s) not found on source: {}",
+                missing.join(", ")
+            ));
+        }
+    }
+
     let mut closure: BTreeMap<String, ClosureEntry> = BTreeMap::new();
     let mut visited: BTreeSet<String> = BTreeSet::new();
     let mut depth: BTreeMap<String, usize> = BTreeMap::new();
@@ -696,6 +717,12 @@ impl DepResolver for FedrqResolver {
             .map_err(|e| e.to_string())
     }
 
+    fn src_exists(&self, srpm: &str) -> Result<bool, String> {
+        self.source_srpm()
+            .src_exists(srpm)
+            .map_err(|e| e.to_string())
+    }
+
     fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
         self.source_srpm()
             .subpkgs_requires(srpm)
@@ -775,6 +802,10 @@ mod tests {
                 .get(dep)
                 .map(|s| vec![s.clone()])
                 .unwrap_or_default())
+        }
+
+        fn src_exists(&self, srpm: &str) -> Result<bool, String> {
+            Ok(self.buildrequires.contains_key(srpm))
         }
 
         fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
@@ -898,12 +929,12 @@ mod tests {
     }
 
     #[test]
-    fn test_package_not_found_warns() {
+    fn test_package_not_found_errors() {
         let resolver = MockResolver::new();
-        let closure =
-            resolve_closure(&resolver, &["nonexistent".to_string()], "rawhide", "epel10").unwrap();
-        assert_eq!(closure.warnings.len(), 1);
-        assert!(closure.warnings[0].contains("nonexistent"));
+        let result = resolve_closure(&resolver, &["nonexistent".to_string()], "rawhide", "epel10");
+        let err = result.unwrap_err();
+        assert!(err.contains("nonexistent"));
+        assert!(err.contains("not found on source"));
     }
 
     #[test]

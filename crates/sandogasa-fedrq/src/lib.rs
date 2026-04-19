@@ -186,6 +186,18 @@ impl Fedrq {
         Self::run(&mut cmd)
     }
 
+    /// Check whether a source package exists.
+    ///
+    /// Equivalent to `fedrq pkgs --src <name>`.
+    pub fn src_exists(&self, srpm: &str) -> Result<bool, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["pkgs", "--src"]);
+        self.apply_opts(&mut cmd);
+        cmd.arg(srpm);
+        let result = Self::run(&mut cmd)?;
+        Ok(result.iter().any(|s| !s.is_empty() && s != "(none)"))
+    }
+
     /// Return the BuildRequires of a source package.
     pub fn src_buildrequires(&self, srpm: &str) -> Result<Vec<String>, Error> {
         let mut cmd = Command::new("fedrq");
