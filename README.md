@@ -4,6 +4,8 @@
 
 # sandogasa
 
+[![Packaging status](https://repology.org/badge/vertical-allrepos/sandogasa.svg)](https://repology.org/project/sandogasa/versions)
+
 A collection of tools and libraries for Fedora package maintenance
 and contributor activity tracking, built around shared API clients
 for Bugzilla, Bodhi, NVD, dist-git, Discourse, FASJSON, and HyperKitty.
@@ -45,7 +47,15 @@ library crates:
 - **sandogasa-repology** — Repology package version tracking API client
 - **sandogasa-rpmvercmp** — RPM version comparison algorithm
 
-## Building
+## Installation
+
+On Fedora:
+
+```
+sudo dnf install sandogasa
+```
+
+From source:
 
 ```
 cargo build --release
