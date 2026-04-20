@@ -34,8 +34,8 @@ Requires) while keeping `@koji:` for binary RPM resolution.
 ### Analyze a crates.io crate's dependencies
 
 Use `check-crate` to check which dependencies of a Rust crate are
-available in a target RPM repo, which are too old, and which are
-missing entirely:
+available in a target RPM repo, which have no matching version, and
+which are missing entirely:
 
 ```console
 $ ebranch check-crate semcode -b rawhide
@@ -48,16 +48,16 @@ Missing (8):
   - semcode-core ^0.14.0 (normal)
   ...
 
-Too old (8):
+No matching version (8):
   - tree-sitter ^0.26 (normal)
-    have: 0.25.10, need: ^0.26
+    available: 0.25.10, need: ^0.26
   ...
 
 Satisfied (35):
   - libc ^0.2 (normal) — 0.2.182
   ...
 
-Summary: 8 missing, 8 too old, 35 satisfied.
+Summary: 8 missing, 8 unmet, 35 satisfied.
 ```
 
 Specify a version (defaults to latest):
