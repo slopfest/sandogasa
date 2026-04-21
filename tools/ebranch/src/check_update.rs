@@ -364,7 +364,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
 
 /// Print a human-readable report to stdout.
 pub fn print_report(report: &CheckUpdateReport) {
-    println!("## Checking update: {}\n", report.input);
+    println!("# Checking update: {}\n", report.input);
     if let Some(ref repo) = report.repo {
         println!("**Branch:** {} ({})\n", report.branch, repo);
     } else {
@@ -385,7 +385,7 @@ pub fn print_report(report: &CheckUpdateReport) {
         if report.reverse_deps.is_empty() {
             println!("No reverse dependencies found.");
         } else {
-            println!("### Reverse dependencies\n");
+            println!("## Reverse dependencies\n");
             for pkg in report.reverse_deps.keys() {
                 println!("- {pkg}");
             }
@@ -418,7 +418,7 @@ pub fn print_report(report: &CheckUpdateReport) {
         .collect();
 
     if !updated.is_empty() {
-        println!("### Updated Provides ({})\n", updated.len());
+        println!("## Updated Provides ({})\n", updated.len());
         for c in &updated {
             let name = provide_name(&c.old);
             let old_ver = c
@@ -438,7 +438,7 @@ pub fn print_report(report: &CheckUpdateReport) {
         }
     }
     if !removed.is_empty() {
-        println!("\n### Removed Provides ({})\n", removed.len());
+        println!("\n## Removed Provides ({})\n", removed.len());
         for c in &removed {
             println!("- `{}`", c.old);
         }
@@ -446,7 +446,7 @@ pub fn print_report(report: &CheckUpdateReport) {
 
     if !report.installability_issues.is_empty() {
         println!(
-            "\n### Installability issues ({})\n",
+            "\n## Installability issues ({})\n",
             report.installability_issues.len()
         );
         for issue in &report.installability_issues {
@@ -455,7 +455,7 @@ pub fn print_report(report: &CheckUpdateReport) {
     }
 
     if !report.reverse_deps.is_empty() {
-        println!("\n### Reverse dependencies\n");
+        println!("\n## Reverse dependencies\n");
         let mut broken_count = 0;
         for (pkg, result) in &report.reverse_deps {
             if result.status == "ok" {
