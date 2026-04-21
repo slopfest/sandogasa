@@ -144,13 +144,17 @@ $ ebranch check-update epel9-build-side-134436 \
 [check-update] using @testing for new provides
 [check-update] 4 changed provides (4 updated, 0 removed)
 ...
-Updated Provides (4):
-  - crate(tokio-macros) (2.6.1 -> 2.7.0)
-  - crate(tokio-macros/default) (2.6.1 -> 2.7.0)
+### Updated Provides (4)
+
+- `crate(tokio-macros)` (2.6.1 → 2.7.0)
+- `crate(tokio-macros/default)` (2.6.1 → 2.7.0)
   ...
 
 No packages depend on the changed Provides. No breakage expected.
 ```
+
+The output is Markdown, so it can be pasted directly into Bodhi
+comments.
 
 The input can also be a Bodhi update alias or URL:
 

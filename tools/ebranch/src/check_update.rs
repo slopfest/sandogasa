@@ -327,23 +327,29 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
 
 /// Print a human-readable report to stdout.
 pub fn print_report(report: &CheckUpdateReport) {
-    println!("Checking update: {}", report.input);
-    println!("Branch: {}", report.branch);
-    println!("Updated packages: {}\n", report.updated_packages.join(", "));
+    println!("## Checking update: {}\n", report.input);
+    println!("**Branch:** {}\n", report.branch);
+    println!(
+        "**Updated packages:** {}\n",
+        report.updated_packages.join(", ")
+    );
 
     if !report.full_analysis {
         // No side tag available — informational mode.
-        println!("Note: no side tag available; cannot compare Provides.");
-        println!("Listing reverse dependencies for manual review.\n");
+        println!(
+            "> **Note:** no side tag available; cannot compare \
+             Provides. Listing reverse dependencies for manual \
+             review.\n"
+        );
         if report.reverse_deps.is_empty() {
             println!("No reverse dependencies found.");
         } else {
-            println!("Reverse dependencies:");
+            println!("### Reverse dependencies\n");
             for pkg in report.reverse_deps.keys() {
-                println!("  - {pkg}");
+                println!("- {pkg}");
             }
             println!(
-                "\nTotal: {} reverse dependencies.",
+                "\n**Total:** {} reverse dependencies.",
                 report.reverse_deps.len()
             );
         }
@@ -367,7 +373,7 @@ pub fn print_report(report: &CheckUpdateReport) {
         .collect();
 
     if !updated.is_empty() {
-        println!("Updated Provides ({}):", updated.len());
+        println!("### Updated Provides ({})\n", updated.len());
         for c in &updated {
             let name = provide_name(&c.old);
             let old_ver = c
@@ -383,16 +389,13 @@ pub fn print_report(report: &CheckUpdateReport) {
                 .unwrap_or("")
                 .trim()
                 .trim_start_matches("= ");
-            println!("  - {name} ({old_ver} -> {new_ver})");
+            println!("- `{name}` ({old_ver} → {new_ver})");
         }
     }
     if !removed.is_empty() {
-        if !updated.is_empty() {
-            println!();
-        }
-        println!("Removed Provides ({}):", removed.len());
+        println!("\n### Removed Provides ({})\n", removed.len());
         for c in &removed {
-            println!("  - {}", c.old);
+            println!("- `{}`", c.old);
         }
     }
 
@@ -404,16 +407,16 @@ pub fn print_report(report: &CheckUpdateReport) {
         return;
     }
 
-    println!("\nReverse dependencies:");
+    println!("\n### Reverse dependencies\n");
     let mut broken_count = 0;
     for (pkg, result) in &report.reverse_deps {
         if result.status == "ok" {
-            println!("  {pkg}: OK");
+            println!("- **{pkg}:** OK");
         } else {
             broken_count += 1;
-            println!("  {pkg}: BROKEN");
+            println!("- **{pkg}:** BROKEN");
             for issue in &result.issues {
-                println!("    - {} (changed: {})", issue.dep, issue.changed_provide);
+                println!("  - `{}` (changed: `{}`)", issue.dep, issue.changed_provide);
             }
         }
     }
@@ -421,11 +424,11 @@ pub fn print_report(report: &CheckUpdateReport) {
     let total = report.reverse_deps.len();
     if broken_count > 0 {
         println!(
-            "\nSummary: {broken_count} of {total} reverse \
+            "\n**Summary:** {broken_count} of {total} reverse \
              dependencies would break."
         );
     } else {
-        println!("\nSummary: all {total} reverse dependencies OK.");
+        println!("\n**Summary:** all {total} reverse dependencies OK.");
     }
 }
 
