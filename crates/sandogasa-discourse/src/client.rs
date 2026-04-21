@@ -37,15 +37,16 @@ impl DiscourseClient {
     }
 
     /// Fetch a user profile by username.
-    pub async fn user(&self, username: &str) -> Result<User, reqwest::Error> {
+    ///
+    /// Returns a human-readable error if the user doesn't exist (404)
+    /// rather than exposing the raw HTTP error.
+    pub async fn user(&self, username: &str) -> Result<User, Box<dyn std::error::Error>> {
         let url = format!("{}/u/{}.json", self.base_url, username);
-        let resp: UserResponse = self
-            .auth(self.client.get(&url))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+        let resp = self.auth(self.client.get(&url)).send().await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(format!("user '{username}' not found on Discourse").into());
+        }
+        let resp: UserResponse = resp.error_for_status()?.json().await?;
         Ok(resp.user)
     }
 }
