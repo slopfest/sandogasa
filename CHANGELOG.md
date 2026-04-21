@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.10.1
+
+### ebranch
+
+- `check-update`: add installability check for updated packages —
+  catches missing dependencies (e.g. `comfy-table`) that would make
+  subpackages uninstallable
+- `check-update`: output Markdown for direct Bodhi copy-paste
+- `check-update`: show repo class in report (e.g. "c10s (@epel)")
+- `check-update`: fix stale side tag warning false positives
+- `resolve`: verify requested packages exist on source before
+  resolving (catches `--source-repo rawhide` misuse)
+- Fix root README: Haskell → Hyperscale for hs-intake/hs-relmon
+
 ## v0.10.0
 
 ### ebranch

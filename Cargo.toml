@@ -32,7 +32,7 @@ members = [
 # "slum" or post-apocalyptic robots in popular culture.
 
 [workspace.package]
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/slopfest/fedora-cve-triage"
