@@ -72,6 +72,9 @@ pub struct RevDepResult {
 pub struct CheckUpdateReport {
     pub input: String,
     pub branch: String,
+    /// Repository class (e.g. "@epel"), if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     pub updated_packages: Vec<String>,
     /// Whether full provides comparison was performed.
     pub full_analysis: bool,
@@ -179,6 +182,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         return Ok(CheckUpdateReport {
             input: input.to_string(),
             branch: branch.clone(),
+            repo: opts.repo.clone(),
             updated_packages: vec![],
             full_analysis: side_tag.is_some(),
             changed_provides: vec![],
@@ -318,6 +322,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
     Ok(CheckUpdateReport {
         input: input.to_string(),
         branch,
+        repo: opts.repo.clone(),
         updated_packages,
         full_analysis: false,
         changed_provides: vec![],
@@ -328,7 +333,11 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
 /// Print a human-readable report to stdout.
 pub fn print_report(report: &CheckUpdateReport) {
     println!("## Checking update: {}\n", report.input);
-    println!("**Branch:** {}\n", report.branch);
+    if let Some(ref repo) = report.repo {
+        println!("**Branch:** {} ({})\n", report.branch, repo);
+    } else {
+        println!("**Branch:** {}\n", report.branch);
+    }
     println!(
         "**Updated packages:** {}\n",
         report.updated_packages.join(", ")
@@ -624,6 +633,7 @@ fn run_provides_analysis(
         return Ok(CheckUpdateReport {
             input: input.to_string(),
             branch: branch.to_string(),
+            repo: opts.repo.clone(),
             updated_packages: updated_packages.to_vec(),
             full_analysis: true,
             changed_provides: vec![],
@@ -697,6 +707,7 @@ fn run_provides_analysis(
     Ok(CheckUpdateReport {
         input: input.to_string(),
         branch: branch.to_string(),
+        repo: opts.repo.clone(),
         updated_packages: updated_packages.to_vec(),
         full_analysis: true,
         changed_provides,
