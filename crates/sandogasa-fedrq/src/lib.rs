@@ -175,6 +175,15 @@ impl Fedrq {
         Self::run(&mut cmd)
     }
 
+    /// Return the Requires of a binary package by name.
+    pub fn pkg_requires(&self, name: &str) -> Result<Vec<String>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["pkgs", "-F", "requires"]);
+        self.apply_opts(&mut cmd);
+        cmd.arg(name);
+        Self::run(&mut cmd)
+    }
+
     /// Return the Provides of packages that provide a given capability.
     ///
     /// Uses `-P` to search by Provides rather than package name.

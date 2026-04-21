@@ -57,6 +57,15 @@ pub struct BrokenRequires {
     pub changed_provide: String,
 }
 
+/// An unsatisfied Requires in an updated package's subpackages.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnsatisfiedDep {
+    /// The source package.
+    pub package: String,
+    /// The unsatisfied Requires string.
+    pub dep: String,
+}
+
 /// Result of checking a single reverse dependency.
 #[derive(Debug, Serialize)]
 pub struct RevDepResult {
@@ -81,6 +90,9 @@ pub struct CheckUpdateReport {
     /// Provides that changed (updated version or truly removed).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub changed_provides: Vec<ChangedProvide>,
+    /// Requires of updated packages not satisfiable on the target.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub installability_issues: Vec<UnsatisfiedDep>,
     pub reverse_deps: BTreeMap<String, RevDepResult>,
 }
 
@@ -186,6 +198,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             updated_packages: vec![],
             full_analysis: side_tag.is_some(),
             changed_provides: vec![],
+            installability_issues: vec![],
             reverse_deps: BTreeMap::new(),
         });
     }
@@ -246,14 +259,23 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         if opts.verbose {
             eprintln!("[check-update] using @testing for new provides");
         }
+        // Get binary RPM names for installability checking.
+        let testing_bins: Vec<String> = updated_packages
+            .iter()
+            .flat_map(|pkg| filter_none(testing_fedrq.subpkgs_names(pkg).unwrap_or_default()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let changed =
             compute_changed_provides_via_subpkgs(&updated_packages, &stable_fedrq, &testing_fedrq);
         return run_provides_analysis(
             input,
             &branch,
             &updated_packages,
+            &testing_bins,
             changed,
             &stable_fedrq,
+            &testing_fedrq,
             opts,
         );
     }
@@ -262,6 +284,13 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         if opts.verbose {
             eprintln!("[check-update] comparing provides via koji + side tag");
         }
+        // Get binary RPM names from koji for installability checking.
+        let koji_bins: Vec<String> = nvrs
+            .iter()
+            .flat_map(|nvr| koji_build_rpms(nvr, opts.koji_profile.as_deref()).unwrap_or_default())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let changed = compute_changed_provides_via_koji(
             &nvrs,
             &updated_packages,
@@ -272,14 +301,16 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         );
 
         // Warn if the side tag repo appears stale.
-        check_side_tag_staleness(&nvrs, &changed);
+        check_side_tag_staleness(&nvrs, side_fq, &koji_bins);
 
         return run_provides_analysis(
             input,
             &branch,
             &updated_packages,
+            &koji_bins,
             changed,
             &stable_fedrq,
+            side_fq,
             opts,
         );
     }
@@ -326,6 +357,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         updated_packages,
         full_analysis: false,
         changed_provides: vec![],
+        installability_issues: vec![],
         reverse_deps,
     })
 }
@@ -365,9 +397,13 @@ pub fn print_report(report: &CheckUpdateReport) {
         return;
     }
 
-    if report.changed_provides.is_empty() {
+    if report.changed_provides.is_empty() && report.installability_issues.is_empty() {
         println!("No changed Provides. No breakage expected.");
         return;
+    }
+
+    if report.changed_provides.is_empty() {
+        println!("No changed Provides.");
     }
 
     let updated: Vec<&ChangedProvide> = report
@@ -408,36 +444,49 @@ pub fn print_report(report: &CheckUpdateReport) {
         }
     }
 
-    if report.reverse_deps.is_empty() {
+    if !report.installability_issues.is_empty() {
         println!(
-            "\nNo packages depend on the changed Provides. \
-             No breakage expected."
+            "\n### Installability issues ({})\n",
+            report.installability_issues.len()
         );
-        return;
-    }
-
-    println!("\n### Reverse dependencies\n");
-    let mut broken_count = 0;
-    for (pkg, result) in &report.reverse_deps {
-        if result.status == "ok" {
-            println!("- **{pkg}:** OK");
-        } else {
-            broken_count += 1;
-            println!("- **{pkg}:** BROKEN");
-            for issue in &result.issues {
-                println!("  - `{}` (changed: `{}`)", issue.dep, issue.changed_provide);
-            }
+        for issue in &report.installability_issues {
+            println!("- **{}**: `{}`", issue.package, issue.dep);
         }
     }
 
-    let total = report.reverse_deps.len();
-    if broken_count > 0 {
+    if !report.reverse_deps.is_empty() {
+        println!("\n### Reverse dependencies\n");
+        let mut broken_count = 0;
+        for (pkg, result) in &report.reverse_deps {
+            if result.status == "ok" {
+                println!("- **{pkg}:** OK");
+            } else {
+                broken_count += 1;
+                println!("- **{pkg}:** BROKEN");
+                for issue in &result.issues {
+                    println!("  - `{}` (changed: `{}`)", issue.dep, issue.changed_provide);
+                }
+            }
+        }
+
+        let total = report.reverse_deps.len();
+        if broken_count > 0 {
+            println!(
+                "\n**Summary:** {broken_count} of {total} reverse \
+                 dependencies would break."
+            );
+        } else {
+            println!("\n**Summary:** all {total} reverse dependencies OK.");
+        }
+    }
+
+    if report.reverse_deps.is_empty() && report.installability_issues.is_empty() {
+        println!("\nNo breakage expected.");
+    } else if !report.installability_issues.is_empty() {
         println!(
-            "\n**Summary:** {broken_count} of {total} reverse \
-             dependencies would break."
+            "\n**Warning:** {} installability issue(s) found.",
+            report.installability_issues.len()
         );
-    } else {
-        println!("\n**Summary:** all {total} reverse dependencies OK.");
     }
 }
 
@@ -448,6 +497,32 @@ fn filter_none(items: Vec<String>) -> Vec<String> {
     items
         .into_iter()
         .filter(|s| !s.is_empty() && s != "(none)")
+        .collect()
+}
+
+/// Extract bare capability names from an RPM dependency string.
+///
+/// Handles rich deps like `(crate(foo) >= 1.0 with crate(foo) < 2.0~)`
+/// by splitting on `with`/`or`/`and`/`if`/`unless` and stripping
+/// version constraints and parentheses.
+fn extract_capability_names(dep: &str) -> Vec<String> {
+    let dep = dep.trim().trim_start_matches('(').trim_end_matches(')');
+    dep.split_whitespace()
+        .filter(|token| {
+            // Skip version operators and boolean operators.
+            !matches!(
+                *token,
+                ">=" | "<=" | ">" | "<" | "=" | "with" | "or" | "and" | "if" | "unless" | "else"
+            ) && !token.starts_with(|c: char| c.is_ascii_digit())
+                && !token.ends_with('~')
+        })
+        // Only strip leading '(' from tokens (nested rich dep grouping).
+        // Do NOT strip trailing ')' — it's part of capability names
+        // like crate(foo), config(bar), pkgconfig(baz).
+        .map(|s| s.trim_start_matches('(').to_string())
+        .filter(|s| !s.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect()
 }
 
@@ -609,14 +684,109 @@ fn compute_changed_provides_via_koji(
     compare_provides(&old_provides, &new_provides)
 }
 
+/// Check that the updated packages' subpackage Requires are
+/// satisfiable on the stable repo. Returns deps that can't be
+/// resolved (indicating the update would be uninstallable).
+///
+/// Queries provides and requires per binary RPM name (not per
+/// source package) so this works on Koji repos that lack source
+/// RPMs.
+fn check_update_installability(
+    updated_packages: &[String],
+    binary_names: &[String],
+    new_fedrq: &sandogasa_fedrq::Fedrq,
+    stable_fedrq: &sandogasa_fedrq::Fedrq,
+    verbose: bool,
+) -> Vec<UnsatisfiedDep> {
+    if verbose {
+        eprintln!(
+            "[check-update] checking installability of {} binary packages",
+            binary_names.len()
+        );
+    }
+
+    // Collect new provides from updated packages (they satisfy each
+    // other's deps). Query per binary package so it works on koji.
+    if verbose {
+        eprintln!("[check-update] collecting provides from updated packages");
+    }
+    let new_provides: BTreeSet<String> = binary_names
+        .par_iter()
+        .flat_map_iter(|name| {
+            new_fedrq
+                .pkg_provides(name)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| provide_name(&p).to_string())
+        })
+        .collect();
+
+    // Map binary RPM names back to source packages for reporting.
+    let bin_to_src: BTreeMap<&str, &str> = binary_names
+        .iter()
+        .map(|bin| {
+            let src = updated_packages
+                .iter()
+                .find(|src| bin.starts_with(src.as_str()) && bin[src.len()..].starts_with('-'))
+                .map(|s| s.as_str())
+                .unwrap_or(bin.as_str());
+            (bin.as_str(), src)
+        })
+        .collect();
+
+    if verbose {
+        eprintln!(
+            "[check-update] {} new provides collected, checking requires",
+            new_provides.len()
+        );
+    }
+
+    binary_names
+        .par_iter()
+        .flat_map_iter(|name| {
+            let requires = new_fedrq.pkg_requires(name).unwrap_or_default();
+            let src = bin_to_src.get(name.as_str()).copied().unwrap_or(name);
+            requires
+                .into_iter()
+                .filter(|dep| {
+                    let dep = dep.trim();
+                    if dep.is_empty() || sandogasa_depfilter::is_rpm_internal_dep(dep) {
+                        return false;
+                    }
+                    // Extract bare capability names (stripping version
+                    // constraints and rich dep syntax).
+                    let caps = extract_capability_names(dep);
+                    // Satisfied by other packages in the update?
+                    if caps.iter().all(|cap| new_provides.contains(cap.as_str())) {
+                        return false;
+                    }
+                    // Satisfied by the stable repo?
+                    let satisfied = caps.iter().all(|cap| {
+                        let resolved = stable_fedrq.provides_of_provider(cap).unwrap_or_default();
+                        resolved.iter().any(|s| !s.is_empty() && s != "(none)")
+                    });
+                    !satisfied
+                })
+                .map(|dep| UnsatisfiedDep {
+                    package: src.to_string(),
+                    dep: dep.trim().to_string(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// Given changed provides, find affected reverse deps and check
 /// their Requires.
+#[allow(clippy::too_many_arguments)]
 fn run_provides_analysis(
     input: &str,
     branch: &str,
     updated_packages: &[String],
+    binary_names: &[String],
     changed_provides: Vec<ChangedProvide>,
     stable_fedrq: &sandogasa_fedrq::Fedrq,
+    new_fedrq: &sandogasa_fedrq::Fedrq,
     opts: &CheckUpdateOptions,
 ) -> Result<CheckUpdateReport, String> {
     if opts.verbose {
@@ -629,6 +799,14 @@ fn run_provides_analysis(
         );
     }
 
+    let installability_issues = check_update_installability(
+        updated_packages,
+        binary_names,
+        new_fedrq,
+        stable_fedrq,
+        opts.verbose,
+    );
+
     if changed_provides.is_empty() {
         return Ok(CheckUpdateReport {
             input: input.to_string(),
@@ -637,6 +815,7 @@ fn run_provides_analysis(
             updated_packages: updated_packages.to_vec(),
             full_analysis: true,
             changed_provides: vec![],
+            installability_issues,
             reverse_deps: BTreeMap::new(),
         });
     }
@@ -711,19 +890,21 @@ fn run_provides_analysis(
         updated_packages: updated_packages.to_vec(),
         full_analysis: true,
         changed_provides,
+        installability_issues,
         reverse_deps,
     })
 }
 
-/// Warn if any package from koji list-tagged has no changed provides,
-/// which suggests the side tag repo metadata is stale.
-fn check_side_tag_staleness(nvrs: &[String], changed: &[ChangedProvide]) {
-    // Collect all provide name strings that changed.
-    let changed_old: BTreeSet<&str> = changed.iter().map(|c| c.old.as_str()).collect();
-
-    // For each NVR, check if the version from the NVR appears in any
-    // changed provide. If the NVR says 1.51.0 but no provide mentions
-    // 1.51.0, the side tag repo is likely stale for that package.
+/// Warn if a package from koji list-tagged has no provides at all
+/// in the side tag, suggesting the repo metadata needs regeneration.
+///
+/// A package with provides that simply didn't change vs stable is
+/// normal (e.g. a release bump with no new capabilities).
+fn check_side_tag_staleness(
+    nvrs: &[String],
+    side_tag_fedrq: &sandogasa_fedrq::Fedrq,
+    binary_names: &[String],
+) {
     for nvr in nvrs {
         let Some(name) = parse_nvr(nvr) else {
             continue;
@@ -738,13 +919,16 @@ fn check_side_tag_staleness(nvrs: &[String], changed: &[ChangedProvide]) {
             continue;
         };
 
-        // Check if any changed provide references this package's
-        // version (from the NVR).
-        let has_version_match = changed_old
-            .iter()
-            .any(|p| p.contains(name) || p.contains(version));
+        // Check if any binary RPM from this source package has
+        // provides in the side tag.
+        let has_provides = binary_names.iter().any(|bin| {
+            bin.starts_with(name)
+                && side_tag_fedrq
+                    .pkg_provides(bin)
+                    .is_ok_and(|p| !p.is_empty())
+        });
 
-        if !has_version_match {
+        if !has_provides {
             eprintln!(
                 "warning: {name}: side tag repo may be stale \
                  (expected version {version} from {nvr} not found \
