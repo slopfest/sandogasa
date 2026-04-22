@@ -76,10 +76,22 @@ struct RunArgs {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command {
-        Command::Checks => cmd_checks(),
-        Command::Run(args) => cmd_run(&args),
-    }
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to build runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    runtime.block_on(async {
+        match cli.command {
+            Command::Checks => cmd_checks(),
+            Command::Run(args) => cmd_run(&args),
+        }
+    })
 }
 
 fn cmd_checks() -> ExitCode {
