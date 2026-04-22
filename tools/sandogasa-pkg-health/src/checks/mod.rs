@@ -2,4 +2,5 @@
 
 //! Individual health check implementations.
 
+pub mod bug_count;
 pub mod maintainer_count;

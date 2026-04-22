@@ -69,6 +69,11 @@ struct RunArgs {
     #[arg(long)]
     json: bool,
 
+    /// Fedora version(s) for FTBFS / FTI tracker lookup (repeatable).
+    /// Rawhide trackers are always included.
+    #[arg(long = "fedora-version", value_name = "N")]
+    fedora_versions: Vec<u32>,
+
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
@@ -89,7 +94,7 @@ fn main() -> ExitCode {
     runtime.block_on(async {
         match cli.command {
             Command::Checks => cmd_checks(),
-            Command::Run(args) => cmd_run(&args),
+            Command::Run(args) => cmd_run(&args).await,
         }
     })
 }
@@ -108,7 +113,7 @@ fn cmd_checks() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn cmd_run(args: &RunArgs) -> ExitCode {
+async fn cmd_run(args: &RunArgs) -> ExitCode {
     let inventory = match sandogasa_inventory::load(&args.inventory) {
         Ok(inv) => inv,
         Err(e) => {
@@ -183,7 +188,7 @@ fn cmd_run(args: &RunArgs) -> ExitCode {
         None => None,
     };
 
-    let ctx = Context::new();
+    let ctx = Context::new(&args.fedora_versions, args.verbose).await;
     let mut ran = 0;
     let mut fresh = 0;
     let mut failed = 0;
@@ -204,22 +209,26 @@ fn cmd_run(args: &RunArgs) -> ExitCode {
                 continue;
             };
 
-            // --max-age: skip if stored result is still fresh.
-            if let Some(age) = max_age
-                && !report.is_stale(pkg, check_id, age)
-            {
-                fresh += 1;
-                continue;
-            }
+            for variant in check.variants(&ctx) {
+                let key = sandogasa_pkg_health::entry_key(check_id, variant.as_deref());
 
-            match check.run(pkg, &ctx) {
-                Ok(result) => {
-                    report.update(pkg, check_id, result.data);
-                    ran += 1;
+                // --max-age: skip if stored result is still fresh.
+                if let Some(age) = max_age
+                    && !report.is_stale(pkg, &key, age)
+                {
+                    fresh += 1;
+                    continue;
                 }
-                Err(e) => {
-                    eprintln!("warning: {pkg}: {check_id}: {e}");
-                    failed += 1;
+
+                match check.run(pkg, variant.as_deref(), &ctx) {
+                    Ok(result) => {
+                        report.update(pkg, &key, result.data);
+                        ran += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("warning: {pkg}: {key}: {e}");
+                        failed += 1;
+                    }
                 }
             }
         }

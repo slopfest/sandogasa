@@ -2,10 +2,15 @@
 
 //! Shared context passed to each HealthCheck.
 
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
+use sandogasa_bugclass::bugzilla::TrackerIds;
+use sandogasa_bugzilla::BzClient;
 use sandogasa_distgit::DistGitClient;
 use tokio::runtime::Handle;
+
+const BUGZILLA_URL: &str = "https://bugzilla.redhat.com";
 
 /// Context bundles API clients and a tokio runtime handle so
 /// checks can reuse them across packages without re-initializing.
@@ -17,28 +22,85 @@ pub struct Context {
     pub runtime: Handle,
     /// Dist-git (Pagure) client for ACL and group queries.
     pub distgit: Arc<DistGitClient>,
-}
-
-impl Default for Context {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Bugzilla client for bug queries.
+    pub bz: Arc<BzClient>,
+    /// Fedora versions the user requested (for variant-aware checks).
+    /// Rawhide is implicit and always available in `trackers`.
+    pub fedora_versions: Vec<u32>,
+    /// FTBFS / FTI tracker bug IDs per version key. Keys are
+    /// `"rawhide"`, `"f44"`, `"f45"`, etc. Populated at startup.
+    pub trackers: BTreeMap<String, Arc<TrackerIds>>,
 }
 
 impl Context {
-    /// Create a Context with default clients. Must be called from
-    /// within a tokio runtime.
-    pub fn new() -> Self {
+    /// Build a Context with default clients. Must be called from
+    /// within a tokio runtime. Looks up FTBFS/FTI trackers once.
+    pub async fn new(fedora_versions: &[u32], verbose: bool) -> Self {
+        let bz = Arc::new(BzClient::new(BUGZILLA_URL));
+
+        // One combined lookup to minimize API calls.
+        if verbose {
+            eprintln!("[pkg-health] looking up FTBFS/FTI tracker bugs");
+        }
+        let combined =
+            sandogasa_bugclass::bugzilla::lookup_trackers(&bz, fedora_versions, verbose).await;
+
+        // Partition combined results by version. We re-query aliases
+        // by known alias → version mapping. Build the per-version
+        // maps by re-fetching aliases individually; cheap since we
+        // already have the IDs cached client-side.
+        let mut trackers: BTreeMap<String, Arc<TrackerIds>> = BTreeMap::new();
+        trackers.insert(
+            "rawhide".to_string(),
+            Arc::new(fetch_version_trackers(&bz, "RAWHIDE").await),
+        );
+        for &ver in fedora_versions {
+            trackers.insert(
+                format!("f{ver}"),
+                Arc::new(fetch_version_trackers(&bz, &format!("F{ver}")).await),
+            );
+        }
+        // The combined set isn't stored — individual per-version sets
+        // cover the same ground.
+        drop(combined);
+
         Self {
             runtime: Handle::current(),
             distgit: Arc::new(DistGitClient::new()),
+            bz,
+            fedora_versions: fedora_versions.to_vec(),
+            trackers,
         }
     }
 
-    /// Block on a future using the stored runtime handle.
+    /// Block on a future using the stored runtime handle. Uses
+    /// `block_in_place` to avoid deadlocking when called from within
+    /// the runtime.
     pub fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
-        // `Handle::block_on` is not available from within the same
-        // runtime; spawn a thread to do the block to avoid deadlock.
         tokio::task::block_in_place(|| self.runtime.block_on(future))
     }
+}
+
+/// Look up FTBFS/FTI tracker IDs for a single version prefix (e.g.
+/// "RAWHIDE", "F45"). Returns empty if no matching trackers found.
+async fn fetch_version_trackers(bz: &BzClient, prefix: &str) -> TrackerIds {
+    let aliases = [
+        format!("alias={prefix}FTBFS"),
+        format!("alias={prefix}FailsToInstall"),
+    ];
+    let query = aliases.join("&");
+    let mut ftbfs = HashSet::new();
+    let mut fti = HashSet::new();
+    if let Ok(bugs) = bz.search(&query, 0).await {
+        for bug in &bugs {
+            for alias in &bug.alias {
+                if alias.ends_with("FTBFS") {
+                    ftbfs.insert(bug.id);
+                } else if alias.ends_with("FailsToInstall") {
+                    fti.insert(bug.id);
+                }
+            }
+        }
+    }
+    TrackerIds { ftbfs, fti }
 }

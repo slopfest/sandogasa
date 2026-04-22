@@ -29,7 +29,12 @@ impl HealthCheck for MaintainerCount {
         CostTier::Cheap
     }
 
-    fn run(&self, package: &str, ctx: &Context) -> Result<CheckResult, String> {
+    fn run(
+        &self,
+        package: &str,
+        _variant: Option<&str>,
+        ctx: &Context,
+    ) -> Result<CheckResult, String> {
         let acls = ctx
             .block_on(ctx.distgit.get_acls(package))
             .map_err(|e| format!("dist-git ACL lookup failed: {e}"))?;

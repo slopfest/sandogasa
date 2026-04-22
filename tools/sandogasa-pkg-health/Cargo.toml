@@ -10,6 +10,7 @@ repository.workspace = true
 chrono = { workspace = true }
 clap = { workspace = true }
 rayon = { workspace = true }
+sandogasa-bugclass = { workspace = true }
 sandogasa-bugzilla = { workspace = true }
 sandogasa-config = { workspace = true }
 sandogasa-distgit = { workspace = true }

@@ -11,7 +11,7 @@ pub mod duration;
 pub mod registry;
 pub mod report;
 
-pub use check::{CheckResult, CostTier, HealthCheck};
+pub use check::{CheckResult, CostTier, HealthCheck, entry_key};
 pub use context::Context;
 pub use registry::Registry;
 pub use report::{CheckEntry, HealthReport, PackageReport};
