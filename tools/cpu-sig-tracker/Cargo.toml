@@ -1,0 +1,22 @@
+[package]
+name = "cpu-sig-tracker"
+description = "Track CentOS Proposed Updates (CPU) SIG package state across Koji, GitLab, and JIRA"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+sandogasa-config = { workspace = true }
+sandogasa-fedrq = { workspace = true }
+sandogasa-gitlab = { workspace = true }
+sandogasa-inventory = { workspace = true }
+sandogasa-koji = { workspace = true }
+sandogasa-rpmvercmp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

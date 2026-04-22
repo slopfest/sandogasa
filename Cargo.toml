@@ -18,6 +18,7 @@ members = [
     "crates/sandogasa-nvd",
     "crates/sandogasa-repology",
     "crates/sandogasa-rpmvercmp",
+    "tools/cpu-sig-tracker",
     "tools/ebranch",
     "tools/fedora-cve-triage",
     "tools/hs-intake",

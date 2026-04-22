@@ -220,6 +220,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "cpu-sig-tracker"
+version = "0.10.1"
+dependencies = [
+ "clap",
+ "sandogasa-config",
+ "sandogasa-fedrq",
+ "sandogasa-gitlab",
+ "sandogasa-inventory",
+ "sandogasa-koji",
+ "sandogasa-rpmvercmp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
