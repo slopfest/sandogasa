@@ -1685,6 +1685,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandogasa-pkg-health"
+version = "0.10.1"
+dependencies = [
+ "chrono",
+ "clap",
+ "rayon",
+ "sandogasa-bugzilla",
+ "sandogasa-config",
+ "sandogasa-fasjson",
+ "sandogasa-inventory",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "wiremock",
+]
+
+[[package]]
 name = "sandogasa-repology"
 version = "0.10.1"
 dependencies = [
@@ -1724,6 +1744,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
+ "chrono",
  "dyn-clone",
  "ref-cast",
  "schemars_derive",
