@@ -43,6 +43,7 @@ library crates:
 - **sandogasa-fedrq** — wrapper for the fedrq RPM repository query tool
 - **sandogasa-gitlab** — GitLab REST and GraphQL API client
 - **sandogasa-inventory** — package-of-interest inventory data model and I/O
+- **sandogasa-jira** — minimal JIRA REST API client (issue status lookup)
 - **sandogasa-koji** — Koji build system CLI wrapper
 - **sandogasa-mailman** — HyperKitty (Mailman 3) archive API client
 - **sandogasa-nvd** — NVD (National Vulnerability Database) API client

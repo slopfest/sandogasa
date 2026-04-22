@@ -1669,6 +1669,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandogasa-jira"
+version = "0.10.1"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "sandogasa-koji"
 version = "0.10.1"
 
