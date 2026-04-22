@@ -452,22 +452,40 @@ impl GroupClient {
     }
 }
 
-/// Extract the package name from a GitLab issue web_url.
+/// Split a GitLab issue or work item URL just before the
+/// `/-/issues/<n>` or `/-/work_items/<n>` tail, returning the
+/// project portion. When neither separator is present, returns
+/// the input unchanged so callers that pass bare project URLs
+/// still get a useful result.
+fn project_part_of_issue_url(web_url: &str) -> &str {
+    for sep in ["/-/issues/", "/-/work_items/"] {
+        if let Some(idx) = web_url.find(sep) {
+            return &web_url[..idx];
+        }
+    }
+    web_url
+}
+
+/// Extract the package name from a GitLab issue or work item
+/// web_url.
 ///
 /// Example: `"https://gitlab.com/CentOS/Hyperscale/rpms/ethtool/-/issues/1"`
-/// returns `Some("ethtool")`.
+/// returns `Some("ethtool")`. Also accepts the work-items form
+/// `"...ethtool/-/work_items/1"`.
 pub fn package_from_issue_url(web_url: &str) -> Option<&str> {
-    let project_part = web_url.split("/-/issues/").next()?;
+    let project_part = project_part_of_issue_url(web_url);
     let name = project_part.rsplit('/').next()?;
     if name.is_empty() { None } else { Some(name) }
 }
 
-/// Extract the project path from a GitLab issue web_url.
+/// Extract the project path from a GitLab issue or work item
+/// web_url.
 ///
 /// Example: `"https://gitlab.com/CentOS/Hyperscale/rpms/ethtool/-/issues/1"`
-/// returns `Some("CentOS/Hyperscale/rpms/ethtool")`.
+/// returns `Some("CentOS/Hyperscale/rpms/ethtool")`. Also
+/// accepts the work-items form.
 pub fn project_path_from_issue_url(web_url: &str) -> Option<String> {
-    let project_part = web_url.split("/-/issues/").next()?;
+    let project_part = project_part_of_issue_url(web_url);
     let rest = project_part
         .strip_prefix("https://")
         .or_else(|| project_part.strip_prefix("http://"))?;
@@ -841,6 +859,27 @@ mod tests {
     #[test]
     fn test_package_from_issue_url_empty() {
         assert_eq!(package_from_issue_url(""), None);
+    }
+
+    #[test]
+    fn test_package_from_issue_url_work_items_form() {
+        assert_eq!(
+            package_from_issue_url(
+                "https://gitlab.com/CentOS/proposed_updates/rpms/PackageKit/-/work_items/1"
+            ),
+            Some("PackageKit"),
+        );
+    }
+
+    #[test]
+    fn test_project_path_from_issue_url_work_items_form() {
+        assert_eq!(
+            project_path_from_issue_url(
+                "https://gitlab.com/CentOS/proposed_updates/rpms/PackageKit/-/work_items/1"
+            )
+            .as_deref(),
+            Some("CentOS/proposed_updates/rpms/PackageKit"),
+        );
     }
 
     #[test]
