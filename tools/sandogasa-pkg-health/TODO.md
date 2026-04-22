@@ -6,46 +6,50 @@ tracks when); in-progress items get an `(in progress)` marker.
 ## MVP (v0.1)
 
 ### Core framework
-- [ ] Create crate skeleton (`Cargo.toml`, `src/main.rs`,
-      `src/lib.rs` if needed)
-- [ ] Add to workspace in root `Cargo.toml`
-- [ ] `HealthCheck` trait with `id`, `description`, `cost_tier`, `run`
-- [ ] `CostTier` enum: `Cheap`, `Medium`, `Expensive`
-- [ ] `Context` struct bundling clients (fedrq, bugzilla, fasjson)
-- [ ] Check registry (Vec<Box<dyn HealthCheck>>)
-- [ ] `CheckResult` with timestamp + arbitrary serde value
+- [x] Create crate skeleton (`Cargo.toml`, `src/main.rs`, `src/lib.rs`)
+- [x] Add to workspace in root `Cargo.toml`
+- [x] `HealthCheck` trait with `id`, `description`, `cost_tier`, `run`
+- [x] `CostTier` enum: `Cheap`, `Medium`, `Expensive`
+- [x] `Context` struct bundling clients (bugzilla, distgit, per-version
+      trackers, tokio runtime handle)
+- [x] Check registry (Vec<Box<dyn HealthCheck>>)
+- [x] `CheckResult` with arbitrary serde value
+- [x] Variant-aware checks via `HealthCheck::variants()` — each
+      (package, check, variant) has its own stored entry and timestamp
 
 ### Report persistence
-- [ ] TOML data model matching PLAN.md
-- [ ] Load-or-create logic (read existing report, merge updates)
-- [ ] Timestamp-based staleness check (`--max-age` flag)
+- [x] TOML data model matching PLAN.md
+- [x] Load-or-create logic (read existing report, merge updates)
+- [x] Timestamp-based staleness check (`--max-age` flag)
 - [ ] JSON Schema generation via `schemars` (matching inventory pattern)
 
 ### CLI
 - [x] clap args: `-i inventory`, `-o report`, `--check <id>`,
       `--cheap`/`--medium`/`--expensive`/`--all`, `--max-age`,
       `--package`, `--json`, `--verbose`
+- [x] `--fedora-version` and `--epel-version` (CSV + repeatable,
+      sorted and deduped with duplicate warnings)
 - [x] Check selection logic (tier flags, --check, default=cheap)
 - [x] Package selection (`--package`, repeatable; default=all)
-- [ ] `--max-age` parsing and skip-when-fresh logic
+- [x] `--max-age` parsing and skip-when-fresh logic
 - [ ] Per-package parallelism (rayon) for cheap checks
 - [ ] Human-readable summary output (currently just a count)
 - [x] JSON output (dumps full report)
 
 ### First checks
-- [ ] `maintainer_count` (Cheap) — FASJSON lookup for direct users
-      + group expansion
-- [ ] `bug_count` (Medium) — Bugzilla search for component, classify
-      by reuse of `sandogasa-report` classifiers
+- [x] `maintainer_count` (Cheap) — dist-git ACL lookup + Pagure group
+      expansion for effective committer count
+- [x] `bug_count` (Medium) — Bugzilla search per component, classify
+      via `sandogasa-bugclass`; variant-aware per release
 
 ### Tests
-- [ ] Unit tests for report merge/update logic
-- [ ] Mock-based tests for each check
+- [x] Unit tests for report merge/update logic (7 tests)
+- [x] Unit tests for duration parser (11 tests)
+- [ ] Mock-based tests for each check (Bugzilla query, dist-git ACLs)
 - [ ] Snapshot test for JSON Schema (matching inventory pattern)
 
 ### Docs
-- [ ] `README.md` following project conventions (install, usage,
-      fields)
+- [x] `README.md` following project conventions (install, usage)
 - [ ] Root `README.md`: add tool entry (alphabetical)
 - [ ] `CHANGELOG.md`: `Unreleased` entry
 
@@ -65,6 +69,6 @@ tracks when); in-progress items get an `(in progress)` marker.
 - [ ] Comparison between two reports (diff: what got worse/better)
 
 ### Open questions to resolve
-- [ ] Where do bug classifiers live? (stay in sandogasa-report,
-      extract to sandogasa-bugclass, or duplicate?)
+- [x] ~~Where do bug classifiers live?~~ — extracted to
+      `sandogasa-bugclass` library crate
 - [ ] Should reports be per-inventory or per-package-set?
