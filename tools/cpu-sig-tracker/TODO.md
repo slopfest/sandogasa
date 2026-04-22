@@ -7,24 +7,24 @@ done; in-progress items get an `(in progress)` marker.
 
 ### Dependencies / building blocks
 - [ ] Add `untag_build(tag, nvr, profile)` to `sandogasa-koji`
-- [ ] Add MR detail fetch to `sandogasa-gitlab` if not already
-      present (description, linked JIRA, source branch, target branch)
-- [ ] New `sandogasa-jira` library crate:
-      - [ ] Minimal `JiraClient::new(base_url)` with optional
+- [x] Add MR detail fetch to `sandogasa-gitlab` (description,
+      source/target branch, `parse_mr_url` helper)
+- [x] New `sandogasa-jira` library crate:
+      - [x] Minimal `JiraClient::new(base_url)` with optional
             token auth
-      - [ ] `issue(key) -> Issue` — returns status, resolution,
-            summary
-      - [ ] Mock-based tests (wiremock pattern)
+      - [x] `issue(key) -> Option<Issue>` — status, resolution,
+            summary; 404 → None
+      - [x] Mock-based tests (wiremock pattern)
 
 ### Tool crate
-- [ ] Create `tools/cpu-sig-tracker/` skeleton (Cargo.toml,
+- [x] Create `tools/cpu-sig-tracker/` skeleton (Cargo.toml,
       src/main.rs, LICENSE symlinks, README.md)
-- [ ] Add to workspace members in root `Cargo.toml`
+- [x] Add to workspace members in root `Cargo.toml`
 
 ### Subcommands
-- [ ] `dump-inventory --release c10s -o inv.toml` — list Koji-tagged
+- [x] `dump-inventory --release c10s -o inv.toml` — list Koji-tagged
       packages, emit sandogasa-inventory TOML
-- [ ] `file-issue <mr-url> [--affected VER] [--expected-fix VER]`
+- [x] `file-issue <mr-url> [--affected VER] [--expected-fix VER]`
       — standardized issue body, auto-extract JIRA link from MR
 - [ ] `status -i inv.toml [--release c10s]` — per-package report
       (JIRA state, Stream NVR comparison, suggested action)

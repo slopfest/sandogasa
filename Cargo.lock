@@ -224,15 +224,18 @@ name = "cpu-sig-tracker"
 version = "0.10.1"
 dependencies = [
  "clap",
+ "rpassword",
  "sandogasa-config",
  "sandogasa-fedrq",
  "sandogasa-gitlab",
  "sandogasa-inventory",
+ "sandogasa-jira",
  "sandogasa-koji",
  "sandogasa-rpmvercmp",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "toml",
 ]
 

@@ -8,14 +8,17 @@ repository.workspace = true
 
 [dependencies]
 clap = { workspace = true }
+rpassword = { workspace = true }
 sandogasa-config = { workspace = true }
 sandogasa-fedrq = { workspace = true }
 sandogasa-gitlab = { workspace = true }
 sandogasa-inventory = { workspace = true }
+sandogasa-jira = { workspace = true }
 sandogasa-koji = { workspace = true }
 sandogasa-rpmvercmp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
