@@ -24,6 +24,9 @@ enum Command {
     Checks,
     /// Run health checks against an inventory.
     Run(RunArgs),
+    /// Display a previously-generated health report without
+    /// re-running any checks.
+    Show(ShowArgs),
 }
 
 #[derive(clap::Args)]
@@ -84,6 +87,20 @@ struct RunArgs {
     verbose: bool,
 }
 
+#[derive(clap::Args)]
+struct ShowArgs {
+    /// Path to an existing report TOML file.
+    report: String,
+
+    /// Limit to specific packages (repeatable).
+    #[arg(long = "package", value_name = "NAME")]
+    packages: Vec<String>,
+
+    /// Output as JSON instead of human-readable.
+    #[arg(long)]
+    json: bool,
+}
+
 /// Outcome of running a single (package, check, variant) work item.
 enum PackageOutcome {
     Fresh,
@@ -141,6 +158,7 @@ fn main() -> ExitCode {
         match cli.command {
             Command::Checks => cmd_checks(),
             Command::Run(args) => cmd_run(&args).await,
+            Command::Show(args) => cmd_show(&args),
         }
     })
 }
@@ -156,6 +174,34 @@ fn cmd_checks() -> ExitCode {
             check.description()
         );
     }
+    ExitCode::SUCCESS
+}
+
+fn cmd_show(args: &ShowArgs) -> ExitCode {
+    let report = match HealthReport::load(&args.report) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).expect("JSON serialization failed")
+        );
+        return ExitCode::SUCCESS;
+    }
+
+    let reg = default_registry();
+    // Default: every package in the report. --package filters down.
+    let packages: Vec<&str> = if args.packages.is_empty() {
+        report.package.keys().map(|s| s.as_str()).collect()
+    } else {
+        args.packages.iter().map(|s| s.as_str()).collect()
+    };
+    print_summary(&report, &reg, &packages);
     ExitCode::SUCCESS
 }
 
