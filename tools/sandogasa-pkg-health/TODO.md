@@ -21,7 +21,8 @@ tracks when); in-progress items get an `(in progress)` marker.
 - [x] TOML data model matching PLAN.md
 - [x] Load-or-create logic (read existing report, merge updates)
 - [x] Timestamp-based staleness check (`--max-age` flag)
-- [ ] JSON Schema generation via `schemars` (matching inventory pattern)
+- [x] JSON Schema generation via `schemars` + snapshot test
+      (`data/health-report.schema.json`)
 
 ### CLI
 - [x] clap args: `-i inventory`, `-o report`, `--check <id>`,
@@ -45,8 +46,8 @@ tracks when); in-progress items get an `(in progress)` marker.
 ### Tests
 - [x] Unit tests for report merge/update logic (7 tests)
 - [x] Unit tests for duration parser (11 tests)
+- [x] Snapshot test for JSON Schema (matching inventory pattern)
 - [ ] Mock-based tests for each check (Bugzilla query, dist-git ACLs)
-- [ ] Snapshot test for JSON Schema (matching inventory pattern)
 
 ### Docs
 - [x] `README.md` following project conventions (install, usage)

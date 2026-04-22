@@ -50,6 +50,19 @@ sandogasa-pkg-health run \
     --all --package rust-arrow --package rust-tokio
 ```
 
+## JSON Schema
+
+A JSON Schema for the report format is checked in at
+[`data/health-report.schema.json`](data/health-report.schema.json).
+It is generated from the Rust types via `schemars` and verified by
+a test.
+
+When the data model changes, update the schema:
+
+```sh
+UPDATE_SCHEMA=1 cargo test -p sandogasa-pkg-health schema_up_to_date
+```
+
 ## Project status
 
 Early development — see [PLAN.md](PLAN.md) for architecture and

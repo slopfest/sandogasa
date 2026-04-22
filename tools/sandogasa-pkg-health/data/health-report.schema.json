@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HealthReport",
+  "description": "Top-level health report for an inventory.",
+  "type": "object",
+  "properties": {
+    "package": {
+      "description": "Per-package results. Key is source RPM name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/PackageReport"
+      },
+      "default": {}
+    },
+    "report": {
+      "description": "Report-level metadata.",
+      "$ref": "#/$defs/ReportMeta"
+    }
+  },
+  "required": [
+    "report"
+  ],
+  "$defs": {
+    "CheckEntry": {
+      "description": "A single check's result for a single package.",
+      "type": "object",
+      "properties": {
+        "data": {
+          "description": "Check-specific structured data."
+        },
+        "timestamp": {
+          "description": "When this check ran.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "timestamp",
+        "data"
+      ]
+    },
+    "PackageReport": {
+      "description": "Health data for a single package.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/CheckEntry"
+      }
+    },
+    "ReportMeta": {
+      "description": "Report-level metadata.",
+      "type": "object",
+      "properties": {
+        "generated": {
+          "description": "Timestamp of the most recent update to any check in this report.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "inventory": {
+          "description": "Inventory name this report covers.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "inventory",
+        "generated"
+      ]
+    }
+  }
+}
