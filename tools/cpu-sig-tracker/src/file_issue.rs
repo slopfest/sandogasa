@@ -153,8 +153,15 @@ fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
     let tracking_client = gitlab::Client::new(&base_url, &tracking_project)?;
     let issue = tracking_client.create_issue(&title, Some(&body), Some(&labels))?;
-
     eprintln!("Filed #{} {}", issue.iid, issue.web_url);
+
+    // The issue represents tracking work against an MR that already
+    // exists, so the "To do" default isn't accurate — transition to
+    // "In progress" immediately.
+    if let Err(e) = tracking_client.set_work_item_status(issue.iid, "In progress") {
+        eprintln!("warning: could not set status to In progress: {e}");
+    }
+
     Ok(())
 }
 

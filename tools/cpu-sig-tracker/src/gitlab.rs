@@ -45,4 +45,12 @@ impl Client {
     ) -> Result<Issue, Box<dyn std::error::Error>> {
         self.0.create_issue(title, description, labels)
     }
+
+    pub fn set_work_item_status(
+        &self,
+        iid: u64,
+        status: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.0.set_work_item_status(iid, status)
+    }
 }
