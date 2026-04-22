@@ -51,5 +51,5 @@
 
 ## Testing
 - Always write corresponding tests when adding or modifying features
-- Run `cargo cov` before committing to verify tests pass and coverage does not regress
-- Coverage must stay at or above 75% line coverage
+- Per commit, run `cargo fmt` and `cargo clippy --workspace`; `cargo test` is recommended for code you touched. Fast prototyping commits don't need full coverage checks
+- Run `cargo cov` at stability points — before release tagging, and when catching a feature up for its README/CHANGELOG entry. Coverage must stay at or above 75% line coverage at those gates
