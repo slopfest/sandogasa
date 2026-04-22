@@ -23,6 +23,19 @@ pub struct Issue {
     pub assignees: Vec<Assignee>,
 }
 
+/// A GitLab merge request (minimal fields).
+#[derive(Debug, Deserialize)]
+pub struct MergeRequest {
+    pub iid: u64,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub state: String,
+    pub web_url: String,
+    pub source_branch: String,
+    pub target_branch: String,
+}
+
 /// Client for the GitLab REST API v4.
 pub struct Client {
     http: reqwest::blocking::Client,
@@ -62,6 +75,22 @@ impl Client {
             base_url: base_url.trim_end_matches('/').to_string(),
             project_path: project_path.to_string(),
         })
+    }
+
+    /// Fetch a merge request by its internal ID (iid).
+    pub fn merge_request(&self, iid: u64) -> Result<MergeRequest, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/merge_requests/{}",
+            self.base_url, encoded, iid
+        );
+        let resp = self.http.get(&url).send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!("GitLab GET {url} failed: {status}: {text}").into());
+        }
+        Ok(resp.json()?)
     }
 
     /// Create a new issue.
@@ -600,6 +629,45 @@ pub fn parse_project_url(url: &str) -> Result<(String, String), String> {
     Ok((format!("{scheme}://{host}"), path.to_string()))
 }
 
+/// Parse a merge request URL into its components.
+///
+/// Example:
+/// `https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42`
+/// returns `("https://gitlab.com", "redhat/centos-stream/rpms/xz", 42)`.
+pub fn parse_mr_url(url: &str) -> Result<(String, String, u64), String> {
+    let trimmed = url.trim_end_matches('/');
+    let rest = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .ok_or_else(|| format!("invalid GitLab URL: {url}"))?;
+    let slash = rest
+        .find('/')
+        .ok_or_else(|| format!("no project path in URL: {url}"))?;
+    let host = &rest[..slash];
+    let path = &rest[slash + 1..];
+
+    let scheme = if trimmed.starts_with("https://") {
+        "https"
+    } else {
+        "http"
+    };
+
+    let (project, iid_str) = path
+        .rsplit_once("/-/merge_requests/")
+        .ok_or_else(|| format!("not a merge request URL: {url}"))?;
+    // `iid_str` may have trailing query or fragment; strip them.
+    let iid_str = iid_str.split(['?', '#']).next().unwrap_or(iid_str);
+    let iid: u64 = iid_str
+        .parse()
+        .map_err(|_| format!("invalid merge request IID in URL: {url}"))?;
+
+    if project.is_empty() {
+        return Err(format!("no project path in URL: {url}"));
+    }
+
+    Ok((format!("{scheme}://{host}"), project.to_string(), iid))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -989,5 +1057,54 @@ mod tests {
         let err = client.list_issues("relmon", None).unwrap_err();
         assert!(err.to_string().contains("500"), "{}", err);
         mock.assert();
+    }
+
+    // --- parse_mr_url ---
+
+    #[test]
+    fn parse_mr_url_standard() {
+        let (base, project, iid) =
+            parse_mr_url("https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42")
+                .unwrap();
+        assert_eq!(base, "https://gitlab.com");
+        assert_eq!(project, "redhat/centos-stream/rpms/xz");
+        assert_eq!(iid, 42);
+    }
+
+    #[test]
+    fn parse_mr_url_strips_trailing_slash() {
+        let (_, _, iid) =
+            parse_mr_url("https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42/")
+                .unwrap();
+        assert_eq!(iid, 42);
+    }
+
+    #[test]
+    fn parse_mr_url_strips_query() {
+        let (_, _, iid) =
+            parse_mr_url("https://gitlab.com/a/b/-/merge_requests/7?commit_id=abc").unwrap();
+        assert_eq!(iid, 7);
+    }
+
+    #[test]
+    fn parse_mr_url_strips_fragment() {
+        let (_, _, iid) =
+            parse_mr_url("https://gitlab.com/a/b/-/merge_requests/7#note_123").unwrap();
+        assert_eq!(iid, 7);
+    }
+
+    #[test]
+    fn parse_mr_url_rejects_issue_url() {
+        assert!(parse_mr_url("https://gitlab.com/a/b/-/issues/1").is_err());
+    }
+
+    #[test]
+    fn parse_mr_url_rejects_non_numeric_iid() {
+        assert!(parse_mr_url("https://gitlab.com/a/b/-/merge_requests/abc").is_err());
+    }
+
+    #[test]
+    fn parse_mr_url_rejects_no_scheme() {
+        assert!(parse_mr_url("gitlab.com/a/b/-/merge_requests/1").is_err());
     }
 }
