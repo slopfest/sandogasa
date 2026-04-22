@@ -23,6 +23,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 - **[poi-tracker](tools/poi-tracker/)** — package-of-interest tracker for Fedora, EPEL, and CentOS SIGs
 - **[sandogasa-hattrack](tools/sandogasa-hattrack/)** — look up a Fedora contributor's activity across services
 - **[sandogasa-pkg-acl](tools/sandogasa-pkg-acl/)** — view and manage Fedora package ACLs via the Pagure dist-git API
+- **[sandogasa-pkg-health](tools/sandogasa-pkg-health/)** — audit package health across a sandogasa inventory (pluggable checks, selective update)
 - **[sandogasa-report](tools/sandogasa-report/)** — activity reporting for Fedora, EPEL, and CentOS SIG packaging
 
 ## Library crates

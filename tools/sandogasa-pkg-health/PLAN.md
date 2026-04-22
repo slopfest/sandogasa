@@ -136,16 +136,25 @@ direct issues but all its deps are unhealthy gets flagged as
 
 ## MVP scope (v0.1 of the tool)
 
-1. Core framework: check trait, registry, Context (with fedrq +
-   bugzilla clients), report TOML model.
+1. Core framework: check trait (variant-aware), registry, Context
+   (with Bugzilla + dist-git clients, per-version tracker maps,
+   tokio runtime handle), report TOML model with JSON Schema.
 2. Cheap checks:
-   - `maintainer_count` (count of direct/group maintainers via FASJSON).
+   - `maintainer_count` (direct users + Pagure group expansion).
 3. Medium checks:
-   - `bug_count` (open bugs by category via Bugzilla; reuse
-     `sandogasa-report` classifiers).
-4. CLI with `run` subcommand and selective update semantics.
-5. TOML report persistence.
-6. Human-readable summary output; `--json` flag.
+   - `bug_count` (open bugs by category via Bugzilla; uses
+     `sandogasa-bugclass` classifiers, variant-aware per release).
+4. CLI subcommands:
+   - `run`: execute checks, update report.
+   - `show`: display existing report without re-running.
+   - `checks`: list registered checks.
+5. TOML report persistence with selective per-(package, check,
+   variant) updates and `--max-age` staleness filtering.
+6. Per-package parallelism via rayon.
+7. Human-readable summary via `HealthCheck::format_result()`;
+   `--json` flag for machine-readable.
+
+All MVP goals are met as of the current state.
 
 ## Post-MVP
 

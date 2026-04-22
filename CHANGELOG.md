@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### New: sandogasa-pkg-health tool
+
+Audit package health across a sandogasa inventory via pluggable
+checks classified by cost tier (cheap / medium / expensive).
+Reports persist to TOML with selective per-(package, check,
+variant) update — re-running one check preserves every other
+stored entry's timestamp.
+
+- `HealthCheck` trait (id, description, cost_tier, variants, run,
+  format_result)
+- Cost tiers: Cheap / Medium / Expensive
+- Variant-aware checks (e.g. `bug_count:f45` vs `bug_count:epel10`)
+  with independent per-variant staleness
+- CLI: `run`, `show`, `checks` subcommands
+- `--fedora-version` and `--epel-version` (CSV + repeatable, sorted
+  and deduped with duplicate warnings)
+- `--max-age` for age-based selective re-run
+- `--package` and check selection flags for scoped updates
+- Per-package parallelism via rayon (~3.4x speedup on 44 packages)
+- JSON Schema for the report format (checked in, snapshot-tested)
+- MVP checks: `maintainer_count` (Cheap), `bug_count` (Medium)
+- `show` subcommand: display an existing report without re-running
+
+### New: sandogasa-bugclass library crate
+
+Bug classifier extracted from `sandogasa-report` into a shared
+library so `sandogasa-pkg-health` can reuse it. The `BugKind` enum
+is the tracker-agnostic vocabulary (Security, Ftbfs, Fti, Update,
+Branch, Review, Other); per-tracker submodules hold the
+classification logic. Currently only Bugzilla is supported.
+
 ## v0.10.1
 
 ### ebranch

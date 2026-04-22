@@ -35,8 +35,11 @@ tracks when); in-progress items get an `(in progress)` marker.
 - [x] `--max-age` parsing and skip-when-fresh logic
 - [x] Per-package parallelism (rayon) — parallel across packages,
       sequential within a package; report writes are single-threaded
-- [ ] Human-readable summary output (currently just a count)
+- [x] Human-readable summary output (per-package, via
+      `HealthCheck::format_result()`)
 - [x] JSON output (dumps full report)
+- [x] `show` subcommand to display an existing report without
+      re-running any checks
 
 ### First checks
 - [x] `maintainer_count` (Cheap) — dist-git ACL lookup + Pagure group
@@ -65,10 +68,10 @@ tracks when); in-progress items get an `(in progress)` marker.
 - [ ] `activity` (Cheap) — commits to dist-git in last N days
 
 ### Features
-- [ ] `show <package>` subcommand for single-package detail
 - [ ] Configurable thresholds → exit-code gating
 - [ ] Config file support (per-inventory check selection)
 - [ ] Comparison between two reports (diff: what got worse/better)
+- [ ] `--jobs N` flag to control rayon thread pool size
 
 ### Open questions to resolve
 - [x] ~~Where do bug classifiers live?~~ — extracted to
