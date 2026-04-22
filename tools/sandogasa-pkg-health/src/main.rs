@@ -174,8 +174,17 @@ fn cmd_run(args: &RunArgs) -> ExitCode {
     let ctx = Context::new();
     let mut ran = 0;
     let mut skipped = 0;
+    let total = packages.len();
+    let width = total.to_string().len();
 
-    for pkg in &packages {
+    for (i, pkg) in packages.iter().enumerate() {
+        if args.verbose {
+            eprintln!(
+                "[pkg-health] [{:>width$}/{total}] {pkg}",
+                i + 1,
+                width = width,
+            );
+        }
         for check_id in &selected_ids {
             let Some(check) = reg.get(check_id) else {
                 eprintln!("warning: unknown check '{check_id}'");
