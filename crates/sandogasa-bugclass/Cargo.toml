@@ -1,0 +1,13 @@
+[package]
+name = "sandogasa-bugclass"
+description = "Bug classification (CVE, FTBFS, update request, etc.) across issue trackers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sandogasa-bugzilla = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/sandogasa-bodhi",
+    "crates/sandogasa-bugclass",
     "crates/sandogasa-bugzilla",
     "crates/sandogasa-cli",
     "crates/sandogasa-config",
@@ -51,6 +52,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 rpassword = "7"
 schemars = { version = "1", features = ["chrono04"] }
 sandogasa-bodhi = { version = "0.10", path = "crates/sandogasa-bodhi" }
+sandogasa-bugclass = { version = "0.10", path = "crates/sandogasa-bugclass" }
 sandogasa-bugzilla = { version = "0.10", path = "crates/sandogasa-bugzilla" }
 sandogasa-cli = { version = "0.10", path = "crates/sandogasa-cli" }
 sandogasa-config = { version = "0.10", path = "crates/sandogasa-config" }

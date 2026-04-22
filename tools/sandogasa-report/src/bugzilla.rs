@@ -6,9 +6,10 @@
 use std::collections::{BTreeMap, HashSet};
 
 use chrono::NaiveDate;
-use serde::Serialize;
-
+use sandogasa_bugclass::BugKind;
+use sandogasa_bugclass::bugzilla::{classify, lookup_trackers};
 use sandogasa_bugzilla::BzClient;
+use serde::Serialize;
 
 /// Bugzilla activity report.
 #[derive(Debug, Serialize)]
@@ -95,68 +96,6 @@ impl From<&sandogasa_bugzilla::models::Bug> for BugEntry {
     }
 }
 
-/// Bug kind for classification (non-review bugs).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BugKind {
-    Review,
-    Security,
-    Update,
-    Branch,
-    Ftbfs,
-    Fti,
-    Other,
-}
-
-/// Tracker bug IDs for FTBFS and FTI classification.
-struct TrackerIds {
-    ftbfs: HashSet<u64>,
-    fti: HashSet<u64>,
-}
-
-/// Classify a bug. Returns `Review` for Package Review bugs
-/// (handled separately by the caller).
-fn classify(bug: &sandogasa_bugzilla::models::Bug, trackers: &TrackerIds) -> BugKind {
-    if bug.component.iter().any(|c| c == "Package Review") {
-        return BugKind::Review;
-    }
-
-    // FTBFS / FTI: check if the bug blocks a known tracker.
-    if bug.blocks.iter().any(|id| trackers.ftbfs.contains(id)) {
-        return BugKind::Ftbfs;
-    }
-    if bug.blocks.iter().any(|id| trackers.fti.contains(id)) {
-        return BugKind::Fti;
-    }
-
-    // Security: summary starts with CVE- or SecurityTracking keyword.
-    if bug.summary.starts_with("CVE-")
-        || bug
-            .keywords
-            .iter()
-            .any(|k| k == "SecurityTracking" || k == "Security")
-    {
-        return BugKind::Security;
-    }
-
-    // Update request: FutureFeature keyword + "is available" summary.
-    if bug.keywords.iter().any(|k| k == "FutureFeature") {
-        let component = bug.component.first().map(|s| s.as_str()).unwrap_or("");
-        if !component.is_empty()
-            && bug.summary.starts_with(component)
-            && bug.summary.contains("is available")
-        {
-            return BugKind::Update;
-        }
-    }
-
-    // Branch request.
-    if bug.summary.to_lowercase().contains("branch") {
-        return BugKind::Branch;
-    }
-
-    BugKind::Other
-}
-
 /// Resolve the Bugzilla email for a FAS user.
 ///
 /// Checks (in order):
@@ -203,52 +142,6 @@ pub fn resolve_email(
              Add the mapping to [users] in the config file."
         )),
     }
-}
-
-/// Look up FTBFS and FTI tracker bug IDs for specified Fedora versions.
-async fn lookup_trackers(bz: &BzClient, versions: &[u32], verbose: bool) -> TrackerIds {
-    let mut ftbfs = HashSet::new();
-    let mut fti = HashSet::new();
-
-    // Always look up the permanent Rawhide trackers, plus any
-    // configured Fedora version trackers.
-    let mut aliases = vec![
-        "RAWHIDEFTBFS".to_string(),
-        "RAWHIDEFailsToInstall".to_string(),
-    ];
-    for ver in versions {
-        aliases.push(format!("F{ver}FTBFS"));
-        aliases.push(format!("F{ver}FailsToInstall"));
-    }
-
-    if verbose {
-        eprintln!("[bugzilla] looking up FTBFS/FTI tracker bugs");
-    }
-
-    // Batch lookup by alias.
-    let alias_params: Vec<String> = aliases.iter().map(|a| format!("alias={a}")).collect();
-    let query = alias_params.join("&");
-    if let Ok(bugs) = bz.search(&query, 0).await {
-        for bug in &bugs {
-            for alias in &bug.alias {
-                if alias.ends_with("FTBFS") {
-                    ftbfs.insert(bug.id);
-                } else if alias.ends_with("FailsToInstall") {
-                    fti.insert(bug.id);
-                }
-            }
-        }
-    }
-
-    if verbose {
-        eprintln!(
-            "[bugzilla] found {} FTBFS and {} FTI tracker(s)",
-            ftbfs.len(),
-            fti.len()
-        );
-    }
-
-    TrackerIds { ftbfs, fti }
 }
 
 /// Run Bugzilla activity reporting.
@@ -662,86 +555,6 @@ mod tests {
             version: vec![],
             cf_fixed_in: String::new(),
         }
-    }
-
-    #[test]
-    fn classify_review() {
-        let trackers = TrackerIds {
-            ftbfs: HashSet::new(),
-            fti: HashSet::new(),
-        };
-        let bug = make_bug("Review Request: rust-foo", "Package Review", &[], &[]);
-        assert_eq!(classify(&bug, &trackers), BugKind::Review);
-    }
-
-    #[test]
-    fn classify_security_by_summary() {
-        let trackers = TrackerIds {
-            ftbfs: HashSet::new(),
-            fti: HashSet::new(),
-        };
-        let bug = make_bug("CVE-2026-1234 foo: buffer overflow", "foo", &[], &[]);
-        assert_eq!(classify(&bug, &trackers), BugKind::Security);
-    }
-
-    #[test]
-    fn classify_security_by_keyword() {
-        let trackers = TrackerIds {
-            ftbfs: HashSet::new(),
-            fti: HashSet::new(),
-        };
-        let bug = make_bug("foo: buffer overflow", "foo", &["SecurityTracking"], &[]);
-        assert_eq!(classify(&bug, &trackers), BugKind::Security);
-    }
-
-    #[test]
-    fn classify_update_request() {
-        let trackers = TrackerIds {
-            ftbfs: HashSet::new(),
-            fti: HashSet::new(),
-        };
-        let bug = make_bug("fish-4.0 is available", "fish", &["FutureFeature"], &[]);
-        assert_eq!(classify(&bug, &trackers), BugKind::Update);
-    }
-
-    #[test]
-    fn classify_branch_request() {
-        let trackers = TrackerIds {
-            ftbfs: HashSet::new(),
-            fti: HashSet::new(),
-        };
-        let bug = make_bug("Please branch rust-foo for epel10", "foo", &[], &[]);
-        assert_eq!(classify(&bug, &trackers), BugKind::Branch);
-    }
-
-    #[test]
-    fn classify_ftbfs() {
-        let trackers = TrackerIds {
-            ftbfs: HashSet::from([999]),
-            fti: HashSet::new(),
-        };
-        let bug = make_bug("foo FTBFS in rawhide", "foo", &[], &[999]);
-        assert_eq!(classify(&bug, &trackers), BugKind::Ftbfs);
-    }
-
-    #[test]
-    fn classify_fti() {
-        let trackers = TrackerIds {
-            ftbfs: HashSet::new(),
-            fti: HashSet::from([888]),
-        };
-        let bug = make_bug("foo fails to install", "foo", &[], &[888]);
-        assert_eq!(classify(&bug, &trackers), BugKind::Fti);
-    }
-
-    #[test]
-    fn classify_other() {
-        let trackers = TrackerIds {
-            ftbfs: HashSet::new(),
-            fti: HashSet::new(),
-        };
-        let bug = make_bug("foo crashes on startup", "foo", &[], &[]);
-        assert_eq!(classify(&bug, &trackers), BugKind::Other);
     }
 
     #[test]

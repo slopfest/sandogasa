@@ -1537,6 +1537,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandogasa-bugclass"
+version = "0.10.1"
+dependencies = [
+ "chrono",
+ "sandogasa-bugzilla",
+]
+
+[[package]]
 name = "sandogasa-bugzilla"
 version = "0.10.1"
 dependencies = [
@@ -1693,6 +1701,7 @@ dependencies = [
  "rayon",
  "sandogasa-bugzilla",
  "sandogasa-config",
+ "sandogasa-distgit",
  "sandogasa-fasjson",
  "sandogasa-inventory",
  "schemars",
@@ -1722,6 +1731,7 @@ dependencies = [
  "clap",
  "reqwest",
  "sandogasa-bodhi",
+ "sandogasa-bugclass",
  "sandogasa-bugzilla",
  "sandogasa-config",
  "sandogasa-fasjson",
