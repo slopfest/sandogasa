@@ -70,6 +70,11 @@ The timestamp on each check lets us age-out and selectively re-run.
 
 ### Selective updates
 
+Two orthogonal axes of selection — **which checks** to run, and
+**which packages** to run them against. Any combination is allowed:
+update one check across all packages, or all checks on one package,
+or one check on one package.
+
 CLI:
 
 ```
@@ -77,20 +82,37 @@ sandogasa-pkg-health run -i inventory.toml -o health.toml \
     [--check bug_count] [--check maintainers] \
     [--cheap | --medium | --expensive | --all] \
     [--max-age 7d] \
-    [--package rust-arrow]
+    [--package rust-arrow] [--package rust-tokio]
 ```
 
-Semantics:
+Check-selection semantics:
 
-- No `-o` file or file doesn't exist → fresh report.
-- `-o` file exists → load it, run selected checks, update those
-  entries, preserve all others.
 - `--check <id>` (repeatable) → run only those checks.
 - `--cheap`/`--medium`/`--expensive` → run all checks in that tier.
 - `--all` → run all checks regardless of tier.
-- `--max-age 7d` → rerun any check whose timestamp is older than 7
-  days ago (in addition to explicitly selected checks).
-- `--package <name>` (repeatable) → limit to specific packages.
+- Default: all cheap checks.
+
+Package-selection semantics:
+
+- `--package <name>` (repeatable) → limit to these packages.
+- Default: every package in the inventory.
+
+Persistence semantics:
+
+- No `-o` file or file doesn't exist → fresh report.
+- `-o` file exists → load it, run selected (checks × packages),
+  update those entries, preserve all others (including results for
+  packages and checks that weren't touched this run).
+- `--max-age 7d` → rerun any selected check whose stored result is
+  older than 7 days (still scoped to selected packages).
+
+Example use cases:
+
+- Daily cron: `--cheap` (all cheap checks, all packages).
+- Weekly expensive sweep: `--expensive` (rollup, dep walks).
+- Ad-hoc: `--all --package rust-arrow` after fixing bugs in
+  rust-arrow — rerun everything just for that package, preserving
+  all other packages' stored results.
 
 ### Output
 

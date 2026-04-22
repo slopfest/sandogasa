@@ -22,13 +22,15 @@ tracks when); in-progress items get an `(in progress)` marker.
 - [ ] JSON Schema generation via `schemars` (matching inventory pattern)
 
 ### CLI
-- [ ] clap args: `-i inventory`, `-o report`, `--check <id>`,
+- [x] clap args: `-i inventory`, `-o report`, `--check <id>`,
       `--cheap`/`--medium`/`--expensive`/`--all`, `--max-age`,
       `--package`, `--json`, `--verbose`
-- [ ] Check selection logic (merge all the flags)
+- [x] Check selection logic (tier flags, --check, default=cheap)
+- [x] Package selection (`--package`, repeatable; default=all)
+- [ ] `--max-age` parsing and skip-when-fresh logic
 - [ ] Per-package parallelism (rayon) for cheap checks
-- [ ] Human-readable summary output
-- [ ] JSON output
+- [ ] Human-readable summary output (currently just a count)
+- [x] JSON output (dumps full report)
 
 ### First checks
 - [ ] `maintainer_count` (Cheap) — FASJSON lookup for direct users
