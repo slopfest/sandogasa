@@ -7,6 +7,7 @@
 pub mod check;
 pub mod checks;
 pub mod context;
+pub mod duration;
 pub mod registry;
 pub mod report;
 

@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use sandogasa_pkg_health::{Context, HealthReport, registry::default_registry};
+use sandogasa_pkg_health::{Context, HealthReport, duration, registry::default_registry};
 
 #[derive(Parser)]
 #[command(
@@ -171,9 +171,22 @@ fn cmd_run(args: &RunArgs) -> ExitCode {
         eprintln!("[pkg-health] {} package(s) to check", packages.len());
     }
 
+    // Parse --max-age if given.
+    let max_age = match args.max_age.as_deref() {
+        Some(s) => match duration::parse(s) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+
     let ctx = Context::new();
     let mut ran = 0;
-    let mut skipped = 0;
+    let mut fresh = 0;
+    let mut failed = 0;
     let total = packages.len();
     let width = total.to_string().len();
 
@@ -191,9 +204,13 @@ fn cmd_run(args: &RunArgs) -> ExitCode {
                 continue;
             };
 
-            // --max-age: skip if selected check is still fresh.
-            // TODO: parse duration string; for now, always run selected.
-            let _ = &args.max_age;
+            // --max-age: skip if stored result is still fresh.
+            if let Some(age) = max_age
+                && !report.is_stale(pkg, check_id, age)
+            {
+                fresh += 1;
+                continue;
+            }
 
             match check.run(pkg, &ctx) {
                 Ok(result) => {
@@ -202,7 +219,7 @@ fn cmd_run(args: &RunArgs) -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!("warning: {pkg}: {check_id}: {e}");
-                    skipped += 1;
+                    failed += 1;
                 }
             }
         }
@@ -220,7 +237,7 @@ fn cmd_run(args: &RunArgs) -> ExitCode {
         );
     } else {
         eprintln!(
-            "Ran {ran} check(s), skipped {skipped}, wrote report to {}",
+            "Ran {ran} check(s), {fresh} fresh (skipped), {failed} failed, wrote report to {}",
             args.output
         );
     }
