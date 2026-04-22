@@ -1699,6 +1699,7 @@ dependencies = [
  "chrono",
  "clap",
  "rayon",
+ "sandogasa-bugclass",
  "sandogasa-bugzilla",
  "sandogasa-config",
  "sandogasa-distgit",

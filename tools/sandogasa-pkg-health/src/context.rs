@@ -72,6 +72,25 @@ impl Context {
         }
     }
 
+    /// Build a Context for testing with explicit clients and
+    /// tracker map. Skips the tracker lookup so tests can pre-populate
+    /// what they need.
+    #[cfg(test)]
+    pub fn for_test(
+        bz: Arc<BzClient>,
+        distgit: Arc<DistGitClient>,
+        trackers: BTreeMap<String, Arc<TrackerIds>>,
+    ) -> Self {
+        Self {
+            runtime: Handle::current(),
+            distgit,
+            bz,
+            fedora_versions: vec![],
+            epel_versions: vec![],
+            trackers,
+        }
+    }
+
     /// Block on a future using the stored runtime handle. Uses
     /// `block_in_place` to avoid deadlocking when called from within
     /// the runtime.
