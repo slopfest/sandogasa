@@ -31,6 +31,7 @@ The underlying API clients and utilities are published as reusable
 library crates:
 
 - **sandogasa-bodhi** — Bodhi API client for Fedora update queries
+- **sandogasa-bugclass** — bug classification (CVE, FTBFS, update request, etc.) across issue trackers
 - **sandogasa-bugzilla** — Bugzilla REST API client
 - **sandogasa-cli** — shared CLI utilities (external tool availability checks)
 - **sandogasa-config** — shared config file management and interactive prompting

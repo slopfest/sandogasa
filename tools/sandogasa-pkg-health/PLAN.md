@@ -173,7 +173,10 @@ direct issues but all its deps are unhealthy gets flagged as
    for the report format? Would help external consumers validate.
 2. Do we want a config file for per-inventory check selections /
    thresholds, or is CLI-only fine for MVP?
-3. Bug classification lives in `sandogasa-report` currently — should
-   it move to a shared crate (e.g. `sandogasa-bugclass`) or should
-   `pkg-health` depend directly on `sandogasa-report`? Depending
-   on a binary crate from a library is unusual.
+
+### Resolved
+
+- **Bug classification**: extracted to `sandogasa-bugclass` library
+  crate. `BugKind` is the tracker-agnostic vocabulary; per-tracker
+  submodules implement classification logic. Both `sandogasa-report`
+  and `sandogasa-pkg-health` depend on it.
