@@ -10,9 +10,11 @@ mod dump_inventory;
 mod file_issue;
 mod gitlab;
 mod jira;
+mod sync_issues;
 
 use dump_inventory::DumpInventoryArgs;
 use file_issue::FileIssueArgs;
+use sync_issues::SyncIssuesArgs;
 
 #[derive(Parser)]
 #[command(
@@ -38,6 +40,10 @@ enum Command {
     /// File a tracking issue in the proposed_updates GitLab
     /// group for a given Merge Request URL.
     FileIssue(FileIssueArgs),
+
+    /// Report which inventory packages have active, proposed,
+    /// or missing tracking issues per release.
+    SyncIssues(SyncIssuesArgs),
 }
 
 fn main() -> ExitCode {
@@ -46,5 +52,6 @@ fn main() -> ExitCode {
         Command::Config => configure::run(),
         Command::DumpInventory(args) => dump_inventory::run(&args),
         Command::FileIssue(args) => file_issue::run(&args),
+        Command::SyncIssues(args) => sync_issues::run(&args),
     }
 }
