@@ -75,6 +75,28 @@ impl HealthCheck for BugCount {
             }),
         })
     }
+
+    fn format_result(&self, data: &serde_json::Value) -> String {
+        let open = data["open"].as_u64().unwrap_or(0);
+        let by_kind = data["by_kind"].as_object();
+        let detail = by_kind
+            .map(|obj| {
+                let mut parts: Vec<String> = obj
+                    .iter()
+                    .filter_map(|(k, v)| v.as_u64().map(|n| (k.as_str(), n)))
+                    .filter(|(_, n)| *n > 0)
+                    .map(|(k, n)| format!("{n} {k}"))
+                    .collect();
+                parts.sort();
+                parts.join(", ")
+            })
+            .unwrap_or_default();
+        if detail.is_empty() {
+            format!("{open} open")
+        } else {
+            format!("{open} open ({detail})")
+        }
+    }
 }
 
 #[cfg(test)]

@@ -65,6 +65,13 @@ pub trait HealthCheck: Send + Sync {
         variant: Option<&str>,
         ctx: &Context,
     ) -> Result<CheckResult, String>;
+
+    /// Render the result of this check as a one-line human-readable
+    /// summary. Default: compact JSON. Checks should override for
+    /// a more polished rendering.
+    fn format_result(&self, data: &serde_json::Value) -> String {
+        serde_json::to_string(data).unwrap_or_else(|_| "(unserializable)".to_string())
+    }
 }
 
 /// Build the storage key for a (check, variant) pair.

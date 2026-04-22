@@ -71,6 +71,21 @@ impl HealthCheck for MaintainerCount {
             }),
         })
     }
+
+    fn format_result(&self, data: &serde_json::Value) -> String {
+        let effective = data["effective_count"].as_u64().unwrap_or(0);
+        let direct = data["direct"].as_array().map_or(0, |a| a.len());
+        let groups: Vec<&str> = data["groups"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        let group_note = if groups.is_empty() {
+            String::new()
+        } else {
+            format!(" via {}", groups.join(", "))
+        };
+        format!("{effective} effective ({direct} direct{group_note})")
+    }
 }
 
 #[cfg(test)]

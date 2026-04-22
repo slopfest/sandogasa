@@ -314,11 +314,39 @@ async fn cmd_run(args: &RunArgs) -> ExitCode {
             serde_json::to_string_pretty(&report).expect("JSON serialization failed")
         );
     } else {
+        print_summary(&report, &reg, &packages);
         eprintln!(
-            "Ran {ran} check(s), {fresh} fresh (skipped), {failed} failed, wrote report to {}",
+            "\nRan {ran} check(s), {fresh} fresh (skipped), {failed} failed, \
+             wrote report to {}",
             args.output
         );
     }
 
     ExitCode::SUCCESS
+}
+
+/// Print a human-readable per-package summary using each check's
+/// format_result override.
+fn print_summary(report: &HealthReport, reg: &sandogasa_pkg_health::Registry, packages: &[&str]) {
+    println!("Health summary ({})\n", report.report.inventory);
+    for pkg in packages {
+        let Some(pkg_report) = report.package.get(*pkg) else {
+            continue;
+        };
+        if pkg_report.checks.is_empty() {
+            continue;
+        }
+        println!("{pkg}:");
+        for (key, entry) in &pkg_report.checks {
+            let (check_id, _variant) = match key.split_once(':') {
+                Some((a, b)) => (a, Some(b)),
+                None => (key.as_str(), None),
+            };
+            let summary = reg.get(check_id).map_or_else(
+                || serde_json::to_string(&entry.data).unwrap_or_default(),
+                |c| c.format_result(&entry.data),
+            );
+            println!("  {key}: {summary}");
+        }
+    }
 }
