@@ -47,7 +47,7 @@ tracks when); in-progress items get an `(in progress)` marker.
 - [x] Unit tests for report merge/update logic (7 tests)
 - [x] Unit tests for duration parser (11 tests)
 - [x] Snapshot test for JSON Schema (matching inventory pattern)
-- [ ] Mock-based tests for each check (Bugzilla query, dist-git ACLs)
+- [x] Mock-based tests for each check (Bugzilla query, dist-git ACLs)
 
 ### Docs
 - [x] `README.md` following project conventions (install, usage)
