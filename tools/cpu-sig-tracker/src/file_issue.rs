@@ -19,6 +19,28 @@ const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
 /// `status` can identify them.
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
 
+/// Issue-type labels already defined in the proposed_updates
+/// GitLab group. Passed through `--type`.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum IssueType {
+    Enhancement,
+    Bugfix,
+    #[value(name = "arch-enablement")]
+    ArchEnablement,
+    Security,
+}
+
+impl IssueType {
+    fn label(self) -> &'static str {
+        match self {
+            IssueType::Enhancement => "enhancement",
+            IssueType::Bugfix => "bugfix",
+            IssueType::ArchEnablement => "arch-enablement",
+            IssueType::Security => "security",
+        }
+    }
+}
+
 #[derive(clap::Args)]
 pub struct FileIssueArgs {
     /// Full Merge Request URL to track, e.g.
@@ -43,6 +65,11 @@ pub struct FileIssueArgs {
     /// branch (e.g. `c10s`).
     #[arg(long)]
     pub release: Option<String>,
+
+    /// Apply one of the proposed_updates type labels:
+    /// enhancement, bugfix, arch-enablement, security.
+    #[arg(long = "type", value_enum)]
+    pub issue_type: Option<IssueType>,
 
     /// Print the issue that would be filed and exit without
     /// making any GitLab API calls.
@@ -92,7 +119,6 @@ fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let body = format_body(&BodyFields {
-        package,
         release: &release,
         mr_url: &mr.web_url,
         mr_title: &mr.title,
@@ -109,11 +135,13 @@ fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
         &mr.title,
     );
 
+    let labels = build_labels(&release, args.issue_type);
+
     if args.dry_run {
         println!("Would file in {PROPOSED_UPDATES_GROUP}/{package}:");
         println!("---");
         println!("title: {title}");
-        println!("labels: {TRACKING_LABEL}");
+        println!("labels: {labels}");
         println!("---");
         println!("{body}");
         return Ok(());
@@ -124,7 +152,7 @@ fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("[cpu-sig-tracker] creating issue in {tracking_project}");
     }
     let tracking_client = gitlab::Client::new(&base_url, &tracking_project)?;
-    let issue = tracking_client.create_issue(&title, Some(&body), Some(TRACKING_LABEL))?;
+    let issue = tracking_client.create_issue(&title, Some(&body), Some(&labels))?;
 
     eprintln!("Filed #{} {}", issue.iid, issue.web_url);
     Ok(())
@@ -132,7 +160,6 @@ fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Fields we substitute into the standardized issue body.
 struct BodyFields<'a> {
-    package: &'a str,
     release: &'a str,
     mr_url: &'a str,
     mr_title: &'a str,
@@ -147,6 +174,33 @@ struct BodyFields<'a> {
 /// projects.
 fn package_from_project(project: &str) -> Option<&str> {
     project.rsplit('/').next().filter(|s| !s.is_empty())
+}
+
+/// Build the comma-separated label list: tracking label +
+/// release label (only if the release is a valid `c<N>s`
+/// identifier) + type label (if given).
+fn build_labels(release: &str, issue_type: Option<IssueType>) -> String {
+    let mut labels: Vec<&str> = vec![TRACKING_LABEL];
+    if let Some(r) = release_label(release) {
+        labels.push(r);
+    }
+    if let Some(t) = issue_type {
+        labels.push(t.label());
+    }
+    labels.join(",")
+}
+
+/// Return `Some(release)` if it looks like a CentOS Stream
+/// release identifier (`c9s`, `c10s`, …). Returns `None` for
+/// anything else (e.g. `main`, feature branches) so we don't
+/// invent bogus project labels.
+fn release_label(release: &str) -> Option<&str> {
+    let digits = release.strip_prefix('c')?.strip_suffix('s')?;
+    if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+        Some(release)
+    } else {
+        None
+    }
 }
 
 /// Scan text for the first `RHEL-\d+` occurrence. Avoids a
@@ -345,7 +399,6 @@ mod tests {
     #[test]
     fn format_body_full() {
         let body = format_body(&BodyFields {
-            package: "xz",
             release: "c10s",
             mr_url: "https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42",
             mr_title: "Fix CVE-2026-0001",
@@ -354,7 +407,10 @@ mod tests {
             affected: Some("xz-5.4-1.el10"),
             expected_fix: Some("xz-5.6-1.el10"),
         });
-        assert!(!body.contains("##"), "body should not contain heading: {body}");
+        assert!(
+            !body.contains("##"),
+            "body should not contain heading: {body}"
+        );
         assert!(body.contains(
             "- **MR**: [Fix CVE-2026-0001](https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42)"
         ));
@@ -370,7 +426,6 @@ mod tests {
     #[test]
     fn format_body_without_jira() {
         let body = format_body(&BodyFields {
-            package: "xz",
             release: "c10s",
             mr_url: "https://example/mr",
             mr_title: "t",
@@ -385,9 +440,67 @@ mod tests {
     }
 
     #[test]
+    fn release_label_accepts_c10s() {
+        assert_eq!(release_label("c10s"), Some("c10s"));
+    }
+
+    #[test]
+    fn release_label_accepts_c9s() {
+        assert_eq!(release_label("c9s"), Some("c9s"));
+    }
+
+    #[test]
+    fn release_label_rejects_main() {
+        assert_eq!(release_label("main"), None);
+    }
+
+    #[test]
+    fn release_label_rejects_prefix_only() {
+        assert_eq!(release_label("cs"), None);
+    }
+
+    #[test]
+    fn release_label_rejects_non_digit_body() {
+        assert_eq!(release_label("cfoos"), None);
+    }
+
+    #[test]
+    fn build_labels_all_three() {
+        assert_eq!(
+            build_labels("c10s", Some(IssueType::Security)),
+            "cpu-sig-tracker,c10s,security"
+        );
+    }
+
+    #[test]
+    fn build_labels_tracking_only_when_release_invalid_and_no_type() {
+        assert_eq!(build_labels("main", None), "cpu-sig-tracker");
+    }
+
+    #[test]
+    fn build_labels_skips_invalid_release_but_keeps_type() {
+        assert_eq!(
+            build_labels("main", Some(IssueType::Bugfix)),
+            "cpu-sig-tracker,bugfix"
+        );
+    }
+
+    #[test]
+    fn build_labels_release_only() {
+        assert_eq!(build_labels("c9s", None), "cpu-sig-tracker,c9s");
+    }
+
+    #[test]
+    fn issue_type_labels_match_gitlab_project_labels() {
+        assert_eq!(IssueType::Enhancement.label(), "enhancement");
+        assert_eq!(IssueType::Bugfix.label(), "bugfix");
+        assert_eq!(IssueType::ArchEnablement.label(), "arch-enablement");
+        assert_eq!(IssueType::Security.label(), "security");
+    }
+
+    #[test]
     fn format_body_with_jira_key_but_no_summary() {
         let body = format_body(&BodyFields {
-            package: "xz",
             release: "c10s",
             mr_url: "https://example/mr",
             mr_title: "t",
