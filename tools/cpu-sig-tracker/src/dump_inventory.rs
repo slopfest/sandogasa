@@ -18,11 +18,12 @@ use sandogasa_koji::{list_tagged_nvrs, parse_nvr_name};
 
 #[derive(clap::Args)]
 pub struct DumpInventoryArgs {
-    /// CentOS release, e.g. "c9s" or "c10s". The Koji tag
-    /// queried is "proposed_updates<N>s-packages-main-release"
-    /// where N is the major version digit.
-    #[arg(short, long)]
-    pub release: String,
+    /// CentOS release(s) to enumerate, e.g. "c10s" or "c9s,c10s"
+    /// (CSV or repeated). The Koji tag queried per release is
+    /// "proposed_updates<N>s-packages-main-release" where N is the
+    /// major version digit.
+    #[arg(short, long = "release", value_delimiter = ',')]
+    pub releases: Vec<String>,
 
     /// Output file (sandogasa-inventory TOML). If it exists,
     /// merge in the newly-discovered packages; existing entries
@@ -58,39 +59,33 @@ pub fn proposed_updates_tag(release: &str) -> Result<String, String> {
 }
 
 pub fn run(args: &DumpInventoryArgs) -> ExitCode {
-    let tag = match proposed_updates_tag(&args.release) {
-        Ok(t) => t,
+    if args.releases.is_empty() {
+        eprintln!("error: at least one --release is required");
+        return ExitCode::FAILURE;
+    }
+
+    // Deduplicate while preserving first-seen order.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let releases: Vec<&str> = args
+        .releases
+        .iter()
+        .filter(|r| seen.insert(r.as_str()))
+        .map(|s| s.as_str())
+        .collect();
+
+    // Pre-validate all release strings so we fail fast before any
+    // Koji calls or inventory writes.
+    let tags: Vec<(String, String)> = match releases
+        .iter()
+        .map(|r| proposed_updates_tag(r).map(|tag| (r.to_string(), tag)))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
     };
-    if args.verbose {
-        eprintln!("[cpu-sig-tracker] listing tagged NVRs in {tag}");
-    }
-
-    let nvrs = match list_tagged_nvrs(&tag, Some(&args.koji_profile)) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("error: koji list-tagged {tag} failed: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    // Extract unique source package names from NVRs.
-    let mut package_names: Vec<String> = nvrs
-        .iter()
-        .filter_map(|nvr| parse_nvr_name(nvr).map(|s| s.to_string()))
-        .collect();
-    package_names.sort();
-    package_names.dedup();
-
-    if args.verbose {
-        eprintln!(
-            "[cpu-sig-tracker] {} unique package(s) in {tag}",
-            package_names.len()
-        );
-    }
 
     // Load existing inventory or create a fresh one.
     let mut inventory = if std::path::Path::new(&args.output).exists() {
@@ -115,39 +110,71 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
         }
     };
 
-    // Add packages not already in the inventory.
-    let mut added = 0usize;
-    for name in &package_names {
-        if inventory.find_package(name).is_none() {
-            inventory.add_package(Package {
-                name: name.clone(),
-                poc: None,
-                reason: None,
-                team: None,
-                task: None,
-                rpms: None,
-                arch_rpms: None,
-                track: None,
-                repology_name: None,
-                distros: None,
-                file_issue: None,
-            });
-            added += 1;
+    let mut total_added = 0usize;
+    for (release, tag) in &tags {
+        if args.verbose {
+            eprintln!("[cpu-sig-tracker] listing tagged NVRs in {tag}");
         }
-    }
+        let nvrs = match list_tagged_nvrs(tag, Some(&args.koji_profile)) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("error: koji list-tagged {tag} failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
 
-    // Update workload membership for this release.
-    let workload = inventory
-        .inventory
-        .workloads
-        .entry(args.release.clone())
-        .or_insert_with(WorkloadMeta::default);
-    for name in &package_names {
-        if !workload.packages.iter().any(|p| p == name) {
-            workload.packages.push(name.clone());
+        let mut package_names: Vec<String> = nvrs
+            .iter()
+            .filter_map(|nvr| parse_nvr_name(nvr).map(|s| s.to_string()))
+            .collect();
+        package_names.sort();
+        package_names.dedup();
+
+        if args.verbose {
+            eprintln!(
+                "[cpu-sig-tracker] {} unique package(s) in {tag}",
+                package_names.len()
+            );
         }
+
+        let mut added = 0usize;
+        for name in &package_names {
+            if inventory.find_package(name).is_none() {
+                inventory.add_package(Package {
+                    name: name.clone(),
+                    poc: None,
+                    reason: None,
+                    team: None,
+                    task: None,
+                    rpms: None,
+                    arch_rpms: None,
+                    track: None,
+                    repology_name: None,
+                    distros: None,
+                    file_issue: None,
+                });
+                added += 1;
+            }
+        }
+        total_added += added;
+
+        let workload = inventory
+            .inventory
+            .workloads
+            .entry(release.clone())
+            .or_insert_with(WorkloadMeta::default);
+        for name in &package_names {
+            if !workload.packages.iter().any(|p| p == name) {
+                workload.packages.push(name.clone());
+            }
+        }
+        workload.packages.sort();
+
+        eprintln!(
+            "  {release}: {} package(s), {added} new to inventory",
+            package_names.len(),
+        );
     }
-    workload.packages.sort();
 
     if let Err(e) = sandogasa_inventory::save(&inventory, &args.output) {
         eprintln!("error: {e}");
@@ -155,12 +182,10 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
     }
 
     eprintln!(
-        "Wrote {}: {} package(s) total, {} new, workload '{}' has {} package(s)",
+        "Wrote {}: {} package(s) total, {total_added} new across {} release(s)",
         args.output,
         inventory.package.len(),
-        added,
-        args.release,
-        inventory.inventory.workloads[&args.release].packages.len(),
+        tags.len(),
     );
     ExitCode::SUCCESS
 }
