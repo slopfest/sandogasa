@@ -33,7 +33,8 @@ tracks when); in-progress items get an `(in progress)` marker.
 - [x] Check selection logic (tier flags, --check, default=cheap)
 - [x] Package selection (`--package`, repeatable; default=all)
 - [x] `--max-age` parsing and skip-when-fresh logic
-- [ ] Per-package parallelism (rayon) for cheap checks
+- [x] Per-package parallelism (rayon) — parallel across packages,
+      sequential within a package; report writes are single-threaded
 - [ ] Human-readable summary output (currently just a count)
 - [x] JSON output (dumps full report)
 
