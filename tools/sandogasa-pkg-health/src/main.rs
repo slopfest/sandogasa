@@ -84,6 +84,16 @@ struct RunArgs {
     verbose: bool,
 }
 
+/// Outcome of running a single (package, check, variant) work item.
+enum PackageOutcome {
+    Fresh,
+    Ran {
+        key: String,
+        data: serde_json::Value,
+    },
+    Failed,
+}
+
 /// Sort and deduplicate a version list, warning on duplicates.
 fn dedup_versions(versions: &[u32], label: &str) -> Vec<u32> {
     let mut sorted: Vec<u32> = versions.to_vec();
@@ -228,48 +238,68 @@ async fn cmd_run(args: &RunArgs) -> ExitCode {
     let epel_versions = dedup_versions(&args.epel_versions, "epel");
 
     let ctx = Context::new(&fedora_versions, &epel_versions, args.verbose).await;
-    let mut ran = 0;
-    let mut fresh = 0;
-    let mut failed = 0;
     let total = packages.len();
     let width = total.to_string().len();
+    let completed = std::sync::atomic::AtomicUsize::new(0);
 
-    for (i, pkg) in packages.iter().enumerate() {
-        if args.verbose {
-            eprintln!(
-                "[pkg-health] [{:>width$}/{total}] {pkg}",
-                i + 1,
-                width = width,
-            );
-        }
-        for check_id in &selected_ids {
-            let Some(check) = reg.get(check_id) else {
-                eprintln!("warning: unknown check '{check_id}'");
-                continue;
-            };
-
-            for variant in check.variants(&ctx) {
-                let key = sandogasa_pkg_health::entry_key(check_id, variant.as_deref());
-
-                // --max-age: skip if stored result is still fresh.
-                if let Some(age) = max_age
-                    && !report.is_stale(pkg, &key, age)
-                {
-                    fresh += 1;
+    // Each (package, check_id, variant) work item produces one of:
+    // - PackageOutcome::Fresh: skipped per --max-age
+    // - PackageOutcome::Ran { key, data }: needs to be written to report
+    // - PackageOutcome::Failed: logged, counted
+    use rayon::prelude::*;
+    let outcomes: Vec<(String, PackageOutcome)> = packages
+        .par_iter()
+        .flat_map_iter(|pkg| {
+            let i = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if args.verbose {
+                eprintln!("[pkg-health] [{i:>width$}/{total}] {pkg}", width = width,);
+            }
+            let mut items: Vec<(String, PackageOutcome)> = Vec::new();
+            for check_id in &selected_ids {
+                let Some(check) = reg.get(check_id) else {
+                    eprintln!("warning: unknown check '{check_id}'");
                     continue;
-                }
+                };
+                for variant in check.variants(&ctx) {
+                    let key = sandogasa_pkg_health::entry_key(check_id, variant.as_deref());
 
-                match check.run(pkg, variant.as_deref(), &ctx) {
-                    Ok(result) => {
-                        report.update(pkg, &key, result.data);
-                        ran += 1;
+                    if let Some(age) = max_age
+                        && !report.is_stale(pkg, &key, age)
+                    {
+                        items.push((pkg.to_string(), PackageOutcome::Fresh));
+                        continue;
                     }
-                    Err(e) => {
-                        eprintln!("warning: {pkg}: {key}: {e}");
-                        failed += 1;
+
+                    match check.run(pkg, variant.as_deref(), &ctx) {
+                        Ok(result) => items.push((
+                            pkg.to_string(),
+                            PackageOutcome::Ran {
+                                key,
+                                data: result.data,
+                            },
+                        )),
+                        Err(e) => {
+                            eprintln!("warning: {pkg}: {key}: {e}");
+                            items.push((pkg.to_string(), PackageOutcome::Failed));
+                        }
                     }
                 }
             }
+            items
+        })
+        .collect();
+
+    let mut ran = 0usize;
+    let mut fresh = 0usize;
+    let mut failed = 0usize;
+    for (pkg, outcome) in outcomes {
+        match outcome {
+            PackageOutcome::Fresh => fresh += 1,
+            PackageOutcome::Ran { key, data } => {
+                report.update(&pkg, &key, data);
+                ran += 1;
+            }
+            PackageOutcome::Failed => failed += 1,
         }
     }
 
