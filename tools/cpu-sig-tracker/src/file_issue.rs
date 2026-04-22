@@ -71,6 +71,11 @@ pub struct FileIssueArgs {
     #[arg(long = "type", value_enum)]
     pub issue_type: Option<IssueType>,
 
+    /// Free-form context note prepended to the issue body as
+    /// a lead paragraph before the structured metadata.
+    #[arg(long)]
+    pub note: Option<String>,
+
     /// Print the issue that would be filed and exit without
     /// making any GitLab API calls.
     #[arg(long)]
@@ -126,6 +131,7 @@ fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
         jira_summary: jira_summary.as_deref(),
         affected: args.affected.as_deref(),
         expected_fix: args.expected_fix.as_deref(),
+        note: args.note.as_deref(),
     });
 
     let title = format_title(
@@ -174,6 +180,7 @@ struct BodyFields<'a> {
     jira_summary: Option<&'a str>,
     affected: Option<&'a str>,
     expected_fix: Option<&'a str>,
+    note: Option<&'a str>,
 }
 
 /// Extract the final path segment of a GitLab project path —
@@ -294,7 +301,7 @@ fn format_body(f: &BodyFields<'_>) -> String {
         None => "- **JIRA**: _(not found in MR; set with `--jira`)_".to_string(),
     };
 
-    format!(
+    let metadata = format!(
         "- **MR**: [{mr_title}]({mr_url})\n\
          {jira_line}\n\
          - **Release**: {release}\n\
@@ -304,7 +311,12 @@ fn format_body(f: &BodyFields<'_>) -> String {
         mr_title = f.mr_title,
         mr_url = f.mr_url,
         release = f.release,
-    )
+    );
+
+    match f.note {
+        Some(note) if !note.trim().is_empty() => format!("{}\n\n{metadata}", note.trim()),
+        _ => metadata,
+    }
 }
 
 #[cfg(test)]
@@ -413,6 +425,7 @@ mod tests {
             jira_summary: Some("CVE fix for xz"),
             affected: Some("xz-5.4-1.el10"),
             expected_fix: Some("xz-5.6-1.el10"),
+            note: None,
         });
         assert!(
             !body.contains("##"),
@@ -440,6 +453,7 @@ mod tests {
             jira_summary: None,
             affected: None,
             expected_fix: None,
+            note: None,
         });
         assert!(body.contains("- **Affected build**: _(unknown)_"));
         assert!(body.contains("- **Expected fix**: _(unknown)_"));
@@ -515,7 +529,53 @@ mod tests {
             jira_summary: None,
             affected: None,
             expected_fix: None,
+            note: None,
         });
         assert!(body.contains("- **JIRA**: [RHEL-1](https://issues.redhat.com/browse/RHEL-1)\n"));
+    }
+
+    #[test]
+    fn format_body_prepends_note() {
+        let body = format_body(&BodyFields {
+            release: "c10s",
+            mr_url: "https://example/mr",
+            mr_title: "t",
+            jira_key: None,
+            jira_summary: None,
+            affected: None,
+            expected_fix: None,
+            note: Some("Tracking for SIG decision 2026-04-22."),
+        });
+        assert!(body.starts_with("Tracking for SIG decision 2026-04-22.\n\n- **MR**:"));
+    }
+
+    #[test]
+    fn format_body_ignores_empty_note() {
+        let body = format_body(&BodyFields {
+            release: "c10s",
+            mr_url: "https://example/mr",
+            mr_title: "t",
+            jira_key: None,
+            jira_summary: None,
+            affected: None,
+            expected_fix: None,
+            note: Some("   \n\t"),
+        });
+        assert!(body.starts_with("- **MR**:"));
+    }
+
+    #[test]
+    fn format_body_trims_note_whitespace() {
+        let body = format_body(&BodyFields {
+            release: "c10s",
+            mr_url: "https://example/mr",
+            mr_title: "t",
+            jira_key: None,
+            jira_summary: None,
+            affected: None,
+            expected_fix: None,
+            note: Some("  leading and trailing  \n\n"),
+        });
+        assert!(body.starts_with("leading and trailing\n\n- **MR**:"));
     }
 }
