@@ -69,14 +69,50 @@ struct RunArgs {
     #[arg(long)]
     json: bool,
 
-    /// Fedora version(s) for FTBFS / FTI tracker lookup (repeatable).
-    /// Rawhide trackers are always included.
-    #[arg(long = "fedora-version", value_name = "N")]
+    /// Fedora version(s) for FTBFS / FTI tracker lookup (CSV or
+    /// repeated). Rawhide trackers are always included.
+    #[arg(long = "fedora-version", value_name = "N", value_delimiter = ',')]
     fedora_versions: Vec<u32>,
+
+    /// EPEL version(s) for FTBFS / FTI tracker lookup (CSV or
+    /// repeated).
+    #[arg(long = "epel-version", value_name = "N", value_delimiter = ',')]
+    epel_versions: Vec<u32>,
 
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
+}
+
+/// Sort and deduplicate a version list, warning on duplicates.
+fn dedup_versions(versions: &[u32], label: &str) -> Vec<u32> {
+    let mut sorted: Vec<u32> = versions.to_vec();
+    sorted.sort_unstable();
+    let orig_len = sorted.len();
+    sorted.dedup();
+    if sorted.len() < orig_len {
+        eprintln!(
+            "warning: duplicate --{label}-version value(s) ignored: {}",
+            duplicates(versions)
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    sorted
+}
+
+/// Return the duplicated values in `xs` (each reported once).
+fn duplicates(xs: &[u32]) -> Vec<u32> {
+    let mut seen = std::collections::HashSet::new();
+    let mut dups = std::collections::BTreeSet::new();
+    for &x in xs {
+        if !seen.insert(x) {
+            dups.insert(x);
+        }
+    }
+    dups.into_iter().collect()
 }
 
 fn main() -> ExitCode {
@@ -188,7 +224,10 @@ async fn cmd_run(args: &RunArgs) -> ExitCode {
         None => None,
     };
 
-    let ctx = Context::new(&args.fedora_versions, args.verbose).await;
+    let fedora_versions = dedup_versions(&args.fedora_versions, "fedora");
+    let epel_versions = dedup_versions(&args.epel_versions, "epel");
+
+    let ctx = Context::new(&fedora_versions, &epel_versions, args.verbose).await;
     let mut ran = 0;
     let mut fresh = 0;
     let mut failed = 0;

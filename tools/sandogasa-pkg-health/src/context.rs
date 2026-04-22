@@ -27,28 +27,23 @@ pub struct Context {
     /// Fedora versions the user requested (for variant-aware checks).
     /// Rawhide is implicit and always available in `trackers`.
     pub fedora_versions: Vec<u32>,
+    /// EPEL versions the user requested.
+    pub epel_versions: Vec<u32>,
     /// FTBFS / FTI tracker bug IDs per version key. Keys are
-    /// `"rawhide"`, `"f44"`, `"f45"`, etc. Populated at startup.
+    /// `"rawhide"`, `"f44"`, `"epel9"`, etc. Populated at startup.
     pub trackers: BTreeMap<String, Arc<TrackerIds>>,
 }
 
 impl Context {
     /// Build a Context with default clients. Must be called from
     /// within a tokio runtime. Looks up FTBFS/FTI trackers once.
-    pub async fn new(fedora_versions: &[u32], verbose: bool) -> Self {
+    pub async fn new(fedora_versions: &[u32], epel_versions: &[u32], verbose: bool) -> Self {
         let bz = Arc::new(BzClient::new(BUGZILLA_URL));
 
-        // One combined lookup to minimize API calls.
         if verbose {
             eprintln!("[pkg-health] looking up FTBFS/FTI tracker bugs");
         }
-        let combined =
-            sandogasa_bugclass::bugzilla::lookup_trackers(&bz, fedora_versions, verbose).await;
 
-        // Partition combined results by version. We re-query aliases
-        // by known alias → version mapping. Build the per-version
-        // maps by re-fetching aliases individually; cheap since we
-        // already have the IDs cached client-side.
         let mut trackers: BTreeMap<String, Arc<TrackerIds>> = BTreeMap::new();
         trackers.insert(
             "rawhide".to_string(),
@@ -60,15 +55,19 @@ impl Context {
                 Arc::new(fetch_version_trackers(&bz, &format!("F{ver}")).await),
             );
         }
-        // The combined set isn't stored — individual per-version sets
-        // cover the same ground.
-        drop(combined);
+        for &ver in epel_versions {
+            trackers.insert(
+                format!("epel{ver}"),
+                Arc::new(fetch_version_trackers(&bz, &format!("EPEL{ver}")).await),
+            );
+        }
 
         Self {
             runtime: Handle::current(),
             distgit: Arc::new(DistGitClient::new()),
             bz,
             fedora_versions: fedora_versions.to_vec(),
+            epel_versions: epel_versions.to_vec(),
             trackers,
         }
     }

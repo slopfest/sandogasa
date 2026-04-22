@@ -32,11 +32,14 @@ impl HealthCheck for BugCount {
 
     fn variants(&self, ctx: &Context) -> Vec<Option<String>> {
         // Always include rawhide; add each explicitly requested Fedora
-        // version. Users update each independently via --fedora-version
-        // + --max-age.
+        // and EPEL version. Users update each independently via
+        // --fedora-version / --epel-version + --max-age.
         let mut vs: Vec<Option<String>> = vec![Some("rawhide".to_string())];
         for ver in &ctx.fedora_versions {
             vs.push(Some(format!("f{ver}")));
+        }
+        for ver in &ctx.epel_versions {
+            vs.push(Some(format!("epel{ver}")));
         }
         vs
     }
