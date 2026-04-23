@@ -24,6 +24,9 @@ target
 # Working files / test outputs
 /scratch/
 
+# Claude Code runtime state
+.claude/scheduled_tasks.lock
+
 # Added by cargo
 
 /target

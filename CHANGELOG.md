@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.10.2
 
 ### New: hs-meetings tool + sandogasa-meetbot library
 

@@ -19,7 +19,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 - **[ebranch](tools/ebranch/)** — build dependency resolver for cross-branch package porting
 - **[fedora-cve-triage](tools/fedora-cve-triage/)** — triage CVEs reported against Fedora components in Red Hat Bugzilla
 - **[hs-intake](tools/hs-intake/)** — Hyperscale package intake analysis
-- **[hs-meetings](tools/hs-meetings/)** — list CentOS Hyperscale SIG meeting archives from meetbot
+- **[hs-meetings](tools/hs-meetings/)** — list and sync CentOS Hyperscale SIG meeting archives from meetbot
 - **[hs-relmon](tools/hs-relmon/)** — Hyperscale release monitoring via Repology
 - **[koji-diff](tools/koji-diff/)** — compare buildroot and build logs between Koji builds
 - **[poi-tracker](tools/poi-tracker/)** — package-of-interest tracker for Fedora, EPEL, and CentOS SIGs
