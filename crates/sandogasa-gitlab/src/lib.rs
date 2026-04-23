@@ -21,6 +21,18 @@ pub struct Issue {
     pub web_url: String,
     #[serde(default)]
     pub assignees: Vec<Assignee>,
+    /// ISO-8601 date string (YYYY-MM-DD) or None.
+    #[serde(default)]
+    pub start_date: Option<String>,
+    /// ISO-8601 date string (YYYY-MM-DD) or None.
+    #[serde(default)]
+    pub due_date: Option<String>,
+    /// ISO-8601 timestamp GitLab set when the issue was
+    /// created. Useful as a fallback start-date when the
+    /// underlying Koji build has been untagged and we can't
+    /// recover its creation time.
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 /// A GitLab merge request (minimal fields).
@@ -527,6 +539,14 @@ pub struct IssueUpdate {
     pub remove_labels: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state_event: Option<String>,
+    /// ISO-8601 date string (YYYY-MM-DD). GitLab stores this
+    /// on the issue as its start date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    /// ISO-8601 date string (YYYY-MM-DD). GitLab stores this
+    /// on the issue as its due date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_date: Option<String>,
 }
 
 fn check_response(resp: reqwest::blocking::Response) -> Result<Issue, Box<dyn std::error::Error>> {

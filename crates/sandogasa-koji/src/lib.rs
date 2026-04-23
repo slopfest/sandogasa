@@ -127,6 +127,30 @@ pub fn list_tagged_nvrs(tag: &str, profile: Option<&str>) -> Result<Vec<String>,
         .collect())
 }
 
+/// Parse the build's creation date from `koji buildinfo`.
+///
+/// Looks for a `Creation time: YYYY-MM-DD HH:MM:SS` line and
+/// returns the date portion. Returns `Ok(None)` if the line
+/// isn't present or can't be parsed — callers should treat
+/// that as "unknown date" rather than an error.
+pub fn build_creation_date(
+    nvr: &str,
+    profile: Option<&str>,
+) -> Result<Option<chrono::NaiveDate>, String> {
+    let stdout = run_koji(profile, &["buildinfo", nvr])?;
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix("Creation time:") {
+            let value = rest.trim();
+            // Parse `YYYY-MM-DD HH:MM:SS` — take the date part.
+            let date_part = value.split_whitespace().next().unwrap_or("");
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_part, "%Y-%m-%d") {
+                return Ok(Some(date));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// List binary RPM names for a build via `koji buildinfo`.
 ///
 /// Parses the RPMs section, returning binary package names
