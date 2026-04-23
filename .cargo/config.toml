@@ -1,2 +1,16 @@
 [alias]
-cov = "llvm-cov test --workspace --fail-under-lines 75"
+# `src/main.rs` files are pure clap dispatch (argument parsing +
+# subcommand match). Their coverage is structurally 0% unless
+# we spawn the compiled binary, and the actual logic they
+# delegate to is covered via the module unit/integration tests.
+# Excluding them lets the workspace coverage reflect the code
+# we genuinely expect to test.
+cov = [
+    "llvm-cov",
+    "test",
+    "--workspace",
+    "--fail-under-lines",
+    "75",
+    "--ignore-filename-regex",
+    "src/main\\.rs$",
+]
