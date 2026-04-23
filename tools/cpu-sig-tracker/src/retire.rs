@@ -301,15 +301,8 @@ fn derive_start_date(
     issue
         .created_at
         .as_deref()
-        .and_then(parse_iso_date)
+        .and_then(crate::utils::parse_iso_date)
         .map(|d| (d, "GitLab issue created_at"))
-}
-
-/// Pull the calendar-date portion out of an ISO-8601 timestamp
-/// like `"2025-04-04T22:17:50.677Z"`.
-fn parse_iso_date(ts: &str) -> Option<chrono::NaiveDate> {
-    let date_part = ts.split(['T', ' ']).next()?;
-    chrono::NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
 }
 
 /// Find the `c<N>s` release label in `- **Release**: c10s`.
@@ -383,24 +376,6 @@ mod tests {
         assert!(note.contains("JIRA RHEL-12345"));
         assert!(note.contains("no xz build"));
         assert!(!note.contains("--force"));
-    }
-
-    #[test]
-    fn parse_iso_date_extracts_calendar_date() {
-        assert_eq!(
-            parse_iso_date("2025-04-04T22:17:50.677Z"),
-            chrono::NaiveDate::from_ymd_opt(2025, 4, 4),
-        );
-        assert_eq!(
-            parse_iso_date("2026-04-22 14:05:12"),
-            chrono::NaiveDate::from_ymd_opt(2026, 4, 22),
-        );
-    }
-
-    #[test]
-    fn parse_iso_date_none_on_garbage() {
-        assert_eq!(parse_iso_date("not a date"), None);
-        assert_eq!(parse_iso_date(""), None);
     }
 
     #[test]

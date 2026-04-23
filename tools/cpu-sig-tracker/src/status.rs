@@ -190,10 +190,16 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
                 Some(key) => fetch_jira(&runtime, &jira_client, key, args.verbose),
                 None => None,
             };
-            let (jira_status, jira_resolution, jira_resolved) = match jira_info {
-                Some((s, r, b)) => (Some(s), r, b),
-                None => (None, None, false),
-            };
+            let (jira_status, jira_resolution, jira_resolved, jira_resolution_date) =
+                match jira_info {
+                    Some(info) => (
+                        Some(info.status),
+                        info.resolution,
+                        info.resolved,
+                        info.resolution_date,
+                    ),
+                    None => (None, None, false, None),
+                };
 
             let pu_nvr = pu_nvrs.get(package).cloned();
             let stream_nvr = stream_nvrs.get(package).cloned();
@@ -256,6 +262,14 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
                         &issue,
                         jira_resolved,
                         has_build,
+                        args.verbose,
+                    );
+                    maybe_refresh_dates(
+                        &project,
+                        &issue,
+                        package,
+                        release,
+                        jira_resolution_date,
                         args.verbose,
                     );
                 } else if !drift_reasons.is_empty() {
@@ -647,6 +661,84 @@ fn maybe_refresh_work_item_status(
     );
 }
 
+/// Reconcile the issue's start_date / due_date with what the
+/// live data says.
+///
+/// - `start_date`: Koji build creation date (probes `-release`
+///   then `-testing`). Falls back to the issue's created_at
+///   when Koji no longer has the build (retired). Non-fatal on
+///   any failure.
+/// - `due_date`: JIRA's resolutiondate when the issue is
+///   resolved; otherwise left alone.
+fn maybe_refresh_dates(
+    project_path: &str,
+    issue: &gitlab::Issue,
+    package: &str,
+    release: &str,
+    jira_resolution_date: Option<chrono::NaiveDate>,
+    verbose: bool,
+) {
+    let desired_start = crate::file_issue::find_build_start_date(package, release, verbose)
+        .or_else(|| {
+            issue
+                .created_at
+                .as_deref()
+                .and_then(crate::utils::parse_iso_date)
+        });
+    let desired_due = jira_resolution_date;
+
+    let current_start_parsed = issue
+        .start_date
+        .as_deref()
+        .and_then(crate::utils::parse_iso_date);
+    let current_due_parsed = issue
+        .due_date
+        .as_deref()
+        .and_then(crate::utils::parse_iso_date);
+
+    let start_needs_update = desired_start.is_some() && current_start_parsed != desired_start;
+    let due_needs_update = desired_due.is_some() && current_due_parsed != desired_due;
+
+    if !start_needs_update && !due_needs_update {
+        return;
+    }
+
+    let client = match gitlab::Client::new(GITLAB_BASE, project_path) {
+        Ok(c) => c,
+        Err(e) => {
+            if verbose {
+                eprintln!("warning: --refresh dates: client for {project_path}: {e}");
+            }
+            return;
+        }
+    };
+
+    let start_arg = if start_needs_update {
+        desired_start.map(|d| d.format("%Y-%m-%d").to_string())
+    } else {
+        None
+    };
+    let due_arg = if due_needs_update {
+        desired_due.map(|d| d.format("%Y-%m-%d").to_string())
+    } else {
+        None
+    };
+
+    if let Err(e) = client.set_work_item_dates(issue.iid, start_arg.as_deref(), due_arg.as_deref())
+    {
+        eprintln!("warning: --refresh dates for {}: {e}", issue.web_url);
+        return;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(d) = &start_arg {
+        parts.push(format!("start_date={d}"));
+    }
+    if let Some(d) = &due_arg {
+        parts.push(format!("due_date={d}"));
+    }
+    eprintln!("dates {}: {}", issue.web_url, parts.join(", "));
+}
+
 /// Inputs for [`maybe_refresh_issue`].
 struct RefreshCtx<'a> {
     project_path: &'a str,
@@ -678,7 +770,11 @@ fn maybe_refresh_issue(ctx: RefreshCtx<'_>) -> bool {
         jira_status: ctx.jira_status,
         jira_resolution: ctx.jira_resolution,
     });
-    if new_body == ctx.original_body {
+    // GitLab strips trailing whitespace/newlines from stored
+    // descriptions, so compare trimmed values — otherwise the
+    // `\n` we always emit at the end triggers a rewrite every
+    // run even when nothing changed.
+    if new_body.trim_end() == ctx.original_body.trim_end() {
         return false;
     }
     let client = match gitlab::Client::new(GITLAB_BASE, ctx.project_path) {
@@ -800,21 +896,29 @@ fn is_metadata_line(line: &str) -> bool {
     PREFIXES.iter().any(|p| trimmed.starts_with(p))
 }
 
+struct JiraInfo {
+    status: String,
+    resolution: Option<String>,
+    resolved: bool,
+    resolution_date: Option<chrono::NaiveDate>,
+}
+
 fn fetch_jira(
     runtime: &tokio::runtime::Runtime,
     client: &sandogasa_jira::JiraClient,
     key: &str,
     verbose: bool,
-) -> Option<(String, Option<String>, bool)> {
+) -> Option<JiraInfo> {
     if verbose {
         eprintln!("[cpu-sig-tracker] fetching JIRA {key}");
     }
     match runtime.block_on(client.issue(key)) {
-        Ok(Some(issue)) => Some((
-            issue.status().to_string(),
-            issue.resolution().map(|s| s.to_string()),
-            issue.is_resolved(),
-        )),
+        Ok(Some(issue)) => Some(JiraInfo {
+            status: issue.status().to_string(),
+            resolution: issue.resolution().map(|s| s.to_string()),
+            resolved: issue.is_resolved(),
+            resolution_date: issue.resolution_date(),
+        }),
         Ok(None) => {
             eprintln!("warning: JIRA {key} not found or not visible");
             None

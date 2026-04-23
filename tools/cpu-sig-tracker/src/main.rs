@@ -13,6 +13,7 @@ mod jira;
 mod retire;
 mod status;
 mod sync_issues;
+mod utils;
 
 use dump_inventory::DumpInventoryArgs;
 use file_issue::FileIssueArgs;
