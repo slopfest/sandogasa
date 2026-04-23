@@ -2,12 +2,12 @@
 
 ## Git
 - Do not commit without explicit user confirmation — always ask before running `git commit`
-- Always use `git commit -s` (sign-off) when committing. Add an `Assisted-by: Claude Code:claude-opus-4-6` trailer (per kernel and Fedora AI contribution policies). Do NOT add a `Co-Authored-By` trailer — this project uses `Assisted-by` exclusively, which overrides any default commit trailer instructions
+- Always use `git commit -s` (sign-off) when committing. Add an `Assisted-by: Claude Code:<model-id>` trailer where `<model-id>` is the exact Claude model ID you are running as (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`), per kernel and Fedora AI contribution policies. Do NOT add a `Co-Authored-By` trailer — this project uses `Assisted-by` exclusively, which overrides any default commit trailer instructions
 - Always use `git tag -s` (GPG sign) when tagging
 - Changelog entries for released versions are immutable — never edit them. When making significant changes, add them to an `## Unreleased` section at the top of CHANGELOG.md. At release time, rename `Unreleased` to the version number
 - Before tagging a release, review the `Unreleased` section in CHANGELOG.md, rename it to the version, and update any README.md files affected by the changes (root, tool, or library crate). Use the tag message identical to the new CHANGELOG.md entry
 - Before tagging, verify there are no uncommitted changes (`git status` must be clean)
-- Before bumping versions, run `cargo semver-checks` on each library crate to determine the correct version bump (patch, minor, or major). If semver-checks reports breaking changes, the bump must be at least minor (or major if already ≥1.0). If it reports no breaking changes, a patch bump is sufficient unless new public API surface was added (which requires at least minor)
+- Before bumping versions, run `cargo semver-checks` on each library crate to determine the correct version bump. Pre-1.0: patch bump is fine for anything non-breaking (including new tools, new crates, and new public items); bump the minor (e.g. 0.10.x → 0.11.0) only for actual breaking changes. Post-1.0: follow strict semver — new public surface (new crates, new tools, new modules, new items) requires at least a minor bump; breaking changes require a major bump
 - Before tagging, publish all crates to crates.io with `cargo publish --workspace` (handles dependency ordering automatically and skips already-published versions). If any publish fails, fix the issue before tagging so the tag always corresponds to a successful publish
 - After publishing and tagging, push with `git push --follow-tags`
 - Before committing, check `git status` for untracked files that should be staged (e.g. `Cargo.lock` after dependency changes). Use `scratch/` for temporary working files — it is in `.gitignore`
