@@ -222,6 +222,56 @@ impl Client {
         Ok(parse_work_item_status(&json))
     }
 
+    /// Set the start / due dates on a work item via GraphQL.
+    ///
+    /// GitLab's REST `PUT /issues/:iid` endpoint silently
+    /// ignores `start_date` and doesn't reliably honor
+    /// `due_date` for work items, so date updates go through
+    /// the `workItemUpdate` mutation's `startAndDueDateWidget`.
+    /// Passing `None` for a field leaves it unchanged; passing
+    /// `Some("")` clears it.
+    pub fn set_work_item_dates(
+        &self,
+        iid: u64,
+        start_date: Option<&str>,
+        due_date: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if start_date.is_none() && due_date.is_none() {
+            return Ok(());
+        }
+        let work_item_id = self.get_work_item_id(iid)?;
+        let mut widget_fields: Vec<String> = Vec::new();
+        if let Some(sd) = start_date {
+            widget_fields.push(format!(r#"startDate: "{sd}""#));
+        }
+        if let Some(dd) = due_date {
+            widget_fields.push(format!(r#"dueDate: "{dd}""#));
+        }
+        let query = format!(
+            r#"mutation {{
+                workItemUpdate(input: {{
+                    id: "{work_item_id}"
+                    startAndDueDateWidget: {{ {} }}
+                }}) {{
+                    errors
+                }}
+            }}"#,
+            widget_fields.join(" "),
+        );
+        let body = serde_json::json!({ "query": query });
+        let resp = self.http.post(self.graphql_url()).json(&body).send()?;
+        if !resp.status().is_success() {
+            let http_status = resp.status();
+            let text = resp.text()?;
+            return Err(format!("GitLab GraphQL error {http_status}: {text}").into());
+        }
+        let json: serde_json::Value = resp.json()?;
+        if let Some(errors) = parse_mutation_errors(&json) {
+            return Err(format!("workItemUpdate errors: {errors:?}").into());
+        }
+        Ok(())
+    }
+
     /// Set the work-item status for an issue via GraphQL.
     ///
     /// Resolves `status` (e.g. "In progress") to its Global ID
