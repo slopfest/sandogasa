@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+### New: cpu-sig-tracker tool
+
+Track CentOS Proposed Updates SIG package state across Koji,
+GitLab, and JIRA. Manages the full lifecycle of each tracking
+issue — filed when an MR against CentOS Stream exists, watched
+until JIRA closes or Stream catches up, then retired and
+untagged.
+
+Subcommands:
+
+- `config` — interactive GitLab + JIRA token setup
+- `dump-inventory` — enumerate `proposed_updates<N>s-packages-main-release`
+  contents into a sandogasa-inventory TOML; `--prune` drops
+  packages no longer tagged in either `-release` or `-testing`
+- `file-issue` — file a standardized tracking issue for an MR;
+  auto-extracts package / release / JIRA key from the MR,
+  applies labels, transitions work-item status to In progress,
+  stamps start_date from Koji build creation time
+- `retire` — close a tracking issue after verifying JIRA
+  resolved + build untagged; mirrors JIRA resolution to
+  GitLab (Done vs Won't do), stamps due_date, leaves an
+  audit-trail comment
+- `status` — per-package report with JIRA state + Koji/Stream
+  NVR compare + suggested action; `--refresh` reconciles body
+  format, work-item status, and start/due dates against live
+  data; `--include-closed` extends the refresh scan to
+  historical issues; `--package` and `--release` narrow the
+  scan
+- `sync-issues` — gap analysis per (release, package):
+  active / proposed / missing classification
+- `untag` — remove a proposed_updates build from both
+  `-release` and `-testing` after verifying JIRA resolved;
+  accepts either a package name or a specific NVR
+
+Issue bodies follow a canonical markdown format so the read
+side can parse back what the write side wrote; work-item
+status, `start_date`, and `due_date` go via GraphQL since the
+REST `PUT /issues` endpoint ignores them for work items.
+
+### New: sandogasa-jira library crate
+
+Minimal Red Hat JIRA REST client — issue lookup with
+status / resolution / resolution date. Used by cpu-sig-tracker
+to drive the retire and status flows.
+
+### cov
+
+- Raised the workspace line-coverage gate from 75% to 80%.
+- Excluded `src/main.rs` files from the measurement — they're
+  structurally 0% (the harness doesn't invoke main()) and the
+  logic they delegate to is exercised by module tests.
+
 ### New: sandogasa-pkg-health tool
 
 Audit package health across a sandogasa inventory via pluggable

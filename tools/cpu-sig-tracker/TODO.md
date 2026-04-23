@@ -63,13 +63,13 @@ Intentionally not shipping:
 ### Tests
 - [x] Unit tests for issue body parse / format round-trip
 - [x] Mock tests for `sandogasa-jira`
-- [ ] Integration: `dump-inventory` → `sync-issues --file-missing`
-      → `status` on a canned inventory
+- [x] wiremock + fake-koji integration tests for each
+      subcommand's `run_inner` path
 
 ### Docs
-- [ ] Tool `README.md` (install, every subcommand, workflow example)
-- [ ] Root `README.md` entry (alphabetical)
-- [ ] `CHANGELOG.md` Unreleased entry
+- [x] Tool `README.md` (install, every subcommand, workflow example)
+- [x] Root `README.md` entry (alphabetical)
+- [x] `CHANGELOG.md` Unreleased entry
 
 ## Post-MVP
 
