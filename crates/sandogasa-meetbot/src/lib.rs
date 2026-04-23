@@ -84,6 +84,23 @@ impl Meetbot {
         }
     }
 
+    /// Fetch the `Content-Length` header for a meetbot artefact
+    /// URL via HEAD. Used to compare log sizes when the same
+    /// channel recorded multiple `!startmeeting` fragments on
+    /// the same day and the longest one is taken as "the real
+    /// meeting".
+    pub fn content_length(&self, url: &str) -> Result<u64, Box<dyn std::error::Error>> {
+        let resp = self.http.head(url).send()?;
+        if !resp.status().is_success() {
+            return Err(format!("meetbot HEAD {url} failed: {}", resp.status()).into());
+        }
+        resp.headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .ok_or_else(|| format!("meetbot HEAD {url}: missing Content-Length").into())
+    }
+
     /// Return every meeting whose topic contains `topic`.
     /// Results are whatever meetbot returns, sorted by date
     /// ascending.
@@ -137,6 +154,49 @@ impl RawMeeting {
             logs_url: rewrite_artefact_url(&self.url.logs, artefact_base),
         })
     }
+}
+
+/// Collapse same-day duplicates in a meeting list by keeping
+/// the entry whose `logs_url` is the largest, as a rough proxy
+/// for "the meeting that actually happened" when `!startmeeting`
+/// was run multiple times (on the same channel, or across
+/// overlapping channels) on a single day. `on_warning` is
+/// invoked once per collapsed group with `(winner, dropped)` so
+/// the caller can surface it to the user.
+pub fn dedup_by_longest_log<F>(
+    client: &Meetbot,
+    meetings: Vec<Meeting>,
+    mut on_warning: F,
+) -> Vec<Meeting>
+where
+    F: FnMut(&Meeting, &[Meeting]),
+{
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<chrono::NaiveDate, Vec<Meeting>> = BTreeMap::new();
+    for m in meetings {
+        groups.entry(m.datetime.date()).or_default().push(m);
+    }
+    let mut out: Vec<Meeting> = Vec::new();
+    for (_, group) in groups {
+        if group.len() == 1 {
+            out.extend(group);
+            continue;
+        }
+        let mut sized: Vec<(u64, Meeting)> = group
+            .into_iter()
+            .map(|m| {
+                let size = client.content_length(&m.logs_url).unwrap_or(0);
+                (size, m)
+            })
+            .collect();
+        sized.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
+        let winner = sized.remove(0).1;
+        let dropped: Vec<Meeting> = sized.into_iter().map(|(_, m)| m).collect();
+        on_warning(&winner, &dropped);
+        out.push(winner);
+    }
+    out.sort_by(|a, b| a.datetime.cmp(&b.datetime));
+    out
 }
 
 /// Rewrite the host portion of a meetbot artefact URL so
@@ -261,6 +321,116 @@ mod tests {
             .search("x")
             .unwrap_err();
         assert!(err.to_string().contains("meetbot GET"));
+    }
+
+    #[test]
+    fn content_length_from_head() {
+        let (runtime, server) = start_mock();
+        runtime.block_on(async {
+            Mock::given(method("HEAD"))
+                .and(path("/logs/foo.html"))
+                .respond_with(ResponseTemplate::new(200).insert_header("content-length", "4242"))
+                .mount(&server)
+                .await;
+        });
+        let client = Meetbot::with_base_url(&server.uri());
+        let url = format!("{}/logs/foo.html", server.uri());
+        assert_eq!(client.content_length(&url).unwrap(), 4242);
+    }
+
+    #[test]
+    fn content_length_missing_header_is_error() {
+        let (runtime, server) = start_mock();
+        runtime.block_on(async {
+            Mock::given(method("HEAD"))
+                .and(path("/logs/bar.html"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+        });
+        let client = Meetbot::with_base_url(&server.uri());
+        let url = format!("{}/logs/bar.html", server.uri());
+        let err = client.content_length(&url).unwrap_err();
+        assert!(err.to_string().contains("Content-Length"));
+    }
+
+    fn meeting(ts: &str, channel: &str, logs: &str) -> Meeting {
+        Meeting {
+            channel: channel.into(),
+            datetime: chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S").unwrap(),
+            topic: "t".into(),
+            summary_url: "https://s/".into(),
+            logs_url: logs.into(),
+        }
+    }
+
+    #[test]
+    fn dedup_keeps_longest_log_on_same_date() {
+        let (runtime, server) = start_mock();
+        runtime.block_on(async {
+            Mock::given(method("HEAD"))
+                .and(path("/a"))
+                .respond_with(ResponseTemplate::new(200).insert_header("content-length", "100"))
+                .mount(&server)
+                .await;
+            Mock::given(method("HEAD"))
+                .and(path("/b"))
+                .respond_with(ResponseTemplate::new(200).insert_header("content-length", "500"))
+                .mount(&server)
+                .await;
+            Mock::given(method("HEAD"))
+                .and(path("/c"))
+                .respond_with(ResponseTemplate::new(200).insert_header("content-length", "300"))
+                .mount(&server)
+                .await;
+        });
+        let client = Meetbot::with_base_url(&server.uri());
+        let uri = server.uri();
+        let meetings = vec![
+            meeting("2026-02-11T16:01:00", "main", &format!("{uri}/a")),
+            meeting("2026-02-11T16:05:00", "main", &format!("{uri}/b")),
+            meeting("2026-02-11T16:02:00", "main", &format!("{uri}/c")),
+        ];
+        let mut warnings = 0;
+        let out = dedup_by_longest_log(&client, meetings, |w, d| {
+            warnings += 1;
+            assert_eq!(w.logs_url, format!("{uri}/b"));
+            assert_eq!(d.len(), 2);
+        });
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].logs_url, format!("{uri}/b"));
+        assert_eq!(warnings, 1);
+    }
+
+    #[test]
+    fn dedup_collapses_across_channels_on_same_date() {
+        // Two rooms, same date: still collapsed — the SIG only
+        // ever runs one meeting per day, so the shorter one is
+        // assumed to be a mis-started fragment.
+        let (runtime, server) = start_mock();
+        runtime.block_on(async {
+            Mock::given(method("HEAD"))
+                .and(path("/a"))
+                .respond_with(ResponseTemplate::new(200).insert_header("content-length", "900"))
+                .mount(&server)
+                .await;
+            Mock::given(method("HEAD"))
+                .and(path("/b"))
+                .respond_with(ResponseTemplate::new(200).insert_header("content-length", "200"))
+                .mount(&server)
+                .await;
+        });
+        let client = Meetbot::with_base_url(&server.uri());
+        let uri = server.uri();
+        let meetings = vec![
+            meeting("2026-02-11T16:05:00", "main", &format!("{uri}/a")),
+            meeting("2026-02-11T16:08:00", "other", &format!("{uri}/b")),
+        ];
+        let mut warnings = 0;
+        let out = dedup_by_longest_log(&client, meetings, |_, _| warnings += 1);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].channel, "main");
+        assert_eq!(warnings, 1);
     }
 
     #[test]

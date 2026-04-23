@@ -7,11 +7,34 @@
 CentOS Hyperscale SIG meeting archive helper. `hs-meetings
 list` queries meetbot.fedoraproject.org for meetings whose
 topic matches `centos-hyperscale-sig` (overridable) and prints
-them as a date/topic/summary table or `--json`. Supports
-calendar filters via `--period 2026Q1` (or `YYYY`, `YYYYH1`)
-and explicit `--since` / `--until`. A `sync` subcommand that
-merges missing meetings into the SIG docs' `meetings.md` is
-planned.
+them as a table (date + stacked summary/logs URLs) or `--json`.
+Supports calendar filters via `--period 2026Q1` (or `YYYY`,
+`YYYYH1`) and explicit `--since` / `--until`.
+
+`hs-meetings sync --file PATH` fetches from meetbot, deduplicates
+against entries already in the target file (matching by date),
+and inserts missing entries into the correct `## YYYY` section in
+reverse-chronological order. New year sections are created
+newest-first. Meetings from 2023 and earlier are dropped before
+insertion — those predate meetbot and often carry hand-curated
+`[agenda](...)` links, so legacy sections stay untouched. New
+entries are rendered without an `agenda,` prefix (no SIG meeting
+has had an external agenda link since January 2023). `--dry-run`
+previews the change without writing. The target file is intended
+to be a tool-managed partial pulled into `meetings.md` via
+`pymdownx.snippets`.
+
+Meetbot sometimes records multiple `!startmeeting` fragments on
+a single day (same channel when the first attempt wasn't closed
+cleanly, or across two rooms if the session was moved). sync
+collapses all same-day entries by fetching the log HEAD for each
+candidate and keeping the longest one, printing a warning with
+the kept and dropped URLs. The SIG only ever runs one meeting
+per day, so the longest log is taken as canonical.
+
+`sandogasa-meetbot` gained `Meetbot::content_length` (HEAD-based
+byte count) and `dedup_by_longest_log` (the grouping utility
+used by sync) as reusable primitives.
 
 Backed by a new `sandogasa-meetbot` library crate that wraps
 meetbot's `/fragedpt/` search endpoint behind a typed blocking

@@ -5,8 +5,10 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 mod list;
+mod sync;
 
 use list::ListArgs;
+use sync::SyncArgs;
 
 #[derive(Parser)]
 #[command(
@@ -24,11 +26,14 @@ struct Cli {
 enum Command {
     /// List SIG meetings recorded on meetbot.
     List(ListArgs),
+    /// Sync SIG meetings into a tool-managed markdown list file.
+    Sync(SyncArgs),
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::List(args) => list::run(&args),
+        Command::Sync(args) => sync::run(&args),
     }
 }
