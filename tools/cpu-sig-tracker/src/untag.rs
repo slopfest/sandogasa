@@ -59,7 +59,7 @@ pub fn run(args: &UntagArgs) -> ExitCode {
     }
 }
 
-fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Error>> {
     let release_tag = proposed_updates_tag(&args.release)?;
     let testing_tag = proposed_updates_testing_tag(&args.release)?;
 
@@ -375,5 +375,91 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("neither"));
+    }
+
+    // ---- end-to-end wiremock + fake-koji test ----
+
+    use crate::test_support::{EnvGuard, install_fake_bin};
+    use serde_json::json;
+    use tempfile::tempdir;
+    use wiremock::matchers::{method, path as wiremock_path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    #[serial_test::serial]
+    fn untag_end_to_end_with_passing_preconditions() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            // Tracking-issue lookup (no state filter).
+            Mock::given(method("GET"))
+                .and(wiremock_path(
+                    "/api/v4/groups/CentOS%2Fproposed_updates%2Frpms/issues",
+                ))
+                .and(query_param("labels", "cpu-sig-tracker,c10s"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    {
+                        "iid": 5,
+                        "title": "xz untag test",
+                        "description": "- **JIRA**: [RHEL-9](https://example/) — Closed (Done)",
+                        "state": "closed",
+                        "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/5",
+                        "assignees": [],
+                    }
+                ])))
+                .mount(&server)
+                .await;
+
+            // JIRA lookup — resolved.
+            Mock::given(method("GET"))
+                .and(wiremock_path("/rest/api/2/issue/RHEL-9"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "key": "RHEL-9",
+                    "fields": {
+                        "summary": "s",
+                        "status": { "name": "Closed" },
+                        "resolution": { "name": "Done" }
+                    }
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let dir = tempdir().unwrap();
+        install_fake_bin(
+            dir.path(),
+            "koji",
+            &[
+                // NVR currently tagged in both -release and -testing.
+                (
+                    "list-tagged --quiet proposed_updates10s-packages-main-release",
+                    "xz-5.6.4-1~proposed.el10\n",
+                ),
+                (
+                    "list-tagged --quiet proposed_updates10s-packages-main-testing",
+                    "xz-5.6.4-1~proposed.el10\n",
+                ),
+                // untag-build succeeds silently.
+                ("untag-build proposed_updates10s-packages-main-release", ""),
+                ("untag-build proposed_updates10s-packages-main-testing", ""),
+            ],
+        );
+        let existing_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{existing_path}", dir.path().display());
+        let _guard = EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
+            ("PATH", &new_path),
+        ]);
+
+        let args = UntagArgs {
+            target: "xz".to_string(),
+            release: "c10s".to_string(),
+            yes: true,
+            force: false,
+            verbose: false,
+        };
+        run_inner(&args).expect("untag succeeds");
     }
 }

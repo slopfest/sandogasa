@@ -640,8 +640,8 @@ fn scan_mr_url_in_body(body: &str) -> Option<String> {
 /// [`MergeRequest`] so callers can pull whichever fields they
 /// need (title, state, description).
 fn fetch_mr(url: &str, verbose: bool) -> Option<gitlab::MergeRequest> {
-    let (base, project, iid) = gitlab::parse_mr_url(url).ok()?;
-    let client = gitlab::Client::new(&base, &project).ok()?;
+    let (_parsed_base, project, iid) = gitlab::parse_mr_url(url).ok()?;
+    let client = gitlab::Client::new(&gitlab_base(), &project).ok()?;
     if verbose {
         eprintln!("[cpu-sig-tracker] fetching MR !{iid} in {project}");
     }

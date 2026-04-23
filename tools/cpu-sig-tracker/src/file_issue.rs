@@ -96,8 +96,8 @@ pub fn run(args: &FileIssueArgs) -> ExitCode {
     }
 }
 
-fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let (base_url, mr_project, iid) = gitlab::parse_mr_url(&args.mr_url)?;
+pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let (_parsed_base, mr_project, iid) = gitlab::parse_mr_url(&args.mr_url)?;
     if args.verbose {
         eprintln!("[cpu-sig-tracker] fetching MR {iid} from {mr_project}");
     }
@@ -105,7 +105,7 @@ fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
     let package = package_from_project(&mr_project)
         .ok_or_else(|| format!("could not extract package name from '{mr_project}'"))?;
 
-    let mr_client = gitlab::Client::new(&base_url, &mr_project)?;
+    let mr_client = gitlab::Client::new(&crate::utils::gitlab_base(), &mr_project)?;
     let mr = mr_client.merge_request(iid)?;
 
     let release = args
@@ -163,7 +163,7 @@ fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
     if args.verbose {
         eprintln!("[cpu-sig-tracker] creating issue in {tracking_project}");
     }
-    let tracking_client = gitlab::Client::new(&base_url, &tracking_project)?;
+    let tracking_client = gitlab::Client::new(&crate::utils::gitlab_base(), &tracking_project)?;
     let issue = tracking_client.create_issue(&title, Some(&body), Some(&labels))?;
     eprintln!("Filed #{} {}", issue.iid, issue.web_url);
 
@@ -731,5 +731,146 @@ mod tests {
             note: Some("  leading and trailing  \n\n"),
         });
         assert!(body.starts_with("leading and trailing\n\n- **MR**:"));
+    }
+
+    // ---- end-to-end wiremock + fake-koji test ----
+
+    use crate::test_support::{EnvGuard, install_fake_bin};
+    use serde_json::json;
+    use tempfile::tempdir;
+    use wiremock::matchers::{method, path as wiremock_path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    #[serial_test::serial]
+    fn file_issue_end_to_end() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            // MR fetch from the source project.
+            Mock::given(method("GET"))
+                .and(wiremock_path(
+                    "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Fxz/merge_requests/42",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "iid": 42,
+                    "title": "Fix RHEL-1234 in xz",
+                    "description": "Linked to RHEL-1234.",
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/redhat/centos-stream/rpms/xz/-/merge_requests/42",
+                    "source_branch": "fix",
+                    "target_branch": "c10s",
+                })))
+                .mount(&server)
+                .await;
+
+            // JIRA enrichment.
+            Mock::given(method("GET"))
+                .and(wiremock_path("/rest/api/2/issue/RHEL-1234"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "key": "RHEL-1234",
+                    "fields": {
+                        "summary": "s",
+                        "status": { "name": "In Progress" }
+                    }
+                })))
+                .mount(&server)
+                .await;
+
+            // create_issue POST on the tracking project.
+            Mock::given(method("POST"))
+                .and(wiremock_path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fxz/issues",
+                ))
+                .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                    "iid": 7,
+                    "title": "xz: Fix RHEL-1234 in xz",
+                    "description": null,
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/7",
+                    "assignees": [],
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            // GraphQL — set_work_item_status (→ In progress) and
+            // set_work_item_dates (start_date) both land here.
+            Mock::given(method("POST"))
+                .and(wiremock_path("/api/graphql"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": {
+                        "project": {
+                            "workItems": {
+                                "nodes": [{
+                                    "id": "gid://gitlab/WorkItem/7",
+                                    "widgets": [{
+                                        "type": "STATUS",
+                                        "status": { "name": "To do" }
+                                    }],
+                                    "namespace": {
+                                        "workItemTypes": {
+                                            "nodes": [{
+                                                "name": "Issue",
+                                                "widgetDefinitions": [{
+                                                    "type": "STATUS",
+                                                    "allowedStatuses": [{
+                                                        "id": "gid://gitlab/status/1",
+                                                        "name": "In progress"
+                                                    }]
+                                                }]
+                                            }]
+                                        }
+                                    }
+                                }]
+                            }
+                        },
+                        "workItemUpdate": { "errors": [] }
+                    }
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let dir = tempdir().unwrap();
+        install_fake_bin(
+            dir.path(),
+            "koji",
+            &[
+                // Koji list for start_date discovery — package
+                // is in -release, with a canned NVR.
+                (
+                    "list-tagged --quiet proposed_updates10s-packages-main-release",
+                    "xz-5.6.4-1~proposed.el10\n",
+                ),
+                // buildinfo for the date.
+                (
+                    "buildinfo xz-5.6.4-1~proposed.el10",
+                    "BUILD: xz-5.6.4-1~proposed.el10\nCreation time: 2026-04-22 10:11:12\n",
+                ),
+            ],
+        );
+        let existing_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{existing_path}", dir.path().display());
+        let _guard = EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
+            ("PATH", &new_path),
+        ]);
+
+        let args = FileIssueArgs {
+            mr_url: "https://gitlab.example/redhat/centos-stream/rpms/xz/-/merge_requests/42"
+                .to_string(),
+            affected: Some("xz-5.6.2-3.el10".to_string()),
+            expected_fix: Some("xz-5.6.4-1~proposed.el10".to_string()),
+            jira: None,
+            release: None,
+            issue_type: Some(IssueType::Security),
+            note: None,
+            dry_run: false,
+            verbose: false,
+        };
+        run_inner(&args).expect("file-issue succeeds");
     }
 }

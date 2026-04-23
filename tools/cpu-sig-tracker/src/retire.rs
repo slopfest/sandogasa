@@ -54,12 +54,17 @@ pub fn run(args: &RetireArgs) -> ExitCode {
     }
 }
 
-fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let (base_url, project_path, iid) = gitlab::parse_issue_url(&args.issue_url)?;
+pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let (_parsed_base, project_path, iid) = gitlab::parse_issue_url(&args.issue_url)?;
+    // parse_issue_url extracts the host from the user-supplied
+    // URL, but we route API calls through `gitlab_base()` so
+    // tests can override via `CPU_SIG_TRACKER_GITLAB_BASE`.
+    // In production both are gitlab.com so there's no
+    // visible change.
     if args.verbose {
         eprintln!("[cpu-sig-tracker] fetching issue {project_path}!{iid}");
     }
-    let client = gitlab::Client::new(&base_url, &project_path)?;
+    let client = gitlab::Client::new(&crate::utils::gitlab_base(), &project_path)?;
     let issue = client.issue(iid)?;
 
     if issue.state == "closed" {
@@ -396,5 +401,154 @@ mod tests {
         );
         assert!(note.contains("--force"));
         assert!(note.contains("still tagged"));
+    }
+
+    // ---- end-to-end wiremock + fake-binary test ----
+
+    use crate::test_support::{EnvGuard, install_fake_bin};
+    use serde_json::json;
+    use tempfile::tempdir;
+    use wiremock::matchers::{body_partial_json, method, path as wiremock_path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const RETIRE_ISSUE_BODY: &str = "\
+- **MR**: [Fix](https://gitlab.example/foo/bar/-/merge_requests/10) — merged\n\
+- **JIRA**: [RHEL-1](https://jira.example/browse/RHEL-1) — Closed (Done)\n\
+- **Release**: c10s\n";
+
+    fn koji_empty_list_tagged() -> String {
+        "Build  Tag  Built by\n-------  -----  --------\n".to_string()
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn retire_closes_issue_with_preconditions_passing() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            // Fetch the tracking issue.
+            Mock::given(method("GET"))
+                .and(wiremock_path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fxz/issues/1",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "iid": 1,
+                    "title": "xz retire test",
+                    "description": RETIRE_ISSUE_BODY,
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1",
+                    "assignees": [],
+                })))
+                .mount(&server)
+                .await;
+
+            // JIRA lookup — resolved as Done.
+            Mock::given(method("GET"))
+                .and(wiremock_path("/rest/api/2/issue/RHEL-1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "key": "RHEL-1",
+                    "fields": {
+                        "summary": "s",
+                        "status": { "name": "Closed" },
+                        "resolution": { "name": "Done" },
+                        "resolutiondate": "2026-04-20T12:00:00.000+0000"
+                    }
+                })))
+                .mount(&server)
+                .await;
+
+            // Audit note POST.
+            Mock::given(method("POST"))
+                .and(wiremock_path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fxz/issues/1/notes",
+                ))
+                .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id": 1})))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            // GraphQL endpoint handles both workItemUpdate
+            // mutations (status + dates) and the get_work_item_id /
+            // resolve_status_id queries that set_work_item_status
+            // performs. One catch-all responder covers them all.
+            Mock::given(method("POST"))
+                .and(wiremock_path("/api/graphql"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": {
+                        "project": {
+                            "workItems": {
+                                "nodes": [{
+                                    "id": "gid://gitlab/WorkItem/99",
+                                    "widgets": [
+                                        { "type": "STATUS", "status": { "name": "Done" } }
+                                    ],
+                                    "namespace": {
+                                        "workItemTypes": {
+                                            "nodes": [{
+                                                "name": "Issue",
+                                                "widgetDefinitions": [{
+                                                    "type": "STATUS",
+                                                    "allowedStatuses": [{
+                                                        "id": "gid://gitlab/status/1",
+                                                        "name": "Done"
+                                                    }]
+                                                }]
+                                            }]
+                                        }
+                                    }
+                                }]
+                            }
+                        },
+                        "workItemUpdate": { "errors": [] }
+                    }
+                })))
+                .mount(&server)
+                .await;
+
+            // Final PUT that closes the issue.
+            Mock::given(method("PUT"))
+                .and(wiremock_path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fxz/issues/1",
+                ))
+                .and(body_partial_json(json!({ "state_event": "close" })))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "iid": 1, "title": "t", "state": "closed",
+                    "web_url": "https://gitlab.example/…", "assignees": []
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+
+        let dir = tempdir().unwrap();
+        install_fake_bin(
+            dir.path(),
+            "koji",
+            &[
+                // list_tagged_nvrs for the precondition check:
+                // no xz build currently tagged → passes.
+                (
+                    "list-tagged --quiet proposed_updates10s-packages-main-release",
+                    &koji_empty_list_tagged(),
+                ),
+            ],
+        );
+        let existing_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{existing_path}", dir.path().display());
+        let _guard = EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
+            ("PATH", &new_path),
+        ]);
+
+        let args = RetireArgs {
+            issue_url: "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1"
+                .to_string(),
+            yes: true,
+            force: false,
+            verbose: false,
+        };
+        run_inner(&args).expect("retire succeeds");
     }
 }
