@@ -1384,7 +1384,7 @@ mod tests {
 
     #[test]
     fn unique_crate_count_deduplicates() {
-        let deps = vec![
+        let deps = [
             DepResult {
                 dep: make_dep("foo", "normal", false),
                 status: DepStatus::Missing,
