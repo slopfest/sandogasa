@@ -101,30 +101,18 @@ fn print_table(meetings: &[Meeting]) {
         return;
     }
     const H_DATE: &str = "DATE";
-    const H_TOPIC: &str = "TOPIC";
-    const H_SUMMARY: &str = "SUMMARY";
+    const H_URLS: &str = "URLS";
     let date_width = meetings
         .iter()
         .map(|m| m.datetime.format("%Y-%m-%d %H:%M").to_string().len())
         .max()
         .unwrap_or(0)
         .max(H_DATE.len());
-    let topic_width = meetings
-        .iter()
-        .map(|m| m.topic.chars().count())
-        .max()
-        .unwrap_or(0)
-        .max(H_TOPIC.len());
-    println!(
-        "{:<date_width$}  {:<topic_width$}  {}",
-        H_DATE, H_TOPIC, H_SUMMARY,
-    );
+    println!("{:<date_width$}  {}", H_DATE, H_URLS);
     for m in meetings {
         let date = m.datetime.format("%Y-%m-%d %H:%M").to_string();
-        println!(
-            "{:<date_width$}  {:<topic_width$}  {}",
-            date, m.topic, m.summary_url,
-        );
+        println!("{:<date_width$}  summary: {}", date, m.summary_url);
+        println!("{:<date_width$}  logs:    {}", "", m.logs_url);
     }
 }
 
