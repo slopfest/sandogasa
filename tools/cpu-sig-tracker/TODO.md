@@ -7,71 +7,75 @@ done; in-progress items get an `(in progress)` marker.
 
 ### Dependencies / building blocks
 - [ ] Add `untag_build(tag, nvr, profile)` to `sandogasa-koji`
-- [x] Add MR detail fetch to `sandogasa-gitlab` (description,
-      source/target branch, `parse_mr_url` helper)
-- [x] New `sandogasa-jira` library crate:
-      - [x] Minimal `JiraClient::new(base_url)` with optional
-            token auth
-      - [x] `issue(key) -> Option<Issue>` — status, resolution,
-            summary; 404 → None
-      - [x] Mock-based tests (wiremock pattern)
+- [x] MR detail fetch + `parse_mr_url` in `sandogasa-gitlab`
+- [x] `sandogasa-gitlab::parse_issue_url` for the `/-/issues/` and
+      `/-/work_items/` URL forms
+- [x] `sandogasa-gitlab::set_work_item_dates` via GraphQL
+      (`startAndDueDateWidget`)
+- [x] `sandogasa-gitlab` `Issue`/`IssueUpdate` date fields
+      (start_date, due_date, created_at)
+- [x] `sandogasa-koji::build_creation_date` for start_date lookup
+- [x] `sandogasa-jira` library crate (minimal issue lookup)
+- [x] `sandogasa-jira::Issue::resolution_date` for due_date lookup
+- [x] `sandogasa-fedrq::src_nvrs` batch NVR lookup for Stream
 
 ### Tool crate
-- [x] Create `tools/cpu-sig-tracker/` skeleton (Cargo.toml,
-      src/main.rs, LICENSE symlinks, README.md)
-- [x] Add to workspace members in root `Cargo.toml`
+- [x] Skeleton + workspace wiring
 
 ### Subcommands
-- [x] `dump-inventory --release c10s -o inv.toml` — list Koji-tagged
-      packages, emit sandogasa-inventory TOML
-- [x] `file-issue <mr-url> [--affected VER] [--expected-fix VER]`
-      — standardized issue body, auto-extract JIRA link from MR
-- [ ] `status -i inv.toml [--release c10s]` — per-package report
-      (JIRA state, Stream NVR comparison, suggested action)
-- [ ] `sync-issues -i inv.toml [--file-missing]` — ensure each
-      inventory package has a tracking issue; create missing ones
+- [x] `config` — interactive GitLab/JIRA token setup
+- [x] `dump-inventory --release c10s,c9s -o inv.toml` — list
+      Koji-tagged packages, emit sandogasa-inventory TOML
+- [x] `file-issue <mr-url>` — standardized issue body, auto-extract
+      JIRA from MR, apply release/type labels, set In progress,
+      stamp start_date
+- [x] `retire <issue-url>` — verify JIRA resolved + build untagged,
+      prompt, leave audit note, set Done/Won't do, stamp dates,
+      close the issue
+- [x] `status -i inv.toml` — per-package report with JIRA state +
+      Koji/Stream NVR compare + suggestion; `--refresh` rewrites
+      bodies to the standard format, reconciles work-item status,
+      backfills dates; `--include-closed` extends to closed issues;
+      `-p, --package` narrows the scan
+- [x] `sync-issues -i inv.toml` — report-only: active / proposed /
+      missing per (release, package)
+- [ ] `sync-issues --file-missing` — auto-file for packages with
+      exactly one open Stream MR
 - [ ] `untag <nvr> [--release c10s] [--yes]` — verify JIRA closed,
-      prompt, untag
-
-### Helpers
-- [ ] Issue body formatter / parser (`issue_body.rs`)
-- [ ] NVR bumping (release increment) — probably reuse
-      `sandogasa-rpmvercmp`'s parsing; may need a small helper
+      prompt, untag the build
 
 ### Output
-- [ ] Human-readable `status` output (per-package, colored
-      suggestion)
-- [ ] `--json` flag for machine-readable output
+- [x] Human-readable `status` tabular output
+- [x] `--json` for `status` and `sync-issues`
 
 ### Config
-- [ ] Reuse `sandogasa-config` for JIRA token storage (optional,
-      anonymous works for public issues)
+- [x] `config` subcommand stores GitLab + JIRA tokens in
+      `~/.config/cpu-sig-tracker/config.toml`
 
 ### Tests
-- [ ] Unit tests for issue body format round-trip
-- [ ] Mock tests for `sandogasa-jira`
+- [x] Unit tests for issue body parse / format round-trip
+- [x] Mock tests for `sandogasa-jira`
 - [ ] Integration: `dump-inventory` → `sync-issues --file-missing`
       → `status` on a canned inventory
 
 ### Docs
-- [ ] Tool `README.md` (install, all five subcommands, workflow
-      example)
+- [ ] Tool `README.md` (install, every subcommand, workflow example)
 - [ ] Root `README.md` entry (alphabetical)
 - [ ] `CHANGELOG.md` Unreleased entry
 
 ## Post-MVP
 
 ### Features
+- [ ] `stale-proposed` classification in `sync-issues` + a `migrate`
+      action to move a package_tracker entry into its `rpms/<pkg>`
+      project once the MR lands
 - [ ] `rebase <pkg>` — drive the dist-git / MR workflow to rebuild
       against the latest Stream
-- [ ] Multi-release scanning in one invocation
-- [ ] Snapshot diff: compare two status outputs to show what
+- [ ] Snapshot diff: compare two `status --json` outputs to show what
       changed
 - [ ] CI-friendly `--strict` mode that fails on missing tracking
       issues
 
 ### Open questions to resolve
-- [ ] JIRA token storage + auth flow details
-- [ ] Per-release vs multi-release inventory format
 - [ ] Rebase heuristic when Stream NVR is lower than
       proposed_updates NVR
