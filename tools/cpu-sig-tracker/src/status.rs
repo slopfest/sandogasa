@@ -36,6 +36,14 @@ pub struct StatusArgs {
     #[arg(long)]
     pub release: Option<String>,
 
+    /// Narrow to specific packages (repeatable or CSV). When
+    /// unset, every tracked package in scope is processed.
+    /// Primarily useful with --refresh to skip the extra
+    /// work-item-status probes for packages you don't care
+    /// about.
+    #[arg(short = 'p', long = "package", value_delimiter = ',')]
+    pub packages: Vec<String>,
+
     /// Emit JSON instead of grouped text.
     #[arg(long)]
     pub json: bool,
@@ -107,13 +115,32 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Runtime::new()?;
     let jira_client = jira::client();
 
+    let package_filter: Option<std::collections::HashSet<&str>> = if args.packages.is_empty() {
+        None
+    } else {
+        Some(args.packages.iter().map(|s| s.as_str()).collect())
+    };
+
     let mut rows: Vec<Row> = Vec::new();
     for release in &releases {
         if args.verbose {
             eprintln!("[cpu-sig-tracker] fetching active issues for {release}");
         }
         let active_label = format!("{TRACKING_LABEL},{release}");
-        let active = group_client.list_issues(&active_label, Some("opened"))?;
+        let active_all = group_client.list_issues(&active_label, Some("opened"))?;
+
+        // Client-side narrow by --package. GitLab can't filter
+        // issues by the project name they belong to, so we do it
+        // after the group list returns.
+        let active: Vec<gitlab::Issue> = active_all
+            .into_iter()
+            .filter(|i| match &package_filter {
+                None => true,
+                Some(set) => {
+                    gitlab::package_from_issue_url(&i.web_url).is_some_and(|p| set.contains(p))
+                }
+            })
+            .collect();
 
         // Status is driven by tracking issues, not the inventory.
         // Packages without a Koji `-release` tag still get a row
@@ -129,6 +156,18 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("[cpu-sig-tracker] fetching proposed_updates tag for {release}");
         }
         let pu_nvrs = fetch_proposed_updates_nvrs(release, args.verbose);
+
+        // Testing-tag NVRs are only needed for the work-item
+        // status reconciliation in --refresh, so skip the extra
+        // Koji call otherwise.
+        let testing_nvrs = if args.refresh {
+            if args.verbose {
+                eprintln!("[cpu-sig-tracker] fetching testing tag for {release}");
+            }
+            fetch_proposed_updates_testing_nvrs(release, args.verbose)
+        } else {
+            HashMap::new()
+        };
 
         if args.verbose {
             eprintln!("[cpu-sig-tracker] fetching Stream NVRs for {release}");
@@ -187,9 +226,10 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
             };
 
             // --refresh rewrites the body unconditionally
-            // (normalizes format + refreshes JIRA/MR state).
-            // Without --refresh we just emit a note per body
-            // that's drifted from the canonical form.
+            // (normalizes format + refreshes JIRA/MR state) and
+            // reconciles the GitLab work-item status with the
+            // live data. Without --refresh we just emit a note
+            // per body that's drifted from the canonical form.
             if args.refresh {
                 if let Some(project) = tracking_project_of(&issue.web_url)
                     && mr_url.is_some()
@@ -209,6 +249,15 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
                     if changed {
                         eprintln!("refreshed {}: rewrote body", issue.web_url);
                     }
+                    let has_build =
+                        pu_nvrs.contains_key(package) || testing_nvrs.contains_key(package);
+                    maybe_refresh_work_item_status(
+                        &project,
+                        &issue,
+                        jira_resolved,
+                        has_build,
+                        args.verbose,
+                    );
                 } else if !drift_reasons.is_empty() {
                     eprintln!(
                         "skipped {}: {}, and no MR URL found",
@@ -531,6 +580,73 @@ fn tracking_project_of(web_url: &str) -> Option<String> {
     sandogasa_gitlab::project_path_from_issue_url(web_url)
 }
 
+/// Pick the GitLab work-item status that matches current
+/// reality.
+///
+/// - JIRA resolved → `Done`.
+/// - JIRA open + a build is tagged in `-release` or `-testing`
+///   → `In progress` (work is in flight).
+/// - JIRA open + no build tagged anywhere → `To do` (the
+///   not-yet-tagged case).
+fn desired_work_item_status(jira_resolved: bool, has_build: bool) -> &'static str {
+    if jira_resolved {
+        "Done"
+    } else if has_build {
+        "In progress"
+    } else {
+        "To do"
+    }
+}
+
+/// Compare the current GitLab work-item status to what it
+/// should be and update it when different. Logged failures are
+/// non-fatal — body refresh still counts as progress.
+fn maybe_refresh_work_item_status(
+    project_path: &str,
+    issue: &gitlab::Issue,
+    jira_resolved: bool,
+    has_build: bool,
+    verbose: bool,
+) {
+    let desired = desired_work_item_status(jira_resolved, has_build);
+    let client = match gitlab::Client::new(GITLAB_BASE, project_path) {
+        Ok(c) => c,
+        Err(e) => {
+            if verbose {
+                eprintln!("warning: --refresh work-item status: client for {project_path}: {e}",);
+            }
+            return;
+        }
+    };
+    let current = match client.get_work_item_status(issue.iid) {
+        Ok(c) => c,
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "warning: --refresh work-item status: fetch for {}!{}: {e}",
+                    project_path, issue.iid,
+                );
+            }
+            return;
+        }
+    };
+    if current.as_deref() == Some(desired) {
+        return;
+    }
+    if let Err(e) = client.set_work_item_status(issue.iid, desired) {
+        eprintln!(
+            "warning: --refresh work-item status: set to {desired} for {}: {e}",
+            issue.web_url,
+        );
+        return;
+    }
+    eprintln!(
+        "work-item status {}: {} → {desired}",
+        issue.web_url,
+        current.as_deref().unwrap_or("<none>"),
+    );
+}
+
 /// Inputs for [`maybe_refresh_issue`].
 struct RefreshCtx<'a> {
     project_path: &'a str,
@@ -711,14 +827,27 @@ fn fetch_jira(
 }
 
 fn fetch_proposed_updates_nvrs(release: &str, verbose: bool) -> HashMap<String, String> {
-    let tag = match proposed_updates_tag(release) {
-        Ok(t) => t,
+    match proposed_updates_tag(release) {
+        Ok(tag) => fetch_koji_nvrs(&tag, verbose),
         Err(e) => {
             eprintln!("warning: {e}; skipping proposed_updates NVR lookup");
-            return HashMap::new();
+            HashMap::new()
         }
-    };
-    match list_tagged(&tag, Some(KOJI_PROFILE), None) {
+    }
+}
+
+fn fetch_proposed_updates_testing_nvrs(release: &str, verbose: bool) -> HashMap<String, String> {
+    match crate::dump_inventory::proposed_updates_testing_tag(release) {
+        Ok(tag) => fetch_koji_nvrs(&tag, verbose),
+        Err(e) => {
+            eprintln!("warning: {e}; skipping testing-tag NVR lookup");
+            HashMap::new()
+        }
+    }
+}
+
+fn fetch_koji_nvrs(tag: &str, verbose: bool) -> HashMap<String, String> {
+    match list_tagged(tag, Some(KOJI_PROFILE), None) {
         Ok(builds) => nvr_map_by_name(&builds),
         Err(e) => {
             if verbose {
@@ -994,6 +1123,14 @@ mod tests {
         assert!(gaps.contains("MR line missing state suffix"), "{gaps}");
         assert!(gaps.contains("JIRA line missing status suffix"), "{gaps}");
         assert!(gaps.contains("legacy metadata lines present"), "{gaps}");
+    }
+
+    #[test]
+    fn desired_work_item_status_mapping() {
+        assert_eq!(desired_work_item_status(true, true), "Done");
+        assert_eq!(desired_work_item_status(true, false), "Done");
+        assert_eq!(desired_work_item_status(false, true), "In progress");
+        assert_eq!(desired_work_item_status(false, false), "To do");
     }
 
     #[test]

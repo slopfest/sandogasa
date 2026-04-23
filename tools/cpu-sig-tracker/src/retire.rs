@@ -121,17 +121,40 @@ fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
     client.add_note(iid, &note)?;
 
+    // Flip the work-item status to Done so browsers of the
+    // GitLab UI see terminal state, not just a closed issue.
+    // Non-fatal on failure.
+    if args.verbose {
+        eprintln!("[cpu-sig-tracker] setting work-item status to Done");
+    }
+    if let Err(e) = client.set_work_item_status(iid, "Done") {
+        eprintln!("warning: could not set work-item status to Done: {e}");
+    }
+
+    // Stamp start_date / due_date via GraphQL — REST
+    // PUT /issues ignores these for work items.
+    let formatted_start = start_date
+        .as_ref()
+        .map(|(d, _)| d.format("%Y-%m-%d").to_string());
+    let formatted_due = jira_check
+        .resolution_date
+        .map(|d| d.format("%Y-%m-%d").to_string());
+    if formatted_start.is_some() || formatted_due.is_some() {
+        if args.verbose {
+            eprintln!("[cpu-sig-tracker] setting start_date/due_date via GraphQL");
+        }
+        if let Err(e) =
+            client.set_work_item_dates(iid, formatted_start.as_deref(), formatted_due.as_deref())
+        {
+            eprintln!("warning: could not set start/due dates: {e}");
+        }
+    }
+
     if args.verbose {
         eprintln!("[cpu-sig-tracker] closing issue");
     }
     let update = gitlab::IssueUpdate {
         state_event: Some("close".to_string()),
-        due_date: jira_check
-            .resolution_date
-            .map(|d| d.format("%Y-%m-%d").to_string()),
-        start_date: start_date
-            .as_ref()
-            .map(|(d, _)| d.format("%Y-%m-%d").to_string()),
         ..Default::default()
     };
     client.edit_issue(iid, &update)?;

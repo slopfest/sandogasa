@@ -72,12 +72,28 @@ impl Client {
         self.0.set_work_item_status(iid, status)
     }
 
+    pub fn get_work_item_status(
+        &self,
+        iid: u64,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        self.0.get_work_item_status(iid)
+    }
+
     pub fn edit_issue(
         &self,
         iid: u64,
         updates: &IssueUpdate,
     ) -> Result<Issue, Box<dyn std::error::Error>> {
         self.0.edit_issue(iid, updates)
+    }
+
+    pub fn set_work_item_dates(
+        &self,
+        iid: u64,
+        start_date: Option<&str>,
+        due_date: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.0.set_work_item_dates(iid, start_date, due_date)
     }
 }
 

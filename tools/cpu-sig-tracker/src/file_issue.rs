@@ -177,13 +177,12 @@ fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Set the issue start_date to when the Koji build entered
     // the SIG's tag line (approximated by the build's creation
     // time — close enough for the "how long did we need this"
-    // retrospective the SIG cares about).
+    // retrospective the SIG cares about). Goes via the GraphQL
+    // workItemUpdate mutation; REST PUT /issues ignores
+    // start_date on work items.
     if let Some(date) = find_build_start_date(package, &release, args.verbose) {
-        let update = gitlab::IssueUpdate {
-            start_date: Some(date.format("%Y-%m-%d").to_string()),
-            ..Default::default()
-        };
-        if let Err(e) = tracking_client.edit_issue(issue.iid, &update) {
+        let formatted = date.format("%Y-%m-%d").to_string();
+        if let Err(e) = tracking_client.set_work_item_dates(issue.iid, Some(&formatted), None) {
             eprintln!("warning: could not set start_date: {e}");
         }
     } else if args.verbose {
