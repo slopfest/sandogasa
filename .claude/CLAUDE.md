@@ -52,4 +52,4 @@
 ## Testing
 - Always write corresponding tests when adding or modifying features
 - Per commit, run `cargo fmt` and `cargo clippy --workspace`; `cargo test` is recommended for code you touched. Fast prototyping commits don't need full coverage checks
-- Run `cargo cov` at stability points — before release tagging, and when catching a feature up for its README/CHANGELOG entry. Coverage must stay at or above 75% line coverage at those gates
+- Run `cargo cov` at stability points — before release tagging, and when catching a feature up for its README/CHANGELOG entry. Coverage must stay at or above 80% line coverage at those gates (binary `src/main.rs` files are excluded from the measurement; see `.cargo/config.toml`)
