@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### New: hs-meetings tool + sandogasa-meetbot library
+
+CentOS Hyperscale SIG meeting archive helper. `hs-meetings
+list` queries meetbot.fedoraproject.org for meetings whose
+topic matches `centos-hyperscale-sig` (overridable) and prints
+them as a date/topic/summary table or `--json`. Supports
+calendar filters via `--period 2026Q1` (or `YYYY`, `YYYYH1`)
+and explicit `--since` / `--until`. A `sync` subcommand that
+merges missing meetings into the SIG docs' `meetings.md` is
+planned.
+
+Backed by a new `sandogasa-meetbot` library crate that wraps
+meetbot's `/fragedpt/` search endpoint behind a typed blocking
+client.
+
+### sandogasa-cli: shared date-range helpers
+
+`sandogasa-cli::date::{parse_period, resolve_date_range}`
+extracted from sandogasa-report so hs-meetings can share the
+same `--since/--until/--period` grammar. sandogasa-report
+switched to the shared implementation; the grammar is
+unchanged (`YYYY`, `YYYYQ1..Q4`, `YYYYH1..H2`).
+
 ### New: cpu-sig-tracker tool
 
 Track CentOS Proposed Updates SIG package state across Koji,

@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 chrono = { workspace = true }
 clap = { workspace = true }
+sandogasa-cli = { workspace = true }
 sandogasa-meetbot = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
