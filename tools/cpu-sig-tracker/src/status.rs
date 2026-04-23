@@ -1889,4 +1889,171 @@ name = "PackageKit"
         // so rebase wouldn't fire; JIRA open → in-progress.
         assert_eq!(r.suggestion, "in-progress");
     }
+
+    #[test]
+    #[serial_test::serial]
+    fn build_rows_refresh_rewrites_body_and_dates() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            // Active issue with legacy body (missing state
+            // suffixes + has a stray Status line). --refresh
+            // should rewrite the body.
+            Mock::given(method("GET"))
+                .and(wiremock_path(
+                    "/api/v4/groups/CentOS%2Fproposed_updates%2Frpms/issues",
+                ))
+                .and(query_param("labels", "cpu-sig-tracker,c10s"))
+                .and(query_param("state", "opened"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    {
+                        "iid": 3,
+                        "title": "xz",
+                        "description": "- **MR**: [t](https://gitlab.example/redhat/rpms/xz/-/merge_requests/5)\n\
+                                        - **JIRA**: [RHEL-2](https://issues.example/browse/RHEL-2)\n\
+                                        - **Release**: c10s\n\
+                                        - **Status**: open",
+                        "state": "opened",
+                        "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/3",
+                        "assignees": [],
+                        "start_date": null,
+                        "due_date": null,
+                        "created_at": "2026-03-01T00:00:00.000Z"
+                    }
+                ])))
+                .mount(&server)
+                .await;
+
+            // JIRA fetch.
+            Mock::given(method("GET"))
+                .and(wiremock_path("/rest/api/2/issue/RHEL-2"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "key": "RHEL-2",
+                    "fields": {
+                        "summary": "s",
+                        "status": { "name": "In Progress" }
+                    }
+                })))
+                .mount(&server)
+                .await;
+
+            // MR fetch (refresh forces it even when structured
+            // line is present, to capture live state).
+            Mock::given(method("GET"))
+                .and(wiremock_path(
+                    "/api/v4/projects/redhat%2Frpms%2Fxz/merge_requests/5",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "iid": 5,
+                    "title": "t",
+                    "description": null,
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/redhat/rpms/xz/-/merge_requests/5",
+                    "source_branch": "fix",
+                    "target_branch": "c10s",
+                })))
+                .mount(&server)
+                .await;
+
+            // Body rewrite — PUT on the issue.
+            Mock::given(method("PUT"))
+                .and(wiremock_path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fxz/issues/3",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "iid": 3, "title": "t", "state": "opened",
+                    "web_url": "https://example", "assignees": []
+                })))
+                .mount(&server)
+                .await;
+
+            // GraphQL (work-item status reconcile + date set).
+            Mock::given(method("POST"))
+                .and(wiremock_path("/api/graphql"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": {
+                        "project": {
+                            "workItems": {
+                                "nodes": [{
+                                    "id": "gid://gitlab/WorkItem/3",
+                                    "widgets": [{
+                                        "type": "STATUS",
+                                        "status": { "name": "To do" }
+                                    }],
+                                    "namespace": {
+                                        "workItemTypes": {
+                                            "nodes": [{
+                                                "name": "Issue",
+                                                "widgetDefinitions": [{
+                                                    "type": "STATUS",
+                                                    "allowedStatuses": [{
+                                                        "id": "gid://gitlab/status/1",
+                                                        "name": "In progress"
+                                                    }]
+                                                }]
+                                            }]
+                                        }
+                                    }
+                                }]
+                            }
+                        },
+                        "workItemUpdate": { "errors": [] }
+                    }
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let dir = tempdir().unwrap();
+        install_fake_bin(
+            dir.path(),
+            "koji",
+            &[
+                (
+                    "list-tagged --latest proposed_updates10s-packages-main-release",
+                    &koji_list_tagged_output(
+                        "xz-5.6.4-1~proposed.el10",
+                        "proposed_updates10s-packages-main-release",
+                    ),
+                ),
+                (
+                    "list-tagged --quiet proposed_updates10s-packages-main-testing",
+                    "",
+                ),
+            ],
+        );
+        install_fake_bin(
+            dir.path(),
+            "fedrq",
+            &[(
+                "pkgs --src -F line:name,version,release -b c10s xz",
+                "xz : 5.6.4 : 1.el10",
+            )],
+        );
+        let inv = STATUS_INVENTORY.replace("PackageKit", "xz");
+        let inv_path = dir.path().join("inv.toml");
+        std::fs::write(&inv_path, &inv).unwrap();
+
+        let existing_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{existing_path}", dir.path().display());
+        let _guard = EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
+            ("PATH", &new_path),
+        ]);
+
+        let args = StatusArgs {
+            inventory: inv_path.to_string_lossy().into_owned(),
+            release: Some("c10s".to_string()),
+            packages: vec![],
+            json: false,
+            refresh: true,
+            include_closed: false,
+            verbose: false,
+        };
+        let rows = build_rows(&args).expect("refresh build_rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].package, "xz");
+    }
 }

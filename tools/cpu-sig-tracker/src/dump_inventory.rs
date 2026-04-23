@@ -368,4 +368,104 @@ mod tests {
     fn tag_rejects_empty_body() {
         assert!(proposed_updates_tag("cs").is_err());
     }
+
+    // ---- end-to-end fake-koji test ----
+
+    use crate::test_support::{EnvGuard, install_fake_bin};
+    use tempfile::tempdir;
+
+    #[test]
+    #[serial_test::serial]
+    fn dump_inventory_writes_toml_with_packages() {
+        let dir = tempdir().unwrap();
+        install_fake_bin(
+            dir.path(),
+            "koji",
+            &[(
+                "list-tagged --quiet proposed_updates10s-packages-main-release",
+                "PackageKit-1.2.8-9~proposed.el10\nxz-5.6.4-1~proposed.el10\n",
+            )],
+        );
+        let existing_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{existing_path}", dir.path().display());
+        let _guard = EnvGuard::new(&[("PATH", &new_path)]);
+
+        let out = dir.path().join("inv.toml");
+        let args = DumpInventoryArgs {
+            releases: vec!["c10s".to_string()],
+            output: out.to_string_lossy().into_owned(),
+            koji_profile: "cbs".to_string(),
+            prune: false,
+            verbose: false,
+        };
+        assert!(matches!(run(&args), std::process::ExitCode::SUCCESS));
+
+        let inv = sandogasa_inventory::load(out.to_str().unwrap()).unwrap();
+        let packages = &inv.inventory.workloads["c10s"].packages;
+        assert!(packages.iter().any(|p| p == "PackageKit"), "{packages:?}");
+        assert!(packages.iter().any(|p| p == "xz"), "{packages:?}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn dump_inventory_prune_drops_stale_packages() {
+        let dir = tempdir().unwrap();
+        // Existing inventory has mutter in the workload. Koji
+        // returns only PackageKit (no mutter in either tag), so
+        // --prune should drop mutter.
+        let prior = r#"
+[inventory]
+name = "t"
+description = "t"
+maintainer = "t"
+
+[inventory.workloads.c10s]
+packages = ["mutter", "PackageKit"]
+
+[[package]]
+name = "mutter"
+
+[[package]]
+name = "PackageKit"
+"#;
+        let out = dir.path().join("inv.toml");
+        std::fs::write(&out, prior).unwrap();
+
+        install_fake_bin(
+            dir.path(),
+            "koji",
+            &[
+                (
+                    "list-tagged --quiet proposed_updates10s-packages-main-release",
+                    "PackageKit-1.2.8-9~proposed.el10\n",
+                ),
+                (
+                    "list-tagged --quiet proposed_updates10s-packages-main-testing",
+                    "",
+                ),
+            ],
+        );
+        let existing_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{existing_path}", dir.path().display());
+        let _guard = EnvGuard::new(&[("PATH", &new_path)]);
+
+        let args = DumpInventoryArgs {
+            releases: vec!["c10s".to_string()],
+            output: out.to_string_lossy().into_owned(),
+            koji_profile: "cbs".to_string(),
+            prune: true,
+            verbose: false,
+        };
+        assert!(matches!(run(&args), std::process::ExitCode::SUCCESS));
+
+        let inv = sandogasa_inventory::load(out.to_str().unwrap()).unwrap();
+        let packages = &inv.inventory.workloads["c10s"].packages;
+        assert!(packages.iter().any(|p| p == "PackageKit"));
+        assert!(
+            !packages.iter().any(|p| p == "mutter"),
+            "mutter should have been pruned: {packages:?}",
+        );
+        // Orphan [[package]] entries stay.
+        assert!(inv.package.iter().any(|p| p.name == "mutter"));
+    }
 }
