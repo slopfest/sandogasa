@@ -116,6 +116,16 @@ pub fn list_tagged(
     Ok(builds)
 }
 
+/// Untag a build from a Koji tag (`koji untag-build <tag> <nvr>`).
+///
+/// Succeeds silently when Koji accepts the command; returns
+/// the koji stderr otherwise. No-op on whether the build was
+/// actually present beforehand — Koji tolerates re-untagging.
+pub fn untag_build(tag: &str, nvr: &str, profile: Option<&str>) -> Result<(), String> {
+    run_koji(profile, &["untag-build", tag, nvr])?;
+    Ok(())
+}
+
 /// List NVRs in a Koji tag (quiet mode, NVRs only).
 pub fn list_tagged_nvrs(tag: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
     let stdout = run_koji(profile, &["list-tagged", "--quiet", tag])?;
