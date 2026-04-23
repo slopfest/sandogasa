@@ -35,6 +35,15 @@ pub struct DumpInventoryArgs {
     #[arg(long, default_value = "cbs")]
     pub koji_profile: String,
 
+    /// Drop packages from each workload that are no longer
+    /// tagged in either the `-release` or `-testing` tag for
+    /// that release. Orphan `[[package]]` entries (metadata
+    /// blocks for packages no longer referenced by any
+    /// workload) are left in place so user-entered fields
+    /// aren't lost.
+    #[arg(long)]
+    pub prune: bool,
+
     /// Print progress to stderr.
     #[arg(short, long)]
     pub verbose: bool,
@@ -123,6 +132,7 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
     };
 
     let mut total_added = 0usize;
+    let mut total_pruned = 0usize;
     for (release, tag) in &tags {
         if args.verbose {
             eprintln!("[cpu-sig-tracker] listing tagged NVRs in {tag}");
@@ -170,6 +180,39 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
         }
         total_added += added;
 
+        // Collect the "currently tagged" set for prune: union
+        // of -release and -testing. Packages in -testing but
+        // not -release are still in-flight and shouldn't be
+        // dropped from the workload.
+        let pruned = if args.prune {
+            let testing_tag = match proposed_updates_testing_tag(release) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            if args.verbose {
+                eprintln!("[cpu-sig-tracker] listing tagged NVRs in {testing_tag}");
+            }
+            let testing_nvrs = match list_tagged_nvrs(&testing_tag, Some(&args.koji_profile)) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("error: koji list-tagged {testing_tag} failed: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let tagged: std::collections::HashSet<String> = nvrs
+                .iter()
+                .chain(testing_nvrs.iter())
+                .filter_map(|nvr| parse_nvr_name(nvr).map(|s| s.to_string()))
+                .collect();
+            prune_workload(&mut inventory, release, &tagged)
+        } else {
+            0
+        };
+        total_pruned += pruned;
+
         let workload = inventory
             .inventory
             .workloads
@@ -183,8 +226,13 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
         workload.packages.sort();
 
         eprintln!(
-            "  {release}: {} package(s), {added} new to inventory",
+            "  {release}: {} package(s), {added} new to inventory{}",
             package_names.len(),
+            if args.prune {
+                format!(", {pruned} pruned")
+            } else {
+                String::new()
+            },
         );
     }
 
@@ -193,8 +241,13 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let prune_suffix = if args.prune {
+        format!(", {total_pruned} pruned")
+    } else {
+        String::new()
+    };
     eprintln!(
-        "Wrote {}: {} package(s) total, {total_added} new across {} release(s)",
+        "Wrote {}: {} package(s) total, {total_added} new across {} release(s){prune_suffix}",
         args.output,
         inventory.package.len(),
         tags.len(),
@@ -202,9 +255,83 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Drop workload entries for `release` whose package names
+/// aren't in the `tagged` set. Returns how many were removed.
+/// Logs each removal to stderr so users can see what got
+/// trimmed.
+fn prune_workload(
+    inventory: &mut Inventory,
+    release: &str,
+    tagged: &std::collections::HashSet<String>,
+) -> usize {
+    let Some(workload) = inventory.inventory.workloads.get_mut(release) else {
+        return 0;
+    };
+    let before = workload.packages.len();
+    workload.packages.retain(|p| {
+        let keep = tagged.contains(p);
+        if !keep {
+            eprintln!("  pruning {release}: {p} no longer tagged");
+        }
+        keep
+    });
+    before - workload.packages.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn build_inv_with_workload(release: &str, packages: &[&str]) -> Inventory {
+        let mut inv = Inventory {
+            inventory: InventoryMeta {
+                name: "t".into(),
+                description: "t".into(),
+                maintainer: "t".into(),
+                labels: vec![],
+                workloads: Default::default(),
+                private_fields: vec![],
+            },
+            package: vec![],
+        };
+        let meta = WorkloadMeta {
+            packages: packages.iter().map(|s| (*s).to_string()).collect(),
+            ..Default::default()
+        };
+        inv.inventory.workloads.insert(release.to_string(), meta);
+        inv
+    }
+
+    #[test]
+    fn prune_workload_drops_untagged_entries() {
+        let mut inv = build_inv_with_workload("c10s", &["xz", "mutter", "PackageKit"]);
+        let tagged: std::collections::HashSet<String> = ["xz", "PackageKit"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let removed = prune_workload(&mut inv, "c10s", &tagged);
+        assert_eq!(removed, 1);
+        assert_eq!(
+            inv.inventory.workloads["c10s"].packages,
+            vec!["xz".to_string(), "PackageKit".to_string()],
+        );
+    }
+
+    #[test]
+    fn prune_workload_keeps_all_when_everything_tagged() {
+        let mut inv = build_inv_with_workload("c10s", &["xz", "PackageKit"]);
+        let tagged: std::collections::HashSet<String> = ["xz", "PackageKit", "extra"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert_eq!(prune_workload(&mut inv, "c10s", &tagged), 0);
+    }
+
+    #[test]
+    fn prune_workload_unknown_release_is_noop() {
+        let mut inv = build_inv_with_workload("c10s", &["xz"]);
+        assert_eq!(prune_workload(&mut inv, "c9s", &Default::default()), 0);
+    }
 
     #[test]
     fn tag_for_c10s() {

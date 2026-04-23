@@ -39,10 +39,18 @@ done; in-progress items get an `(in progress)` marker.
       `-p, --package` narrows the scan
 - [x] `sync-issues -i inv.toml` — report-only: active / proposed /
       missing per (release, package)
-- [ ] `sync-issues --file-missing` — auto-file for packages with
-      exactly one open Stream MR
-- [ ] `untag <nvr> [--release c10s] [--yes]` — verify JIRA closed,
-      prompt, untag the build
+- [x] `untag <pkg|nvr> --release c10s` — verify JIRA resolved via
+      the tracking issue, prompt, untag from both `-release` and
+      `-testing`
+- [x] `dump-inventory --prune` — drop workload entries that are no
+      longer tagged in either `-release` or `-testing`; orphan
+      `[[package]]` metadata blocks are preserved
+
+Intentionally not shipping:
+- ~~`sync-issues --file-missing`~~ — too easy to misfire (guessing
+  which MR corresponds to a missing tracking issue across
+  multiple open MRs is lossy). Files should continue to be filed
+  explicitly via `file-issue`.
 
 ### Output
 - [x] Human-readable `status` tabular output
