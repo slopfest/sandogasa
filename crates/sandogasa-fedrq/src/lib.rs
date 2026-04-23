@@ -217,24 +217,46 @@ impl Fedrq {
     }
 
     /// Return the NVRs of the given source packages on this
-    /// branch, in a single fedrq call. Packages not present on
-    /// the branch are omitted from the result (callers key on
-    /// the `name-` prefix to know which NVR corresponds to
-    /// which input).
+    /// branch, in a single fedrq call.
     ///
-    /// Returns an empty vector if `packages` is empty so callers
-    /// don't accidentally invoke `fedrq pkgs` with no args
-    /// (which would query the entire repo).
+    /// Uses fedrq's `line:name,version,release` formatter so
+    /// we can pair each output row back to its input name —
+    /// fedrq sorts output alphabetically and dedupes rows
+    /// across repositories, so relying on input order isn't
+    /// safe. The NVRs are reconstructed as
+    /// `name-version-release` (no epoch), the same form that
+    /// `koji list-tagged` emits.
+    ///
+    /// Packages not present on the branch are omitted from the
+    /// result. Returns an empty vector if `packages` is empty
+    /// so callers don't accidentally invoke `fedrq pkgs` with
+    /// no args (which would query the entire repo).
     pub fn src_nvrs(&self, packages: &[String]) -> Result<Vec<String>, Error> {
         if packages.is_empty() {
             return Ok(vec![]);
         }
         let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "--src", "-F", "nvr"]);
+        cmd.args(["pkgs", "--src", "-F", "line:name,version,release"]);
         self.apply_opts(&mut cmd);
         cmd.args(packages);
         let raw = Self::run(&mut cmd)?;
-        Ok(raw.into_iter().filter(|s| s != "(none)").collect())
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for line in raw {
+            let parts: Vec<&str> = line.split(" : ").collect();
+            if parts.len() != 3 {
+                continue;
+            }
+            let (name, version, release) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
+            if name.is_empty() || name == "(none)" {
+                continue;
+            }
+            let nvr = format!("{name}-{version}-{release}");
+            if seen.insert(nvr.clone()) {
+                out.push(nvr);
+            }
+        }
+        Ok(out)
     }
 }
 

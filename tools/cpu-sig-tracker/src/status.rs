@@ -646,8 +646,8 @@ fn stream_newer_than_proposed(pu_nvr: Option<&str>, stream_nvr: Option<&str>) ->
     compare_evr(&stream_vr, &pu_vr) == Ordering::Greater
 }
 
-/// Extract the "version-release" portion of an NVR. Returns
-/// None when the NVR doesn't parse cleanly.
+/// Extract the "version-release" portion of an NVR for display.
+/// Returns None when the NVR doesn't parse cleanly.
 fn vr_of_nvr(nvr: &str) -> Option<String> {
     let (_, v, r) = parse_nvr(nvr)?;
     Some(format!("{v}-{r}"))
