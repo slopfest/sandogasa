@@ -19,14 +19,20 @@ cargo install hs-meetings
 ### `list`
 
 ```sh
-hs-meetings list                       # default topic: centos-hyperscale-sig
-hs-meetings list --topic some-other    # any meetbot topic
-hs-meetings list --json                # machine-readable
+hs-meetings list                               # every meeting on the default topic
+hs-meetings list --topic some-other            # any meetbot topic
+hs-meetings list --period 2026Q1               # calendar period filter
+hs-meetings list --period 2025H2               # … halves also work
+hs-meetings list --since 2026-03-01            # open-ended from a date
+hs-meetings list --since 2026-03-01 --until 2026-04-30  # explicit range
+hs-meetings list --json                        # machine-readable
 ```
 
 Fetches every meeting whose topic contains the search string (default
-`centos-hyperscale-sig`), sorted ascending by date. Prints a table
-of `DATE | TOPIC | SUMMARY` or a JSON array with `--json`.
+`centos-hyperscale-sig`), sorted ascending by date. `--period`
+accepts `YYYY`, `YYYYQ1..Q4`, `YYYYH1..H2`; `--since` /
+`--until` take `YYYY-MM-DD`. Output is a `DATE | TOPIC | SUMMARY`
+table or a JSON array with `--json`.
 
 ### `sync`
 
