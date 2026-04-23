@@ -2,6 +2,8 @@
 
 //! Shared CLI utilities for sandogasa tools.
 
+pub mod date;
+
 use std::process::{Command, Stdio};
 
 /// Check that an external tool is available in `$PATH`.

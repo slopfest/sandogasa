@@ -75,75 +75,15 @@ struct Cli {
     verbose: bool,
 }
 
-/// Parse a period string like "2026", "2026Q1", or "2026H1" into a date range.
-fn parse_period(period: &str) -> Result<(NaiveDate, NaiveDate), String> {
-    let period = period.trim();
-    if period.len() < 4 {
-        return Err(format!(
-            "invalid period: {period} (expected e.g. 2026, 2026Q1, or 2026H1)"
-        ));
-    }
-
-    let (year_str, kind) = period.split_at(4);
-    let year: i32 = year_str
-        .parse()
-        .map_err(|_| format!("invalid year in period: {period}"))?;
-
-    if kind.is_empty() {
-        return Ok((
-            NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
-        ));
-    }
-
-    let kind_upper = kind.to_uppercase();
-    match kind_upper.as_str() {
-        "Q1" => Ok((
-            NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 3, 31).unwrap(),
-        )),
-        "Q2" => Ok((
-            NaiveDate::from_ymd_opt(year, 4, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 6, 30).unwrap(),
-        )),
-        "Q3" => Ok((
-            NaiveDate::from_ymd_opt(year, 7, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 9, 30).unwrap(),
-        )),
-        "Q4" => Ok((
-            NaiveDate::from_ymd_opt(year, 10, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
-        )),
-        "H1" => Ok((
-            NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 6, 30).unwrap(),
-        )),
-        "H2" => Ok((
-            NaiveDate::from_ymd_opt(year, 7, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
-        )),
-        _ => Err(format!(
-            "invalid period: {period} (expected Q1-Q4 or H1-H2)"
-        )),
-    }
-}
-
-/// Resolve the date range from CLI args.
+/// Resolve the date range from CLI args. Requires one of
+/// `--since` or `--period`; unlike the shared
+/// [`sandogasa_cli::date::resolve_date_range`], sandogasa-report
+/// treats a fully-unbounded range as a user error.
 fn resolve_date_range(cli: &Cli) -> Result<(NaiveDate, NaiveDate), String> {
-    if let Some(ref period) = cli.period {
-        return parse_period(period);
+    if cli.since.is_none() && cli.period.is_none() {
+        return Err("either --since or --period is required".to_string());
     }
-
-    let since = cli.since.ok_or("either --since or --period is required")?;
-    let until = cli
-        .until
-        .unwrap_or_else(|| chrono::Local::now().date_naive());
-
-    if since > until {
-        return Err(format!("--since ({since}) is after --until ({until})"));
-    }
-
-    Ok((since, until))
+    sandogasa_cli::date::resolve_date_range(cli.since, cli.until, cli.period.as_deref())
 }
 
 fn main() -> ExitCode {
@@ -358,50 +298,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_quarter_q1() {
-        let (s, e) = parse_period("2026Q1").unwrap();
+    fn resolve_date_range_requires_since_or_period() {
+        let cli = Cli {
+            config: None,
+            user: None,
+            domain: vec![],
+            since: None,
+            until: None,
+            period: None,
+            no_bugzilla: false,
+            no_bodhi: false,
+            no_koji: false,
+            detailed: false,
+            json: false,
+            output: None,
+            verbose: false,
+        };
+        assert!(resolve_date_range(&cli).is_err());
+    }
+
+    #[test]
+    fn resolve_date_range_accepts_period() {
+        let cli = Cli {
+            config: None,
+            user: None,
+            domain: vec![],
+            since: None,
+            until: None,
+            period: Some("2026Q1".into()),
+            no_bugzilla: false,
+            no_bodhi: false,
+            no_koji: false,
+            detailed: false,
+            json: false,
+            output: None,
+            verbose: false,
+        };
+        let (s, e) = resolve_date_range(&cli).unwrap();
         assert_eq!(s, NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
         assert_eq!(e, NaiveDate::from_ymd_opt(2026, 3, 31).unwrap());
-    }
-
-    #[test]
-    fn parse_quarter_q4() {
-        let (s, e) = parse_period("2026Q4").unwrap();
-        assert_eq!(s, NaiveDate::from_ymd_opt(2026, 10, 1).unwrap());
-        assert_eq!(e, NaiveDate::from_ymd_opt(2026, 12, 31).unwrap());
-    }
-
-    #[test]
-    fn parse_half_h1() {
-        let (s, e) = parse_period("2026H1").unwrap();
-        assert_eq!(s, NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
-        assert_eq!(e, NaiveDate::from_ymd_opt(2026, 6, 30).unwrap());
-    }
-
-    #[test]
-    fn parse_half_h2() {
-        let (s, e) = parse_period("2026H2").unwrap();
-        assert_eq!(s, NaiveDate::from_ymd_opt(2026, 7, 1).unwrap());
-        assert_eq!(e, NaiveDate::from_ymd_opt(2026, 12, 31).unwrap());
-    }
-
-    #[test]
-    fn parse_period_case_insensitive() {
-        let (s, _) = parse_period("2026q1").unwrap();
-        assert_eq!(s, NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
-    }
-
-    #[test]
-    fn parse_year() {
-        let (s, e) = parse_period("2026").unwrap();
-        assert_eq!(s, NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
-        assert_eq!(e, NaiveDate::from_ymd_opt(2026, 12, 31).unwrap());
-    }
-
-    #[test]
-    fn parse_period_invalid() {
-        assert!(parse_period("2026X1").is_err());
-        assert!(parse_period("abc").is_err());
-        assert!(parse_period("2026Q5").is_err());
     }
 }
