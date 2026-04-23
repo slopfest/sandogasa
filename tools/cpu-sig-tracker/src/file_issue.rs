@@ -118,17 +118,23 @@ fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .or_else(|| extract_jira_key(&mr.title, mr.description.as_deref()));
 
-    let jira_summary = match jira_key.as_deref() {
-        Some(key) => fetch_jira_summary(key, args.verbose),
+    let jira_info = match jira_key.as_deref() {
+        Some(key) => fetch_jira_info(key, args.verbose),
         None => None,
+    };
+    let (jira_status, jira_resolution) = match jira_info {
+        Some((s, r)) => (Some(s), r),
+        None => (None, None),
     };
 
     let body = format_body(&BodyFields {
         release: &release,
         mr_url: &mr.web_url,
         mr_title: &mr.title,
+        mr_state: Some(&mr.state),
         jira_key: jira_key.as_deref(),
-        jira_summary: jira_summary.as_deref(),
+        jira_status: jira_status.as_deref(),
+        jira_resolution: jira_resolution.as_deref(),
         affected: args.affected.as_deref(),
         expected_fix: args.expected_fix.as_deref(),
         note: args.note.as_deref(),
@@ -176,8 +182,10 @@ struct BodyFields<'a> {
     release: &'a str,
     mr_url: &'a str,
     mr_title: &'a str,
+    mr_state: Option<&'a str>,
     jira_key: Option<&'a str>,
-    jira_summary: Option<&'a str>,
+    jira_status: Option<&'a str>,
+    jira_resolution: Option<&'a str>,
     affected: Option<&'a str>,
     expected_fix: Option<&'a str>,
     note: Option<&'a str>,
@@ -253,7 +261,10 @@ pub(crate) fn scan_rhel_key(text: &str) -> Option<String> {
     None
 }
 
-fn fetch_jira_summary(key: &str, verbose: bool) -> Option<String> {
+/// Fetch the JIRA issue's status and resolution for inclusion
+/// in the rendered body. Returns `(status, resolution)` where
+/// resolution is None when the issue is still open.
+fn fetch_jira_info(key: &str, verbose: bool) -> Option<(String, Option<String>)> {
     if verbose {
         eprintln!("[cpu-sig-tracker] fetching JIRA {key}");
     }
@@ -266,7 +277,10 @@ fn fetch_jira_summary(key: &str, verbose: bool) -> Option<String> {
     };
     let client = jira::client();
     match runtime.block_on(client.issue(key)) {
-        Ok(Some(issue)) => Some(issue.summary().to_string()),
+        Ok(Some(issue)) => Some((
+            issue.status().to_string(),
+            issue.resolution().map(|s| s.to_string()),
+        )),
         Ok(None) => {
             eprintln!("warning: JIRA {key} not found or not visible");
             None
@@ -290,30 +304,46 @@ fn format_title(
     }
 }
 
+/// `- **MR**: [title](url) — state` (state suffix omitted when
+/// unknown).
+fn format_mr_line(mr_url: &str, mr_title: &str, mr_state: Option<&str>) -> String {
+    match mr_state {
+        Some(state) => format!("- **MR**: [{mr_title}]({mr_url}) — {state}"),
+        None => format!("- **MR**: [{mr_title}]({mr_url})"),
+    }
+}
+
+/// `- **JIRA**: [KEY](url) — status (resolution)` with
+/// graceful degradation when fields are missing.
+fn format_jira_line(
+    jira_key: Option<&str>,
+    jira_status: Option<&str>,
+    jira_resolution: Option<&str>,
+) -> String {
+    let Some(key) = jira_key else {
+        return "- **JIRA**: _(not found in MR; set with `--jira`)_".to_string();
+    };
+    let url = format!("https://issues.redhat.com/browse/{key}");
+    let suffix = match (jira_status, jira_resolution) {
+        (Some(s), Some(r)) => format!(" — {s} ({r})"),
+        (Some(s), None) => format!(" — {s}"),
+        (None, _) => String::new(),
+    };
+    format!("- **JIRA**: [{key}]({url}){suffix}")
+}
+
 fn format_body(f: &BodyFields<'_>) -> String {
     let affected = f.affected.unwrap_or("_(unknown)_");
     let expected_fix = f.expected_fix.unwrap_or("_(unknown)_");
-
-    let jira_line = match f.jira_key {
-        Some(key) => {
-            let url = format!("https://issues.redhat.com/browse/{key}");
-            match f.jira_summary {
-                Some(summary) => format!("- **JIRA**: [{key}]({url}) — {summary}"),
-                None => format!("- **JIRA**: [{key}]({url})"),
-            }
-        }
-        None => "- **JIRA**: _(not found in MR; set with `--jira`)_".to_string(),
-    };
+    let mr_line = format_mr_line(f.mr_url, f.mr_title, f.mr_state);
+    let jira_line = format_jira_line(f.jira_key, f.jira_status, f.jira_resolution);
 
     let metadata = format!(
-        "- **MR**: [{mr_title}]({mr_url})\n\
+        "{mr_line}\n\
          {jira_line}\n\
          - **Release**: {release}\n\
          - **Affected build**: {affected}\n\
-         - **Expected fix**: {expected_fix}\n\
-         - **Status**: open\n",
-        mr_title = f.mr_title,
-        mr_url = f.mr_url,
+         - **Expected fix**: {expected_fix}\n",
         release = f.release,
     );
 
@@ -425,8 +455,10 @@ mod tests {
             release: "c10s",
             mr_url: "https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42",
             mr_title: "Fix CVE-2026-0001",
+            mr_state: Some("opened"),
             jira_key: Some("RHEL-12345"),
-            jira_summary: Some("CVE fix for xz"),
+            jira_status: Some("In Progress"),
+            jira_resolution: None,
             affected: Some("xz-5.4-1.el10"),
             expected_fix: Some("xz-5.6-1.el10"),
             note: None,
@@ -436,15 +468,20 @@ mod tests {
             "body should not contain heading: {body}"
         );
         assert!(body.contains(
-            "- **MR**: [Fix CVE-2026-0001](https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42)"
+            "- **MR**: [Fix CVE-2026-0001](https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42) — opened"
         ));
         assert!(body.contains(
-            "- **JIRA**: [RHEL-12345](https://issues.redhat.com/browse/RHEL-12345) — CVE fix for xz"
+            "- **JIRA**: [RHEL-12345](https://issues.redhat.com/browse/RHEL-12345) — In Progress"
         ));
         assert!(body.contains("- **Release**: c10s"));
         assert!(body.contains("- **Affected build**: xz-5.4-1.el10"));
         assert!(body.contains("- **Expected fix**: xz-5.6-1.el10"));
-        assert!(body.contains("- **Status**: open"));
+        // Separate Status line is no longer emitted — state
+        // lives on the MR line, JIRA status on the JIRA line.
+        assert!(
+            !body.contains("- **Status**:"),
+            "body should not contain a standalone Status line: {body}",
+        );
     }
 
     #[test]
@@ -453,8 +490,10 @@ mod tests {
             release: "c10s",
             mr_url: "https://example/mr",
             mr_title: "t",
+            mr_state: None,
             jira_key: None,
-            jira_summary: None,
+            jira_status: None,
+            jira_resolution: None,
             affected: None,
             expected_fix: None,
             note: None,
@@ -462,6 +501,28 @@ mod tests {
         assert!(body.contains("- **Affected build**: _(unknown)_"));
         assert!(body.contains("- **Expected fix**: _(unknown)_"));
         assert!(body.contains("- **JIRA**: _(not found in MR; set with `--jira`)_"));
+        // MR state suffix is omitted when unknown.
+        assert!(body.contains("- **MR**: [t](https://example/mr)\n"));
+    }
+
+    #[test]
+    fn format_body_with_resolved_jira_shows_resolution() {
+        let body = format_body(&BodyFields {
+            release: "c10s",
+            mr_url: "https://example/mr",
+            mr_title: "t",
+            mr_state: Some("merged"),
+            jira_key: Some("RHEL-1"),
+            jira_status: Some("Closed"),
+            jira_resolution: Some("Done"),
+            affected: None,
+            expected_fix: None,
+            note: None,
+        });
+        assert!(body.contains("- **MR**: [t](https://example/mr) — merged"));
+        assert!(body.contains(
+            "- **JIRA**: [RHEL-1](https://issues.redhat.com/browse/RHEL-1) — Closed (Done)"
+        ));
     }
 
     #[test]
@@ -530,7 +591,9 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             jira_key: Some("RHEL-1"),
-            jira_summary: None,
+            mr_state: None,
+            jira_status: None,
+            jira_resolution: None,
             affected: None,
             expected_fix: None,
             note: None,
@@ -545,7 +608,9 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             jira_key: None,
-            jira_summary: None,
+            mr_state: None,
+            jira_status: None,
+            jira_resolution: None,
             affected: None,
             expected_fix: None,
             note: Some("Tracking for SIG decision 2026-04-22."),
@@ -560,7 +625,9 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             jira_key: None,
-            jira_summary: None,
+            mr_state: None,
+            jira_status: None,
+            jira_resolution: None,
             affected: None,
             expected_fix: None,
             note: Some("   \n\t"),
@@ -575,7 +642,9 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             jira_key: None,
-            jira_summary: None,
+            mr_state: None,
+            jira_status: None,
+            jira_resolution: None,
             affected: None,
             expected_fix: None,
             note: Some("  leading and trailing  \n\n"),

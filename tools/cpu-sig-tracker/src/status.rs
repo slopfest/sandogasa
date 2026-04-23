@@ -40,11 +40,13 @@ pub struct StatusArgs {
     #[arg(long)]
     pub json: bool,
 
-    /// Rewrite tracking issue bodies whose MR/JIRA lines don't
-    /// match the standardized format so future runs hit the
-    /// fast path. Mutates GitLab state; off by default.
+    /// Rewrite tracking issue bodies to the standardized
+    /// format, refreshing the MR state and JIRA status lines
+    /// to their current values. Normalizes legacy bodies and
+    /// keeps already-standard bodies up to date. Mutates
+    /// GitLab state; off by default.
     #[arg(long)]
-    pub repair: bool,
+    pub refresh: bool,
 
     /// Print progress to stderr.
     #[arg(short, long)]
@@ -139,9 +141,10 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let body = issue.description.as_deref().unwrap_or("");
-            let parsed = resolve_body_references(body, args.verbose);
+            let parsed = resolve_body_references(body, args.verbose, args.refresh);
             let mr_url = parsed.mr_url.clone();
             let mr_title = parsed.mr_title.clone();
+            let mr_state = parsed.mr_state.clone();
             let jira_key = parsed.jira_key.clone();
 
             let jira_info = match jira_key.as_deref() {
@@ -163,42 +166,62 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
                 stream_nvr.as_deref(),
             );
 
-            // Issue path: find the project's GitLab client to
-            // edit the body for --repair. Construct lazily only
-            // when needed.
-            if parsed.needs_repair() {
-                let gaps = parsed.describe_gaps();
-                if args.repair {
-                    if let Some(project) = tracking_project_of(&issue.web_url)
-                        && mr_url.is_some()
-                    {
-                        let changed = maybe_repair_issue(RepairCtx {
-                            project_path: &project,
-                            iid: issue.iid,
-                            original_body: body,
-                            release,
-                            mr_url: mr_url.as_deref(),
-                            mr_title: mr_title.as_deref(),
-                            jira_key: jira_key.as_deref(),
-                        });
-                        if changed {
-                            eprintln!(
-                                "repaired {}: rewrote body to standard format ({gaps})",
-                                issue.web_url,
-                            );
-                        }
-                    } else {
-                        eprintln!(
-                            "skipped {}: {gaps}, and no MR URL found to build a repaired body",
-                            issue.web_url,
-                        );
+            // Body-vs-live drift detection. Format drift is
+            // free (pure body parse); JIRA drift compares the
+            // body's current JIRA suffix to the canonical form
+            // of the JIRA fetch.
+            let jira_drift = jira_suffix_drift(
+                parsed.body_jira_suffix.as_deref(),
+                jira_status.as_deref(),
+                jira_resolution.as_deref(),
+            );
+            let drift_reasons = {
+                let mut reasons: Vec<String> = Vec::new();
+                if parsed.needs_refresh() {
+                    reasons.push(parsed.describe_gaps());
+                }
+                if jira_drift {
+                    reasons.push("JIRA status drifted from live value".to_string());
+                }
+                reasons
+            };
+
+            // --refresh rewrites the body unconditionally
+            // (normalizes format + refreshes JIRA/MR state).
+            // Without --refresh we just emit a note per body
+            // that's drifted from the canonical form.
+            if args.refresh {
+                if let Some(project) = tracking_project_of(&issue.web_url)
+                    && mr_url.is_some()
+                {
+                    let changed = maybe_refresh_issue(RefreshCtx {
+                        project_path: &project,
+                        iid: issue.iid,
+                        original_body: body,
+                        release,
+                        mr_url: mr_url.as_deref(),
+                        mr_title: mr_title.as_deref(),
+                        mr_state: mr_state.as_deref(),
+                        jira_key: jira_key.as_deref(),
+                        jira_status: jira_status.as_deref(),
+                        jira_resolution: jira_resolution.as_deref(),
+                    });
+                    if changed {
+                        eprintln!("refreshed {}: rewrote body", issue.web_url);
                     }
-                } else {
+                } else if !drift_reasons.is_empty() {
                     eprintln!(
-                        "note: {}: {gaps}; run with --repair to normalize",
+                        "skipped {}: {}, and no MR URL found",
                         issue.web_url,
+                        drift_reasons.join("; "),
                     );
                 }
+            } else if !drift_reasons.is_empty() {
+                eprintln!(
+                    "note: {}: {}; run with --refresh to update",
+                    issue.web_url,
+                    drift_reasons.join("; "),
+                );
             }
 
             rows.push(Row {
@@ -229,102 +252,224 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Fields resolved from a tracking issue body, optionally
-/// augmented by following the MR.
+/// Fields resolved from a tracking issue body, possibly
+/// augmented by fetching the MR it references.
 #[derive(Debug, Default)]
 struct BodyRefs {
     mr_url: Option<String>,
     mr_title: Option<String>,
+    mr_state: Option<String>,
     jira_key: Option<String>,
     /// Whether the structured `- **MR**: [title](url)` line was
     /// parseable from the body.
     structured_mr: bool,
+    /// Whether the MR line in the body carries a ` — <state>`
+    /// suffix (present in the current canonical format).
+    mr_line_has_suffix: bool,
     /// Whether the structured `- **JIRA**: [KEY](url)` line was
     /// parseable from the body.
     structured_jira: bool,
+    /// Whether the JIRA line in the body carries a ` — <status>`
+    /// suffix (present in the current canonical format).
+    jira_line_has_suffix: bool,
+    /// The `<status>` or `<status> (<resolution>)` text that
+    /// currently sits on the JIRA line, for drift comparison
+    /// against the live JIRA API value.
+    body_jira_suffix: Option<String>,
+    /// Whether the body still contains legacy format artifacts
+    /// that the current canonical format dropped (standalone
+    /// `- **Status**:` line, `* Stream MR:` bullet, etc.).
+    has_legacy_lines: bool,
 }
 
 impl BodyRefs {
-    /// True when at least one of the structured metadata lines
-    /// is missing; `--repair` rewrites the body in that case.
-    fn needs_repair(&self) -> bool {
-        !self.structured_mr || !self.structured_jira
+    /// True when the body doesn't match the canonical format
+    /// (any structured line missing, any required suffix
+    /// absent, or a legacy line hanging around).
+    fn needs_refresh(&self) -> bool {
+        !self.structured_mr
+            || !self.structured_jira
+            || !self.mr_line_has_suffix
+            || !self.jira_line_has_suffix
+            || self.has_legacy_lines
     }
 
-    /// Short description of what's missing, for stderr.
-    fn describe_gaps(&self) -> &'static str {
-        match (self.structured_mr, self.structured_jira) {
-            (false, false) => "missing structured MR and JIRA lines",
-            (false, true) => "missing structured MR line",
-            (true, false) => "missing structured JIRA line",
-            (true, true) => "already standard",
+    /// Comma-joined list of drift reasons for stderr.
+    fn describe_gaps(&self) -> String {
+        let mut gaps: Vec<&str> = Vec::new();
+        if !self.structured_mr {
+            gaps.push("missing structured MR line");
+        } else if !self.mr_line_has_suffix {
+            gaps.push("MR line missing state suffix");
+        }
+        if !self.structured_jira {
+            gaps.push("missing structured JIRA line");
+        } else if !self.jira_line_has_suffix {
+            gaps.push("JIRA line missing status suffix");
+        }
+        if self.has_legacy_lines {
+            gaps.push("legacy metadata lines present");
+        }
+        if gaps.is_empty() {
+            "already standard".to_string()
+        } else {
+            gaps.join("; ")
         }
     }
 }
 
 /// Parse a tracking issue body for its MR URL and JIRA key.
 ///
-/// Fast path: `- **MR**: [title](url)` and `- **JIRA**: [KEY]`
-/// lines that `file-issue` emits. When either is missing we
-/// fall back to lenient scanners; when JIRA is still missing
-/// but the body has an MR URL, we follow the MR and scan its
-/// title + description for `RHEL-\d+`.
-fn resolve_body_references(body: &str, verbose: bool) -> BodyRefs {
-    let structured_mr_url = structured_mr_url(body);
-    let mr_url = structured_mr_url
+/// Fast path: `- **MR**: [title](url) — state` and
+/// `- **JIRA**: [KEY](url) — status` lines that `file-issue`
+/// emits. When either is missing we fall back to lenient
+/// scanners. Fetches the MR once when any of (a) the caller
+/// forces it (for refresh-time state), (b) structured MR line
+/// absent so we need the title, (c) structured JIRA missing
+/// so we scan the MR description for a RHEL key.
+fn resolve_body_references(body: &str, verbose: bool, force_mr_fetch: bool) -> BodyRefs {
+    let structured_mr = parse_mr_line(body);
+    let mr_url_from_body = structured_mr.as_ref().map(|(u, _)| u.clone());
+    let mr_url = mr_url_from_body
         .clone()
         .or_else(|| scan_mr_url_in_body(body));
 
-    let structured_jira = structured_jira_key(body);
-    let jira_key = structured_jira
-        .clone()
-        .or_else(|| scan_rhel_key(body))
-        .or_else(|| {
-            mr_url
-                .as_deref()
-                .and_then(|u| follow_mr_for_jira(u, verbose))
-        });
+    let structured_jira = parse_jira_line(body);
+    let jira_from_body = structured_jira
+        .as_ref()
+        .map(|(k, _)| k.clone())
+        .or_else(|| scan_rhel_key(body));
 
-    let mr_title = match (&structured_mr_url, &mr_url) {
-        (Some(_), _) => None, // already in body; no fetch needed
-        (None, Some(url)) => fetch_mr_title(url, verbose),
-        (None, None) => None,
+    let should_fetch_mr =
+        mr_url.is_some() && (force_mr_fetch || structured_mr.is_none() || jira_from_body.is_none());
+    let mr = if should_fetch_mr {
+        mr_url.as_deref().and_then(|u| fetch_mr(u, verbose))
+    } else {
+        None
     };
+
+    let jira_key = jira_from_body.or_else(|| {
+        mr.as_ref().and_then(|m| {
+            scan_rhel_key(&m.title).or_else(|| m.description.as_deref().and_then(scan_rhel_key))
+        })
+    });
 
     BodyRefs {
         mr_url,
-        mr_title,
+        mr_title: mr.as_ref().map(|m| m.title.clone()),
+        mr_state: mr.as_ref().map(|m| m.state.clone()),
         jira_key,
-        structured_mr: structured_mr_url.is_some(),
+        structured_mr: structured_mr.is_some(),
+        mr_line_has_suffix: structured_mr
+            .as_ref()
+            .map(|(_, s)| s.is_some())
+            .unwrap_or(false),
         structured_jira: structured_jira.is_some(),
+        jira_line_has_suffix: structured_jira
+            .as_ref()
+            .map(|(_, s)| s.is_some())
+            .unwrap_or(false),
+        body_jira_suffix: structured_jira.and_then(|(_, s)| s),
+        has_legacy_lines: body.lines().any(is_legacy_line),
     }
 }
 
-/// Parse the structured `- **MR**: [title](url)` line.
-fn structured_mr_url(body: &str) -> Option<String> {
+/// Parse the structured `- **MR**: [title](url)[ — state]`
+/// line. Returns (url, state) where state is the trimmed text
+/// after ` — ` / ` -- ` following the URL's closing paren.
+fn parse_mr_line(body: &str) -> Option<(String, Option<String>)> {
     for line in body.lines() {
         if let Some(rest) = line.strip_prefix("- **MR**: [")
             && let Some(idx) = rest.find("](")
         {
             let after = &rest[idx + 2..];
             if let Some(end) = after.find(')') {
-                return Some(after[..end].to_string());
+                let url = after[..end].to_string();
+                let tail = after[end + 1..].trim_start();
+                let state = strip_em_dash(tail)
+                    .map(str::trim)
+                    .map(str::to_string)
+                    .filter(|s| !s.is_empty());
+                return Some((url, state));
             }
         }
     }
     None
 }
 
-/// Parse the structured `- **JIRA**: [KEY](url)` line.
-fn structured_jira_key(body: &str) -> Option<String> {
+/// Parse the structured `- **JIRA**: [KEY](url)[ — suffix]`
+/// line. Returns (key, suffix) where suffix is the trimmed
+/// text after ` — ` / ` -- ` following the URL's closing paren.
+fn parse_jira_line(body: &str) -> Option<(String, Option<String>)> {
     for line in body.lines() {
         if let Some(rest) = line.strip_prefix("- **JIRA**: [")
-            && let Some(end) = rest.find(']')
+            && let Some(key_end) = rest.find(']')
         {
-            return Some(rest[..end].to_string());
+            let key = rest[..key_end].to_string();
+            // Skip over the `(url)` part to find the trailing
+            // suffix, tolerating no trailing content.
+            let after_key = &rest[key_end + 1..];
+            let suffix = if let Some(after) = after_key.strip_prefix('(')
+                && let Some(end) = after.find(')')
+            {
+                let tail = after[end + 1..].trim_start();
+                strip_em_dash(tail)
+                    .map(str::trim)
+                    .map(str::to_string)
+                    .filter(|s| !s.is_empty())
+            } else {
+                None
+            };
+            return Some((key, suffix));
         }
     }
     None
+}
+
+/// Strip a leading em-dash or double-hyphen used as a suffix
+/// separator and return the text that follows.
+fn strip_em_dash(s: &str) -> Option<&str> {
+    s.strip_prefix("— ")
+        .or_else(|| s.strip_prefix("—"))
+        .or_else(|| s.strip_prefix("-- "))
+        .or_else(|| s.strip_prefix("--"))
+}
+
+/// Compare the JIRA suffix on the body's JIRA line to the
+/// canonical suffix derived from the live JIRA fetch. Returns
+/// true when they differ (body-state has drifted). Missing
+/// live data short-circuits to `false` — we don't claim drift
+/// when we can't compare.
+fn jira_suffix_drift(
+    body_suffix: Option<&str>,
+    live_status: Option<&str>,
+    live_resolution: Option<&str>,
+) -> bool {
+    let canonical = canonical_jira_suffix(live_status, live_resolution);
+    match (body_suffix, canonical.as_deref()) {
+        (Some(body), Some(live)) => body != live,
+        (None, Some(_)) => true,
+        (Some(_), None) | (None, None) => false,
+    }
+}
+
+/// The `<status>` or `<status> (<resolution>)` text we'd put
+/// after ` — ` on the JIRA line. None when no live status.
+fn canonical_jira_suffix(status: Option<&str>, resolution: Option<&str>) -> Option<String> {
+    match (status, resolution) {
+        (Some(s), Some(r)) => Some(format!("{s} ({r})")),
+        (Some(s), None) => Some(s.to_string()),
+        (None, _) => None,
+    }
+}
+
+/// Detect lines from older body layouts that the current
+/// canonical format no longer emits (standalone Status line,
+/// legacy bullet-style MR/affected rows).
+fn is_legacy_line(line: &str) -> bool {
+    const PREFIXES: &[&str] = &["- **Status**:", "* Stream MR:", "* Affected", "* Expected"];
+    let trimmed = line.trim_start();
+    PREFIXES.iter().any(|p| trimmed.starts_with(p))
 }
 
 /// Scan a body for any `.../-/merge_requests/<N>` URL and
@@ -360,42 +505,22 @@ fn scan_mr_url_in_body(body: &str) -> Option<String> {
     Some(body[start..end].to_string())
 }
 
-/// Fetch the MR referenced by `url` and return its stored title,
-/// for use in the standardized `- **MR**: [title](url)` line.
-fn fetch_mr_title(url: &str, verbose: bool) -> Option<String> {
+/// Fetch the MR referenced by `url`. Returns the full
+/// [`MergeRequest`] so callers can pull whichever fields they
+/// need (title, state, description).
+fn fetch_mr(url: &str, verbose: bool) -> Option<gitlab::MergeRequest> {
     let (base, project, iid) = gitlab::parse_mr_url(url).ok()?;
     let client = gitlab::Client::new(&base, &project).ok()?;
     if verbose {
-        eprintln!("[cpu-sig-tracker] fetching MR !{iid} in {project} for title");
+        eprintln!("[cpu-sig-tracker] fetching MR !{iid} in {project}");
     }
     match client.merge_request(iid) {
-        Ok(mr) => Some(mr.title),
+        Ok(mr) => Some(mr),
         Err(e) => {
-            eprintln!("warning: failed to fetch MR {url} for title: {e}");
+            eprintln!("warning: failed to fetch MR {url}: {e}");
             None
         }
     }
-}
-
-/// Fetch the MR referenced by `url`, scan its title and
-/// description for a `RHEL-\d+` key, and return it.
-fn follow_mr_for_jira(url: &str, verbose: bool) -> Option<String> {
-    let (base, project, iid) = gitlab::parse_mr_url(url).ok()?;
-    let client = gitlab::Client::new(&base, &project).ok()?;
-    if verbose {
-        eprintln!("[cpu-sig-tracker] fetching MR !{iid} in {project} for JIRA key");
-    }
-    let mr = match client.merge_request(iid) {
-        Ok(mr) => mr,
-        Err(e) => {
-            eprintln!("warning: failed to fetch MR {url} for JIRA lookup: {e}");
-            return None;
-        }
-    };
-    if let Some(key) = scan_rhel_key(&mr.title) {
-        return Some(key);
-    }
-    mr.description.as_deref().and_then(scan_rhel_key)
 }
 
 /// Given a tracking issue `web_url` like
@@ -406,25 +531,37 @@ fn tracking_project_of(web_url: &str) -> Option<String> {
     sandogasa_gitlab::project_path_from_issue_url(web_url)
 }
 
-/// Inputs for [`maybe_repair_issue`].
-struct RepairCtx<'a> {
+/// Inputs for [`maybe_refresh_issue`].
+struct RefreshCtx<'a> {
     project_path: &'a str,
     iid: u64,
     original_body: &'a str,
     release: &'a str,
     mr_url: Option<&'a str>,
     mr_title: Option<&'a str>,
+    mr_state: Option<&'a str>,
     jira_key: Option<&'a str>,
+    jira_status: Option<&'a str>,
+    jira_resolution: Option<&'a str>,
 }
 
 /// Rewrite the tracking issue body to the standardized format
 /// so future runs hit the fast path. Keeps the original prose
 /// as a lead paragraph and appends the structured metadata.
 /// Returns `true` when the body was actually changed.
-fn maybe_repair_issue(ctx: RepairCtx<'_>) -> bool {
+fn maybe_refresh_issue(ctx: RefreshCtx<'_>) -> bool {
     let Some(url) = ctx.mr_url else { return false };
     let title = ctx.mr_title.unwrap_or(url);
-    let new_body = repaired_body(ctx.original_body, ctx.release, url, title, ctx.jira_key);
+    let new_body = refreshed_body(RefreshedBodyArgs {
+        original_body: ctx.original_body,
+        release: ctx.release,
+        mr_url: url,
+        mr_title: title,
+        mr_state: ctx.mr_state,
+        jira_key: ctx.jira_key,
+        jira_status: ctx.jira_status,
+        jira_resolution: ctx.jira_resolution,
+    });
     if new_body == ctx.original_body {
         return false;
     }
@@ -432,7 +569,7 @@ fn maybe_repair_issue(ctx: RepairCtx<'_>) -> bool {
         Ok(c) => c,
         Err(e) => {
             eprintln!(
-                "warning: --repair: could not build client for {}: {e}",
+                "warning: --refresh: could not build client for {}: {e}",
                 ctx.project_path,
             );
             return false;
@@ -444,7 +581,7 @@ fn maybe_repair_issue(ctx: RepairCtx<'_>) -> bool {
     };
     if let Err(e) = client.edit_issue(ctx.iid, &update) {
         eprintln!(
-            "warning: --repair: failed to update {}!{}: {e}",
+            "warning: --refresh: failed to update {}!{}: {e}",
             ctx.project_path, ctx.iid,
         );
         return false;
@@ -452,34 +589,63 @@ fn maybe_repair_issue(ctx: RepairCtx<'_>) -> bool {
     true
 }
 
+/// Inputs for [`refreshed_body`].
+struct RefreshedBodyArgs<'a> {
+    original_body: &'a str,
+    release: &'a str,
+    mr_url: &'a str,
+    mr_title: &'a str,
+    mr_state: Option<&'a str>,
+    jira_key: Option<&'a str>,
+    jira_status: Option<&'a str>,
+    jira_resolution: Option<&'a str>,
+}
+
 /// Build a standardized body, preserving the original prose
 /// (trimmed) as a lead paragraph when it isn't already just
 /// the structured metadata.
-fn repaired_body(
-    original_body: &str,
-    release: &str,
-    mr_url: &str,
-    mr_title: &str,
-    jira_key: Option<&str>,
-) -> String {
-    let lead = extract_lead_paragraph(original_body);
-    let jira_line = match jira_key {
-        Some(key) => {
-            let url = format!("https://issues.redhat.com/browse/{key}");
-            format!("- **JIRA**: [{key}]({url})")
-        }
-        None => "- **JIRA**: _(not found in MR; set with `--jira`)_".to_string(),
-    };
+fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
+    let lead = extract_lead_paragraph(a.original_body);
+    let mr_line = format_mr_line(a.mr_url, a.mr_title, a.mr_state);
+    let jira_line = format_jira_line(a.jira_key, a.jira_status, a.jira_resolution);
     let metadata = format!(
-        "- **MR**: [{mr_title}]({mr_url})\n\
+        "{mr_line}\n\
          {jira_line}\n\
-         - **Release**: {release}\n\
-         - **Status**: open\n",
+         - **Release**: {}\n",
+        a.release,
     );
     match lead {
         Some(lead) if !lead.is_empty() => format!("{lead}\n\n{metadata}"),
         _ => metadata,
     }
+}
+
+/// Build `- **MR**: [title](url) — state` (suffix omitted when
+/// state is unknown).
+fn format_mr_line(mr_url: &str, mr_title: &str, mr_state: Option<&str>) -> String {
+    match mr_state {
+        Some(state) => format!("- **MR**: [{mr_title}]({mr_url}) — {state}"),
+        None => format!("- **MR**: [{mr_title}]({mr_url})"),
+    }
+}
+
+/// Build `- **JIRA**: [KEY](url) — status (resolution)` with
+/// graceful degradation for missing fields.
+fn format_jira_line(
+    jira_key: Option<&str>,
+    jira_status: Option<&str>,
+    jira_resolution: Option<&str>,
+) -> String {
+    let Some(key) = jira_key else {
+        return "- **JIRA**: _(not found in MR; set with `--jira`)_".to_string();
+    };
+    let url = format!("https://issues.redhat.com/browse/{key}");
+    let suffix = match (jira_status, jira_resolution) {
+        (Some(s), Some(r)) => format!(" — {s} ({r})"),
+        (Some(s), None) => format!(" — {s}"),
+        (None, _) => String::new(),
+    };
+    format!("- **JIRA**: [{key}]({url}){suffix}")
 }
 
 /// Strip the existing structured metadata lines (and their
@@ -738,53 +904,119 @@ fn format_jira_state(r: &Row) -> String {
 mod tests {
     use super::*;
 
-    const SAMPLE_BODY: &str = "\
-        Lead paragraph explaining why.\n\
-        \n\
-        - **MR**: [Fix CVE](https://gitlab.com/foo/bar/-/merge_requests/3)\n\
-        - **JIRA**: [RHEL-12345](https://issues.redhat.com/browse/RHEL-12345) — summary text\n\
-        - **Release**: c10s\n\
-        - **Affected build**: xz-5.4-1.el10\n\
-        - **Expected fix**: xz-5.6-1.el10\n\
-        - **Status**: open\n";
-
     #[test]
-    fn structured_mr_url_from_standard_body() {
-        assert_eq!(
-            structured_mr_url(SAMPLE_BODY).as_deref(),
-            Some("https://gitlab.com/foo/bar/-/merge_requests/3"),
-        );
+    fn parse_mr_line_returns_url_and_state() {
+        let body = "- **MR**: [title](https://example/-/merge_requests/3) — merged\n";
+        let (url, state) = parse_mr_line(body).unwrap();
+        assert_eq!(url, "https://example/-/merge_requests/3");
+        assert_eq!(state.as_deref(), Some("merged"));
     }
 
     #[test]
-    fn structured_jira_key_from_standard_body() {
-        assert_eq!(
-            structured_jira_key(SAMPLE_BODY).as_deref(),
-            Some("RHEL-12345"),
-        );
+    fn parse_mr_line_without_state_suffix() {
+        let body = "- **MR**: [title](https://example/-/merge_requests/3)\n";
+        let (url, state) = parse_mr_line(body).unwrap();
+        assert_eq!(url, "https://example/-/merge_requests/3");
+        assert_eq!(state, None);
     }
 
     #[test]
-    fn structured_mr_url_missing_line_returns_none() {
+    fn parse_jira_line_returns_key_and_suffix() {
+        let body = "- **JIRA**: [RHEL-1](https://example/) — Closed (Done)\n";
+        let (key, suffix) = parse_jira_line(body).unwrap();
+        assert_eq!(key, "RHEL-1");
+        assert_eq!(suffix.as_deref(), Some("Closed (Done)"));
+    }
+
+    #[test]
+    fn parse_jira_line_without_suffix() {
         let body = "- **JIRA**: [RHEL-1](https://example/)\n";
-        assert_eq!(structured_mr_url(body), None);
+        let (_, suffix) = parse_jira_line(body).unwrap();
+        assert_eq!(suffix, None);
     }
 
     #[test]
-    fn structured_jira_key_missing_line_returns_none() {
-        let body = "- **MR**: [t](https://example/)\n";
-        assert_eq!(structured_jira_key(body), None);
-    }
-
-    #[test]
-    fn structured_jira_key_skips_placeholder() {
-        // file-issue emits a placeholder when no JIRA key is
-        // auto-extracted; structured_jira_key shouldn't treat
-        // the placeholder text as a real key.
+    fn parse_jira_line_skips_placeholder() {
+        // Placeholder text doesn't start with `[` so parser
+        // returns None rather than a bogus key.
         let body = "- **JIRA**: _(not found in MR; set with `--jira`)_\n";
-        // The placeholder doesn't start with `[` so the
-        // structured parser returns None.
-        assert_eq!(structured_jira_key(body), None);
+        assert_eq!(parse_jira_line(body), None);
+    }
+
+    #[test]
+    fn parse_mr_line_missing_returns_none() {
+        let body = "- **JIRA**: [RHEL-1](https://example/)\n";
+        assert_eq!(parse_mr_line(body), None);
+    }
+
+    #[test]
+    fn jira_suffix_drift_matches_canonical() {
+        assert!(!jira_suffix_drift(
+            Some("Closed (Done)"),
+            Some("Closed"),
+            Some("Done"),
+        ));
+        assert!(!jira_suffix_drift(Some("New"), Some("New"), None));
+    }
+
+    #[test]
+    fn jira_suffix_drift_detects_stale_body() {
+        assert!(jira_suffix_drift(Some("New"), Some("Closed"), Some("Done"),));
+        assert!(jira_suffix_drift(Some("In Progress"), Some("Closed"), None,));
+    }
+
+    #[test]
+    fn jira_suffix_drift_body_missing_but_live_known() {
+        // Body has no suffix, live JIRA has a status — that's
+        // drift the user should fix.
+        assert!(jira_suffix_drift(None, Some("New"), None));
+    }
+
+    #[test]
+    fn jira_suffix_drift_no_live_data() {
+        // Without live data we can't tell; don't cry drift.
+        assert!(!jira_suffix_drift(Some("New"), None, None));
+        assert!(!jira_suffix_drift(None, None, None));
+    }
+
+    #[test]
+    fn describe_gaps_lists_multiple_reasons() {
+        let refs = BodyRefs {
+            structured_mr: true,
+            mr_line_has_suffix: false,
+            structured_jira: true,
+            jira_line_has_suffix: false,
+            has_legacy_lines: true,
+            ..Default::default()
+        };
+        assert!(refs.needs_refresh());
+        let gaps = refs.describe_gaps();
+        assert!(gaps.contains("MR line missing state suffix"), "{gaps}");
+        assert!(gaps.contains("JIRA line missing status suffix"), "{gaps}");
+        assert!(gaps.contains("legacy metadata lines present"), "{gaps}");
+    }
+
+    #[test]
+    fn describe_gaps_already_standard() {
+        let refs = BodyRefs {
+            structured_mr: true,
+            mr_line_has_suffix: true,
+            structured_jira: true,
+            jira_line_has_suffix: true,
+            has_legacy_lines: false,
+            ..Default::default()
+        };
+        assert!(!refs.needs_refresh());
+        assert_eq!(refs.describe_gaps(), "already standard");
+    }
+
+    #[test]
+    fn is_legacy_line_detects_standalone_status() {
+        assert!(is_legacy_line("- **Status**: open"));
+        assert!(is_legacy_line("* Stream MR: https://example/"));
+        assert!(is_legacy_line("* Affected version-release: 1-1"));
+        assert!(!is_legacy_line("- **MR**: [t](u) — merged"));
+        assert!(!is_legacy_line("- **JIRA**: [RHEL-1](u) — New"));
     }
 
     #[test]
@@ -1014,31 +1246,50 @@ mod tests {
     }
 
     #[test]
-    fn repaired_body_with_jira_and_lead() {
+    fn refreshed_body_with_jira_and_lead() {
         let original = "\
             Legacy context paragraph.\n\
             \n\
             * Stream MR: https://example/-/merge_requests/1\n";
-        let out = repaired_body(
-            original,
-            "c10s",
-            "https://example/-/merge_requests/1",
-            "Fix CVE-2026-0001",
-            Some("RHEL-12345"),
-        );
+        let out = refreshed_body(RefreshedBodyArgs {
+            original_body: original,
+            release: "c10s",
+            mr_url: "https://example/-/merge_requests/1",
+            mr_title: "Fix CVE-2026-0001",
+            mr_state: Some("merged"),
+            jira_key: Some("RHEL-12345"),
+            jira_status: Some("Closed"),
+            jira_resolution: Some("Done"),
+        });
         assert!(out.starts_with("Legacy context paragraph.\n\n- **MR**:"));
-        assert!(out.contains("- **MR**: [Fix CVE-2026-0001](https://example/-/merge_requests/1)"));
-        assert!(
-            out.contains("- **JIRA**: [RHEL-12345](https://issues.redhat.com/browse/RHEL-12345)")
-        );
+        assert!(out.contains(
+            "- **MR**: [Fix CVE-2026-0001](https://example/-/merge_requests/1) — merged"
+        ));
+        assert!(out.contains(
+            "- **JIRA**: [RHEL-12345](https://issues.redhat.com/browse/RHEL-12345) — Closed (Done)"
+        ));
         assert!(out.contains("- **Release**: c10s"));
-        assert!(out.contains("- **Status**: open"));
+        assert!(
+            !out.contains("- **Status**:"),
+            "refreshed body should not emit a standalone Status line: {out}",
+        );
     }
 
     #[test]
-    fn repaired_body_without_jira_uses_placeholder() {
-        let out = repaired_body("", "c10s", "https://example/-/merge_requests/1", "t", None);
+    fn refreshed_body_without_jira_uses_placeholder() {
+        let out = refreshed_body(RefreshedBodyArgs {
+            original_body: "",
+            release: "c10s",
+            mr_url: "https://example/-/merge_requests/1",
+            mr_title: "t",
+            mr_state: None,
+            jira_key: None,
+            jira_status: None,
+            jira_resolution: None,
+        });
         assert!(out.contains("- **JIRA**: _(not found in MR; set with `--jira`)_"));
+        // MR state suffix omitted when unknown.
+        assert!(out.contains("- **MR**: [t](https://example/-/merge_requests/1)\n"));
     }
 
     #[test]
