@@ -252,6 +252,9 @@ mod tests {
             state: "opened".to_string(),
             web_url: url.to_string(),
             assignees: vec![],
+            start_date: None,
+            due_date: None,
+            created_at: None,
         }
     }
 

@@ -223,6 +223,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 name = "cpu-sig-tracker"
 version = "0.10.1"
 dependencies = [
+ "chrono",
  "clap",
  "rpassword",
  "sandogasa-config",
@@ -1675,6 +1676,7 @@ dependencies = [
 name = "sandogasa-jira"
 version = "0.10.1"
 dependencies = [
+ "chrono",
  "reqwest",
  "serde",
  "serde_json",
@@ -1685,6 +1687,9 @@ dependencies = [
 [[package]]
 name = "sandogasa-koji"
 version = "0.10.1"
+dependencies = [
+ "chrono",
+]
 
 [[package]]
 name = "sandogasa-mailman"

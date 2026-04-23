@@ -174,8 +174,82 @@ fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("warning: could not set status to In progress: {e}");
     }
 
+    // Set the issue start_date to when the Koji build entered
+    // the SIG's tag line (approximated by the build's creation
+    // time — close enough for the "how long did we need this"
+    // retrospective the SIG cares about).
+    if let Some(date) = find_build_start_date(package, &release, args.verbose) {
+        let update = gitlab::IssueUpdate {
+            start_date: Some(date.format("%Y-%m-%d").to_string()),
+            ..Default::default()
+        };
+        if let Err(e) = tracking_client.edit_issue(issue.iid, &update) {
+            eprintln!("warning: could not set start_date: {e}");
+        }
+    } else if args.verbose {
+        eprintln!(
+            "[cpu-sig-tracker] no Koji build found for {package} in c{release} \
+             -release or -testing; leaving start_date blank",
+        );
+    }
+
     Ok(())
 }
+
+/// Look up the package's latest build across the release's
+/// `-release` and `-testing` Koji tags and return its creation
+/// date. `-release` wins when both are populated; `-testing`
+/// is the fallback for packages whose first build hasn't been
+/// promoted yet.
+pub(crate) fn find_build_start_date(
+    package: &str,
+    release: &str,
+    verbose: bool,
+) -> Option<chrono::NaiveDate> {
+    for tag_fn in [
+        crate::dump_inventory::proposed_updates_tag as fn(&str) -> Result<String, String>,
+        crate::dump_inventory::proposed_updates_testing_tag as fn(&str) -> Result<String, String>,
+    ] {
+        let tag = match tag_fn(release) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if verbose {
+            eprintln!("[cpu-sig-tracker] checking {tag} for {package}");
+        }
+        let nvrs = match sandogasa_koji::list_tagged_nvrs(&tag, Some(KOJI_PROFILE)) {
+            Ok(v) => v,
+            Err(e) => {
+                if verbose {
+                    eprintln!("[cpu-sig-tracker] koji list-tagged {tag} failed: {e}");
+                }
+                continue;
+            }
+        };
+        let Some(nvr) = nvrs
+            .iter()
+            .find(|n| sandogasa_koji::parse_nvr_name(n) == Some(package))
+        else {
+            continue;
+        };
+        match sandogasa_koji::build_creation_date(nvr, Some(KOJI_PROFILE)) {
+            Ok(Some(date)) => return Some(date),
+            Ok(None) => {
+                if verbose {
+                    eprintln!("[cpu-sig-tracker] koji buildinfo {nvr} produced no creation time",);
+                }
+            }
+            Err(e) => {
+                if verbose {
+                    eprintln!("[cpu-sig-tracker] koji buildinfo {nvr} failed: {e}");
+                }
+            }
+        }
+    }
+    None
+}
+
+const KOJI_PROFILE: &str = "cbs";
 
 /// Fields we substitute into the standardized issue body.
 struct BodyFields<'a> {

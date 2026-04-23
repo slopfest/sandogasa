@@ -80,11 +80,11 @@ fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Precondition 2: no pu build tagged.
     let build_check = check_package_untagged(&release, package, args.verbose);
 
-    report_precondition("JIRA resolved", &jira_check);
+    report_precondition("JIRA resolved", &jira_check.check);
     report_precondition("no pu build tagged", &build_check);
 
     let preconditions_ok =
-        matches!(&jira_check, Check::Pass(_)) && matches!(&build_check, Check::Pass(_));
+        matches!(&jira_check.check, Check::Pass(_)) && matches!(&build_check, Check::Pass(_));
     if !preconditions_ok && !args.force {
         return Err(
             "retire preconditions not met; re-run with --force to override or fix the \
@@ -98,12 +98,24 @@ fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Error>> {
     println!("  title:   {}", issue.title);
     println!("  package: {package}");
     println!("  release: {release}");
+    let start_date = derive_start_date(package, &release, &issue, args.verbose);
+    if let Some((date, source)) = &start_date {
+        println!("  start_date: {date} (from {source})");
+    }
+    if let Some(date) = jira_check.resolution_date {
+        println!("  due_date: {date} (from JIRA resolutiondate)");
+    }
     if !args.yes && !confirm("Proceed?")? {
         eprintln!("aborted.");
         return Ok(());
     }
 
-    let note = compose_audit_note(jira_key.as_deref(), &jira_check, &build_check, args.force);
+    let note = compose_audit_note(
+        jira_key.as_deref(),
+        &jira_check.check,
+        &build_check,
+        args.force,
+    );
     if args.verbose {
         eprintln!("[cpu-sig-tracker] posting audit note");
     }
@@ -114,6 +126,12 @@ fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
     let update = gitlab::IssueUpdate {
         state_event: Some("close".to_string()),
+        due_date: jira_check
+            .resolution_date
+            .map(|d| d.format("%Y-%m-%d").to_string()),
+        start_date: start_date
+            .as_ref()
+            .map(|(d, _)| d.format("%Y-%m-%d").to_string()),
         ..Default::default()
     };
     client.edit_issue(iid, &update)?;
@@ -145,13 +163,28 @@ impl Check {
     }
 }
 
-fn check_jira_resolved(jira_key: Option<&str>, verbose: bool) -> Check {
+/// Outcome of the JIRA-resolved check, plus the extracted
+/// resolution date when available.
+struct JiraCheck {
+    check: Check,
+    resolution_date: Option<chrono::NaiveDate>,
+}
+
+fn check_jira_resolved(jira_key: Option<&str>, verbose: bool) -> JiraCheck {
     let Some(key) = jira_key else {
-        return Check::Skipped("no JIRA key found in issue body".to_string());
+        return JiraCheck {
+            check: Check::Skipped("no JIRA key found in issue body".to_string()),
+            resolution_date: None,
+        };
     };
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
-        Err(e) => return Check::Skipped(format!("tokio runtime init failed: {e}")),
+        Err(e) => {
+            return JiraCheck {
+                check: Check::Skipped(format!("tokio runtime init failed: {e}")),
+                resolution_date: None,
+            };
+        }
     };
     let jira_client = jira::client();
     if verbose {
@@ -159,11 +192,24 @@ fn check_jira_resolved(jira_key: Option<&str>, verbose: bool) -> Check {
     }
     match runtime.block_on(jira_client.issue(key)) {
         Ok(Some(issue)) if issue.is_resolved() => {
-            Check::Pass(format!("{} — {}", key, describe_jira(&issue)))
+            let resolution_date = issue.resolution_date();
+            JiraCheck {
+                check: Check::Pass(format!("{} — {}", key, describe_jira(&issue))),
+                resolution_date,
+            }
         }
-        Ok(Some(issue)) => Check::Fail(format!("{} is {} (not resolved)", key, issue.status())),
-        Ok(None) => Check::Skipped(format!("JIRA {key} not visible")),
-        Err(e) => Check::Skipped(format!("JIRA {key} fetch failed: {e}")),
+        Ok(Some(issue)) => JiraCheck {
+            check: Check::Fail(format!("{} is {} (not resolved)", key, issue.status())),
+            resolution_date: None,
+        },
+        Ok(None) => JiraCheck {
+            check: Check::Skipped(format!("JIRA {key} not visible")),
+            resolution_date: None,
+        },
+        Err(e) => JiraCheck {
+            check: Check::Skipped(format!("JIRA {key} fetch failed: {e}")),
+            resolution_date: None,
+        },
     }
 }
 
@@ -209,6 +255,38 @@ fn compose_audit_note(
     let build_part = format!(" Build: {}", build_check.detail());
     let forced_part = if forced { " (--force)" } else { "" };
     format!("Closing via `cpu-sig-tracker retire`{forced_part}.{jira_part}{build_part}")
+}
+
+/// Best-effort start_date for the tracking issue we're about
+/// to close.
+///
+/// Tries Koji's `-release` / `-testing` tags first (matching
+/// `file-issue`'s logic). When the build is no longer tagged
+/// — the common case at retire-time, since retirement usually
+/// follows untagging — falls back to the issue's own
+/// `created_at` timestamp, which is a reasonable approximation
+/// of when the SIG started tracking the package.
+fn derive_start_date(
+    package: &str,
+    release: &str,
+    issue: &gitlab::Issue,
+    verbose: bool,
+) -> Option<(chrono::NaiveDate, &'static str)> {
+    if let Some(date) = crate::file_issue::find_build_start_date(package, release, verbose) {
+        return Some((date, "Koji build creation time"));
+    }
+    issue
+        .created_at
+        .as_deref()
+        .and_then(parse_iso_date)
+        .map(|d| (d, "GitLab issue created_at"))
+}
+
+/// Pull the calendar-date portion out of an ISO-8601 timestamp
+/// like `"2025-04-04T22:17:50.677Z"`.
+fn parse_iso_date(ts: &str) -> Option<chrono::NaiveDate> {
+    let date_part = ts.split(['T', ' ']).next()?;
+    chrono::NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
 }
 
 /// Find the `c<N>s` release label in `- **Release**: c10s`.
@@ -282,6 +360,24 @@ mod tests {
         assert!(note.contains("JIRA RHEL-12345"));
         assert!(note.contains("no xz build"));
         assert!(!note.contains("--force"));
+    }
+
+    #[test]
+    fn parse_iso_date_extracts_calendar_date() {
+        assert_eq!(
+            parse_iso_date("2025-04-04T22:17:50.677Z"),
+            chrono::NaiveDate::from_ymd_opt(2025, 4, 4),
+        );
+        assert_eq!(
+            parse_iso_date("2026-04-22 14:05:12"),
+            chrono::NaiveDate::from_ymd_opt(2026, 4, 22),
+        );
+    }
+
+    #[test]
+    fn parse_iso_date_none_on_garbage() {
+        assert_eq!(parse_iso_date("not a date"), None);
+        assert_eq!(parse_iso_date(""), None);
     }
 
     #[test]

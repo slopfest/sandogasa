@@ -45,6 +45,18 @@ pub struct DumpInventoryArgs {
 /// `proposed_updates<N>s-packages-main-release` where N is the
 /// major version digit.
 pub fn proposed_updates_tag(release: &str) -> Result<String, String> {
+    proposed_updates_tag_with_suffix(release, "release")
+}
+
+/// Build the CBS `-testing` sibling tag
+/// (`proposed_updates<N>s-packages-main-testing`). Useful for
+/// packages that have been built but not yet promoted to the
+/// `-release` tag.
+pub fn proposed_updates_testing_tag(release: &str) -> Result<String, String> {
+    proposed_updates_tag_with_suffix(release, "testing")
+}
+
+fn proposed_updates_tag_with_suffix(release: &str, suffix: &str) -> Result<String, String> {
     let digits = release
         .strip_prefix('c')
         .and_then(|s| s.strip_suffix('s'))
@@ -55,7 +67,7 @@ pub fn proposed_updates_tag(release: &str) -> Result<String, String> {
                  (e.g. c9s, c10s)"
             )
         })?;
-    Ok(format!("proposed_updates{digits}s-packages-main-release"))
+    Ok(format!("proposed_updates{digits}s-packages-main-{suffix}"))
 }
 
 pub fn run(args: &DumpInventoryArgs) -> ExitCode {
