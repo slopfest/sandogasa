@@ -1772,6 +1772,9 @@ mod tests {
                     username: "bob".into(),
                 },
             ],
+            start_date: None,
+            due_date: None,
+            created_at: None,
         };
         let r = IssueRef::from_gitlab_issue(&issue, Some("To do".into()));
         assert_eq!(r.iid, 7);
@@ -1791,6 +1794,9 @@ mod tests {
             state: "closed".into(),
             web_url: "u".into(),
             assignees: vec![],
+            start_date: None,
+            due_date: None,
+            created_at: None,
         };
         let r = IssueRef::from_gitlab_issue(&issue, None);
         assert_eq!(r.status, "closed");

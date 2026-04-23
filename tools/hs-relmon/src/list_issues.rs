@@ -349,6 +349,9 @@ mod tests {
                 .into_iter()
                 .map(|u| gitlab::Assignee { username: u.into() })
                 .collect(),
+            start_date: None,
+            due_date: None,
+            created_at: None,
         }
     }
 
@@ -392,6 +395,9 @@ mod tests {
             state: "opened".into(),
             web_url: "".into(),
             assignees: vec![],
+            start_date: None,
+            due_date: None,
+            created_at: None,
         };
         assert!(entry_from_issue(&issue, None, None).is_none());
     }
