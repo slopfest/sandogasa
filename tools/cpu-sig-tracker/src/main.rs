@@ -13,6 +13,8 @@ mod jira;
 mod retire;
 mod status;
 mod sync_issues;
+#[cfg(test)]
+mod test_support;
 mod untag;
 mod utils;
 

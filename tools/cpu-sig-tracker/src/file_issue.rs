@@ -543,9 +543,11 @@ mod tests {
         assert!(body.contains(
             "- **MR**: [Fix CVE-2026-0001](https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42) — opened"
         ));
-        assert!(body.contains(
-            "- **JIRA**: [RHEL-12345](https://issues.redhat.com/browse/RHEL-12345) — In Progress"
-        ));
+        let expected = format!(
+            "- **JIRA**: [RHEL-12345]({}/browse/RHEL-12345) — In Progress",
+            crate::utils::jira_base(),
+        );
+        assert!(body.contains(&expected), "{body}");
         assert!(body.contains("- **Release**: c10s"));
         assert!(body.contains("- **Affected build**: xz-5.4-1.el10"));
         assert!(body.contains("- **Expected fix**: xz-5.6-1.el10"));
@@ -593,9 +595,11 @@ mod tests {
             note: None,
         });
         assert!(body.contains("- **MR**: [t](https://example/mr) — merged"));
-        assert!(body.contains(
-            "- **JIRA**: [RHEL-1](https://issues.redhat.com/browse/RHEL-1) — Closed (Done)"
-        ));
+        let expected = format!(
+            "- **JIRA**: [RHEL-1]({}/browse/RHEL-1) — Closed (Done)",
+            crate::utils::jira_base(),
+        );
+        assert!(body.contains(&expected), "{body}");
     }
 
     #[test]
@@ -671,7 +675,11 @@ mod tests {
             expected_fix: None,
             note: None,
         });
-        assert!(body.contains("- **JIRA**: [RHEL-1](https://issues.redhat.com/browse/RHEL-1)\n"));
+        let expected = format!(
+            "- **JIRA**: [RHEL-1]({}/browse/RHEL-1)\n",
+            crate::utils::jira_base(),
+        );
+        assert!(body.contains(&expected), "{body}");
     }
 
     #[test]

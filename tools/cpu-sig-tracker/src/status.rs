@@ -96,8 +96,21 @@ pub struct Row {
 }
 
 pub fn run(args: &StatusArgs) -> ExitCode {
-    match run_inner(args) {
-        Ok(()) => ExitCode::SUCCESS,
+    match build_rows(args) {
+        Ok(rows) => {
+            if args.json {
+                match serde_json::to_string_pretty(&rows) {
+                    Ok(j) => println!("{j}"),
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else {
+                print_human(&rows);
+            }
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::FAILURE
@@ -105,7 +118,7 @@ pub fn run(args: &StatusArgs) -> ExitCode {
     }
 }
 
-fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
     let inventory = sandogasa_inventory::load(&args.inventory)?;
 
     let releases: Vec<String> = match &args.release {
@@ -367,15 +380,7 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     rows.sort_by(|a, b| a.release.cmp(&b.release).then(a.package.cmp(&b.package)));
-
-    if args.json {
-        let json = serde_json::to_string_pretty(&rows)?;
-        println!("{json}");
-    } else {
-        print_human(&rows);
-    }
-
-    Ok(())
+    Ok(rows)
 }
 
 /// Fields resolved from a tracking issue body, possibly
@@ -1619,9 +1624,15 @@ mod tests {
         assert!(out.contains(
             "- **MR**: [Fix CVE-2026-0001](https://example/-/merge_requests/1) — merged"
         ));
-        assert!(out.contains(
-            "- **JIRA**: [RHEL-12345](https://issues.redhat.com/browse/RHEL-12345) — Closed (Done)"
-        ));
+        // The JIRA base URL is env-overridable; compute the
+        // expected link against the current value so parallel
+        // tests mutating the env var don't cause false
+        // failures here.
+        let expected_jira = format!(
+            "- **JIRA**: [RHEL-12345]({}/browse/RHEL-12345) — Closed (Done)",
+            crate::utils::jira_base(),
+        );
+        assert!(out.contains(&expected_jira), "{out}");
         assert!(out.contains("- **Release**: c10s"));
         assert!(
             !out.contains("- **Status**:"),
@@ -1744,5 +1755,138 @@ mod tests {
             suggestion: "no-jira",
         };
         assert_eq!(format_jira_state(&r), "unknown");
+    }
+
+    // ---- end-to-end wiremock + fake-binary test for the
+    // read path (no --refresh) ----
+
+    use crate::test_support::{EnvGuard, install_fake_bin};
+    use serde_json::json;
+    use tempfile::tempdir;
+    use wiremock::matchers::{method, path as wiremock_path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const STATUS_INVENTORY: &str = r#"
+[inventory]
+name = "cpu-sig"
+description = "t"
+maintainer = "t"
+
+[inventory.workloads.c10s]
+packages = ["PackageKit"]
+
+[[package]]
+name = "PackageKit"
+"#;
+
+    fn koji_list_tagged_output(nvr: &str, tag: &str) -> String {
+        format!(
+            "Build                                                    Tag                                          Built by\n\
+             -------                                                  -----                                        --------\n\
+             {nvr}    {tag}    alice\n",
+        )
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn build_rows_reads_active_issue_end_to_end() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            // Group fetch: one active tracking issue.
+            Mock::given(method("GET"))
+                .and(wiremock_path(
+                    "/api/v4/groups/CentOS%2Fproposed_updates%2Frpms/issues",
+                ))
+                .and(query_param("labels", "cpu-sig-tracker,c10s"))
+                .and(query_param("state", "opened"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    {
+                        "iid": 3,
+                        "title": "PackageKit — CVE",
+                        "description": "- **MR**: [Fix](https://gitlab.example/foo/bar/-/merge_requests/10) — opened\n\
+                                        - **JIRA**: [RHEL-1](https://issues.example/browse/RHEL-1) — In Progress\n\
+                                        - **Release**: c10s",
+                        "state": "opened",
+                        "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/PackageKit/-/issues/3",
+                        "assignees": [],
+                    }
+                ])))
+                .mount(&server)
+                .await;
+
+            // JIRA fetch.
+            Mock::given(method("GET"))
+                .and(wiremock_path("/rest/api/2/issue/RHEL-1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "key": "RHEL-1",
+                    "fields": {
+                        "summary": "s",
+                        "status": { "name": "In Progress" }
+                    }
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let dir = tempdir().unwrap();
+        install_fake_bin(
+            dir.path(),
+            "koji",
+            &[(
+                "list-tagged --latest proposed_updates10s-packages-main-release",
+                &koji_list_tagged_output(
+                    "PackageKit-1.2.8-9~proposed.el10",
+                    "proposed_updates10s-packages-main-release",
+                ),
+            )],
+        );
+        install_fake_bin(
+            dir.path(),
+            "fedrq",
+            &[(
+                "pkgs --src -F line:name,version,release -b c10s PackageKit",
+                "PackageKit : 1.2.8 : 8.el10",
+            )],
+        );
+        let inv_path = dir.path().join("inv.toml");
+        std::fs::write(&inv_path, STATUS_INVENTORY).unwrap();
+
+        let existing_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{existing_path}", dir.path().display());
+        let _guard = EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
+            ("PATH", &new_path),
+        ]);
+
+        let args = StatusArgs {
+            inventory: inv_path.to_string_lossy().into_owned(),
+            release: Some("c10s".to_string()),
+            packages: vec![],
+            json: false,
+            refresh: false,
+            include_closed: false,
+            verbose: false,
+        };
+        let rows = build_rows(&args).expect("build_rows");
+
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.release, "c10s");
+        assert_eq!(r.package, "PackageKit");
+        assert_eq!(r.issue_state, "opened");
+        assert_eq!(r.jira_key.as_deref(), Some("RHEL-1"));
+        assert_eq!(r.jira_status.as_deref(), Some("In Progress"));
+        assert!(!r.jira_resolved);
+        assert_eq!(
+            r.proposed_updates_nvr.as_deref(),
+            Some("PackageKit-1.2.8-9~proposed.el10"),
+        );
+        assert_eq!(r.stream_nvr.as_deref(), Some("PackageKit-1.2.8-8.el10"),);
+        // pu (1.2.8-9~proposed) is newer than stream (1.2.8-8)
+        // so rebase wouldn't fire; JIRA open → in-progress.
+        assert_eq!(r.suggestion, "in-progress");
     }
 }
