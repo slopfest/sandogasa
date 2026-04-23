@@ -93,6 +93,22 @@ impl Client {
         Ok(resp.json()?)
     }
 
+    /// Fetch a single issue by its internal ID (iid).
+    pub fn issue(&self, iid: u64) -> Result<Issue, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/issues/{}",
+            self.base_url, encoded, iid
+        );
+        let resp = self.http.get(&url).send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!("GitLab GET {url} failed: {status}: {text}").into());
+        }
+        Ok(resp.json()?)
+    }
+
     /// Create a new issue.
     pub fn create_issue(
         &self,
@@ -686,6 +702,46 @@ pub fn parse_mr_url(url: &str) -> Result<(String, String, u64), String> {
     Ok((format!("{scheme}://{host}"), project.to_string(), iid))
 }
 
+/// Parse a GitLab issue / work-item URL into its components.
+///
+/// Accepts both the legacy `/-/issues/<n>` path and the newer
+/// `/-/work_items/<n>` form. Example:
+/// `https://gitlab.com/CentOS/proposed_updates/rpms/xz/-/work_items/1`
+/// returns `("https://gitlab.com", "CentOS/proposed_updates/rpms/xz", 1)`.
+pub fn parse_issue_url(url: &str) -> Result<(String, String, u64), String> {
+    let trimmed = url.trim_end_matches('/');
+    let rest = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .ok_or_else(|| format!("invalid GitLab URL: {url}"))?;
+    let slash = rest
+        .find('/')
+        .ok_or_else(|| format!("no project path in URL: {url}"))?;
+    let host = &rest[..slash];
+    let path = &rest[slash + 1..];
+
+    let scheme = if trimmed.starts_with("https://") {
+        "https"
+    } else {
+        "http"
+    };
+
+    let (project, iid_str) = path
+        .rsplit_once("/-/issues/")
+        .or_else(|| path.rsplit_once("/-/work_items/"))
+        .ok_or_else(|| format!("not an issue or work-item URL: {url}"))?;
+    let iid_str = iid_str.split(['?', '#']).next().unwrap_or(iid_str);
+    let iid: u64 = iid_str
+        .parse()
+        .map_err(|_| format!("invalid issue IID in URL: {url}"))?;
+
+    if project.is_empty() {
+        return Err(format!("no project path in URL: {url}"));
+    }
+
+    Ok((format!("{scheme}://{host}"), project.to_string(), iid))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1145,5 +1201,41 @@ mod tests {
     #[test]
     fn parse_mr_url_rejects_no_scheme() {
         assert!(parse_mr_url("gitlab.com/a/b/-/merge_requests/1").is_err());
+    }
+
+    #[test]
+    fn parse_issue_url_handles_legacy_form() {
+        let (base, project, iid) =
+            parse_issue_url("https://gitlab.com/group/project/-/issues/42").unwrap();
+        assert_eq!(base, "https://gitlab.com");
+        assert_eq!(project, "group/project");
+        assert_eq!(iid, 42);
+    }
+
+    #[test]
+    fn parse_issue_url_handles_work_items_form() {
+        let (base, project, iid) =
+            parse_issue_url("https://gitlab.com/CentOS/proposed_updates/rpms/xz/-/work_items/1")
+                .unwrap();
+        assert_eq!(base, "https://gitlab.com");
+        assert_eq!(project, "CentOS/proposed_updates/rpms/xz");
+        assert_eq!(iid, 1);
+    }
+
+    #[test]
+    fn parse_issue_url_strips_query_and_fragment() {
+        let (_, _, iid) =
+            parse_issue_url("https://gitlab.com/a/b/-/work_items/7?note=123#xyz").unwrap();
+        assert_eq!(iid, 7);
+    }
+
+    #[test]
+    fn parse_issue_url_rejects_mr_url() {
+        assert!(parse_issue_url("https://gitlab.com/a/b/-/merge_requests/1").is_err());
+    }
+
+    #[test]
+    fn parse_issue_url_rejects_non_numeric_iid() {
+        assert!(parse_issue_url("https://gitlab.com/a/b/-/issues/xyz").is_err());
     }
 }
