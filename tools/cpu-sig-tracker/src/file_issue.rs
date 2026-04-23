@@ -396,7 +396,7 @@ fn format_jira_line(
     let Some(key) = jira_key else {
         return "- **JIRA**: _(not found in MR; set with `--jira`)_".to_string();
     };
-    let url = format!("https://issues.redhat.com/browse/{key}");
+    let url = format!("{}/browse/{key}", crate::utils::jira_base());
     let suffix = match (jira_status, jira_resolution) {
         (Some(s), Some(r)) => format!(" — {s} ({r})"),
         (Some(s), None) => format!(" — {s}"),

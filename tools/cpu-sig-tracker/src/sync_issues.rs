@@ -28,7 +28,7 @@ const PACKAGE_TRACKER_PROJECT: &str = "CentOS/proposed_updates/package_tracker";
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
 
 /// Hardcoded since all cpu-sig-tracker flows go through gitlab.com.
-const GITLAB_BASE: &str = "https://gitlab.com";
+use crate::utils::gitlab_base;
 
 #[derive(clap::Args)]
 pub struct SyncIssuesArgs {
@@ -51,8 +51,21 @@ pub struct SyncIssuesArgs {
 }
 
 pub fn run(args: &SyncIssuesArgs) -> ExitCode {
-    match run_inner(args) {
-        Ok(()) => ExitCode::SUCCESS,
+    match build_rows(args) {
+        Ok(rows) => {
+            if args.json {
+                match serde_json::to_string_pretty(&rows) {
+                    Ok(j) => println!("{j}"),
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else {
+                print_human(&rows);
+            }
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::FAILURE
@@ -92,7 +105,7 @@ pub struct Row {
     pub issue_url: Option<String>,
 }
 
-fn run_inner(args: &SyncIssuesArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn build_rows(args: &SyncIssuesArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
     let inventory = sandogasa_inventory::load(&args.inventory)?;
 
     let releases: Vec<String> = match &args.release {
@@ -109,8 +122,8 @@ fn run_inner(args: &SyncIssuesArgs) -> Result<(), Box<dyn std::error::Error>> {
         None => inventory.inventory.workloads.keys().cloned().collect(),
     };
 
-    let group_client = gitlab::GroupClient::new(GITLAB_BASE, PROPOSED_UPDATES_GROUP)?;
-    let tracker_client = gitlab::Client::new(GITLAB_BASE, PACKAGE_TRACKER_PROJECT)?;
+    let group_client = gitlab::GroupClient::new(&gitlab_base(), PROPOSED_UPDATES_GROUP)?;
+    let tracker_client = gitlab::Client::new(&gitlab_base(), PACKAGE_TRACKER_PROJECT)?;
 
     let mut rows: Vec<Row> = Vec::new();
     for release in &releases {
@@ -136,15 +149,7 @@ fn run_inner(args: &SyncIssuesArgs) -> Result<(), Box<dyn std::error::Error>> {
             rows.push(classify(release, &pkg, &active, &proposed));
         }
     }
-
-    if args.json {
-        let json = serde_json::to_string_pretty(&rows)?;
-        println!("{json}");
-    } else {
-        print_human(&rows);
-    }
-
-    Ok(())
+    Ok(rows)
 }
 
 /// Decide which bucket a (release, package) falls into given
@@ -345,5 +350,118 @@ mod tests {
         let proposed: Vec<gitlab::Issue> = vec![];
         let row = classify("c10s", "PackageKit", &active, &proposed);
         assert_eq!(row.status, TrackingStatus::Active);
+    }
+
+    // ---- end-to-end wiremock test ----
+    //
+    // Drives `build_rows` against a live wiremock server that
+    // impersonates GitLab. Sets a handful of env vars
+    // (GITLAB_TOKEN, CPU_SIG_TRACKER_GITLAB_BASE) so the
+    // wrapper's token loader and the base-URL helper point at
+    // the fake. serial_test serializes the test body so
+    // parallel runs don't stomp on each other's env mutations.
+
+    use serde_json::json;
+    use tempfile::tempdir;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const SAMPLE_INVENTORY: &str = r#"
+[inventory]
+name = "cpu-sig"
+description = "test"
+maintainer = "test"
+
+[inventory.workloads.c10s]
+packages = ["PackageKit", "missingpkg"]
+
+[[package]]
+name = "PackageKit"
+
+[[package]]
+name = "missingpkg"
+"#;
+
+    fn gitlab_issue_json(web_url: &str, title: &str) -> serde_json::Value {
+        json!({
+            "iid": 1,
+            "title": title,
+            "description": "",
+            "state": "opened",
+            "web_url": web_url,
+            "assignees": [],
+        })
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn build_rows_classifies_active_proposed_missing() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let rpms_path = "/api/v4/groups/CentOS%2Fproposed_updates%2Frpms/issues";
+        let tracker_path = "/api/v4/projects/CentOS%2Fproposed_updates%2Fpackage_tracker/issues";
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path(rpms_path))
+                .and(query_param("labels", "cpu-sig-tracker,c10s"))
+                .and(query_param("state", "opened"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!([gitlab_issue_json(
+                        "https://gitlab.example/CentOS/proposed_updates/rpms/PackageKit/-/issues/3",
+                        "PackageKit fix",
+                    ),])),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path(tracker_path))
+                .and(query_param("labels", "c10s"))
+                .and(query_param("state", "opened"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+
+        let dir = tempdir().unwrap();
+        let inv_path = dir.path().join("inv.toml");
+        std::fs::write(&inv_path, SAMPLE_INVENTORY).unwrap();
+
+        // SAFETY: env mutations are serialized via
+        // serial_test; no other threads read these vars
+        // concurrently.
+        unsafe {
+            std::env::set_var("GITLAB_TOKEN", "test-token");
+            std::env::set_var("CPU_SIG_TRACKER_GITLAB_BASE", server.uri());
+        }
+
+        let args = SyncIssuesArgs {
+            inventory: inv_path.to_string_lossy().into_owned(),
+            release: Some("c10s".to_string()),
+            json: false,
+            verbose: false,
+        };
+        let rows = build_rows(&args).expect("build_rows");
+
+        unsafe {
+            std::env::remove_var("GITLAB_TOKEN");
+            std::env::remove_var("CPU_SIG_TRACKER_GITLAB_BASE");
+        }
+
+        assert_eq!(rows.len(), 2);
+        let package_kit = rows.iter().find(|r| r.package == "PackageKit").unwrap();
+        assert_eq!(package_kit.status, TrackingStatus::Active);
+        assert!(
+            package_kit
+                .issue_url
+                .as_deref()
+                .unwrap()
+                .ends_with("/rpms/PackageKit/-/issues/3"),
+        );
+        let missing = rows.iter().find(|r| r.package == "missingpkg").unwrap();
+        assert_eq!(missing.status, TrackingStatus::Missing);
+        assert_eq!(missing.issue_url, None);
     }
 }

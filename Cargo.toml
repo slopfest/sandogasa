@@ -74,6 +74,7 @@ sandogasa-rpmvercmp = { version = "0.10", path = "crates/sandogasa-rpmvercmp" }
 semver = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serial_test = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 toml = "0.8"

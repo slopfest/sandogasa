@@ -2,6 +2,22 @@
 
 //! Small shared helpers used by more than one subcommand.
 
+/// GitLab base URL, overridable via
+/// `CPU_SIG_TRACKER_GITLAB_BASE` for tests pointing at mock
+/// servers. Defaults to the real `https://gitlab.com`.
+pub fn gitlab_base() -> String {
+    std::env::var("CPU_SIG_TRACKER_GITLAB_BASE")
+        .unwrap_or_else(|_| "https://gitlab.com".to_string())
+}
+
+/// Red Hat JIRA base URL, overridable via
+/// `CPU_SIG_TRACKER_JIRA_BASE` for tests pointing at mock
+/// servers. Defaults to the real `https://issues.redhat.com`.
+pub fn jira_base() -> String {
+    std::env::var("CPU_SIG_TRACKER_JIRA_BASE")
+        .unwrap_or_else(|_| "https://issues.redhat.com".to_string())
+}
+
 /// Pull the calendar-date portion out of an ISO-8601 timestamp
 /// like `"2025-04-04T22:17:50.677Z"`. Returns `None` when the
 /// input doesn't begin with a `YYYY-MM-DD` chunk.

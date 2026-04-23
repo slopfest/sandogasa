@@ -6,9 +6,7 @@
 use std::process::ExitCode;
 
 use crate::config::{self, Config, GitlabConfig, JiraConfig};
-use crate::jira;
-
-const GITLAB_BASE: &str = "https://gitlab.com";
+use crate::utils::{gitlab_base, jira_base};
 
 pub fn run() -> ExitCode {
     match run_inner() {
@@ -43,7 +41,7 @@ fn prompt_gitlab_token(
 ) -> Result<String, Box<dyn std::error::Error>> {
     if let Some(cfg) = existing {
         eprint!("Validating existing GitLab token... ");
-        match sandogasa_gitlab::validate_token(GITLAB_BASE, &cfg.access_token) {
+        match sandogasa_gitlab::validate_token(&gitlab_base(), &cfg.access_token) {
             Ok(true) => {
                 eprintln!("valid.");
                 return Ok(cfg.access_token.clone());
@@ -61,7 +59,7 @@ fn prompt_gitlab_token(
     }
 
     eprint!("Validating GitLab token... ");
-    if !sandogasa_gitlab::validate_token(GITLAB_BASE, &token)? {
+    if !sandogasa_gitlab::validate_token(&gitlab_base(), &token)? {
         return Err("GitLab token is invalid".into());
     }
     eprintln!("valid.");
@@ -72,7 +70,7 @@ fn prompt_jira_token(
     existing: Option<&JiraConfig>,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     if existing.is_some() {
-        eprintln!("JIRA token already configured at {}.", jira::BASE_URL,);
+        eprintln!("JIRA token already configured at {}.", jira_base(),);
         eprint!("Replace it? [y/N]: ");
         use std::io::{BufRead, Write};
         std::io::stderr().flush()?;
@@ -86,7 +84,7 @@ fn prompt_jira_token(
     eprintln!(
         "Paste a JIRA personal access token for {} (empty to skip; \
         anonymous access works for public issues).",
-        jira::BASE_URL,
+        jira_base(),
     );
     let token = rpassword::prompt_password("JIRA token: ")?;
     let token = token.trim().to_string();

@@ -19,7 +19,7 @@ use crate::{gitlab, jira};
 
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
-const GITLAB_BASE: &str = "https://gitlab.com";
+use crate::utils::gitlab_base;
 const KOJI_PROFILE: &str = "cbs";
 
 #[derive(clap::Args)]
@@ -180,7 +180,7 @@ fn resolve_target(
 /// `cpu-sig-tracker`-labeled group and check whether its JIRA
 /// is resolved.
 fn check_tracking_issue_jira(package: &str, release: &str, verbose: bool) -> Check {
-    let group_client = match gitlab::GroupClient::new(GITLAB_BASE, PROPOSED_UPDATES_GROUP) {
+    let group_client = match gitlab::GroupClient::new(&gitlab_base(), PROPOSED_UPDATES_GROUP) {
         Ok(c) => c,
         Err(e) => return Check::Skipped(format!("GitLab group client: {e}")),
     };

@@ -23,7 +23,7 @@ use crate::{gitlab, jira};
 
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
-const GITLAB_BASE: &str = "https://gitlab.com";
+use crate::utils::gitlab_base;
 const KOJI_PROFILE: &str = "cbs";
 
 #[derive(clap::Args)]
@@ -122,7 +122,7 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
         None => inventory.inventory.workloads.keys().cloned().collect(),
     };
 
-    let group_client = gitlab::GroupClient::new(GITLAB_BASE, PROPOSED_UPDATES_GROUP)?;
+    let group_client = gitlab::GroupClient::new(&gitlab_base(), PROPOSED_UPDATES_GROUP)?;
     let runtime = tokio::runtime::Runtime::new()?;
     let jira_client = jira::client();
 
@@ -703,7 +703,7 @@ fn maybe_refresh_work_item_status(
     verbose: bool,
 ) {
     let desired = desired_work_item_status(jira_resolved, jira_resolution, has_build);
-    let client = match gitlab::Client::new(GITLAB_BASE, project_path) {
+    let client = match gitlab::Client::new(&gitlab_base(), project_path) {
         Ok(c) => c,
         Err(e) => {
             if verbose {
@@ -783,7 +783,7 @@ fn maybe_refresh_dates(
         return;
     }
 
-    let client = match gitlab::Client::new(GITLAB_BASE, project_path) {
+    let client = match gitlab::Client::new(&gitlab_base(), project_path) {
         Ok(c) => c,
         Err(e) => {
             if verbose {
@@ -857,7 +857,7 @@ fn maybe_refresh_issue(ctx: RefreshCtx<'_>) -> bool {
     if new_body.trim_end() == ctx.original_body.trim_end() {
         return false;
     }
-    let client = match gitlab::Client::new(GITLAB_BASE, ctx.project_path) {
+    let client = match gitlab::Client::new(&gitlab_base(), ctx.project_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!(
@@ -931,7 +931,7 @@ fn format_jira_line(
     let Some(key) = jira_key else {
         return "- **JIRA**: _(not found in MR; set with `--jira`)_".to_string();
     };
-    let url = format!("https://issues.redhat.com/browse/{key}");
+    let url = format!("{}/browse/{key}", crate::utils::jira_base());
     let suffix = match (jira_status, jira_resolution) {
         (Some(s), Some(r)) => format!(" — {s} ({r})"),
         (Some(s), None) => format!(" — {s}"),
