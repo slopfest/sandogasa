@@ -4,7 +4,7 @@
 //! from the local config file and constructs project clients.
 
 pub use sandogasa_gitlab::{
-    Issue, IssueUpdate, MergeRequest, package_from_issue_url, parse_mr_url,
+    Issue, IssueUpdate, MergeRequest, package_from_issue_url, parse_issue_url, parse_mr_url,
 };
 
 /// Load the GitLab token from `GITLAB_TOKEN` env or config.
@@ -37,6 +37,14 @@ impl Client {
 
     pub fn merge_request(&self, iid: u64) -> Result<MergeRequest, Box<dyn std::error::Error>> {
         self.0.merge_request(iid)
+    }
+
+    pub fn issue(&self, iid: u64) -> Result<Issue, Box<dyn std::error::Error>> {
+        self.0.issue(iid)
+    }
+
+    pub fn add_note(&self, iid: u64, body: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.0.add_note(iid, body)
     }
 
     pub fn create_issue(

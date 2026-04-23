@@ -10,11 +10,13 @@ mod dump_inventory;
 mod file_issue;
 mod gitlab;
 mod jira;
+mod retire;
 mod status;
 mod sync_issues;
 
 use dump_inventory::DumpInventoryArgs;
 use file_issue::FileIssueArgs;
+use retire::RetireArgs;
 use status::StatusArgs;
 use sync_issues::SyncIssuesArgs;
 
@@ -43,6 +45,10 @@ enum Command {
     /// group for a given Merge Request URL.
     FileIssue(FileIssueArgs),
 
+    /// Close a tracking issue (retire-issue suggestion) after
+    /// verifying JIRA is resolved and the build is untagged.
+    Retire(RetireArgs),
+
     /// Report JIRA status and suggested next action for each
     /// active tracking issue.
     Status(StatusArgs),
@@ -58,6 +64,7 @@ fn main() -> ExitCode {
         Command::Config => configure::run(),
         Command::DumpInventory(args) => dump_inventory::run(&args),
         Command::FileIssue(args) => file_issue::run(&args),
+        Command::Retire(args) => retire::run(&args),
         Command::Status(args) => status::run(&args),
         Command::SyncIssues(args) => sync_issues::run(&args),
     }
