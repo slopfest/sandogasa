@@ -13,6 +13,7 @@ mod jira;
 mod retire;
 mod status;
 mod sync_issues;
+mod untag;
 mod utils;
 
 use dump_inventory::DumpInventoryArgs;
@@ -20,6 +21,7 @@ use file_issue::FileIssueArgs;
 use retire::RetireArgs;
 use status::StatusArgs;
 use sync_issues::SyncIssuesArgs;
+use untag::UntagArgs;
 
 #[derive(Parser)]
 #[command(
@@ -57,6 +59,10 @@ enum Command {
     /// Report which inventory packages have active, proposed,
     /// or missing tracking issues per release.
     SyncIssues(SyncIssuesArgs),
+
+    /// Untag a proposed_updates build from its CBS -release tag
+    /// after verifying the JIRA is resolved.
+    Untag(UntagArgs),
 }
 
 fn main() -> ExitCode {
@@ -68,5 +74,6 @@ fn main() -> ExitCode {
         Command::Retire(args) => retire::run(&args),
         Command::Status(args) => status::run(&args),
         Command::SyncIssues(args) => sync_issues::run(&args),
+        Command::Untag(args) => untag::run(&args),
     }
 }
