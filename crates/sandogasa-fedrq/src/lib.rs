@@ -215,6 +215,27 @@ impl Fedrq {
         cmd.arg(srpm);
         Self::run(&mut cmd)
     }
+
+    /// Return the NVRs of the given source packages on this
+    /// branch, in a single fedrq call. Packages not present on
+    /// the branch are omitted from the result (callers key on
+    /// the `name-` prefix to know which NVR corresponds to
+    /// which input).
+    ///
+    /// Returns an empty vector if `packages` is empty so callers
+    /// don't accidentally invoke `fedrq pkgs` with no args
+    /// (which would query the entire repo).
+    pub fn src_nvrs(&self, packages: &[String]) -> Result<Vec<String>, Error> {
+        if packages.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["pkgs", "--src", "-F", "nvr"]);
+        self.apply_opts(&mut cmd);
+        cmd.args(packages);
+        let raw = Self::run(&mut cmd)?;
+        Ok(raw.into_iter().filter(|s| s != "(none)").collect())
+    }
 }
 
 #[cfg(test)]
@@ -282,6 +303,13 @@ mod tests {
     fn whatrequires_empty_packages_returns_empty() {
         let fq = Fedrq::default();
         let result = fq.whatrequires(&[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn src_nvrs_empty_packages_returns_empty() {
+        let fq = Fedrq::default();
+        let result = fq.src_nvrs(&[]).unwrap();
         assert!(result.is_empty());
     }
 }
