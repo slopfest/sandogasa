@@ -121,14 +121,17 @@ fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
     client.add_note(iid, &note)?;
 
-    // Flip the work-item status to Done so browsers of the
-    // GitLab UI see terminal state, not just a closed issue.
-    // Non-fatal on failure.
+    // Flip the work-item status so browsers of the GitLab UI
+    // see a terminal state, not just a closed issue. Mirrors
+    // the JIRA resolution: "Done" for actual fixes, "Won't do"
+    // for Won't Do / Obsolete / Cannot Reproduce / …
+    let terminal_status =
+        crate::status::gitlab_status_for_resolution(jira_check.resolution_name.as_deref());
     if args.verbose {
-        eprintln!("[cpu-sig-tracker] setting work-item status to Done");
+        eprintln!("[cpu-sig-tracker] setting work-item status to {terminal_status}");
     }
-    if let Err(e) = client.set_work_item_status(iid, "Done") {
-        eprintln!("warning: could not set work-item status to Done: {e}");
+    if let Err(e) = client.set_work_item_status(iid, terminal_status) {
+        eprintln!("warning: could not set work-item status to {terminal_status}: {e}");
     }
 
     // Stamp start_date / due_date via GraphQL — REST
@@ -186,10 +189,12 @@ impl Check {
     }
 }
 
-/// Outcome of the JIRA-resolved check, plus the extracted
-/// resolution date when available.
+/// Outcome of the JIRA-resolved check, plus details extracted
+/// from the fetch for use downstream (resolution name → GitLab
+/// status, resolution date → due_date).
 struct JiraCheck {
     check: Check,
+    resolution_name: Option<String>,
     resolution_date: Option<chrono::NaiveDate>,
 }
 
@@ -197,6 +202,7 @@ fn check_jira_resolved(jira_key: Option<&str>, verbose: bool) -> JiraCheck {
     let Some(key) = jira_key else {
         return JiraCheck {
             check: Check::Skipped("no JIRA key found in issue body".to_string()),
+            resolution_name: None,
             resolution_date: None,
         };
     };
@@ -205,6 +211,7 @@ fn check_jira_resolved(jira_key: Option<&str>, verbose: bool) -> JiraCheck {
         Err(e) => {
             return JiraCheck {
                 check: Check::Skipped(format!("tokio runtime init failed: {e}")),
+                resolution_name: None,
                 resolution_date: None,
             };
         }
@@ -214,23 +221,24 @@ fn check_jira_resolved(jira_key: Option<&str>, verbose: bool) -> JiraCheck {
         eprintln!("[cpu-sig-tracker] fetching JIRA {key}");
     }
     match runtime.block_on(jira_client.issue(key)) {
-        Ok(Some(issue)) if issue.is_resolved() => {
-            let resolution_date = issue.resolution_date();
-            JiraCheck {
-                check: Check::Pass(format!("{} — {}", key, describe_jira(&issue))),
-                resolution_date,
-            }
-        }
+        Ok(Some(issue)) if issue.is_resolved() => JiraCheck {
+            check: Check::Pass(format!("{} — {}", key, describe_jira(&issue))),
+            resolution_name: issue.resolution().map(|s| s.to_string()),
+            resolution_date: issue.resolution_date(),
+        },
         Ok(Some(issue)) => JiraCheck {
             check: Check::Fail(format!("{} is {} (not resolved)", key, issue.status())),
+            resolution_name: None,
             resolution_date: None,
         },
         Ok(None) => JiraCheck {
             check: Check::Skipped(format!("JIRA {key} not visible")),
+            resolution_name: None,
             resolution_date: None,
         },
         Err(e) => JiraCheck {
             check: Check::Skipped(format!("JIRA {key} fetch failed: {e}")),
+            resolution_name: None,
             resolution_date: None,
         },
     }

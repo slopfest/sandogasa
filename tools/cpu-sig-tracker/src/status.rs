@@ -56,11 +56,12 @@ pub struct StatusArgs {
     #[arg(long)]
     pub refresh: bool,
 
-    /// With --refresh, also process closed tracking issues so
-    /// their start_date / due_date can be backfilled. Body and
-    /// work-item status are left alone on closed issues (the
-    /// historical record is considered final). No-op without
-    /// --refresh.
+    /// With --refresh, also process closed tracking issues —
+    /// backfill their start_date / due_date and reconcile
+    /// their work-item status against the current JIRA
+    /// resolution (e.g. Done → Won't do when JIRA was
+    /// retroactively flipped). Body content is left alone.
+    /// No-op without --refresh.
     #[arg(long, requires = "refresh")]
     pub include_closed: bool,
 
@@ -224,10 +225,13 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
             let stream_nvr = stream_nvrs.get(package).cloned();
 
             let suggestion = if issue.state == "closed" {
-                // Closed issues are terminal — nothing left for
-                // the tool to recommend, so use the same "—"
-                // placeholder other columns use for unknown.
-                "—"
+                // Closed issue with a lingering pu build still
+                // needs an untag; otherwise nothing to do.
+                if pu_nvr.is_some() {
+                    "untag-candidate"
+                } else {
+                    "—"
+                }
             } else {
                 suggest_next_action(
                     jira_key.as_deref(),
@@ -259,13 +263,26 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
 
             let is_closed = issue.state == "closed";
 
-            // Closed issues are historical: we only backfill
-            // missing dates on them; body + work-item status
-            // are left alone. Open issues get the full refresh.
+            // Closed issues are historical: we leave the body
+            // alone but still reconcile work-item status and
+            // backfill missing dates so the GitLab view stays
+            // accurate (e.g. a JIRA that later flipped to
+            // Won't Do → Done gets its GitLab status corrected).
+            // Open issues get the full refresh.
             if args.refresh {
                 let project = tracking_project_of(&issue.web_url);
                 if is_closed {
                     if let Some(project) = project {
+                        let has_build =
+                            pu_nvrs.contains_key(package) || testing_nvrs.contains_key(package);
+                        maybe_refresh_work_item_status(
+                            &project,
+                            &issue,
+                            jira_resolved,
+                            jira_resolution.as_deref(),
+                            has_build,
+                            args.verbose,
+                        );
                         maybe_refresh_dates(
                             &project,
                             &issue,
@@ -297,6 +314,7 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
                         &project,
                         &issue,
                         jira_resolved,
+                        jira_resolution.as_deref(),
                         has_build,
                         args.verbose,
                     );
@@ -642,18 +660,34 @@ fn tracking_project_of(web_url: &str) -> Option<String> {
 /// Pick the GitLab work-item status that matches current
 /// reality.
 ///
-/// - JIRA resolved → `Done`.
+/// - JIRA resolved → `gitlab_status_for_resolution` (either
+///   `Done` or `Won't do` depending on how JIRA was closed).
 /// - JIRA open + a build is tagged in `-release` or `-testing`
 ///   → `In progress` (work is in flight).
 /// - JIRA open + no build tagged anywhere → `To do` (the
 ///   not-yet-tagged case).
-fn desired_work_item_status(jira_resolved: bool, has_build: bool) -> &'static str {
+fn desired_work_item_status(
+    jira_resolved: bool,
+    jira_resolution: Option<&str>,
+    has_build: bool,
+) -> &'static str {
     if jira_resolved {
-        "Done"
+        gitlab_status_for_resolution(jira_resolution)
     } else if has_build {
         "In progress"
     } else {
         "To do"
+    }
+}
+
+/// Map a JIRA resolution name to the closest GitLab work-item
+/// status. Only `Done` / `Fixed` / `Resolved` count as a real
+/// fix — every other resolution (Won't Do, Obsolete, Cannot
+/// Reproduce, …) maps to `Won't do`.
+pub(crate) fn gitlab_status_for_resolution(resolution: Option<&str>) -> &'static str {
+    match resolution {
+        Some("Done" | "Fixed" | "Resolved") => "Done",
+        _ => "Won't do",
     }
 }
 
@@ -664,10 +698,11 @@ fn maybe_refresh_work_item_status(
     project_path: &str,
     issue: &gitlab::Issue,
     jira_resolved: bool,
+    jira_resolution: Option<&str>,
     has_build: bool,
     verbose: bool,
 ) {
-    let desired = desired_work_item_status(jira_resolved, has_build);
+    let desired = desired_work_item_status(jira_resolved, jira_resolution, has_build);
     let client = match gitlab::Client::new(GITLAB_BASE, project_path) {
         Ok(c) => c,
         Err(e) => {
@@ -1282,10 +1317,37 @@ mod tests {
 
     #[test]
     fn desired_work_item_status_mapping() {
-        assert_eq!(desired_work_item_status(true, true), "Done");
-        assert_eq!(desired_work_item_status(true, false), "Done");
-        assert_eq!(desired_work_item_status(false, true), "In progress");
-        assert_eq!(desired_work_item_status(false, false), "To do");
+        assert_eq!(desired_work_item_status(true, Some("Done"), true), "Done");
+        assert_eq!(desired_work_item_status(true, Some("Done"), false), "Done");
+        assert_eq!(
+            desired_work_item_status(true, Some("Won't Do"), true),
+            "Won't do"
+        );
+        assert_eq!(
+            desired_work_item_status(true, Some("Obsolete"), false),
+            "Won't do"
+        );
+        assert_eq!(desired_work_item_status(false, None, true), "In progress");
+        assert_eq!(desired_work_item_status(false, None, false), "To do");
+    }
+
+    #[test]
+    fn gitlab_status_for_resolution_maps_fix_families_to_done() {
+        assert_eq!(gitlab_status_for_resolution(Some("Done")), "Done");
+        assert_eq!(gitlab_status_for_resolution(Some("Fixed")), "Done");
+        assert_eq!(gitlab_status_for_resolution(Some("Resolved")), "Done");
+    }
+
+    #[test]
+    fn gitlab_status_for_resolution_everything_else_is_wont_do() {
+        assert_eq!(gitlab_status_for_resolution(Some("Won't Do")), "Won't do");
+        assert_eq!(gitlab_status_for_resolution(Some("Obsolete")), "Won't do");
+        assert_eq!(
+            gitlab_status_for_resolution(Some("Cannot Reproduce")),
+            "Won't do"
+        );
+        assert_eq!(gitlab_status_for_resolution(Some("Duplicate")), "Won't do");
+        assert_eq!(gitlab_status_for_resolution(None), "Won't do");
     }
 
     #[test]
