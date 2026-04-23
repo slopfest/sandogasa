@@ -228,7 +228,11 @@ fn extract_jira_key(title: &str, description: Option<&str>) -> Option<String> {
     None
 }
 
-fn scan_rhel_key(text: &str) -> Option<String> {
+/// Scan `text` for the first RHEL-\d+ occurrence that isn't
+/// embedded inside a longer word. Shared with `status` so
+/// legacy manually-filed issues (whose bodies don't match the
+/// tool's standardized structure) still resolve a JIRA key.
+pub(crate) fn scan_rhel_key(text: &str) -> Option<String> {
     const PREFIX: &str = "RHEL-";
     let mut rest = text;
     while let Some(idx) = rest.find(PREFIX) {

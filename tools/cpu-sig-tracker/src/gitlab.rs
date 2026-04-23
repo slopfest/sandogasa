@@ -3,7 +3,9 @@
 //! Thin wrapper around [`sandogasa_gitlab`] that loads the token
 //! from the local config file and constructs project clients.
 
-pub use sandogasa_gitlab::{Issue, MergeRequest, package_from_issue_url, parse_mr_url};
+pub use sandogasa_gitlab::{
+    Issue, IssueUpdate, MergeRequest, package_from_issue_url, parse_mr_url,
+};
 
 /// Load the GitLab token from `GITLAB_TOKEN` env or config.
 pub fn load_token() -> Result<String, Box<dyn std::error::Error>> {
@@ -60,6 +62,14 @@ impl Client {
         status: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.0.set_work_item_status(iid, status)
+    }
+
+    pub fn edit_issue(
+        &self,
+        iid: u64,
+        updates: &IssueUpdate,
+    ) -> Result<Issue, Box<dyn std::error::Error>> {
+        self.0.edit_issue(iid, updates)
     }
 }
 

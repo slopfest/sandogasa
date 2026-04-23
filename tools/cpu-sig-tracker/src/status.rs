@@ -18,6 +18,7 @@ use sandogasa_koji::{TaggedBuild, list_tagged, parse_nvr};
 use sandogasa_rpmvercmp::compare_evr;
 
 use crate::dump_inventory::proposed_updates_tag;
+use crate::file_issue::scan_rhel_key;
 use crate::{gitlab, jira};
 
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
@@ -38,6 +39,12 @@ pub struct StatusArgs {
     /// Emit JSON instead of grouped text.
     #[arg(long)]
     pub json: bool,
+
+    /// Rewrite tracking issue bodies whose MR/JIRA lines don't
+    /// match the standardized format so future runs hit the
+    /// fast path. Mutates GitLab state; off by default.
+    #[arg(long)]
+    pub repair: bool,
 
     /// Print progress to stderr.
     #[arg(short, long)]
@@ -132,8 +139,10 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let body = issue.description.as_deref().unwrap_or("");
-            let mr_url = parse_mr_url_from_body(body).map(|s| s.to_string());
-            let jira_key = parse_jira_key_from_body(body).map(|s| s.to_string());
+            let parsed = resolve_body_references(body, args.verbose);
+            let mr_url = parsed.mr_url.clone();
+            let mr_title = parsed.mr_title.clone();
+            let jira_key = parsed.jira_key.clone();
 
             let jira_info = match jira_key.as_deref() {
                 Some(key) => fetch_jira(&runtime, &jira_client, key, args.verbose),
@@ -153,6 +162,44 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
                 pu_nvr.as_deref(),
                 stream_nvr.as_deref(),
             );
+
+            // Issue path: find the project's GitLab client to
+            // edit the body for --repair. Construct lazily only
+            // when needed.
+            if parsed.needs_repair() {
+                let gaps = parsed.describe_gaps();
+                if args.repair {
+                    if let Some(project) = tracking_project_of(&issue.web_url)
+                        && mr_url.is_some()
+                    {
+                        let changed = maybe_repair_issue(RepairCtx {
+                            project_path: &project,
+                            iid: issue.iid,
+                            original_body: body,
+                            release,
+                            mr_url: mr_url.as_deref(),
+                            mr_title: mr_title.as_deref(),
+                            jira_key: jira_key.as_deref(),
+                        });
+                        if changed {
+                            eprintln!(
+                                "repaired {}: rewrote body to standard format ({gaps})",
+                                issue.web_url,
+                            );
+                        }
+                    } else {
+                        eprintln!(
+                            "skipped {}: {gaps}, and no MR URL found to build a repaired body",
+                            issue.web_url,
+                        );
+                    }
+                } else {
+                    eprintln!(
+                        "note: {}: {gaps}; run with --repair to normalize",
+                        issue.web_url,
+                    );
+                }
+            }
 
             rows.push(Row {
                 release: release.to_string(),
@@ -182,33 +229,293 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Extract the MR URL from the standardized issue body line
-/// `- **MR**: [title](url)`.
-fn parse_mr_url_from_body(body: &str) -> Option<&str> {
+/// Fields resolved from a tracking issue body, optionally
+/// augmented by following the MR.
+#[derive(Debug, Default)]
+struct BodyRefs {
+    mr_url: Option<String>,
+    mr_title: Option<String>,
+    jira_key: Option<String>,
+    /// Whether the structured `- **MR**: [title](url)` line was
+    /// parseable from the body.
+    structured_mr: bool,
+    /// Whether the structured `- **JIRA**: [KEY](url)` line was
+    /// parseable from the body.
+    structured_jira: bool,
+}
+
+impl BodyRefs {
+    /// True when at least one of the structured metadata lines
+    /// is missing; `--repair` rewrites the body in that case.
+    fn needs_repair(&self) -> bool {
+        !self.structured_mr || !self.structured_jira
+    }
+
+    /// Short description of what's missing, for stderr.
+    fn describe_gaps(&self) -> &'static str {
+        match (self.structured_mr, self.structured_jira) {
+            (false, false) => "missing structured MR and JIRA lines",
+            (false, true) => "missing structured MR line",
+            (true, false) => "missing structured JIRA line",
+            (true, true) => "already standard",
+        }
+    }
+}
+
+/// Parse a tracking issue body for its MR URL and JIRA key.
+///
+/// Fast path: `- **MR**: [title](url)` and `- **JIRA**: [KEY]`
+/// lines that `file-issue` emits. When either is missing we
+/// fall back to lenient scanners; when JIRA is still missing
+/// but the body has an MR URL, we follow the MR and scan its
+/// title + description for `RHEL-\d+`.
+fn resolve_body_references(body: &str, verbose: bool) -> BodyRefs {
+    let structured_mr_url = structured_mr_url(body);
+    let mr_url = structured_mr_url
+        .clone()
+        .or_else(|| scan_mr_url_in_body(body));
+
+    let structured_jira = structured_jira_key(body);
+    let jira_key = structured_jira
+        .clone()
+        .or_else(|| scan_rhel_key(body))
+        .or_else(|| {
+            mr_url
+                .as_deref()
+                .and_then(|u| follow_mr_for_jira(u, verbose))
+        });
+
+    let mr_title = match (&structured_mr_url, &mr_url) {
+        (Some(_), _) => None, // already in body; no fetch needed
+        (None, Some(url)) => fetch_mr_title(url, verbose),
+        (None, None) => None,
+    };
+
+    BodyRefs {
+        mr_url,
+        mr_title,
+        jira_key,
+        structured_mr: structured_mr_url.is_some(),
+        structured_jira: structured_jira.is_some(),
+    }
+}
+
+/// Parse the structured `- **MR**: [title](url)` line.
+fn structured_mr_url(body: &str) -> Option<String> {
     for line in body.lines() {
         if let Some(rest) = line.strip_prefix("- **MR**: [")
             && let Some(idx) = rest.find("](")
         {
             let after = &rest[idx + 2..];
             if let Some(end) = after.find(')') {
-                return Some(&after[..end]);
+                return Some(after[..end].to_string());
             }
         }
     }
     None
 }
 
-/// Extract the JIRA key from the standardized issue body line
-/// `- **JIRA**: [KEY](url)…`.
-fn parse_jira_key_from_body(body: &str) -> Option<&str> {
+/// Parse the structured `- **JIRA**: [KEY](url)` line.
+fn structured_jira_key(body: &str) -> Option<String> {
     for line in body.lines() {
         if let Some(rest) = line.strip_prefix("- **JIRA**: [")
             && let Some(end) = rest.find(']')
         {
-            return Some(&rest[..end]);
+            return Some(rest[..end].to_string());
         }
     }
     None
+}
+
+/// Scan a body for any `.../-/merge_requests/<N>` URL and
+/// return it trimmed at a whitespace or closing-paren boundary.
+/// Case where the body has `* Stream MR: https://.../-/merge_requests/10`
+/// or similar ad-hoc forms.
+fn scan_mr_url_in_body(body: &str) -> Option<String> {
+    const SEP: &str = "/-/merge_requests/";
+    let idx = body.find(SEP)?;
+    // Walk left to find the start of the URL (https:// or http://).
+    let prefix_bound = body[..idx].rfind(|c: char| c.is_whitespace() || c == '<' || c == '(');
+    let start = prefix_bound.map(|p| p + 1).unwrap_or(0);
+    let url_start_str = &body[start..];
+    if !url_start_str.starts_with("http://") && !url_start_str.starts_with("https://") {
+        return None;
+    }
+    // Walk right to the end of the URL — stop at whitespace,
+    // closing bracket/paren/angle, or markdown punctuation.
+    let rest = &body[idx + SEP.len()..];
+    let suffix_len = rest
+        .find(|c: char| {
+            c.is_whitespace() || matches!(c, ')' | '>' | ']' | ',' | '.' | ';') || c == '`'
+        })
+        .unwrap_or(rest.len());
+    let digits = &rest[..suffix_len];
+    // Must start with at least one digit.
+    if !digits.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    // Cut at the last ascii digit run.
+    let digit_len = digits.chars().take_while(|c| c.is_ascii_digit()).count();
+    let end = idx + SEP.len() + digit_len;
+    Some(body[start..end].to_string())
+}
+
+/// Fetch the MR referenced by `url` and return its stored title,
+/// for use in the standardized `- **MR**: [title](url)` line.
+fn fetch_mr_title(url: &str, verbose: bool) -> Option<String> {
+    let (base, project, iid) = gitlab::parse_mr_url(url).ok()?;
+    let client = gitlab::Client::new(&base, &project).ok()?;
+    if verbose {
+        eprintln!("[cpu-sig-tracker] fetching MR !{iid} in {project} for title");
+    }
+    match client.merge_request(iid) {
+        Ok(mr) => Some(mr.title),
+        Err(e) => {
+            eprintln!("warning: failed to fetch MR {url} for title: {e}");
+            None
+        }
+    }
+}
+
+/// Fetch the MR referenced by `url`, scan its title and
+/// description for a `RHEL-\d+` key, and return it.
+fn follow_mr_for_jira(url: &str, verbose: bool) -> Option<String> {
+    let (base, project, iid) = gitlab::parse_mr_url(url).ok()?;
+    let client = gitlab::Client::new(&base, &project).ok()?;
+    if verbose {
+        eprintln!("[cpu-sig-tracker] fetching MR !{iid} in {project} for JIRA key");
+    }
+    let mr = match client.merge_request(iid) {
+        Ok(mr) => mr,
+        Err(e) => {
+            eprintln!("warning: failed to fetch MR {url} for JIRA lookup: {e}");
+            return None;
+        }
+    };
+    if let Some(key) = scan_rhel_key(&mr.title) {
+        return Some(key);
+    }
+    mr.description.as_deref().and_then(scan_rhel_key)
+}
+
+/// Given a tracking issue `web_url` like
+/// `https://gitlab.com/CentOS/proposed_updates/rpms/<pkg>/-/work_items/<n>`,
+/// return the project path `CentOS/proposed_updates/rpms/<pkg>`
+/// so callers can construct a project-scoped client.
+fn tracking_project_of(web_url: &str) -> Option<String> {
+    sandogasa_gitlab::project_path_from_issue_url(web_url)
+}
+
+/// Inputs for [`maybe_repair_issue`].
+struct RepairCtx<'a> {
+    project_path: &'a str,
+    iid: u64,
+    original_body: &'a str,
+    release: &'a str,
+    mr_url: Option<&'a str>,
+    mr_title: Option<&'a str>,
+    jira_key: Option<&'a str>,
+}
+
+/// Rewrite the tracking issue body to the standardized format
+/// so future runs hit the fast path. Keeps the original prose
+/// as a lead paragraph and appends the structured metadata.
+/// Returns `true` when the body was actually changed.
+fn maybe_repair_issue(ctx: RepairCtx<'_>) -> bool {
+    let Some(url) = ctx.mr_url else { return false };
+    let title = ctx.mr_title.unwrap_or(url);
+    let new_body = repaired_body(ctx.original_body, ctx.release, url, title, ctx.jira_key);
+    if new_body == ctx.original_body {
+        return false;
+    }
+    let client = match gitlab::Client::new(GITLAB_BASE, ctx.project_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "warning: --repair: could not build client for {}: {e}",
+                ctx.project_path,
+            );
+            return false;
+        }
+    };
+    let update = gitlab::IssueUpdate {
+        description: Some(new_body),
+        ..Default::default()
+    };
+    if let Err(e) = client.edit_issue(ctx.iid, &update) {
+        eprintln!(
+            "warning: --repair: failed to update {}!{}: {e}",
+            ctx.project_path, ctx.iid,
+        );
+        return false;
+    }
+    true
+}
+
+/// Build a standardized body, preserving the original prose
+/// (trimmed) as a lead paragraph when it isn't already just
+/// the structured metadata.
+fn repaired_body(
+    original_body: &str,
+    release: &str,
+    mr_url: &str,
+    mr_title: &str,
+    jira_key: Option<&str>,
+) -> String {
+    let lead = extract_lead_paragraph(original_body);
+    let jira_line = match jira_key {
+        Some(key) => {
+            let url = format!("https://issues.redhat.com/browse/{key}");
+            format!("- **JIRA**: [{key}]({url})")
+        }
+        None => "- **JIRA**: _(not found in MR; set with `--jira`)_".to_string(),
+    };
+    let metadata = format!(
+        "- **MR**: [{mr_title}]({mr_url})\n\
+         {jira_line}\n\
+         - **Release**: {release}\n\
+         - **Status**: open\n",
+    );
+    match lead {
+        Some(lead) if !lead.is_empty() => format!("{lead}\n\n{metadata}"),
+        _ => metadata,
+    }
+}
+
+/// Strip the existing structured metadata lines (and their
+/// blank-line separator) from a body, leaving only the prose
+/// that preceded them. Returns None if there's no prose.
+fn extract_lead_paragraph(body: &str) -> Option<String> {
+    let mut lead_lines: Vec<&str> = Vec::new();
+    for line in body.lines() {
+        if is_metadata_line(line) {
+            break;
+        }
+        lead_lines.push(line);
+    }
+    let joined = lead_lines.join("\n");
+    let trimmed = joined.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn is_metadata_line(line: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "- **MR**:",
+        "- **JIRA**:",
+        "- **Release**:",
+        "- **Affected build**:",
+        "- **Expected fix**:",
+        "- **Status**:",
+        "* Stream MR:",
+        "* Affected",
+        "* Expected",
+    ];
+    let trimmed = line.trim_start();
+    PREFIXES.iter().any(|p| trimmed.starts_with(p))
 }
 
 fn fetch_jira(
@@ -442,50 +749,76 @@ mod tests {
         - **Status**: open\n";
 
     #[test]
-    fn parse_mr_url_from_standard_body() {
+    fn structured_mr_url_from_standard_body() {
         assert_eq!(
-            parse_mr_url_from_body(SAMPLE_BODY),
+            structured_mr_url(SAMPLE_BODY).as_deref(),
             Some("https://gitlab.com/foo/bar/-/merge_requests/3"),
         );
     }
 
     #[test]
-    fn parse_jira_key_from_standard_body() {
-        assert_eq!(parse_jira_key_from_body(SAMPLE_BODY), Some("RHEL-12345"));
+    fn structured_jira_key_from_standard_body() {
+        assert_eq!(
+            structured_jira_key(SAMPLE_BODY).as_deref(),
+            Some("RHEL-12345"),
+        );
     }
 
     #[test]
-    fn parse_mr_url_missing_line_returns_none() {
+    fn structured_mr_url_missing_line_returns_none() {
         let body = "- **JIRA**: [RHEL-1](https://example/)\n";
-        assert_eq!(parse_mr_url_from_body(body), None);
+        assert_eq!(structured_mr_url(body), None);
     }
 
     #[test]
-    fn parse_jira_key_missing_line_returns_none() {
+    fn structured_jira_key_missing_line_returns_none() {
         let body = "- **MR**: [t](https://example/)\n";
-        assert_eq!(parse_jira_key_from_body(body), None);
+        assert_eq!(structured_jira_key(body), None);
     }
 
     #[test]
-    fn parse_mr_url_handles_without_lead_paragraph() {
-        // Match against a body that starts with the metadata
-        // (no lead --note paragraph).
-        let body = "\
-            - **MR**: [t](https://example/mr)\n\
-            - **JIRA**: [RHEL-2](https://issues.redhat.com/browse/RHEL-2)\n";
-        assert_eq!(parse_mr_url_from_body(body), Some("https://example/mr"));
-        assert_eq!(parse_jira_key_from_body(body), Some("RHEL-2"));
-    }
-
-    #[test]
-    fn parse_mr_url_handles_jira_not_found_placeholder() {
+    fn structured_jira_key_skips_placeholder() {
         // file-issue emits a placeholder when no JIRA key is
-        // auto-extracted; parse_jira_key should return None
-        // rather than a bogus string.
+        // auto-extracted; structured_jira_key shouldn't treat
+        // the placeholder text as a real key.
+        let body = "- **JIRA**: _(not found in MR; set with `--jira`)_\n";
+        // The placeholder doesn't start with `[` so the
+        // structured parser returns None.
+        assert_eq!(structured_jira_key(body), None);
+    }
+
+    #[test]
+    fn scan_mr_url_handles_bullet_label() {
         let body = "\
-            - **MR**: [t](https://example/mr)\n\
-            - **JIRA**: _(not found in MR; set with `--jira`)_\n";
-        assert_eq!(parse_jira_key_from_body(body), None);
+            * Stream MR: https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/10\n\
+            * Affected version-release: 1:5.6.2-3.el10\n";
+        assert_eq!(
+            scan_mr_url_in_body(body).as_deref(),
+            Some("https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/10"),
+        );
+    }
+
+    #[test]
+    fn scan_mr_url_handles_markdown_link() {
+        let body = "See [the MR](https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42) for details.";
+        assert_eq!(
+            scan_mr_url_in_body(body).as_deref(),
+            Some("https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42"),
+        );
+    }
+
+    #[test]
+    fn scan_mr_url_returns_none_when_absent() {
+        assert_eq!(scan_mr_url_in_body("no merge request here"), None);
+    }
+
+    #[test]
+    fn scan_mr_url_requires_digits() {
+        // Path present but no numeric iid — reject.
+        assert_eq!(
+            scan_mr_url_in_body("https://gitlab.com/foo/bar/-/merge_requests/"),
+            None
+        );
     }
 
     #[test]
@@ -646,6 +979,66 @@ mod tests {
     fn stream_newer_than_proposed_false_when_either_missing() {
         assert!(!stream_newer_than_proposed(None, Some("xz-5.4-1.el10")));
         assert!(!stream_newer_than_proposed(Some("xz-5.4-1.el10"), None));
+    }
+
+    #[test]
+    fn extract_lead_paragraph_preserves_prose() {
+        let body = "\
+            Context about why we're tracking.\n\
+            \n\
+            - **MR**: [t](https://example/mr)\n\
+            - **JIRA**: [RHEL-1](https://example/)\n";
+        assert_eq!(
+            extract_lead_paragraph(body).as_deref(),
+            Some("Context about why we're tracking."),
+        );
+    }
+
+    #[test]
+    fn extract_lead_paragraph_returns_none_when_only_metadata() {
+        let body = "- **MR**: [t](https://example/mr)\n- **JIRA**: [RHEL-1](https://example/)\n";
+        assert_eq!(extract_lead_paragraph(body), None);
+    }
+
+    #[test]
+    fn extract_lead_paragraph_stops_at_legacy_bullet() {
+        let body = "\
+            Fix for CVE-2024-X.\n\
+            \n\
+            * Stream MR: https://example/-/merge_requests/1\n\
+            * Affected version-release: 1.0-1\n";
+        assert_eq!(
+            extract_lead_paragraph(body).as_deref(),
+            Some("Fix for CVE-2024-X."),
+        );
+    }
+
+    #[test]
+    fn repaired_body_with_jira_and_lead() {
+        let original = "\
+            Legacy context paragraph.\n\
+            \n\
+            * Stream MR: https://example/-/merge_requests/1\n";
+        let out = repaired_body(
+            original,
+            "c10s",
+            "https://example/-/merge_requests/1",
+            "Fix CVE-2026-0001",
+            Some("RHEL-12345"),
+        );
+        assert!(out.starts_with("Legacy context paragraph.\n\n- **MR**:"));
+        assert!(out.contains("- **MR**: [Fix CVE-2026-0001](https://example/-/merge_requests/1)"));
+        assert!(
+            out.contains("- **JIRA**: [RHEL-12345](https://issues.redhat.com/browse/RHEL-12345)")
+        );
+        assert!(out.contains("- **Release**: c10s"));
+        assert!(out.contains("- **Status**: open"));
+    }
+
+    #[test]
+    fn repaired_body_without_jira_uses_placeholder() {
+        let out = repaired_body("", "c10s", "https://example/-/merge_requests/1", "t", None);
+        assert!(out.contains("- **JIRA**: _(not found in MR; set with `--jira`)_"));
     }
 
     #[test]
