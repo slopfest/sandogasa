@@ -56,6 +56,14 @@ pub struct StatusArgs {
     #[arg(long)]
     pub refresh: bool,
 
+    /// With --refresh, also process closed tracking issues so
+    /// their start_date / due_date can be backfilled. Body and
+    /// work-item status are left alone on closed issues (the
+    /// historical record is considered final). No-op without
+    /// --refresh.
+    #[arg(long, requires = "refresh")]
+    pub include_closed: bool,
+
     /// Print progress to stderr.
     #[arg(short, long)]
     pub verbose: bool,
@@ -65,6 +73,8 @@ pub struct StatusArgs {
 pub struct Row {
     pub release: String,
     pub package: String,
+    /// GitLab issue state: "opened" or "closed".
+    pub issue_state: String,
     pub issue_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mr_url: Option<String>,
@@ -123,11 +133,20 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut rows: Vec<Row> = Vec::new();
     for release in &releases {
+        let state_filter = if args.include_closed {
+            // Pass None → GitLab returns both opened and closed.
+            None
+        } else {
+            Some("opened")
+        };
         if args.verbose {
-            eprintln!("[cpu-sig-tracker] fetching active issues for {release}");
+            eprintln!(
+                "[cpu-sig-tracker] fetching {} tracking issues for {release}",
+                state_filter.unwrap_or("all-state"),
+            );
         }
         let active_label = format!("{TRACKING_LABEL},{release}");
-        let active_all = group_client.list_issues(&active_label, Some("opened"))?;
+        let active_all = group_client.list_issues(&active_label, state_filter)?;
 
         // Client-side narrow by --package. GitLab can't filter
         // issues by the project name they belong to, so we do it
@@ -204,12 +223,19 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
             let pu_nvr = pu_nvrs.get(package).cloned();
             let stream_nvr = stream_nvrs.get(package).cloned();
 
-            let suggestion = suggest_next_action(
-                jira_key.as_deref(),
-                jira_resolved,
-                pu_nvr.as_deref(),
-                stream_nvr.as_deref(),
-            );
+            let suggestion = if issue.state == "closed" {
+                // Closed issues are terminal — nothing left for
+                // the tool to recommend, so use the same "—"
+                // placeholder other columns use for unknown.
+                "—"
+            } else {
+                suggest_next_action(
+                    jira_key.as_deref(),
+                    jira_resolved,
+                    pu_nvr.as_deref(),
+                    stream_nvr.as_deref(),
+                )
+            };
 
             // Body-vs-live drift detection. Format drift is
             // free (pure body parse); JIRA drift compares the
@@ -231,15 +257,25 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
                 reasons
             };
 
-            // --refresh rewrites the body unconditionally
-            // (normalizes format + refreshes JIRA/MR state) and
-            // reconciles the GitLab work-item status with the
-            // live data. Without --refresh we just emit a note
-            // per body that's drifted from the canonical form.
+            let is_closed = issue.state == "closed";
+
+            // Closed issues are historical: we only backfill
+            // missing dates on them; body + work-item status
+            // are left alone. Open issues get the full refresh.
             if args.refresh {
-                if let Some(project) = tracking_project_of(&issue.web_url)
-                    && mr_url.is_some()
-                {
+                let project = tracking_project_of(&issue.web_url);
+                if is_closed {
+                    if let Some(project) = project {
+                        maybe_refresh_dates(
+                            &project,
+                            &issue,
+                            package,
+                            release,
+                            jira_resolution_date,
+                            args.verbose,
+                        );
+                    }
+                } else if let (Some(project), true) = (project, mr_url.is_some()) {
                     let changed = maybe_refresh_issue(RefreshCtx {
                         project_path: &project,
                         iid: issue.iid,
@@ -279,7 +315,7 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
                         drift_reasons.join("; "),
                     );
                 }
-            } else if !drift_reasons.is_empty() {
+            } else if !is_closed && !drift_reasons.is_empty() {
                 eprintln!(
                     "note: {}: {}; run with --refresh to update",
                     issue.web_url,
@@ -287,9 +323,18 @@ fn run_inner(args: &StatusArgs) -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
 
+            // By default the status table is in-flight only.
+            // --include-closed opts those issues back in so
+            // users can see the full picture of what the
+            // refresh touched.
+            if is_closed && !args.include_closed {
+                continue;
+            }
+
             rows.push(Row {
                 release: release.to_string(),
                 package: package.to_string(),
+                issue_state: issue.state.clone(),
                 issue_url: issue.web_url.clone(),
                 mr_url,
                 jira_key,
@@ -1126,6 +1171,12 @@ fn col_width<'a>(header: &str, values: impl IntoIterator<Item = &'a str>) -> usi
 }
 
 fn format_jira_state(r: &Row) -> String {
+    // Closed GitLab issues trump JIRA detail — "closed" is the
+    // clearest signal to UI readers and makes --include-closed
+    // rows scan-able at a glance.
+    if r.issue_state == "closed" {
+        return "closed".to_string();
+    }
     match (&r.jira_status, &r.jira_resolution) {
         (Some(status), Some(resolution)) => format!("{status} ({resolution})"),
         (Some(status), None) => status.clone(),
@@ -1560,6 +1611,7 @@ mod tests {
         let r = Row {
             release: "c10s".into(),
             package: "xz".into(),
+            issue_state: "opened".into(),
             issue_url: "u".into(),
             mr_url: None,
             jira_key: Some("RHEL-1".into()),
@@ -1578,6 +1630,7 @@ mod tests {
         let r = Row {
             release: "c10s".into(),
             package: "xz".into(),
+            issue_state: "opened".into(),
             issue_url: "u".into(),
             mr_url: None,
             jira_key: Some("RHEL-1".into()),
@@ -1592,10 +1645,32 @@ mod tests {
     }
 
     #[test]
+    fn format_jira_state_closed_overrides_jira() {
+        // Closed issue → STATE column shows "closed"
+        // regardless of the underlying JIRA status.
+        let r = Row {
+            release: "c10s".into(),
+            package: "xz".into(),
+            issue_state: "closed".into(),
+            issue_url: "u".into(),
+            mr_url: None,
+            jira_key: Some("RHEL-1".into()),
+            jira_status: Some("Closed".into()),
+            jira_resolution: Some("Obsolete".into()),
+            jira_resolved: true,
+            proposed_updates_nvr: None,
+            stream_nvr: None,
+            suggestion: "—",
+        };
+        assert_eq!(format_jira_state(&r), "closed");
+    }
+
+    #[test]
     fn format_jira_state_unknown() {
         let r = Row {
             release: "c10s".into(),
             package: "xz".into(),
+            issue_state: "opened".into(),
             issue_url: "u".into(),
             mr_url: None,
             jira_key: None,
