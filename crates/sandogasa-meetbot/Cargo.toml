@@ -1,0 +1,17 @@
+[package]
+name = "sandogasa-meetbot"
+description = "HTTP client for meetbot.fedoraproject.org's meeting search endpoint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true }
+wiremock = { workspace = true }
