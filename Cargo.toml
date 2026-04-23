@@ -16,6 +16,7 @@ members = [
     "crates/sandogasa-jira",
     "crates/sandogasa-koji",
     "crates/sandogasa-mailman",
+    "crates/sandogasa-meetbot",
     "crates/sandogasa-nvd",
     "crates/sandogasa-repology",
     "crates/sandogasa-rpmvercmp",
@@ -23,6 +24,7 @@ members = [
     "tools/ebranch",
     "tools/fedora-cve-triage",
     "tools/hs-intake",
+    "tools/hs-meetings",
     "tools/koji-diff",
     "tools/hs-relmon",
     "tools/sandogasa-hattrack",
@@ -68,6 +70,7 @@ sandogasa-inventory = { version = "0.10", path = "crates/sandogasa-inventory" }
 sandogasa-jira = { version = "0.10", path = "crates/sandogasa-jira" }
 sandogasa-koji = { version = "0.10", path = "crates/sandogasa-koji" }
 sandogasa-mailman = { version = "0.10", path = "crates/sandogasa-mailman" }
+sandogasa-meetbot = { version = "0.10", path = "crates/sandogasa-meetbot" }
 sandogasa-nvd = { version = "0.10", path = "crates/sandogasa-nvd" }
 sandogasa-repology = { version = "0.10", path = "crates/sandogasa-repology" }
 sandogasa-rpmvercmp = { version = "0.10", path = "crates/sandogasa-rpmvercmp" }

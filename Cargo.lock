@@ -638,6 +638,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hs-meetings"
+version = "0.10.1"
+dependencies = [
+ "chrono",
+ "clap",
+ "sandogasa-meetbot",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hs-relmon"
 version = "0.10.1"
 dependencies = [
@@ -1697,6 +1708,18 @@ dependencies = [
 name = "sandogasa-mailman"
 version = "0.10.1"
 dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
+name = "sandogasa-meetbot"
+version = "0.10.1"
+dependencies = [
+ "chrono",
  "reqwest",
  "serde",
  "serde_json",
