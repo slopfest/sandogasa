@@ -59,9 +59,10 @@ pub fn gitlab_report(
     user: &str,
     since: NaiveDate,
     until: NaiveDate,
+    tokens: &std::collections::BTreeMap<String, String>,
     verbose: bool,
 ) -> Result<GitlabReport, String> {
-    let token = find_token(&cfg.instance)?;
+    let token = find_token(&cfg.instance, tokens)?;
     let base = cfg.instance.trim_end_matches('/');
 
     if verbose {
@@ -292,28 +293,50 @@ fn write_mr_list(out: &mut String, mrs: &[MrRef], instance: &str) {
     out.push('\n');
 }
 
-/// Look up the GitLab API token for an instance. Tries an
-/// instance-specific env var first, then the generic fallback.
+/// Look up the GitLab API token for an instance.
 ///
-/// For `https://salsa.debian.org`, the instance-specific var is
-/// `GITLAB_TOKEN_SALSA_DEBIAN_ORG`; for `https://gitlab.com` it's
-/// `GITLAB_TOKEN_GITLAB_COM`. The generic `GITLAB_TOKEN` matches
-/// the convention used by other sandogasa tools.
-fn find_token(instance: &str) -> Result<String, String> {
+/// Order: instance-specific env var → generic env var →
+/// `gitlab_tokens.<hostname>` from the user overlay → error.
+/// Env vars win over config so a shell override (`GITLAB_TOKEN=…
+/// sandogasa-report report …`) works even with a persisted
+/// token.
+fn find_token(
+    instance: &str,
+    tokens: &std::collections::BTreeMap<String, String>,
+) -> Result<String, String> {
     let var = instance_token_env(instance);
     if let Ok(t) = std::env::var(&var) {
         return Ok(t);
     }
-    std::env::var("GITLAB_TOKEN")
-        .map_err(|_| format!("no GitLab token: set {var} (instance-specific) or GITLAB_TOKEN"))
+    if let Ok(t) = std::env::var("GITLAB_TOKEN") {
+        return Ok(t);
+    }
+    let host = instance_host(instance);
+    if let Some(t) = tokens.get(&host) {
+        return Ok(t.clone());
+    }
+    Err(format!(
+        "no GitLab token for {host}: set {var} (instance-specific), \
+         GITLAB_TOKEN (generic), or run `sandogasa-report config` to \
+         store one in the overlay"
+    ))
 }
 
 fn instance_token_env(instance: &str) -> String {
-    let host = instance
+    format!(
+        "GITLAB_TOKEN_{}",
+        instance_host(instance).to_uppercase().replace('.', "_")
+    )
+}
+
+/// Strip scheme + trailing slash to get the bare hostname, e.g.
+/// `"https://gitlab.com/"` → `"gitlab.com"`.
+pub(crate) fn instance_host(instance: &str) -> String {
+    instance
         .trim_end_matches('/')
         .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    format!("GITLAB_TOKEN_{}", host.to_uppercase().replace('.', "_"))
+        .trim_start_matches("http://")
+        .to_string()
 }
 
 #[cfg(test)]
@@ -452,6 +475,40 @@ mod tests {
         assert!(md.contains("### Opened"));
         assert!(md.contains("!42"));
         assert!(md.contains("Fix build"));
+    }
+
+    #[test]
+    fn find_token_errors_when_nothing_set() {
+        // Safe: the hostname we use is clearly not a real
+        // GITLAB_TOKEN_ env var anyone would set, and we pass an
+        // empty tokens map. Env-var presence isn't tested here —
+        // env-var tests would need process-wide synchronization.
+        let tokens = std::collections::BTreeMap::new();
+        let err = find_token("https://nonexistent.example.test", &tokens).unwrap_err();
+        assert!(err.contains("no GitLab token"));
+    }
+
+    #[test]
+    fn find_token_falls_back_to_config() {
+        // SAFETY: only matters when no env vars are set. The
+        // hostname is scoped to avoid clashing with production
+        // GITLAB_TOKEN_GITLAB_COM etc.
+        let mut tokens = std::collections::BTreeMap::new();
+        tokens.insert(
+            "nonexistent.example.test".to_string(),
+            "from-config".to_string(),
+        );
+        // The test relies on the matching env vars being unset —
+        // which they are in a normal cargo test environment since
+        // the key is scoped to a fake hostname.
+        let var = instance_token_env("https://nonexistent.example.test");
+        // Skip if the env var happens to be set (e.g. someone
+        // exported every possible GITLAB_TOKEN_*).
+        if std::env::var(&var).is_ok() || std::env::var("GITLAB_TOKEN").is_ok() {
+            return;
+        }
+        let tok = find_token("https://nonexistent.example.test", &tokens).unwrap();
+        assert_eq!(tok, "from-config");
     }
 
     #[test]

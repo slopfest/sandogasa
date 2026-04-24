@@ -166,6 +166,12 @@ user = "michel"
 # desirable or available.
 [users]
 salimma = "michel@example.com"
+
+# Persisted GitLab API tokens — populated by
+# `sandogasa-report config`. Env vars still win if set.
+[gitlab_tokens]
+"gitlab.com" = "glpat-..."
+"salsa.debian.org" = "glpat-..."
 ```
 
 ### Koji tag patterns
@@ -186,9 +192,13 @@ token from, in order:
    `GITLAB_TOKEN_SALSA_DEBIAN_ORG`.
 2. `GITLAB_TOKEN` — the generic fallback shared with other
    sandogasa tools.
+3. `gitlab_tokens.<hostname>` in the overlay — persisted by
+   `sandogasa-report config`, so tokens survive across shell
+   sessions without re-exporting env vars.
 
-Use the instance-specific name when reporting across multiple
-GitLab instances in a single run.
+Env vars win over config, so a one-off shell override still
+works even with a persisted token. The overlay file is kept at
+`~/.config/sandogasa-report/config.toml` with 0600 permissions.
 
 ### FTBFS/FTI tracking
 

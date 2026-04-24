@@ -302,7 +302,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                 continue;
             }
         };
-        match gitlab::gitlab_report(gl, user, since, until, cli.verbose) {
+        match gitlab::gitlab_report(gl, user, since, until, &cfg.gitlab_tokens, cli.verbose) {
             Ok(gl_report) => {
                 unified.gitlab.insert((*name).to_string(), gl_report);
             }

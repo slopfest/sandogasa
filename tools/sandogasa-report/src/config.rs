@@ -20,6 +20,15 @@ pub struct ReportConfig {
     /// Package groups for categorical reporting.
     #[serde(default)]
     pub groups: BTreeMap<String, GroupConfig>,
+
+    /// Per-instance GitLab API tokens, keyed by hostname (e.g.
+    /// `"gitlab.com"`, `"salsa.debian.org"`). Env vars
+    /// (`GITLAB_TOKEN_<HOSTNAME>` or generic `GITLAB_TOKEN`) still
+    /// take precedence, so a shell-session override works even
+    /// with a saved token. Belongs in the user overlay — the
+    /// values are credentials.
+    #[serde(default)]
+    pub gitlab_tokens: BTreeMap<String, String>,
 }
 
 /// A package group with an optional description.
@@ -142,9 +151,23 @@ fn load_layered(
     }
 
     let merged = merge_toml(main_value, overlay_value);
-    merged
-        .try_into::<ReportConfig>()
-        .map_err(|e| format!("failed to deserialize merged config: {e}"))
+    merged.try_into::<ReportConfig>().map_err(|e| {
+        if main_path.is_none() {
+            format!(
+                "failed to deserialize merged config: {e}\n\
+                 \n\
+                 The user overlay at {} has per-domain entries that\n\
+                 are incomplete without the shared main config. Pass\n\
+                 `-c <path>` pointing at the main config that defines\n\
+                 `instance`, `group`, etc. for those domains.",
+                overlay_path
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            )
+        } else {
+            format!("failed to deserialize merged config: {e}")
+        }
+    })
 }
 
 fn read_toml_value(path: &std::path::Path) -> Result<toml::Value, String> {

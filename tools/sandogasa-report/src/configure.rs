@@ -88,21 +88,81 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
         changed = true;
     }
 
+    // Token round: one prompt per unique instance, validated
+    // before saving. Existing tokens are checked first so a
+    // re-run doesn't force re-entry unless they've been revoked.
+    let mut instances: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (_, instance, _) in &gitlab_domains {
+        instances.insert(instance.clone());
+    }
+    if !instances.is_empty() {
+        eprintln!("\nGitLab API tokens (per instance):");
+    }
+    for instance in &instances {
+        let host = crate::gitlab::instance_host(instance);
+        let existing = overlay_get_str(&overlay, &["gitlab_tokens", &host]);
+        match prompt_gitlab_token(instance, existing.as_deref())? {
+            TokenChoice::Saved(t) => {
+                overlay_set_str(&mut overlay, &["gitlab_tokens", &host], &t);
+                changed = true;
+            }
+            TokenChoice::KeepExisting | TokenChoice::Skipped => {}
+        }
+    }
+
     if !changed {
         eprintln!("\nNo changes.");
         return Ok(());
     }
 
-    if let Some(parent) = overlay_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&overlay_path, toml::to_string_pretty(&overlay)?)?;
+    overlay_cf.save(&overlay)?;
     eprintln!("\nSaved overlay to {}", overlay_path.display());
-    eprintln!(
-        "\nReminder: GitLab tokens still come from env vars — set \
-         GITLAB_TOKEN_<HOSTNAME> per instance or a generic GITLAB_TOKEN."
-    );
     Ok(())
+}
+
+enum TokenChoice {
+    Saved(String),
+    KeepExisting,
+    Skipped,
+}
+
+/// Interactively collect a GitLab API token for `instance`.
+/// Validates existing tokens first (and keeps them if still
+/// valid), then prompts for a new one via `rpassword`. An empty
+/// response skips the instance — useful when a shell env var is
+/// providing the token and the user doesn't want to persist it.
+fn prompt_gitlab_token(
+    instance: &str,
+    existing: Option<&str>,
+) -> Result<TokenChoice, Box<dyn std::error::Error>> {
+    if let Some(tok) = existing {
+        eprint!("  Validating existing {instance} token... ");
+        match sandogasa_gitlab::validate_token(instance, tok) {
+            Ok(true) => {
+                eprintln!("valid.");
+                return Ok(TokenChoice::KeepExisting);
+            }
+            Ok(false) => eprintln!("invalid — re-prompting."),
+            Err(e) => eprintln!("check failed ({e}); re-prompting."),
+        }
+    }
+    let token = rpassword::prompt_password(format!(
+        "  Paste a personal access token for {instance} with 'api' scope \
+         (enter to skip): "
+    ))?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Ok(TokenChoice::Skipped);
+    }
+    eprint!("  Validating... ");
+    match sandogasa_gitlab::validate_token(instance, &token) {
+        Ok(true) => {
+            eprintln!("valid.");
+            Ok(TokenChoice::Saved(token))
+        }
+        Ok(false) => Err(format!("token rejected by {instance}").into()),
+        Err(e) => Err(format!("validation failed for {instance}: {e}").into()),
+    }
 }
 
 fn read_line(prompt: &str) -> io::Result<String> {
@@ -111,6 +171,17 @@ fn read_line(prompt: &str) -> io::Result<String> {
     let mut line = String::new();
     io::stdin().lock().read_line(&mut line)?;
     Ok(line)
+}
+
+/// Read a string leaf at `path` from a `toml::Value`. Returns
+/// `None` if any intermediate key is missing or the leaf isn't a
+/// string.
+fn overlay_get_str(value: &toml::Value, path: &[&str]) -> Option<String> {
+    let mut cur = value;
+    for segment in path {
+        cur = cur.get(*segment)?;
+    }
+    cur.as_str().map(|s| s.to_string())
 }
 
 /// Deep-set a string value at `path` in a `toml::Value`, creating

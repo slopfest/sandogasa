@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### sandogasa-report: persisted GitLab tokens
+
+`sandogasa-report config` now prompts for a GitLab API token per
+unique instance after the username round and saves them to the
+overlay under `[gitlab_tokens]` keyed by hostname (e.g.
+`"gitlab.com" = "glpat-…"`). Existing tokens are validated on
+re-run and kept if still working. The overlay file is written
+with 0600 permissions.
+
+Token lookup order: `GITLAB_TOKEN_<HOSTNAME>` env var →
+`GITLAB_TOKEN` env var → `gitlab_tokens.<host>` from the
+overlay. Env vars win over config so a one-shot shell override
+still works with a persisted token.
+
 ### sandogasa-report: `report` and `config` subcommands (breaking)
 
 CLI restructured to a subcommand shape, matching ebranch,

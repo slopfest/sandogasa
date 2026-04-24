@@ -1797,6 +1797,7 @@ dependencies = [
  "chrono",
  "clap",
  "reqwest",
+ "rpassword",
  "sandogasa-bodhi",
  "sandogasa-bugclass",
  "sandogasa-bugzilla",
