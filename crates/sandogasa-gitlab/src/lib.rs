@@ -3,7 +3,7 @@
 //! GitLab REST and GraphQL API client for issues and work items.
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A GitLab user (assignee).
 #[derive(Debug, Deserialize)]
@@ -812,6 +812,165 @@ pub fn parse_issue_url(url: &str) -> Result<(String, String, u64), String> {
     Ok((format!("{scheme}://{host}"), project.to_string(), iid))
 }
 
+/// A GitLab user as returned by `/users?username=<name>`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct User {
+    pub id: u64,
+    pub username: String,
+}
+
+/// Look up a user by username on a specific GitLab instance.
+/// Returns `Ok(None)` if the server returns 200 with an empty list
+/// (no user with that name on that instance).
+pub fn user_by_username(
+    base_url: &str,
+    token: &str,
+    username: &str,
+) -> Result<Option<User>, Box<dyn std::error::Error>> {
+    let http = build_http_client(token)?;
+    let url = format!("{}/api/v4/users", base_url.trim_end_matches('/'));
+    let resp = http.get(&url).query(&[("username", username)]).send()?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text()?;
+        return Err(format!("GitLab GET {url} failed: {status}: {text}").into());
+    }
+    let users: Vec<User> = resp.json()?;
+    Ok(users.into_iter().next())
+}
+
+/// One entry from the user-activity events endpoint. Fields are
+/// sparse — GitLab only populates the ones relevant to each
+/// `action_name`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Event {
+    pub id: u64,
+    pub project_id: u64,
+    pub action_name: String,
+    #[serde(default)]
+    pub target_type: Option<String>,
+    #[serde(default)]
+    pub target_iid: Option<u64>,
+    #[serde(default)]
+    pub target_title: Option<String>,
+    pub created_at: String,
+    #[serde(default)]
+    pub note: Option<EventNote>,
+    #[serde(default)]
+    pub push_data: Option<EventPushData>,
+}
+
+/// Note payload attached to `commented on` events.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EventNote {
+    #[serde(default)]
+    pub noteable_type: Option<String>,
+    #[serde(default)]
+    pub noteable_iid: Option<u64>,
+    #[serde(default)]
+    pub body: Option<String>,
+}
+
+/// Push payload attached to `pushed to` / `pushed new` events.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EventPushData {
+    #[serde(default)]
+    pub commit_count: u64,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub ref_type: Option<String>,
+    #[serde(default, rename = "ref")]
+    pub ref_name: Option<String>,
+    #[serde(default)]
+    pub commit_title: Option<String>,
+}
+
+/// Fetch a user's activity events within `[after, before)` — GitLab's
+/// event endpoint is half-open on both sides and rejects both-null.
+/// Results are paginated at 100/page; this follows every page until
+/// a short page arrives.
+///
+/// Callers that want events on a closed `[since, until]` day range
+/// should pass `after = since - 1` and `before = until + 1`, since
+/// events ON the boundary day are excluded by GitLab.
+pub fn user_events(
+    base_url: &str,
+    token: &str,
+    user_id: u64,
+    action: Option<&str>,
+    after: chrono::NaiveDate,
+    before: chrono::NaiveDate,
+) -> Result<Vec<Event>, Box<dyn std::error::Error>> {
+    let http = build_http_client(token)?;
+    let endpoint = format!(
+        "{}/api/v4/users/{}/events",
+        base_url.trim_end_matches('/'),
+        user_id
+    );
+    let after_str = after.to_string();
+    let before_str = before.to_string();
+    let mut out: Vec<Event> = Vec::new();
+    let mut page = 1u32;
+    loop {
+        let page_str = page.to_string();
+        let mut query: Vec<(&str, &str)> = vec![
+            ("per_page", "100"),
+            ("page", &page_str),
+            ("after", &after_str),
+            ("before", &before_str),
+        ];
+        if let Some(a) = action {
+            query.push(("action", a));
+        }
+        let resp = http.get(&endpoint).query(&query).send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!("GitLab GET {endpoint} failed: {status}: {text}").into());
+        }
+        let batch: Vec<Event> = resp.json()?;
+        let n = batch.len();
+        out.extend(batch);
+        if n < 100 {
+            break;
+        }
+        page += 1;
+    }
+    Ok(out)
+}
+
+/// Minimal project identity: what you need to filter events by
+/// `path_with_namespace` prefix and render a human-readable link.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProjectSummary {
+    pub id: u64,
+    pub path_with_namespace: String,
+    pub web_url: String,
+}
+
+/// Look up a project's `path_with_namespace` from its numeric ID.
+/// Used to map event `project_id` → group-prefix filter.
+pub fn project_summary(
+    base_url: &str,
+    token: &str,
+    project_id: u64,
+) -> Result<ProjectSummary, Box<dyn std::error::Error>> {
+    let http = build_http_client(token)?;
+    let url = format!(
+        "{}/api/v4/projects/{}",
+        base_url.trim_end_matches('/'),
+        project_id
+    );
+    let resp = http.get(&url).send()?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text()?;
+        return Err(format!("GitLab GET {url} failed: {status}: {text}").into());
+    }
+    Ok(resp.json()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1307,5 +1466,99 @@ mod tests {
     #[test]
     fn parse_issue_url_rejects_non_numeric_iid() {
         assert!(parse_issue_url("https://gitlab.com/a/b/-/issues/xyz").is_err());
+    }
+
+    #[test]
+    fn user_by_username_returns_first_match() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/users?username=alice")
+            .match_header("private-token", "tok")
+            .with_status(200)
+            .with_body(r#"[{"id": 42, "username": "alice"}]"#)
+            .create();
+        let user = user_by_username(&server.url(), "tok", "alice").unwrap();
+        assert_eq!(user.as_ref().map(|u| u.id), Some(42));
+        assert_eq!(user.as_ref().map(|u| u.username.as_str()), Some("alice"));
+        mock.assert();
+    }
+
+    #[test]
+    fn user_by_username_empty_list_is_none() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/users?username=ghost")
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        let user = user_by_username(&server.url(), "tok", "ghost").unwrap();
+        assert!(user.is_none());
+        mock.assert();
+    }
+
+    #[test]
+    fn user_events_single_page() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", mockito::Matcher::Any)
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("page".into(), "1".into()),
+                mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+                mockito::Matcher::UrlEncoded("after".into(), "2026-01-01".into()),
+                mockito::Matcher::UrlEncoded("before".into(), "2026-03-31".into()),
+                mockito::Matcher::UrlEncoded("action".into(), "created".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"[{"id": 1, "project_id": 10, "action_name": "opened",
+                    "target_type": "MergeRequest", "target_iid": 123,
+                    "target_title": "Fix X", "created_at": "2026-02-15T10:00:00Z"}]"#,
+            )
+            .create();
+        let events = user_events(
+            &server.url(),
+            "tok",
+            42,
+            Some("created"),
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].target_iid, Some(123));
+        assert_eq!(events[0].action_name, "opened");
+        mock.assert();
+    }
+
+    #[test]
+    fn event_deserializes_push_data() {
+        let json = r#"{
+            "id": 5,
+            "project_id": 10,
+            "action_name": "pushed to",
+            "created_at": "2026-02-15T10:00:00Z",
+            "push_data": {"commit_count": 3, "ref": "main", "action": "pushed",
+                          "ref_type": "branch", "commit_title": "Fix typo"}
+        }"#;
+        let e: Event = serde_json::from_str(json).unwrap();
+        let push = e.push_data.unwrap();
+        assert_eq!(push.commit_count, 3);
+        assert_eq!(push.ref_name.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn project_summary_returns_path() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/projects/10")
+            .with_status(200)
+            .with_body(
+                r#"{"id": 10, "path_with_namespace": "CentOS/Hyperscale/rpms/perf",
+                    "web_url": "https://gitlab.com/CentOS/Hyperscale/rpms/perf"}"#,
+            )
+            .create();
+        let p = project_summary(&server.url(), "tok", 10).unwrap();
+        assert_eq!(p.path_with_namespace, "CentOS/Hyperscale/rpms/perf");
+        mock.assert();
     }
 }
