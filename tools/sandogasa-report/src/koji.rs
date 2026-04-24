@@ -269,16 +269,21 @@ pub fn format_markdown(
     report: &KojiReport,
     detailed: bool,
     groups: &BTreeMap<String, crate::config::GroupConfig>,
-    _previous: Option<&KojiReport>,
+    heading_suffix: Option<&str>,
 ) -> String {
     let mut out = String::new();
+
+    let heading = match heading_suffix {
+        Some(s) => format!("## Koji CBS ({s})\n\n"),
+        None => "## Koji CBS\n\n".to_string(),
+    };
 
     if report.packages.is_empty() {
         out.push_str("No Koji CBS packages found.\n");
         return out;
     }
 
-    out.push_str("## Koji CBS\n\n");
+    out.push_str(&heading);
 
     let new_count = report
         .packages

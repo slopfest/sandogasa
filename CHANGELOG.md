@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### sandogasa-report: per-domain Koji sections
+
+Multi-domain runs (e.g. `--domain hyperscale --domain proposed_updates`)
+now render one `## Koji CBS (<domain>)` section per domain instead of
+merging all Koji activity into a single `## Koji CBS` block. Single-
+domain runs keep the bare `## Koji CBS` heading. Bodhi and Bugzilla
+sections are unchanged — Bugzilla still runs once across the unioned
+Fedora versions, and Bodhi still merges since its release keys are
+orthogonal across domains.
+
+The JSON shape changes: `report.koji` is now an object keyed by
+domain name (`{"hyperscale": {...}, "proposed_updates": {...}}`)
+instead of a single `KojiReport`. The key is omitted when no domain
+reports Koji activity.
+
 ## v0.10.2
 
 ### New: hs-meetings tool + sandogasa-meetbot library

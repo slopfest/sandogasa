@@ -147,13 +147,13 @@ fn main() -> ExitCode {
         until,
         bugzilla: None,
         bodhi: None,
-        koji: None,
+        koji: std::collections::BTreeMap::new(),
     };
 
     // Collect across all domains.
     let mut needs_bugzilla = false;
     let mut bodhi_domains: Vec<(&str, &config::DomainConfig)> = Vec::new();
-    let mut all_koji_domains = Vec::new();
+    let mut all_koji_domains: Vec<(&str, &config::DomainConfig)> = Vec::new();
     let mut fedora_versions: Vec<u32> = Vec::new();
 
     for (name, domain) in &domains {
@@ -169,7 +169,7 @@ fn main() -> ExitCode {
             bodhi_domains.push((name, domain));
         }
         if !domain.koji_tags.is_empty() && !cli.no_koji {
-            all_koji_domains.push(*domain);
+            all_koji_domains.push((name, domain));
         }
     }
     fedora_versions.sort();
@@ -204,29 +204,14 @@ fn main() -> ExitCode {
         }
     }
 
-    // Koji CBS reporting (merge across all domains).
-    for domain in &all_koji_domains {
+    // Koji CBS reporting — one section per domain. Each domain's
+    // koji_tags produce its own report so multi-domain runs can
+    // render them separately (e.g. "Koji CBS (Hyperscale)" vs
+    // "Koji CBS (Proposed Updates)").
+    for (name, domain) in &all_koji_domains {
         match koji::koji_report(domain, cli.user.as_deref(), since, until, cli.verbose) {
             Ok(koji_report) => {
-                if let Some(ref mut existing) = unified.koji {
-                    // Merge packages from additional domains.
-                    for (name, entry) in koji_report.packages {
-                        existing
-                            .packages
-                            .entry(name)
-                            .and_modify(|e| {
-                                // Merge version maps.
-                                for (distro, ver) in &entry.versions {
-                                    e.versions
-                                        .entry(distro.clone())
-                                        .or_insert_with(|| ver.clone());
-                                }
-                            })
-                            .or_insert(entry);
-                    }
-                } else {
-                    unified.koji = Some(koji_report);
-                }
+                unified.koji.insert((*name).to_string(), koji_report);
             }
             Err(e) => {
                 eprintln!("error: koji: {e}");
@@ -267,7 +252,7 @@ fn main() -> ExitCode {
         }
     }
 
-    if unified.bugzilla.is_none() && unified.bodhi.is_none() && unified.koji.is_none() {
+    if unified.bugzilla.is_none() && unified.bodhi.is_none() && unified.koji.is_empty() {
         eprintln!("No data sources configured for the selected domain(s).");
         return ExitCode::FAILURE;
     }
