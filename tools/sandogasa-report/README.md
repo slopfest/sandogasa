@@ -27,34 +27,46 @@ Requires `koji` CLI for CentOS SIG reporting
 
 ## Usage
 
+Two subcommands:
+
+- `sandogasa-report report` — generate an activity report. Takes
+  the date range, domain list, and output format.
+- `sandogasa-report config` — interactive setup of the per-user
+  overlay (see [Configuration](#configuration)). Walks each
+  GitLab-enabled domain from the main config and prompts for your
+  username on that instance.
+
 ```sh
+# Interactive overlay setup
+sandogasa-report config -c config.toml
+
 # Report on Fedora activity for Q1 2026
-sandogasa-report -c config.toml -d fedora \
+sandogasa-report report -c config.toml -d fedora \
     --user username --period 2026Q1
 
 # Detailed report with per-item listings
-sandogasa-report -c config.toml -d fedora \
+sandogasa-report report -c config.toml -d fedora \
     --user username --period 2026Q1 --detailed
 
 # Multiple domains in one report
-sandogasa-report -c config.toml -d fedora -d hyperscale \
+sandogasa-report report -c config.toml -d fedora -d hyperscale \
     --user username --period 2026Q1
 
 # Arbitrary date range (inclusive)
-sandogasa-report -c config.toml -d epel \
+sandogasa-report report -c config.toml -d epel \
     --user username --since 2026-01-01 --until 2026-06-30
 
 # Full year, half year, and quarter periods
-sandogasa-report -c config.toml -d hyperscale --period 2025
-sandogasa-report -c config.toml -d hyperscale --period 2025H2
-sandogasa-report -c config.toml -d hyperscale --period 2025Q4
+sandogasa-report report -c config.toml -d hyperscale --period 2025
+sandogasa-report report -c config.toml -d hyperscale --period 2025H2
+sandogasa-report report -c config.toml -d hyperscale --period 2025Q4
 
 # JSON output to file
-sandogasa-report -c config.toml -d fedora \
+sandogasa-report report -c config.toml -d fedora \
     --user username --period 2026Q1 --json -o report.json
 
 # Skip specific data sources for faster testing
-sandogasa-report -c config.toml -d fedora \
+sandogasa-report report -c config.toml -d fedora \
     --user username --period 2026Q1 --no-bugzilla --no-bodhi
 ```
 
@@ -74,9 +86,19 @@ sandogasa-report -c config.toml -d fedora \
 
 ## Configuration
 
-A TOML config file defines domains, user email mappings, and
-package groups. See `configs/sandogasa-report/config.toml` for a
-full example.
+Configuration is layered: a **main config** passed via `-c` holds
+the shared structure (domains, groups, koji tags, GitLab instance
+URLs), and a **user overlay** at
+`~/.config/sandogasa-report/config.toml` is auto-loaded and
+deep-merged on top. Overlay values win at every nesting level;
+missing overlay keys leave the main value unchanged.
+
+This lets a team check in one shared `config.toml` and each user
+keep their personal bits (GitLab usernames, Bugzilla emails,
+instance-specific tweaks) in their own home config.
+
+See `configs/sandogasa-report/config.toml` for a full main-config
+example.
 
 ```toml
 # FAS username → Bugzilla email mapping.
@@ -120,6 +142,30 @@ packages = ["intel-gpu-tools", "libdrm", "mesa"]
 
 [groups.developer-tools]
 packages = ["neovim", "helix", "fish"]
+```
+
+### Per-user overlay
+
+A typical overlay at `~/.config/sandogasa-report/config.toml`
+might look like:
+
+```toml
+# Personal GitLab usernames for forges where the login differs
+# from FAS. Everything else (domains, groups, instance URLs) is
+# inherited from the shared `-c` config.
+[domains.hyperscale.gitlab]
+user = "michel-slm"
+
+[domains.proposed-updates.gitlab]
+user = "michel-slm"
+
+[domains.debian.gitlab]
+user = "michel"
+
+# Personal Bugzilla email when FAS → email auto-resolution isn't
+# desirable or available.
+[users]
+salimma = "michel@example.com"
 ```
 
 ### Koji tag patterns

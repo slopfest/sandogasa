@@ -3,12 +3,13 @@
 use std::process::ExitCode;
 
 use chrono::NaiveDate;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 mod bodhi;
 mod brace;
 mod bugzilla;
 mod config;
+mod configure;
 mod gitlab;
 mod koji;
 mod report;
@@ -23,7 +24,22 @@ mod report;
     )
 )]
 struct Cli {
-    /// Path to config file (domains, groups).
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Interactively set per-user overrides in
+    /// `~/.config/sandogasa-report/config.toml`.
+    Config(configure::ConfigArgs),
+    /// Generate an activity report across one or more domains.
+    Report(ReportArgs),
+}
+
+#[derive(clap::Args)]
+struct ReportArgs {
+    /// Path to main config file (domains, groups).
     #[arg(short, long, value_name = "PATH")]
     config: Option<String>,
 
@@ -84,7 +100,7 @@ struct Cli {
 /// `--since` or `--period`; unlike the shared
 /// [`sandogasa_cli::date::resolve_date_range`], sandogasa-report
 /// treats a fully-unbounded range as a user error.
-fn resolve_date_range(cli: &Cli) -> Result<(NaiveDate, NaiveDate), String> {
+fn resolve_date_range(cli: &ReportArgs) -> Result<(NaiveDate, NaiveDate), String> {
     if cli.since.is_none() && cli.period.is_none() {
         return Err("either --since or --period is required".to_string());
     }
@@ -93,8 +109,14 @@ fn resolve_date_range(cli: &Cli) -> Result<(NaiveDate, NaiveDate), String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    match cli.command {
+        Command::Config(args) => configure::run(&args),
+        Command::Report(args) => run_report(&args),
+    }
+}
 
-    let (since, until) = match resolve_date_range(&cli) {
+fn run_report(cli: &ReportArgs) -> ExitCode {
+    let (since, until) = match resolve_date_range(cli) {
         Ok(range) => range,
         Err(e) => {
             eprintln!("error: {e}");
@@ -327,7 +349,7 @@ mod tests {
 
     #[test]
     fn resolve_date_range_requires_since_or_period() {
-        let cli = Cli {
+        let cli = ReportArgs {
             config: None,
             user: None,
             domain: vec![],
@@ -348,7 +370,7 @@ mod tests {
 
     #[test]
     fn resolve_date_range_accepts_period() {
-        let cli = Cli {
+        let cli = ReportArgs {
             config: None,
             user: None,
             domain: vec![],

@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### sandogasa-report: `report` and `config` subcommands (breaking)
+
+CLI restructured to a subcommand shape, matching ebranch,
+cpu-sig-tracker, and other sibling tools. Existing invocations
+of the form `sandogasa-report -c … -d …` now need a leading
+`report`: `sandogasa-report report -c … -d …`. New subcommand
+`sandogasa-report config` walks each GitLab-enabled domain from
+the main config and prompts for the per-user username override,
+writing the result to the overlay at
+`~/.config/sandogasa-report/config.toml` while preserving any
+other keys the user added manually.
+
+### sandogasa-report: per-user config overlay
+
+Configuration is now layered. The `-c` main config holds the
+shared structure (domains, groups, koji tags, GitLab instance
+URLs) and can be checked in; a per-user overlay at
+`~/.config/sandogasa-report/config.toml` is auto-loaded when
+present and deep-merged on top, so personal settings (GitLab
+usernames, Bugzilla emails, any override) stay out of the
+sharable file. Tables merge recursively; scalar and array values
+are replaced wholesale by the overlay.
+
 ### sandogasa-report: GitLab activity reporting
 
 New data source. Each domain can declare

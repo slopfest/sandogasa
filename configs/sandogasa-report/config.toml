@@ -32,7 +32,9 @@ koji_tags = [
 [domains.hyperscale.gitlab]
 instance = "https://gitlab.com"
 group = "CentOS/Hyperscale"
-user = "michel-slm"  # override if GitLab username ≠ FAS login
+# Per-user overrides (e.g. `user = "michel-slm"`) belong in
+# ~/.config/sandogasa-report/config.toml, not here — this file is
+# meant to be sharable across users.
 
 [domains.proposed-updates]
 koji_profile = "cbs"
@@ -42,7 +44,6 @@ koji_tags = [
 [domains.proposed-updates.gitlab]
 instance = "https://gitlab.com"
 group = "CentOS/proposed_updates"
-user = "michel-slm"
 
 # --- Debian ---
 
@@ -50,7 +51,6 @@ user = "michel-slm"
 [domains.debian.gitlab]
 instance = "https://salsa.debian.org"
 # No group filter — all user activity on salsa counts.
-user = "michel"  # override if salsa username ≠ FAS login
 
 # --- Package groups for categorical reporting ---
 # Each group has an optional description and a list of packages.
