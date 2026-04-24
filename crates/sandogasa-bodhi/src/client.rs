@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use std::time::Duration;
+
 use reqwest::Client;
 
 use crate::models::{
@@ -8,6 +10,12 @@ use crate::models::{
 };
 
 const BODHI_API_BASE: &str = "https://bodhi.fedoraproject.org";
+
+/// Upper bound on any single Bodhi HTTP request. Bodhi routinely
+/// takes 5–30s on larger queries, so this is deliberately
+/// generous; its job is to catch genuinely hung connections
+/// rather than to bound latency.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct BodhiClient {
     base_url: String,
@@ -20,18 +28,25 @@ impl Default for BodhiClient {
     }
 }
 
+fn build_http_client() -> Client {
+    Client::builder()
+        .timeout(DEFAULT_TIMEOUT)
+        .build()
+        .expect("build reqwest client")
+}
+
 impl BodhiClient {
     pub fn new() -> Self {
         Self {
             base_url: BODHI_API_BASE.to_string(),
-            client: Client::new(),
+            client: build_http_client(),
         }
     }
 
     pub fn with_base_url(base_url: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
-            client: Client::new(),
+            client: build_http_client(),
         }
     }
 
@@ -118,27 +133,75 @@ impl BodhiClient {
         Ok(resp.update)
     }
 
-    /// Fetch the most recent updates submitted by a user.
+    /// Fetch updates submitted by a user, optionally filtered to
+    /// a submission-date window.
     ///
-    /// Returns up to `limit` updates, most recent first.
-    pub async fn updates_for_user(
+    /// `submitted_since` and `submitted_before` map to Bodhi's
+    /// `submitted_since` / `submitted_before` query params — pass
+    /// them to let Bodhi narrow the result set server-side rather
+    /// than client-filtering a huge response. Both are optional:
+    /// omitting them yields the unfiltered "all updates by user"
+    /// behaviour.
+    ///
+    /// Note: filtering by submission date misses updates
+    /// submitted before the window that transitioned
+    /// (testing/stable) inside it. For activity reports the
+    /// caller should widen `submitted_since` with a reasonable
+    /// buffer (days to weeks) if that edge case matters.
+    ///
+    /// Paginates at 100 rows per request until either `limit`
+    /// updates have been collected or the last page is reached.
+    /// Smaller per-request windows avoid Bodhi's tendency to
+    /// time out on very large single fetches.
+    ///
+    /// `on_page` is invoked after each successful page with
+    /// `(page_number, total_pages, running_count)` so callers
+    /// can stream progress to the user.
+    pub async fn updates_for_user<F>(
         &self,
         username: &str,
         limit: u32,
-    ) -> Result<Vec<Update>, reqwest::Error> {
-        let url = format!(
-            "{}/updates/?user={}&rows_per_page={}&chrome=0",
-            self.base_url, username, limit
-        );
-        let resp: UpdatesResponse = self
-            .client
-            .get(&url)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-        Ok(resp.updates)
+        submitted_since: Option<chrono::NaiveDate>,
+        submitted_before: Option<chrono::NaiveDate>,
+        mut on_page: F,
+    ) -> Result<Vec<Update>, reqwest::Error>
+    where
+        F: FnMut(u64, u64, usize),
+    {
+        let mut all = Vec::new();
+        let mut page = 1;
+        let date_filters = {
+            let mut s = String::new();
+            if let Some(d) = submitted_since {
+                s.push_str(&format!("&submitted_since={d}"));
+            }
+            if let Some(d) = submitted_before {
+                s.push_str(&format!("&submitted_before={d}"));
+            }
+            s
+        };
+        loop {
+            let url = format!(
+                "{}/updates/?user={}{}&rows_per_page=100&chrome=0&page={}",
+                self.base_url, username, date_filters, page
+            );
+            let resp: UpdatesResponse = self
+                .client
+                .get(&url)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            all.extend(resp.updates);
+            on_page(resp.page, resp.pages, all.len());
+            if all.len() >= limit as usize || page >= resp.pages {
+                break;
+            }
+            page += 1;
+        }
+        all.truncate(limit as usize);
+        Ok(all)
     }
 
     /// Fetch the most recent comments by a user.
@@ -358,8 +421,22 @@ mod tests {
             .mount(&server)
             .await;
 
-        let updates = client.updates_for_user("salimma", 1).await.unwrap();
+        let (updates, pages) = {
+            use std::sync::{Arc, Mutex};
+            let pages = Arc::new(Mutex::new(Vec::new()));
+            let pages_capture = Arc::clone(&pages);
+            let updates = client
+                .updates_for_user("salimma", 1, None, None, move |p, t, n| {
+                    pages_capture.lock().unwrap().push((p, t, n));
+                })
+                .await
+                .unwrap();
+            let pages = Arc::try_unwrap(pages).unwrap().into_inner().unwrap();
+            (updates, pages)
+        };
         assert_eq!(updates.len(), 1);
+        // Callback fired at least once with a running count.
+        assert!(!pages.is_empty());
         assert_eq!(updates[0].alias, "FEDORA-2026-b600f85be9");
         assert_eq!(updates[0].release.as_ref().unwrap().name, "F44");
     }
@@ -380,7 +457,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let updates = client.updates_for_user("nobody", 1).await.unwrap();
+        let updates = client
+            .updates_for_user("nobody", 1, None, None, |_, _, _| {})
+            .await
+            .unwrap();
         assert!(updates.is_empty());
     }
 

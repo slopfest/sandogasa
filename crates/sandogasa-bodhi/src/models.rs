@@ -14,6 +14,20 @@ pub struct UpdatesResponse {
 pub struct Update {
     pub alias: String,
     pub status: String,
+    /// Bodhi's auto-generated NVR-joined title (space-separated
+    /// list of builds). Rarely what a reader wants; prefer
+    /// `display_name` or the first line of `notes`.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// User-set one-line display name shown as the update's
+    /// heading in the Bodhi UI. Optional — often empty.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// User-written markdown notes. The first non-empty line is
+    /// typically the update's human-readable summary, even when
+    /// `display_name` is blank.
+    #[serde(default)]
+    pub notes: Option<String>,
     #[serde(default)]
     pub builds: Vec<Build>,
     #[serde(default)]
