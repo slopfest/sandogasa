@@ -44,9 +44,11 @@ hs-meetings sync --file meetings-list.md --period 2026  # limit to a year
 
 Fetches meetings from meetbot, deduplicates against entries
 already present in `--file` (matching by date extracted from
-the URL), and inserts any new ones into the correct `## YYYY`
+the URL), and inserts any new ones into the correct `### YYYY`
 section in reverse-chronological order. New year sections are
-created as needed, newest-first.
+created as needed, newest-first. Year headings are rendered at
+`###` level so they nest under the docs site's `## Meeting
+minutes` parent heading.
 
 Meetings from 2023 and earlier are dropped before insertion:
 pre-2024 sections predate meetbot and often carry hand-curated

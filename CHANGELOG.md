@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### hs-meetings: year headings at `###` level
+
+The tool-managed meetings list is included underneath the docs'
+`## Meeting minutes` parent heading, so year sections now render
+as `### YYYY` instead of `## YYYY`. Fixes the sidebar indent in
+mkdocs-material, where `## YYYY` sections sat at the same level
+as `## Meeting minutes` and visually detached from it.
+
 ### sandogasa-report: per-domain Koji sections
 
 Multi-domain runs (e.g. `--domain hyperscale --domain proposed_updates`)

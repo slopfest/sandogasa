@@ -151,7 +151,6 @@ struct Document {
 
 struct Section {
     year: i32,
-    heading_line: String,
     entries: Vec<Entry>,
 }
 
@@ -182,7 +181,6 @@ impl Document {
         } else {
             let new_section = Section {
                 year,
-                heading_line: format!("## {year}\n"),
                 entries: vec![entry],
             };
             let pos = self
@@ -194,11 +192,16 @@ impl Document {
         }
     }
 
+    /// Render with `### YYYY` year headings. The tool-managed
+    /// meetings-list file is included underneath the `## Meeting
+    /// minutes` heading in the docs, so year sections must be
+    /// a deeper level to nest correctly in the site's sidebar.
+    /// Any pre-existing `## YYYY` or similar headings in the file
+    /// are normalized to `###` on write.
     fn render(&self) -> String {
         let mut out = self.header.clone();
         for section in &self.sections {
-            out.push_str(&section.heading_line);
-            out.push('\n');
+            out.push_str(&format!("### {}\n\n", section.year));
             for entry in &section.entries {
                 out.push_str(&entry.text);
             }
@@ -222,22 +225,22 @@ fn render_entry(m: &Meeting) -> String {
 fn parse_document(text: &str) -> Result<Document, String> {
     let mut header_lines: Vec<&str> = Vec::new();
     let mut sections: Vec<Section> = Vec::new();
-    let mut current: Option<(i32, String, Vec<&str>)> = None;
+    let mut current: Option<(i32, Vec<&str>)> = None;
 
     for line in text.lines() {
         if let Some(year) = parse_year_heading(line) {
-            if let Some((y, h, body)) = current.take() {
-                sections.push(parse_section(y, h, body)?);
+            if let Some((y, body)) = current.take() {
+                sections.push(parse_section(y, body)?);
             }
-            current = Some((year, format!("{line}\n"), Vec::new()));
-        } else if let Some((_, _, body)) = current.as_mut() {
+            current = Some((year, Vec::new()));
+        } else if let Some((_, body)) = current.as_mut() {
             body.push(line);
         } else {
             header_lines.push(line);
         }
     }
-    if let Some((y, h, body)) = current {
-        sections.push(parse_section(y, h, body)?);
+    if let Some((y, body)) = current {
+        sections.push(parse_section(y, body)?);
     }
 
     let header = if header_lines.is_empty() {
@@ -255,7 +258,7 @@ fn parse_document(text: &str) -> Result<Document, String> {
     Ok(Document { header, sections })
 }
 
-fn parse_section(year: i32, heading_line: String, body: Vec<&str>) -> Result<Section, String> {
+fn parse_section(year: i32, body: Vec<&str>) -> Result<Section, String> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut current_lines: Vec<&str> = Vec::new();
 
@@ -279,11 +282,7 @@ fn parse_section(year: i32, heading_line: String, body: Vec<&str>) -> Result<Sec
         entries.push(build_entry(current_lines)?);
     }
 
-    Ok(Section {
-        year,
-        heading_line,
-        entries,
-    })
+    Ok(Section { year, entries })
 }
 
 fn build_entry(lines: Vec<&str>) -> Result<Entry, String> {
@@ -443,14 +442,20 @@ mod tests {
     }
 
     #[test]
-    fn render_roundtrips_canonical() {
-        let text = "## 2024\n\n\
+    fn render_normalizes_heading_level_to_h3() {
+        // Existing `## YYYY` headings are rewritten to `### YYYY`
+        // so the meetings list nests correctly under the docs'
+        // `## Meeting minutes` parent heading.
+        let input = "## 2024\n\n\
 * May 22: agenda,\n          [summary](https://x/2024-05-22-16.06.html),\n          [logs](https://x/2024-05-22-16.06.log.html)\n\n\
 ## 2023\n\n\
 * Dec 20: agenda,\n          [summary](https://y/2023-12-20-16.00.html),\n          [logs](https://y/2023-12-20-16.00.log.html)\n";
-        let doc = parse_document(text).unwrap();
+        let expected = input
+            .replace("## 2024", "### 2024")
+            .replace("## 2023", "### 2023");
+        let doc = parse_document(input).unwrap();
         let out = doc.render();
-        assert_eq!(out, text);
+        assert_eq!(out, expected);
     }
 
     #[test]
@@ -476,7 +481,7 @@ mod tests {
         let mut doc = parse_document("").unwrap();
         doc.insert(&meeting("2026-04-22T15:08:00"));
         let out = doc.render();
-        assert!(out.contains("## 2026\n"));
+        assert!(out.contains("### 2026\n"));
         assert!(out.contains("* Apr 22: [summary]("));
         assert!(!out.contains("agenda"));
     }
