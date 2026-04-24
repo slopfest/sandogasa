@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### sandogasa-report: authored-commit count alongside pushed (breaking JSON)
+
+GitLab's push events credit every commit in a push to the
+pusher, so a single `git push --mirror` of someone else's repo
+can wildly inflate the numbers. Sync now cross-checks with
+`/projects/:id/repository/commits?author=<user>` and reports
+both:
+
+    - **Commits pushed:** 193 across 6 project(s)
+    - **Commits authored:** 14
+
+In detailed mode, the per-project breakdown shows both side by
+side so a mirror is obvious at a glance:
+
+    - `CentOS/Hyperscale/rpms/kernel`: 0 authored / 187 pushed
+    - `CentOS/Hyperscale/rpms/perf`:   12 authored / 14 pushed
+
+Cost: one additional API call per unique project the user
+pushed to.
+
+JSON shape change: `GitlabReport.commits_by_project` is renamed
+to `commits_pushed`; a sibling `commits_authored` map is added.
+
+`sandogasa-gitlab` gained `count_authored_commits` as a reusable
+primitive.
+
 ### sandogasa-report: user profiles (breaking)
 
 Replaces the old `[users] <fas> = "<email>"` map and the

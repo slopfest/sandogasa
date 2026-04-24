@@ -13,8 +13,10 @@ packaging activity across multiple systems:
 - **Koji CBS**: new packages and version updates in CentOS SIG
   release tags, with date-range comparison
 - **GitLab**: MRs opened / merged / approved / commented on, plus
-  pushed commit counts per project. Optionally scoped by group
-  prefix (`CentOS/Hyperscale`, `CentOS/Hyperscale/rpms`, etc.)
+  both pushed and authored commit counts per project. The gap
+  between the two flags mirror activity (pushes of commits the
+  user didn't author). Optionally scoped by group prefix
+  (`CentOS/Hyperscale`, `CentOS/Hyperscale/rpms`, etc.)
 
 ## Installation
 

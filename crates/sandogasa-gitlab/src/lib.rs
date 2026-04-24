@@ -971,6 +971,64 @@ pub fn project_summary(
     Ok(resp.json()?)
 }
 
+/// Count commits in `project_id` authored by `author` within
+/// `[since, until]` (inclusive). GitLab's commits endpoint
+/// matches the `author` parameter against both name and email
+/// fields, so passing the GitLab username usually works; if the
+/// user authored commits under an email only, pass that email
+/// string instead.
+///
+/// Intended as a cross-check against the push-event count: a big
+/// gap (pushed >> authored) flags mirror activity — the user
+/// pushed commits they didn't author.
+pub fn count_authored_commits(
+    base_url: &str,
+    token: &str,
+    project_id: u64,
+    author: &str,
+    since: chrono::NaiveDate,
+    until: chrono::NaiveDate,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let http = build_http_client(token)?;
+    let endpoint = format!(
+        "{}/api/v4/projects/{}/repository/commits",
+        base_url.trim_end_matches('/'),
+        project_id
+    );
+    // Both bounds are inclusive on this endpoint (unlike the
+    // events endpoint), so pass the days as-is.
+    let since_str = format!("{since}T00:00:00Z");
+    let until_str = format!("{until}T23:59:59Z");
+    let mut total: u64 = 0;
+    let mut page = 1u32;
+    loop {
+        let page_str = page.to_string();
+        let query: Vec<(&str, &str)> = vec![
+            ("per_page", "100"),
+            ("page", &page_str),
+            ("author", author),
+            ("since", &since_str),
+            ("until", &until_str),
+        ];
+        let resp = http.get(&endpoint).query(&query).send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!("GitLab GET {endpoint} failed: {status}: {text}").into());
+        }
+        // The endpoint returns an array; we only need the length
+        // so decode as a generic array and count.
+        let batch: Vec<serde_json::Value> = resp.json()?;
+        let n = batch.len() as u64;
+        total += n;
+        if n < 100 {
+            break;
+        }
+        page += 1;
+    }
+    Ok(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1544,6 +1602,40 @@ mod tests {
         let push = e.push_data.unwrap();
         assert_eq!(push.commit_count, 3);
         assert_eq!(push.ref_name.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn count_authored_commits_paginates_and_sums() {
+        let mut server = mockito::Server::new();
+        let mock_p1 = server
+            .mock("GET", "/api/v4/projects/10/repository/commits")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("page".into(), "1".into()),
+                mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+                mockito::Matcher::UrlEncoded("author".into(), "michel-slm".into()),
+            ]))
+            .with_status(200)
+            // 100 entries → paginator fetches another page.
+            .with_body(format!("[{}]", vec!["{}"; 100].join(",")))
+            .create();
+        let mock_p2 = server
+            .mock("GET", "/api/v4/projects/10/repository/commits")
+            .match_query(mockito::Matcher::UrlEncoded("page".into(), "2".into()))
+            .with_status(200)
+            .with_body("[{},{},{}]")
+            .create();
+        let n = count_authored_commits(
+            &server.url(),
+            "tok",
+            10,
+            "michel-slm",
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(n, 103);
+        mock_p1.assert();
+        mock_p2.assert();
     }
 
     #[test]

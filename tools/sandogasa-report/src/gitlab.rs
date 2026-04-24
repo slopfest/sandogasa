@@ -10,7 +10,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
-use sandogasa_gitlab::{Event, project_summary, user_by_username, user_events};
+use sandogasa_gitlab::{
+    Event, count_authored_commits, project_summary, user_by_username, user_events,
+};
 use serde::Serialize;
 
 use crate::config::GitlabConfig;
@@ -36,10 +38,18 @@ pub struct GitlabReport {
     /// MRs the user commented on (deduplicated per MR).
     pub commented_mrs: Vec<MrRef>,
 
-    /// Commit totals per project, summed from push events.
-    /// Individual commits are not enumerated — GitLab's activity
-    /// feed reports them by push, not by commit.
-    pub commits_by_project: BTreeMap<String, u64>,
+    /// Per-project count of commits pushed by the user. Derived
+    /// from push events, so it includes commits the user didn't
+    /// author (mirrors, rebase pushes of others' work, etc.).
+    pub commits_pushed: BTreeMap<String, u64>,
+
+    /// Per-project count of commits actually authored by the user
+    /// in the reporting window, from
+    /// `/projects/:id/repository/commits?author=<username>`. A
+    /// big gap between `commits_pushed` and `commits_authored`
+    /// on a project flags mirror/rebase activity: the user is
+    /// getting credited for other people's commits.
+    pub commits_authored: BTreeMap<String, u64>,
 }
 
 /// Pointer back to a merge request in the report's summary lists.
@@ -102,6 +112,10 @@ pub fn gitlab_report(
     };
     let mut commented_seen: BTreeSet<(u64, u64)> = BTreeSet::new();
 
+    // Track which project_ids fall inside the group filter so we
+    // only fire authored-count lookups for the projects the
+    // report actually covers.
+    let mut project_ids_in_group: BTreeSet<u64> = BTreeSet::new();
     for ev in &events {
         if !in_date_range(&ev.created_at, since, until) {
             continue;
@@ -112,7 +126,39 @@ pub fn gitlab_report(
         if !path_in_group(path, cfg.group.as_deref()) {
             continue;
         }
+        project_ids_in_group.insert(ev.project_id);
         dispatch_event(ev, path, &mut report, &mut commented_seen);
+    }
+
+    // Authored-commit counts, one call per in-scope project. Runs
+    // only where the user already pushed; projects the user
+    // only commented on or approved MRs for don't count here.
+    if verbose {
+        eprintln!(
+            "[gitlab] {base}: fetching authored-commit counts for {} project(s)",
+            report.commits_pushed.len()
+        );
+    }
+    let pushed_paths: Vec<String> = report.commits_pushed.keys().cloned().collect();
+    for path in &pushed_paths {
+        // project_id isn't stored in commits_pushed; look up by
+        // inverting `paths`. This is linear but the map is tiny
+        // (one entry per touched project).
+        let Some((pid, _)) = paths.iter().find(|(_, p)| *p == path) else {
+            continue;
+        };
+        if !project_ids_in_group.contains(pid) {
+            continue;
+        }
+        match count_authored_commits(base, &token, *pid, user, since, until) {
+            Ok(n) => {
+                report.commits_authored.insert(path.clone(), n);
+            }
+            Err(e) if verbose => {
+                eprintln!("[gitlab] {base}: authored-commit lookup failed for {path}: {e}");
+            }
+            Err(_) => {}
+        }
     }
 
     Ok(report)
@@ -135,14 +181,15 @@ pub fn format_markdown(
         && report.merged_mrs.is_empty()
         && report.approved_mrs.is_empty()
         && report.commented_mrs.is_empty()
-        && report.commits_by_project.is_empty()
+        && report.commits_pushed.is_empty()
     {
         let mut out = heading;
         out.push_str("No GitLab activity.\n\n");
         return out;
     }
 
-    let total_commits: u64 = report.commits_by_project.values().sum();
+    let total_pushed: u64 = report.commits_pushed.values().sum();
+    let total_authored: u64 = report.commits_authored.values().sum();
     let mut out = heading;
     out.push_str(&format!("- **MRs opened:** {}\n", report.opened_mrs.len()));
     out.push_str(&format!("- **MRs merged:** {}\n", report.merged_mrs.len()));
@@ -154,9 +201,13 @@ pub fn format_markdown(
         "- **MRs commented on:** {}\n",
         report.commented_mrs.len()
     ));
+    let authored_projects = report.commits_authored.values().filter(|&&n| n > 0).count();
     out.push_str(&format!(
-        "- **Commits pushed:** {total_commits} across {} project(s)\n\n",
-        report.commits_by_project.len()
+        "- **Commits pushed:** {total_pushed} across {} project(s)\n",
+        report.commits_pushed.len()
+    ));
+    out.push_str(&format!(
+        "- **Commits authored:** {total_authored} across {authored_projects} project(s)\n\n",
     ));
 
     if !detailed {
@@ -179,10 +230,13 @@ pub fn format_markdown(
         out.push_str("### Commented on\n\n");
         write_mr_list(&mut out, &report.commented_mrs, &report.instance);
     }
-    if !report.commits_by_project.is_empty() {
+    if !report.commits_pushed.is_empty() {
         out.push_str("### Commits by project\n\n");
-        for (project, count) in &report.commits_by_project {
-            out.push_str(&format!("- `{project}`: {count} commits\n"));
+        for (project, pushed) in &report.commits_pushed {
+            let authored = report.commits_authored.get(project).copied().unwrap_or(0);
+            out.push_str(&format!(
+                "- `{project}`: {authored} authored / {pushed} pushed\n"
+            ));
         }
         out.push('\n');
     }
@@ -262,10 +316,7 @@ fn dispatch_event(
         }
         ("pushed to", _) | ("pushed new", _) => {
             if let Some(pd) = &ev.push_data {
-                *report
-                    .commits_by_project
-                    .entry(path.to_string())
-                    .or_insert(0) += pd.commit_count;
+                *report.commits_pushed.entry(path.to_string()).or_insert(0) += pd.commit_count;
             }
         }
         _ => {}
@@ -442,7 +493,7 @@ mod tests {
         let mut seen = BTreeSet::new();
         dispatch_event(&ev, "a/b", &mut report, &mut seen);
         dispatch_event(&ev, "a/b", &mut report, &mut seen);
-        assert_eq!(report.commits_by_project.get("a/b"), Some(&6));
+        assert_eq!(report.commits_pushed.get("a/b"), Some(&6));
     }
 
     #[test]
