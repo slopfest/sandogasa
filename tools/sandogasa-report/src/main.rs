@@ -157,18 +157,39 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
 
     let domain_label = cli.domain.join(" + ");
 
+    // Resolve the CLI --user into a profile (if one is defined in
+    // config.users) plus a FAS login string for the FAS-based
+    // services (Bugzilla/Bodhi/Koji). Unknown --user values fall
+    // back to being treated as the FAS login directly.
+    let profile_key = cli.user.as_deref();
+    let profile = profile_key.and_then(|k| cfg.users.get(k));
+    let fas_user: Option<String> = profile_key.map(|k| {
+        profile
+            .map(|p| p.fas_or(k))
+            .unwrap_or_else(|| k.to_string())
+    });
+    let bz_email_override = profile.and_then(|p| p.bugzilla_email.as_deref());
+
     if cli.verbose {
         eprintln!("[report] domain={domain_label}, period={since} to {until}");
-        if let Some(ref user) = cli.user {
-            eprintln!("[report] user={user}");
+        if let Some(key) = profile_key {
+            match (&fas_user, profile.is_some()) {
+                (Some(fas), true) => eprintln!("[report] profile={key}, fas={fas}"),
+                (Some(fas), false) => eprintln!("[report] user={fas} (no profile)"),
+                _ => {}
+            }
         }
     }
 
     let rt = tokio::runtime::Runtime::new().expect("failed to create async runtime");
 
-    // Build the unified report.
+    // Build the unified report. The header's "primary" identity is
+    // the resolved FAS login — the profile key is a CLI shorthand,
+    // not a username on any service, so rendering it would be
+    // misleading (and any GitLab username matching the profile key
+    // but not the FAS login would go unlabeled).
     let mut unified = report::Report {
-        user: cli.user.clone(),
+        user: fas_user.clone(),
         domain: domain_label,
         since,
         until,
@@ -210,8 +231,8 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
 
     // Bugzilla reporting (only once, regardless of how many domains).
     if needs_bugzilla {
-        if let Some(ref user) = cli.user {
-            let email = match bugzilla::resolve_email(user, &cfg.users, cli.verbose) {
+        if let Some(ref user) = fas_user {
+            let email = match bugzilla::resolve_email(user, bz_email_override, cli.verbose) {
                 Ok(e) => e,
                 Err(e) => {
                     eprintln!("error: {e}");
@@ -243,7 +264,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
     // render them separately (e.g. "Koji CBS (Hyperscale)" vs
     // "Koji CBS (Proposed Updates)").
     for (name, domain) in &all_koji_domains {
-        match koji::koji_report(domain, cli.user.as_deref(), since, until, cli.verbose) {
+        match koji::koji_report(domain, fas_user.as_deref(), since, until, cli.verbose) {
             Ok(koji_report) => {
                 unified.koji.insert((*name).to_string(), koji_report);
             }
@@ -256,7 +277,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
 
     // Bodhi reporting.
     if !bodhi_domains.is_empty() {
-        if let Some(ref user) = cli.user {
+        if let Some(ref user) = fas_user {
             for (_, domain) in &bodhi_domains {
                 match rt.block_on(bodhi::bodhi_report(user, domain, since, until, cli.verbose)) {
                     Ok(bodhi_report) => {
@@ -286,23 +307,25 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         }
     }
 
-    // GitLab reporting — one section per domain with a gitlab config.
-    // Each domain may override the CLI --user with its own
-    // instance-specific username (salimma on FAS ≠ michel-slm on
-    // gitlab.com ≠ michel on salsa). Domains without an override
-    // fall back to the CLI user.
+    // GitLab reporting — one section per domain. Username
+    // resolution: profile.gitlab[<instance_host>] → profile.fas →
+    // raw --user. Domains with no resolvable username are skipped
+    // with a warning.
     for (name, gl) in &gitlab_domains {
-        let user = match gl.user.as_deref().or(cli.user.as_deref()) {
-            Some(u) => u,
-            None => {
-                eprintln!(
-                    "warning: GitLab domain '{name}' has no user — \
-                     set --user or [domains.{name}.gitlab] user in config, skipping"
-                );
-                continue;
-            }
+        let host = gitlab::instance_host(&gl.instance);
+        let resolved = profile
+            .and_then(|p| p.gitlab_username(&host))
+            .map(String::from)
+            .or_else(|| fas_user.clone());
+        let Some(user) = resolved else {
+            eprintln!(
+                "warning: GitLab domain '{name}' has no user — \
+                 set --user, or add [users.<name>.gitlab.\"{host}\"] \
+                 to the config, skipping"
+            );
+            continue;
         };
-        match gitlab::gitlab_report(gl, user, since, until, &cfg.gitlab_tokens, cli.verbose) {
+        match gitlab::gitlab_report(gl, &user, since, until, &cfg.gitlab_tokens, cli.verbose) {
             Ok(gl_report) => {
                 unified.gitlab.insert((*name).to_string(), gl_report);
             }

@@ -3,10 +3,19 @@
 # Domains define which data sources to query for a report.
 # Use with: sandogasa-report -c configs/sandogasa-report/config.toml -d <domain>
 
-# FAS username → Bugzilla email mapping.
-# If not set, looked up via FASJSON (requires Kerberos).
-[users]
-# username = "user"
+# User profiles go in the per-user overlay
+# (~/.config/sandogasa-report/config.toml), not here, since they
+# contain per-service identities. See `sandogasa-report config`
+# for interactive setup.
+#
+# Example overlay:
+#   [users.michel]
+#   fas = "salimma"
+#   bugzilla_email = "michel@example.com"
+#
+#   [users.michel.gitlab]
+#   "gitlab.com" = "michel-slm"
+#   "salsa.debian.org" = "michel"
 
 # --- Fedora domains ---
 
@@ -32,9 +41,6 @@ koji_tags = [
 [domains.hyperscale.gitlab]
 instance = "https://gitlab.com"
 group = "CentOS/Hyperscale"
-# Per-user overrides (e.g. `user = "michel-slm"`) belong in
-# ~/.config/sandogasa-report/config.toml, not here — this file is
-# meant to be sharable across users.
 
 [domains.proposed-updates]
 koji_profile = "cbs"

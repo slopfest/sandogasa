@@ -49,39 +49,42 @@ pub fn format_markdown(
 
     // Header.
     out.push_str(&format!("# Activity Report: {}\n\n", report.domain));
-    // Collect per-domain GitLab username overrides — those whose
-    // GitLab user differs from the CLI user, grouped by alias so
-    // one override spanning several domains appears on one line.
-    let cli_user = report.user.as_deref();
-    let mut aliases: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (domain, gl) in &report.gitlab {
-        if Some(gl.user.as_str()) != cli_user {
-            aliases
-                .entry(gl.user.as_str())
-                .or_default()
-                .push(domain.as_str());
+    // Per-instance GitLab usernames that differ from the FAS login.
+    // Keyed by hostname (not CLI domain), since one GitLab
+    // instance is serving multiple CLI domains is the common case
+    // (hyperscale + proposed-updates both on gitlab.com) and
+    // showing the host-level identity once reads more naturally
+    // than repeating it per CLI domain.
+    let fas_user = report.user.as_deref();
+    let mut gitlab_aliases: BTreeMap<String, String> = BTreeMap::new();
+    for gl in report.gitlab.values() {
+        let host = crate::gitlab::instance_host(&gl.instance);
+        if Some(gl.user.as_str()) != fas_user {
+            gitlab_aliases
+                .entry(host)
+                .or_insert_with(|| gl.user.clone());
         }
     }
-    match (report.user.as_deref(), aliases.is_empty()) {
+    match (fas_user, gitlab_aliases.is_empty()) {
         // No aliases: keep the compact single-line form.
         (Some(user), true) => out.push_str(&format!("**User:** `{user}`\n")),
-        // CLI user plus aliases: render as a bulleted list so
-        // each identity stands alone. Usernames are backticked
-        // for consistency — they're identifiers, not prose.
+        // FAS user plus per-host GitLab aliases: render as a
+        // bulleted identity list. FAS is annotated so it's clear
+        // which service the primary username applies to.
         (Some(user), false) => {
             out.push_str("**User:**\n");
-            out.push_str(&format!("  - `{user}`\n"));
-            for (alias, domains) in &aliases {
-                out.push_str(&format!("  - `{alias}` (GitLab: {})\n", domains.join(", ")));
+            out.push_str(&format!("  - `{user}` (FAS)\n"));
+            for (host, alias) in &gitlab_aliases {
+                out.push_str(&format!("  - `{alias}` ({host})\n"));
             }
             out.push('\n');
         }
-        // No CLI user but config-declared aliases (rare — e.g.
-        // running with per-domain users only).
+        // No FAS user but GitLab identities are configured (rare —
+        // running without --user against GitLab-only domains).
         (None, false) => {
             out.push_str("**User:**\n");
-            for (alias, domains) in &aliases {
-                out.push_str(&format!("  - `{alias}` (GitLab: {})\n", domains.join(", ")));
+            for (host, alias) in &gitlab_aliases {
+                out.push_str(&format!("  - `{alias}` ({host})\n"));
             }
             out.push('\n');
         }
@@ -258,14 +261,16 @@ mod tests {
             gitlab,
         };
         let md = format_markdown(&report, false, &BTreeMap::new());
-        // List form: User heading followed by CLI user and one
-        // bullet per distinct alias; the michel-slm line lists
-        // both domains that share it. All usernames are backticked.
-        assert!(md.contains("**User:**\n  - `salimma`\n"));
-        assert!(md.contains("  - `michel-slm` (GitLab: hyperscale, proposed-updates)"));
-        assert!(md.contains("  - `michel` (GitLab: debian)"));
+        // List form: FAS primary (labeled) + one bullet per
+        // instance hostname. The two hyperscale/proposed-updates
+        // entries share a host → only one bullet for gitlab.com.
+        assert!(md.contains("**User:**\n  - `salimma` (FAS)\n"));
+        assert!(md.contains("  - `michel-slm` (gitlab.com)"));
+        assert!(md.contains("  - `michel` (salsa.debian.org)"));
         // Blank line separates the identity block from Period.
-        assert!(md.contains("proposed-updates)\n\n**Period:**"));
+        // BTreeMap sorts hosts alphabetically → salsa.debian.org
+        // is last before the trailing blank.
+        assert!(md.contains("(salsa.debian.org)\n\n**Period:**"));
     }
 
     #[test]

@@ -9,9 +9,11 @@ use serde::Deserialize;
 /// Top-level config.
 #[derive(Debug, Default, Deserialize)]
 pub struct ReportConfig {
-    /// FAS username → Bugzilla email mapping.
+    /// Named user profiles. The key is the CLI `--user` value;
+    /// the value holds per-service identities (FAS login,
+    /// Bugzilla email, per-instance GitLab usernames).
     #[serde(default)]
-    pub users: BTreeMap<String, String>,
+    pub users: BTreeMap<String, User>,
 
     /// Named domain presets.
     #[serde(default)]
@@ -29,6 +31,47 @@ pub struct ReportConfig {
     /// values are credentials.
     #[serde(default)]
     pub gitlab_tokens: BTreeMap<String, String>,
+}
+
+/// A person's identity across multiple services. The profile key
+/// (map key in `[users]`) is what the CLI `--user` flag matches;
+/// each field resolves to a service-specific username so reports
+/// for a single person can span services that don't share a
+/// username (FAS `salimma` vs gitlab.com `michel-slm` vs salsa
+/// `michel`).
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct User {
+    /// FAS (Fedora Account System) login, used for Bugzilla
+    /// creator queries, Bodhi request/comment filtering, Koji
+    /// owner filtering. If unset, the profile key is used —
+    /// convenient when the profile name matches the FAS login.
+    #[serde(default)]
+    pub fas: Option<String>,
+
+    /// Bugzilla email override. When unset, the tool asks FASJSON
+    /// to resolve FAS → email.
+    #[serde(default)]
+    pub bugzilla_email: Option<String>,
+
+    /// Per-instance GitLab usernames, keyed by hostname (e.g.
+    /// `"gitlab.com" = "michel-slm"`). The lookup uses the domain
+    /// config's `instance` URL.
+    #[serde(default)]
+    pub gitlab: BTreeMap<String, String>,
+}
+
+impl User {
+    /// Resolve the FAS login for this profile, falling back to
+    /// the given profile key when `fas` is unset.
+    pub fn fas_or(&self, key: &str) -> String {
+        self.fas.clone().unwrap_or_else(|| key.to_string())
+    }
+
+    /// GitLab username on a specific instance host (e.g.
+    /// `"gitlab.com"`), if the profile has one configured.
+    pub fn gitlab_username(&self, instance_host: &str) -> Option<&str> {
+        self.gitlab.get(instance_host).map(String::as_str)
+    }
 }
 
 /// A package group with an optional description.
@@ -77,7 +120,8 @@ pub struct DomainConfig {
 /// Per-domain GitLab settings. If `group` is set, activity events
 /// are filtered to projects whose `path_with_namespace` starts
 /// with that prefix. Omit `group` to include all user activity on
-/// the instance.
+/// the instance. Per-user GitLab username overrides live on the
+/// user profile (`[users.<key>.gitlab]`), not here.
 #[derive(Debug, Default, Deserialize)]
 pub struct GitlabConfig {
     /// GitLab base URL (e.g. `https://gitlab.com`,
@@ -88,13 +132,6 @@ pub struct GitlabConfig {
     /// `CentOS/Hyperscale/rpms`). Matches on path_with_namespace.
     #[serde(default)]
     pub group: Option<String>,
-
-    /// Override the CLI `--user` for this instance. Needed when
-    /// the user's GitLab username differs from their FAS login
-    /// (e.g. FAS `salimma` vs gitlab.com `michel-slm` vs salsa
-    /// `michel`). If unset, the CLI `--user` value is used.
-    #[serde(default)]
-    pub user: Option<String>,
 }
 
 /// Load config with a per-user overlay.
@@ -300,7 +337,7 @@ packages = ["pkg1", "pkg2"]
     }
 
     #[test]
-    fn load_layered_overlay_overrides_main() {
+    fn load_layered_overlay_adds_user_profile() {
         let dir = tempfile::tempdir().unwrap();
         let main_path = dir.path().join("main.toml");
         std::fs::write(
@@ -316,15 +353,24 @@ group = "CentOS/Hyperscale"
         std::fs::write(
             &overlay_path,
             r#"
-[domains.hyperscale.gitlab]
-user = "michel-slm"
+[users.michel]
+fas = "salimma"
+
+[users.michel.gitlab]
+"gitlab.com" = "michel-slm"
 "#,
         )
         .unwrap();
         let cfg = load_layered(Some(&main_path), Some(&overlay_path)).unwrap();
+        // Main config's domain is intact.
         let gl = cfg.domains["hyperscale"].gitlab.as_ref().unwrap();
         assert_eq!(gl.instance, "https://gitlab.com");
-        assert_eq!(gl.group.as_deref(), Some("CentOS/Hyperscale"));
-        assert_eq!(gl.user.as_deref(), Some("michel-slm"));
+        // Overlay added the user profile.
+        let u = &cfg.users["michel"];
+        assert_eq!(u.fas.as_deref(), Some("salimma"));
+        assert_eq!(
+            u.gitlab.get("gitlab.com").map(String::as_str),
+            Some("michel-slm")
+        );
     }
 }

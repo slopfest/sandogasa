@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### sandogasa-report: user profiles (breaking)
+
+Replaces the old `[users] <fas> = "<email>"` map and the
+`[domains.X.gitlab].user` override with first-class user
+profiles. One profile represents a single person and ties
+together their per-service identities — FAS login, Bugzilla
+email, and GitLab usernames per instance:
+
+```toml
+[users.michel]
+fas = "salimma"
+bugzilla_email = "michel@example.com"
+
+[users.michel.gitlab]
+"gitlab.com" = "michel-slm"
+"salsa.debian.org" = "michel"
+```
+
+`sandogasa-report report --user michel` resolves the profile
+once and each backend picks the right username:
+
+- Bugzilla / Bodhi / Koji: `profile.fas` (or the profile key if
+  unset)
+- GitLab on `<host>`: `profile.gitlab[<host>]` → `profile.fas` →
+  raw `--user`
+
+Unknown `--user` values still work — they're treated as a raw
+FAS login for back-compat with scripts that don't use profiles.
+
+`sandogasa-report config` now walks through: profile key
+(showing existing profiles), FAS username, Bugzilla email,
+per-instance GitLab usernames, per-instance tokens. Every value
+has a default (the current one) so re-running with Enter
+presses keeps everything in place.
+
+Breaking changes:
+
+- `[users] <fas> = "<email>"` → `[users.<profile>]
+  bugzilla_email = "<email>"`
+- `[domains.X.gitlab].user` is dropped — move to
+  `[users.<profile>.gitlab].<host>`
+
 ### sandogasa-report: persisted GitLab tokens
 
 `sandogasa-report config` now prompts for a GitLab API token per

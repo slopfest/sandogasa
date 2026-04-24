@@ -3,7 +3,7 @@
 //! Bugzilla activity reporting — review requests, CVE fixes,
 //! update requests, branch requests, and general bugs.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use chrono::NaiveDate;
 use sandogasa_bugclass::BugKind;
@@ -99,19 +99,19 @@ impl From<&sandogasa_bugzilla::models::Bug> for BugEntry {
 /// Resolve the Bugzilla email for a FAS user.
 ///
 /// Checks (in order):
-/// 1. Config file `[users]` mapping
+/// 1. The profile's `bugzilla_email` override, if set
 /// 2. FASJSON `rhbzemail` field (requires Kerberos)
 /// 3. First email from FASJSON `emails` list
 pub fn resolve_email(
     user: &str,
-    users: &BTreeMap<String, String>,
+    profile_email: Option<&str>,
     verbose: bool,
 ) -> Result<String, String> {
-    if let Some(email) = users.get(user) {
+    if let Some(email) = profile_email {
         if verbose {
             eprintln!("[bugzilla] using configured email for {user}: {email}");
         }
-        return Ok(email.clone());
+        return Ok(email.to_string());
     }
 
     if verbose {
@@ -134,12 +134,12 @@ pub fn resolve_email(
             }
             Err(format!(
                 "FASJSON returned no emails for {user}. \
-                 Add the mapping to [users] in the config file."
+                 Set `bugzilla_email` on the user profile in the config."
             ))
         }
         Err(e) => Err(format!(
             "could not look up {user} via FASJSON: {e}. \
-             Add the mapping to [users] in the config file."
+             Set `bugzilla_email` on the user profile in the config."
         )),
     }
 }

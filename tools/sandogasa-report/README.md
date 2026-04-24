@@ -150,22 +150,16 @@ A typical overlay at `~/.config/sandogasa-report/config.toml`
 might look like:
 
 ```toml
-# Personal GitLab usernames for forges where the login differs
-# from FAS. Everything else (domains, groups, instance URLs) is
-# inherited from the shared `-c` config.
-[domains.hyperscale.gitlab]
-user = "michel-slm"
+# A profile ties together the usernames one person uses across
+# services. `sandogasa-report report --user michel` then looks
+# this up and queries each backend with the right identity.
+[users.michel]
+fas = "salimma"                       # default if omitted: the profile key
+bugzilla_email = "michel@example.com" # optional; FASJSON fallback otherwise
 
-[domains.proposed-updates.gitlab]
-user = "michel-slm"
-
-[domains.debian.gitlab]
-user = "michel"
-
-# Personal Bugzilla email when FAS → email auto-resolution isn't
-# desirable or available.
-[users]
-salimma = "michel@example.com"
+[users.michel.gitlab]
+"gitlab.com" = "michel-slm"
+"salsa.debian.org" = "michel"
 
 # Persisted GitLab API tokens — populated by
 # `sandogasa-report config`. Env vars still win if set.
