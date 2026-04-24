@@ -9,6 +9,7 @@ mod bodhi;
 mod brace;
 mod bugzilla;
 mod config;
+mod gitlab;
 mod koji;
 mod report;
 
@@ -57,6 +58,10 @@ struct Cli {
     /// Skip Koji queries.
     #[arg(long)]
     no_koji: bool,
+
+    /// Skip GitLab queries.
+    #[arg(long)]
+    no_gitlab: bool,
 
     /// Include per-item details, not just counts.
     #[arg(long)]
@@ -148,12 +153,14 @@ fn main() -> ExitCode {
         bugzilla: None,
         bodhi: None,
         koji: std::collections::BTreeMap::new(),
+        gitlab: std::collections::BTreeMap::new(),
     };
 
     // Collect across all domains.
     let mut needs_bugzilla = false;
     let mut bodhi_domains: Vec<(&str, &config::DomainConfig)> = Vec::new();
     let mut all_koji_domains: Vec<(&str, &config::DomainConfig)> = Vec::new();
+    let mut gitlab_domains: Vec<(&str, &config::GitlabConfig)> = Vec::new();
     let mut fedora_versions: Vec<u32> = Vec::new();
 
     for (name, domain) in &domains {
@@ -170,6 +177,11 @@ fn main() -> ExitCode {
         }
         if !domain.koji_tags.is_empty() && !cli.no_koji {
             all_koji_domains.push((name, domain));
+        }
+        if let Some(gl) = domain.gitlab.as_ref()
+            && !cli.no_gitlab
+        {
+            gitlab_domains.push((name, gl));
         }
     }
     fedora_versions.sort();
@@ -252,7 +264,38 @@ fn main() -> ExitCode {
         }
     }
 
-    if unified.bugzilla.is_none() && unified.bodhi.is_none() && unified.koji.is_empty() {
+    // GitLab reporting — one section per domain with a gitlab config.
+    // Each domain may override the CLI --user with its own
+    // instance-specific username (salimma on FAS ≠ michel-slm on
+    // gitlab.com ≠ michel on salsa). Domains without an override
+    // fall back to the CLI user.
+    for (name, gl) in &gitlab_domains {
+        let user = match gl.user.as_deref().or(cli.user.as_deref()) {
+            Some(u) => u,
+            None => {
+                eprintln!(
+                    "warning: GitLab domain '{name}' has no user — \
+                     set --user or [domains.{name}.gitlab] user in config, skipping"
+                );
+                continue;
+            }
+        };
+        match gitlab::gitlab_report(gl, user, since, until, cli.verbose) {
+            Ok(gl_report) => {
+                unified.gitlab.insert((*name).to_string(), gl_report);
+            }
+            Err(e) => {
+                eprintln!("error: gitlab ({name}): {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    if unified.bugzilla.is_none()
+        && unified.bodhi.is_none()
+        && unified.koji.is_empty()
+        && unified.gitlab.is_empty()
+    {
         eprintln!("No data sources configured for the selected domain(s).");
         return ExitCode::FAILURE;
     }
@@ -294,6 +337,7 @@ mod tests {
             no_bugzilla: false,
             no_bodhi: false,
             no_koji: false,
+            no_gitlab: false,
             detailed: false,
             json: false,
             output: None,
@@ -314,6 +358,7 @@ mod tests {
             no_bugzilla: false,
             no_bodhi: false,
             no_koji: false,
+            no_gitlab: false,
             detailed: false,
             json: false,
             output: None,

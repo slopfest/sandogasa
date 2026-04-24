@@ -1653,6 +1653,7 @@ version = "0.10.2"
 name = "sandogasa-gitlab"
 version = "0.10.2"
 dependencies = [
+ "chrono",
  "mockito",
  "reqwest",
  "serde",
@@ -1802,6 +1803,7 @@ dependencies = [
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-fasjson",
+ "sandogasa-gitlab",
  "sandogasa-koji",
  "serde",
  "serde_json",

@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### sandogasa-report: GitLab activity reporting
+
+New data source. Each domain can declare
+`[domains.<name>.gitlab]` with an `instance` URL and an optional
+`group` prefix; the tool fetches the user's activity events on
+that instance, filters by group, and renders a `## GitLab
+(<domain>)` section (bare `## GitLab` for single-domain runs).
+
+Reported activity:
+
+- MRs opened, merged, approved, commented on (dedup per MR)
+- Commits pushed, summed per project
+
+`--no-gitlab` flag to skip. Authentication: instance-specific env
+var `GITLAB_TOKEN_<HOSTNAME>` (e.g. `GITLAB_TOKEN_GITLAB_COM`,
+`GITLAB_TOKEN_SALSA_DEBIAN_ORG`) with fallback to generic
+`GITLAB_TOKEN`. Lets a single run cover multiple GitLab instances
+(gitlab.com + salsa.debian.org, etc.).
+
+Each `[domains.<name>.gitlab]` block may set a `user` override
+for cases where the GitLab username differs from the CLI/FAS
+username (e.g. FAS `salimma` vs gitlab.com `michel-slm` vs salsa
+`michel`). If unset, the CLI `--user` value is used.
+
+`sandogasa-gitlab` gained the supporting primitives:
+`user_by_username`, `user_events` (paginated), `project_summary`,
+plus `User`, `Event`, `EventNote`, `EventPushData`, and
+`ProjectSummary` types.
+
 ### hs-meetings: year headings at `###` level
 
 The tool-managed meetings list is included underneath the docs'

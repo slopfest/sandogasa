@@ -59,6 +59,33 @@ pub struct DomainConfig {
     /// Koji tag patterns with brace expansion.
     #[serde(default)]
     pub koji_tags: Vec<String>,
+
+    /// Include GitLab activity (MRs authored/merged/reviewed, commits).
+    #[serde(default)]
+    pub gitlab: Option<GitlabConfig>,
+}
+
+/// Per-domain GitLab settings. If `group` is set, activity events
+/// are filtered to projects whose `path_with_namespace` starts
+/// with that prefix. Omit `group` to include all user activity on
+/// the instance.
+#[derive(Debug, Default, Deserialize)]
+pub struct GitlabConfig {
+    /// GitLab base URL (e.g. `https://gitlab.com`,
+    /// `https://salsa.debian.org`).
+    pub instance: String,
+
+    /// Group prefix filter (e.g. `CentOS/Hyperscale`,
+    /// `CentOS/Hyperscale/rpms`). Matches on path_with_namespace.
+    #[serde(default)]
+    pub group: Option<String>,
+
+    /// Override the CLI `--user` for this instance. Needed when
+    /// the user's GitLab username differs from their FAS login
+    /// (e.g. FAS `salimma` vs gitlab.com `michel-slm` vs salsa
+    /// `michel`). If unset, the CLI `--user` value is used.
+    #[serde(default)]
+    pub user: Option<String>,
 }
 
 /// Load the config file.

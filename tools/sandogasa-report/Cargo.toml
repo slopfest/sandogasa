@@ -16,6 +16,7 @@ sandogasa-bugzilla = { workspace = true }
 sandogasa-cli = { workspace = true }
 sandogasa-config = { workspace = true }
 sandogasa-fasjson = { workspace = true }
+sandogasa-gitlab = { workspace = true }
 sandogasa-koji = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

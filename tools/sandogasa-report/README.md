@@ -12,6 +12,9 @@ packaging activity across multiple systems:
   per-release breakdown
 - **Koji CBS**: new packages and version updates in CentOS SIG
   release tags, with date-range comparison
+- **GitLab**: MRs opened / merged / approved / commented on, plus
+  pushed commit counts per project. Optionally scoped by group
+  prefix (`CentOS/Hyperscale`, `CentOS/Hyperscale/rpms`, etc.)
 
 ## Installation
 
@@ -65,7 +68,8 @@ sandogasa-report -c config.toml -d fedora \
 - `--detailed` — include per-item details, not just counts
 - `--json` — output as JSON instead of Markdown
 - `-o, --output <PATH>` — write output to file
-- `--no-bugzilla` / `--no-bodhi` / `--no-koji` — skip data sources
+- `--no-bugzilla` / `--no-bodhi` / `--no-koji` / `--no-gitlab` —
+  skip data sources
 - `-v, --verbose` — print progress to stderr
 
 ## Configuration
@@ -97,6 +101,15 @@ koji_profile = "cbs"
 koji_tags = [
     "hyperscale{9,10}{,s}-packages-{main,facebook}-release",
 ]
+[domains.hyperscale.gitlab]
+instance = "https://gitlab.com"
+group = "CentOS/Hyperscale"
+# user = "michel-slm"  # optional, if GitLab username ≠ FAS login
+
+[domains.debian.gitlab]
+instance = "https://salsa.debian.org"
+# No group filter → all user activity on this instance counts.
+user = "michel"  # salsa username often differs from FAS login
 
 # Package groups for categorical reporting.
 # Group keys are prettified for headings (e.g. "developer-tools"
@@ -115,6 +128,21 @@ Tag patterns support shell-style brace expansion:
 `hyperscale{9,10}{,s}-packages-main-release` expands to all
 combinations (hyperscale9-packages-main-release,
 hyperscale9s-packages-main-release, etc.).
+
+### GitLab authentication
+
+Each GitLab instance needs an API token. The tool looks up the
+token from, in order:
+
+1. `GITLAB_TOKEN_<HOSTNAME>` — instance-specific, hostname dots
+   replaced by underscores and uppercased. For `gitlab.com` this
+   is `GITLAB_TOKEN_GITLAB_COM`; for `salsa.debian.org` it's
+   `GITLAB_TOKEN_SALSA_DEBIAN_ORG`.
+2. `GITLAB_TOKEN` — the generic fallback shared with other
+   sandogasa tools.
+
+Use the instance-specific name when reporting across multiple
+GitLab instances in a single run.
 
 ### FTBFS/FTI tracking
 
