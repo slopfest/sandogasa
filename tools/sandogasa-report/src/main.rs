@@ -79,9 +79,14 @@ struct ReportArgs {
     #[arg(long)]
     no_gitlab: bool,
 
-    /// Include per-item details, not just counts.
-    #[arg(long)]
-    detailed: bool,
+    /// Include per-item details. Repeat for deeper detail —
+    /// level 1 (`--detailed`) lists each Bodhi update but
+    /// summarizes multi-build ones as "N builds", level 2
+    /// (`--detailed --detailed`) lists every build. Koji,
+    /// GitLab, and Bugzilla ignore the difference between
+    /// levels 1 and 2 (no deeper layer to expose).
+    #[arg(long, action = clap::ArgAction::Count)]
+    detailed: u8,
 
     /// Output as JSON instead of Markdown.
     #[arg(long)]
@@ -383,7 +388,7 @@ mod tests {
             no_bodhi: false,
             no_koji: false,
             no_gitlab: false,
-            detailed: false,
+            detailed: 0,
             json: false,
             output: None,
             verbose: false,
@@ -404,7 +409,7 @@ mod tests {
             no_bodhi: false,
             no_koji: false,
             no_gitlab: false,
-            detailed: false,
+            detailed: 0,
             json: false,
             output: None,
             verbose: false,

@@ -267,10 +267,11 @@ fn prettify_group_name(name: &str) -> String {
 /// they match.
 pub fn format_markdown(
     report: &KojiReport,
-    detailed: bool,
+    detail: u8,
     groups: &BTreeMap<String, crate::config::GroupConfig>,
     heading_suffix: Option<&str>,
 ) -> String {
+    let detailed = detail >= 1;
     let mut out = String::new();
 
     let heading = match heading_suffix {
@@ -485,7 +486,7 @@ mod tests {
             },
         );
         let report = KojiReport { packages };
-        let md = format_markdown(&report, true, &BTreeMap::new(), None);
+        let md = format_markdown(&report, 1, &BTreeMap::new(), None);
         assert!(md.contains("**systemd** rebased to 256.12"));
         // Should NOT contain distro-specific versions.
         assert!(!md.contains("(el9)"));
@@ -521,7 +522,7 @@ mod tests {
             },
         );
         let report = KojiReport { packages };
-        let md = format_markdown(&report, true, &BTreeMap::new(), None);
+        let md = format_markdown(&report, 1, &BTreeMap::new(), None);
         assert!(md.contains("**mesa** rebased to"));
         assert!(md.contains("(el9)"));
         assert!(md.contains("(el10)"));
@@ -564,7 +565,7 @@ mod tests {
                 packages: vec!["mesa".to_string()],
             },
         )]);
-        let md = format_markdown(&report, true, &groups, None);
+        let md = format_markdown(&report, 1, &groups, None);
         assert!(md.contains("**Hw:**"));
         assert!(md.contains("Hardware enablement and GPU support"));
     }
@@ -596,7 +597,7 @@ mod tests {
                 packages: vec!["fish".to_string()],
             },
         )]);
-        let md = format_markdown(&report, true, &groups, None);
+        let md = format_markdown(&report, 1, &groups, None);
         assert!(md.contains("**Developer Tools:**"));
     }
 
@@ -620,7 +621,7 @@ mod tests {
             },
         );
         let report = KojiReport { packages };
-        let md = format_markdown(&report, true, &BTreeMap::new(), None);
+        let md = format_markdown(&report, 1, &BTreeMap::new(), None);
         assert!(md.contains("### New packages"));
         assert!(md.contains("**neovim** 0.10.0 added"));
         assert!(!md.contains("rebased to"));
@@ -662,7 +663,7 @@ mod tests {
             },
         );
         let report = KojiReport { packages };
-        let md = format_markdown(&report, true, &BTreeMap::new(), None);
+        let md = format_markdown(&report, 1, &BTreeMap::new(), None);
         assert!(md.contains("### New packages"));
         assert!(md.contains("**fish** 4.0 added"));
         assert!(md.contains("### Package updates"));
@@ -705,7 +706,7 @@ mod tests {
             },
         );
         let report = KojiReport { packages };
-        let md = format_markdown(&report, false, &BTreeMap::new(), None);
+        let md = format_markdown(&report, 0, &BTreeMap::new(), None);
         assert!(md.contains("**1** new package(s)"));
         assert!(md.contains("**1** updated package(s)"));
         // Summary should not have detailed sections.
@@ -720,7 +721,7 @@ mod tests {
         let report = KojiReport {
             packages: BTreeMap::new(),
         };
-        let md = format_markdown(&report, true, &BTreeMap::new(), None);
+        let md = format_markdown(&report, 1, &BTreeMap::new(), None);
         assert!(md.contains("No Koji CBS packages found"));
     }
 
@@ -754,7 +755,7 @@ mod tests {
             },
         );
         let report = KojiReport { packages };
-        let md = format_markdown(&report, true, &BTreeMap::new(), None);
+        let md = format_markdown(&report, 1, &BTreeMap::new(), None);
         assert!(md.contains("**mesa** 24.3 (el10), 24.0 (el9) added"));
     }
 

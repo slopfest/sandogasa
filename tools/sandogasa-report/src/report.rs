@@ -40,9 +40,14 @@ pub struct Report {
 }
 
 /// Format the full report as Markdown.
+///
+/// `detail` is a count: 0 = summary, 1 = detailed with Bodhi
+/// multi-build updates collapsed to a count, 2 = detailed with
+/// every build listed. Only Bodhi distinguishes levels 1 and 2;
+/// the other sections treat `detail >= 1` uniformly.
 pub fn format_markdown(
     report: &Report,
-    detailed: bool,
+    detail: u8,
     groups: &BTreeMap<String, crate::config::GroupConfig>,
 ) -> String {
     let mut out = String::new();
@@ -97,12 +102,12 @@ pub fn format_markdown(
 
     // Bugzilla section.
     if let Some(ref bz_report) = report.bugzilla {
-        out.push_str(&bugzilla::format_markdown(bz_report, detailed));
+        out.push_str(&bugzilla::format_markdown(bz_report, detail));
     }
 
     // Bodhi section.
     if let Some(ref bodhi_report) = report.bodhi {
-        out.push_str(&bodhi::format_markdown(bodhi_report, detailed));
+        out.push_str(&bodhi::format_markdown(bodhi_report, detail));
     }
 
     // Koji section(s). One per domain — labeled when multiple,
@@ -110,12 +115,7 @@ pub fn format_markdown(
     let multi_koji = report.koji.len() > 1;
     for (domain_name, koji_report) in &report.koji {
         let suffix = multi_koji.then_some(domain_name.as_str());
-        out.push_str(&koji::format_markdown(
-            koji_report,
-            detailed,
-            groups,
-            suffix,
-        ));
+        out.push_str(&koji::format_markdown(koji_report, detail, groups, suffix));
     }
 
     // GitLab section(s). Same pattern as Koji — labeled per-domain
@@ -123,7 +123,7 @@ pub fn format_markdown(
     let multi_gitlab = report.gitlab.len() > 1;
     for (domain_name, gl_report) in &report.gitlab {
         let suffix = multi_gitlab.then_some(domain_name.as_str());
-        out.push_str(&gitlab::format_markdown(gl_report, detailed, suffix));
+        out.push_str(&gitlab::format_markdown(gl_report, detail, suffix));
     }
 
     out
@@ -146,7 +146,7 @@ mod tests {
             koji: BTreeMap::new(),
             gitlab: BTreeMap::new(),
         };
-        let md = format_markdown(&report, false, &BTreeMap::new());
+        let md = format_markdown(&report, 0, &BTreeMap::new());
         assert!(md.contains("# Activity Report: fedora"));
         assert!(md.contains("**User:** `testuser`"));
         assert!(md.contains("**Period:** 2026-01-01 to 2026-03-31"));
@@ -171,7 +171,7 @@ mod tests {
             koji,
             gitlab: BTreeMap::new(),
         };
-        let md = format_markdown(&report, false, &BTreeMap::new());
+        let md = format_markdown(&report, 0, &BTreeMap::new());
         // With a single domain, no suffix is added. Empty packages
         // suppresses the heading entirely, so assert via absence.
         assert!(!md.contains("## Koji CBS ("));
@@ -218,7 +218,7 @@ mod tests {
             koji,
             gitlab: BTreeMap::new(),
         };
-        let md = format_markdown(&report, false, &BTreeMap::new());
+        let md = format_markdown(&report, 0, &BTreeMap::new());
         assert!(md.contains("## Koji CBS (hyperscale)"));
         assert!(md.contains("## Koji CBS (proposed_updates)"));
     }
@@ -260,7 +260,7 @@ mod tests {
             koji: BTreeMap::new(),
             gitlab,
         };
-        let md = format_markdown(&report, false, &BTreeMap::new());
+        let md = format_markdown(&report, 0, &BTreeMap::new());
         // List form: FAS primary (labeled) + one bullet per
         // instance hostname. The two hyperscale/proposed-updates
         // entries share a host → only one bullet for gitlab.com.
@@ -294,7 +294,7 @@ mod tests {
             koji: BTreeMap::new(),
             gitlab,
         };
-        let md = format_markdown(&report, false, &BTreeMap::new());
+        let md = format_markdown(&report, 0, &BTreeMap::new());
         // No override bullet when the domain user matches the CLI user.
         assert!(!md.contains("- GitLab `"));
     }
@@ -311,7 +311,7 @@ mod tests {
             koji: BTreeMap::new(),
             gitlab: BTreeMap::new(),
         };
-        let md = format_markdown(&report, false, &BTreeMap::new());
+        let md = format_markdown(&report, 0, &BTreeMap::new());
         assert!(md.contains("# Activity Report: test"));
         assert!(!md.contains("**User:**"));
     }

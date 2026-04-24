@@ -29,10 +29,44 @@ pub struct BodhiReport {
 pub struct UpdateEntry {
     pub alias: String,
     pub status: String,
+    /// Short human-readable summary, resolved once at fetch time
+    /// from `display_name` (if set), then the first non-empty
+    /// line of `notes`, else the single build NVR (if exactly
+    /// one build), else `None`. Used by the condensed detail
+    /// level so a 20-build update renders as `summary (20 builds)`
+    /// instead of a wall of NVRs.
+    pub summary: Option<String>,
     pub builds: Vec<String>,
     pub date_submitted: Option<String>,
     pub date_testing: Option<String>,
     pub date_stable: Option<String>,
+}
+
+/// Resolve the best short human-readable summary for an update,
+/// preferring Bodhi's `display_name`, then the first non-empty
+/// line of `notes`, then the single build NVR if the update has
+/// exactly one build. Returns `None` when nothing usable exists
+/// (the formatter will fall back to the bare "N builds" count).
+fn derive_summary(u: &sandogasa_bodhi::models::Update) -> Option<String> {
+    if let Some(name) = u.display_name.as_deref()
+        && !name.trim().is_empty()
+    {
+        return Some(name.trim().to_string());
+    }
+    if let Some(notes) = u.notes.as_deref()
+        && let Some(line) = notes.lines().map(str::trim).find(|l| !l.is_empty())
+    {
+        // Strip leading markdown heading hashes that sometimes
+        // appear in notes.
+        let cleaned = line.trim_start_matches('#').trim();
+        if !cleaned.is_empty() {
+            return Some(cleaned.to_string());
+        }
+    }
+    if u.builds.len() == 1 {
+        return Some(u.builds[0].nvr.clone());
+    }
+    None
 }
 
 /// Parse a Bodhi date string like "2026-02-25 11:55:26" into a NaiveDate.
@@ -87,12 +121,27 @@ async fn bodhi_report_with_client(
         eprintln!("[bodhi] fetching updates for {username}");
     }
 
-    // Fetch a large batch — Bodhi returns most recent first by
-    // date_submitted. We stop when submissions are older than our
-    // period, but also include updates submitted earlier that had
-    // a state change (testing/stable) during the period.
+    // Bodhi filters by submission date server-side, so we pass
+    // our report window plus a small buffer to catch updates
+    // submitted just before `since` that still pushed within it.
+    // `submitted_before` is widened past `until` so the endpoint
+    // includes the boundary day. The client then re-checks each
+    // update's submitted/testing/stable dates against the exact
+    // window.
+    let submitted_since = since - chrono::Duration::days(30);
+    let submitted_before = until + chrono::Duration::days(1);
     let updates = client
-        .updates_for_user(username, 500)
+        .updates_for_user(
+            username,
+            500,
+            Some(submitted_since),
+            Some(submitted_before),
+            |page, total_pages, count| {
+                if verbose {
+                    eprintln!("[bodhi] fetched page {page}/{total_pages} ({count} updates so far)");
+                }
+            },
+        )
         .await
         .map_err(|e| format!("Bodhi query failed: {e}"))?;
 
@@ -153,6 +202,7 @@ async fn bodhi_report_with_client(
         let entry = UpdateEntry {
             alias: update.alias.clone(),
             status: update.status.clone(),
+            summary: derive_summary(update),
             builds: update.builds.iter().map(|b| b.nvr.clone()).collect(),
             date_submitted: update.date_submitted.clone(),
             date_testing: update.date_testing.clone(),
@@ -206,7 +256,16 @@ fn sorted_releases(by_release: &BTreeMap<String, Vec<UpdateEntry>>) -> Vec<&str>
     releases
 }
 
-pub fn format_markdown(report: &BodhiReport, detailed: bool) -> String {
+/// Render the Bodhi section.
+///
+/// - `detail == 0` — summary only (totals, per-release counts)
+/// - `detail == 1` — list each update as
+///   `[alias](url) (status, date)` with the Bodhi-provided title
+///   indented below as `Title (N builds)`. Keeps the line
+///   compact even when an update bundles 20+ sub-packages.
+/// - `detail >= 2` — same as level 1 plus, for multi-build
+///   updates only, list every build NVR as indented sub-bullets.
+pub fn format_markdown(report: &BodhiReport, detail: u8) -> String {
     let mut out = String::new();
 
     out.push_str("## Bodhi\n\n");
@@ -236,11 +295,10 @@ pub fn format_markdown(report: &BodhiReport, detailed: bool) -> String {
     }
     out.push('\n');
 
-    if !detailed {
+    if detail == 0 {
         return out;
     }
 
-    // Detailed: list updates per release.
     for release in &releases {
         let updates = &report.by_release[*release];
         out.push_str(&format!("### {release}\n\n"));
@@ -255,8 +313,25 @@ pub fn format_markdown(report: &BodhiReport, detailed: bool) -> String {
                  ({}, {date})\n",
                 u.alias, u.alias, u.status
             ));
-            for nvr in &u.builds {
-                out.push_str(&format!("  - {nvr}\n"));
+            // Always show the human summary + build count on an
+            // indented line. Singular/plural differ for 1 vs >1
+            // builds. Missing summaries fall back to just the count.
+            let n = u.builds.len();
+            let unit = if n == 1 { "build" } else { "builds" };
+            match u.summary.as_deref() {
+                Some(s) => out.push_str(&format!("  {s} ({n} {unit})\n")),
+                None => out.push_str(&format!("  {n} {unit}\n")),
+            }
+            // List build NVRs as indented sub-bullets when either:
+            //   - detail >= 2 (always list everything)
+            //   - there's exactly 1 build (the summary may be a
+            //     human phrase like "Initial release" that doesn't
+            //     identify the package, so the one NVR is helpful
+            //     at level 1 too)
+            if detail >= 2 || n == 1 {
+                for nvr in &u.builds {
+                    out.push_str(&format!("  - {nvr}\n"));
+                }
             }
         }
         out.push('\n');
@@ -336,6 +411,7 @@ mod tests {
                 UpdateEntry {
                     alias: "FEDORA-2026-abc123".to_string(),
                     status: "stable".to_string(),
+                    summary: Some("foo-1.0-1.fc45".to_string()),
                     builds: vec!["foo-1.0-1.fc45".to_string()],
                     date_submitted: Some("2026-01-15 10:00:00".to_string()),
                     date_testing: Some("2026-01-15 12:00:00".to_string()),
@@ -344,6 +420,7 @@ mod tests {
                 UpdateEntry {
                     alias: "FEDORA-2026-def456".to_string(),
                     status: "testing".to_string(),
+                    summary: Some("Latest bar crates".to_string()),
                     builds: vec![
                         "bar-2.0-1.fc45".to_string(),
                         "bar-extra-2.0-1.fc45".to_string(),
@@ -359,6 +436,7 @@ mod tests {
             vec![UpdateEntry {
                 alias: "FEDORA-EPEL-2026-ghi789".to_string(),
                 status: "stable".to_string(),
+                summary: Some("baz-3.0-1.el9".to_string()),
                 builds: vec!["baz-3.0-1.el9".to_string()],
                 date_submitted: Some("2026-01-20 08:00:00".to_string()),
                 date_testing: None,
@@ -378,7 +456,7 @@ mod tests {
     #[test]
     fn format_summary() {
         let report = make_report();
-        let md = format_markdown(&report, false);
+        let md = format_markdown(&report, 0);
         assert!(md.contains("**3** update(s)"));
         assert!(md.contains("**4** build(s)"));
         assert!(md.contains("**3** submitted"));
@@ -390,15 +468,73 @@ mod tests {
     }
 
     #[test]
-    fn format_detailed() {
+    fn format_detailed_level_1_single_build_still_shown() {
         let report = make_report();
-        let md = format_markdown(&report, true);
-        assert!(md.contains("### F45"));
-        assert!(md.contains("FEDORA-2026-abc123"));
-        assert!(md.contains("foo-1.0-1.fc45"));
-        assert!(md.contains("bar-2.0-1.fc45"));
-        assert!(md.contains("### EPEL-9"));
-        assert!(md.contains("FEDORA-EPEL-2026-ghi789"));
+        let md = format_markdown(&report, 1);
+        // Summary indented on its own line with the build count.
+        assert!(md.contains("\n  foo-1.0-1.fc45 (1 build)\n"));
+        assert!(md.contains("\n  Latest bar crates (2 builds)\n"));
+        // Single-build update gets its NVR listed — summary may
+        // be a human phrase that doesn't identify the package.
+        assert!(md.contains("  - foo-1.0-1.fc45\n"));
+        // Multi-build update does NOT get the expanded list at
+        // level 1.
+        assert!(!md.contains("  - bar-2.0-1.fc45\n"));
+        assert!(!md.contains("  - bar-extra-2.0-1.fc45\n"));
+    }
+
+    #[test]
+    fn format_detailed_level_2_lists_every_build() {
+        let report = make_report();
+        let md = format_markdown(&report, 2);
+        assert!(md.contains("\n  Latest bar crates (2 builds)\n"));
+        assert!(md.contains("  - foo-1.0-1.fc45\n"));
+        assert!(md.contains("  - bar-2.0-1.fc45\n"));
+        assert!(md.contains("  - bar-extra-2.0-1.fc45\n"));
+    }
+
+    #[test]
+    fn derive_summary_prefers_display_name() {
+        let mut u: sandogasa_bodhi::models::Update = serde_json::from_str(
+            r#"{"alias":"a","status":"stable","display_name":"Latest selinux crates",
+                "notes":"Some notes","builds":[{"nvr":"foo-1-1"},{"nvr":"bar-1-1"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(derive_summary(&u).as_deref(), Some("Latest selinux crates"));
+        // When display_name is absent the first non-empty notes
+        // line wins.
+        u.display_name = Some(String::new());
+        assert_eq!(derive_summary(&u).as_deref(), Some("Some notes"));
+        // With everything empty and a single build, fall back to
+        // the NVR so the output isn't just "1 build".
+        u.notes = None;
+        u.builds = vec![sandogasa_bodhi::models::Build {
+            nvr: "solo-1-1".to_string(),
+        }];
+        assert_eq!(derive_summary(&u).as_deref(), Some("solo-1-1"));
+        // Multi-build with no display_name/notes → no summary.
+        u.builds = vec![
+            sandogasa_bodhi::models::Build {
+                nvr: "a-1-1".into(),
+            },
+            sandogasa_bodhi::models::Build {
+                nvr: "b-1-1".into(),
+            },
+        ];
+        assert!(derive_summary(&u).is_none());
+    }
+
+    #[test]
+    fn derive_summary_strips_markdown_heading() {
+        // Regular (non-raw) string so \n expands; JSON's " gets
+        // escaped with \".
+        let u: sandogasa_bodhi::models::Update = serde_json::from_str(
+            "{\"alias\":\"a\",\"status\":\"stable\",\
+             \"notes\":\"# Big fix\\n\\nDetails...\",\
+             \"builds\":[{\"nvr\":\"x-1-1\"},{\"nvr\":\"y-1-1\"}]}",
+        )
+        .unwrap();
+        assert_eq!(derive_summary(&u).as_deref(), Some("Big fix"));
     }
 
     #[tokio::test]

@@ -78,3 +78,32 @@ overlay.
 The `config` subcommand edits the overlay as a raw
 `toml::Value` rather than round-tripping through `ReportConfig`
 so unknown keys the user authored by hand survive the write.
+
+## Future work
+
+### Resumable / cacheable report generation
+
+Right now a run executes Bugzilla → Koji → Bodhi → GitLab
+sequentially and blocks on every backend. Any of them can be
+slow (Bodhi `rows_per_page=500` routinely takes 30–60s, GitLab
+authored-commit walks scale with the project count) and a
+network blip late in the pipeline wastes everything that ran
+earlier.
+
+A per-section result cache keyed by
+`(user, since, until, domain, source)` would let re-runs pick
+up where the previous one failed. Sketch:
+
+- After each sub-report (`BugzillaReport`, per-domain
+  `KojiReport`, etc.) successfully builds, write its JSON to
+  `$XDG_CACHE_HOME/sandogasa-report/<hash>/<source>.json`.
+- At the top of each section, check for a fresh-enough cache
+  entry and skip the network round trips if present.
+- `--no-cache` to force a clean run; `--clear-cache` to wipe.
+- Consider whether "fresh enough" means "same period, same
+  user, within N minutes" or something stricter.
+
+Also related: add a sensible request timeout to the shared
+HTTP clients (Bodhi, Bugzilla, GitLab, …) so a hung connection
+fails loudly at ~120s instead of blocking forever. Today the
+default `reqwest::Client::new()` has no request timeout.

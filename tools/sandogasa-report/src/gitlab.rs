@@ -167,11 +167,8 @@ pub fn gitlab_report(
 /// Format the GitLab section as Markdown. `heading_suffix` is
 /// `Some("<domain>")` for multi-domain runs and `None` otherwise,
 /// mirroring the Koji formatter.
-pub fn format_markdown(
-    report: &GitlabReport,
-    detailed: bool,
-    heading_suffix: Option<&str>,
-) -> String {
+pub fn format_markdown(report: &GitlabReport, detail: u8, heading_suffix: Option<&str>) -> String {
+    let detailed = detail >= 1;
     let heading = match heading_suffix {
         Some(s) => format!("## GitLab ({s})\n\n"),
         None => "## GitLab\n\n".to_string(),
@@ -503,7 +500,7 @@ mod tests {
             group: None,
             ..Default::default()
         };
-        let md = format_markdown(&report, false, None);
+        let md = format_markdown(&report, 0, None);
         assert!(md.contains("## GitLab\n"));
         assert!(md.contains("No GitLab activity"));
     }
@@ -520,7 +517,7 @@ mod tests {
             iid: 42,
             title: "Fix build".into(),
         });
-        let md = format_markdown(&report, true, Some("hyperscale"));
+        let md = format_markdown(&report, 1, Some("hyperscale"));
         assert!(md.contains("## GitLab (hyperscale)"));
         assert!(md.contains("**MRs opened:** 1"));
         assert!(md.contains("### Opened"));

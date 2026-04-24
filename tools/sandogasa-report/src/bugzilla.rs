@@ -371,7 +371,8 @@ async fn bugzilla_report_with_client(
 }
 
 /// Format the Bugzilla report as Markdown.
-pub fn format_markdown(report: &BugzillaReport, detailed: bool) -> String {
+pub fn format_markdown(report: &BugzillaReport, detail: u8) -> String {
+    let detailed = detail >= 1;
     let mut out = String::new();
 
     out.push_str("## Bugzilla\n\n");
@@ -548,7 +549,7 @@ mod tests {
             fti: BugCategory::default(),
             other: BugCategory::default(),
         };
-        let md = format_markdown(&report, false);
+        let md = format_markdown(&report, 0);
         assert!(md.contains("**1** review request(s) submitted"));
         assert!(md.contains("## Bugzilla"));
     }
@@ -599,7 +600,7 @@ mod tests {
             fti: BugCategory::default(),
             other: BugCategory::default(),
         };
-        let md = format_markdown(&report, true);
+        let md = format_markdown(&report, 1);
         assert!(md.contains("(1 completed)"));
         assert!(md.contains("Completed"));
         assert!(md.contains("#### Review requests submitted"));
@@ -621,7 +622,7 @@ mod tests {
             fti: BugCategory::default(),
             other: BugCategory::default(),
         };
-        let md = format_markdown(&report, false);
+        let md = format_markdown(&report, 0);
         // No table if all categories are empty.
         assert!(!md.contains("| Category |"));
     }
