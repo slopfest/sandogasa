@@ -279,7 +279,7 @@ pub fn format_markdown(
     };
 
     if report.packages.is_empty() {
-        out.push_str("No Koji CBS packages found.\n");
+        out.push_str("No Koji CBS packages found.\n\n");
         return out;
     }
 
@@ -298,7 +298,7 @@ pub fn format_markdown(
 
     if !detailed {
         out.push_str(&format!(
-            "**{}** new package(s), **{}** updated package(s).\n",
+            "**{}** new package(s), **{}** updated package(s).\n\n",
             new_count, updated_count
         ));
         return out;
@@ -710,6 +710,9 @@ mod tests {
         assert!(md.contains("**1** updated package(s)"));
         // Summary should not have detailed sections.
         assert!(!md.contains("### New packages"));
+        // Trailing blank line so the next section isn't rammed
+        // up against this one.
+        assert!(md.ends_with(").\n\n"));
     }
 
     #[test]

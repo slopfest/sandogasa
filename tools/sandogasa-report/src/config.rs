@@ -104,29 +104,44 @@ pub struct GitlabConfig {
 /// - No `-c`, user config present → user config is the only source
 /// - No `-c`, no user config → empty defaults
 pub fn load_config(path: Option<&str>) -> Result<ReportConfig, String> {
-    let main_value = if let Some(p) = path {
-        let main_path = std::path::PathBuf::from(p);
-        if !main_path.exists() {
-            return Err(format!("config file not found: {}", main_path.display()));
+    let overlay_cf = sandogasa_config::ConfigFile::for_tool("sandogasa-report");
+    let overlay_path = overlay_cf.path();
+    let overlay = if overlay_path.exists() {
+        Some(overlay_path)
+    } else {
+        None
+    };
+    load_layered(path.map(std::path::Path::new), overlay)
+}
+
+/// Core load-and-merge logic, exposed separately so tests can
+/// feed explicit overlay paths and stay isolated from whatever
+/// happens to live in the developer's real
+/// `~/.config/sandogasa-report/config.toml`.
+fn load_layered(
+    main_path: Option<&std::path::Path>,
+    overlay_path: Option<&std::path::Path>,
+) -> Result<ReportConfig, String> {
+    let main_value = if let Some(p) = main_path {
+        if !p.exists() {
+            return Err(format!("config file not found: {}", p.display()));
         }
-        read_toml_value(&main_path)?
+        read_toml_value(p)?
     } else {
         toml::Value::Table(Default::default())
     };
 
-    let user_cf = sandogasa_config::ConfigFile::for_tool("sandogasa-report");
-    let user_present = user_cf.path().exists();
-    let user_value = if user_present {
-        read_toml_value(user_cf.path())?
+    let overlay_value = if let Some(p) = overlay_path {
+        read_toml_value(p)?
     } else {
         toml::Value::Table(Default::default())
     };
 
-    if path.is_none() && !user_present {
+    if main_path.is_none() && overlay_path.is_none() {
         return Ok(ReportConfig::default());
     }
 
-    let merged = merge_toml(main_value, user_value);
+    let merged = merge_toml(main_value, overlay_value);
     merged
         .try_into::<ReportConfig>()
         .map_err(|e| format!("failed to deserialize merged config: {e}"))
@@ -217,22 +232,31 @@ user = "michel-slm"
         assert_eq!(arr[0].as_integer(), Some(44));
     }
 
+    // These exercise `load_layered` directly so the developer's
+    // real `~/.config/sandogasa-report/config.toml` doesn't leak
+    // into the assertions.
+
     #[test]
-    fn load_config_no_file_returns_default() {
-        let cfg = load_config(None).unwrap();
+    fn load_layered_no_files_returns_default() {
+        let cfg = load_layered(None, None).unwrap();
         assert!(cfg.domains.is_empty());
         assert!(cfg.users.is_empty());
         assert!(cfg.groups.is_empty());
     }
 
     #[test]
-    fn load_config_explicit_missing_errors() {
-        let result = load_config(Some("/tmp/nonexistent-sandogasa-report-test.toml"));
+    fn load_layered_missing_main_errors() {
+        let result = load_layered(
+            Some(std::path::Path::new(
+                "/tmp/nonexistent-sandogasa-report-test.toml",
+            )),
+            None,
+        );
         assert!(result.is_err());
     }
 
     #[test]
-    fn load_config_from_file() {
+    fn load_layered_main_only() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(
@@ -246,9 +270,38 @@ packages = ["pkg1", "pkg2"]
 "#,
         )
         .unwrap();
-        let cfg = load_config(Some(path.to_str().unwrap())).unwrap();
+        let cfg = load_layered(Some(&path), None).unwrap();
         assert!(cfg.domains.contains_key("test"));
         assert!(cfg.domains["test"].bugzilla);
         assert_eq!(cfg.groups["mygroup"].packages, vec!["pkg1", "pkg2"]);
+    }
+
+    #[test]
+    fn load_layered_overlay_overrides_main() {
+        let dir = tempfile::tempdir().unwrap();
+        let main_path = dir.path().join("main.toml");
+        std::fs::write(
+            &main_path,
+            r#"
+[domains.hyperscale.gitlab]
+instance = "https://gitlab.com"
+group = "CentOS/Hyperscale"
+"#,
+        )
+        .unwrap();
+        let overlay_path = dir.path().join("overlay.toml");
+        std::fs::write(
+            &overlay_path,
+            r#"
+[domains.hyperscale.gitlab]
+user = "michel-slm"
+"#,
+        )
+        .unwrap();
+        let cfg = load_layered(Some(&main_path), Some(&overlay_path)).unwrap();
+        let gl = cfg.domains["hyperscale"].gitlab.as_ref().unwrap();
+        assert_eq!(gl.instance, "https://gitlab.com");
+        assert_eq!(gl.group.as_deref(), Some("CentOS/Hyperscale"));
+        assert_eq!(gl.user.as_deref(), Some("michel-slm"));
     }
 }
