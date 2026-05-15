@@ -506,7 +506,19 @@ fn filter_none(items: Vec<String>) -> Vec<String> {
 /// by splitting on `with`/`or`/`and`/`if`/`unless` and stripping
 /// version constraints and parentheses.
 fn extract_capability_names(dep: &str) -> Vec<String> {
-    let dep = dep.trim().trim_start_matches('(').trim_end_matches(')');
+    // Strip wrapping parens ONLY when the entire dep is a
+    // rich/boolean expression — i.e. it starts with `(` and ends
+    // with `)`. Plain caps like `libc.so.6(GLIBC_2.34)(64bit)`
+    // or `rtld(GNU_HASH)` end in `)` but the `)` is part of the
+    // name; trimming it unconditionally produces a broken
+    // capability that fedrq won't resolve, which then surfaces
+    // as a bogus "installability issue" for every system lib.
+    let dep = dep.trim();
+    let dep = if dep.starts_with('(') && dep.ends_with(')') {
+        &dep[1..dep.len() - 1]
+    } else {
+        dep
+    };
     dep.split_whitespace()
         .filter(|token| {
             // Skip version operators and boolean operators.
@@ -1003,6 +1015,48 @@ mod tests {
             provide_name("crate(foo/default) >= 1.0"),
             "crate(foo/default)"
         );
+    }
+
+    // --- extract_capability_names ---
+
+    #[test]
+    fn extract_capability_names_keeps_paren_in_lib_caps() {
+        // The trailing ')' on these caps is part of the name —
+        // dropping it produces a corrupted cap that fedrq can't
+        // resolve, surfacing as a false-positive installability
+        // issue for every system library.
+        assert_eq!(
+            extract_capability_names("libc.so.6(GLIBC_2.34)(64bit)"),
+            vec!["libc.so.6(GLIBC_2.34)(64bit)".to_string()]
+        );
+        assert_eq!(
+            extract_capability_names("ld-linux-aarch64.so.1()(64bit)"),
+            vec!["ld-linux-aarch64.so.1()(64bit)".to_string()]
+        );
+        assert_eq!(
+            extract_capability_names("rtld(GNU_HASH)"),
+            vec!["rtld(GNU_HASH)".to_string()]
+        );
+        assert_eq!(
+            extract_capability_names("nginx(abi)"),
+            vec!["nginx(abi)".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_capability_names_strips_outer_rich_dep_parens() {
+        // A true rich/boolean dep wrapped in `(...)` should have
+        // those wrapping parens stripped, but the inner cap
+        // names with their own parens stay intact.
+        let caps = extract_capability_names("(crate(foo) >= 1.0 with crate(foo) < 2.0~)");
+        assert!(caps.contains(&"crate(foo)".to_string()));
+        assert!(!caps.iter().any(|c| c.contains(">=") || c.contains("<")));
+    }
+
+    #[test]
+    fn extract_capability_names_drops_version_operators() {
+        let caps = extract_capability_names("nginx(abi) = 2:1.30.0-1.fc44");
+        assert_eq!(caps, vec!["nginx(abi)".to_string()]);
     }
 
     // --- compare_provides ---
