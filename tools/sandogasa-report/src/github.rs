@@ -112,28 +112,23 @@ pub fn github_report(
         .map(into_pr_ref)
         .collect();
 
-    // PRs the user reviewed (any review state).
-    let q = format!("type:pr reviewed-by:{login} updated:{since}..{until}{org_clause}",);
-    report.reviewed_prs = run_pr_search(&client, &q, verbose)?
-        .into_iter()
-        .map(into_pr_ref)
-        .collect();
-
-    // PRs the user commented on.
-    let q = format!("type:pr commenter:{login} updated:{since}..{until}{org_clause}",);
-    report.commented_prs = run_pr_search(&client, &q, verbose)?
-        .into_iter()
-        .map(into_pr_ref)
-        .collect();
-
-    // Commits: walk events, find PushEvents, filter to org if
-    // set, then count authored commits per touched repo.
+    // Reviewed/commented PRs come from user events, not Search.
+    // GitHub Search's `reviewed-by:`/`commenter:` qualifiers match
+    // "user has done this at any time" and the temporal filters
+    // (`updated:`, `created:`, etc.) apply to the PR itself, not
+    // the user's action — so a 2021 PR with any modification
+    // in our window (e.g. a comment from someone else) would
+    // surface as "reviewed in window". Walking the user's events
+    // gives us "the user *actually did* the thing in the window".
     if verbose {
-        eprintln!("[github] {base}: fetching user events to find pushed repos");
+        eprintln!("[github] {base}: fetching user events");
     }
     let events = client
         .user_events(login)
         .map_err(|e| format!("GitHub events on {base}: {e}"))?;
+    let (reviewed, commented) = prs_from_events(&events, since, until, cfg.org.as_deref());
+    report.reviewed_prs = reviewed;
+    report.commented_prs = commented;
     let touched_repos: BTreeSet<String> = events
         .iter()
         .filter(|e| e.event_type == "PushEvent")
@@ -233,6 +228,114 @@ pub fn format_markdown(report: &GithubReport, detail: u8, heading_suffix: Option
         out.push('\n');
     }
     out
+}
+
+/// Walk the user's events and bucket PRs into `(reviewed,
+/// commented)`. Only events whose `created_at` falls inside the
+/// reporting window count, regardless of when the PR itself was
+/// last touched.
+///
+/// - `PullRequestReviewEvent` → reviewed.
+/// - `PullRequestReviewCommentEvent` → commented (inline diff
+///   comment on a PR).
+/// - `IssueCommentEvent` → commented, but only when the issue is
+///   actually a PR (payload carries `issue.pull_request`).
+///
+/// Dedup is by `(repo, number)` so multiple events on the same
+/// PR collapse to one entry, with the first-seen title winning.
+fn prs_from_events(
+    events: &[Event],
+    since: NaiveDate,
+    until: NaiveDate,
+    org: Option<&str>,
+) -> (Vec<PrRef>, Vec<PrRef>) {
+    let mut reviewed: BTreeMap<(String, u64), PrRef> = BTreeMap::new();
+    let mut commented: BTreeMap<(String, u64), PrRef> = BTreeMap::new();
+    for ev in events {
+        if !event_in_range(ev, since, until) {
+            continue;
+        }
+        let Some(repo) = ev.repo_slug() else { continue };
+        if !repo_in_org(repo, org) {
+            continue;
+        }
+        let repo = repo.to_string();
+        match ev.event_type.as_str() {
+            "PullRequestReviewEvent" | "PullRequestReviewCommentEvent" => {
+                if let Some(pr) = pr_ref_from_pr_event(&ev.payload, &repo) {
+                    let key = (repo.clone(), pr.number);
+                    if ev.event_type == "PullRequestReviewEvent" {
+                        reviewed.entry(key).or_insert(pr);
+                    } else {
+                        commented.entry(key).or_insert(pr);
+                    }
+                }
+            }
+            "IssueCommentEvent" => {
+                // Only count if the issue is actually a PR.
+                let is_pr = ev
+                    .payload
+                    .get("issue")
+                    .and_then(|i| i.get("pull_request"))
+                    .is_some();
+                if !is_pr {
+                    continue;
+                }
+                if let Some(pr) = pr_ref_from_issue_event(&ev.payload, &repo) {
+                    let key = (repo.clone(), pr.number);
+                    commented.entry(key).or_insert(pr);
+                }
+            }
+            _ => {}
+        }
+    }
+    (
+        reviewed.into_values().collect(),
+        commented.into_values().collect(),
+    )
+}
+
+fn pr_ref_from_pr_event(payload: &serde_json::Value, repo: &str) -> Option<PrRef> {
+    let pr = payload.get("pull_request")?;
+    let number = pr.get("number").and_then(|n| n.as_u64())?;
+    let title = pr
+        .get("title")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+    let url = pr
+        .get("html_url")
+        .and_then(|u| u.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| format!("https://github.com/{repo}/pull/{number}"));
+    Some(PrRef {
+        repo: repo.to_string(),
+        number,
+        title,
+        url,
+    })
+}
+
+fn pr_ref_from_issue_event(payload: &serde_json::Value, repo: &str) -> Option<PrRef> {
+    let issue = payload.get("issue")?;
+    let number = issue.get("number").and_then(|n| n.as_u64())?;
+    let title = issue
+        .get("title")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+    let url = issue
+        .get("pull_request")
+        .and_then(|p| p.get("html_url"))
+        .and_then(|u| u.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| format!("https://github.com/{repo}/pull/{number}"));
+    Some(PrRef {
+        repo: repo.to_string(),
+        number,
+        title,
+        url,
+    })
 }
 
 fn run_pr_search(client: &Client, query: &str, verbose: bool) -> Result<Vec<PullRequest>, String> {
@@ -393,6 +496,141 @@ mod tests {
         }
         let tok = find_token("https://nonexistent.example.test", &tokens).unwrap();
         assert_eq!(tok, "from-config");
+    }
+
+    fn make_event(
+        event_type: &str,
+        repo: &str,
+        created_at: &str,
+        payload: serde_json::Value,
+    ) -> Event {
+        serde_json::from_value(serde_json::json!({
+            "id": "1",
+            "type": event_type,
+            "repo": {"id": 1, "name": repo},
+            "created_at": created_at,
+            "payload": payload,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn prs_from_events_review_in_window() {
+        let events = vec![make_event(
+            "PullRequestReviewEvent",
+            "slopfest/sandogasa",
+            "2026-02-15T10:00:00Z",
+            serde_json::json!({
+                "pull_request": {
+                    "number": 42,
+                    "title": "Add foo",
+                    "html_url": "https://github.com/slopfest/sandogasa/pull/42"
+                }
+            }),
+        )];
+        let (reviewed, commented) = prs_from_events(
+            &events,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            None,
+        );
+        assert_eq!(reviewed.len(), 1);
+        assert_eq!(reviewed[0].number, 42);
+        assert!(commented.is_empty());
+    }
+
+    #[test]
+    fn prs_from_events_skips_old_pr_with_only_other_user_activity() {
+        // The original bug: a 2021 PR the user reviewed long ago
+        // shows up in Search because someone else's comment in
+        // the window bumps the PR's `updated:` timestamp. With
+        // events, only the user's own actions count — an event
+        // from 2021 falls outside the window and gets dropped.
+        let events = vec![make_event(
+            "PullRequestReviewEvent",
+            "starship/starship",
+            "2021-08-15T10:00:00Z",
+            serde_json::json!({
+                "pull_request": {"number": 2612, "title": "old", "html_url": "x"}
+            }),
+        )];
+        let (reviewed, commented) = prs_from_events(
+            &events,
+            NaiveDate::from_ymd_opt(2026, 4, 26).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 16).unwrap(),
+            None,
+        );
+        assert!(reviewed.is_empty());
+        assert!(commented.is_empty());
+    }
+
+    #[test]
+    fn prs_from_events_issue_comment_only_if_pr() {
+        // IssueCommentEvent fires for both issues and PRs; only
+        // the PR variant should count as a "PR commented on".
+        let on_issue = make_event(
+            "IssueCommentEvent",
+            "slopfest/sandogasa",
+            "2026-02-15T10:00:00Z",
+            serde_json::json!({
+                "issue": {"number": 1, "title": "issue-only"}
+                // No `pull_request` field → it's an issue.
+            }),
+        );
+        let on_pr = make_event(
+            "IssueCommentEvent",
+            "slopfest/sandogasa",
+            "2026-02-15T10:00:00Z",
+            serde_json::json!({
+                "issue": {
+                    "number": 5,
+                    "title": "PR thread",
+                    "pull_request": {"html_url": "https://github.com/slopfest/sandogasa/pull/5"}
+                }
+            }),
+        );
+        let (_, commented) = prs_from_events(
+            &[on_issue, on_pr],
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            None,
+        );
+        assert_eq!(commented.len(), 1);
+        assert_eq!(commented[0].number, 5);
+    }
+
+    #[test]
+    fn prs_from_events_dedups_multiple_events_on_same_pr() {
+        // Two comments + one review on the same PR collapse to
+        // one entry in each bucket.
+        let events = vec![
+            make_event(
+                "PullRequestReviewEvent",
+                "o/r",
+                "2026-02-10T10:00:00Z",
+                serde_json::json!({"pull_request": {"number": 7, "title": "x", "html_url": "https://github.com/o/r/pull/7"}}),
+            ),
+            make_event(
+                "PullRequestReviewCommentEvent",
+                "o/r",
+                "2026-02-11T10:00:00Z",
+                serde_json::json!({"pull_request": {"number": 7, "title": "x", "html_url": "https://github.com/o/r/pull/7"}}),
+            ),
+            make_event(
+                "PullRequestReviewCommentEvent",
+                "o/r",
+                "2026-02-12T10:00:00Z",
+                serde_json::json!({"pull_request": {"number": 7, "title": "x", "html_url": "https://github.com/o/r/pull/7"}}),
+            ),
+        ];
+        let (reviewed, commented) = prs_from_events(
+            &events,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            None,
+        );
+        assert_eq!(reviewed.len(), 1);
+        assert_eq!(commented.len(), 1);
     }
 
     #[test]
