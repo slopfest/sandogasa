@@ -42,31 +42,71 @@ pub struct UpdateEntry {
     pub date_stable: Option<String>,
 }
 
-/// Resolve the best short human-readable summary for an update,
-/// preferring Bodhi's `display_name`, then the first non-empty
-/// line of `notes`, then the single build NVR if the update has
-/// exactly one build. Returns `None` when nothing usable exists
-/// (the formatter will fall back to the bare "N builds" count).
+/// Resolve the best short human-readable summary for an update.
+///
+/// Preference order:
+/// 1. `display_name` (always a single line).
+/// 2. `notes`. When notes look like a bullet list (every
+///    non-empty line starts with `-`, `*`, or `+`) and have more
+///    than one entry, all bullets are returned joined with
+///    newlines so the formatter can render each on its own line
+///    — a Django update that "Fixes CVE-X, CVE-Y, CVE-Z" should
+///    surface every CVE. Otherwise just the first non-empty
+///    line, cleaned.
+/// 3. Single build NVR.
+///
+/// Returns `None` when nothing usable exists; the formatter
+/// then falls back to a bare "N builds" count.
 fn derive_summary(u: &sandogasa_bodhi::models::Update) -> Option<String> {
     if let Some(name) = u.display_name.as_deref()
         && !name.trim().is_empty()
     {
         return Some(name.trim().to_string());
     }
-    if let Some(notes) = u.notes.as_deref()
-        && let Some(line) = notes.lines().map(str::trim).find(|l| !l.is_empty())
-    {
-        // Strip leading markdown heading hashes that sometimes
-        // appear in notes.
-        let cleaned = line.trim_start_matches('#').trim();
-        if !cleaned.is_empty() {
-            return Some(cleaned.to_string());
+    if let Some(notes) = u.notes.as_deref() {
+        let lines: Vec<&str> = notes
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        if !lines.is_empty() {
+            let all_bullets = lines.iter().all(|l| is_bullet_line(l));
+            if all_bullets && lines.len() > 1 {
+                let cleaned: Vec<String> = lines.iter().map(|l| clean_notes_line(l)).collect();
+                if !cleaned.iter().all(|s| s.is_empty()) {
+                    return Some(cleaned.join("\n"));
+                }
+            }
+            let first = clean_notes_line(lines[0]);
+            if !first.is_empty() {
+                return Some(first);
+            }
         }
     }
     if u.builds.len() == 1 {
         return Some(u.builds[0].nvr.clone());
     }
     None
+}
+
+fn is_bullet_line(s: &str) -> bool {
+    let t = s.trim_start();
+    t.starts_with("- ") || t.starts_with("* ") || t.starts_with("+ ")
+}
+
+/// Strip leading bullet markers (`- `, `* `, `+ `) and Markdown
+/// heading hashes from a notes line, then trim. Notes routinely
+/// start each line with `- ` since they're bullet lists in the
+/// Bodhi UI, and our formatter has its own bullet styling — the
+/// raw `-` would duplicate visually.
+fn clean_notes_line(s: &str) -> String {
+    let t = s.trim();
+    let t = t
+        .strip_prefix("- ")
+        .or_else(|| t.strip_prefix("* "))
+        .or_else(|| t.strip_prefix("+ "))
+        .unwrap_or(t);
+    t.trim_start_matches('#').trim().to_string()
 }
 
 /// Parse a Bodhi date string like "2026-02-25 11:55:26" into a NaiveDate.
@@ -313,13 +353,25 @@ pub fn format_markdown(report: &BodhiReport, detail: u8) -> String {
                  ({}, {date})\n",
                 u.alias, u.alias, u.status
             ));
-            // Always show the human summary + build count on an
-            // indented line. Singular/plural differ for 1 vs >1
-            // builds. Missing summaries fall back to just the count.
+            // Show the human summary on indented lines, then the
+            // build count on its own line. Multi-line summaries
+            // (e.g. a bullet list of CVE fixes) render one line
+            // per item. Missing summaries collapse to just the
+            // count.
             let n = u.builds.len();
             let unit = if n == 1 { "build" } else { "builds" };
             match u.summary.as_deref() {
-                Some(s) => out.push_str(&format!("  {s} ({n} {unit})\n")),
+                Some(s) => {
+                    let lines: Vec<&str> = s.split('\n').collect();
+                    if lines.len() == 1 {
+                        out.push_str(&format!("  {} ({n} {unit})\n", lines[0]));
+                    } else {
+                        for line in &lines {
+                            out.push_str(&format!("  {line}\n"));
+                        }
+                        out.push_str(&format!("  ({n} {unit})\n"));
+                    }
+                }
                 None => out.push_str(&format!("  {n} {unit}\n")),
             }
             // List build NVRs as indented sub-bullets when either:
@@ -522,6 +574,82 @@ mod tests {
             },
         ];
         assert!(derive_summary(&u).is_none());
+    }
+
+    #[test]
+    fn derive_summary_joins_bullet_notes() {
+        // Real shape — Django security update with 3 CVE
+        // fixes as bullets. Every line should land in the
+        // summary, not just the first.
+        let u: sandogasa_bodhi::models::Update = serde_json::from_str(
+            "{\"alias\":\"a\",\"status\":\"stable\",\"notes\":\
+             \"- Fixes CVE-2026-5766: ASGI bypass\\n\
+             - Fixes CVE-2026-35192: Session fixation\\n\
+             - Fixes CVE-2026-6907: Cache leak\",\
+             \"builds\":[{\"nvr\":\"python-django5-5.2.14-1.fc44\"}]}",
+        )
+        .unwrap();
+        let s = derive_summary(&u).unwrap();
+        let lines: Vec<&str> = s.split('\n').collect();
+        assert_eq!(lines.len(), 3);
+        // Bullet prefix stripped — our formatter has its own.
+        assert_eq!(lines[0], "Fixes CVE-2026-5766: ASGI bypass");
+        assert_eq!(lines[1], "Fixes CVE-2026-35192: Session fixation");
+        assert_eq!(lines[2], "Fixes CVE-2026-6907: Cache leak");
+    }
+
+    #[test]
+    fn derive_summary_strips_leading_bullet_on_single_line() {
+        // Single bulleted line: strip the `- ` so the summary
+        // doesn't read as two bullets.
+        let u: sandogasa_bodhi::models::Update = serde_json::from_str(
+            "{\"alias\":\"a\",\"status\":\"stable\",\
+             \"notes\":\"- Fixes CVE-2026-5766: ASGI bypass\",\
+             \"builds\":[{\"nvr\":\"x-1-1\"}]}",
+        )
+        .unwrap();
+        assert_eq!(
+            derive_summary(&u).as_deref(),
+            Some("Fixes CVE-2026-5766: ASGI bypass")
+        );
+    }
+
+    #[test]
+    fn format_detailed_renders_multi_line_summary() {
+        // Synthetic report exercising the multi-line summary path
+        // in the formatter.
+        let mut by_release = BTreeMap::new();
+        by_release.insert(
+            "F44".to_string(),
+            vec![UpdateEntry {
+                alias: "FEDORA-2026-django".to_string(),
+                status: "testing".to_string(),
+                summary: Some(
+                    "Fixes CVE-2026-5766: ASGI bypass\n\
+                     Fixes CVE-2026-35192: Session fixation"
+                        .to_string(),
+                ),
+                builds: vec!["python-django5-5.2.14-1.fc44".to_string()],
+                date_submitted: Some("2026-05-12 00:00:00".to_string()),
+                date_testing: Some("2026-05-12 00:00:00".to_string()),
+                date_stable: None,
+            }],
+        );
+        let report = BodhiReport {
+            total_updates: 1,
+            total_builds: 1,
+            submitted: 1,
+            pushed_to_testing: 1,
+            pushed_to_stable: 0,
+            by_release,
+        };
+        let md = format_markdown(&report, 1);
+        assert!(md.contains("\n  Fixes CVE-2026-5766: ASGI bypass\n"));
+        assert!(md.contains("\n  Fixes CVE-2026-35192: Session fixation\n"));
+        // Build count on its own line after the bullets.
+        assert!(md.contains("\n  (1 build)\n"));
+        // Single build still listed.
+        assert!(md.contains("  - python-django5-5.2.14-1.fc44\n"));
     }
 
     #[test]
