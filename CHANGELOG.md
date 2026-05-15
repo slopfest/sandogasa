@@ -1,6 +1,34 @@
 # Changelog
 
-## Unreleased
+## v0.11.0
+
+### New: sandogasa-github library crate
+
+Minimal blocking GitHub REST client scoped to what sandogasa
+tools need for activity reports: token validation, user
+identity lookup, paginated user events, the Search Issues API
+for pull requests, and per-repo authored-commit counts. Mirrors
+`sandogasa-gitlab` in shape so downstream tools can treat the
+two forges structurally the same.
+
+Surface:
+
+- `Client::new(base_url, token)` with `Accept:
+  application/vnd.github+json`, `X-GitHub-Api-Version:
+  2022-11-28`, and a 120s request timeout.
+- `validate_token` — three-state return
+  (Ok(true)/Ok(false)/Err) distinguishes rejected creds from
+  transport errors.
+- `user_by_username` — Ok(None) on 404 so callers can recover.
+- `search_pull_requests(query)` — paginated over Search Issues
+  up to GitHub's 1000-item cap.
+- `user_events(username)` — paginated up to GitHub's
+  300-event/3-page cap.
+- `count_authored_commits` — treats 404/409 as "no commits" so
+  an empty/gone repo doesn't abort the run.
+
+DEVELOPMENT.md captures the design choices that aren't obvious
+from the code.
 
 ### sandogasa-report: GitHub activity reporting
 
@@ -173,6 +201,97 @@ The tool-managed meetings list is included underneath the docs'
 as `### YYYY` instead of `## YYYY`. Fixes the sidebar indent in
 mkdocs-material, where `## YYYY` sections sat at the same level
 as `## Meeting minutes` and visually detached from it.
+
+### sandogasa-bodhi: paginate `updates_for_user`, date filter, timeout (breaking)
+
+`updates_for_user` used to fetch the full result set in a
+single `rows_per_page=500` call, which Bodhi routinely needed
+45s to serve and would sometimes hang entirely with no
+client-side timeout. Reworked:
+
+- Paginate at `rows_per_page=100` and invoke a caller-supplied
+  `on_page` closure `(page, total_pages, running_count)` per
+  response, so tools can stream progress to the user instead
+  of waiting in silence.
+- Accept optional `submitted_since` and `submitted_before`
+  `NaiveDate` bounds that map to Bodhi's server-side filter.
+  Activity reports no longer walk past the window just to
+  discard everything client-side.
+- `BodhiClient::new()` / `with_base_url` now build the reqwest
+  client with a 120s per-request timeout so a truly hung
+  connection fails loudly instead of blocking forever.
+
+Also added `display_name` and `notes` to the `Update` model.
+`title` on the API is the space-joined NVR list; the
+human-readable heading users see in the Bodhi UI comes from
+`display_name` (when set) or the first line of `notes`.
+
+Breaking: `updates_for_user` signature gained
+`submitted_since`, `submitted_before`, and `on_page` params.
+
+### sandogasa-report: two-level `--detailed` Bodhi, progress, date window
+
+`--detailed` is now a count flag — passing it twice
+(`--detailed --detailed`) opts into a second detail level. All
+formatters take a `detail: u8`; only Bodhi uses level 2 today,
+the rest treat `>=1` uniformly.
+
+Bodhi rendering at level 1:
+
+    - [alias](url) (status, date)
+      Latest `selinux` crates (8 builds)
+
+The summary comes from `display_name` when set, else all
+bullet-list lines of `notes` (preserving the full CVE list
+when present), else the single build NVR when the update only
+has one. Bullet-prefix markers (`- `, `* `, `+ `) are stripped
+from each line. Level 2 additionally emits every build NVR as
+an indented sub-bullet. Single-build updates also get the
+sub-bullet at level 1.
+
+Tool-side Bodhi fetch updates:
+
+- Hands `(since - 30 days, until + 1 day)` to
+  `updates_for_user` so Bodhi narrows server-side; 30-day
+  buffer catches submissions that pushed inside the window.
+- Wires the `on_page` callback to eprintln! when `--verbose`,
+  so a long fetch streams progress per page.
+
+Also adds DEVELOPMENT.md design notes covering the
+commits-pushed/authored reasoning, event-endpoint half-open
+date windows, overlay editing strategy, and future-work
+section.
+
+### sandogasa-report: trailing blank on Koji non-detailed output
+
+Koji's summary mode (no `--detailed`) only emitted a single
+trailing newline, so a following `## GitLab (…)` heading
+rendered rammed up against it. Now matches the
+detailed/empty paths by ending with `\n\n`.
+
+### sandogasa-report: GitHub reviewed/commented from events, not search
+
+The Search Issues qualifiers `reviewed-by:` and `commenter:`
+match any PR the user has ever reviewed or commented on,
+filtered by the PR's own timestamps — so a PR last updated by
+someone else inside the window would surface even when the
+user's only interaction with it was years ago. Switched to
+walking the user-events endpoint (PullRequestReviewEvent,
+IssueCommentEvent, PullRequestReviewCommentEvent) and
+filtering on the event timestamp itself, so each entry is a
+review or comment actually authored by the user in the
+reporting window. See `tools/sandogasa-report/TODO.md` for the
+300-event ceiling this introduces.
+
+### ebranch: fix bogus installability issues for caps with parens
+
+`extract_capability_names` trimmed trailing `)` from every dep,
+even when the `)` was part of the capability name (e.g.
+`libc.so.6(GLIBC_2.34)(64bit)` → `libc.so.6(GLIBC_2.34)(64bit`,
+missing final paren). The corrupted cap then failed fedrq
+lookup, surfacing as a "missing" provide for nearly every
+system library. Wrapping parens are now stripped only when the
+entire dep is itself a rich/boolean expression.
 
 ### sandogasa-report: per-domain Koji sections
 
