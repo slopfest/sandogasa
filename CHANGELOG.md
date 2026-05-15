@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### sandogasa-report: GitHub activity reporting
+
+New data source mirroring GitLab. Each domain can declare
+`[domains.<name>.github]` with an `instance` URL (defaults to
+`https://api.github.com`) and an optional `org` prefix; the
+tool queries the user's PRs (opened / merged / reviewed /
+commented on) via the Search Issues API, then walks user
+events to find touched repos and counts authored commits per
+repo. Rendered as `## GitHub (<domain>)` sections alongside
+GitLab.
+
+Profile schema gained `[users.<key>.github]` for per-instance
+GitHub usernames, and the overlay gained `[github_tokens]` for
+persisted PATs. `--no-github` skips the queries.
+
+Authentication: `GITHUB_TOKEN_<HOSTNAME>` env var (e.g.
+`GITHUB_TOKEN_API_GITHUB_COM`) → generic `GITHUB_TOKEN` (the
+same name the `gh` CLI uses) → overlay `[github_tokens]`.
+
+`sandogasa-report config` now walks GitHub identities and
+tokens in addition to GitLab. The token prompt uses the new
+`sandogasa-github::validate_token`'s three-state return so a
+saved-but-unreachable token isn't mistaken for an invalid one
+and re-prompted needlessly.
+
+GitHub ships with authored-commit counting only for v1;
+mirror-pusher detection (analogous to GitLab's `commits_pushed`
+vs `commits_authored` split) is deferred — see
+`tools/sandogasa-report/TODO.md` for the rationale.
+
 ### sandogasa-report: authored-commit count alongside pushed (breaking JSON)
 
 GitLab's push events credit every commit in a push to the

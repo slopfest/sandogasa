@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::Serialize;
 
-use crate::{bodhi, bugzilla, gitlab, koji};
+use crate::{bodhi, bugzilla, github, gitlab, koji};
 
 /// Full activity report.
 #[derive(Debug, Serialize)]
@@ -37,6 +37,10 @@ pub struct Report {
     /// in the config appear.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub gitlab: BTreeMap<String, gitlab::GitlabReport>,
+
+    /// GitHub section per domain. Same shape as `gitlab`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub github: BTreeMap<String, github::GithubReport>,
 }
 
 /// Format the full report as Markdown.
@@ -54,12 +58,14 @@ pub fn format_markdown(
 
     // Header.
     out.push_str(&format!("# Activity Report: {}\n\n", report.domain));
-    // Per-instance GitLab usernames that differ from the FAS login.
-    // Keyed by hostname (not CLI domain), since one GitLab
-    // instance is serving multiple CLI domains is the common case
-    // (hyperscale + proposed-updates both on gitlab.com) and
-    // showing the host-level identity once reads more naturally
-    // than repeating it per CLI domain.
+    // Per-instance forge usernames that differ from the FAS login.
+    // Keyed by hostname (not CLI domain), since one forge instance
+    // commonly serves multiple CLI domains (e.g. hyperscale and
+    // proposed-updates both on gitlab.com); showing the host-level
+    // identity once reads more naturally than repeating it per
+    // domain. GitHub aliases merge into the same map so a person
+    // with the same handle on github.com and salsa.debian.org
+    // gets one line per host regardless of forge.
     let fas_user = report.user.as_deref();
     let mut gitlab_aliases: BTreeMap<String, String> = BTreeMap::new();
     for gl in report.gitlab.values() {
@@ -68,6 +74,14 @@ pub fn format_markdown(
             gitlab_aliases
                 .entry(host)
                 .or_insert_with(|| gl.user.clone());
+        }
+    }
+    for gh in report.github.values() {
+        let host = crate::github::instance_host(&gh.instance);
+        if Some(gh.user.as_str()) != fas_user {
+            gitlab_aliases
+                .entry(host)
+                .or_insert_with(|| gh.user.clone());
         }
     }
     match (fas_user, gitlab_aliases.is_empty()) {
@@ -126,6 +140,13 @@ pub fn format_markdown(
         out.push_str(&gitlab::format_markdown(gl_report, detail, suffix));
     }
 
+    // GitHub section(s).
+    let multi_github = report.github.len() > 1;
+    for (domain_name, gh_report) in &report.github {
+        let suffix = multi_github.then_some(domain_name.as_str());
+        out.push_str(&github::format_markdown(gh_report, detail, suffix));
+    }
+
     out
 }
 
@@ -145,6 +166,7 @@ mod tests {
             bodhi: None,
             koji: BTreeMap::new(),
             gitlab: BTreeMap::new(),
+            github: BTreeMap::new(),
         };
         let md = format_markdown(&report, 0, &BTreeMap::new());
         assert!(md.contains("# Activity Report: fedora"));
@@ -170,6 +192,7 @@ mod tests {
             bodhi: None,
             koji,
             gitlab: BTreeMap::new(),
+            github: BTreeMap::new(),
         };
         let md = format_markdown(&report, 0, &BTreeMap::new());
         // With a single domain, no suffix is added. Empty packages
@@ -217,6 +240,7 @@ mod tests {
             bodhi: None,
             koji,
             gitlab: BTreeMap::new(),
+            github: BTreeMap::new(),
         };
         let md = format_markdown(&report, 0, &BTreeMap::new());
         assert!(md.contains("## Koji CBS (hyperscale)"));
@@ -259,6 +283,7 @@ mod tests {
             bodhi: None,
             koji: BTreeMap::new(),
             gitlab,
+            github: BTreeMap::new(),
         };
         let md = format_markdown(&report, 0, &BTreeMap::new());
         // List form: FAS primary (labeled) + one bullet per
@@ -293,6 +318,7 @@ mod tests {
             bodhi: None,
             koji: BTreeMap::new(),
             gitlab,
+            github: BTreeMap::new(),
         };
         let md = format_markdown(&report, 0, &BTreeMap::new());
         // No override bullet when the domain user matches the CLI user.
@@ -310,6 +336,7 @@ mod tests {
             bodhi: None,
             koji: BTreeMap::new(),
             gitlab: BTreeMap::new(),
+            github: BTreeMap::new(),
         };
         let md = format_markdown(&report, 0, &BTreeMap::new());
         assert!(md.contains("# Activity Report: test"));

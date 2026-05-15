@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! `config` subcommand — interactively populate user profiles
-//! and GitLab tokens in the overlay at
+//! and forge tokens (GitLab + GitHub) in the overlay at
 //! `~/.config/sandogasa-report/config.toml`. A profile binds a
 //! single logical person to their per-service identities (FAS
-//! login, Bugzilla email, per-instance GitLab usernames) so a
-//! single `--user <profile>` CLI flag can drive a multi-forge
-//! report. The overlay is edited in-place as a `toml::Value` so
-//! unknown keys the user added by hand survive round-tripping.
+//! login, Bugzilla email, per-instance GitLab/GitHub usernames)
+//! so a single `--user <profile>` CLI flag can drive a
+//! multi-forge report. The overlay is edited in-place as a
+//! `toml::Value` so unknown keys the user added by hand survive
+//! round-tripping.
 
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, Write};
@@ -17,7 +18,7 @@ use crate::config;
 
 #[derive(clap::Args)]
 pub struct ConfigArgs {
-    /// Main config file to enumerate domains / GitLab instances
+    /// Main config file to enumerate domains / forge instances
     /// from. Without one, there are no instances to configure.
     #[arg(short, long, value_name = "PATH")]
     pub config: Option<String>,
@@ -39,11 +40,18 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
     let merged = config::load_config(args.config.as_deref())
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    // Unique GitLab instances across the enabled domains.
-    let instances: BTreeSet<String> = merged
+    // Unique forge instances across the enabled domains, kept
+    // separate so we can prompt for the right credential type
+    // (GitLab vs GitHub) per instance.
+    let gitlab_instances: BTreeSet<String> = merged
         .domains
         .values()
         .filter_map(|d| d.gitlab.as_ref().map(|g| g.instance.clone()))
+        .collect();
+    let github_instances: BTreeSet<String> = merged
+        .domains
+        .values()
+        .filter_map(|d| d.github.as_ref().map(|g| g.instance.clone()))
         .collect();
 
     // Load the raw overlay toml::Value so hand-authored keys are
@@ -84,20 +92,36 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
         &mut overlay,
         &profile_key,
         existing_profile.as_ref(),
-        &instances,
+        &gitlab_instances,
+        &github_instances,
     )?;
 
-    // Token section: one prompt per unique instance. Existing
-    // tokens are validated first so re-runs don't force re-entry.
-    if !instances.is_empty() {
+    // Token section: one prompt per unique instance, per forge.
+    // Existing tokens are validated first so re-runs don't force
+    // re-entry unless they've been revoked.
+    if !gitlab_instances.is_empty() {
         eprintln!("\nGitLab API tokens (per instance):");
     }
-    for instance in &instances {
+    for instance in &gitlab_instances {
         let host = crate::gitlab::instance_host(instance);
         let existing = overlay_get_str(&overlay, &["gitlab_tokens", &host]);
         match prompt_gitlab_token(instance, existing.as_deref())? {
             TokenChoice::Saved(t) => {
                 overlay_set_str(&mut overlay, &["gitlab_tokens", &host], &t);
+                changed = true;
+            }
+            TokenChoice::KeepExisting | TokenChoice::Skipped => {}
+        }
+    }
+    if !github_instances.is_empty() {
+        eprintln!("\nGitHub API tokens (per instance):");
+    }
+    for instance in &github_instances {
+        let host = crate::github::instance_host(instance);
+        let existing = overlay_get_str(&overlay, &["github_tokens", &host]);
+        match prompt_github_token(instance, existing.as_deref())? {
+            TokenChoice::Saved(t) => {
+                overlay_set_str(&mut overlay, &["github_tokens", &host], &t);
                 changed = true;
             }
             TokenChoice::KeepExisting | TokenChoice::Skipped => {}
@@ -120,7 +144,8 @@ fn prompt_profile(
     overlay: &mut toml::Value,
     profile_key: &str,
     existing: Option<&config::User>,
-    instances: &BTreeSet<String>,
+    gitlab_instances: &BTreeSet<String>,
+    github_instances: &BTreeSet<String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut changed = false;
     let fas_default = existing
@@ -144,26 +169,67 @@ fn prompt_profile(
         changed = true;
     }
 
+    if prompt_per_instance_usernames(
+        overlay,
+        profile_key,
+        existing,
+        gitlab_instances,
+        "GitLab",
+        "gitlab",
+        |u, host| u.gitlab.get(host),
+        crate::gitlab::instance_host,
+    )? {
+        changed = true;
+    }
+    if prompt_per_instance_usernames(
+        overlay,
+        profile_key,
+        existing,
+        github_instances,
+        "GitHub",
+        "github",
+        |u, host| u.github.get(host),
+        crate::github::instance_host,
+    )? {
+        changed = true;
+    }
+    Ok(changed)
+}
+
+/// Prompt for per-instance usernames on a single forge, writing
+/// each non-empty answer into the overlay under
+/// `[users.<profile>.<forge_key>]`. Factored out because the
+/// gitlab and github passes are identical except for the
+/// label, the overlay key, the profile-lookup function, and
+/// the host-derivation function.
+#[allow(clippy::too_many_arguments)]
+fn prompt_per_instance_usernames(
+    overlay: &mut toml::Value,
+    profile_key: &str,
+    existing: Option<&config::User>,
+    instances: &BTreeSet<String>,
+    forge_label: &str,
+    forge_key: &str,
+    lookup: impl for<'a> Fn(&'a config::User, &str) -> Option<&'a String>,
+    host_of: impl Fn(&str) -> String,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let mut changed = false;
     if !instances.is_empty() {
-        eprintln!("\n  GitLab usernames (per instance):");
+        eprintln!("\n  {forge_label} usernames (per instance):");
     }
     for instance in instances {
-        let host = crate::gitlab::instance_host(instance);
-        let current = existing
-            .and_then(|p| p.gitlab.get(&host))
+        let host = host_of(instance);
+        let current: String = existing
+            .and_then(|p| lookup(p, &host))
             .cloned()
             .unwrap_or_default();
         let u = prompt_default(
             &format!("    {host} (empty to skip) [{current}]: "),
             &current,
         )?;
-        if !u.is_empty()
-            && existing
-                .and_then(|p| p.gitlab.get(&host))
-                .map(String::as_str)
-                != Some(&u)
+        if !u.is_empty() && existing.and_then(|p| lookup(p, &host)).map(String::as_str) != Some(&u)
         {
-            overlay_set_str(overlay, &["users", profile_key, "gitlab", &host], &u);
+            overlay_set_str(overlay, &["users", profile_key, forge_key, &host], &u);
             changed = true;
         }
     }
@@ -206,6 +272,48 @@ fn prompt_gitlab_token(
     }
     eprint!("  Validating... ");
     match sandogasa_gitlab::validate_token(instance, &token) {
+        Ok(true) => {
+            eprintln!("valid.");
+            Ok(TokenChoice::Saved(token))
+        }
+        Ok(false) => Err(format!("token rejected by {instance}").into()),
+        Err(e) => Err(format!("validation failed for {instance}: {e}").into()),
+    }
+}
+
+/// Same flow as `prompt_gitlab_token` but for GitHub. Uses
+/// `sandogasa-github`'s three-state `validate_token`: an
+/// `Ok(false)` means the saved token is actually invalid (re-
+/// prompt), while `Err` means we couldn't reach the API (warn
+/// and keep the existing token so the user can retry).
+fn prompt_github_token(
+    instance: &str,
+    existing: Option<&str>,
+) -> Result<TokenChoice, Box<dyn std::error::Error>> {
+    if let Some(tok) = existing {
+        eprint!("  Validating existing {instance} token... ");
+        match sandogasa_github::validate_token(instance, tok) {
+            Ok(true) => {
+                eprintln!("valid.");
+                return Ok(TokenChoice::KeepExisting);
+            }
+            Ok(false) => eprintln!("invalid — re-prompting."),
+            Err(e) => {
+                eprintln!("check failed ({e}); keeping existing token.");
+                return Ok(TokenChoice::KeepExisting);
+            }
+        }
+    }
+    let token = rpassword::prompt_password(format!(
+        "  Paste a personal access token for {instance} with 'repo' scope \
+         (enter to skip): "
+    ))?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Ok(TokenChoice::Skipped);
+    }
+    eprint!("  Validating... ");
+    match sandogasa_github::validate_token(instance, &token) {
         Ok(true) => {
             eprintln!("valid.");
             Ok(TokenChoice::Saved(token))

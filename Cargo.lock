@@ -1816,6 +1816,7 @@ dependencies = [
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-fasjson",
+ "sandogasa-github",
  "sandogasa-gitlab",
  "sandogasa-koji",
  "serde",

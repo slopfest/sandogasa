@@ -31,6 +31,13 @@ pub struct ReportConfig {
     /// values are credentials.
     #[serde(default)]
     pub gitlab_tokens: BTreeMap<String, String>,
+
+    /// Per-instance GitHub API tokens, keyed by hostname (e.g.
+    /// `"github.com"`). Env vars (`GITHUB_TOKEN_<HOSTNAME>` or
+    /// generic `GITHUB_TOKEN`, the same names the `gh` CLI uses)
+    /// take precedence.
+    #[serde(default)]
+    pub github_tokens: BTreeMap<String, String>,
 }
 
 /// A person's identity across multiple services. The profile key
@@ -58,6 +65,13 @@ pub struct User {
     /// config's `instance` URL.
     #[serde(default)]
     pub gitlab: BTreeMap<String, String>,
+
+    /// Per-instance GitHub usernames, keyed by hostname (e.g.
+    /// `"github.com" = "michel-slm"`). Same lookup model as
+    /// `gitlab` above; separate so a user can have different
+    /// logins on the two forges.
+    #[serde(default)]
+    pub github: BTreeMap<String, String>,
 }
 
 impl User {
@@ -71,6 +85,12 @@ impl User {
     /// `"gitlab.com"`), if the profile has one configured.
     pub fn gitlab_username(&self, instance_host: &str) -> Option<&str> {
         self.gitlab.get(instance_host).map(String::as_str)
+    }
+
+    /// GitHub username on a specific instance host (e.g.
+    /// `"github.com"`), if the profile has one configured.
+    pub fn github_username(&self, instance_host: &str) -> Option<&str> {
+        self.github.get(instance_host).map(String::as_str)
     }
 }
 
@@ -115,6 +135,10 @@ pub struct DomainConfig {
     /// Include GitLab activity (MRs authored/merged/reviewed, commits).
     #[serde(default)]
     pub gitlab: Option<GitlabConfig>,
+
+    /// Include GitHub activity (PRs authored/merged/reviewed, commits).
+    #[serde(default)]
+    pub github: Option<GithubConfig>,
 }
 
 /// Per-domain GitLab settings. If `group` is set, activity events
@@ -132,6 +156,30 @@ pub struct GitlabConfig {
     /// `CentOS/Hyperscale/rpms`). Matches on path_with_namespace.
     #[serde(default)]
     pub group: Option<String>,
+}
+
+/// Per-domain GitHub settings. Parallels `GitlabConfig`:
+/// `instance` defaults to `https://api.github.com` so the field
+/// is optional in practice; `org` narrows the scope to repos
+/// owned by that organisation (or user namespace), matching
+/// GitLab's `group` prefix.
+#[derive(Debug, Default, Deserialize)]
+pub struct GithubConfig {
+    /// GitHub API base URL. Defaults to the production
+    /// `https://api.github.com`; set this for a GHES `/api/v3`
+    /// endpoint.
+    #[serde(default = "default_github_instance")]
+    pub instance: String,
+
+    /// Organisation or user namespace to scope to. Used in PR
+    /// Search queries as `org:<value>` and as a prefix filter
+    /// for the events-derived list of touched repos.
+    #[serde(default)]
+    pub org: Option<String>,
+}
+
+fn default_github_instance() -> String {
+    "https://api.github.com".to_string()
 }
 
 /// Load config with a per-user overlay.

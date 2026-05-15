@@ -17,6 +17,10 @@ packaging activity across multiple systems:
   between the two flags mirror activity (pushes of commits the
   user didn't author). Optionally scoped by group prefix
   (`CentOS/Hyperscale`, `CentOS/Hyperscale/rpms`, etc.)
+- **GitHub**: PRs opened / merged / reviewed / commented on, plus
+  authored commit counts per repo. Optionally scoped by
+  organisation. See `TODO.md` for why GitHub ships only the
+  authored count today (mirror-pusher detection deferred).
 
 ## Installation
 
@@ -82,8 +86,8 @@ sandogasa-report report -c config.toml -d fedora \
 - `--detailed` — include per-item details, not just counts
 - `--json` — output as JSON instead of Markdown
 - `-o, --output <PATH>` — write output to file
-- `--no-bugzilla` / `--no-bodhi` / `--no-koji` / `--no-gitlab` —
-  skip data sources
+- `--no-bugzilla` / `--no-bodhi` / `--no-koji` / `--no-gitlab` /
+  `--no-github` — skip data sources
 - `-v, --verbose` — print progress to stderr
 
 ## Configuration
@@ -163,11 +167,17 @@ bugzilla_email = "michel@example.com" # optional; FASJSON fallback otherwise
 "gitlab.com" = "michel-slm"
 "salsa.debian.org" = "michel"
 
-# Persisted GitLab API tokens — populated by
-# `sandogasa-report config`. Env vars still win if set.
+[users.michel.github]
+"api.github.com" = "michel-slm"
+
+# Persisted API tokens — populated by `sandogasa-report config`.
+# Env vars still win if set.
 [gitlab_tokens]
 "gitlab.com" = "glpat-..."
 "salsa.debian.org" = "glpat-..."
+
+[github_tokens]
+"api.github.com" = "ghp_..."
 ```
 
 ### Koji tag patterns
@@ -195,6 +205,16 @@ token from, in order:
 Env vars win over config, so a one-off shell override still
 works even with a persisted token. The overlay file is kept at
 `~/.config/sandogasa-report/config.toml` with 0600 permissions.
+
+### GitHub authentication
+
+Same lookup shape as GitLab. The instance-specific env var is
+`GITHUB_TOKEN_<HOSTNAME>` (for `api.github.com` →
+`GITHUB_TOKEN_API_GITHUB_COM`); the generic `GITHUB_TOKEN`
+matches the convention the `gh` CLI already uses. The overlay's
+`[github_tokens]` table is the third fallback. PATs need `repo`
+scope for private repos; `public_repo` suffices for public-only
+reports.
 
 ### FTBFS/FTI tracking
 

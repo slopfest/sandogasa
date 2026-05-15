@@ -10,6 +10,7 @@ mod brace;
 mod bugzilla;
 mod config;
 mod configure;
+mod github;
 mod gitlab;
 mod koji;
 mod report;
@@ -78,6 +79,10 @@ struct ReportArgs {
     /// Skip GitLab queries.
     #[arg(long)]
     no_gitlab: bool,
+
+    /// Skip GitHub queries.
+    #[arg(long)]
+    no_github: bool,
 
     /// Include per-item details. Repeat for deeper detail —
     /// level 1 (`--detailed`) lists each Bodhi update but
@@ -202,6 +207,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         bodhi: None,
         koji: std::collections::BTreeMap::new(),
         gitlab: std::collections::BTreeMap::new(),
+        github: std::collections::BTreeMap::new(),
     };
 
     // Collect across all domains.
@@ -209,6 +215,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
     let mut bodhi_domains: Vec<(&str, &config::DomainConfig)> = Vec::new();
     let mut all_koji_domains: Vec<(&str, &config::DomainConfig)> = Vec::new();
     let mut gitlab_domains: Vec<(&str, &config::GitlabConfig)> = Vec::new();
+    let mut github_domains: Vec<(&str, &config::GithubConfig)> = Vec::new();
     let mut fedora_versions: Vec<u32> = Vec::new();
 
     for (name, domain) in &domains {
@@ -230,6 +237,11 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             && !cli.no_gitlab
         {
             gitlab_domains.push((name, gl));
+        }
+        if let Some(gh) = domain.github.as_ref()
+            && !cli.no_github
+        {
+            github_domains.push((name, gh));
         }
     }
     fedora_versions.sort();
@@ -341,10 +353,39 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         }
     }
 
+    // GitHub reporting — same per-domain pattern as GitLab.
+    // Username resolution: profile.github[<host>] → profile.fas
+    // → raw --user.
+    for (name, gh) in &github_domains {
+        let host = github::instance_host(&gh.instance);
+        let resolved = profile
+            .and_then(|p| p.github_username(&host))
+            .map(String::from)
+            .or_else(|| fas_user.clone());
+        let Some(user) = resolved else {
+            eprintln!(
+                "warning: GitHub domain '{name}' has no user — \
+                 set --user, or add [users.<name>.github.\"{host}\"] \
+                 to the config, skipping"
+            );
+            continue;
+        };
+        match github::github_report(gh, &user, since, until, &cfg.github_tokens, cli.verbose) {
+            Ok(gh_report) => {
+                unified.github.insert((*name).to_string(), gh_report);
+            }
+            Err(e) => {
+                eprintln!("error: github ({name}): {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
     if unified.bugzilla.is_none()
         && unified.bodhi.is_none()
         && unified.koji.is_empty()
         && unified.gitlab.is_empty()
+        && unified.github.is_empty()
     {
         eprintln!("No data sources configured for the selected domain(s).");
         return ExitCode::FAILURE;
@@ -388,6 +429,7 @@ mod tests {
             no_bodhi: false,
             no_koji: false,
             no_gitlab: false,
+            no_github: false,
             detailed: 0,
             json: false,
             output: None,
@@ -409,6 +451,7 @@ mod tests {
             no_bodhi: false,
             no_koji: false,
             no_gitlab: false,
+            no_github: false,
             detailed: 0,
             json: false,
             output: None,
