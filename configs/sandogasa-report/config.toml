@@ -58,6 +58,10 @@ group = "CentOS/proposed_updates"
 instance = "https://salsa.debian.org"
 # No group filter — all user activity on salsa counts.
 
+# --- GitHub ---
+
+[domains.upstream.github]
+
 # --- Package groups for categorical reporting ---
 # Each group has an optional description and a list of packages.
 # The group key is prettified for the heading

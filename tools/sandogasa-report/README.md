@@ -180,6 +180,27 @@ bugzilla_email = "michel@example.com" # optional; FASJSON fallback otherwise
 "api.github.com" = "ghp_..."
 ```
 
+### GitHub domain shorthand
+
+The full `[domains.X.github]` block accepts both `instance`
+(the API base URL) and `org` (a namespace filter). Both have
+sensible defaults, so a minimal config can elide them:
+
+```toml
+# All your github.com activity, any owner.
+[domains.upstream.github]
+
+# Same, scoped to one org.
+[domains.upstream.github]
+org = "slopfest"
+
+# A GHES instance — `instance` is only worth specifying when
+# you're not on github.com.
+[domains.work.github]
+instance = "https://github.enterprise.example/api/v3"
+org = "platform-team"
+```
+
 ### Koji tag patterns
 
 Tag patterns support shell-style brace expansion:
@@ -212,9 +233,28 @@ Same lookup shape as GitLab. The instance-specific env var is
 `GITHUB_TOKEN_<HOSTNAME>` (for `api.github.com` →
 `GITHUB_TOKEN_API_GITHUB_COM`); the generic `GITHUB_TOKEN`
 matches the convention the `gh` CLI already uses. The overlay's
-`[github_tokens]` table is the third fallback. PATs need `repo`
-scope for private repos; `public_repo` suffices for public-only
-reports.
+`[github_tokens]` table is the third fallback.
+
+**Where to create a token.** GitHub's settings tree buries
+this; the direct URLs are easier:
+
+- **Fine-grained PATs** (recommended): <https://github.com/settings/personal-access-tokens>
+  → *Generate new token*. Pick "All repositories" or a specific
+  org/repo set, then under *Repository permissions* grant
+  read-only on:
+  - **Contents** — commit listing
+  - **Pull requests** — PR search + reviews
+  - **Metadata** — always required
+  Account permissions can stay empty. Token starts with
+  `github_pat_…`.
+- **Classic PATs**: <https://github.com/settings/tokens> →
+  *Generate new token (classic)*. Scopes:
+  - `public_repo` for public-only reports, or `repo` to include
+    private repos
+  - `read:user` for the username lookup
+  Token starts with `ghp_…`. Both PAT types work identically
+  against the API; fine-grained is preferable because revoking
+  one org's access doesn't affect the others.
 
 ### FTBFS/FTI tracking
 
