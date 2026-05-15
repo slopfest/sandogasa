@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
-use sandogasa_github::{Client, Event, PullRequest};
+use sandogasa_github::{Client, Event, PullRequest, User};
 use serde::Serialize;
 
 use crate::config::GithubConfig;
@@ -47,6 +47,17 @@ pub struct GithubReport {
     /// only for repos the user pushed to (discovered via the
     /// events endpoint).
     pub commits_authored: BTreeMap<String, u64>,
+
+    /// Annotated tags the user cut in the window. Derived by
+    /// walking each touched repo's tag refs and resolving
+    /// annotated-tag objects — `git push --follow-tags` folds
+    /// tag creation into the PushEvent so the events stream
+    /// alone can't tell us about new tags. Lightweight tags
+    /// aren't included since they carry no tagger metadata.
+    pub tags_pushed: Vec<TagRef>,
+    /// GitHub Releases the user published in the window. Derived
+    /// from `ReleaseEvent` with `action == "published"`.
+    pub releases_published: Vec<ReleaseRef>,
 }
 
 /// Pointer to a pull request for the report's summary lists.
@@ -60,6 +71,34 @@ pub struct PrRef {
     pub title: String,
     /// PR URL (the canonical web link).
     pub url: String,
+}
+
+/// A tag the user pushed.
+#[derive(Debug, Clone, Serialize)]
+pub struct TagRef {
+    /// `owner/name` slug.
+    pub repo: String,
+    /// Tag name (e.g. `v0.11.0`).
+    pub tag: String,
+    /// Link to the tag tree on github.com.
+    pub url: String,
+}
+
+/// A GitHub Release the user published.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReleaseRef {
+    /// `owner/name` slug.
+    pub repo: String,
+    /// Tag the release is anchored on.
+    pub tag: String,
+    /// Optional release title (`release.name`). Empty/missing
+    /// becomes `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `release.html_url`.
+    pub url: String,
+    /// `release.prerelease`.
+    pub prerelease: bool,
 }
 
 /// Build the GitHub activity report for one domain.
@@ -129,6 +168,7 @@ pub fn github_report(
     let (reviewed, commented) = prs_from_events(&events, since, until, cfg.org.as_deref());
     report.reviewed_prs = reviewed;
     report.commented_prs = commented;
+    report.releases_published = releases_from_events(&events, since, until, cfg.org.as_deref());
     let touched_repos: BTreeSet<String> = events
         .iter()
         .filter(|e| e.event_type == "PushEvent")
@@ -136,6 +176,19 @@ pub fn github_report(
         .filter_map(|e| e.repo_slug().map(String::from))
         .filter(|slug| repo_in_org(slug, cfg.org.as_deref()))
         .collect();
+
+    // Tags can't be derived from the user-events stream: a
+    // `git push --follow-tags` folds the tag creation into the
+    // existing PushEvent (which lists only the branch ref). Walk
+    // the Git Refs API per touched repo instead, resolving
+    // annotated tags so we can check the tagger date and identity.
+    if verbose {
+        eprintln!(
+            "[github] {base}: scanning tags across {} touched repo(s)",
+            touched_repos.len()
+        );
+    }
+    report.tags_pushed = collect_tags(&client, &touched_repos, &user_obj, since, until, verbose);
 
     if verbose {
         eprintln!(
@@ -177,6 +230,8 @@ pub fn format_markdown(report: &GithubReport, detail: u8, heading_suffix: Option
         && report.reviewed_prs.is_empty()
         && report.commented_prs.is_empty()
         && report.commits_authored.is_empty()
+        && report.tags_pushed.is_empty()
+        && report.releases_published.is_empty()
     {
         let mut out = heading;
         out.push_str("No GitHub activity.\n\n");
@@ -185,6 +240,8 @@ pub fn format_markdown(report: &GithubReport, detail: u8, heading_suffix: Option
 
     let total_authored: u64 = report.commits_authored.values().sum();
     let authored_repos = report.commits_authored.len();
+    let tag_repos = unique_repos(&report.tags_pushed, |t| &t.repo);
+    let release_repos = unique_repos(&report.releases_published, |r| &r.repo);
     let mut out = heading;
     out.push_str(&format!("- **PRs opened:** {}\n", report.opened_prs.len()));
     out.push_str(&format!("- **PRs merged:** {}\n", report.merged_prs.len()));
@@ -197,7 +254,15 @@ pub fn format_markdown(report: &GithubReport, detail: u8, heading_suffix: Option
         report.commented_prs.len()
     ));
     out.push_str(&format!(
-        "- **Commits authored:** {total_authored} across {authored_repos} repo(s)\n\n",
+        "- **Commits authored:** {total_authored} across {authored_repos} repo(s)\n",
+    ));
+    out.push_str(&format!(
+        "- **Tags pushed:** {} across {tag_repos} repo(s)\n",
+        report.tags_pushed.len(),
+    ));
+    out.push_str(&format!(
+        "- **Releases published:** {} across {release_repos} repo(s)\n\n",
+        report.releases_published.len(),
     ));
 
     if !detailed {
@@ -226,6 +291,14 @@ pub fn format_markdown(report: &GithubReport, detail: u8, heading_suffix: Option
             out.push_str(&format!("- `{repo}`: {count}\n"));
         }
         out.push('\n');
+    }
+    if !report.tags_pushed.is_empty() {
+        out.push_str("### Tags pushed\n\n");
+        write_tag_list(&mut out, &report.tags_pushed);
+    }
+    if !report.releases_published.is_empty() {
+        out.push_str("### Releases published\n\n");
+        write_release_list(&mut out, &report.releases_published);
     }
     out
 }
@@ -293,6 +366,152 @@ fn prs_from_events(
         reviewed.into_values().collect(),
         commented.into_values().collect(),
     )
+}
+
+/// Walk the Git Refs API for each repo the user pushed to and
+/// collect annotated tags they cut in the window. Lightweight
+/// tags are skipped — they carry no tagger info and there's no
+/// reliable signal that the user (rather than a co-maintainer)
+/// pushed them.
+///
+/// Match heuristic: an annotated tag belongs to the user when
+/// `tagger.date` is inside the window AND the tagger's `name`
+/// or `email` matches the user's GitHub profile (case-
+/// insensitive). The profile fallback works for users who set a
+/// public name even when their commit email differs from the
+/// public GitHub email (the common Fedora case where commits
+/// are signed with `salimma@fedoraproject.org` but the GitHub
+/// account lists a personal address).
+fn collect_tags(
+    client: &Client,
+    repos: &BTreeSet<String>,
+    user: &User,
+    since: NaiveDate,
+    until: NaiveDate,
+    verbose: bool,
+) -> Vec<TagRef> {
+    let mut out: Vec<TagRef> = Vec::new();
+    for slug in repos {
+        let Some((owner, repo)) = slug.split_once('/') else {
+            continue;
+        };
+        let refs = match client.list_tag_refs(owner, repo) {
+            Ok(r) => r,
+            Err(e) => {
+                if verbose {
+                    eprintln!("[github] list_tag_refs failed for {slug}: {e}");
+                }
+                continue;
+            }
+        };
+        for r in refs {
+            if r.object.object_type != "tag" {
+                continue;
+            }
+            let annotated = match client.get_annotated_tag(owner, repo, &r.object.sha) {
+                Ok(t) => t,
+                Err(e) => {
+                    if verbose {
+                        eprintln!(
+                            "[github] get_annotated_tag failed for {slug}#{}: {e}",
+                            r.tag_name()
+                        );
+                    }
+                    continue;
+                }
+            };
+            if !tagger_in_window(&annotated.tagger.date, since, until) {
+                continue;
+            }
+            if !tagger_matches_user(&annotated.tagger, user) {
+                continue;
+            }
+            out.push(TagRef {
+                repo: slug.clone(),
+                tag: annotated.tag,
+                url: format!("https://github.com/{slug}/tree/{}", r.tag_name()),
+            });
+        }
+    }
+    out.sort_by(|a, b| a.repo.cmp(&b.repo).then(a.tag.cmp(&b.tag)));
+    out
+}
+
+fn tagger_in_window(date: &str, since: NaiveDate, until: NaiveDate) -> bool {
+    let Some(day) = date.split('T').next() else {
+        return false;
+    };
+    NaiveDate::parse_from_str(day, "%Y-%m-%d")
+        .map(|d| d >= since && d <= until)
+        .unwrap_or(false)
+}
+
+fn tagger_matches_user(tagger: &sandogasa_github::Tagger, user: &User) -> bool {
+    let name_match = user
+        .name
+        .as_deref()
+        .is_some_and(|n| n.eq_ignore_ascii_case(&tagger.name));
+    let email_match = user
+        .email
+        .as_deref()
+        .is_some_and(|e| e.eq_ignore_ascii_case(&tagger.email));
+    name_match || email_match
+}
+
+/// Walk the user's events and collect GitHub Releases they
+/// published in the window. Sourced from `ReleaseEvent` with
+/// `action == "published"`. Dedup is by `(repo, tag)`.
+fn releases_from_events(
+    events: &[Event],
+    since: NaiveDate,
+    until: NaiveDate,
+    org: Option<&str>,
+) -> Vec<ReleaseRef> {
+    let mut releases: BTreeMap<(String, String), ReleaseRef> = BTreeMap::new();
+    for ev in events {
+        if !event_in_range(ev, since, until) {
+            continue;
+        }
+        if ev.event_type != "ReleaseEvent" {
+            continue;
+        }
+        if ev.payload.get("action").and_then(|v| v.as_str()) != Some("published") {
+            continue;
+        }
+        let Some(release) = ev.payload.get("release") else {
+            continue;
+        };
+        let Some(tag) = release.get("tag_name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(repo) = ev.repo_slug() else { continue };
+        if !repo_in_org(repo, org) {
+            continue;
+        }
+        let name = release
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        let url = release
+            .get("html_url")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| format!("https://github.com/{repo}/releases/tag/{tag}"));
+        let prerelease = release
+            .get("prerelease")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let key = (repo.to_string(), tag.to_string());
+        releases.entry(key).or_insert(ReleaseRef {
+            repo: repo.to_string(),
+            tag: tag.to_string(),
+            name,
+            url,
+            prerelease,
+        });
+    }
+    releases.into_values().collect()
 }
 
 fn pr_ref_from_pr_event(payload: &serde_json::Value, repo: &str) -> Option<PrRef> {
@@ -365,6 +584,44 @@ fn write_pr_list(out: &mut String, prs: &[PrRef]) {
         ));
     }
     out.push('\n');
+}
+
+fn write_tag_list(out: &mut String, tags: &[TagRef]) {
+    let mut by_repo: BTreeMap<&str, Vec<&TagRef>> = BTreeMap::new();
+    for t in tags {
+        by_repo.entry(t.repo.as_str()).or_default().push(t);
+    }
+    for (repo, entries) in by_repo {
+        let formatted: Vec<String> = entries
+            .iter()
+            .map(|t| format!("[{}]({})", t.tag, t.url))
+            .collect();
+        out.push_str(&format!("- `{repo}`: {}\n", formatted.join(", ")));
+    }
+    out.push('\n');
+}
+
+fn write_release_list(out: &mut String, releases: &[ReleaseRef]) {
+    for r in releases {
+        let prerelease = if r.prerelease { " (prerelease)" } else { "" };
+        let suffix = match &r.name {
+            Some(name) if name != &r.tag => format!(" — {name}"),
+            _ => String::new(),
+        };
+        out.push_str(&format!(
+            "- [{} {}]({}){suffix}{prerelease}\n",
+            r.repo, r.tag, r.url,
+        ));
+    }
+    out.push('\n');
+}
+
+fn unique_repos<T>(items: &[T], repo_of: impl Fn(&T) -> &String) -> usize {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for it in items {
+        seen.insert(repo_of(it).as_str());
+    }
+    seen.len()
 }
 
 fn event_in_range(event: &Event, since: NaiveDate, until: NaiveDate) -> bool {
@@ -646,6 +903,143 @@ mod tests {
         assert_eq!(r.title, "Fix it");
     }
 
+    fn make_tagger(name: &str, email: &str, date: &str) -> sandogasa_github::Tagger {
+        sandogasa_github::Tagger {
+            name: name.into(),
+            email: email.into(),
+            date: date.into(),
+        }
+    }
+
+    fn make_user(login: &str, name: Option<&str>, email: Option<&str>) -> User {
+        User {
+            id: 1,
+            login: login.into(),
+            name: name.map(String::from),
+            email: email.map(String::from),
+        }
+    }
+
+    #[test]
+    fn tagger_matches_user_by_name_or_email() {
+        let user = make_user(
+            "michel-slm",
+            Some("Michel Lind"),
+            Some("michel@michel-slm.name"),
+        );
+        // Different email (commit identity) — name match wins.
+        assert!(tagger_matches_user(
+            &make_tagger(
+                "Michel Lind",
+                "salimma@fedoraproject.org",
+                "2026-05-15T17:03:15Z"
+            ),
+            &user
+        ));
+        // Different name (display name change) — email match wins.
+        assert!(tagger_matches_user(
+            &make_tagger(
+                "Someone Else",
+                "michel@michel-slm.name",
+                "2026-05-15T17:03:15Z"
+            ),
+            &user
+        ));
+        // Neither — reject.
+        assert!(!tagger_matches_user(
+            &make_tagger("Other", "other@example.com", "2026-05-15T17:03:15Z"),
+            &user
+        ));
+    }
+
+    #[test]
+    fn tagger_matches_is_case_insensitive() {
+        let user = make_user("u", Some("Michel Lind"), Some("M@example.com"));
+        assert!(tagger_matches_user(
+            &make_tagger("MICHEL LIND", "other@example.com", "2026-05-15T00:00:00Z"),
+            &user
+        ));
+        assert!(tagger_matches_user(
+            &make_tagger("other", "m@example.com", "2026-05-15T00:00:00Z"),
+            &user
+        ));
+    }
+
+    #[test]
+    fn tagger_in_window_parses_iso8601() {
+        let s = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        let u = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        assert!(tagger_in_window("2026-05-15T17:03:15Z", s, u));
+        assert!(!tagger_in_window("2026-06-01T00:00:00Z", s, u));
+        assert!(!tagger_in_window("garbage", s, u));
+    }
+
+    #[test]
+    fn releases_from_events_extracts_published() {
+        let events = vec![
+            make_event(
+                "ReleaseEvent",
+                "slopfest/sandogasa",
+                "2026-05-15T10:00:00Z",
+                serde_json::json!({
+                    "action": "published",
+                    "release": {
+                        "tag_name": "v0.11.0",
+                        "name": "Release v0.11.0",
+                        "html_url": "https://github.com/slopfest/sandogasa/releases/tag/v0.11.0",
+                        "prerelease": false
+                    }
+                }),
+            ),
+            // edited action — skip.
+            make_event(
+                "ReleaseEvent",
+                "slopfest/sandogasa",
+                "2026-05-15T11:00:00Z",
+                serde_json::json!({
+                    "action": "edited",
+                    "release": {"tag_name": "v0.10.0", "name": "old", "html_url": "x"}
+                }),
+            ),
+        ];
+        let releases = releases_from_events(
+            &events,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
+            None,
+        );
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].tag, "v0.11.0");
+        assert_eq!(releases[0].name.as_deref(), Some("Release v0.11.0"));
+        assert!(!releases[0].prerelease);
+    }
+
+    #[test]
+    fn releases_from_events_handles_missing_name_and_prerelease() {
+        let events = vec![make_event(
+            "ReleaseEvent",
+            "o/r",
+            "2026-05-15T10:00:00Z",
+            serde_json::json!({
+                "action": "published",
+                "release": {
+                    "tag_name": "v0.0.1-rc1",
+                    "html_url": "https://github.com/o/r/releases/tag/v0.0.1-rc1",
+                    "prerelease": true
+                }
+            }),
+        )];
+        let releases = releases_from_events(
+            &events,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
+            None,
+        );
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].name, None);
+        assert!(releases[0].prerelease);
+    }
+
     #[test]
     fn format_empty_report() {
         let report = GithubReport {
@@ -682,5 +1076,39 @@ mod tests {
         assert!(md.contains("### Opened"));
         assert!(md.contains("#42"));
         assert!(md.contains("Fix build"));
+    }
+
+    #[test]
+    fn format_renders_tags_and_releases() {
+        let mut report = GithubReport {
+            instance: "https://api.github.com".into(),
+            user: "octocat".into(),
+            ..Default::default()
+        };
+        report.tags_pushed.push(TagRef {
+            repo: "slopfest/sandogasa".into(),
+            tag: "v0.11.0".into(),
+            url: "https://github.com/slopfest/sandogasa/tree/v0.11.0".into(),
+        });
+        report.tags_pushed.push(TagRef {
+            repo: "slopfest/sandogasa".into(),
+            tag: "v0.10.2".into(),
+            url: "https://github.com/slopfest/sandogasa/tree/v0.10.2".into(),
+        });
+        report.releases_published.push(ReleaseRef {
+            repo: "slopfest/sandogasa".into(),
+            tag: "v0.11.0".into(),
+            name: Some("Release v0.11.0".into()),
+            url: "https://github.com/slopfest/sandogasa/releases/tag/v0.11.0".into(),
+            prerelease: false,
+        });
+        let md = format_markdown(&report, 1, None);
+        assert!(md.contains("**Tags pushed:** 2 across 1 repo(s)"));
+        assert!(md.contains("**Releases published:** 1 across 1 repo(s)"));
+        assert!(md.contains("### Tags pushed"));
+        assert!(md.contains("v0.11.0"));
+        assert!(md.contains("v0.10.2"));
+        assert!(md.contains("### Releases published"));
+        assert!(md.contains("Release v0.11.0"));
     }
 }

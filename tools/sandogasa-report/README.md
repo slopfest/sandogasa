@@ -12,13 +12,15 @@ packaging activity across multiple systems:
   per-release breakdown
 - **Koji CBS**: new packages and version updates in CentOS SIG
   release tags, with date-range comparison
-- **GitLab**: MRs opened / merged / approved / commented on, plus
-  both pushed and authored commit counts per project. The gap
-  between the two flags mirror activity (pushes of commits the
-  user didn't author). Optionally scoped by group prefix
-  (`CentOS/Hyperscale`, `CentOS/Hyperscale/rpms`, etc.)
-- **GitHub**: PRs opened / merged / reviewed / commented on, plus
-  authored commit counts per repo. Optionally scoped by
+- **GitLab**: MRs opened / merged / approved / commented on,
+  both pushed and authored commit counts per project, tags
+  pushed, and GitLab Releases authored. The gap between
+  pushed/authored commits flags mirror activity. Optionally
+  scoped by group prefix (`CentOS/Hyperscale`,
+  `CentOS/Hyperscale/rpms`, etc.)
+- **GitHub**: PRs opened / merged / reviewed / commented on,
+  authored commit counts per repo, annotated tags cut, and
+  GitHub Releases published. Optionally scoped by
   organisation. See `TODO.md` for why GitHub ships only the
   authored count today (mirror-pusher detection deferred).
 

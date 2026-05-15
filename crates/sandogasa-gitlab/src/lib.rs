@@ -1029,6 +1029,139 @@ pub fn count_authored_commits(
     Ok(total)
 }
 
+/// A tag as returned by `/projects/:id/repository/tags`. The
+/// fields kept here are the ones relevant to an activity-window
+/// match: the tag's `created_at` (when the ref was pushed,
+/// distinct from the commit date) and the tag name.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Tag {
+    pub name: String,
+    /// Tag-ref creation timestamp on GitLab (ISO 8601). This is
+    /// when the tag was pushed, *not* when the underlying commit
+    /// was authored — so a tag created locally weeks ago and
+    /// pushed today appears here with today's date.
+    pub created_at: String,
+}
+
+/// List tags for a project, paginated. Returns an empty list on
+/// 404. Uses `order_by=updated&sort=desc` so newer tags come
+/// first — handy when the caller wants to short-circuit on the
+/// first tag older than its window of interest.
+pub fn list_tags(
+    base_url: &str,
+    token: &str,
+    project_id: u64,
+) -> Result<Vec<Tag>, Box<dyn std::error::Error>> {
+    let http = build_http_client(token)?;
+    let endpoint = format!(
+        "{}/api/v4/projects/{}/repository/tags",
+        base_url.trim_end_matches('/'),
+        project_id
+    );
+    let mut out: Vec<Tag> = Vec::new();
+    let mut page = 1u32;
+    loop {
+        let page_str = page.to_string();
+        let query: Vec<(&str, &str)> = vec![
+            ("per_page", "100"),
+            ("page", &page_str),
+            ("order_by", "updated"),
+            ("sort", "desc"),
+        ];
+        let resp = http.get(&endpoint).query(&query).send()?;
+        if resp.status().as_u16() == 404 {
+            break;
+        }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!("GitLab GET {endpoint} failed: {status}: {text}").into());
+        }
+        let batch: Vec<Tag> = resp.json()?;
+        let n = batch.len();
+        out.extend(batch);
+        if n < 100 {
+            break;
+        }
+        page += 1;
+    }
+    Ok(out)
+}
+
+/// A GitLab Release as returned by `/projects/:id/releases`.
+/// Field selection follows the API's snake_case names.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Release {
+    pub tag_name: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub released_at: String,
+    pub author: ReleaseAuthor,
+    #[serde(default, rename = "_links")]
+    pub links: Option<ReleaseLinks>,
+    #[serde(default)]
+    pub upcoming_release: bool,
+}
+
+/// Author block on a Release. Username is the field most useful
+/// for cross-referencing with the calling user's profile.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReleaseAuthor {
+    pub id: u64,
+    pub username: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// `_links` block. The `self` link is the canonical web URL of
+/// the release page.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReleaseLinks {
+    #[serde(default, rename = "self")]
+    pub self_url: Option<String>,
+}
+
+/// List releases for a project. Returns an empty list on 404
+/// (project gone) so callers can iterate over many projects
+/// without per-project error handling.
+pub fn project_releases(
+    base_url: &str,
+    token: &str,
+    project_id: u64,
+) -> Result<Vec<Release>, Box<dyn std::error::Error>> {
+    let http = build_http_client(token)?;
+    let endpoint = format!(
+        "{}/api/v4/projects/{}/releases",
+        base_url.trim_end_matches('/'),
+        project_id
+    );
+    let mut out: Vec<Release> = Vec::new();
+    let mut page = 1u32;
+    loop {
+        let page_str = page.to_string();
+        let query: Vec<(&str, &str)> = vec![("per_page", "100"), ("page", &page_str)];
+        let resp = http.get(&endpoint).query(&query).send()?;
+        if resp.status().as_u16() == 404 {
+            break;
+        }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!("GitLab GET {endpoint} failed: {status}: {text}").into());
+        }
+        let batch: Vec<Release> = resp.json()?;
+        let n = batch.len();
+        out.extend(batch);
+        if n < 100 {
+            break;
+        }
+        page += 1;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

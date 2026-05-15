@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.11.1
+
+### sandogasa-report: tags and releases on both forges
+
+`GithubReport` and `GitlabReport` gained `tags_pushed` and
+`releases_published` fields, with matching summary lines and
+detailed `### Tags pushed` / `### Releases published`
+sections.
+
+GitHub tag detection walks each touched repo's tag refs via
+the Git Refs API and resolves annotated tag objects to check
+the tagger date and identity. The user-events stream alone
+can't carry tag info: `git push --follow-tags` folds the tag
+creation into the PushEvent (which only lists the branch
+ref), so a release-tag push doesn't surface as `CreateEvent`.
+Match heuristic: tagger.date in the window AND tagger.name or
+tagger.email matching the user's GitHub profile name/email
+(case-insensitive). Lightweight tags are skipped — they carry
+no tagger metadata. GitHub Releases stay on events
+(`ReleaseEvent` with `action == "published"`).
+
+GitLab tag detection is two-stage. The events stream tells us
+which projects had any user tag push, but the events
+themselves can omit per-tag names (a `git push --tags` of N
+tags fires one event with `ref_count: N` and `ref: null`) and
+GitLab's `tag.created_at` follows the tagger date for
+annotated tags rather than the push time, so a batch of tags
+created locally across several days but pushed at once
+doesn't cluster around the event timestamp. So for every
+project where the user pushed any tag, we list the project's
+tags and include all entries with `created_at` in the window.
+GitLab Releases come from a per-project query against
+`/projects/:id/releases`, filtered to releases authored by
+the user and released inside the window.
+
+`sandogasa-github` gained `GitTagRef`, `GitObject`,
+`AnnotatedTag`, `Tagger` types plus `Client::list_tag_refs`
+and `Client::get_annotated_tag`. `User` gained `name` and
+`email` fields (both optional). `sandogasa-gitlab` gained
+`Tag`, `Release`, `ReleaseAuthor`, `ReleaseLinks` types plus
+`list_tags` and `project_releases`.
+
 ## v0.11.0
 
 ### New: sandogasa-github library crate

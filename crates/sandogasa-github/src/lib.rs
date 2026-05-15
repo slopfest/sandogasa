@@ -47,6 +47,12 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 pub struct User {
     pub id: u64,
     pub login: String,
+    /// Public display name (`null` when the user hasn't set one).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Public email (`null` when the user keeps it private).
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 /// A repository as returned by event payloads and PR responses.
@@ -161,6 +167,55 @@ pub struct Event {
     /// Free-form payload — varies per event type.
     #[serde(default)]
     pub payload: serde_json::Value,
+}
+
+/// One entry from `/repos/{owner}/{repo}/git/refs/tags`. The
+/// underlying `object` distinguishes lightweight tags (point
+/// directly to a commit) from annotated tags (point to a Tag
+/// object that carries tagger info).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GitTagRef {
+    /// The fully-qualified ref, e.g. `refs/tags/v0.11.0`.
+    #[serde(rename = "ref")]
+    pub ref_name: String,
+    pub object: GitObject,
+}
+
+impl GitTagRef {
+    /// Strip the `refs/tags/` prefix to get just the tag name.
+    pub fn tag_name(&self) -> &str {
+        self.ref_name
+            .strip_prefix("refs/tags/")
+            .unwrap_or(&self.ref_name)
+    }
+}
+
+/// The thing a Git ref points at. `object_type` is `"commit"`
+/// for lightweight tags and `"tag"` for annotated ones.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GitObject {
+    #[serde(rename = "type")]
+    pub object_type: String,
+    pub sha: String,
+}
+
+/// An annotated-tag object from
+/// `/repos/{owner}/{repo}/git/tags/{sha}`. Only annotated tags
+/// carry tagger metadata; lightweight tags don't have an
+/// addressable tag object.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AnnotatedTag {
+    pub tag: String,
+    pub tagger: Tagger,
+}
+
+/// `name` + `email` + `date` triple stamped on annotated-tag
+/// creation. `date` is ISO 8601 (e.g. `2026-05-15T17:03:15Z`).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Tagger {
+    pub name: String,
+    pub email: String,
+    pub date: String,
 }
 
 impl Event {
@@ -333,6 +388,61 @@ impl Client {
             page += 1;
         }
         Ok(total)
+    }
+
+    /// List all tag refs for `owner/repo`. Returns an empty list
+    /// on 404 (gone repo) and 409 (empty repo) so callers can
+    /// iterate over many repos without per-repo error handling.
+    pub fn list_tag_refs(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<GitTagRef>, Box<dyn std::error::Error>> {
+        let url = format!("{}/repos/{}/{}/git/refs/tags", self.base_url, owner, repo);
+        let resp = self.http.get(&url).send()?;
+        // 404 = repo gone or no tags ref namespace; 409 = empty repo.
+        if resp.status().as_u16() == 404 || resp.status().as_u16() == 409 {
+            return Ok(Vec::new());
+        }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!("GitHub GET {url} failed: {status}: {text}").into());
+        }
+        // GitHub returns an object (not an array) when there's
+        // exactly one match. The standard `/git/refs/tags` shape
+        // returns an array for the namespace listing; we only see
+        // the object form when someone queries a single ref. Be
+        // defensive and accept both.
+        let body: serde_json::Value = resp.json()?;
+        if body.is_array() {
+            Ok(serde_json::from_value(body)?)
+        } else {
+            Ok(vec![serde_json::from_value(body)?])
+        }
+    }
+
+    /// Fetch one annotated-tag object by SHA. Use only when the
+    /// matching `GitTagRef.object.object_type == "tag"` —
+    /// lightweight tags (where `object_type == "commit"`) have no
+    /// addressable tag object and this endpoint will 404.
+    pub fn get_annotated_tag(
+        &self,
+        owner: &str,
+        repo: &str,
+        sha: &str,
+    ) -> Result<AnnotatedTag, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/repos/{}/{}/git/tags/{}",
+            self.base_url, owner, repo, sha
+        );
+        let resp = self.http.get(&url).send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!("GitHub GET {url} failed: {status}: {text}").into());
+        }
+        Ok(resp.json()?)
     }
 }
 

@@ -11,7 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use sandogasa_gitlab::{
-    Event, count_authored_commits, project_summary, user_by_username, user_events,
+    Event, count_authored_commits, list_tags, project_releases, project_summary, user_by_username,
+    user_events,
 };
 use serde::Serialize;
 
@@ -50,6 +51,17 @@ pub struct GitlabReport {
     /// on a project flags mirror/rebase activity: the user is
     /// getting credited for other people's commits.
     pub commits_authored: BTreeMap<String, u64>,
+
+    /// Tags the user pushed. GitLab events include `push_data`
+    /// with `ref_type == "tag"` whenever a tag is pushed, so we
+    /// don't have to walk per-project tag listings the way the
+    /// GitHub side does.
+    pub tags_pushed: Vec<TagRef>,
+    /// GitLab Releases the user authored that were released
+    /// inside the window. Sourced from `/projects/:id/releases`
+    /// per touched project — GitLab's user-events stream doesn't
+    /// surface release creation as a typed event.
+    pub releases_published: Vec<ReleaseRef>,
 }
 
 /// Pointer back to a merge request in the report's summary lists.
@@ -61,6 +73,33 @@ pub struct MrRef {
     pub iid: u64,
     /// MR title.
     pub title: String,
+}
+
+/// A tag the user pushed.
+#[derive(Debug, Clone, Serialize)]
+pub struct TagRef {
+    /// Project path.
+    pub project: String,
+    /// Tag name (e.g. `v0.11.0`).
+    pub tag: String,
+}
+
+/// A GitLab Release the user authored.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReleaseRef {
+    /// Project path.
+    pub project: String,
+    /// Anchored tag name.
+    pub tag: String,
+    /// Optional release title (`release.name`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Canonical URL — `_links.self` when set, otherwise the
+    /// conventional `{instance}/{project}/-/releases/{tag}` form.
+    pub url: String,
+    /// `upcoming_release` — true for scheduled releases that
+    /// haven't been published yet.
+    pub upcoming: bool,
 }
 
 /// Build the GitLab activity report for one domain.
@@ -111,6 +150,14 @@ pub fn gitlab_report(
         ..Default::default()
     };
     let mut commented_seen: BTreeSet<(u64, u64)> = BTreeSet::new();
+    let mut tags_seen: BTreeSet<(String, String)> = BTreeSet::new();
+    // Track which projects had any tag-push event from this user
+    // — singleton pushes give us the name inline, but batched
+    // pushes (`push_data.ref == null`, `ref_count > 0`) and
+    // annotated-tag pushes whose `created_at` GitLab populates
+    // from the tagger date (not the push time) need a second
+    // pass against the tags API to recover the names.
+    let mut tagged_project_ids: BTreeSet<u64> = BTreeSet::new();
 
     // Track which project_ids fall inside the group filter so we
     // only fire authored-count lookups for the projects the
@@ -127,8 +174,51 @@ pub fn gitlab_report(
             continue;
         }
         project_ids_in_group.insert(ev.project_id);
-        dispatch_event(ev, path, &mut report, &mut commented_seen);
+        if is_tag_push_event(ev) {
+            tagged_project_ids.insert(ev.project_id);
+        }
+        dispatch_event(ev, path, &mut report, &mut commented_seen, &mut tags_seen);
     }
+
+    // Fill in any tags we couldn't name from events alone by
+    // listing each tagged project's tags and adding those whose
+    // `created_at` falls in the window. Over-attribution risk:
+    // on shared projects (multiple maintainers), this credits
+    // co-maintainers' tags too. For the typical Fedora /
+    // Debian / personal-project case this is correct.
+    if !tagged_project_ids.is_empty() && verbose {
+        eprintln!(
+            "[gitlab] {base}: filling tag names from tags API across {} project(s)",
+            tagged_project_ids.len(),
+        );
+    }
+    for pid in &tagged_project_ids {
+        let Some(path) = paths.get(pid) else { continue };
+        let tags = match list_tags(base, &token, *pid) {
+            Ok(t) => t,
+            Err(e) => {
+                if verbose {
+                    eprintln!("[gitlab] {base}: tag listing failed for {path}: {e}");
+                }
+                continue;
+            }
+        };
+        for tag in tags {
+            if !in_date_range(&tag.created_at, since, until) {
+                continue;
+            }
+            if tags_seen.insert((path.clone(), tag.name.clone())) {
+                report.tags_pushed.push(TagRef {
+                    project: path.clone(),
+                    tag: tag.name,
+                });
+            }
+        }
+    }
+
+    report
+        .tags_pushed
+        .sort_by(|a, b| a.project.cmp(&b.project).then(a.tag.cmp(&b.tag)));
 
     // Authored-commit counts, one call per in-scope project. Runs
     // only where the user already pushed; projects the user
@@ -161,6 +251,52 @@ pub fn gitlab_report(
         }
     }
 
+    // Releases per in-scope project. GitLab's user events don't
+    // surface release publication as a typed event, so we have to
+    // ask each project. Filter by author.username == user and
+    // released_at in the window.
+    if verbose {
+        eprintln!(
+            "[gitlab] {base}: scanning releases across {} project(s)",
+            project_ids_in_group.len()
+        );
+    }
+    for pid in &project_ids_in_group {
+        let Some(path) = paths.get(pid) else { continue };
+        let releases = match project_releases(base, &token, *pid) {
+            Ok(r) => r,
+            Err(e) => {
+                if verbose {
+                    eprintln!("[gitlab] {base}: release lookup failed for {path}: {e}");
+                }
+                continue;
+            }
+        };
+        for r in releases {
+            if r.author.username != user_obj.username {
+                continue;
+            }
+            if !in_date_range(&r.released_at, since, until) {
+                continue;
+            }
+            let url = r
+                .links
+                .as_ref()
+                .and_then(|l| l.self_url.clone())
+                .unwrap_or_else(|| format!("{base}/{path}/-/releases/{}", r.tag_name));
+            report.releases_published.push(ReleaseRef {
+                project: path.clone(),
+                tag: r.tag_name,
+                name: r.name,
+                url,
+                upcoming: r.upcoming_release,
+            });
+        }
+    }
+    report
+        .releases_published
+        .sort_by(|a, b| a.project.cmp(&b.project).then(a.tag.cmp(&b.tag)));
+
     Ok(report)
 }
 
@@ -179,6 +315,8 @@ pub fn format_markdown(report: &GitlabReport, detail: u8, heading_suffix: Option
         && report.approved_mrs.is_empty()
         && report.commented_mrs.is_empty()
         && report.commits_pushed.is_empty()
+        && report.tags_pushed.is_empty()
+        && report.releases_published.is_empty()
     {
         let mut out = heading;
         out.push_str("No GitLab activity.\n\n");
@@ -187,6 +325,8 @@ pub fn format_markdown(report: &GitlabReport, detail: u8, heading_suffix: Option
 
     let total_pushed: u64 = report.commits_pushed.values().sum();
     let total_authored: u64 = report.commits_authored.values().sum();
+    let tag_projects = unique_project_count(&report.tags_pushed, |t| &t.project);
+    let release_projects = unique_project_count(&report.releases_published, |r| &r.project);
     let mut out = heading;
     out.push_str(&format!("- **MRs opened:** {}\n", report.opened_mrs.len()));
     out.push_str(&format!("- **MRs merged:** {}\n", report.merged_mrs.len()));
@@ -204,7 +344,15 @@ pub fn format_markdown(report: &GitlabReport, detail: u8, heading_suffix: Option
         report.commits_pushed.len()
     ));
     out.push_str(&format!(
-        "- **Commits authored:** {total_authored} across {authored_projects} project(s)\n\n",
+        "- **Commits authored:** {total_authored} across {authored_projects} project(s)\n",
+    ));
+    out.push_str(&format!(
+        "- **Tags pushed:** {} across {tag_projects} project(s)\n",
+        report.tags_pushed.len(),
+    ));
+    out.push_str(&format!(
+        "- **Releases published:** {} across {release_projects} project(s)\n\n",
+        report.releases_published.len(),
     ));
 
     if !detailed {
@@ -237,7 +385,46 @@ pub fn format_markdown(report: &GitlabReport, detail: u8, heading_suffix: Option
         }
         out.push('\n');
     }
+    if !report.tags_pushed.is_empty() {
+        out.push_str("### Tags pushed\n\n");
+        let base = report.instance.trim_end_matches('/');
+        let mut by_project: BTreeMap<&str, Vec<&TagRef>> = BTreeMap::new();
+        for t in &report.tags_pushed {
+            by_project.entry(t.project.as_str()).or_default().push(t);
+        }
+        for (project, entries) in by_project {
+            let formatted: Vec<String> = entries
+                .iter()
+                .map(|t| format!("[{}]({base}/{project}/-/tags/{})", t.tag, t.tag))
+                .collect();
+            out.push_str(&format!("- `{project}`: {}\n", formatted.join(", ")));
+        }
+        out.push('\n');
+    }
+    if !report.releases_published.is_empty() {
+        out.push_str("### Releases published\n\n");
+        for r in &report.releases_published {
+            let upcoming = if r.upcoming { " (upcoming)" } else { "" };
+            let suffix = match &r.name {
+                Some(name) if name != &r.tag => format!(" — {name}"),
+                _ => String::new(),
+            };
+            out.push_str(&format!(
+                "- [{} {}]({}){suffix}{upcoming}\n",
+                r.project, r.tag, r.url,
+            ));
+        }
+        out.push('\n');
+    }
     out
+}
+
+fn unique_project_count<T>(items: &[T], project_of: impl Fn(&T) -> &String) -> usize {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for it in items {
+        seen.insert(project_of(it).as_str());
+    }
+    seen.len()
 }
 
 /// Resolve each event's `project_id` to its `path_with_namespace`.
@@ -267,6 +454,20 @@ fn resolve_project_paths(
     paths
 }
 
+/// Is `ev` any kind of user tag push — singleton or batched? We
+/// use this as the trigger to dive into the tags API for a
+/// project, regardless of whether the event itself carries a
+/// name.
+fn is_tag_push_event(ev: &Event) -> bool {
+    if ev.action_name != "pushed to" && ev.action_name != "pushed new" {
+        return false;
+    }
+    let Some(pd) = &ev.push_data else {
+        return false;
+    };
+    pd.ref_type.as_deref() == Some("tag")
+}
+
 fn in_date_range(created_at: &str, since: NaiveDate, until: NaiveDate) -> bool {
     let Some(day) = created_at.split('T').next() else {
         return false;
@@ -292,6 +493,7 @@ fn dispatch_event(
     path: &str,
     report: &mut GitlabReport,
     commented: &mut BTreeSet<(u64, u64)>,
+    tags: &mut BTreeSet<(String, String)>,
 ) {
     let is_mr = ev.target_type.as_deref() == Some("MergeRequest");
     match (ev.action_name.as_str(), is_mr) {
@@ -313,7 +515,18 @@ fn dispatch_event(
         }
         ("pushed to", _) | ("pushed new", _) => {
             if let Some(pd) = &ev.push_data {
-                *report.commits_pushed.entry(path.to_string()).or_insert(0) += pd.commit_count;
+                if pd.ref_type.as_deref() == Some("tag") {
+                    if let Some(tag) = pd.ref_name.as_deref()
+                        && tags.insert((path.to_string(), tag.to_string()))
+                    {
+                        report.tags_pushed.push(TagRef {
+                            project: path.to_string(),
+                            tag: tag.to_string(),
+                        });
+                    }
+                } else {
+                    *report.commits_pushed.entry(path.to_string()).or_insert(0) += pd.commit_count;
+                }
             }
         }
         _ => {}
@@ -455,7 +668,13 @@ mod tests {
         let ev = sample_event("opened", Some("MergeRequest"), 10, Some(5), Some("Fix"));
         let mut report = GitlabReport::default();
         let mut seen = BTreeSet::new();
-        dispatch_event(&ev, "a/b", &mut report, &mut seen);
+        dispatch_event(
+            &ev,
+            "a/b",
+            &mut report,
+            &mut seen,
+            &mut std::collections::BTreeSet::new(),
+        );
         assert_eq!(report.opened_mrs.len(), 1);
         assert_eq!(report.opened_mrs[0].iid, 5);
     }
@@ -471,8 +690,20 @@ mod tests {
         ev.note = Some(note);
         let mut report = GitlabReport::default();
         let mut seen = BTreeSet::new();
-        dispatch_event(&ev, "a/b", &mut report, &mut seen);
-        dispatch_event(&ev, "a/b", &mut report, &mut seen);
+        dispatch_event(
+            &ev,
+            "a/b",
+            &mut report,
+            &mut seen,
+            &mut std::collections::BTreeSet::new(),
+        );
+        dispatch_event(
+            &ev,
+            "a/b",
+            &mut report,
+            &mut seen,
+            &mut std::collections::BTreeSet::new(),
+        );
         assert_eq!(report.commented_mrs.len(), 1);
     }
 
@@ -488,8 +719,20 @@ mod tests {
         });
         let mut report = GitlabReport::default();
         let mut seen = BTreeSet::new();
-        dispatch_event(&ev, "a/b", &mut report, &mut seen);
-        dispatch_event(&ev, "a/b", &mut report, &mut seen);
+        dispatch_event(
+            &ev,
+            "a/b",
+            &mut report,
+            &mut seen,
+            &mut std::collections::BTreeSet::new(),
+        );
+        dispatch_event(
+            &ev,
+            "a/b",
+            &mut report,
+            &mut seen,
+            &mut std::collections::BTreeSet::new(),
+        );
         assert_eq!(report.commits_pushed.get("a/b"), Some(&6));
     }
 
