@@ -43,6 +43,7 @@ library crates:
 - **sandogasa-distgit** — Fedora dist-git client, ACL management, and RPM spec file parser
 - **sandogasa-fasjson** — FASJSON (Fedora Account System) API client with Kerberos auth
 - **sandogasa-fedrq** — wrapper for the fedrq RPM repository query tool
+- **sandogasa-github** — GitHub REST API client (user identity + activity)
 - **sandogasa-gitlab** — GitLab REST and GraphQL API client
 - **sandogasa-inventory** — package-of-interest inventory data model and I/O
 - **sandogasa-jira** — minimal JIRA REST API client (issue status lookup)

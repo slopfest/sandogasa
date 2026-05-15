@@ -1651,6 +1651,17 @@ name = "sandogasa-fedrq"
 version = "0.10.2"
 
 [[package]]
+name = "sandogasa-github"
+version = "0.10.2"
+dependencies = [
+ "chrono",
+ "mockito",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "sandogasa-gitlab"
 version = "0.10.2"
 dependencies = [
