@@ -237,7 +237,7 @@ async fn cmd_bodhi(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = sandogasa_bodhi::BodhiClient::with_base_url(base_url);
     let (updates, comments) = tokio::try_join!(
-        client.updates_for_user(username, 1),
+        client.updates_for_user(username, 1, None, None, |_, _, _| {}),
         client.comments_for_user(username, 1),
     )?;
 
@@ -961,7 +961,9 @@ async fn check_discourse(username: &str) -> ServiceLastSeen {
 
 async fn check_bodhi(username: &str) -> ServiceLastSeen {
     let client = sandogasa_bodhi::BodhiClient::new();
-    let updates = client.updates_for_user(username, 1).await;
+    let updates = client
+        .updates_for_user(username, 1, None, None, |_, _, _| {})
+        .await;
     let comments = client.comments_for_user(username, 1).await;
 
     let update_ts = updates
