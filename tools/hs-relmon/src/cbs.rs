@@ -41,9 +41,14 @@ pub struct Build {
 }
 
 impl Build {
-    /// Whether this is a Hyperscale build (release contains ".hs.").
+    /// Whether this is a Hyperscale build. Hyperscale builds
+    /// carry an `hs`-prefixed marker segment in their release
+    /// string: `hs` (main), `hs+fb` (facebook), `hsx`
+    /// (experimental), `hsk` (kernel), and so on. We accept any
+    /// segment starting with `hs` so newly-introduced flavors
+    /// don't need a code change.
     pub fn is_hyperscale(&self) -> bool {
-        self.release.contains(".hs.")
+        self.release.split('.').any(|seg| seg.starts_with("hs"))
     }
 
     /// Return the EL version this build targets (e.g. 9, 10), if detectable.
@@ -576,23 +581,24 @@ mod tests {
 
     #[test]
     fn test_build_is_hyperscale() {
-        let hs = Build {
-            build_id: 1,
-            name: "ethtool".into(),
-            version: "6.15".into(),
-            release: "3.hs.el10".into(),
-            nvr: "ethtool-6.15-3.hs.el10".into(),
-        };
-        assert!(hs.is_hyperscale());
-
-        let non_hs = Build {
-            build_id: 2,
-            name: "ethtool".into(),
-            version: "6.2".into(),
-            release: "1.el9sbase_901".into(),
-            nvr: "ethtool-6.2-1.el9sbase_901".into(),
-        };
-        assert!(!non_hs.is_hyperscale());
+        let cases = [
+            ("3.hs.el10", true),             // main
+            ("12.3.hs+fb.el10", true),       // facebook
+            ("3.1.hsx.el10", true),          // experimental
+            ("0.hs1.hsk.el10", true),        // kernel
+            ("1.el9sbase_901", false),       // non-hyperscale base
+            ("2.el10s~1", false),            // pre-release non-hyperscale
+        ];
+        for (release, expected) in cases {
+            let b = Build {
+                build_id: 1,
+                name: "pkg".into(),
+                version: "1".into(),
+                release: release.into(),
+                nvr: format!("pkg-1-{release}"),
+            };
+            assert_eq!(b.is_hyperscale(), expected, "release={release}");
+        }
     }
 
     #[test]
