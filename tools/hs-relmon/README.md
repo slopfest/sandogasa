@@ -24,6 +24,12 @@ hs-relmon config
 hs-relmon list-issues [--group <url>] [--json]
     [--issue-status <status>] [--issue-assignee <username>]
     [--manifest <path>] [--add-missing]
+hs-relmon prune-tags <package>
+    [--release-keep <N>] [--testing-keep <N>] [--repositories <list>]
+    [--dry-run] [--yes] [--verbose]
+hs-relmon prune-manifest <manifest>
+    [--release-keep <N>] [--testing-keep <N>] [--repositories <list>]
+    [--skip <list>] [--dry-run] [--yes] [--verbose]
 ```
 
 ### Examples
@@ -187,6 +193,64 @@ Automatically add missing packages to the manifest (preserves comments):
 ```
 $ hs-relmon list-issues --manifest packages.toml --add-missing
 ```
+
+### Pruning old tagged builds
+
+CBS Koji's hyperscale `-testing` and `-release` tags accumulate
+old builds because nothing untags them automatically. `prune-tags`
+walks a package's hyperscale builds, groups by tag, and untags
+anything past the retention threshold. Output lists the builds
+that will stay tagged alongside the ones to be untagged so you
+can sanity-check before confirming:
+
+```
+$ hs-relmon prune-tags ethtool --dry-run
+ethtool: would untag 7 build(s)
+  hyperscale10s-packages-main-release: keep 2, untag 1
+    keep:
+      ethtool-6.19-1.hs.el10
+      ethtool-6.18-1.hs.el10
+    untag:
+      ethtool-6.14-1.hs.el10
+  hyperscale10s-packages-main-testing: keep 1, untag 3
+    keep:
+      ethtool-6.19-1.hs.el10
+    untag:
+      ethtool-6.18-1.hs.el10
+      ethtool-6.15-3.hs.el10
+      ethtool-6.14-1.hs.el10
+  ...
+```
+
+Defaults: 2 builds kept per `-release` tag, 1 per `-testing`,
+repository `main` only. Override:
+
+```
+$ hs-relmon prune-tags ethtool --release-keep 3 --testing-keep 2
+$ hs-relmon prune-tags ethtool --repositories main,facebook
+```
+
+Without `--dry-run` you get a per-package `[y/N]` prompt; pass
+`-y/--yes` to skip. Untag operations run via `koji untag-build`
+against the `cbs` profile (install `koji` and configure CBS auth
+beforehand).
+
+For batch use, `prune-manifest <path>` walks every package in a
+manifest with the same options:
+
+```
+$ hs-relmon prune-manifest packages.toml --dry-run
+```
+
+Exclude packages that manage their own tag cleanup with
+`--skip`:
+
+```
+$ hs-relmon prune-manifest packages.toml --skip systemd,kernel
+```
+
+`-candidate` and tags whose repository isn't in `--repositories`
+are left alone.
 
 ## Data sources
 

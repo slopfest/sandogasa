@@ -15,6 +15,7 @@ reqwest = { workspace = true }
 rpassword = { workspace = true }
 sandogasa-config = { workspace = true }
 sandogasa-gitlab = { workspace = true }
+sandogasa-koji = { workspace = true }
 sandogasa-repology = { workspace = true }
 sandogasa-rpmvercmp = { workspace = true }
 serde = { workspace = true }

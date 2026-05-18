@@ -11,6 +11,7 @@ use hs_relmon::config;
 use hs_relmon::gitlab;
 use hs_relmon::list_issues;
 use hs_relmon::manifest;
+use hs_relmon::prune_tags;
 use hs_relmon::repology;
 
 #[derive(Parser)]
@@ -185,6 +186,99 @@ are missing from the manifest. Requires --manifest.
 Packages are inserted in sorted order."
         )]
         add_missing: bool,
+    },
+
+    /// Untag old hyperscale builds for every package in a
+    /// manifest, keeping N newest in each `-release`/`-testing`
+    /// tag.
+    PruneManifest {
+        /// Path to the TOML manifest file.
+        manifest: PathBuf,
+
+        /// Builds to keep per `-release` tag.
+        #[arg(long, default_value_t = prune_tags::DEFAULT_RELEASE_KEEP)]
+        release_keep: usize,
+
+        /// Builds to keep per `-testing` tag.
+        #[arg(long, default_value_t = prune_tags::DEFAULT_TESTING_KEEP)]
+        testing_keep: usize,
+
+        /// Comma-separated Hyperscale repositories to manage.
+        #[arg(
+            long,
+            default_value = prune_tags::DEFAULT_REPOSITORY,
+            long_help = "\
+Comma-separated Hyperscale repositories to manage.
+The repository is the segment between `-packages-`
+and the stage suffix, e.g. `main` in
+`hyperscale10s-packages-main-release`. Tags whose
+repository is not in this list are not touched."
+        )]
+        repositories: String,
+
+        /// Comma-separated packages to skip.
+        #[arg(
+            long,
+            value_name = "LIST",
+            long_help = "\
+Comma-separated package names to skip during the
+batch run. Useful when one package manages its own
+tag cleanup (e.g. systemd) and you don't want this
+tool to touch it."
+        )]
+        skip: Option<String>,
+
+        /// Preview operations without applying them.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip the per-package confirmation prompt.
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Untag old hyperscale builds for one package, keeping N
+    /// newest in each `-release`/`-testing` tag.
+    PruneTags {
+        /// Source package name (e.g. ethtool).
+        package: String,
+
+        /// Builds to keep per `-release` tag.
+        #[arg(long, default_value_t = prune_tags::DEFAULT_RELEASE_KEEP)]
+        release_keep: usize,
+
+        /// Builds to keep per `-testing` tag.
+        #[arg(long, default_value_t = prune_tags::DEFAULT_TESTING_KEEP)]
+        testing_keep: usize,
+
+        /// Comma-separated Hyperscale repositories to manage.
+        #[arg(
+            long,
+            default_value = prune_tags::DEFAULT_REPOSITORY,
+            long_help = "\
+Comma-separated Hyperscale repositories to manage.
+The repository is the segment between `-packages-`
+and the stage suffix, e.g. `main` in
+`hyperscale10s-packages-main-release`. Tags whose
+repository is not in this list are not touched."
+        )]
+        repositories: String,
+
+        /// Preview operations without applying them.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip the confirmation prompt.
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// Configure GitLab authentication.
@@ -438,11 +532,99 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        Command::PruneTags {
+            package,
+            release_keep,
+            testing_keep,
+            repositories,
+            dry_run,
+            yes,
+            verbose,
+        } => {
+            let opts = prune_tags::PruneOptions {
+                release_keep,
+                testing_keep,
+                repositories: prune_tags::parse_repositories(&repositories),
+            };
+            let client = cbs::Client::new();
+            run_prune_one(&client, &package, &opts, dry_run, yes, verbose)?;
+        }
+        Command::PruneManifest {
+            manifest: path,
+            release_keep,
+            testing_keep,
+            repositories,
+            skip,
+            dry_run,
+            yes,
+            verbose,
+        } => {
+            let opts = prune_tags::PruneOptions {
+                release_keep,
+                testing_keep,
+                repositories: prune_tags::parse_repositories(&repositories),
+            };
+            let skip_set: HashSet<String> = skip
+                .as_deref()
+                .unwrap_or("")
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            let m = manifest::Manifest::load(&path)?;
+            let client = cbs::Client::new();
+            let mut total_failures = 0usize;
+            for pkg in &m.packages {
+                if skip_set.contains(&pkg.name) {
+                    if verbose {
+                        eprintln!("{}: skipped (--skip)", pkg.name);
+                    }
+                    continue;
+                }
+                if let Err(e) = run_prune_one(&client, &pkg.name, &opts, dry_run, yes, verbose) {
+                    eprintln!("{}: {e}", pkg.name);
+                    total_failures += 1;
+                }
+            }
+            if total_failures > 0 {
+                std::process::exit(1);
+            }
+        }
         Command::Config => {
             configure_gitlab()?;
         }
     }
 
+    Ok(())
+}
+
+fn run_prune_one(
+    client: &cbs::Client,
+    package: &str,
+    opts: &prune_tags::PruneOptions,
+    dry_run: bool,
+    yes: bool,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let builds_with_tags = prune_tags::fetch_builds_with_tags(client, package, verbose)?;
+    let plan = prune_tags::build_plan(package, &builds_with_tags, opts);
+    print!("{}", prune_tags::render_plan(&plan));
+    let total = plan.total_untags();
+    if total == 0 {
+        return Ok(());
+    }
+    if dry_run {
+        return Ok(());
+    }
+    if !yes && !prune_tags::confirm(&format!("Untag {total} build(s) for {package}?"))? {
+        eprintln!("{package}: aborted.");
+        return Ok(());
+    }
+    let errors = prune_tags::apply_plan(&plan, verbose);
+    if errors > 0 {
+        return Err(format!("{errors} untag operation(s) failed for {package}").into());
+    }
     Ok(())
 }
 

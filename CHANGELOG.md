@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### hs-relmon: `prune-tags` / `prune-manifest` subcommands
+
+Untag old hyperscale builds, keeping the N newest in each
+`-release` / `-testing` tag. Walks a package's hyperscale
+builds via CBS Koji's `listTags`, groups by literal tag name,
+and emits `koji untag-build` calls for everything past the
+retention threshold.
+
+Defaults: 2 builds kept per `-release` tag, 1 per `-testing`.
+`--repositories main` is the default repository filter;
+`--repositories main,facebook` opts into additional channels.
+Output is a per-tag breakdown listing both the builds that
+will stay tagged and the ones to be untagged, so the user can
+sanity-check before confirming. `--dry-run` previews without
+acting; without it, prompts per package unless `--yes`.
+`prune-manifest <path>` walks every package in the manifest
+with the same options, and accepts `--skip <list>` to exclude
+packages that manage their own tag cleanup (e.g. systemd).
+
+`-candidate` and tags whose repository isn't in
+`--repositories` are not touched.
+
 ## v0.11.1
 
 ### sandogasa-report: tags and releases on both forges

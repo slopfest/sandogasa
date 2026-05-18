@@ -6,6 +6,7 @@ pub mod config;
 pub mod gitlab;
 pub mod list_issues;
 pub mod manifest;
+pub mod prune_tags;
 
 pub use sandogasa_repology as repology;
 pub use sandogasa_rpmvercmp as rpmvercmp;

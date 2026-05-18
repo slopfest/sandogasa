@@ -660,6 +660,7 @@ dependencies = [
  "rpassword",
  "sandogasa-config",
  "sandogasa-gitlab",
+ "sandogasa-koji",
  "sandogasa-repology",
  "sandogasa-rpmvercmp",
  "serde",
