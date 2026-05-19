@@ -12,9 +12,3 @@
   Note: koji's `--before` is exclusive, add a day when converting
   from inclusive end dates.
 
-## Koji tag cleanup tool
-
-- Tool to detect and clean up stale builds in CentOS SIG Koji tags.
-  Policy: only one build per package should be tagged for release
-  unless there's a specific reason. The tool should list packages
-  with multiple tagged builds and optionally untag the older ones.

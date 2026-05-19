@@ -6,7 +6,7 @@ done; in-progress items get an `(in progress)` marker.
 ## MVP (v0.1)
 
 ### Dependencies / building blocks
-- [ ] Add `untag_build(tag, nvr, profile)` to `sandogasa-koji`
+- [x] Add `untag_build(tag, nvr, profile)` to `sandogasa-koji`
 - [x] MR detail fetch + `parse_mr_url` in `sandogasa-gitlab`
 - [x] `sandogasa-gitlab::parse_issue_url` for the `/-/issues/` and
       `/-/work_items/` URL forms

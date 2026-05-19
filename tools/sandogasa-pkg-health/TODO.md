@@ -55,8 +55,8 @@ tracks when); in-progress items get an `(in progress)` marker.
 
 ### Docs
 - [x] `README.md` following project conventions (install, usage)
-- [ ] Root `README.md`: add tool entry (alphabetical)
-- [ ] `CHANGELOG.md`: `Unreleased` entry
+- [x] Root `README.md`: add tool entry (alphabetical)
+- [x] `CHANGELOG.md` entry (released in v0.10.2)
 
 ## Post-MVP
 
