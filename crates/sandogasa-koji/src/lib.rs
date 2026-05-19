@@ -116,6 +116,93 @@ pub fn list_tagged(
     Ok(builds)
 }
 
+/// One "tagged into" event from `koji list-history --tag=<tag>`.
+/// Captures only the bits the activity-reporting code needs;
+/// the date column is parsed by the caller as needed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagAddEvent {
+    /// `<weekday> <month> <day> <hh:mm:ss> <year>` as koji prints
+    /// it under `--utc`. Kept as the original string so callers
+    /// can preserve fidelity for display; parse with chrono if
+    /// numeric comparisons are needed.
+    pub when: String,
+    /// The build NVR that was tagged.
+    pub nvr: String,
+    /// FAS username (or other Koji actor identifier) credited
+    /// with the tagging.
+    pub owner: String,
+}
+
+/// Walk a tag's "tagged into" events in the window `[after,
+/// before)` and return them in chronological order. Implemented
+/// via `koji list-history --tag=<tag>` parsed line-by-line; only
+/// `tagged into` lines are kept (other event types like owner
+/// changes and untags are filtered out).
+///
+/// Both bounds are dates: `after` is inclusive on the start,
+/// `before` should be `until + 1 day` to make the window
+/// closed on the `until` day. Times are in UTC.
+pub fn tag_history(
+    tag: &str,
+    profile: Option<&str>,
+    after: chrono::NaiveDate,
+    before: chrono::NaiveDate,
+) -> Result<Vec<TagAddEvent>, String> {
+    let after_str = after.to_string();
+    let before_str = before.to_string();
+    let stdout = run_koji(
+        profile,
+        &[
+            "list-history",
+            "--tag",
+            tag,
+            "--after",
+            &after_str,
+            "--before",
+            &before_str,
+            "--utc",
+        ],
+    )?;
+    Ok(parse_tag_history(&stdout))
+}
+
+/// Parse `koji list-history` output and pick out only the
+/// "tagged into" entries. Format of those lines (as of koji
+/// 1.34, `--utc`):
+///
+/// ```text
+/// Thu Apr 30 23:19:02 2026 nvr-1.0-1.el10 tagged into mytag by user [still active]
+/// ```
+///
+/// Five date/time tokens (weekday, month, day, hh:mm:ss, year),
+/// then NVR, then `tagged into <tag> by <user>`, optionally
+/// followed by `[still active]`. The tag name is already known
+/// to the caller so we don't bother re-extracting it.
+pub fn parse_tag_history(stdout: &str) -> Vec<TagAddEvent> {
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        // Date prefix is 5 whitespace-separated tokens:
+        //   <weekday> <month> <day> <hh:mm:ss> <year>
+        // followed by <nvr> <tagged> <into> <tag-name> <by> <user> [...]
+        if parts.len() < 11 {
+            continue;
+        }
+        if parts[6] != "tagged" || parts[7] != "into" || parts[9] != "by" {
+            continue;
+        }
+        let when = parts[0..5].join(" ");
+        let nvr = parts[5].to_string();
+        let owner = parts[10].to_string();
+        out.push(TagAddEvent { when, nvr, owner });
+    }
+    out
+}
+
 /// Untag a build from a Koji tag (`koji untag-build <tag> <nvr>`).
 ///
 /// Succeeds silently when Koji accepts the command; returns
@@ -238,5 +325,43 @@ mod tests {
     #[test]
     fn parse_nvr_full_too_short() {
         assert!(parse_nvr("nohyphens").is_none());
+    }
+
+    #[test]
+    fn parse_tag_history_picks_only_tag_adds() {
+        let stdout = "\
+Thu Apr 30 23:19:02 2026 kpatch-0.9.11-0.4.hs.el10 tagged into hyperscale10s-packages-main-release by dcavalca [still active]
+Wed May  6 20:04:12 2026 package owner dcavalca set for git-lfs in hyperscale10s-packages-main-release by dcavalca [still active]
+Thu May  7 16:22:29 2026 git-lfs-3.7.1-5.20260423gite09c0f6.hs.el10 tagged into hyperscale10s-packages-main-release by dcavalca [still active]
+Mon May 18 15:35:11 2026 ethtool-6.14-1.hs.el10 untagged from hyperscale10s-packages-main-release by salimma
+";
+        let events = parse_tag_history(stdout);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].nvr, "kpatch-0.9.11-0.4.hs.el10");
+        assert_eq!(events[0].owner, "dcavalca");
+        assert_eq!(events[0].when, "Thu Apr 30 23:19:02 2026");
+        assert_eq!(events[1].nvr, "git-lfs-3.7.1-5.20260423gite09c0f6.hs.el10");
+        assert_eq!(events[1].owner, "dcavalca");
+    }
+
+    #[test]
+    fn parse_tag_history_ignores_owner_and_pkg_list_entries() {
+        // These three look superficially similar to a tag event
+        // but use other verbs in the same positions.
+        let stdout = "\
+Wed May  6 20:04:12 2026 package owner dcavalca set for git-lfs in hyperscale10s-packages-main-release by dcavalca [still active]
+Wed May  6 20:04:12 2026 package list entry created: git-lfs in hyperscale10s-packages-main-release by dcavalca [still active]
+Mon May 18 15:35:11 2026 ethtool-6.14-1.hs.el10 untagged from hyperscale10s-packages-main-release by salimma
+";
+        assert!(parse_tag_history(stdout).is_empty());
+    }
+
+    #[test]
+    fn parse_tag_history_handles_blank_lines() {
+        let stdout =
+            "\n\nThu Apr 30 23:19:02 2026 foo-1-1.el10 tagged into bar by u [still active]\n\n";
+        let events = parse_tag_history(stdout);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].nvr, "foo-1-1.el10");
     }
 }

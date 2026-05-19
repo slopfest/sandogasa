@@ -140,8 +140,12 @@ fn query_tag_snapshot(
 
 /// Run Koji CBS reporting for a domain config.
 ///
-/// Compares tag state at the start and end of the reporting period
-/// to identify new and updated packages.
+/// Snapshots tag state at the start of the period, walks tag-add
+/// events across the window, and reports each touched package as
+/// new (no prior tagging) or updated (different version from the
+/// pre-window snapshot). Walking the history catches packages
+/// that were tagged and untagged entirely within the window —
+/// activity the previous snapshot-diff approach silently missed.
 pub fn koji_report(
     domain: &DomainConfig,
     user: Option<&str>,
@@ -161,21 +165,70 @@ pub fn koji_report(
         return Err("no koji_tags configured for this domain".to_string());
     }
 
-    // Query at start of period and end of period (next day, inclusive).
+    // `koji list-history --before` is exclusive — pass until+1day
+    // so the entire `until` day is in the window.
     let start_ts = since.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp();
-    let end_ts = until
-        .succ_opt()
-        .unwrap_or(until)
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .and_utc()
-        .timestamp();
+    let history_before = until.succ_opt().unwrap_or(until);
 
     let before = query_tag_snapshot(&tags, profile, Some(start_ts), user, verbose);
-    let after = query_tag_snapshot(&tags, profile, Some(end_ts), user, verbose);
+    let activity = query_tag_activity(&tags, profile, since, history_before, user, verbose);
 
-    let packages = diff_snapshots(&before, &after);
+    let packages = diff_snapshots(&before, &activity);
     Ok(KojiReport { packages })
+}
+
+/// Walk tag-add events in `[since, before)` across `tags` and
+/// produce a snapshot-shaped value: for each (package, distro)
+/// touched in the window, the *latest* version that landed in
+/// that window. Compatible with `diff_snapshots` for free.
+fn query_tag_activity(
+    tags: &[String],
+    profile: Option<&str>,
+    since: chrono::NaiveDate,
+    before: chrono::NaiveDate,
+    user: Option<&str>,
+    verbose: bool,
+) -> TagSnapshot {
+    let mut activity: TagSnapshot = BTreeMap::new();
+    for tag in tags {
+        if verbose {
+            eprintln!("[koji] history for {tag} in [{since}, {before})");
+        }
+        let events = match sandogasa_koji::tag_history(tag, profile, since, before) {
+            Ok(e) => e,
+            Err(e) => {
+                if verbose {
+                    eprintln!("[koji] warning: {e}");
+                }
+                continue;
+            }
+        };
+        let distro = distro_from_tag(tag);
+        for ev in events {
+            if let Some(u) = user
+                && ev.owner != u
+            {
+                continue;
+            }
+            let Some((name, version, release)) = sandogasa_koji::parse_nvr(&ev.nvr) else {
+                continue;
+            };
+            let distro_map = activity.entry(name.to_string()).or_default();
+            distro_map
+                .entry(distro.clone())
+                .and_modify(|(old_ver, old_rel, old_owner)| {
+                    if version > old_ver.as_str()
+                        || (version == old_ver.as_str() && release > old_rel.as_str())
+                    {
+                        *old_ver = version.to_string();
+                        *old_rel = release.to_string();
+                        *old_owner = ev.owner.clone();
+                    }
+                })
+                .or_insert((version.to_string(), release.to_string(), ev.owner.clone()));
+        }
+    }
+    activity
 }
 
 /// Diff two tag snapshots to find new and updated packages.

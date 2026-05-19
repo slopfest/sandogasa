@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### sandogasa-report: history-based Koji activity reporting
+
+Koji CBS reporting now walks `koji list-history` events
+across the reporting window instead of diffing two snapshots
+at the window's boundaries. Snapshot-diff missed any package
+that was tagged and untagged entirely within the window;
+history-walking captures every "tagged into" event so that
+activity surfaces even when the net effect is invisible at
+the start/end.
+
+`sandogasa-koji` gained `tag_history(tag, profile, after,
+before)` returning `Vec<TagAddEvent>` plus a public
+`parse_tag_history` helper for the line-by-line parser.
+
+No JSON shape changes; same `KojiReport` / `PackageEntry` /
+`ChangeKind` surface.
+
 ### sandogasa-inventory: `Priority` enum + per-package and per-workload fields
 
 New `Priority` enum (`unspecified` / `low` / `medium` / `high`
