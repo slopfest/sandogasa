@@ -7,6 +7,40 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// A Bugzilla priority level. Variants are ordered from
+/// least- to most-important so a `max(...)` across several
+/// candidates picks the highest priority.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Priority {
+    /// Bugzilla's `unspecified` — the default a release-monitoring
+    /// bug arrives at. Treated as "don't manage" when resolving
+    /// from inventory; valid as an explicit override that opts
+    /// a package out of a workload-level default.
+    Unspecified,
+    Low,
+    Medium,
+    High,
+    Urgent,
+}
+
+impl Priority {
+    /// The matching Bugzilla API string (`"unspecified"`, `"low"`,
+    /// …). Used when constructing PUT bodies and when comparing
+    /// against the `priority` field of a fetched bug.
+    pub fn as_bugzilla_str(&self) -> &'static str {
+        match self {
+            Priority::Unspecified => "unspecified",
+            Priority::Low => "low",
+            Priority::Medium => "medium",
+            Priority::High => "high",
+            Priority::Urgent => "urgent",
+        }
+    }
+}
+
 /// Top-level inventory document.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Inventory {
@@ -57,6 +91,13 @@ pub struct WorkloadMeta {
     /// Content-resolver labels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<Vec<String>>,
+    /// Default Bugzilla priority for packages in this workload
+    /// when they don't carry an explicit `priority`. The
+    /// resolved priority is the max across all workloads listing
+    /// the package, so a package in both a "best-effort" and a
+    /// "security-sensitive" workload picks up the latter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_priority: Option<Priority>,
     /// Source RPM names belonging to this workload.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub packages: Vec<String>,
@@ -103,6 +144,14 @@ pub struct Package {
     /// Whether to file GitLab issues for version updates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_issue: Option<bool>,
+
+    // --- Bugzilla bug-priority management ---
+    /// Bugzilla priority to apply to release-monitoring bugs for
+    /// this package. Overrides any workload-level
+    /// `default_priority`. Set to `unspecified` to explicitly
+    /// opt out of a workload default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<Priority>,
 }
 
 impl Inventory {
@@ -170,6 +219,32 @@ impl Inventory {
         self.package.iter().find(|p| p.name == name)
     }
 
+    /// Resolve the Bugzilla priority for a package. An explicit
+    /// `priority` on the package wins outright (including
+    /// `unspecified`, which acts as an opt-out from any
+    /// workload-level default). Otherwise, walk every workload
+    /// that lists this package and return the highest
+    /// `default_priority` among them.
+    pub fn priority_for(&self, name: &str) -> Option<Priority> {
+        let pkg = self.find_package(name)?;
+        if let Some(p) = pkg.priority {
+            return Some(p);
+        }
+        let mut best: Option<Priority> = None;
+        for meta in self.inventory.workloads.values() {
+            if !meta.packages.iter().any(|p| p == name) {
+                continue;
+            }
+            if let Some(p) = meta.default_priority {
+                best = match best {
+                    None => Some(p),
+                    Some(b) => Some(b.max(p)),
+                };
+            }
+        }
+        best
+    }
+
     /// Find a package by name (mutable).
     pub fn find_package_mut(&mut self, name: &str) -> Option<&mut Package> {
         self.package.iter_mut().find(|p| p.name == name)
@@ -221,6 +296,7 @@ mod tests {
             repology_name: None,
             distros: None,
             file_issue: None,
+            priority: None,
         }
     }
 
@@ -396,5 +472,95 @@ mod tests {
         assert!(inv1.find_package("new-pkg").is_some());
         // Metadata stays from inv1.
         assert_eq!(inv1.inventory.name, "test");
+    }
+
+    #[test]
+    fn priority_ordering() {
+        // The ordering matters: max() over workload defaults
+        // must pick the most-important one.
+        assert!(Priority::Urgent > Priority::High);
+        assert!(Priority::High > Priority::Medium);
+        assert!(Priority::Medium > Priority::Low);
+        assert!(Priority::Low > Priority::Unspecified);
+    }
+
+    #[test]
+    fn priority_serializes_lowercase() {
+        let toml_str = toml::to_string(&PriorityWrapper { p: Priority::High }).unwrap();
+        assert!(toml_str.contains("p = \"high\""));
+        let back: PriorityWrapper = toml::from_str("p = \"urgent\"").unwrap();
+        assert_eq!(back.p, Priority::Urgent);
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct PriorityWrapper {
+        p: Priority,
+    }
+
+    #[test]
+    fn priority_for_returns_none_when_unset() {
+        let inv = make_inventory();
+        assert_eq!(inv.priority_for("foo"), None);
+    }
+
+    #[test]
+    fn priority_for_explicit_package_field_wins() {
+        let mut inv = make_inventory();
+        inv.find_package_mut("foo").unwrap().priority = Some(Priority::High);
+        // Add a workload default that would otherwise apply.
+        inv.inventory
+            .workloads
+            .get_mut("hyperscale")
+            .unwrap()
+            .default_priority = Some(Priority::Urgent);
+        // Package field wins even when the workload would be
+        // strictly higher.
+        assert_eq!(inv.priority_for("foo"), Some(Priority::High));
+    }
+
+    #[test]
+    fn priority_for_falls_back_to_workload_default() {
+        let mut inv = make_inventory();
+        inv.inventory
+            .workloads
+            .get_mut("hyperscale")
+            .unwrap()
+            .default_priority = Some(Priority::Medium);
+        assert_eq!(inv.priority_for("bar"), Some(Priority::Medium));
+    }
+
+    #[test]
+    fn priority_for_picks_max_across_workloads() {
+        let mut inv = make_inventory();
+        // `foo` is in both hyperscale and epel.
+        inv.inventory
+            .workloads
+            .get_mut("hyperscale")
+            .unwrap()
+            .default_priority = Some(Priority::Low);
+        inv.inventory
+            .workloads
+            .get_mut("epel")
+            .unwrap()
+            .default_priority = Some(Priority::High);
+        assert_eq!(inv.priority_for("foo"), Some(Priority::High));
+    }
+
+    #[test]
+    fn priority_for_explicit_unspecified_opts_out_of_workload_default() {
+        let mut inv = make_inventory();
+        inv.inventory
+            .workloads
+            .get_mut("hyperscale")
+            .unwrap()
+            .default_priority = Some(Priority::Urgent);
+        inv.find_package_mut("foo").unwrap().priority = Some(Priority::Unspecified);
+        assert_eq!(inv.priority_for("foo"), Some(Priority::Unspecified));
+    }
+
+    #[test]
+    fn priority_for_unknown_package_is_none() {
+        let inv = make_inventory();
+        assert_eq!(inv.priority_for("does-not-exist"), None);
     }
 }

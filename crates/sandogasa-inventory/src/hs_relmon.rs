@@ -233,6 +233,7 @@ mod tests {
             repology_name: None,
             distros: None,
             file_issue: None,
+            priority: None,
         }
     }
 

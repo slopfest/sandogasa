@@ -110,6 +110,17 @@
             "null"
           ]
         },
+        "priority": {
+          "description": "Bugzilla priority to apply to release-monitoring bugs for\nthis package. Overrides any workload-level\n`default_priority`. Set to `unspecified` to explicitly\nopt out of a workload default.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Priority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "reason": {
           "description": "Reason for tracking this package.",
           "type": [
@@ -160,10 +171,40 @@
         "name"
       ]
     },
+    "Priority": {
+      "description": "A Bugzilla priority level. Variants are ordered from\nleast- to most-important so a `max(...)` across several\ncandidates picks the highest priority.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "urgent"
+          ]
+        },
+        {
+          "description": "Bugzilla's `unspecified` — the default a release-monitoring\nbug arrives at. Treated as \"don't manage\" when resolving\nfrom inventory; valid as an explicit override that opts\na package out of a workload-level default.",
+          "type": "string",
+          "const": "unspecified"
+        }
+      ]
+    },
     "WorkloadMeta": {
       "description": "Per-workload metadata for content-resolver export.\n\nAll fields except `packages` are optional — omitted fields\nfall back to the inventory-level values.",
       "type": "object",
       "properties": {
+        "default_priority": {
+          "description": "Default Bugzilla priority for packages in this workload\nwhen they don't carry an explicit `priority`. The\nresolved priority is the max across all workloads listing\nthe package, so a package in both a \"best-effort\" and a\n\"security-sensitive\" workload picks up the latter.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Priority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "description": {
           "description": "Human-readable description.",
           "type": [

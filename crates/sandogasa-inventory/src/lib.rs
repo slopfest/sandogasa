@@ -12,7 +12,7 @@ pub mod hs_relmon;
 pub mod import_json;
 mod model;
 
-pub use model::{Inventory, InventoryMeta, Package, WorkloadMeta};
+pub use model::{Inventory, InventoryMeta, Package, Priority, WorkloadMeta};
 
 /// Generate a JSON Schema for the inventory format.
 pub fn json_schema() -> String {

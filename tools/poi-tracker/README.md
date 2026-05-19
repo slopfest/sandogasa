@@ -120,6 +120,45 @@ poi-tracker import old-inventory.json -o inventory.toml \
 poi-tracker validate -i inventory.toml
 ```
 
+### Configure (Bugzilla API key)
+
+```sh
+poi-tracker config
+```
+
+Prompts for a Bugzilla API key, validates it with a quick test
+search, and saves it to `~/.config/poi-tracker/config.toml`.
+Lookup order at runtime: `--api-key` flag → `BUGZILLA_API_KEY`
+env var → config file.
+
+Generate an API key at
+<https://bugzilla.redhat.com/userprefs.cgi?tab=apikey>.
+
+### Triage update bugs
+
+Some packages reliably need attention when a new upstream version
+appears — `python-django*` updates almost always fix CVEs, for
+instance. Mark them in the inventory with a `priority` field (or
+a workload-level `default_priority`), then have poi-tracker
+triage the auto-filed release-monitoring bugs by raising their
+Bugzilla priority:
+
+```sh
+poi-tracker -i inventory.toml triage-updates --dry-run
+poi-tracker -i inventory.toml triage-updates
+```
+
+For each inventoried package with a resolved priority, this
+queries OPEN bugs reported by `upstream-release-monitoring@
+fedoraproject.org` (against `Fedora` and `Fedora EPEL`) and
+raises any whose priority is `unspecified`. Bugs already
+triaged by a human are left alone.
+
+Per-package `priority` wins over `default_priority`; if a
+package is in multiple workloads, the highest workload
+default applies. Set `priority = "unspecified"` on a package
+to explicitly opt out of a workload default.
+
 ## Inventory format
 
 ```toml
@@ -179,10 +218,13 @@ track = "upstream"
 | `repology_name` | package | Repology name override |
 | `distros` | package | hs-relmon distribution list |
 | `file_issue` | package | File GitLab issues |
+| `priority` | package | Bugzilla priority for `triage-updates` (`unspecified`/`low`/`medium`/`high`/`urgent`) |
+| `default_priority` | workload | Default Bugzilla priority for packages in this workload |
 
 Each `[inventory.workloads.<key>]` section can override `name`,
-`description`, `maintainer`, and `labels` for content-resolver
-export. Omitted fields fall back to inventory-level values.
+`description`, `maintainer`, `labels`, and `default_priority`
+for content-resolver export and `triage-updates`. Omitted
+fields fall back to inventory-level values.
 
 ## License
 

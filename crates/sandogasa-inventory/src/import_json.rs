@@ -82,6 +82,7 @@ pub fn import(json_str: &str) -> Result<Inventory, String> {
             repology_name: None,
             distros: None,
             file_issue: None,
+            priority: None,
         });
     }
 

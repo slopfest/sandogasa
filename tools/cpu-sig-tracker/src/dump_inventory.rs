@@ -174,6 +174,7 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
                     repology_name: None,
                     distros: None,
                     file_issue: None,
+                    priority: None,
                 });
                 added += 1;
             }

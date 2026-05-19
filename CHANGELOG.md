@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### sandogasa-inventory: `Priority` enum + per-package and per-workload fields
+
+New `Priority` enum (`unspecified` / `low` / `medium` / `high`
+/ `urgent`, ordered so `max(…)` picks the most important). New
+optional fields:
+
+- `Package.priority: Option<Priority>` — explicit override.
+- `WorkloadMeta.default_priority: Option<Priority>` —
+  workload-level default.
+
+New method `Inventory::priority_for(name)` resolves the value
+for a package: per-package field wins outright (including
+`unspecified` as an explicit opt-out); else the max
+`default_priority` across every workload listing the package.
+Both fields serialize to lowercase TOML strings.
+
+### poi-tracker: `triage-updates` and `config` subcommands
+
+`triage-updates` raises the Bugzilla priority on
+release-monitoring bugs for inventoried packages whose
+resolved priority is set. For each such package, queries OPEN
+bugs reported by `upstream-release-monitoring@fedoraproject.org`
+against `Fedora` and `Fedora EPEL` and updates any whose
+current priority is `unspecified` — leaving already-triaged
+bugs alone. `--dry-run` previews; otherwise prompts unless
+`--yes`.
+
+`config` walks an interactive Bugzilla API-key setup mirroring
+`ebranch config`. Storage at `~/.config/poi-tracker/config.toml`
+with restricted perms; lookup order at runtime is `--api-key`
+→ `BUGZILLA_API_KEY` env → config file.
+
 ### hs-relmon: `prune-tags` / `prune-manifest` subcommands
 
 Untag old hyperscale builds, keeping the N newest in each

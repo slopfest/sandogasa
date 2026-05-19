@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+mod config;
+mod triage_updates;
+
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 
@@ -32,6 +35,8 @@ struct Cli {
 enum Command {
     /// Add a package to the inventory.
     Add(AddArgs),
+    /// Configure poi-tracker (Bugzilla API key, etc.).
+    Config,
     /// Export inventory to another format.
     Export(ExportArgs),
     /// Find which inventory file(s) contain a package.
@@ -46,8 +51,32 @@ enum Command {
     SyncDistgit(SyncDistgitArgs),
     /// Sync inventory from a GitLab RPM group.
     SyncGitlab(SyncGitlabArgs),
+    /// Triage open release-monitoring bugs for inventoried
+    /// packages by bumping their Bugzilla priority to match the
+    /// inventory.
+    TriageUpdates(TriageUpdatesArgs),
     /// Validate inventory consistency.
     Validate,
+}
+
+#[derive(clap::Args)]
+struct TriageUpdatesArgs {
+    /// Bugzilla API key (or set BUGZILLA_API_KEY env var, or
+    /// run `poi-tracker config`).
+    #[arg(long, env = "BUGZILLA_API_KEY")]
+    api_key: Option<String>,
+
+    /// Preview updates without applying them.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Skip the confirmation prompt.
+    #[arg(short, long)]
+    yes: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[derive(clap::Args)]
@@ -336,10 +365,10 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     // Import/sync commands produce new files and don't need existing
-    // inventory paths.
+    // inventory paths. `Config` doesn't touch inventories at all.
     let needs_paths = !matches!(
         cli.command,
-        Command::Import(_) | Command::SyncDistgit(_) | Command::SyncGitlab(_)
+        Command::Config | Command::Import(_) | Command::SyncDistgit(_) | Command::SyncGitlab(_)
     );
 
     let paths = resolve_inventory_paths(&cli);
@@ -351,6 +380,7 @@ fn main() -> ExitCode {
 
     match &cli.command {
         Command::Add(args) => cmd_add(&paths, args),
+        Command::Config => cmd_config(),
         Command::Export(args) => cmd_export(&paths, args),
         Command::Find(args) => cmd_find(&paths, args),
         Command::Import(args) => cmd_import(args),
@@ -358,7 +388,79 @@ fn main() -> ExitCode {
         Command::Show(args) => cmd_show(&paths, args),
         Command::SyncDistgit(args) => cmd_sync_distgit(args),
         Command::SyncGitlab(args) => cmd_sync_gitlab(args),
+        Command::TriageUpdates(args) => cmd_triage_updates(&paths, args),
         Command::Validate => cmd_validate(&paths),
+    }
+}
+
+fn cmd_config() -> ExitCode {
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to create runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match rt.block_on(config::cmd_config()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
+    let inventory = match sandogasa_inventory::load_and_merge(paths) {
+        Ok(inv) => inv,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let api_key = match config::resolve_api_key(args.api_key.as_deref()) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let url = config::resolve_url();
+    let client = sandogasa_bugzilla::BzClient::new(&url).with_api_key(api_key);
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to create runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match rt.block_on(triage_updates::run(
+        &inventory,
+        &client,
+        args.dry_run,
+        args.yes,
+        args.verbose,
+    )) {
+        Ok(report) => {
+            eprintln!(
+                "\n{} package(s) with managed priority, {} planned update(s), \
+                 {} applied, {} failed",
+                report.packages_with_priority,
+                report.updates_planned,
+                report.updates_applied,
+                report.failures
+            );
+            if report.failures > 0 {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -721,6 +823,7 @@ fn cmd_add(paths: &[String], args: &AddArgs) -> ExitCode {
             repology_name: None,
             distros: None,
             file_issue: None,
+            priority: None,
         };
         inventory.add_package(pkg);
         eprintln!("Added {} to {target_path}", args.name);
@@ -1043,6 +1146,7 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
             repology_name: None,
             distros: None,
             file_issue: None,
+            priority: None,
         });
         for wl in &args.workload {
             inventory.add_to_workload(wl, &p.name);
@@ -1240,6 +1344,7 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
             repology_name: None,
             distros: None,
             file_issue: None,
+            priority: None,
         });
         for wl in &args.workload {
             inventory.add_to_workload(wl, name);

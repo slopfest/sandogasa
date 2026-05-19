@@ -582,12 +582,12 @@ mod tests {
     #[test]
     fn test_build_is_hyperscale() {
         let cases = [
-            ("3.hs.el10", true),             // main
-            ("12.3.hs+fb.el10", true),       // facebook
-            ("3.1.hsx.el10", true),          // experimental
-            ("0.hs1.hsk.el10", true),        // kernel
-            ("1.el9sbase_901", false),       // non-hyperscale base
-            ("2.el10s~1", false),            // pre-release non-hyperscale
+            ("3.hs.el10", true),       // main
+            ("12.3.hs+fb.el10", true), // facebook
+            ("3.1.hsx.el10", true),    // experimental
+            ("0.hs1.hsk.el10", true),  // kernel
+            ("1.el9sbase_901", false), // non-hyperscale base
+            ("2.el10s~1", false),      // pre-release non-hyperscale
         ];
         for (release, expected) in cases {
             let b = Build {
