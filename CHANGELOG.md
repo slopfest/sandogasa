@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.11.2
 
 ### sandogasa-report: history-based Koji activity reporting
 
