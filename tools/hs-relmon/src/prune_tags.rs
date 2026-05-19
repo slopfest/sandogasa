@@ -18,6 +18,7 @@
 //! For batch operation, `prune-manifest <path>` walks each
 //! package in the manifest in order.
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, Write};
 
 use sandogasa_koji::untag_build;
@@ -173,27 +174,79 @@ pub fn fetch_managed_tags(
     out
 }
 
-/// Build the untag plan from per-tag builds. Each tag is treated
-/// independently: sort builds by `build_id` descending (newest
-/// first), keep the first N per the stage's retention, untag the
-/// rest.
+/// Build the untag plan from per-tag builds.
+///
+/// Two rules combine per tag:
+///
+/// 1. **Promotion dedup**: any build currently tagged in a
+///    `-testing` tag that is *also* present in the sibling
+///    `-release` tag (same repository + EL combination) is
+///    queued for untag from `-testing`. Once a build is in
+///    release, keeping it in testing only adds noise.
+/// 2. **Retention**: among the remaining builds in each tag,
+///    sort by `build_id` descending and keep the first N per
+///    the stage's retention (`release_keep` / `testing_keep`).
+///    Older builds are queued for untag.
 pub fn build_plan(package: &str, tag_builds: &[TagBuilds], opts: &PruneOptions) -> PrunePlan {
+    // Index NVRs in each release tag so we can spot promoted
+    // builds when planning the matching testing tag.
+    let mut release_nvrs_by_tag: std::collections::BTreeMap<String, BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    for (tag, builds) in tag_builds {
+        if tag.ends_with("-release") {
+            release_nvrs_by_tag.insert(tag.clone(), builds.iter().map(|b| b.nvr.clone()).collect());
+        }
+    }
+
     let mut tag_plans: Vec<TagPlan> = Vec::new();
     for (tag, builds) in tag_builds {
+        let is_testing = tag.ends_with("-testing");
+        let sibling_release_nvrs: Option<&BTreeSet<String>> = if is_testing {
+            let sibling = format!("{}-release", tag.trim_end_matches("-testing"));
+            release_nvrs_by_tag.get(&sibling)
+        } else {
+            None
+        };
+
+        // Bucket 1: builds promoted to -release (queue for untag
+        // from -testing). Bucket 2: everything else (subject to
+        // the keep-N-newest rule).
+        let mut promoted_untag: Vec<(i64, String)> = Vec::new();
+        let mut considered: Vec<&Build> = Vec::new();
+        for b in builds {
+            if let Some(rel) = sibling_release_nvrs
+                && rel.contains(&b.nvr)
+            {
+                promoted_untag.push((b.build_id, b.nvr.clone()));
+            } else {
+                considered.push(b);
+            }
+        }
+
+        // Apply retention to the non-promoted bucket.
+        considered.sort_by(|a, b| b.build_id.cmp(&a.build_id));
         let keep_count = if tag.ends_with("-release") {
             opts.release_keep
         } else {
             opts.testing_keep
         };
-        let mut entries: Vec<&Build> = builds.iter().collect();
-        entries.sort_by(|a, b| b.build_id.cmp(&a.build_id));
-        let nvrs: Vec<String> = entries.into_iter().map(|b| b.nvr.clone()).collect();
-        let (keep, untag) = if nvrs.len() <= keep_count {
-            (nvrs, Vec::new())
+        let (keep_builds, retention_untag_builds) = if considered.len() <= keep_count {
+            (considered.as_slice(), &[][..])
         } else {
-            let (k, u) = nvrs.split_at(keep_count);
-            (k.to_vec(), u.to_vec())
+            considered.split_at(keep_count)
         };
+        let keep: Vec<String> = keep_builds.iter().map(|b| b.nvr.clone()).collect();
+
+        // Untags: promotion + retention, sorted newest-first.
+        let mut untag_pairs: Vec<(i64, String)> = promoted_untag;
+        untag_pairs.extend(
+            retention_untag_builds
+                .iter()
+                .map(|b| (b.build_id, b.nvr.clone())),
+        );
+        untag_pairs.sort_by(|a, b| b.0.cmp(&a.0));
+        let untag: Vec<String> = untag_pairs.into_iter().map(|(_, n)| n).collect();
+
         tag_plans.push(TagPlan {
             tag: tag.clone(),
             keep,
@@ -368,19 +421,26 @@ mod tests {
 
     #[test]
     fn build_plan_release_and_testing_have_independent_retention() {
+        // Distinct NVRs in each stage so the promotion-dedup
+        // rule doesn't kick in — this test isolates the
+        // keep-N-newest retention.
         let release_builds = vec![
             make_build(5000, "ethtool-6.18-1.hs.el10"),
             make_build(4000, "ethtool-6.17-1.hs.el10"),
             make_build(3000, "ethtool-6.16-1.hs.el10"),
         ];
-        let testing_builds = release_builds.clone();
+        let testing_builds = vec![
+            make_build(5100, "ethtool-6.19~rc1-1.hs.el10"),
+            make_build(4100, "ethtool-6.19~rc2-1.hs.el10"),
+            make_build(3100, "ethtool-6.19~rc3-1.hs.el10"),
+        ];
         let tag_builds = vec![
             tb("hyperscale10s-packages-main-release", release_builds),
             tb("hyperscale10s-packages-main-testing", testing_builds),
         ];
         let plan = build_plan("ethtool", &tag_builds, &PruneOptions::default());
-        // release_keep=2 → 5000 + 4000 stay, 3000 untagged
-        // testing_keep=1 → 5000 stays, 4000 + 3000 untagged
+        // release_keep=2 → 5000 + 4000 stay, 3000 untagged.
+        // testing_keep=1 → 5100 stays, 4100 + 3100 untagged.
         assert_eq!(plan.total_untags(), 3);
 
         let release = plan
@@ -436,6 +496,94 @@ mod tests {
             .unwrap();
         assert!(el9.untag.is_empty());
         assert_eq!(el9.keep.len(), 2);
+    }
+
+    #[test]
+    fn build_plan_untags_testing_builds_that_are_in_release() {
+        // Same NVR is in both -release and -testing. The
+        // -release entry stays put; the -testing entry is queued
+        // for untag (regardless of retention), since promoted
+        // builds shouldn't linger in testing.
+        let shared_build = make_build(5000, "ethtool-6.18-1.hs.el10");
+        let tag_builds = vec![
+            tb(
+                "hyperscale10s-packages-main-release",
+                vec![shared_build.clone()],
+            ),
+            tb(
+                "hyperscale10s-packages-main-testing",
+                vec![shared_build.clone()],
+            ),
+        ];
+        let plan = build_plan("ethtool", &tag_builds, &PruneOptions::default());
+        let release = plan
+            .tags
+            .iter()
+            .find(|t| t.tag.ends_with("-release"))
+            .unwrap();
+        assert_eq!(release.keep, vec!["ethtool-6.18-1.hs.el10"]);
+        assert!(release.untag.is_empty());
+        let testing = plan
+            .tags
+            .iter()
+            .find(|t| t.tag.ends_with("-testing"))
+            .unwrap();
+        // No keeps in testing — the only build there was the
+        // promoted one.
+        assert!(testing.keep.is_empty());
+        assert_eq!(testing.untag, vec!["ethtool-6.18-1.hs.el10"]);
+    }
+
+    #[test]
+    fn build_plan_keeps_unpromoted_testing_builds() {
+        // Testing has v1.5 and v1.6; release has v1.5. v1.5 gets
+        // untagged from testing as promoted; v1.6 stays under
+        // the testing_keep=1 rule.
+        let v15 = make_build(5000, "ethtool-1.5-1.hs.el10");
+        let v16 = make_build(6000, "ethtool-1.6-1.hs.el10");
+        let tag_builds = vec![
+            tb("hyperscale10s-packages-main-release", vec![v15.clone()]),
+            tb(
+                "hyperscale10s-packages-main-testing",
+                vec![v15.clone(), v16.clone()],
+            ),
+        ];
+        let plan = build_plan("ethtool", &tag_builds, &PruneOptions::default());
+        let testing = plan
+            .tags
+            .iter()
+            .find(|t| t.tag.ends_with("-testing"))
+            .unwrap();
+        assert_eq!(testing.keep, vec!["ethtool-1.6-1.hs.el10"]);
+        assert_eq!(testing.untag, vec!["ethtool-1.5-1.hs.el10"]);
+    }
+
+    #[test]
+    fn build_plan_promotion_rule_respects_repository_boundary() {
+        // Build is in main-release but not facebook-release. A
+        // facebook-testing copy of the same build is NOT
+        // considered promoted because its sibling is
+        // facebook-release.
+        let shared = make_build(5000, "ethtool-6.18-1.hs.el10");
+        let tag_builds = vec![
+            tb("hyperscale10s-packages-main-release", vec![shared.clone()]),
+            tb(
+                "hyperscale10s-packages-facebook-testing",
+                vec![shared.clone()],
+            ),
+        ];
+        let opts = PruneOptions {
+            repositories: vec!["main".to_string(), "facebook".to_string()],
+            ..PruneOptions::default()
+        };
+        let plan = build_plan("ethtool", &tag_builds, &opts);
+        let fb_testing = plan
+            .tags
+            .iter()
+            .find(|t| t.tag == "hyperscale10s-packages-facebook-testing")
+            .unwrap();
+        assert_eq!(fb_testing.keep, vec!["ethtool-6.18-1.hs.el10"]);
+        assert!(fb_testing.untag.is_empty());
     }
 
     #[test]

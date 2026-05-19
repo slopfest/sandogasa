@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### hs-relmon: prune-tags untags promoted builds from -testing
+
+`prune-tags` (and `prune-manifest`) now queue any build that
+appears in *both* a `-testing` tag and the sibling `-release`
+tag for untagging from `-testing`, in addition to the existing
+keep-N-newest retention rule. Once a build is promoted to
+release, leaving its `-testing` copy in place only adds noise
+to `list-tagged` output. Sibling matching is on the literal
+tag-name prefix, so `main-testing` pairs with `main-release`
+and `facebook-testing` pairs with `facebook-release` — there's
+no cross-repository attribution.
+
 ## v0.11.2
 
 ### sandogasa-report: history-based Koji activity reporting
