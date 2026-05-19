@@ -144,6 +144,42 @@ impl Client {
         parse_builds(&resp)
     }
 
+    /// List builds of `package` currently in `tag`. Equivalent
+    /// to `koji list-tagged --package=<pkg> <tag>` but via the
+    /// XML-RPC `listTagged` method, which returns full Build
+    /// records (carrying `build_id`) so callers can sort by
+    /// build creation order.
+    ///
+    /// Inverts the cost of `list_builds(pkg) + list_tags(bid)
+    /// per build`: where that approach is linear in the
+    /// package's total build count (thousands for heavy
+    /// packages like systemd), this is linear in the tag's
+    /// content (tens at most for typical tags).
+    pub fn list_tagged_package(
+        &self,
+        tag: &str,
+        package: &str,
+    ) -> Result<Vec<Build>, Box<dyn std::error::Error>> {
+        // listTagged(tag, event=nil, inherit=False, prefix=nil,
+        //   latest=False, package=...)
+        let body = format!(
+            r#"<?xml version="1.0"?>
+<methodCall>
+  <methodName>listTagged</methodName>
+  <params>
+    <param><value><string>{tag}</string></value></param>
+    <param><value><nil/></value></param>
+    <param><value><boolean>0</boolean></value></param>
+    <param><value><nil/></value></param>
+    <param><value><boolean>0</boolean></value></param>
+    <param><value><string>{package}</string></value></param>
+  </params>
+</methodCall>"#
+        );
+        let resp = self.call(&body)?;
+        parse_builds(&resp)
+    }
+
     /// List tag names for a given build ID.
     pub fn list_tags(&self, build_id: i64) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let body = format!(

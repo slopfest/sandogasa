@@ -18,12 +18,11 @@
 //! For batch operation, `prune-manifest <path>` walks each
 //! package in the manifest in order.
 
-use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
 use sandogasa_koji::untag_build;
 
-use crate::cbs::{Build, Client, hyperscale_builds};
+use crate::cbs::{Build, Client};
 
 /// CBS Koji profile used by the workspace. Matches
 /// `cpu-sig-tracker`'s constant.
@@ -98,109 +97,114 @@ impl PrunePlan {
     }
 }
 
-/// One hyperscale build paired with the tags it carries. The
-/// extra type alias keeps the public APIs readable and quiets
-/// clippy's `type_complexity` lint.
-pub type BuildWithTags = (Build, Vec<String>);
+/// One managed tag's contents — the literal tag name paired
+/// with the builds Koji currently has tagged under it.
+pub type TagBuilds = (String, Vec<Build>);
 
-/// Build the untag plan for one package: group its hyperscale
-/// builds by managed tag, sort by `build_id` descending, and
-/// split each tag into keep (N newest) + untag (the rest).
-///
-/// Tags outside our repository filter or outside `-release`/
-/// `-testing` are skipped entirely — `-candidate` and other
-/// repositories are not touched here.
-pub fn build_plan(
-    package: &str,
-    builds_with_tags: &[BuildWithTags],
-    opts: &PruneOptions,
-) -> PrunePlan {
-    let mut groups: BTreeMap<String, Vec<(i64, String)>> = BTreeMap::new();
-    for (build, tags) in builds_with_tags {
-        for tag in tags {
-            if !is_managed_tag(tag, &opts.repositories) {
-                continue;
+/// Enumerate the managed-tag names this run will consider.
+/// We cross-multiply EL-version-suffix (`9`, `9s`, `10`, `10s`),
+/// repository (from `--repositories`), and stage (`release`,
+/// `testing`). Non-existent tags get skipped at query time, so
+/// generating a few extras is cheap.
+pub fn candidate_tags(repositories: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for el in ["9", "9s", "10", "10s"] {
+        for repo in repositories {
+            for stage in ["release", "testing"] {
+                out.push(format!("hyperscale{el}-packages-{repo}-{stage}"));
             }
-            groups
-                .entry(tag.clone())
-                .or_default()
-                .push((build.build_id, build.nvr.clone()));
         }
     }
+    out.sort();
+    out
+}
 
+/// Query Koji for the builds of `package` in every candidate
+/// managed tag. Tags that error out (don't exist on this hub,
+/// transport hiccup, etc.) are skipped with a logged warning
+/// when verbose.
+///
+/// Inverts the previous approach of "list every build, then ask
+/// each one's tags". For heavy packages like systemd this drops
+/// us from thousands of XML-RPC calls to a fixed handful (one
+/// per candidate tag), and the progress is observable line-by-
+/// line because each tag prints as it's queried.
+pub fn fetch_managed_tags(
+    client: &Client,
+    package: &str,
+    opts: &PruneOptions,
+    verbose: bool,
+) -> Vec<TagBuilds> {
+    let candidates = candidate_tags(&opts.repositories);
+    if verbose {
+        eprintln!(
+            "[hs-relmon] {package}: querying {} candidate tag(s)",
+            candidates.len()
+        );
+    }
+    let mut out: Vec<TagBuilds> = Vec::new();
+    for (i, tag) in candidates.iter().enumerate() {
+        if verbose {
+            eprintln!(
+                "[hs-relmon] {package}: [{}/{}] {tag}",
+                i + 1,
+                candidates.len()
+            );
+        }
+        match client.list_tagged_package(tag, package) {
+            Ok(builds) if !builds.is_empty() => {
+                if verbose {
+                    eprintln!("[hs-relmon] {package}: {tag}: {} build(s)", builds.len());
+                }
+                out.push((tag.clone(), builds));
+            }
+            Ok(_) => {
+                if verbose {
+                    eprintln!("[hs-relmon] {package}: {tag}: empty");
+                }
+            }
+            Err(e) => {
+                if verbose {
+                    eprintln!("[hs-relmon] {package}: {tag}: skipped ({e})");
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Build the untag plan from per-tag builds. Each tag is treated
+/// independently: sort builds by `build_id` descending (newest
+/// first), keep the first N per the stage's retention, untag the
+/// rest.
+pub fn build_plan(package: &str, tag_builds: &[TagBuilds], opts: &PruneOptions) -> PrunePlan {
     let mut tag_plans: Vec<TagPlan> = Vec::new();
-    for (tag, mut entries) in groups {
-        entries.sort_by(|a, b| b.0.cmp(&a.0));
+    for (tag, builds) in tag_builds {
         let keep_count = if tag.ends_with("-release") {
             opts.release_keep
         } else {
             opts.testing_keep
         };
-        let nvrs: Vec<String> = entries.into_iter().map(|(_, n)| n).collect();
+        let mut entries: Vec<&Build> = builds.iter().collect();
+        entries.sort_by(|a, b| b.build_id.cmp(&a.build_id));
+        let nvrs: Vec<String> = entries.into_iter().map(|b| b.nvr.clone()).collect();
         let (keep, untag) = if nvrs.len() <= keep_count {
             (nvrs, Vec::new())
         } else {
             let (k, u) = nvrs.split_at(keep_count);
             (k.to_vec(), u.to_vec())
         };
-        tag_plans.push(TagPlan { tag, keep, untag });
+        tag_plans.push(TagPlan {
+            tag: tag.clone(),
+            keep,
+            untag,
+        });
     }
+    tag_plans.sort_by(|a, b| a.tag.cmp(&b.tag));
     PrunePlan {
         package: package.to_string(),
         tags: tag_plans,
     }
-}
-
-/// Is `tag` a hyperscale `-release` or `-testing` tag with a
-/// repository in our allow-list? The repository is the segment
-/// after the last `-packages-`.
-fn is_managed_tag(tag: &str, repositories: &[String]) -> bool {
-    if !tag.starts_with("hyperscale") {
-        return false;
-    }
-    let Some(repo) = extract_repository(tag) else {
-        return false;
-    };
-    repositories.iter().any(|r| r == repo)
-}
-
-fn extract_repository(tag: &str) -> Option<&str> {
-    let root = tag
-        .strip_suffix("-release")
-        .or_else(|| tag.strip_suffix("-testing"))?;
-    let (_, repo) = root.rsplit_once("-packages-")?;
-    Some(repo)
-}
-
-/// Pull a package's hyperscale builds + their tag lists from
-/// CBS Koji. Calls `listTags` once per hyperscale build (one
-/// XML-RPC roundtrip each) — manageable for typical packages
-/// (~10s of builds) but linear in build count.
-pub fn fetch_builds_with_tags(
-    client: &Client,
-    package: &str,
-    verbose: bool,
-) -> Result<Vec<BuildWithTags>, Box<dyn std::error::Error>> {
-    let package_id = client
-        .get_package_id(package)?
-        .ok_or_else(|| format!("package '{package}' not found in CBS Koji"))?;
-    let builds = client.list_builds(package_id)?;
-    let mut hyperscale_set: Vec<&Build> = Vec::new();
-    for el in [9u32, 10u32] {
-        hyperscale_set.extend(hyperscale_builds(&builds, el));
-    }
-    if verbose {
-        eprintln!(
-            "[hs-relmon] {package}: fetching tags for {} hyperscale build(s)",
-            hyperscale_set.len()
-        );
-    }
-    let mut out = Vec::with_capacity(hyperscale_set.len());
-    for build in hyperscale_set {
-        let tags = client.list_tags(build.build_id)?;
-        out.push((build.clone(), tags));
-    }
-    Ok(out)
 }
 
 /// Format the plan for human review. Per-tag breakdown listing
@@ -307,68 +311,47 @@ mod tests {
     }
 
     #[test]
-    fn extract_repository_handles_release_and_testing() {
-        assert_eq!(
-            extract_repository("hyperscale10s-packages-main-release"),
-            Some("main")
-        );
-        assert_eq!(
-            extract_repository("hyperscale9-packages-facebook-testing"),
-            Some("facebook")
-        );
-        assert_eq!(
-            extract_repository("hyperscale10s-packages-experimental-release"),
-            Some("experimental")
-        );
-        assert_eq!(
-            extract_repository("hyperscale10s-packages-main-candidate"),
-            None
-        );
-        assert_eq!(extract_repository("unrelated-tag"), None);
+    fn candidate_tags_cross_products_el_repo_stage() {
+        let tags = candidate_tags(&["main".to_string()]);
+        // 4 EL variants × 1 repo × 2 stages = 8 tags.
+        assert_eq!(tags.len(), 8);
+        assert!(tags.contains(&"hyperscale10s-packages-main-release".to_string()));
+        assert!(tags.contains(&"hyperscale10s-packages-main-testing".to_string()));
+        assert!(tags.contains(&"hyperscale9s-packages-main-release".to_string()));
+        assert!(tags.contains(&"hyperscale9-packages-main-release".to_string()));
     }
 
     #[test]
-    fn is_managed_tag_filters_by_repository() {
-        let main = vec!["main".to_string()];
-        let main_facebook = vec!["main".to_string(), "facebook".to_string()];
+    fn candidate_tags_grows_with_repositories() {
+        let tags = candidate_tags(&[
+            "main".to_string(),
+            "facebook".to_string(),
+            "experimental".to_string(),
+        ]);
+        // 4 EL × 3 repos × 2 stages = 24 tags.
+        assert_eq!(tags.len(), 24);
+        assert!(tags.contains(&"hyperscale10s-packages-facebook-release".to_string()));
+        assert!(tags.contains(&"hyperscale10s-packages-experimental-testing".to_string()));
+    }
 
-        assert!(is_managed_tag("hyperscale10s-packages-main-release", &main));
-        assert!(!is_managed_tag(
-            "hyperscale10s-packages-facebook-release",
-            &main
-        ));
-        assert!(is_managed_tag(
-            "hyperscale10s-packages-facebook-release",
-            &main_facebook
-        ));
-        assert!(!is_managed_tag(
-            "hyperscale10s-packages-main-candidate",
-            &main
-        ));
-        assert!(!is_managed_tag("dist-c10s", &main));
+    /// Helper: build a per-tag input the way `fetch_managed_tags`
+    /// would after talking to Koji.
+    fn tb(tag: &str, builds: Vec<Build>) -> TagBuilds {
+        (tag.to_string(), builds)
     }
 
     #[test]
     fn build_plan_keeps_n_newest_per_tag() {
-        let builds_with_tags = vec![
-            (
+        let tag_builds = vec![tb(
+            "hyperscale10s-packages-main-release",
+            vec![
                 make_build(5000, "ethtool-6.18-1.hs.el10"),
-                vec!["hyperscale10s-packages-main-release".to_string()],
-            ),
-            (
                 make_build(4000, "ethtool-6.17-1.hs.el10"),
-                vec!["hyperscale10s-packages-main-release".to_string()],
-            ),
-            (
                 make_build(3000, "ethtool-6.16-1.hs.el10"),
-                vec!["hyperscale10s-packages-main-release".to_string()],
-            ),
-            (
                 make_build(2000, "ethtool-6.15-1.hs.el10"),
-                vec!["hyperscale10s-packages-main-release".to_string()],
-            ),
-        ];
-        let plan = build_plan("ethtool", &builds_with_tags, &PruneOptions::default());
+            ],
+        )];
+        let plan = build_plan("ethtool", &tag_builds, &PruneOptions::default());
         // release_keep=2 → keep 5000 + 4000, untag 3000 + 2000.
         assert_eq!(plan.tags.len(), 1);
         let tp = &plan.tags[0];
@@ -385,30 +368,17 @@ mod tests {
 
     #[test]
     fn build_plan_release_and_testing_have_independent_retention() {
-        let builds_with_tags = vec![
-            (
-                make_build(5000, "ethtool-6.18-1.hs.el10"),
-                vec![
-                    "hyperscale10s-packages-main-release".to_string(),
-                    "hyperscale10s-packages-main-testing".to_string(),
-                ],
-            ),
-            (
-                make_build(4000, "ethtool-6.17-1.hs.el10"),
-                vec![
-                    "hyperscale10s-packages-main-release".to_string(),
-                    "hyperscale10s-packages-main-testing".to_string(),
-                ],
-            ),
-            (
-                make_build(3000, "ethtool-6.16-1.hs.el10"),
-                vec![
-                    "hyperscale10s-packages-main-release".to_string(),
-                    "hyperscale10s-packages-main-testing".to_string(),
-                ],
-            ),
+        let release_builds = vec![
+            make_build(5000, "ethtool-6.18-1.hs.el10"),
+            make_build(4000, "ethtool-6.17-1.hs.el10"),
+            make_build(3000, "ethtool-6.16-1.hs.el10"),
         ];
-        let plan = build_plan("ethtool", &builds_with_tags, &PruneOptions::default());
+        let testing_builds = release_builds.clone();
+        let tag_builds = vec![
+            tb("hyperscale10s-packages-main-release", release_builds),
+            tb("hyperscale10s-packages-main-testing", testing_builds),
+        ];
+        let plan = build_plan("ethtool", &tag_builds, &PruneOptions::default());
         // release_keep=2 → 5000 + 4000 stay, 3000 untagged
         // testing_keep=1 → 5000 stays, 4000 + 3000 untagged
         assert_eq!(plan.total_untags(), 3);
@@ -431,59 +401,25 @@ mod tests {
     }
 
     #[test]
-    fn build_plan_ignores_non_main_repository_by_default() {
-        let builds_with_tags = vec![
-            (
-                make_build(5000, "ethtool-6.18-1.hs.el10"),
-                vec!["hyperscale10s-packages-main-release".to_string()],
+    fn build_plan_separates_tags() {
+        let tag_builds = vec![
+            tb(
+                "hyperscale10s-packages-main-release",
+                vec![
+                    make_build(5000, "ethtool-6.18-1.hs.el10"),
+                    make_build(4000, "ethtool-6.17-1.hs.el10"),
+                    make_build(3000, "ethtool-6.16-1.hs.el10"),
+                ],
             ),
-            (
-                make_build(4000, "ethtool-6.17-1.hs.el10"),
-                vec!["hyperscale10s-packages-facebook-release".to_string()],
-            ),
-            (
-                make_build(3000, "ethtool-6.16-1.hs.el10"),
-                vec!["hyperscale10s-packages-facebook-release".to_string()],
-            ),
-            (
-                make_build(2000, "ethtool-6.15-1.hs.el10"),
-                vec!["hyperscale10s-packages-facebook-release".to_string()],
-            ),
-        ];
-        // Default repositories = ["main"] — facebook is
-        // untouched even though it has 3 builds (over retention).
-        let plan = build_plan("ethtool", &builds_with_tags, &PruneOptions::default());
-        // The only main tag has 1 build (≤ retention) → 1 group
-        // with 0 untags.
-        assert_eq!(plan.total_untags(), 0);
-    }
-
-    #[test]
-    fn build_plan_separates_el_versions_via_tag_name() {
-        let builds_with_tags = vec![
-            (
-                make_build(5000, "ethtool-6.18-1.hs.el10"),
-                vec!["hyperscale10s-packages-main-release".to_string()],
-            ),
-            (
-                make_build(4000, "ethtool-6.17-1.hs.el10"),
-                vec!["hyperscale10s-packages-main-release".to_string()],
-            ),
-            (
-                make_build(3000, "ethtool-6.16-1.hs.el10"),
-                vec!["hyperscale10s-packages-main-release".to_string()],
-            ),
-            // EL9 — separate tag, separate retention.
-            (
-                make_build(2500, "ethtool-6.16-1.hs.el9"),
-                vec!["hyperscale9-packages-main-release".to_string()],
-            ),
-            (
-                make_build(2000, "ethtool-6.15-1.hs.el9"),
-                vec!["hyperscale9-packages-main-release".to_string()],
+            tb(
+                "hyperscale9-packages-main-release",
+                vec![
+                    make_build(2500, "ethtool-6.16-1.hs.el9"),
+                    make_build(2000, "ethtool-6.15-1.hs.el9"),
+                ],
             ),
         ];
-        let plan = build_plan("ethtool", &builds_with_tags, &PruneOptions::default());
+        let plan = build_plan("ethtool", &tag_builds, &PruneOptions::default());
         // EL10: release_keep=2 → 5000 + 4000 stay, 3000 untagged.
         // EL9: 2 builds, both stay (under retention).
         assert_eq!(plan.total_untags(), 1);
@@ -504,11 +440,11 @@ mod tests {
 
     #[test]
     fn build_plan_nothing_to_do_when_under_retention() {
-        let builds_with_tags = vec![(
-            make_build(5000, "ethtool-6.18-1.hs.el10"),
-            vec!["hyperscale10s-packages-main-release".to_string()],
+        let tag_builds = vec![tb(
+            "hyperscale10s-packages-main-release",
+            vec![make_build(5000, "ethtool-6.18-1.hs.el10")],
         )];
-        let plan = build_plan("ethtool", &builds_with_tags, &PruneOptions::default());
+        let plan = build_plan("ethtool", &tag_builds, &PruneOptions::default());
         assert_eq!(plan.total_untags(), 0);
         // Tag is still tracked so the render shows it as kept.
         assert_eq!(plan.tags.len(), 1);

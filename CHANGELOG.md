@@ -37,10 +37,11 @@ with restricted perms; lookup order at runtime is `--api-key`
 ### hs-relmon: `prune-tags` / `prune-manifest` subcommands
 
 Untag old hyperscale builds, keeping the N newest in each
-`-release` / `-testing` tag. Walks a package's hyperscale
-builds via CBS Koji's `listTags`, groups by literal tag name,
-and emits `koji untag-build` calls for everything past the
-retention threshold.
+`-release` / `-testing` tag. Enumerates the candidate managed
+tags (cross product of EL version × repository × stage), calls
+`listTagged` once per candidate for the package, and emits
+`koji untag-build` calls for everything past the retention
+threshold. Per-tag progress is printed with `--verbose`.
 
 Defaults: 2 builds kept per `-release` tag, 1 per `-testing`.
 `--repositories main` is the default repository filter;

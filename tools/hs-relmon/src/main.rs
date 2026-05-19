@@ -607,8 +607,8 @@ fn run_prune_one(
     yes: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let builds_with_tags = prune_tags::fetch_builds_with_tags(client, package, verbose)?;
-    let plan = prune_tags::build_plan(package, &builds_with_tags, opts);
+    let tag_builds = prune_tags::fetch_managed_tags(client, package, opts, verbose);
+    let plan = prune_tags::build_plan(package, &tag_builds, opts);
     print!("{}", prune_tags::render_plan(&plan));
     let total = plan.total_untags();
     if total == 0 {
