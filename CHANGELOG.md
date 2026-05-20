@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### ebranch: check-update no longer trusts a stale @testing snapshot
+
+`check-update` previously fell back to `@testing` for "new"
+provides as soon as that repo returned *any* subpackage for the
+source — even when the Bodhi update was still `pending` and
+`@testing` actually carried the previous V-R. The diff against
+stable was then empty, hiding removed-subpackage cases like a
+default-feature rename (e.g. `rust-libmimalloc-sys` flipping
+its default from v2 to v3, where `+v3-devel` is replaced by
+`+v2-devel`).
+
+Two gates now guard the `@testing` path:
+
+- For Bodhi-alias input, the update's status must be
+  `testing`. Anything else (typically `pending`) skips
+  `@testing` and uses the build side tag instead.
+- `@testing` must report at least one subpackage whose
+  `(version, release)` matches one of the input NVRs.
+
+When either gate fails, `check-update` falls through to the
+side-tag comparison as before, so reports for pending updates
+correctly surface removed provides.
+
+`sandogasa-fedrq` gained `Fedrq::subpkgs_nvrs(srpm)` returning
+`Vec<(name, version, release)>`, used by the new gate.
+
 ### hs-relmon: prune-tags untags promoted builds from -testing
 
 `prune-tags` (and `prune-manifest`) now queue any build that

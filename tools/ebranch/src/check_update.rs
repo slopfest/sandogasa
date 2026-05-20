@@ -141,15 +141,16 @@ pub fn koji_build_rpms(nvr: &str, profile: Option<&str>) -> Result<Vec<String>, 
 
 /// Run the check-update analysis.
 pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdateReport, String> {
-    // Phase 0: Determine side tag, NVRs, branch, and Bodhi release branch.
-    let (side_tag, nvrs, branch, bodhi_branch) = match detect_input_type(input) {
+    // Phase 0: Determine side tag, NVRs, branch, Bodhi release branch,
+    // and Bodhi update status (None for side-tag input).
+    let (side_tag, nvrs, branch, bodhi_branch, bodhi_status) = match detect_input_type(input) {
         InputKind::SideTag(tag) => {
             let branch = opts
                 .branch
                 .clone()
                 .ok_or("--branch is required for side tag input")?;
             let nvrs = koji_list_tagged(&tag, opts.koji_profile.as_deref())?;
-            (Some(tag), nvrs, branch, None)
+            (Some(tag), nvrs, branch, None, None)
         }
         InputKind::BodhiAlias(alias) => {
             let info = fetch_bodhi_update(&alias)?;
@@ -170,7 +171,13 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
                 (None, info.nvrs)
             };
 
-            (side_tag, nvrs, branch, info.release_branch)
+            (
+                side_tag,
+                nvrs,
+                branch,
+                info.release_branch,
+                Some(info.status),
+            )
         }
     };
 
@@ -249,11 +256,26 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         repo: Some("@testing".to_string()),
     };
 
-    let has_testing = updated_packages
-        .first()
-        .and_then(|pkg| testing_fedrq.subpkgs_names(pkg).ok())
-        .map(filter_none)
-        .is_some_and(|names| !names.is_empty());
+    // Two gates: Bodhi must say the update is in testing (when we know),
+    // and @testing must actually carry one of the expected NVRs (covers
+    // both side-tag input and a stale @testing metadata snapshot).
+    let bodhi_in_testing = match bodhi_status.as_deref() {
+        Some("testing") => true,
+        Some(other) => {
+            if opts.verbose {
+                eprintln!(
+                    "[check-update] Bodhi status is '{other}', \
+                     not 'testing'; skipping @testing"
+                );
+            }
+            false
+        }
+        None => true,
+    };
+    let has_testing = bodhi_in_testing
+        && testing_has_update_nvrs(&nvrs, |src| {
+            testing_fedrq.subpkgs_nvrs(src).unwrap_or_default()
+        });
 
     if has_testing {
         if opts.verbose {
@@ -573,6 +595,33 @@ fn compare_provides(old: &BTreeSet<String>, new: &BTreeSet<String>) -> Vec<Chang
     changed
 }
 
+/// Check whether `@testing` actually carries the expected new
+/// content for at least one of the input NVRs.
+///
+/// Bodhi can claim an update is being routed to testing while the
+/// updates-testing repo metadata still reflects the previous V-R,
+/// and side-tag inputs have no Bodhi status to consult — so we
+/// confirm by querying via `lookup` directly. Returns true as soon
+/// as one subpackage matches an expected `(version, release)`.
+///
+/// `lookup(src)` returns `(name, version, release)` tuples for all
+/// subpackages of `src` in `@testing`; the caller is responsible for
+/// wiring it to `Fedrq::subpkgs_nvrs` (extracted as a closure so the
+/// matcher can be unit-tested without invoking fedrq).
+fn testing_has_update_nvrs<F>(nvrs: &[String], lookup: F) -> bool
+where
+    F: Fn(&str) -> Vec<(String, String, String)>,
+{
+    let expected: BTreeMap<&str, (&str, &str)> = nvrs
+        .iter()
+        .filter_map(|nvr| sandogasa_koji::parse_nvr(nvr).map(|(n, v, r)| (n, (v, r))))
+        .collect();
+
+    expected
+        .iter()
+        .any(|(src, (exp_v, exp_r))| lookup(src).iter().any(|(_, v, r)| v == exp_v && r == exp_r))
+}
+
 /// Extract a testing branch from a side tag name.
 ///
 /// E.g. "epel9-build-side-133287" → "epel9",
@@ -590,6 +639,8 @@ struct BodhiUpdateInfo {
     release_name: Option<String>,
     /// Branch from the Bodhi release (e.g. "epel9", "f44").
     release_branch: Option<String>,
+    /// Update status ("pending", "testing", "stable", ...).
+    status: String,
 }
 
 /// Fetch a Bodhi update and extract its key fields.
@@ -612,6 +663,7 @@ fn fetch_bodhi_update(alias: &str) -> Result<BodhiUpdateInfo, String> {
         nvrs,
         release_name,
         release_branch,
+        status: update.status,
     })
 }
 
@@ -1087,6 +1139,71 @@ mod tests {
         let new: BTreeSet<String> = ["bash".to_string()].into();
         let changed = compare_provides(&old, &new);
         assert!(changed.is_empty());
+    }
+
+    // --- testing_has_update_nvrs ---
+
+    fn nvr_row(name: &str, version: &str, release: &str) -> (String, String, String) {
+        (name.to_string(), version.to_string(), release.to_string())
+    }
+
+    #[test]
+    fn testing_has_update_nvrs_matches_when_vr_present() {
+        let nvrs = vec!["rust-libmimalloc-sys-0.1.47-1.fc44".to_string()];
+        // @testing returns subpackages at the matching V-R.
+        let found = testing_has_update_nvrs(&nvrs, |_src| {
+            vec![nvr_row(
+                "rust-libmimalloc-sys+default-devel",
+                "0.1.47",
+                "1.fc44",
+            )]
+        });
+        assert!(found);
+    }
+
+    #[test]
+    fn testing_has_update_nvrs_rejects_stale_testing() {
+        let nvrs = vec!["rust-libmimalloc-sys-0.1.47-1.fc44".to_string()];
+        // @testing still has the previous V-R — this is the bug case.
+        let found = testing_has_update_nvrs(&nvrs, |_src| {
+            vec![nvr_row(
+                "rust-libmimalloc-sys+default-devel",
+                "0.1.44",
+                "2.fc44",
+            )]
+        });
+        assert!(!found);
+    }
+
+    #[test]
+    fn testing_has_update_nvrs_any_match_wins() {
+        // Multiple NVRs in the update; one matches, one doesn't.
+        let nvrs = vec![
+            "rust-libmimalloc-sys-0.1.47-1.fc44".to_string(),
+            "rust-mimalloc-0.1.50-1.fc44".to_string(),
+        ];
+        let found = testing_has_update_nvrs(&nvrs, |src| match src {
+            "rust-libmimalloc-sys" => {
+                vec![nvr_row("rust-libmimalloc-sys-devel", "0.1.44", "2.fc44")]
+            }
+            "rust-mimalloc" => vec![nvr_row("rust-mimalloc-devel", "0.1.50", "1.fc44")],
+            _ => vec![],
+        });
+        assert!(found);
+    }
+
+    #[test]
+    fn testing_has_update_nvrs_empty_input_false() {
+        assert!(!testing_has_update_nvrs(&[], |_| vec![]));
+    }
+
+    #[test]
+    fn testing_has_update_nvrs_malformed_nvr_skipped() {
+        // No valid NVRs → nothing to check → false (not a panic).
+        let found = testing_has_update_nvrs(&["not-an-nvr".to_string()], |_| {
+            vec![nvr_row("anything", "1", "1")]
+        });
+        assert!(!found);
     }
 
     // --- testing_branch_from_side_tag ---

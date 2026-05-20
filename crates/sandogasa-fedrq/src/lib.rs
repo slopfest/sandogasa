@@ -138,6 +138,29 @@ impl Fedrq {
         self.subpkgs_query("name", srpm)
     }
 
+    /// Return `(name, version, release)` for every subpackage of a
+    /// source package.
+    ///
+    /// Lets callers verify whether a given repo actually contains
+    /// the expected V-R of an update (the bare `subpkgs_names`
+    /// query can't distinguish old vs. new content).
+    pub fn subpkgs_nvrs(&self, srpm: &str) -> Result<Vec<(String, String, String)>, Error> {
+        let raw = self.subpkgs_query("line:name,version,release", srpm)?;
+        let mut out = Vec::new();
+        for line in raw {
+            let parts: Vec<&str> = line.split(" : ").collect();
+            if parts.len() != 3 {
+                continue;
+            }
+            let (name, version, release) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
+            if name.is_empty() || name == "(none)" {
+                continue;
+            }
+            out.push((name.to_string(), version.to_string(), release.to_string()));
+        }
+        Ok(out)
+    }
+
     /// Return source package names that require any of the given packages.
     ///
     /// Returns an empty list if `packages` is empty (the package may not
