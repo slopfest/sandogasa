@@ -28,6 +28,32 @@ correctly surface removed provides.
 `sandogasa-fedrq` gained `Fedrq::subpkgs_nvrs(srpm)` returning
 `Vec<(name, version, release)>`, used by the new gate.
 
+### ebranch: check-update flags stale side-tag repodata
+
+When the side-tag comparison path runs, `check-update` now
+cross-checks each koji NVR against the V-R that the side tag's
+repodata actually serves. A mismatch means
+`compute_changed_provides_via_koji` would diff stable's provides
+against an *old* V-R inherited from the parent tag, silently
+dropping affected reverse deps from the report. Concrete case:
+FEDORA-2026-7db4114930 listed `rust-mimalloc-0.1.50-1.fc44`,
+but the side-tag repodata still returned `0.1.48-2.fc44`, so
+`crate(mimalloc) = 0.1.48` never landed in `changed_provides`
+and `rust-nu` (a real reverse dep) was missed.
+
+The previous `check_side_tag_staleness` only verified that
+*some* provides existed for the binary RPM names — it didn't
+notice when those provides came from the previous V-R.
+
+New report field `stale_side_tag: Vec<StaleSideTag>`
+(`{ package, expected_nvr, actual_vr? }`) surfaces each
+mismatch in both the JSON and human output. When non-empty the
+report prints a prominent banner asking the user to run
+`koji regen-repo` on the side tag and rerun.
+
+`sandogasa-fedrq` gained `Fedrq::pkg_nvrs(name)` returning
+`Vec<(name, version, release)>` for the per-binary lookup.
+
 ### hs-relmon: prune-tags untags promoted builds from -testing
 
 `prune-tags` (and `prune-manifest`) now queue any build that

@@ -198,6 +198,32 @@ impl Fedrq {
         Self::run(&mut cmd)
     }
 
+    /// Return `(name, version, release)` for binary packages
+    /// matching `name`.
+    ///
+    /// Lets callers detect side-tag repos whose metadata still
+    /// serves a stale V-R for a name that koji has at a newer NVR.
+    pub fn pkg_nvrs(&self, name: &str) -> Result<Vec<(String, String, String)>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["pkgs", "-F", "line:name,version,release"]);
+        self.apply_opts(&mut cmd);
+        cmd.arg(name);
+        let raw = Self::run(&mut cmd)?;
+        let mut out = Vec::new();
+        for line in raw {
+            let parts: Vec<&str> = line.split(" : ").collect();
+            if parts.len() != 3 {
+                continue;
+            }
+            let (n, v, r) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
+            if n.is_empty() || n == "(none)" {
+                continue;
+            }
+            out.push((n.to_string(), v.to_string(), r.to_string()));
+        }
+        Ok(out)
+    }
+
     /// Return the Requires of a binary package by name.
     pub fn pkg_requires(&self, name: &str) -> Result<Vec<String>, Error> {
         let mut cmd = Command::new("fedrq");

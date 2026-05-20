@@ -66,6 +66,23 @@ pub struct UnsatisfiedDep {
     pub dep: String,
 }
 
+/// A side tag repo whose metadata still serves a stale V-R for
+/// a build that koji says is tagged at a newer NVR.
+///
+/// When present, the provides comparison may have missed changes
+/// from this source, so the report's reverse-dep list is
+/// incomplete. The user-side remedy is `koji regen-repo <side-tag>`.
+#[derive(Debug, Clone, Serialize)]
+pub struct StaleSideTag {
+    /// Source package name.
+    pub package: String,
+    /// Expected NVR per koji (`name-version-release`).
+    pub expected_nvr: String,
+    /// V-R actually served by the side tag repo, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_vr: Option<String>,
+}
+
 /// Result of checking a single reverse dependency.
 #[derive(Debug, Serialize)]
 pub struct RevDepResult {
@@ -93,6 +110,10 @@ pub struct CheckUpdateReport {
     /// Requires of updated packages not satisfiable on the target.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub installability_issues: Vec<UnsatisfiedDep>,
+    /// Side-tag staleness warnings. When non-empty the
+    /// reverse-dep analysis is incomplete.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stale_side_tag: Vec<StaleSideTag>,
     pub reverse_deps: BTreeMap<String, RevDepResult>,
 }
 
@@ -206,6 +227,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             full_analysis: side_tag.is_some(),
             changed_provides: vec![],
             installability_issues: vec![],
+            stale_side_tag: vec![],
             reverse_deps: BTreeMap::new(),
         });
     }
@@ -296,6 +318,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             &updated_packages,
             &testing_bins,
             changed,
+            vec![],
             &stable_fedrq,
             &testing_fedrq,
             opts,
@@ -322,8 +345,13 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             opts.verbose,
         );
 
-        // Warn if the side tag repo appears stale.
-        check_side_tag_staleness(&nvrs, side_fq, &koji_bins);
+        // Detect side-tag repodata that lags koji (V-R mismatch).
+        let stale_side_tag = check_side_tag_staleness(
+            &nvrs,
+            &koji_bins,
+            |bin| side_fq.pkg_nvrs(bin).unwrap_or_default(),
+            opts.verbose,
+        );
 
         return run_provides_analysis(
             input,
@@ -331,6 +359,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             &updated_packages,
             &koji_bins,
             changed,
+            stale_side_tag,
             &stable_fedrq,
             side_fq,
             opts,
@@ -380,6 +409,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         full_analysis: false,
         changed_provides: vec![],
         installability_issues: vec![],
+        stale_side_tag: vec![],
         reverse_deps,
     })
 }
@@ -396,6 +426,29 @@ pub fn print_report(report: &CheckUpdateReport) {
         "**Updated packages:** {}\n",
         report.updated_packages.join(", ")
     );
+
+    if !report.stale_side_tag.is_empty() {
+        println!(
+            "> **Warning:** side tag repodata is stale for {} \
+             source package(s); the reverse-dep analysis below \
+             may be incomplete. Run `koji regen-repo` on the \
+             side tag and rerun this check.",
+            report.stale_side_tag.len()
+        );
+        for w in &report.stale_side_tag {
+            match &w.actual_vr {
+                Some(actual) => println!(
+                    "> - **{}**: expected `{}`, found `{}` in repodata",
+                    w.package, w.expected_nvr, actual
+                ),
+                None => println!(
+                    "> - **{}**: expected `{}`, no matching binary RPMs in repodata",
+                    w.package, w.expected_nvr
+                ),
+            }
+        }
+        println!();
+    }
 
     if !report.full_analysis {
         // No side tag available — informational mode.
@@ -849,6 +902,7 @@ fn run_provides_analysis(
     updated_packages: &[String],
     binary_names: &[String],
     changed_provides: Vec<ChangedProvide>,
+    stale_side_tag: Vec<StaleSideTag>,
     stable_fedrq: &sandogasa_fedrq::Fedrq,
     new_fedrq: &sandogasa_fedrq::Fedrq,
     opts: &CheckUpdateOptions,
@@ -880,6 +934,7 @@ fn run_provides_analysis(
             full_analysis: true,
             changed_provides: vec![],
             installability_issues,
+            stale_side_tag,
             reverse_deps: BTreeMap::new(),
         });
     }
@@ -955,52 +1010,90 @@ fn run_provides_analysis(
         full_analysis: true,
         changed_provides,
         installability_issues,
+        stale_side_tag,
         reverse_deps,
     })
 }
 
-/// Warn if a package from koji list-tagged has no provides at all
-/// in the side tag, suggesting the repo metadata needs regeneration.
+/// Detect side-tag repos whose metadata still serves a stale V-R
+/// for a build that koji has at a newer NVR.
 ///
-/// A package with provides that simply didn't change vs stable is
-/// normal (e.g. a release bump with no new capabilities).
-fn check_side_tag_staleness(
+/// koji list-tagged is authoritative for what builds are in the
+/// side tag, but the rendered repodata can lag — leaving fedrq
+/// queries returning the previous V-R inherited from the parent
+/// tag. When that happens, `compute_changed_provides_via_koji`
+/// compares stable's provides against the same old V-R, finds no
+/// diff, and silently drops affected reverse deps.
+///
+/// For each koji NVR we look up the binary RPMs' V-R in the side
+/// tag and flag any source where none of the binaries match the
+/// expected `(version, release)`.
+fn check_side_tag_staleness<F>(
     nvrs: &[String],
-    side_tag_fedrq: &sandogasa_fedrq::Fedrq,
     binary_names: &[String],
-) {
+    lookup: F,
+    verbose: bool,
+) -> Vec<StaleSideTag>
+where
+    F: Fn(&str) -> Vec<(String, String, String)>,
+{
+    let mut warnings = Vec::new();
     for nvr in nvrs {
-        let Some(name) = parse_nvr(nvr) else {
-            continue;
-        };
-        // Extract version from NVR.
-        let version = nvr
-            .strip_prefix(name)
-            .and_then(|rest| rest.strip_prefix('-'))
-            .and_then(|vr| vr.split_once('-'))
-            .map(|(v, _)| v);
-        let Some(version) = version else {
+        let Some((name, exp_v, exp_r)) = sandogasa_koji::parse_nvr(nvr) else {
             continue;
         };
 
-        // Check if any binary RPM from this source package has
-        // provides in the side tag.
-        let has_provides = binary_names.iter().any(|bin| {
-            bin.starts_with(name)
-                && side_tag_fedrq
-                    .pkg_provides(bin)
-                    .is_ok_and(|p| !p.is_empty())
-        });
+        let matching_bins: Vec<&String> = binary_names
+            .iter()
+            .filter(|bin| bin.starts_with(name))
+            .collect();
+        if matching_bins.is_empty() {
+            continue;
+        }
 
-        if !has_provides {
-            eprintln!(
-                "warning: {name}: side tag repo may be stale \
-                 (expected version {version} from {nvr} not found \
-                 in changed provides); consider running \
-                 'koji regen-repo' or using @testing if available"
-            );
+        let mut expected_found = false;
+        let mut actual_vr: Option<String> = None;
+        for bin in &matching_bins {
+            let rows = lookup(bin);
+            for (_, v, r) in &rows {
+                if v == exp_v && r == exp_r {
+                    expected_found = true;
+                    break;
+                }
+                if actual_vr.is_none() {
+                    actual_vr = Some(format!("{v}-{r}"));
+                }
+            }
+            if expected_found {
+                break;
+            }
+        }
+
+        if !expected_found {
+            let warning = StaleSideTag {
+                package: name.to_string(),
+                expected_nvr: nvr.clone(),
+                actual_vr: actual_vr.clone(),
+            };
+            if verbose {
+                match &warning.actual_vr {
+                    Some(actual) => eprintln!(
+                        "warning: {name}: side tag repodata is stale \
+                         (expected {exp_v}-{exp_r} from {nvr}, found \
+                         {actual}); run 'koji regen-repo' on the side \
+                         tag to refresh"
+                    ),
+                    None => eprintln!(
+                        "warning: {name}: side tag has no binary RPMs \
+                         in repodata for expected {exp_v}-{exp_r} from \
+                         {nvr}; run 'koji regen-repo' on the side tag"
+                    ),
+                }
+            }
+            warnings.push(warning);
         }
     }
+    warnings
 }
 
 // ---- Tests ----
@@ -1204,6 +1297,96 @@ mod tests {
             vec![nvr_row("anything", "1", "1")]
         });
         assert!(!found);
+    }
+
+    // --- check_side_tag_staleness ---
+
+    #[test]
+    fn check_side_tag_staleness_matching_vr_no_warning() {
+        let nvrs = vec!["rust-mimalloc-0.1.50-1.fc44".to_string()];
+        let bins = vec!["rust-mimalloc-devel".to_string()];
+        let warnings = check_side_tag_staleness(
+            &nvrs,
+            &bins,
+            |_| vec![nvr_row("rust-mimalloc-devel", "0.1.50", "1.fc44")],
+            false,
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn check_side_tag_staleness_detects_mismatched_vr() {
+        // The exact case from the f44 / FEDORA-2026-7db4114930 report:
+        // koji says rust-mimalloc-0.1.50-1.fc44 but the side tag repo
+        // still serves 0.1.48-2.fc44.
+        let nvrs = vec!["rust-mimalloc-0.1.50-1.fc44".to_string()];
+        let bins = vec!["rust-mimalloc-devel".to_string()];
+        let warnings = check_side_tag_staleness(
+            &nvrs,
+            &bins,
+            |_| vec![nvr_row("rust-mimalloc-devel", "0.1.48", "2.fc44")],
+            false,
+        );
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].package, "rust-mimalloc");
+        assert_eq!(warnings[0].expected_nvr, "rust-mimalloc-0.1.50-1.fc44");
+        assert_eq!(warnings[0].actual_vr.as_deref(), Some("0.1.48-2.fc44"));
+    }
+
+    #[test]
+    fn check_side_tag_staleness_detects_missing_binaries() {
+        let nvrs = vec!["rust-mimalloc-0.1.50-1.fc44".to_string()];
+        let bins = vec!["rust-mimalloc-devel".to_string()];
+        let warnings = check_side_tag_staleness(&nvrs, &bins, |_| vec![], false);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].package, "rust-mimalloc");
+        assert!(warnings[0].actual_vr.is_none());
+    }
+
+    #[test]
+    fn check_side_tag_staleness_skips_unmatched_source() {
+        // No binary RPMs match this NVR's source name → nothing to check,
+        // no warning (avoids false positives when koji buildinfo and
+        // koji list-tagged are out of sync for some other reason).
+        let nvrs = vec!["rust-mimalloc-0.1.50-1.fc44".to_string()];
+        let bins = vec!["unrelated-pkg-devel".to_string()];
+        let warnings = check_side_tag_staleness(
+            &nvrs,
+            &bins,
+            |_| vec![nvr_row("unrelated-pkg-devel", "1", "1.fc44")],
+            false,
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn check_side_tag_staleness_mixed_sources() {
+        // rust-libmimalloc-sys is fresh, rust-mimalloc is stale —
+        // we should warn only for rust-mimalloc.
+        let nvrs = vec![
+            "rust-libmimalloc-sys-0.1.47-1.fc44".to_string(),
+            "rust-mimalloc-0.1.50-1.fc44".to_string(),
+        ];
+        let bins = vec![
+            "rust-libmimalloc-sys-devel".to_string(),
+            "rust-mimalloc-devel".to_string(),
+        ];
+        let warnings = check_side_tag_staleness(
+            &nvrs,
+            &bins,
+            |bin| match bin {
+                "rust-libmimalloc-sys-devel" => {
+                    vec![nvr_row("rust-libmimalloc-sys-devel", "0.1.47", "1.fc44")]
+                }
+                "rust-mimalloc-devel" => {
+                    vec![nvr_row("rust-mimalloc-devel", "0.1.48", "2.fc44")]
+                }
+                _ => vec![],
+            },
+            false,
+        );
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].package, "rust-mimalloc");
     }
 
     // --- testing_branch_from_side_tag ---
