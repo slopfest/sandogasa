@@ -431,8 +431,9 @@ pub fn print_report(report: &CheckUpdateReport) {
         println!(
             "> **Warning:** side tag repodata is stale for {} \
              source package(s); the reverse-dep analysis below \
-             may be incomplete. Run `koji regen-repo` on the \
-             side tag and rerun this check.",
+             may be incomplete. Run `koji regen-repo` on the side \
+             tag, then rerun this check with `--refresh` to drop \
+             the cached metadata.",
             report.stale_side_tag.len()
         );
         for w in &report.stale_side_tag {
@@ -1081,12 +1082,13 @@ where
                         "warning: {name}: side tag repodata is stale \
                          (expected {exp_v}-{exp_r} from {nvr}, found \
                          {actual}); run 'koji regen-repo' on the side \
-                         tag to refresh"
+                         tag, then rerun with --refresh"
                     ),
                     None => eprintln!(
                         "warning: {name}: side tag has no binary RPMs \
                          in repodata for expected {exp_v}-{exp_r} from \
-                         {nvr}; run 'koji regen-repo' on the side tag"
+                         {nvr}; run 'koji regen-repo' on the side tag, \
+                         then rerun with --refresh"
                     ),
                 }
             }

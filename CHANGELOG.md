@@ -49,7 +49,9 @@ New report field `stale_side_tag: Vec<StaleSideTag>`
 (`{ package, expected_nvr, actual_vr? }`) surfaces each
 mismatch in both the JSON and human output. When non-empty the
 report prints a prominent banner asking the user to run
-`koji regen-repo` on the side tag and rerun.
+`koji regen-repo` on the side tag and rerun with `--refresh`
+(the latter clears fedrq's smartcache, which would otherwise
+keep serving the old metadata).
 
 `sandogasa-fedrq` gained `Fedrq::pkg_nvrs(name)` returning
 `Vec<(name, version, release)>` for the per-binary lookup.
