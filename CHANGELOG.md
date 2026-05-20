@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.11.3
 
 ### ebranch: check-update no longer trusts a stale @testing snapshot
 

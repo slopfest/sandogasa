@@ -164,10 +164,22 @@ ebranch check-update https://bodhi.fedoraproject.org/updates/FEDORA-EPEL-2026-f9
 ```
 
 For new provides, ebranch checks these sources in order:
-1. **@testing** — if the update has been pushed to testing
-   (authoritative metadata, preferred)
-2. **Side tag** — via `koji buildinfo` + `fedrq pkg_provides`
-   (warns if the side tag repo is stale)
+1. **@testing** — preferred when the update has been pushed
+   there, since the rendered repodata is authoritative. Two
+   gates protect against a stale snapshot:
+   - For Bodhi-alias input, the update's status must be
+     `testing` (a `pending` update is in koji but has not
+     reached `updates-testing` yet, so @testing would still
+     return the previous V-R).
+   - `@testing` must report at least one subpackage whose
+     `(version, release)` matches one of the input NVRs.
+2. **Side tag** — via `koji buildinfo` + `fedrq pkg_provides`.
+   Cross-checks each koji NVR against the V-R the side-tag
+   repodata actually serves; if they disagree (typically
+   because `koji regen-repo` hasn't run yet), the report opens
+   with a banner listing the stale sources. The remedy is
+   `koji regen-repo <side-tag>` followed by a rerun with
+   `--refresh` (which clears fedrq's smartcache).
 3. **Reverse deps only** — lists affected packages for manual review
 
 For EPEL side tags, the testing branch is auto-detected from the
