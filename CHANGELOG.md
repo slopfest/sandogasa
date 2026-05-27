@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.11.4
 
 ### ebranch: branch-request filing and escalation
 
