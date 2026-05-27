@@ -241,6 +241,56 @@ ebranch check-crate arrow 57 -b rawhide -t --copr > build.sh
 Use `--check-install` to verify that every subpackage in the closure
 will be installable after building:
 
+### File and escalate EPEL branch requests
+
+Once you know which packages need branching (from
+`check-crate --toml` / `resolve`), file Bugzilla branch
+requests and chase the ones that go unanswered.
+
+File a single request:
+
+```sh
+# Requires a Bugzilla API key (BUGZILLA_API_KEY env var or
+# `ebranch config`).
+ebranch file-request foo epel9
+ebranch file-request foo epel9 --fas alice          # offer to co-maintain
+ebranch file-request foo epel9 --fas alice --sig "EPEL Packagers SIG"
+```
+
+The request is filed against `Fedora EPEL`/`<branch>`, falling
+back to `Fedora`/`rawhide` when the component isn't in EPEL. By
+default it blocks the `EPELPackagersSIG` tracker; override with
+`--blocked`, and add `--dependson` for prerequisite bugs. Pass
+`--report <file>` to record the new bug ID in a resolve report.
+
+To file for a whole dependency closure, first capture it with
+`resolve --report`, then file requests for every package and
+link them along the dependency graph (a package's request
+`depends_on` the requests for the packages it needs):
+
+```sh
+ebranch resolve python-django6 --source rawhide \
+    --target c10s --target-repo @epel --report django.toml
+ebranch file-requests django.toml epel9 --fas alice --dry-run
+ebranch file-requests django.toml epel9 --fas alice
+```
+
+Bug IDs and a `pinged` flag are stored in the report under
+`[branch_requests]`, so re-runs skip already-filed packages.
+
+Escalate requests that have sat in NEW for at least a week —
+adds a `needinfo?` ping and marks them so they're not pinged
+again:
+
+```sh
+ebranch escalate django.toml epel9 --dry-run
+ebranch escalate django.toml epel9
+```
+
+All three accept `--dry-run` and `--verbose`; `--dry-run`
+previews without contacting Bugzilla (escalate still reads bug
+state to decide what it would ping).
+
 ## License
 
 Licensed under either of

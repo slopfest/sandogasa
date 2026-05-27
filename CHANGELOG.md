@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### ebranch: branch-request filing and escalation
+
+Ports the EPEL branch-request workflow from the old Python
+ebranch (issue #9). Three new Bugzilla-backed subcommands:
+
+- `file-request <pkg> <branch>` — file one "Please branch and
+  build" bug against `Fedora EPEL`/`<branch>`, falling back to
+  `Fedora`/`rawhide` when the component isn't in EPEL. `--fas`
+  and `--sig` add a co-maintainer offer; `--blocked`/
+  `--dependson` set links (default: block the
+  `EPELPackagersSIG` tracker); `--toml` records the bug ID in a
+  check-crate report.
+- `file-requests <report.toml> <branch>` — file requests for
+  every package in a `resolve --report` closure and link them
+  along the dependency graph (a package's request `depends_on`
+  its dependencies' requests). IDs are written back under
+  `[branch_requests]`.
+- `escalate <report.toml> <branch>` — add a `needinfo?` ping to
+  requests that have been NEW for ≥7 days and not yet pinged,
+  marking them so they aren't pinged twice.
+
+`resolve` gained `--report <file>`, which writes the closure
+(package list + dependency edges) as a TOML the branch-request
+commands consume. API key resolves from `--api-key` →
+`BUGZILLA_API_KEY` → `ebranch config`. All three support
+`--dry-run`.
+
+`sandogasa-bugzilla` gained `BzClient::create` (POST
+`/rest/bug`) returning a `CreateBugResponse` that surfaces
+Bugzilla-level rejections (e.g. an invalid component) without
+erroring, so callers can fall back to another product.
+
 ### hs-relmon: prune-tags untags testing builds not newer than release
 
 `prune-tags` / `prune-manifest` previously untagged a

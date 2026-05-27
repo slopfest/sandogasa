@@ -2,7 +2,7 @@
 
 use reqwest::Client;
 
-use crate::models::{Bug, BugSearchResponse, Comment, CommentResponse};
+use crate::models::{Bug, BugSearchResponse, Comment, CommentResponse, CreateBugResponse};
 
 pub struct BzClient {
     base_url: String,
@@ -145,6 +145,29 @@ impl BzClient {
             .json()
             .await?;
         Ok(resp["result"].as_bool().unwrap_or(false))
+    }
+
+    /// Create a new bug. Requires an API key. `fields` is a JSON
+    /// object of bug fields (`product`, `component`, `version`,
+    /// `summary`, `description`, optionally `blocks`/
+    /// `depends_on`, …).
+    ///
+    /// Returns the parsed response rather than erroring on a
+    /// Bugzilla-level rejection: a 400 with `{"error": true,
+    /// ...}` (e.g. an invalid component for the product) comes
+    /// back as a `CreateBugResponse` with `error == true`, so the
+    /// caller can fall back to a different product. Only
+    /// transport-level failures surface as `Err`.
+    pub async fn create(
+        &self,
+        fields: &serde_json::Value,
+    ) -> Result<CreateBugResponse, reqwest::Error> {
+        self.auth(self.client.post(self.url("bug")))
+            .json(fields)
+            .send()
+            .await?
+            .json()
+            .await
     }
 
     /// Update a bug. Requires an API key. The body is a JSON object with fields to update.
@@ -297,6 +320,66 @@ mod tests {
 
         let result = client.valid_login("user@example.com").await;
         assert!(result.is_err());
+    }
+
+    // ---- create ----
+
+    #[tokio::test]
+    async fn create_posts_and_returns_id() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+
+        Mock::given(method("POST"))
+            .and(path("/rest/bug"))
+            .and(body_json(serde_json::json!({
+                "product": "Fedora EPEL",
+                "component": "foo",
+                "version": "epel9",
+                "summary": "Please branch and build foo in epel9",
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 12345})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let resp = client
+            .create(&serde_json::json!({
+                "product": "Fedora EPEL",
+                "component": "foo",
+                "version": "epel9",
+                "summary": "Please branch and build foo in epel9",
+            }))
+            .await
+            .unwrap();
+        assert_eq!(resp.id, Some(12345));
+        assert!(!resp.error);
+    }
+
+    #[tokio::test]
+    async fn create_surfaces_bugzilla_error_without_erroring() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+
+        // Bugzilla rejects an invalid component with a 400 + error body.
+        Mock::given(method("POST"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": true,
+                "code": 51,
+                "message": "The component 'foo' does not exist in the 'Fedora EPEL' product."
+            })))
+            .mount(&server)
+            .await;
+
+        let resp = client
+            .create(&serde_json::json!({"product": "Fedora EPEL", "component": "foo"}))
+            .await
+            .unwrap();
+        assert!(resp.error);
+        assert_eq!(resp.id, None);
+        assert!(resp.message.unwrap().contains("does not exist"));
     }
 
     // ---- update ----

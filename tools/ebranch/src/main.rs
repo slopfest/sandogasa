@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod branch_request;
 mod check_crate;
 mod check_update;
 mod config;
@@ -51,6 +52,11 @@ struct ResolveArgs {
     /// Output as JSON instead of human-readable text.
     #[arg(long)]
     json: bool,
+
+    /// Write a TOML report (package list + dependency edges) for
+    /// the branch-request subcommands to consume.
+    #[arg(long, value_name = "FILE")]
+    report: Option<String>,
 
     /// Output build-order as a Koji chain build string.
     #[arg(long)]
@@ -287,10 +293,89 @@ enum Command {
     CheckUpdate(CheckUpdateArgs),
     /// Set up Bugzilla API key and other settings.
     Config,
+    /// Escalate (needinfo) stale branch requests in a report.
+    Escalate(EscalateArgs),
+    /// File a branch request for one package.
+    FileRequest(FileRequestArgs),
+    /// File branch requests for all missing packages in a report.
+    FileRequests(FileRequestsArgs),
     /// Detect dependency cycles in the build graph.
     FindCycles(ResolveArgs),
     /// Resolve the full dependency closure for porting.
     Resolve(ResolveArgs),
+}
+
+/// Bugzilla connection + co-maintainer offer flags shared by the
+/// branch-request subcommands.
+#[derive(clap::Args, Clone)]
+struct BranchRequestCommon {
+    /// EPEL branch to request (e.g. epel9, epel10).
+    branch: String,
+
+    /// Bugzilla base URL.
+    #[arg(long, default_value = "https://bugzilla.redhat.com")]
+    bugzilla_url: String,
+
+    /// Bugzilla API key (defaults to BUGZILLA_API_KEY env var or
+    /// the key from `ebranch config`).
+    #[arg(long, env = "BUGZILLA_API_KEY")]
+    api_key: Option<String>,
+
+    /// FAS of the reporter, if willing to co-maintain.
+    #[arg(long)]
+    fas: Option<String>,
+
+    /// Packaging SIG to offer as co-maintainer (requires --fas).
+    #[arg(long)]
+    sig: Option<String>,
+
+    /// Show what would happen without contacting Bugzilla.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+#[derive(clap::Args, Clone)]
+struct FileRequestArgs {
+    /// Source package to request a branch for.
+    package: String,
+
+    #[command(flatten)]
+    common: BranchRequestCommon,
+
+    /// CSV of bugs/aliases this request blocks (default: the
+    /// EPELPackagersSIG tracker).
+    #[arg(long, value_delimiter = ',')]
+    blocked: Vec<String>,
+
+    /// CSV of bugs/aliases this request depends on.
+    #[arg(long, value_delimiter = ',')]
+    dependson: Vec<String>,
+
+    /// check-crate report TOML to record the new bug ID in.
+    #[arg(long)]
+    toml: Option<String>,
+}
+
+#[derive(clap::Args, Clone)]
+struct FileRequestsArgs {
+    /// check-crate report TOML listing the missing packages.
+    toml: String,
+
+    #[command(flatten)]
+    common: BranchRequestCommon,
+}
+
+#[derive(clap::Args, Clone)]
+struct EscalateArgs {
+    /// check-crate report TOML with recorded branch requests.
+    toml: String,
+
+    #[command(flatten)]
+    common: BranchRequestCommon,
 }
 
 #[derive(clap::Args, Clone)]
@@ -318,6 +403,50 @@ struct CheckPkgReviewsArgs {
 enum Mode {
     Resolve,
     FindCycles,
+}
+
+/// Build branch-request `Options` from the shared flags,
+/// resolving the API key (CLI flag → env → config file).
+fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Options, String> {
+    let api_key = config::resolve_api_key(c.api_key.as_deref())?;
+    Ok(branch_request::Options {
+        bugzilla_url: c.bugzilla_url.clone(),
+        api_key,
+        branch: c.branch.clone(),
+        fas: c.fas.clone(),
+        sig: c.sig.clone(),
+        dry_run: c.dry_run,
+        verbose: c.verbose,
+    })
+}
+
+/// Dispatch the Bugzilla-backed branch-request subcommands.
+/// Returns `Some(exit_code)` when `cmd` was one of them, `None`
+/// otherwise so the caller proceeds to the fedrq commands.
+fn handle_branch_request_command(cmd: &Command) -> Option<ExitCode> {
+    let result = match cmd {
+        Command::FileRequest(a) => branch_request_options(&a.common).and_then(|opts| {
+            branch_request::run_file_request(
+                &a.package,
+                &a.blocked,
+                &a.dependson,
+                a.toml.as_deref(),
+                &opts,
+            )
+        }),
+        Command::FileRequests(a) => branch_request_options(&a.common)
+            .and_then(|opts| branch_request::run_file_requests(&a.toml, &opts)),
+        Command::Escalate(a) => branch_request_options(&a.common)
+            .and_then(|opts| branch_request::run_escalate(&a.toml, &opts)),
+        _ => return None,
+    };
+    Some(match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    })
 }
 
 /// Clear the fedrq repo metadata cache if `--refresh` was passed.
@@ -371,6 +500,11 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         };
+    }
+
+    // Branch-request subcommands talk to Bugzilla, not fedrq.
+    if let Some(code) = handle_branch_request_command(&cli.command) {
+        return code;
     }
 
     // All other subcommands need fedrq.
@@ -493,7 +627,10 @@ fn main() -> ExitCode {
         Command::CheckCrate(_)
         | Command::CheckPkgReviews(_)
         | Command::CheckUpdate(_)
-        | Command::Config => unreachable!(),
+        | Command::Config
+        | Command::Escalate(_)
+        | Command::FileRequest(_)
+        | Command::FileRequests(_) => unreachable!(),
         Command::FindCycles(a) => (a, Mode::FindCycles),
         Command::Resolve(a) => (a, Mode::Resolve),
     };
@@ -601,6 +738,22 @@ fn main() -> ExitCode {
                     None => eprintln!("install: {pkg}: {dep} (unresolvable)", dep = u.dep),
                 }
             }
+        }
+    }
+
+    // Persist a branch-request report when asked, regardless of
+    // the stdout output format.
+    if let Some(path) = &args.report {
+        let report = resolve::ResolveReport::from_closure(&closure);
+        if let Err(e) = resolve::write_report(&report, path) {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+        if args.verbose {
+            eprintln!(
+                "wrote report with {} package(s) to {path}",
+                report.packages.len()
+            );
         }
     }
 

@@ -9,6 +9,23 @@ pub struct BugSearchResponse {
     pub total_matches: Option<u64>,
 }
 
+/// Response from `POST /rest/bug`. On success `id` is the new
+/// bug number; on a Bugzilla-level rejection `error` is true and
+/// `code`/`message` describe why (e.g. an invalid component for
+/// the product). Callers inspect this to decide whether to retry
+/// against a different product.
+#[derive(Debug, Deserialize)]
+pub struct CreateBugResponse {
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub error: bool,
+    #[serde(default)]
+    pub code: Option<i64>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Bug {
     pub id: u64,

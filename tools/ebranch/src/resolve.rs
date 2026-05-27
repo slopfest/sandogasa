@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use dashmap::DashMap;
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A BuildRequires entry that is missing on the target branch.
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +59,73 @@ impl Closure {
             })
             .collect()
     }
+}
+
+/// A persisted resolve closure plus branch-request tracking.
+///
+/// Written by `resolve --report` and consumed by the
+/// branch-request subcommands (`file-request`, `file-requests`,
+/// `escalate`). `edges` is already package-level (a package maps
+/// to the packages it build-depends on), so branch requests link
+/// directly along it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveReport {
+    pub source_branch: String,
+    pub target_branch: String,
+    /// Every source package in the closure, sorted.
+    pub packages: Vec<String>,
+    /// Package → packages it depends on (empty-dep packages
+    /// omitted to keep the file readable).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub edges: BTreeMap<String, BTreeSet<String>>,
+    /// Filed branch requests, keyed by package. Populated by
+    /// `file-request`/`file-requests`, consumed by `escalate`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub branch_requests: BTreeMap<String, BranchRequest>,
+}
+
+/// A filed branch-request bug and whether it's been escalated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchRequest {
+    /// Red Hat Bugzilla number of the branch request.
+    pub rhbz: u64,
+    /// Whether the request has already been escalated (a
+    /// `needinfo?` ping). Set by `escalate` so it never pings the
+    /// same request twice.
+    #[serde(default)]
+    pub pinged: bool,
+}
+
+impl ResolveReport {
+    /// Build a report from a resolved closure (no requests yet).
+    pub fn from_closure(closure: &Closure) -> Self {
+        let mut packages: Vec<String> = closure.closure.keys().cloned().collect();
+        packages.sort();
+        let edges: BTreeMap<String, BTreeSet<String>> = closure
+            .to_edges()
+            .into_iter()
+            .filter(|(_, deps)| !deps.is_empty())
+            .collect();
+        ResolveReport {
+            source_branch: closure.source_branch.clone(),
+            target_branch: closure.target_branch.clone(),
+            packages,
+            edges,
+            branch_requests: BTreeMap::new(),
+        }
+    }
+}
+
+/// Write a resolve report to a TOML file.
+pub fn write_report(report: &ResolveReport, path: &str) -> Result<(), String> {
+    let toml = toml::to_string_pretty(report).map_err(|e| format!("serialize report: {e}"))?;
+    std::fs::write(path, toml).map_err(|e| format!("write {path}: {e}"))
+}
+
+/// Load a resolve report from a TOML file.
+pub fn load_report(path: &str) -> Result<ResolveReport, String> {
+    let s = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
+    toml::from_str(&s).map_err(|e| format!("parse {path}: {e}"))
 }
 
 /// Trait abstracting fedrq operations for testability.
@@ -733,6 +800,74 @@ impl DepResolver for FedrqResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_report_from_closure_drops_empty_edges() {
+        let mut closure_map = BTreeMap::new();
+        closure_map.insert(
+            "a".to_string(),
+            ClosureEntry {
+                missing_deps: vec![MissingDep {
+                    dep: "needs-b".into(),
+                    provided_by: "b".into(),
+                }],
+            },
+        );
+        closure_map.insert(
+            "b".to_string(),
+            ClosureEntry {
+                missing_deps: vec![],
+            },
+        );
+        let closure = Closure {
+            source_branch: "rawhide".into(),
+            target_branch: "epel9".into(),
+            requested: vec!["a".into()],
+            closure: closure_map,
+            warnings: vec![],
+        };
+        let report = ResolveReport::from_closure(&closure);
+        assert_eq!(report.packages, vec!["a", "b"]);
+        // a depends on b; b has no deps so it's omitted from edges.
+        assert_eq!(report.edges.len(), 1);
+        assert_eq!(
+            report
+                .edges
+                .get("a")
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["b".to_string()]
+        );
+        assert!(report.branch_requests.is_empty());
+    }
+
+    #[test]
+    fn resolve_report_toml_round_trip() {
+        let mut edges = BTreeMap::new();
+        edges.insert("a".to_string(), BTreeSet::from(["b".to_string()]));
+        let mut requests = BTreeMap::new();
+        requests.insert(
+            "a".to_string(),
+            BranchRequest {
+                rhbz: 42,
+                pinged: true,
+            },
+        );
+        let report = ResolveReport {
+            source_branch: "rawhide".into(),
+            target_branch: "epel9".into(),
+            packages: vec!["a".into(), "b".into()],
+            edges,
+            branch_requests: requests,
+        };
+        let toml = toml::to_string_pretty(&report).unwrap();
+        let back: ResolveReport = toml::from_str(&toml).unwrap();
+        assert_eq!(back.packages, report.packages);
+        assert_eq!(back.branch_requests.get("a").unwrap().rhbz, 42);
+        assert!(back.branch_requests.get("a").unwrap().pinged);
+    }
 
     struct MockResolver {
         /// srpm -> BuildRequires list (source branch)
