@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+### hs-relmon: `review` subcommand
+
+Interactively review builds in Hyperscale `-testing` tags,
+modeled on `fedora-easy-karma`. For each build it shows the
+build metadata and the currently-released NVR for comparison,
+then prompts:
+
+- `+1` promotes — tags into the sibling `-release` tag and
+  untags from `-testing`.
+- `-1` rejects — untags from `-testing`.
+- `0` / `s` / Enter skips; `q` / Ctrl-D stops.
+
+Changelog display is scoped to what changed: for a build whose
+package is already in release, only the changelog entries newer
+than the released build are shown; for a brand-new package
+(nothing in release yet) the changelog is capped at
+`--changelog-lines` (default 20). If a testing build is not
+newer than the released build (same version already released,
+or a downgrade), review prints a warning rather than acting —
+pruning the stale testing tag is `prune-tags`' job.
+
+`hs-relmon review` with no argument walks every build in
+testing; a package name reviews its latest build per testing
+tag; an NVR reviews that specific build. `--repositories`
+selects which repos to scan (default `main`); `--skip`
+(repeatable or CSV) excludes packages with their own release
+pipeline (e.g. systemd) and wins over an explicit target;
+`--dry-run` lists the builds and exits.
+
+`sandogasa-koji` gained `tag_build` (sibling of `untag_build`)
+and `build_info_with_changelog`. `tag_build` passes `--wait`
+explicitly — koji defaults to `--nowait` off a TTY, which would
+let promote untag a build from testing before the release tag
+landed, briefly leaving it in neither tag.
+
 ## v0.11.3
 
 ### ebranch: check-update no longer trusts a stale @testing snapshot

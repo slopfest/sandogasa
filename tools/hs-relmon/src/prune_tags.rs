@@ -27,7 +27,7 @@ use crate::cbs::{Build, Client};
 
 /// CBS Koji profile used by the workspace. Matches
 /// `cpu-sig-tracker`'s constant.
-const KOJI_PROFILE: &str = "cbs";
+pub(crate) const KOJI_PROFILE: &str = "cbs";
 
 /// Default number of builds to keep in each `-release` tag.
 pub const DEFAULT_RELEASE_KEEP: usize = 2;

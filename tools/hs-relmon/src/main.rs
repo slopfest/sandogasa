@@ -13,6 +13,7 @@ use hs_relmon::list_issues;
 use hs_relmon::manifest;
 use hs_relmon::prune_tags;
 use hs_relmon::repology;
+use hs_relmon::review;
 
 #[derive(Parser)]
 #[command(name = "hs-relmon", about = "Hyperscale release monitoring")]
@@ -275,6 +276,61 @@ repository is not in this list are not touched."
         /// Skip the confirmation prompt.
         #[arg(short, long)]
         yes: bool,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Interactively review builds in hyperscale `-testing` tags
+    /// and promote (+1), reject (-1), or skip (0) each one.
+    Review {
+        /// Optional package name or build NVR. With a package
+        /// name, reviews its latest build in each testing tag;
+        /// with an NVR, reviews that specific build; omitted,
+        /// reviews everything in testing.
+        target: Option<String>,
+
+        /// Comma-separated Hyperscale repositories to scan.
+        #[arg(
+            long,
+            default_value = prune_tags::DEFAULT_REPOSITORY,
+            long_help = "\
+Comma-separated Hyperscale repositories to scan.
+The repository is the segment between `-packages-`
+and the stage suffix, e.g. `main` in
+`hyperscale10s-packages-main-testing`."
+        )]
+        repositories: String,
+
+        /// Package(s) to never review (repeatable or CSV).
+        #[arg(
+            long,
+            value_delimiter = ',',
+            long_help = "\
+Package name(s) to exclude from review, repeatable
+or comma-separated. Use for packages with their own
+release pipeline (e.g. systemd) that should never be
+promoted through this tool."
+        )]
+        skip: Vec<String>,
+
+        /// Changelog lines to show for a brand-new package.
+        #[arg(
+            long,
+            default_value_t = review::DEFAULT_CHANGELOG_LINES,
+            long_help = "\
+For a package with nothing yet in release, show at
+most this many lines of its changelog (a new package
+has no prior version to diff against). Packages that
+are already in release always show just the entries
+newer than the released build."
+        )]
+        changelog_lines: usize,
+
+        /// List the builds that would be reviewed, then exit.
+        #[arg(long)]
+        dry_run: bool,
 
         /// Print progress to stderr.
         #[arg(short, long)]
@@ -590,6 +646,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if total_failures > 0 {
                 std::process::exit(1);
             }
+        }
+        Command::Review {
+            target,
+            repositories,
+            skip,
+            changelog_lines,
+            dry_run,
+            verbose,
+        } => {
+            let repos = prune_tags::parse_repositories(&repositories);
+            review::run(
+                &repos,
+                target.as_deref(),
+                &skip,
+                changelog_lines,
+                dry_run,
+                verbose,
+            )?;
         }
         Command::Config => {
             configure_gitlab()?;

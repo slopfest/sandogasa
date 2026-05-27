@@ -203,6 +203,25 @@ pub fn parse_tag_history(stdout: &str) -> Vec<TagAddEvent> {
     out
 }
 
+/// Tag a build into a Koji tag (`koji tag-build --wait <tag>
+/// <nvr>`).
+///
+/// `--wait` is explicit because koji defaults to `--nowait` when
+/// its stdout isn't a TTY (as when run as a subprocess): the tag
+/// task would be queued and the command would return before the
+/// build actually landed in the tag. Callers that tag-then-untag
+/// (promoting a build from testing to release) rely on the tag
+/// being confirmed first, so the build is never absent from both
+/// tags.
+///
+/// Succeeds silently when Koji accepts the command; returns the
+/// koji stderr otherwise. Koji tolerates re-tagging a build
+/// already in the tag, so this is effectively idempotent.
+pub fn tag_build(tag: &str, nvr: &str, profile: Option<&str>) -> Result<(), String> {
+    run_koji(profile, &["tag-build", "--wait", tag, nvr])?;
+    Ok(())
+}
+
 /// Untag a build from a Koji tag (`koji untag-build <tag> <nvr>`).
 ///
 /// Succeeds silently when Koji accepts the command; returns
@@ -211,6 +230,15 @@ pub fn parse_tag_history(stdout: &str) -> Vec<TagAddEvent> {
 pub fn untag_build(tag: &str, nvr: &str, profile: Option<&str>) -> Result<(), String> {
     run_koji(profile, &["untag-build", tag, nvr])?;
     Ok(())
+}
+
+/// Fetch `koji buildinfo --changelog <nvr>` output verbatim for
+/// display. Returns the raw stdout so callers can show it to a
+/// human reviewing the build. Errors propagate (unlike the
+/// date/rpm helpers, an unexpected failure here is worth
+/// surfacing during an interactive review).
+pub fn build_info_with_changelog(nvr: &str, profile: Option<&str>) -> Result<String, String> {
+    run_koji(profile, &["buildinfo", "--changelog", nvr])
 }
 
 /// List NVRs in a Koji tag (quiet mode, NVRs only).

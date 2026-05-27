@@ -30,6 +30,8 @@ hs-relmon prune-tags <package>
 hs-relmon prune-manifest <manifest>
     [--release-keep <N>] [--testing-keep <N>] [--repositories <list>]
     [--skip <list>] [--dry-run] [--yes] [--verbose]
+hs-relmon review [<package>|<nvr>]
+    [--repositories <list>] [--skip <list>] [--dry-run] [--verbose]
 ```
 
 ### Examples
@@ -251,6 +253,53 @@ $ hs-relmon prune-manifest packages.toml --skip systemd,kernel
 
 `-candidate` and tags whose repository isn't in `--repositories`
 are left alone.
+
+### Reviewing testing builds
+
+Interactively review builds sitting in `-testing` tags and act
+on each, in the spirit of `fedora-easy-karma`:
+
+```
+$ hs-relmon review                 # every build in testing
+$ hs-relmon review dnsmasq         # latest dnsmasq build(s) in testing
+$ hs-relmon review dnsmasq-2.92rel2-9.hs.el10   # one specific build
+```
+
+For each build it prints the build metadata, the
+currently-released NVR for comparison, and the relevant
+changelog (via `koji buildinfo --changelog`), then prompts:
+
+- `+1` / `1` — promote: tag the build into the sibling
+  `-release` tag and untag it from `-testing`.
+- `-1` — reject: untag from `-testing`.
+- `0` / `s` / Enter — skip, leave the build as-is.
+- `q` / Ctrl-D — stop reviewing.
+
+The changelog is scoped to what changed: for a package already
+in release, only the entries newer than the released build are
+shown; for a brand-new package the changelog is capped at
+`--changelog-lines` (default 20). If a testing build is *not
+newer* than what's in release (same version already released, or
+a downgrade), review warns and leaves it alone — cleaning up the
+stale testing tag is `prune-tags`' job.
+
+`--repositories` (default `main`) selects which testing
+repositories to scan; `--dry-run` lists the builds that would
+be reviewed and exits without prompting.
+
+Exclude packages that have their own release pipeline with
+`--skip` (repeatable or comma-separated):
+
+```
+$ hs-relmon review --skip systemd,kernel
+```
+
+Skip wins over an explicit target, so a skipped package can't
+be promoted even if you name it directly.
+
+When a package name is given, its latest build in each testing
+tag is reviewed. When an NVR is given, only that build is
+reviewed (an NVR is recognised by its `.el` dist marker).
 
 ## Data sources
 
