@@ -232,6 +232,12 @@ $ hs-relmon prune-tags ethtool --release-keep 3 --testing-keep 2
 $ hs-relmon prune-tags ethtool --repositories main,facebook
 ```
 
+Beyond the keep-N retention, a `-testing` build whose version
+is *not newer* than the latest build in the sibling `-release`
+tag is always untagged from testing — once release has caught up
+to or past it (a promoted build, or an older leftover), keeping
+it in testing is pure noise.
+
 Without `--dry-run` you get a per-package `[y/N]` prompt; pass
 `-y/--yes` to skip. Untag operations run via `koji untag-build`
 against the `cbs` profile (install `koji` and configure CBS auth

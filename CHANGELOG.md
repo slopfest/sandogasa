@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### hs-relmon: prune-tags untags testing builds not newer than release
+
+`prune-tags` / `prune-manifest` previously untagged a
+`-testing` build only when the exact same NVR was present in
+the sibling `-release` tag. It now untags any testing build
+whose version is *not newer* than the latest release build —
+covering older leftovers in testing, not just the promoted
+build. Strictly-newer testing builds are still subject only to
+the keep-N retention rule.
+
 ### hs-relmon: `review` subcommand
 
 Interactively review builds in Hyperscale `-testing` tags,

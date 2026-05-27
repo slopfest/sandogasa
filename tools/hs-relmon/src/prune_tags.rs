@@ -18,12 +18,13 @@
 //! For batch operation, `prune-manifest <path>` walks each
 //! package in the manifest in order.
 
-use std::collections::BTreeSet;
+use std::cmp::Ordering;
 use std::io::{BufRead, Write};
 
 use sandogasa_koji::untag_build;
 
 use crate::cbs::{Build, Client};
+use crate::rpmvercmp::compare_evr;
 
 /// CBS Koji profile used by the workspace. Matches
 /// `cpu-sig-tracker`'s constant.
@@ -174,56 +175,71 @@ pub fn fetch_managed_tags(
     out
 }
 
+/// `version-release` of a build, for version comparison via
+/// `rpmvercmp::compare_evr`.
+fn version_release(b: &Build) -> String {
+    format!("{}-{}", b.version, b.release)
+}
+
 /// Build the untag plan from per-tag builds.
 ///
 /// Two rules combine per tag:
 ///
-/// 1. **Promotion dedup**: any build currently tagged in a
-///    `-testing` tag that is *also* present in the sibling
-///    `-release` tag (same repository + EL combination) is
-///    queued for untag from `-testing`. Once a build is in
-///    release, keeping it in testing only adds noise.
-/// 2. **Retention**: among the remaining builds in each tag,
-///    sort by `build_id` descending and keep the first N per
-///    the stage's retention (`release_keep` / `testing_keep`).
-///    Older builds are queued for untag.
+/// 1. **Supersede dedup**: any build in a `-testing` tag whose
+///    version is *not newer* than the latest build in the
+///    sibling `-release` tag (same repository + EL combination)
+///    is queued for untag from `-testing`. Once release has
+///    caught up to or past a testing build, keeping it in
+///    testing only adds noise — this covers both an exact
+///    promoted build and older leftovers.
+/// 2. **Retention**: among the remaining (strictly-newer-than-
+///    release) builds in each tag, sort by `build_id` descending
+///    and keep the first N per the stage's retention
+///    (`release_keep` / `testing_keep`). Older builds are queued
+///    for untag.
 pub fn build_plan(package: &str, tag_builds: &[TagBuilds], opts: &PruneOptions) -> PrunePlan {
-    // Index NVRs in each release tag so we can spot promoted
-    // builds when planning the matching testing tag.
-    let mut release_nvrs_by_tag: std::collections::BTreeMap<String, BTreeSet<String>> =
+    // For each release tag, the highest version-release among its
+    // builds — the version testing is measured against.
+    let mut release_max_evr_by_tag: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
     for (tag, builds) in tag_builds {
-        if tag.ends_with("-release") {
-            release_nvrs_by_tag.insert(tag.clone(), builds.iter().map(|b| b.nvr.clone()).collect());
+        if tag.ends_with("-release")
+            && let Some(max) = builds
+                .iter()
+                .map(version_release)
+                .max_by(|a, b| compare_evr(a, b))
+        {
+            release_max_evr_by_tag.insert(tag.clone(), max);
         }
     }
 
     let mut tag_plans: Vec<TagPlan> = Vec::new();
     for (tag, builds) in tag_builds {
         let is_testing = tag.ends_with("-testing");
-        let sibling_release_nvrs: Option<&BTreeSet<String>> = if is_testing {
+        let sibling_release_max: Option<&String> = if is_testing {
             let sibling = format!("{}-release", tag.trim_end_matches("-testing"));
-            release_nvrs_by_tag.get(&sibling)
+            release_max_evr_by_tag.get(&sibling)
         } else {
             None
         };
 
-        // Bucket 1: builds promoted to -release (queue for untag
-        // from -testing). Bucket 2: everything else (subject to
-        // the keep-N-newest rule).
-        let mut promoted_untag: Vec<(i64, String)> = Vec::new();
+        // Bucket 1: testing builds superseded by release (queue
+        // for untag). Bucket 2: everything else (subject to the
+        // keep-N-newest rule).
+        let mut superseded_untag: Vec<(i64, String)> = Vec::new();
         let mut considered: Vec<&Build> = Vec::new();
         for b in builds {
-            if let Some(rel) = sibling_release_nvrs
-                && rel.contains(&b.nvr)
-            {
-                promoted_untag.push((b.build_id, b.nvr.clone()));
+            let superseded = sibling_release_max.is_some_and(|rel_max| {
+                compare_evr(&version_release(b), rel_max) != Ordering::Greater
+            });
+            if superseded {
+                superseded_untag.push((b.build_id, b.nvr.clone()));
             } else {
                 considered.push(b);
             }
         }
 
-        // Apply retention to the non-promoted bucket.
+        // Apply retention to the non-superseded bucket.
         considered.sort_by(|a, b| b.build_id.cmp(&a.build_id));
         let keep_count = if tag.ends_with("-release") {
             opts.release_keep
@@ -237,8 +253,8 @@ pub fn build_plan(package: &str, tag_builds: &[TagBuilds], opts: &PruneOptions) 
         };
         let keep: Vec<String> = keep_builds.iter().map(|b| b.nvr.clone()).collect();
 
-        // Untags: promotion + retention, sorted newest-first.
-        let mut untag_pairs: Vec<(i64, String)> = promoted_untag;
+        // Untags: supersede + retention, sorted newest-first.
+        let mut untag_pairs: Vec<(i64, String)> = superseded_untag;
         untag_pairs.extend(
             retention_untag_builds
                 .iter()
@@ -556,6 +572,35 @@ mod tests {
             .unwrap();
         assert_eq!(testing.keep, vec!["ethtool-1.6-1.hs.el10"]);
         assert_eq!(testing.untag, vec!["ethtool-1.5-1.hs.el10"]);
+    }
+
+    #[test]
+    fn build_plan_untags_testing_older_than_release() {
+        // Release is at 6.18. Testing holds an older 6.17 (a
+        // stale leftover) and a newer 6.19. 6.17 is superseded —
+        // even though it's not the exact released build — and
+        // gets untagged; 6.19 stays as a real testing candidate.
+        let tag_builds = vec![
+            tb(
+                "hyperscale10s-packages-main-release",
+                vec![make_build(5000, "ethtool-6.18-1.hs.el10")],
+            ),
+            tb(
+                "hyperscale10s-packages-main-testing",
+                vec![
+                    make_build(4000, "ethtool-6.17-1.hs.el10"),
+                    make_build(6000, "ethtool-6.19-1.hs.el10"),
+                ],
+            ),
+        ];
+        let plan = build_plan("ethtool", &tag_builds, &PruneOptions::default());
+        let testing = plan
+            .tags
+            .iter()
+            .find(|t| t.tag.ends_with("-testing"))
+            .unwrap();
+        assert_eq!(testing.keep, vec!["ethtool-6.19-1.hs.el10"]);
+        assert_eq!(testing.untag, vec!["ethtool-6.17-1.hs.el10"]);
     }
 
     #[test]
