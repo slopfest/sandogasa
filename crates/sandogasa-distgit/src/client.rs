@@ -128,6 +128,28 @@ impl DistGitClient {
         Ok(body)
     }
 
+    /// Check whether a package is retired on a given dist-git
+    /// branch by looking for the `dead.package` marker file
+    /// Fedora uses to mark a retired branch. Returns `Ok(true)`
+    /// when the file is present, `Ok(false)` on 404 (no marker,
+    /// i.e. live), and surfaces other HTTP errors.
+    pub async fn is_retired(
+        &self,
+        package: &str,
+        branch: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/rpms/{}/raw/{}/f/dead.package",
+            self.base_url, package, branch
+        );
+        let resp = self.client.get(&url).send().await?;
+        match resp.status().as_u16() {
+            200 => Ok(true),
+            404 => Ok(false),
+            other => Err(format!("dist-git GET {url} returned {other}").into()),
+        }
+    }
+
     /// Fetch ACLs for an RPM package.
     pub async fn get_acls(&self, package: &str) -> Result<ProjectAcls, Box<dyn std::error::Error>> {
         let url = format!("{}/api/0/rpms/{}", self.base_url, package);
@@ -1281,6 +1303,64 @@ mod tests {
 
         let result = client.fetch_spec("nonexistent", "rawhide").await;
         assert!(result.is_err());
+    }
+
+    // ---- is_retired ----
+
+    #[tokio::test]
+    async fn is_retired_true_when_dead_package_present() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/rpms/old-pkg/raw/rawhide/f/dead.package"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("retired upstream\n"))
+            .mount(&server)
+            .await;
+        assert!(client.is_retired("old-pkg", "rawhide").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn is_retired_false_on_404() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/rpms/live-pkg/raw/rawhide/f/dead.package"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        assert!(!client.is_retired("live-pkg", "rawhide").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn is_retired_branch_aware() {
+        // A package retired only on epel10 should not look
+        // retired when we query rawhide.
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/rpms/foo/raw/rawhide/f/dead.package"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rpms/foo/raw/epel10/f/dead.package"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(""))
+            .mount(&server)
+            .await;
+        assert!(!client.is_retired("foo", "rawhide").await.unwrap());
+        assert!(client.is_retired("foo", "epel10").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn is_retired_surfaces_other_errors() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/rpms/foo/raw/rawhide/f/dead.package"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        assert!(client.is_retired("foo", "rawhide").await.is_err());
     }
 
     // ---- user_projects ----

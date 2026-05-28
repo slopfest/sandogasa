@@ -23,6 +23,8 @@ pub struct BugzillaConfig {
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
+    pub email: String,
+    #[serde(default)]
     pub url: String,
 }
 
@@ -72,6 +74,17 @@ pub fn resolve_url() -> String {
         .unwrap_or_else(|| BugzillaConfig::DEFAULT_URL.to_string())
 }
 
+/// Read the user's configured Bugzilla email (used to claim
+/// ownership when closing bugs). Returns `None` if the file
+/// isn't present, can't be parsed, or has no email set.
+pub fn resolve_email() -> Option<String> {
+    sandogasa_config::ConfigFile::for_tool("poi-tracker")
+        .load::<PoiTrackerConfig>()
+        .ok()
+        .map(|c| c.bugzilla.email)
+        .filter(|e| !e.is_empty())
+}
+
 /// Interactive config setup. Prompts for the Bugzilla API key,
 /// validates it with a minimal search, and writes the result.
 pub async fn cmd_config() -> Result<(), String> {
@@ -96,6 +109,29 @@ pub async fn cmd_config() -> Result<(), String> {
         config.bugzilla.api_key = key;
     } else {
         println!("Bugzilla API key: (set)");
+    }
+
+    // Email is optional — it's only used by `triage-retired
+    // --claim` to set `assigned_to` on closed bugs. Blank input
+    // keeps the current value (which may itself be empty).
+    let current = if config.bugzilla.email.is_empty() {
+        "<unset>"
+    } else {
+        config.bugzilla.email.as_str()
+    };
+    print!("Bugzilla email [{current}] (for --claim; blank to keep): ");
+    use std::io::{BufRead, Write};
+    std::io::stdout()
+        .flush()
+        .map_err(|e| format!("flush: {e}"))?;
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|e| format!("read: {e}"))?;
+    let trimmed = line.trim();
+    if !trimmed.is_empty() {
+        config.bugzilla.email = trimmed.to_string();
     }
 
     print!("Validating API key... ");

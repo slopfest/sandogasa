@@ -159,6 +159,53 @@ package is in multiple workloads, the highest workload
 default applies. Set `priority = "unspecified"` on a package
 to explicitly opt out of a workload default.
 
+### Close retired packages' update bugs
+
+When a package gets retired on a dist-git branch (a
+`dead.package` file is committed), any open release-monitoring
+bug for that branch is dead weight — there's no live spec to
+update. `triage-retired` walks the inventory, checks dist-git
+for retirement, and closes those bugs as `CLOSED/CANTFIX`:
+
+```sh
+poi-tracker -i inventory.toml triage-retired --dry-run
+poi-tracker -i inventory.toml triage-retired
+```
+
+The `--branch` flag controls which dist-git branch is checked
+(default `rawhide`); the same branch scopes the Bugzilla
+search, so an `epel10` retirement closes the
+`Fedora EPEL`/`epel10` bug:
+
+```sh
+poi-tracker -i inventory.toml triage-retired --branch epel10
+```
+
+Bugs that are already `CLOSED` are skipped. Each closure adds a
+short comment naming the package and the retired branch.
+
+Interactive runs offer to claim ownership of each closed bug
+(set `assigned_to` to your configured Bugzilla email). Pass
+`--claim` to claim without prompting — under `-y` this is the
+only way to opt in. The email is set via `poi-tracker config`.
+
+Useful flags for big inventories:
+
+- `--package <name>` — only check this one package. Handy for
+  testing or when re-running after fixing a single entry.
+- `--start-from <name>` — resume from this package onwards in
+  the inventory's iteration order, e.g. to continue an
+  interrupted run.
+- `--end-with <name>` — stop after this package (inclusive).
+  Combine with `--start-from` to scope to a name-range, e.g.
+  `--start-from rust-nu-cli --end-with rust-nu-utils` to test
+  the change against every `rust-nu-*` package in one shot.
+
+Network reads (dist-git probes, Bugzilla searches) retry up to
+3 times with exponential backoff, so a transient connection
+hiccup against `src.fedoraproject.org` doesn't abort the whole
+inventory.
+
 ## Inventory format
 
 ```toml

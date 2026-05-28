@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### poi-tracker: `triage-retired` subcommand
+
+Close open release-monitoring bugs for any inventoried package
+that's retired on a dist-git branch. For each package the
+command checks Pagure for a `dead.package` marker on
+`--branch` (default `rawhide`); when present, every open bug
+that `triage-updates` would touch is closed as
+`CLOSED/CANTFIX` with a short comment naming the package and
+branch.
+
+The branch also scopes the Bugzilla search — `--branch
+rawhide` closes `Fedora`/rawhide bugs, `--branch epel10`
+closes `Fedora EPEL`/epel10 bugs — so EPEL retirements clear
+the right tracking bug. `--package <name>` scopes the run to a
+single package (handy for testing); `--start-from <name>` and
+`--end-with <name>` bound an inclusive sub-range of the
+inventory (e.g. `--start-from rust-nu-cli --end-with
+rust-nu-utils` to walk every `rust-nu-*` package).
+Network reads (dist-git probes, Bugzilla searches) retry up to
+3 times with exponential backoff so a transient connection
+blip doesn't abort the whole inventory. Findings print
+per-package as each retirement is confirmed (rather than
+batched at the end), followed by a one-line-per-package tally
+listing the `rhbz#<id>`s about to be closed. Interactive runs
+offer to claim ownership (set `assigned_to` to the configured
+Bugzilla email) before applying — `--claim` skips that prompt
+and is also the only way to claim under `-y`. `poi-tracker
+config` now prompts for an optional Bugzilla email used for
+claiming. `--dry-run` previews, `--yes` skips the confirmation
+prompt.
+
+`sandogasa-distgit` gained `DistGitClient::is_retired(package,
+branch)`, a presence probe that returns `true` when the
+`dead.package` marker exists on that branch and `false` on
+404.
+
 ## v0.11.4
 
 ### ebranch: branch-request filing and escalation

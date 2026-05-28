@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 mod config;
+mod triage_retired;
 mod triage_updates;
 
 use std::collections::BTreeMap;
@@ -51,12 +52,72 @@ enum Command {
     SyncDistgit(SyncDistgitArgs),
     /// Sync inventory from a GitLab RPM group.
     SyncGitlab(SyncGitlabArgs),
+    /// Close open release-monitoring bugs as CANTFIX for any
+    /// inventoried package that is retired on a dist-git branch.
+    TriageRetired(TriageRetiredArgs),
     /// Triage open release-monitoring bugs for inventoried
     /// packages by bumping their Bugzilla priority to match the
     /// inventory.
     TriageUpdates(TriageUpdatesArgs),
     /// Validate inventory consistency.
     Validate,
+}
+
+#[derive(clap::Args)]
+struct TriageRetiredArgs {
+    /// Dist-git branch to check retirement against (e.g.
+    /// `rawhide`, `epel10`, `f43`). Retirement on this branch
+    /// scopes the Bugzilla search too — a `rawhide` retirement
+    /// closes the Fedora/rawhide bug, an `epel10` retirement
+    /// closes the Fedora EPEL/epel10 bug.
+    #[arg(long, default_value = "rawhide")]
+    branch: String,
+
+    /// Only check this single package (must be in the
+    /// inventory). Useful for testing.
+    #[arg(
+        long,
+        value_name = "NAME",
+        conflicts_with_all = ["start_from", "end_with"],
+    )]
+    package: Option<String>,
+
+    /// Resume from this package onwards (inclusive), skipping
+    /// earlier ones in the inventory's iteration order. Useful
+    /// to continue an interrupted run.
+    #[arg(long, value_name = "NAME", conflicts_with = "package")]
+    start_from: Option<String>,
+
+    /// Stop after this package (inclusive), skipping anything
+    /// later in the inventory's iteration order. Combine with
+    /// `--start-from` to bound a sub-range, e.g.
+    /// `--start-from rust-nu-cli --end-with rust-nu-utils`.
+    #[arg(long, value_name = "NAME", conflicts_with = "package")]
+    end_with: Option<String>,
+
+    /// Bugzilla API key (or set BUGZILLA_API_KEY env var, or
+    /// run `poi-tracker config`).
+    #[arg(long, env = "BUGZILLA_API_KEY")]
+    api_key: Option<String>,
+
+    /// Also set `assigned_to` on each closed bug to the
+    /// Bugzilla email set via `poi-tracker config`. Interactive
+    /// mode prompts; with `-y` this flag is the only way to
+    /// claim.
+    #[arg(long)]
+    claim: bool,
+
+    /// Preview closures without applying them.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Skip the confirmation prompt.
+    #[arg(short, long)]
+    yes: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[derive(clap::Args)]
@@ -388,8 +449,80 @@ fn main() -> ExitCode {
         Command::Show(args) => cmd_show(&paths, args),
         Command::SyncDistgit(args) => cmd_sync_distgit(args),
         Command::SyncGitlab(args) => cmd_sync_gitlab(args),
+        Command::TriageRetired(args) => cmd_triage_retired(&paths, args),
         Command::TriageUpdates(args) => cmd_triage_updates(&paths, args),
         Command::Validate => cmd_validate(&paths),
+    }
+}
+
+fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> ExitCode {
+    let inventory = match sandogasa_inventory::load_and_merge(paths) {
+        Ok(inv) => inv,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let api_key = match config::resolve_api_key(args.api_key.as_deref()) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let url = config::resolve_url();
+    let bz = sandogasa_bugzilla::BzClient::new(&url).with_api_key(api_key);
+    let dg = sandogasa_distgit::DistGitClient::new();
+
+    let claim_email = config::resolve_email();
+    if args.claim && claim_email.is_none() {
+        eprintln!(
+            "error: --claim needs a configured Bugzilla email.\n\
+             Set it with: poi-tracker config"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to create runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match rt.block_on(triage_retired::run(
+        &inventory,
+        &bz,
+        &dg,
+        &args.branch,
+        args.package.as_deref(),
+        args.start_from.as_deref(),
+        args.end_with.as_deref(),
+        args.claim,
+        claim_email.as_deref(),
+        args.dry_run,
+        args.yes,
+        args.verbose,
+    )) {
+        Ok(report) => {
+            eprintln!(
+                "\n{} checked, {} retired, {} planned, {} closed, {} failed",
+                report.packages_checked,
+                report.packages_retired,
+                report.closes_planned,
+                report.closes_applied,
+                report.failures
+            );
+            if report.failures > 0 {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
