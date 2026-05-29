@@ -43,3 +43,7 @@ track = "fedora-rawhide"
 name = "systemd"
 track = "fedora-rawhide"
 file_issue = false
+
+[[package]]
+name = "wprof"
+
