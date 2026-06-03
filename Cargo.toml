@@ -46,6 +46,7 @@ repository = "https://github.com/slopfest/fedora-cve-triage"
 
 [workspace.dependencies]
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 dashmap = "6"
 dirs = "6"

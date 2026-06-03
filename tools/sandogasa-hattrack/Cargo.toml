@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 clap = { workspace = true }
 emojis = { workspace = true }
 sandogasa-bodhi = { workspace = true }

@@ -8,6 +8,8 @@ use clap::{Parser, Subcommand};
 use sandogasa_fasjson::kerberos;
 use serde::Serialize;
 
+mod locale;
+
 #[derive(Parser)]
 #[command(
     version,
@@ -21,6 +23,11 @@ struct Cli {
     /// Output machine-readable JSON
     #[arg(long, global = true)]
     json: bool,
+
+    /// Source for tzdb's zone1970.tab (country lookup table).
+    /// `auto` picks the newer of system + bundled.
+    #[arg(long, value_enum, default_value_t = locale::TzSource::Auto, global = true)]
+    tz_source: locale::TzSource,
 
     #[command(subcommand)]
     command: Command,
@@ -141,11 +148,37 @@ struct DiscourseProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
     location: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    local_time: Option<LocalTimeReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     last_posted_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_seen_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<DiscourseStatus>,
+}
+
+/// Local time + weekend signal derived from the user's IANA
+/// timezone. Country is `None` for zones not listed in
+/// `zone1970.tab` (and so `is_weekend` is too).
+#[derive(Serialize)]
+struct LocalTimeReport {
+    rfc3339: String,
+    weekday: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_weekend: Option<bool>,
+}
+
+impl From<locale::LocalTimeInfo> for LocalTimeReport {
+    fn from(info: locale::LocalTimeInfo) -> Self {
+        Self {
+            rfc3339: info.local_time_rfc3339,
+            weekday: info.weekday.to_string(),
+            country: info.country.map(String::from),
+            is_weekend: info.is_weekend,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -161,6 +194,7 @@ struct DiscourseStatus {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    locale::init_source(cli.tz_source);
 
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -1103,12 +1137,18 @@ async fn cmd_discourse(
     let client = sandogasa_discourse::DiscourseClient::new(base_url);
     let user = client.user(username).await?;
 
+    let local_info = user
+        .timezone
+        .as_deref()
+        .and_then(|tz| locale::local_time_info(tz, Utc::now()));
+
     let profile = DiscourseProfile {
         username: user.username.clone(),
         name: user.name.clone(),
         title: user.title.clone(),
         timezone: user.timezone.clone(),
         location: user.location.clone(),
+        local_time: local_info.clone().map(Into::into),
         last_posted_at: user.last_posted_at.map(|t| t.to_rfc3339()),
         last_seen_at: user.last_seen_at.map(|t| t.to_rfc3339()),
         status: user.status.as_ref().map(|s| DiscourseStatus {
@@ -1135,6 +1175,21 @@ async fn cmd_discourse(
     }
     if let Some(loc) = &user.location {
         println!("  Location:    {loc}");
+    }
+    if let Some(info) = &local_info {
+        let weekday = info.weekday;
+        let kind = match info.is_weekend {
+            Some(true) => " — weekend",
+            Some(false) => " — weekday",
+            None => "",
+        };
+        println!(
+            "  Local time:  {} ({}{})",
+            info.local_time_display, weekday, kind
+        );
+        if let Some(cc) = info.country {
+            println!("  Country:     {cc}");
+        }
     }
     if let Some(ts) = user.last_posted_at {
         println!(
@@ -1237,6 +1292,12 @@ mod tests {
             title: Some("Fedora Project Leader".to_string()),
             timezone: Some("America/New_York".to_string()),
             location: Some("Somerville, MA".to_string()),
+            local_time: Some(LocalTimeReport {
+                rfc3339: "2026-06-03T10:00:00-04:00".to_string(),
+                weekday: "Wed".to_string(),
+                country: Some("US".to_string()),
+                is_weekend: Some(false),
+            }),
             last_posted_at: Some("2026-03-17T14:50:30+00:00".to_string()),
             last_seen_at: Some("2026-03-22T05:36:12+00:00".to_string()),
             status: Some(DiscourseStatus {
@@ -1262,6 +1323,7 @@ mod tests {
             title: None,
             timezone: None,
             location: None,
+            local_time: None,
             last_posted_at: None,
             last_seen_at: None,
             status: None,

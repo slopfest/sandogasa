@@ -48,6 +48,21 @@ Subcommands that need an email address (bugzilla, mailman) will:
 2. Query FASJSON for additional emails (requires Kerberos)
 3. Use `--email` for direct override, `--no-fas` to skip FASJSON
 
+### Local time and weekend signal
+
+The `discourse` subcommand resolves the user's IANA timezone to
+a country (via the tzdb `zone1970.tab` table), then reports the
+local time and whether it's currently the weekend in that
+country. Weekends default to Sat+Sun, with overrides for places
+where the workweek is shifted (Fri+Sat across most of MENA,
+Fri only in Iran, Sat only in Nepal).
+
+The lookup table is read from `/usr/share/zoneinfo/zone1970.tab`
+by default; if that's older than the copy bundled with this
+tool, an `info:` line on stderr notes that the bundled copy is
+being used instead. Force one or the other with `--tz-source
+system` / `--tz-source bundled`.
+
 ### JSON output
 
 All subcommands support `--json` for machine-readable output:

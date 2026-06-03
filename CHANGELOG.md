@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### sandogasa-hattrack: local time and weekend signal in `discourse`
+
+The `discourse` subcommand now derives the user's local time
+from their Discourse-set IANA timezone, names the country (via
+tzdb's `zone1970.tab`), and flags whether it's currently the
+weekend there. Weekends default to Sat+Sun with overrides for
+the MENA Fri+Sat block, Iran (Fri), Nepal (Sat), and a few
+others. JSON output gains a `local_time` object alongside the
+existing `timezone`/`location` fields.
+
+A bundled copy of `zone1970.tab` ships with the crate so the
+lookup works on systems without tzdata installed. By default
+the system file at `/usr/share/zoneinfo/zone1970.tab` wins as
+long as it's at least as new as the bundled copy; otherwise the
+bundled one is used and a one-line `info:` is logged. The new
+global flag `--tz-source <auto|system|bundled>` forces a
+choice.
+
 ### poi-tracker: `triage-retired` subcommand
 
 Close open release-monitoring bugs for any inventoried package
