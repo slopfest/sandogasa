@@ -93,6 +93,23 @@ repeat lookups never touch the network.
   `--now 2026-03-17 discourse salimma` to see what
   St. Patrick's Day looks like.
 
+### Narrowing the `last-seen` service set
+
+`last-seen` queries five services (Bodhi, Bugzilla, Discourse,
+dist-git, Mailman). The Mailman scan is the slow path because
+it walks HyperKitty archives page by page, so skipping it is
+the common speed-up when the user clearly doesn't post:
+
+```sh
+sandogasa-hattrack last-seen alice --skip mailman
+sandogasa-hattrack last-seen alice --skip mailman,bugzilla
+sandogasa-hattrack last-seen alice --only discourse,bodhi
+```
+
+`--skip` and `--only` are mutually exclusive. Both accept a
+comma-separated list (or can be repeated). Values:
+`bodhi`, `bugzilla`, `discourse`, `distgit`, `mailman`.
+
 ### JSON output
 
 All subcommands support `--json` for machine-readable output:

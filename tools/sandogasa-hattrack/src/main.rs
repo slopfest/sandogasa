@@ -64,6 +64,28 @@ struct Cli {
     command: Command,
 }
 
+/// Services queried by `last-seen`. Used by `--skip` / `--only`
+/// to narrow what gets fetched — mailing-list scans are the
+/// slow path, so skipping them is the common case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Service {
+    Bodhi,
+    Bugzilla,
+    Discourse,
+    Distgit,
+    Mailman,
+}
+
+/// Decide whether `svc` should run given the (mutually
+/// exclusive) `--skip` and `--only` lists. Empty lists =
+/// default behaviour = include everything.
+fn service_enabled(svc: Service, skip: &[Service], only: &[Service]) -> bool {
+    if !only.is_empty() {
+        return only.contains(&svc);
+    }
+    !skip.contains(&svc)
+}
+
 /// Parse the `--now` argument: accepts either a bare date
 /// (`YYYY-MM-DD`, treated as midnight UTC) or any RFC 3339
 /// datetime.
@@ -152,6 +174,17 @@ enum Command {
         /// Max pages to scan mailing list archives
         #[arg(long, default_value = "200")]
         max_pages: u32,
+
+        /// Skip these services (comma-separated, repeatable).
+        /// Mailman is the slowest, so `--skip mailman` is the
+        /// common speed-up when a user doesn't post to lists.
+        #[arg(long, value_enum, value_delimiter = ',', conflicts_with = "only")]
+        skip: Vec<Service>,
+
+        /// Run only these services (comma-separated, repeatable).
+        /// Inverse of `--skip`.
+        #[arg(long, value_enum, value_delimiter = ',', conflicts_with = "skip")]
+        only: Vec<Service>,
     },
 
     /// Show a contributor's mailing list activity
@@ -292,6 +325,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             no_fas,
             list,
             max_pages,
+            skip,
+            only,
         } => {
             cmd_last_seen(
                 &username,
@@ -305,6 +340,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 holidays_enabled,
                 holidays_refresh,
                 now,
+                &skip,
+                &only,
             )
             .await
         }
@@ -1087,6 +1124,8 @@ async fn cmd_last_seen(
     holidays_enabled: bool,
     holidays_refresh: bool,
     now: DateTime<Utc>,
+    skip: &[Service],
+    only: &[Service],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fas = resolve_fas(Some(username), email_overrides, no_fas)?;
     let emails = fas.emails.clone();
@@ -1098,27 +1137,34 @@ async fn cmd_last_seen(
         .map(str::to_owned);
 
     let mut services = Vec::new();
+    let mut discourse_tz: Option<String> = None;
 
-    // Discourse
-    eprintln!("Checking Discourse...");
-    let (discourse_service, discourse_tz) = check_discourse(username).await;
-    services.push(discourse_service);
+    if service_enabled(Service::Discourse, skip, only) {
+        eprintln!("Checking Discourse...");
+        let (discourse_service, tz) = check_discourse(username).await;
+        services.push(discourse_service);
+        discourse_tz = tz;
+    }
 
-    // Bodhi
-    eprintln!("Checking Bodhi...");
-    services.push(check_bodhi(username).await);
+    if service_enabled(Service::Bodhi, skip, only) {
+        eprintln!("Checking Bodhi...");
+        services.push(check_bodhi(username).await);
+    }
 
-    // Dist-git
-    eprintln!("Checking dist-git...");
-    services.push(check_distgit(username).await);
+    if service_enabled(Service::Distgit, skip, only) {
+        eprintln!("Checking dist-git...");
+        services.push(check_distgit(username).await);
+    }
 
-    // Bugzilla
-    eprintln!("Checking Bugzilla...");
-    services.push(check_bugzilla(&emails).await);
+    if service_enabled(Service::Bugzilla, skip, only) {
+        eprintln!("Checking Bugzilla...");
+        services.push(check_bugzilla(&emails).await);
+    }
 
-    // Mailman
-    eprintln!("Checking mailing lists...");
-    services.push(check_mailman(&emails, lists, max_pages).await);
+    if service_enabled(Service::Mailman, skip, only) {
+        eprintln!("Checking mailing lists...");
+        services.push(check_mailman(&emails, lists, max_pages).await);
+    }
 
     // Sort by most recent first (entries with dates before those without)
     services.sort_by(|a, b| b.last_active.cmp(&a.last_active));
@@ -1617,6 +1663,42 @@ mod tests {
         let entries = build_local_time_entries(&pairs, now);
         assert_eq!(entries[0].timezone, "Asia/Tokyo");
         assert_eq!(entries[1].timezone, "Europe/Dublin");
+    }
+
+    // ---- service filtering ----
+
+    #[test]
+    fn service_enabled_default_includes_everything() {
+        assert!(service_enabled(Service::Mailman, &[], &[]));
+        assert!(service_enabled(Service::Discourse, &[], &[]));
+    }
+
+    #[test]
+    fn service_enabled_skip_excludes_listed() {
+        let skip = [Service::Mailman, Service::Bugzilla];
+        assert!(!service_enabled(Service::Mailman, &skip, &[]));
+        assert!(!service_enabled(Service::Bugzilla, &skip, &[]));
+        assert!(service_enabled(Service::Discourse, &skip, &[]));
+        assert!(service_enabled(Service::Bodhi, &skip, &[]));
+    }
+
+    #[test]
+    fn service_enabled_only_restricts_to_listed() {
+        let only = [Service::Discourse, Service::Bodhi];
+        assert!(service_enabled(Service::Discourse, &[], &only));
+        assert!(service_enabled(Service::Bodhi, &[], &only));
+        assert!(!service_enabled(Service::Mailman, &[], &only));
+        assert!(!service_enabled(Service::Bugzilla, &[], &only));
+    }
+
+    #[test]
+    fn service_enabled_only_wins_when_both_specified() {
+        // Defence-in-depth: clap rejects this combination via
+        // `conflicts_with`, but if it ever slipped through,
+        // `only` takes priority over `skip`.
+        let only = [Service::Discourse];
+        let skip = [Service::Discourse];
+        assert!(service_enabled(Service::Discourse, &skip, &only));
     }
 
     #[test]

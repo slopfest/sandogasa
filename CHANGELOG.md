@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### sandogasa-hattrack: narrow `last-seen`'s service set
+
+Two new flags on `last-seen` let callers skip the expensive
+HyperKitty mailing-list scan (or any other service) when a
+target user clearly doesn't use it:
+
+- `--skip <list>` — comma-separated services to skip.
+- `--only <list>` — comma-separated services to ONLY query
+  (mutually exclusive with `--skip`).
+
+Values: `bodhi`, `bugzilla`, `discourse`, `distgit`,
+`mailman`. Skipped services don't appear in the human output
+or JSON `services` array at all (rather than appearing with
+"no activity").
+
 ### sandogasa-hattrack: public-holiday signal in `discourse` and `last-seen`
 
 The `discourse` and `last-seen` subcommands now flag any
