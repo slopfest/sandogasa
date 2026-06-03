@@ -19,6 +19,11 @@ pub struct FasUser {
     /// Red Hat Bugzilla email, if different from FAS email.
     #[serde(default)]
     pub rhbzemail: Option<String>,
+    /// IANA timezone the user has set on their FAS profile,
+    /// e.g. `Europe/Dublin`. Empty / null for users who haven't
+    /// filled it in.
+    #[serde(default)]
+    pub timezone: Option<String>,
 }
 
 #[cfg(test)]
@@ -31,7 +36,8 @@ mod tests {
             "result": {
                 "username": "salimma",
                 "human_name": "Michel Lind",
-                "emails": ["salimma@fedoraproject.org", "michel@michel-slm.name"]
+                "emails": ["salimma@fedoraproject.org", "michel@michel-slm.name"],
+                "timezone": "Europe/Dublin"
             }
         }"#;
 
@@ -39,6 +45,7 @@ mod tests {
         assert_eq!(resp.result.username, "salimma");
         assert_eq!(resp.result.human_name.as_deref(), Some("Michel Lind"));
         assert_eq!(resp.result.emails.len(), 2);
+        assert_eq!(resp.result.timezone.as_deref(), Some("Europe/Dublin"));
     }
 
     #[test]

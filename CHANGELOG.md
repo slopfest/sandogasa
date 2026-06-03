@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### sandogasa-hattrack: surface local time in `last-seen`
+
+`last-seen` now prints the same `Local time:` / `Country:`
+block already rendered by `discourse`, with the same colour
+treatment (`--color`, `--working-hours`). Both FAS (via
+FASJSON's previously-unused `timezone` field) and Discourse
+are queried independently; when both advertise a timezone and
+they agree, the block is rendered once, and when they
+disagree (e.g. a traveller who updated Discourse but not FAS),
+both are rendered side-by-side with a `[FAS]` / `[Discourse]`
+suffix so the divergence is visible. JSON output gains a
+`local_times` array on the top-level summary, one entry per
+distinct timezone with its source(s) attached.
+
+`sandogasa-fasjson::models::FasUser` gained a `timezone:
+Option<String>` field.
+
 ### sandogasa-hattrack: colour the local-time / weekday output
 
 Adds ANSI styling to the `discourse` subcommand's `Local time:`

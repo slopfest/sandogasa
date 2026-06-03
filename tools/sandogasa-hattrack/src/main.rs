@@ -242,7 +242,19 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             no_fas,
             list,
             max_pages,
-        } => cmd_last_seen(&username, &email, no_fas, &list, max_pages, json).await,
+        } => {
+            cmd_last_seen(
+                &username,
+                &email,
+                no_fas,
+                &list,
+                max_pages,
+                json,
+                color,
+                working_hours,
+            )
+            .await
+        }
         Command::Mailman {
             username,
             email,
@@ -525,13 +537,25 @@ struct MailmanPost {
 /// query FASJSON (with Kerberos) to discover emails from the FAS username.
 /// Always includes `username@fedoraproject.org` since users may post from
 /// either their FAS alias or their personal email.
-fn resolve_emails(
+/// Emails + the underlying FAS user, when a lookup happened.
+/// Callers that only care about the email list use
+/// [`resolve_emails`]; callers that also want signals like the
+/// user's timezone reach for [`resolve_fas`].
+struct FasLookup {
+    emails: Vec<String>,
+    user: Option<sandogasa_fasjson::models::FasUser>,
+}
+
+fn resolve_fas(
     username: Option<&str>,
     email_overrides: &[String],
     no_fas: bool,
-) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+) -> Result<FasLookup, Box<dyn std::error::Error>> {
     if !email_overrides.is_empty() {
-        return Ok(email_overrides.to_vec());
+        return Ok(FasLookup {
+            emails: email_overrides.to_vec(),
+            user: None,
+        });
     }
 
     let fas_username = username.ok_or("either a username or --email must be provided")?;
@@ -539,26 +563,29 @@ fn resolve_emails(
     let mut emails = vec![format!("{fas_username}@fedoraproject.org")];
 
     if no_fas {
-        return Ok(emails);
+        return Ok(FasLookup { emails, user: None });
     }
 
-    // Try FASJSON for additional email addresses
+    // Try FASJSON for additional emails AND profile signals
+    // (timezone, etc.) the caller may want.
+    let mut user_out: Option<sandogasa_fasjson::models::FasUser> = None;
     match ensure_kerberos_ticket() {
         Ok(()) => {
             eprintln!("Looking up {fas_username} in FASJSON...");
             let client = sandogasa_fasjson::FasjsonClient::new();
             match client.user(fas_username) {
                 Ok(user) => {
-                    for email in user.emails {
-                        if !emails.contains(&email) {
-                            emails.push(email);
+                    for email in &user.emails {
+                        if !emails.contains(email) {
+                            emails.push(email.clone());
                         }
                     }
-                    if let Some(rhbz) = user.rhbzemail
+                    if let Some(rhbz) = user.rhbzemail.clone()
                         && !emails.contains(&rhbz)
                     {
                         emails.push(rhbz);
                     }
+                    user_out = Some(user);
                 }
                 Err(e) => {
                     eprintln!("FASJSON lookup failed: {e}");
@@ -572,7 +599,18 @@ fn resolve_emails(
         }
     }
 
-    Ok(emails)
+    Ok(FasLookup {
+        emails,
+        user: user_out,
+    })
+}
+
+fn resolve_emails(
+    username: Option<&str>,
+    email_overrides: &[String],
+    no_fas: bool,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    Ok(resolve_fas(username, email_overrides, no_fas)?.emails)
 }
 
 /// Ensure a valid Kerberos ticket exists, offering to renew or acquire one.
@@ -873,7 +911,78 @@ async fn cmd_distgit(
 #[derive(Serialize)]
 struct LastSeenSummary {
     username: String,
+    /// One entry per distinct timezone the user advertises.
+    /// FAS and Discourse are tracked independently because a
+    /// traveller may update Discourse but leave FAS pointing at
+    /// home (or vice versa) — surface both rather than guessing
+    /// which is current.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    local_times: Vec<LocalTimeEntry>,
     services: Vec<ServiceLastSeen>,
+}
+
+/// A timezone + the resolved local-time snapshot, tagged with
+/// the source(s) that advertised this timezone. When two
+/// sources agree, both source names land in `sources` so the
+/// reader knows there's no divergence.
+#[derive(Serialize)]
+struct LocalTimeEntry {
+    sources: Vec<String>,
+    timezone: String,
+    rfc3339: String,
+    weekday: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_weekend: Option<bool>,
+    /// Render fields kept in-memory only — JSON consumers
+    /// should re-format from `rfc3339` themselves.
+    #[serde(skip)]
+    display: String,
+    #[serde(skip)]
+    hour: u32,
+    #[serde(skip)]
+    weekday_enum: chrono::Weekday,
+}
+
+/// Build the per-timezone entries: collect (source, tz) pairs
+/// in the order they were resolved, dedupe by timezone string
+/// while merging source labels, and resolve each to a
+/// `LocalTimeEntry`. Timezones that don't parse via
+/// `chrono-tz` are dropped silently — we already report the
+/// raw string elsewhere if needed.
+fn build_local_time_entries(pairs: &[(&str, &str)], now_utc: DateTime<Utc>) -> Vec<LocalTimeEntry> {
+    let mut order: Vec<String> = Vec::new();
+    let mut by_tz: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (source, tz) in pairs {
+        if tz.is_empty() {
+            continue;
+        }
+        let key = (*tz).to_string();
+        if !by_tz.contains_key(&key) {
+            order.push(key.clone());
+        }
+        by_tz.entry(key).or_default().push((*source).to_string());
+    }
+    order
+        .into_iter()
+        .filter_map(|tz| {
+            let info = locale::local_time_info(&tz, now_utc)?;
+            let sources = by_tz.remove(&tz).unwrap_or_default();
+            Some(LocalTimeEntry {
+                sources,
+                timezone: tz,
+                rfc3339: info.local_time_rfc3339,
+                weekday: info.weekday.to_string(),
+                country: info.country.map(String::from),
+                is_weekend: info.is_weekend,
+                display: info.local_time_display,
+                hour: info.hour,
+                weekday_enum: info.weekday,
+            })
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -891,6 +1000,7 @@ struct ServiceLastSeen {
     status_expires: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_last_seen(
     username: &str,
     email_overrides: &[String],
@@ -898,13 +1008,24 @@ async fn cmd_last_seen(
     lists: &[String],
     max_pages: u32,
     json: bool,
+    color: bool,
+    working_hours: (u8, u8),
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let emails = resolve_emails(Some(username), email_overrides, no_fas)?;
+    let fas = resolve_fas(Some(username), email_overrides, no_fas)?;
+    let emails = fas.emails.clone();
+    let fas_tz = fas
+        .user
+        .as_ref()
+        .and_then(|u| u.timezone.as_deref())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+
     let mut services = Vec::new();
 
     // Discourse
     eprintln!("Checking Discourse...");
-    services.push(check_discourse(username).await);
+    let (discourse_service, discourse_tz) = check_discourse(username).await;
+    services.push(discourse_service);
 
     // Bodhi
     eprintln!("Checking Bodhi...");
@@ -925,8 +1046,22 @@ async fn cmd_last_seen(
     // Sort by most recent first (entries with dates before those without)
     services.sort_by(|a, b| b.last_active.cmp(&a.last_active));
 
+    // Collect every timezone the user has set. FAS and
+    // Discourse are tracked independently — a traveller may
+    // update Discourse but leave FAS pointing home, or vice
+    // versa, so show both rather than picking one.
+    let mut pairs: Vec<(&str, &str)> = Vec::new();
+    if let Some(ref tz) = fas_tz {
+        pairs.push(("FAS", tz));
+    }
+    if let Some(ref tz) = discourse_tz {
+        pairs.push(("Discourse", tz));
+    }
+    let entries = build_local_time_entries(&pairs, Utc::now());
+
     let summary = LastSeenSummary {
         username: username.to_string(),
+        local_times: entries,
         services,
     };
 
@@ -936,6 +1071,29 @@ async fn cmd_last_seen(
     }
 
     println!("Last seen: {username}\n");
+    let show_source_label = summary.local_times.len() > 1;
+    for entry in &summary.local_times {
+        let rendered = style::local_time_line(
+            &entry.display,
+            entry.hour,
+            entry.weekday_enum,
+            entry.is_weekend,
+            working_hours,
+            color,
+        );
+        let suffix = if show_source_label {
+            format!("  [{}]", entry.sources.join(" / "))
+        } else {
+            String::new()
+        };
+        println!("  {:<14} {rendered}{suffix}", "Local time:");
+        if let Some(cc) = &entry.country {
+            println!("  {:<14} {cc}", "Country:");
+        }
+    }
+    if !summary.local_times.is_empty() {
+        println!();
+    }
     for svc in &summary.services {
         if let Some(ts) = &svc.last_active {
             let rel = if let Ok(dt) = ts.parse::<DateTime<Utc>>() {
@@ -968,7 +1126,7 @@ async fn cmd_last_seen(
     Ok(())
 }
 
-async fn check_discourse(username: &str) -> ServiceLastSeen {
+async fn check_discourse(username: &str) -> (ServiceLastSeen, Option<String>) {
     let client = sandogasa_discourse::DiscourseClient::new("https://discussion.fedoraproject.org");
     match client.user(username).await {
         Ok(user) => {
@@ -992,23 +1150,30 @@ async fn check_discourse(username: &str) -> ServiceLastSeen {
                 }
                 None => (None, None),
             };
+            let tz = user.timezone.filter(|s| !s.is_empty());
+            (
+                ServiceLastSeen {
+                    service: "Discourse".to_string(),
+                    last_active: user.last_posted_at.map(|t| t.to_rfc3339()),
+                    detail: user.last_posted_at.map(|_| "last post".to_string()),
+                    error: None,
+                    status,
+                    status_expires,
+                },
+                tz,
+            )
+        }
+        Err(e) => (
             ServiceLastSeen {
                 service: "Discourse".to_string(),
-                last_active: user.last_posted_at.map(|t| t.to_rfc3339()),
-                detail: user.last_posted_at.map(|_| "last post".to_string()),
-                error: None,
-                status,
-                status_expires,
-            }
-        }
-        Err(e) => ServiceLastSeen {
-            service: "Discourse".to_string(),
-            last_active: None,
-            detail: None,
-            error: Some(e.to_string()),
-            status: None,
-            status_expires: None,
-        },
+                last_active: None,
+                detail: None,
+                error: Some(e.to_string()),
+                status: None,
+                status_expires: None,
+            },
+            None,
+        ),
     }
 }
 
@@ -1303,6 +1468,54 @@ fn render_emoji(shortcode: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
+
+    // ---- build_local_time_entries ----
+
+    #[test]
+    fn local_time_entries_merge_when_same_timezone() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 3, 12, 0, 0).unwrap();
+        let pairs = vec![("FAS", "Europe/Dublin"), ("Discourse", "Europe/Dublin")];
+        let entries = build_local_time_entries(&pairs, now);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].sources, vec!["FAS", "Discourse"]);
+        assert_eq!(entries[0].timezone, "Europe/Dublin");
+    }
+
+    #[test]
+    fn local_time_entries_kept_separate_when_timezones_differ() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 3, 12, 0, 0).unwrap();
+        let pairs = vec![("FAS", "Europe/Dublin"), ("Discourse", "Asia/Tokyo")];
+        let entries = build_local_time_entries(&pairs, now);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].sources, vec!["FAS"]);
+        assert_eq!(entries[0].timezone, "Europe/Dublin");
+        assert_eq!(entries[1].sources, vec!["Discourse"]);
+        assert_eq!(entries[1].timezone, "Asia/Tokyo");
+    }
+
+    #[test]
+    fn local_time_entries_skip_empty_and_unparseable() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 3, 12, 0, 0).unwrap();
+        let pairs = vec![
+            ("FAS", ""),
+            ("Discourse", "Bogus/Zone"),
+            ("Other", "Europe/Berlin"),
+        ];
+        let entries = build_local_time_entries(&pairs, now);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].timezone, "Europe/Berlin");
+        assert_eq!(entries[0].sources, vec!["Other"]);
+    }
+
+    #[test]
+    fn local_time_entries_preserves_input_order() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 3, 12, 0, 0).unwrap();
+        let pairs = vec![("Discourse", "Asia/Tokyo"), ("FAS", "Europe/Dublin")];
+        let entries = build_local_time_entries(&pairs, now);
+        assert_eq!(entries[0].timezone, "Asia/Tokyo");
+        assert_eq!(entries[1].timezone, "Europe/Dublin");
+    }
 
     #[test]
     fn discourse_profile_serializes_full() {
@@ -1615,6 +1828,7 @@ mod tests {
     fn last_seen_serializes() {
         let summary = LastSeenSummary {
             username: "salimma".to_string(),
+            local_times: Vec::new(),
             services: vec![
                 ServiceLastSeen {
                     service: "Discourse".to_string(),

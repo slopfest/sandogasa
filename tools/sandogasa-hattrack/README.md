@@ -71,6 +71,13 @@ convention: `--color auto` (default) enables them on a TTY
 when `NO_COLOR` is unset; `--color always` / `--color never`
 force a choice.
 
+The same `Local time:` / `Country:` block also appears at the
+top of `last-seen` output. Both FAS (via FASJSON) and
+Discourse are queried independently: matching timezones
+collapse to one entry, mismatched ones are shown side-by-side
+with a `[FAS]` / `[Discourse]` suffix so you can spot a
+traveller who's updated one source but not the other.
+
 ### JSON output
 
 All subcommands support `--json` for machine-readable output:
