@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## v0.12.0
+
+### sandogasa-fasjson: `timezone` field on `FasUser` (breaking)
+
+`sandogasa_fasjson::models::FasUser` gained a public field
+`timezone: Option<String>` so callers can read the user's FAS
+profile timezone (used by sandogasa-hattrack's `last-seen`,
+below). Adding a `pub` field to a struct with no
+`#[non_exhaustive]` marker is a semver-breaking change for
+code that constructs `FasUser` via a struct literal; consumers
+that only read fields are unaffected.
+
+Migration: if you construct `FasUser` directly (rare; mostly
+seen in tests), add `timezone: None` to the field list.
 
 ### sandogasa-hattrack: narrow `last-seen`'s service set
 
@@ -55,10 +68,9 @@ disagree (e.g. a traveller who updated Discourse but not FAS),
 both are rendered side-by-side with a `[FAS]` / `[Discourse]`
 suffix so the divergence is visible. JSON output gains a
 `local_times` array on the top-level summary, one entry per
-distinct timezone with its source(s) attached.
-
-`sandogasa-fasjson::models::FasUser` gained a `timezone:
-Option<String>` field.
+distinct timezone with its source(s) attached. The FAS-side
+timezone read uses the new `FasUser.timezone` field (see the
+`sandogasa-fasjson` entry above).
 
 ### sandogasa-hattrack: colour the local-time / weekday output
 
