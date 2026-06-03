@@ -9,6 +9,7 @@ use sandogasa_fasjson::kerberos;
 use serde::Serialize;
 
 mod locale;
+mod style;
 
 #[derive(Parser)]
 #[command(
@@ -28,6 +29,20 @@ struct Cli {
     /// `auto` picks the newer of system + bundled.
     #[arg(long, value_enum, default_value_t = locale::TzSource::Auto, global = true)]
     tz_source: locale::TzSource,
+
+    /// Colorize output. `auto` = TTY + NO_COLOR-aware.
+    #[arg(long, value_enum, default_value_t = style::ColorChoice::Auto, global = true)]
+    color: style::ColorChoice,
+
+    /// Working-hours range `START-END` (24h local).
+    /// Outside is dimmed.
+    #[arg(
+        long,
+        value_parser = style::parse_working_hours,
+        default_value = "9-18",
+        global = true,
+    )]
+    working_hours: (u8, u8),
 
     #[command(subcommand)]
     command: Command,
@@ -207,6 +222,8 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let json = cli.json;
+    let color = style::use_color(cli.color);
+    let working_hours = cli.working_hours;
     match cli.command {
         Command::Bodhi { username, url } => cmd_bodhi(&username, &url, json).await,
         Command::Bugzilla {
@@ -216,7 +233,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             url,
         } => cmd_bugzilla(username.as_deref(), &email, no_fas, &url, json).await,
         Command::Distgit { username, url } => cmd_distgit(&username, &url, json).await,
-        Command::Discourse { username, url } => cmd_discourse(&username, &url, json).await,
+        Command::Discourse { username, url } => {
+            cmd_discourse(&username, &url, json, color, working_hours).await
+        }
         Command::LastSeen {
             username,
             email,
@@ -1133,6 +1152,8 @@ async fn cmd_discourse(
     username: &str,
     base_url: &str,
     json: bool,
+    color: bool,
+    working_hours: (u8, u8),
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = sandogasa_discourse::DiscourseClient::new(base_url);
     let user = client.user(username).await?;
@@ -1177,16 +1198,15 @@ async fn cmd_discourse(
         println!("  Location:    {loc}");
     }
     if let Some(info) = &local_info {
-        let weekday = info.weekday;
-        let kind = match info.is_weekend {
-            Some(true) => " — weekend",
-            Some(false) => " — weekday",
-            None => "",
-        };
-        println!(
-            "  Local time:  {} ({}{})",
-            info.local_time_display, weekday, kind
+        let rendered = style::local_time_line(
+            &info.local_time_display,
+            info.hour,
+            info.weekday,
+            info.is_weekend,
+            working_hours,
+            color,
         );
+        println!("  Local time:  {rendered}");
         if let Some(cc) = info.country {
             println!("  Country:     {cc}");
         }

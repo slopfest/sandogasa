@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use chrono::{DateTime, Datelike, NaiveDate, Utc, Weekday};
+use chrono::{DateTime, Datelike, NaiveDate, Timelike, Utc, Weekday};
 
 const BUNDLED_ZONE1970_TAB: &str = include_str!("../data/zone1970.tab");
 const SYSTEM_ZONE1970_PATH: &str = "/usr/share/zoneinfo/zone1970.tab";
@@ -208,6 +208,9 @@ pub struct LocalTimeInfo {
     pub local_time_display: String,
     /// Day of week in the local zone.
     pub weekday: Weekday,
+    /// Hour of day in the local zone (0–23), used to flag
+    /// outside-working-hours in the rendered output.
+    pub hour: u32,
     /// ISO 3166-1 alpha-2 country, if the zone is in zone1970.tab.
     pub country: Option<&'static str>,
     /// Whether `weekday` is a weekend in `country`. `None` when
@@ -228,6 +231,7 @@ pub fn local_time_info(iana: &str, now_utc: DateTime<Utc>) -> Option<LocalTimeIn
         local_time_rfc3339: local.to_rfc3339(),
         local_time_display: local.format("%Y-%m-%d %H:%M:%S %Z").to_string(),
         weekday,
+        hour: local.hour(),
         country,
         is_weekend,
     })

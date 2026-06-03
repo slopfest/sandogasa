@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### sandogasa-hattrack: colour the local-time / weekday output
+
+Adds ANSI styling to the `discourse` subcommand's `Local time:`
+line: the weekday tag is green for a weekday or yellow for a
+weekend, and the timestamp itself is dimmed when the local hour
+sits outside working hours. JSON output is unaffected.
+
+New global flags: `--color <auto|always|never>` (default
+`auto`, follows the grep/ls convention — TTY + `NO_COLOR`
+honoured) and `--working-hours <START-END>` (default `9-18`,
+24-hour clock, start inclusive / end exclusive).
+
 ### sandogasa-hattrack: local time and weekend signal in `discourse`
 
 The `discourse` subcommand now derives the user's local time
