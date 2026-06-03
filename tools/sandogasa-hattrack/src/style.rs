@@ -74,16 +74,41 @@ fn paint(s: &str, code: &str, on: bool) -> String {
     }
 }
 
+/// How the current local date is classified for colouring.
+/// `Weekend` and `Holiday` are both "off" days and render
+/// yellow; `Weekday` is green; `Unknown` (no country, no
+/// signal) stays plain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DayKind {
+    Weekday,
+    Weekend,
+    Holiday,
+    Unknown,
+}
+
+/// Resolve a `DayKind` from the inputs the caller already has.
+/// Weekend wins over Holiday — if Saturday happens to also be
+/// a public holiday, the day-of-week label is the simpler
+/// signal and the `Holiday:` line below covers the rest.
+pub fn classify_day(is_weekend: Option<bool>, has_holiday: bool) -> DayKind {
+    match is_weekend {
+        Some(true) => DayKind::Weekend,
+        Some(false) if has_holiday => DayKind::Holiday,
+        Some(false) => DayKind::Weekday,
+        None => DayKind::Unknown,
+    }
+}
+
 /// Style the `Local time:` value: dim the timestamp when the
-/// local hour falls outside the working-hours range; colorize
-/// the weekday block green for a weekday or yellow for a
-/// weekend. `is_weekend = None` (country unknown) leaves the
-/// weekday plain.
+/// local hour falls outside the working-hours range, and tag
+/// the day-of-week according to its `DayKind` — green for a
+/// plain weekday, yellow for weekend or holiday, plain when the
+/// country is unknown.
 pub fn local_time_line(
     display_time: &str,
     hour: u32,
     weekday: chrono::Weekday,
-    is_weekend: Option<bool>,
+    kind: DayKind,
     working_hours: (u8, u8),
     color: bool,
 ) -> String {
@@ -95,10 +120,11 @@ pub fn local_time_line(
         paint(display_time, DIM, color)
     };
 
-    let weekday_tag = match is_weekend {
-        Some(true) => paint(&format!("{weekday} — weekend"), YELLOW, color),
-        Some(false) => paint(&format!("{weekday} — weekday"), GREEN, color),
-        None => weekday.to_string(),
+    let weekday_tag = match kind {
+        DayKind::Weekend => paint(&format!("{weekday} — weekend"), YELLOW, color),
+        DayKind::Holiday => paint(&format!("{weekday} — holiday"), YELLOW, color),
+        DayKind::Weekday => paint(&format!("{weekday} — weekday"), GREEN, color),
+        DayKind::Unknown => weekday.to_string(),
     };
 
     format!("{time} ({weekday_tag})")
@@ -142,7 +168,7 @@ mod tests {
             "2026-06-03 14:00:00 IST",
             14,
             Weekday::Wed,
-            Some(false),
+            DayKind::Weekday,
             (9, 18),
             true,
         );
@@ -157,7 +183,7 @@ mod tests {
             "2026-06-06 22:00:00 IST",
             22,
             Weekday::Sat,
-            Some(true),
+            DayKind::Weekend,
             (9, 18),
             true,
         );
@@ -172,7 +198,7 @@ mod tests {
             "2026-06-03 14:00:00 IST",
             14,
             Weekday::Wed,
-            Some(false),
+            DayKind::Weekday,
             (9, 18),
             false,
         );
@@ -186,7 +212,7 @@ mod tests {
             "2026-06-03 14:00:00 UTC",
             14,
             Weekday::Wed,
-            None,
+            DayKind::Unknown,
             (9, 18),
             true,
         );
@@ -203,7 +229,7 @@ mod tests {
             "2026-06-03 18:00:00 IST",
             18,
             Weekday::Wed,
-            Some(false),
+            DayKind::Weekday,
             (9, 18),
             true,
         );
@@ -217,10 +243,39 @@ mod tests {
             "2026-06-03 09:00:00 IST",
             9,
             Weekday::Wed,
-            Some(false),
+            DayKind::Weekday,
             (9, 18),
             true,
         );
         assert!(!out.contains(DIM));
+    }
+
+    #[test]
+    fn local_time_line_holiday_on_weekday_renders_yellow() {
+        // Saint Patrick's Day (2026-03-17) fell on a Tuesday.
+        let out = local_time_line(
+            "2026-03-17 10:00:00 GMT",
+            10,
+            Weekday::Tue,
+            DayKind::Holiday,
+            (9, 18),
+            true,
+        );
+        assert!(out.contains(YELLOW), "holiday should be yellow");
+        assert!(out.contains("Tue — holiday"));
+        assert!(!out.contains("weekday"));
+    }
+
+    #[test]
+    fn classify_day_priority() {
+        // Weekend wins over holiday (Sat that's also a holiday
+        // is just "weekend" — the Holiday: line below covers
+        // the rest).
+        assert_eq!(classify_day(Some(true), true), DayKind::Weekend);
+        assert_eq!(classify_day(Some(true), false), DayKind::Weekend);
+        assert_eq!(classify_day(Some(false), true), DayKind::Holiday);
+        assert_eq!(classify_day(Some(false), false), DayKind::Weekday);
+        assert_eq!(classify_day(None, true), DayKind::Unknown);
+        assert_eq!(classify_day(None, false), DayKind::Unknown);
     }
 }

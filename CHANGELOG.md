@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### sandogasa-hattrack: public-holiday signal in `discourse` and `last-seen`
+
+The `discourse` and `last-seen` subcommands now flag any
+nationwide public holiday falling on the user's local date,
+rendered as a `Holiday:` line under `Country:` (and as a
+`holidays` array on each `LocalTimeEntry` / `LocalTimeReport`
+in JSON output). Data comes from the Nager.Date public API
+(<https://date.nager.at>) and is cached per country-per-year
+at `$XDG_CACHE_HOME/sandogasa-hattrack/holidays/{CC}-{YEAR}.
+json` (typically `~/.cache/...`), so repeat lookups never go
+to the network. Only nationwide holidays (`global: true`) are
+surfaced — we only know the country, not the subdivision.
+
+When FAS and Discourse advertise different timezones, each row
+gets its own holiday check, so a holiday in either location
+shows up next to that location's `Local time:` line.
+
+New global flags:
+- `--no-holidays` skips the lookup entirely (useful offline).
+- `--refresh-holidays` force-refetches the year's data even
+  when a cached copy is present.
+- `--now <YYYY-MM-DD | RFC 3339>` overrides "now" for the
+  local-time / holiday computation. Intended for testing and
+  demos — relative timestamps on other services are
+  unaffected.
+
 ### sandogasa-hattrack: surface local time in `last-seen`
 
 `last-seen` now prints the same `Local time:` / `Country:`

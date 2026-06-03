@@ -208,6 +208,9 @@ pub struct LocalTimeInfo {
     pub local_time_display: String,
     /// Day of week in the local zone.
     pub weekday: Weekday,
+    /// Calendar date in the local zone — needed for the
+    /// holiday lookup.
+    pub local_date: NaiveDate,
     /// Hour of day in the local zone (0–23), used to flag
     /// outside-working-hours in the rendered output.
     pub hour: u32,
@@ -231,6 +234,7 @@ pub fn local_time_info(iana: &str, now_utc: DateTime<Utc>) -> Option<LocalTimeIn
         local_time_rfc3339: local.to_rfc3339(),
         local_time_display: local.format("%Y-%m-%d %H:%M:%S %Z").to_string(),
         weekday,
+        local_date: local.date_naive(),
         hour: local.hour(),
         country,
         is_weekend,

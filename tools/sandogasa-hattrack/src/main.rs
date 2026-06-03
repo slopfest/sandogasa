@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use sandogasa_fasjson::kerberos;
 use serde::Serialize;
 
+mod holidays;
 mod locale;
 mod style;
 
@@ -44,8 +45,38 @@ struct Cli {
     )]
     working_hours: (u8, u8),
 
+    /// Skip the Nager.Date public-holiday lookup.
+    #[arg(long, global = true)]
+    no_holidays: bool,
+
+    /// Force-refetch holiday data from Nager.Date even when a
+    /// cached copy is present.
+    #[arg(long, global = true)]
+    refresh_holidays: bool,
+
+    /// Override "now" used for local-time / holiday lookups.
+    /// Accepts `YYYY-MM-DD` (midnight UTC) or full RFC 3339
+    /// (e.g. `2026-03-17T10:00:00Z`). For testing / demos.
+    #[arg(long, value_parser = parse_now, global = true)]
+    now: Option<DateTime<Utc>>,
+
     #[command(subcommand)]
     command: Command,
+}
+
+/// Parse the `--now` argument: accepts either a bare date
+/// (`YYYY-MM-DD`, treated as midnight UTC) or any RFC 3339
+/// datetime.
+fn parse_now(s: &str) -> Result<DateTime<Utc>, String> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Ok(d.and_hms_opt(0, 0, 0).unwrap().and_utc());
+    }
+    Err(format!(
+        "expected YYYY-MM-DD or RFC 3339 datetime, got `{s}`"
+    ))
 }
 
 #[derive(Subcommand)]
@@ -183,15 +214,21 @@ struct LocalTimeReport {
     country: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     is_weekend: Option<bool>,
+    /// Nationwide public holidays falling on this local date,
+    /// per Nager.Date. Empty for an ordinary day or when the
+    /// lookup was skipped / failed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    holidays: Vec<holidays::HolidayEntry>,
 }
 
-impl From<locale::LocalTimeInfo> for LocalTimeReport {
-    fn from(info: locale::LocalTimeInfo) -> Self {
+impl LocalTimeReport {
+    fn from_info(info: &locale::LocalTimeInfo, holidays: Vec<holidays::HolidayEntry>) -> Self {
         Self {
-            rfc3339: info.local_time_rfc3339,
+            rfc3339: info.local_time_rfc3339.clone(),
             weekday: info.weekday.to_string(),
             country: info.country.map(String::from),
             is_weekend: info.is_weekend,
+            holidays,
         }
     }
 }
@@ -224,6 +261,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let json = cli.json;
     let color = style::use_color(cli.color);
     let working_hours = cli.working_hours;
+    let holidays_enabled = !cli.no_holidays;
+    let holidays_refresh = cli.refresh_holidays;
+    let now = cli.now.unwrap_or_else(Utc::now);
     match cli.command {
         Command::Bodhi { username, url } => cmd_bodhi(&username, &url, json).await,
         Command::Bugzilla {
@@ -234,7 +274,17 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => cmd_bugzilla(username.as_deref(), &email, no_fas, &url, json).await,
         Command::Distgit { username, url } => cmd_distgit(&username, &url, json).await,
         Command::Discourse { username, url } => {
-            cmd_discourse(&username, &url, json, color, working_hours).await
+            cmd_discourse(
+                &username,
+                &url,
+                json,
+                color,
+                working_hours,
+                holidays_enabled,
+                holidays_refresh,
+                now,
+            )
+            .await
         }
         Command::LastSeen {
             username,
@@ -252,6 +302,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 json,
                 color,
                 working_hours,
+                holidays_enabled,
+                holidays_refresh,
+                now,
             )
             .await
         }
@@ -935,6 +988,11 @@ struct LocalTimeEntry {
     country: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     is_weekend: Option<bool>,
+    /// Nationwide public holidays falling on this local date.
+    /// Looked up per-entry, so a divergent FAS/Discourse pair
+    /// gets its own check — flag a holiday in either location.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    holidays: Vec<holidays::HolidayEntry>,
     /// Render fields kept in-memory only — JSON consumers
     /// should re-format from `rfc3339` themselves.
     #[serde(skip)]
@@ -943,6 +1001,8 @@ struct LocalTimeEntry {
     hour: u32,
     #[serde(skip)]
     weekday_enum: chrono::Weekday,
+    #[serde(skip)]
+    local_date: chrono::NaiveDate,
 }
 
 /// Build the per-timezone entries: collect (source, tz) pairs
@@ -977,12 +1037,26 @@ fn build_local_time_entries(pairs: &[(&str, &str)], now_utc: DateTime<Utc>) -> V
                 weekday: info.weekday.to_string(),
                 country: info.country.map(String::from),
                 is_weekend: info.is_weekend,
+                holidays: Vec::new(),
                 display: info.local_time_display,
                 hour: info.hour,
                 weekday_enum: info.weekday,
+                local_date: info.local_date,
             })
         })
         .collect()
+}
+
+/// Fill in each entry's `holidays` via Nager.Date. Each entry
+/// has its own country + local date, so a divergent
+/// FAS/Discourse pair gets two independent checks: a holiday
+/// in either location will appear on that location's row.
+async fn enrich_with_holidays(entries: &mut [LocalTimeEntry], refresh: bool) {
+    for entry in entries.iter_mut() {
+        if let Some(cc) = entry.country.clone() {
+            entry.holidays = holidays::holidays_for(&cc, entry.local_date, refresh).await;
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1010,6 +1084,9 @@ async fn cmd_last_seen(
     json: bool,
     color: bool,
     working_hours: (u8, u8),
+    holidays_enabled: bool,
+    holidays_refresh: bool,
+    now: DateTime<Utc>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fas = resolve_fas(Some(username), email_overrides, no_fas)?;
     let emails = fas.emails.clone();
@@ -1057,7 +1134,10 @@ async fn cmd_last_seen(
     if let Some(ref tz) = discourse_tz {
         pairs.push(("Discourse", tz));
     }
-    let entries = build_local_time_entries(&pairs, Utc::now());
+    let mut entries = build_local_time_entries(&pairs, now);
+    if holidays_enabled {
+        enrich_with_holidays(&mut entries, holidays_refresh).await;
+    }
 
     let summary = LastSeenSummary {
         username: username.to_string(),
@@ -1073,11 +1153,12 @@ async fn cmd_last_seen(
     println!("Last seen: {username}\n");
     let show_source_label = summary.local_times.len() > 1;
     for entry in &summary.local_times {
+        let kind = style::classify_day(entry.is_weekend, !entry.holidays.is_empty());
         let rendered = style::local_time_line(
             &entry.display,
             entry.hour,
             entry.weekday_enum,
-            entry.is_weekend,
+            kind,
             working_hours,
             color,
         );
@@ -1089,6 +1170,9 @@ async fn cmd_last_seen(
         println!("  {:<14} {rendered}{suffix}", "Local time:");
         if let Some(cc) = &entry.country {
             println!("  {:<14} {cc}", "Country:");
+        }
+        for h in &entry.holidays {
+            println!("  {:<14} {}", "Holiday:", holidays::format_holiday(h));
         }
     }
     if !summary.local_times.is_empty() {
@@ -1313,12 +1397,16 @@ async fn check_mailman(emails: &[String], lists: &[String], max_pages: u32) -> S
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_discourse(
     username: &str,
     base_url: &str,
     json: bool,
     color: bool,
     working_hours: (u8, u8),
+    holidays_enabled: bool,
+    holidays_refresh: bool,
+    now: DateTime<Utc>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = sandogasa_discourse::DiscourseClient::new(base_url);
     let user = client.user(username).await?;
@@ -1326,7 +1414,15 @@ async fn cmd_discourse(
     let local_info = user
         .timezone
         .as_deref()
-        .and_then(|tz| locale::local_time_info(tz, Utc::now()));
+        .and_then(|tz| locale::local_time_info(tz, now));
+
+    let holiday_names = match (&local_info, holidays_enabled) {
+        (Some(info), true) => match info.country {
+            Some(cc) => holidays::holidays_for(cc, info.local_date, holidays_refresh).await,
+            None => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
 
     let profile = DiscourseProfile {
         username: user.username.clone(),
@@ -1334,7 +1430,9 @@ async fn cmd_discourse(
         title: user.title.clone(),
         timezone: user.timezone.clone(),
         location: user.location.clone(),
-        local_time: local_info.clone().map(Into::into),
+        local_time: local_info
+            .as_ref()
+            .map(|info| LocalTimeReport::from_info(info, holiday_names.clone())),
         last_posted_at: user.last_posted_at.map(|t| t.to_rfc3339()),
         last_seen_at: user.last_seen_at.map(|t| t.to_rfc3339()),
         status: user.status.as_ref().map(|s| DiscourseStatus {
@@ -1363,17 +1461,21 @@ async fn cmd_discourse(
         println!("  Location:    {loc}");
     }
     if let Some(info) = &local_info {
+        let kind = style::classify_day(info.is_weekend, !holiday_names.is_empty());
         let rendered = style::local_time_line(
             &info.local_time_display,
             info.hour,
             info.weekday,
-            info.is_weekend,
+            kind,
             working_hours,
             color,
         );
         println!("  Local time:  {rendered}");
         if let Some(cc) = info.country {
             println!("  Country:     {cc}");
+        }
+        for h in &holiday_names {
+            println!("  Holiday:     {}", holidays::format_holiday(h));
         }
     }
     if let Some(ts) = user.last_posted_at {
@@ -1530,6 +1632,7 @@ mod tests {
                 weekday: "Wed".to_string(),
                 country: Some("US".to_string()),
                 is_weekend: Some(false),
+                holidays: Vec::new(),
             }),
             last_posted_at: Some("2026-03-17T14:50:30+00:00".to_string()),
             last_seen_at: Some("2026-03-22T05:36:12+00:00".to_string()),

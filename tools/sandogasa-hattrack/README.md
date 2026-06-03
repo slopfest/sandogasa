@@ -78,6 +78,21 @@ collapse to one entry, mismatched ones are shown side-by-side
 with a `[FAS]` / `[Discourse]` suffix so you can spot a
 traveller who's updated one source but not the other.
 
+### Public-holiday flag
+
+When the user's resolved country has a nationwide public
+holiday on their local date, a `Holiday:` line appears under
+`Country:`. Data comes from the [Nager.Date](https://date.nager.at)
+public API (122 countries) and is cached per country-per-year
+under `$XDG_CACHE_HOME/sandogasa-hattrack/holidays/`, so
+repeat lookups never touch the network.
+
+- `--no-holidays` skips the lookup entirely.
+- `--refresh-holidays` force-refetches the cached data.
+- `--now <YYYY-MM-DD>` overrides the date for testing, e.g.
+  `--now 2026-03-17 discourse salimma` to see what
+  St. Patrick's Day looks like.
+
 ### JSON output
 
 All subcommands support `--json` for machine-readable output:
