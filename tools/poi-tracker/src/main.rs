@@ -1149,12 +1149,12 @@ fn filter_projects<'a>(
 fn build_patterns(args: &SyncDistgitArgs) -> Result<Vec<String>, String> {
     // Transitional shim: '--auto-prefix --pattern <start>' was the
     // pre-0.12.1 spelling of '--start-pattern <start>'. Accept it
-    // with a deprecation warning until the next breaking release.
+    // with a deprecation warning until 0.13.0 (see DEPRECATIONS.md).
     let (pattern, start_pattern) = if args.auto_prefix && args.pattern.is_some() {
         let start = args.pattern.as_deref().unwrap().trim_end_matches('*');
         eprintln!(
-            "warning: '--auto-prefix --pattern <start>' is deprecated; \
-             use --start-pattern {start}"
+            "warning: '--auto-prefix --pattern <start>' is deprecated \
+             and will be removed in 0.13.0; use --start-pattern {start}"
         );
         (None, Some(start.to_string()))
     } else {

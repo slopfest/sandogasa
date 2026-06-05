@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Deprecation tracking: DEPRECATIONS.md
+
+New root-level `DEPRECATIONS.md` records deprecated
+functionality with its deprecation release, planned removal
+release, and replacement. The first entry pins the removal of
+poi-tracker's deprecated `sync-distgit --auto-prefix --pattern
+<start>` spelling to v0.13.0, and its runtime warning now
+names that version.
+
 ## v0.12.1
 
 ### fedora-cve-triage: `--component` filter for `bodhi-check`

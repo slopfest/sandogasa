@@ -68,6 +68,12 @@ From source:
 cargo build --release
 ```
 
+## Deprecations
+
+Deprecated functionality, its replacement, and the release it
+will be removed in are tracked in
+[DEPRECATIONS.md](DEPRECATIONS.md).
+
 ## License
 
 Licensed under either of
