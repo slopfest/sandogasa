@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### fedora-cve-triage: `--component` filter for `bodhi-check`
+
+`bodhi-check` accepts a new `-c` / `--component` flag (CSV or
+repeated) that limits the run to the given components,
+overriding the config file's `components` list. This allows
+scoping an assignee-based config to specific packages for one
+run without editing the config.
+
 ### fedora-cve-triage: `bodhi-check` resolves rawhide bugs
 
 Bugs filed against version `rawhide` previously produced
