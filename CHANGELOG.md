@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### sandogasa-distgit: non-blocking retry backoff
+
+`get_with_retry` now uses `tokio::time::sleep` instead of
+`std::thread::sleep`, so the retry backoff yields to the tokio
+runtime instead of blocking the worker thread. `tokio` is now a
+regular dependency of the crate (it was already pulled in
+transitively via `reqwest`).
+
 ## v0.12.0
 
 ### sandogasa-fasjson: `timezone` field on `FasUser` (breaking)

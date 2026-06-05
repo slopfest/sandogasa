@@ -452,7 +452,7 @@ impl DistGitClient {
                     delay.as_secs(),
                     attempt + 1,
                 );
-                std::thread::sleep(delay);
+                tokio::time::sleep(delay).await;
                 last_err = Some(format!("{status} for {url}"));
                 continue;
             }
@@ -1471,6 +1471,35 @@ mod tests {
 
         let projects = client.user_projects("nobody", 100, None).await.unwrap();
         assert!(projects.is_empty());
+    }
+
+    #[tokio::test]
+    async fn user_projects_retries_on_transient_error() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        // First request fails with 503; the retry succeeds.
+        Mock::given(method("GET"))
+            .and(path("/api/0/projects"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "projects": [project_json("aaa", "salimma", &[])],
+                "pagination": { "pages": 1, "per_page": 100 }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let projects = client.user_projects("salimma", 100, None).await.unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "aaa");
     }
 
     // ---- group_projects ----
