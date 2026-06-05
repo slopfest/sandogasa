@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.12.1
 
 ### fedora-cve-triage: `--component` filter for `bodhi-check`
 
