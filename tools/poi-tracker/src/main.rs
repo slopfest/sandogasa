@@ -303,10 +303,7 @@ struct SyncDistgitArgs {
     exclude: Vec<String>,
 
     /// Name pattern for a single patterned query.
-    #[arg(
-        long,
-        conflicts_with_all = ["auto_prefix", "start_pattern", "end_pattern"]
-    )]
+    #[arg(long, conflicts_with = "start_pattern")]
     pattern: Option<String>,
 
     /// Start the prefix scan at this prefix.
@@ -1149,20 +1146,39 @@ fn filter_projects<'a>(
 /// --auto-prefix; --no-auto-prefix forces a single unfiltered
 /// query. An empty string in the result means "query without a
 /// pattern".
-fn build_patterns(args: &SyncDistgitArgs) -> Vec<String> {
+fn build_patterns(args: &SyncDistgitArgs) -> Result<Vec<String>, String> {
+    // Transitional shim: '--auto-prefix --pattern <start>' was the
+    // pre-0.12.1 spelling of '--start-pattern <start>'. Accept it
+    // with a deprecation warning until the next breaking release.
+    let (pattern, start_pattern) = if args.auto_prefix && args.pattern.is_some() {
+        let start = args.pattern.as_deref().unwrap().trim_end_matches('*');
+        eprintln!(
+            "warning: '--auto-prefix --pattern <start>' is deprecated; \
+             use --start-pattern {start}"
+        );
+        (None, Some(start.to_string()))
+    } else {
+        (args.pattern.clone(), args.start_pattern.clone())
+    };
+    if pattern.is_some() && args.end_pattern.is_some() {
+        return Err(
+            "--pattern issues a single patterned query; use --start-pattern \
+             with --end-pattern to bound the prefix scan"
+                .to_string(),
+        );
+    }
     // Collapse the flags (clap rejects contradictory combinations)
     // and the mode-dependent default into one scan/no-scan choice.
     let scan = !args.no_auto_prefix
         && (args.auto_prefix
-            || args.start_pattern.is_some()
+            || start_pattern.is_some()
             || args.end_pattern.is_some()
-            || (args.user.is_some() && args.pattern.is_none()));
+            || (args.user.is_some() && pattern.is_none()));
     if !scan {
-        return vec![args.pattern.clone().unwrap_or_default()];
+        return Ok(vec![pattern.unwrap_or_default()]);
     }
     let all_prefixes = ('a'..='z').chain('0'..='9').map(|c| format!("{c}*"));
-    let start = args
-        .start_pattern
+    let start = start_pattern
         .as_deref()
         .map(|p| p.trim_end_matches('*'))
         .unwrap_or("");
@@ -1176,11 +1192,11 @@ fn build_patterns(args: &SyncDistgitArgs) -> Vec<String> {
     } else {
         Box::new(all_prefixes.skip_while(move |p| !p.starts_with(start)))
     };
-    if end.is_empty() {
+    Ok(if end.is_empty() {
         iter.collect()
     } else {
         iter.take_while(|p| !p.starts_with(end)).collect()
-    }
+    })
 }
 
 async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -1202,7 +1218,7 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         }
     }
 
-    let patterns = build_patterns(args);
+    let patterns = build_patterns(args)?;
 
     let source_label = if let Some(ref user) = args.user {
         format!("user:{user}")
@@ -1766,7 +1782,7 @@ mod tests {
         // No --pattern: user syncs scan a-z then 0-9 by default,
         // since the unfiltered Pagure query times out (504).
         let args = default_args();
-        let patterns = build_patterns(&args);
+        let patterns = build_patterns(&args).unwrap();
         assert_eq!(patterns.len(), 36);
         assert_eq!(patterns.first().unwrap(), "a*");
         assert_eq!(patterns[25], "z*");
@@ -1778,14 +1794,14 @@ mod tests {
     fn build_patterns_user_explicit_pattern_is_single_query() {
         let mut args = default_args();
         args.pattern = Some("rust-*".to_string());
-        assert_eq!(build_patterns(&args), vec!["rust-*".to_string()]);
+        assert_eq!(build_patterns(&args).unwrap(), vec!["rust-*".to_string()]);
     }
 
     #[test]
     fn build_patterns_no_auto_prefix_forces_single_query() {
         let mut args = default_args();
         args.no_auto_prefix = true;
-        assert_eq!(build_patterns(&args), vec![String::new()]);
+        assert_eq!(build_patterns(&args).unwrap(), vec![String::new()]);
     }
 
     #[test]
@@ -1795,7 +1811,7 @@ mod tests {
             group: Some("rust-sig".to_string()),
             ..default_args()
         };
-        assert_eq!(build_patterns(&args), vec![String::new()]);
+        assert_eq!(build_patterns(&args).unwrap(), vec![String::new()]);
     }
 
     #[test]
@@ -1806,14 +1822,14 @@ mod tests {
             auto_prefix: true,
             ..default_args()
         };
-        assert_eq!(build_patterns(&args).len(), 36);
+        assert_eq!(build_patterns(&args).unwrap().len(), 36);
     }
 
     #[test]
     fn build_patterns_start_pattern_bounds_scan() {
         let mut args = default_args();
         args.start_pattern = Some("x".to_string());
-        let patterns = build_patterns(&args);
+        let patterns = build_patterns(&args).unwrap();
         // x*, y*, z*, then 0*-9*
         assert_eq!(patterns.len(), 13);
         assert_eq!(patterns.first().unwrap(), "x*");
@@ -1826,7 +1842,40 @@ mod tests {
         let mut args = default_args();
         args.start_pattern = Some("b*".to_string());
         args.end_pattern = Some("e".to_string());
-        assert_eq!(build_patterns(&args), vec!["b*", "c*", "d*"]);
+        assert_eq!(build_patterns(&args).unwrap(), vec!["b*", "c*", "d*"]);
+    }
+
+    #[test]
+    fn build_patterns_deprecated_auto_prefix_pattern_is_start_point() {
+        // Transitional: '--auto-prefix --pattern <start>' is the
+        // pre-0.12.1 spelling of '--start-pattern <start>'.
+        let mut args = default_args();
+        args.auto_prefix = true;
+        args.pattern = Some("x*".to_string());
+        let patterns = build_patterns(&args).unwrap();
+        // x*, y*, z*, then 0*-9*
+        assert_eq!(patterns.len(), 13);
+        assert_eq!(patterns.first().unwrap(), "x*");
+        assert_eq!(patterns.last().unwrap(), "9*");
+    }
+
+    #[test]
+    fn build_patterns_deprecated_spelling_honours_end_pattern() {
+        let mut args = default_args();
+        args.auto_prefix = true;
+        args.pattern = Some("b".to_string());
+        args.end_pattern = Some("e".to_string());
+        assert_eq!(build_patterns(&args).unwrap(), vec!["b*", "c*", "d*"]);
+    }
+
+    #[test]
+    fn build_patterns_pattern_with_end_pattern_is_rejected() {
+        // Without --auto-prefix, --pattern means a single query, so
+        // combining it with a scan bound is contradictory.
+        let mut args = default_args();
+        args.pattern = Some("rust-*".to_string());
+        args.end_pattern = Some("m".to_string());
+        assert!(build_patterns(&args).is_err());
     }
 
     #[test]
@@ -1839,7 +1888,7 @@ mod tests {
             end_pattern: Some("c".to_string()),
             ..default_args()
         };
-        assert_eq!(build_patterns(&args), vec!["a*", "b*"]);
+        assert_eq!(build_patterns(&args).unwrap(), vec!["a*", "b*"]);
     }
 
     // ---- matches_any_pattern ----

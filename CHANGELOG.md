@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### poi-tracker: prefix mode is the default for `sync-distgit --user` (breaking CLI)
+### poi-tracker: prefix mode is the default for `sync-distgit --user`
 
 Pagure's unfiltered per-user projects query scans every
 project's ACLs server-side and routinely exceeds the gateway
@@ -11,21 +11,15 @@ all ACL types — so `sync-distgit --user` without `--pattern`
 now scans one name prefix at a time (`a*`–`z*`, `0*`–`9*`).
 Group syncs still issue a single query by default.
 
-Breaking CLI changes:
-
-- `--pattern` now always means a single patterned query and
-  conflicts with `--auto-prefix`: the old scan-resume spelling
-  `--auto-prefix --pattern <start>` is rejected. Use the new
+- `--pattern` now always means a single patterned query. The
+  new `--start-pattern <prefix>` (with the existing
+  `--end-pattern`, which no longer requires `--auto-prefix`)
+  bounds the prefix scan and implies prefix mode, also for
+  group syncs.
+- The old scan-resume spelling `--auto-prefix --pattern
+  <start>` is deprecated but still accepted with a warning,
+  to be removed in the next breaking release. Use
   `--start-pattern <prefix>` instead.
-- `--end-pattern` no longer requires `--auto-prefix`; together
-  with `--start-pattern` it bounds the scan and implies prefix
-  mode (also for group syncs).
-
-Migration: `--auto-prefix --pattern f --end-pattern m` becomes
-`--start-pattern f --end-pattern m`.
-
-Other changes:
-
 - `--auto-prefix` remains as the explicit opt-in to a full
   scan (the way a group sync enables prefix mode).
 - The new `--no-auto-prefix` flag forces a single unfiltered
