@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### fedora-cve-triage: `bodhi-check` resolves rawhide bugs
+
+Bugs filed against version `rawhide` previously produced
+"cannot determine release" warnings and were skipped, because
+the release name cannot be derived from the version field
+alone. `bodhi-check` now resolves them to whichever release
+Bodhi currently calls rawhide (`branch == "rawhide"`, e.g.
+`F45`), where rawhide builds receive automatic updates. The
+fedrq provides fallback for NVD product matching queries the
+`rawhide` branch for that release (its lowercased name has no
+repos until Fedora branches). An explicit `[fedora-NN]`
+summary tag still takes precedence.
+
 ### poi-tracker: prefix mode is the default for `sync-distgit --user`
 
 Pagure's unfiltered per-user projects query scans every
