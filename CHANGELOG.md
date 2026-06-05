@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### poi-tracker: prefix mode is the default for `sync-distgit --user` (breaking CLI)
+
+Pagure's unfiltered per-user projects query scans every
+project's ACLs server-side and routinely exceeds the gateway
+timeout (HTTP 504) — and there is no cheaper API that covers
+all ACL types — so `sync-distgit --user` without `--pattern`
+now scans one name prefix at a time (`a*`–`z*`, `0*`–`9*`).
+Group syncs still issue a single query by default.
+
+Breaking CLI changes:
+
+- `--pattern` now always means a single patterned query and
+  conflicts with `--auto-prefix`: the old scan-resume spelling
+  `--auto-prefix --pattern <start>` is rejected. Use the new
+  `--start-pattern <prefix>` instead.
+- `--end-pattern` no longer requires `--auto-prefix`; together
+  with `--start-pattern` it bounds the scan and implies prefix
+  mode (also for group syncs).
+
+Migration: `--auto-prefix --pattern f --end-pattern m` becomes
+`--start-pattern f --end-pattern m`.
+
+Other changes:
+
+- `--auto-prefix` remains as the explicit opt-in to a full
+  scan (the way a group sync enables prefix mode).
+- The new `--no-auto-prefix` flag forces a single unfiltered
+  query (the old `--user` default); if both `--auto-prefix`
+  and `--no-auto-prefix` are given, the last one wins.
+- When an unfiltered query does hit a 504, the error output
+  now suggests retrying with `--auto-prefix`.
+
 ### sandogasa-distgit: non-blocking retry backoff
 
 `get_with_retry` now uses `tokio::time::sleep` instead of

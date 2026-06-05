@@ -98,7 +98,23 @@ poi-tracker sync-distgit --group kde-sig \
 
 # Remove packages no longer in dist-git results
 poi-tracker sync-distgit --user salimma --prune -o my.toml
+
+# Resume an interrupted sync from f*, stop before m*
+poi-tracker sync-distgit --user salimma \
+    --start-pattern f --end-pattern m
 ```
+
+User syncs query Pagure one name prefix at a time (`a*`–`z*`,
+`0*`–`9*`) by default: the unfiltered per-user query scans every
+project's ACLs server-side and routinely exceeds Pagure's gateway
+timeout (HTTP 504). `--pattern` switches to a single patterned
+query instead, and `--no-auto-prefix` forces a single unfiltered
+query. `--start-pattern` / `--end-pattern` bound the prefix scan
+(e.g. to resume an interrupted sync: start at this prefix / stop
+before this prefix) and imply prefix mode, as does
+`--auto-prefix` — which is how a group sync opts into scanning.
+If both `--auto-prefix` and `--no-auto-prefix` are given, the
+last one wins.
 
 Packages where the user has both direct and group-based access
 are always included, regardless of group filters.

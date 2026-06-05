@@ -302,17 +302,32 @@ struct SyncDistgitArgs {
     #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
     exclude: Vec<String>,
 
-    /// Name pattern, or --auto-prefix start point.
-    #[arg(long)]
+    /// Name pattern for a single patterned query.
+    #[arg(
+        long,
+        conflicts_with_all = ["auto_prefix", "start_pattern", "end_pattern"]
+    )]
     pattern: Option<String>,
 
-    /// Stop --auto-prefix before this prefix.
-    #[arg(long, requires = "auto_prefix")]
+    /// Start the prefix scan at this prefix.
+    #[arg(long, value_name = "PREFIX")]
+    start_pattern: Option<String>,
+
+    /// Stop the prefix scan before this prefix.
+    #[arg(long, value_name = "PREFIX")]
     end_pattern: Option<String>,
 
-    /// Query by a-z/0-9 prefix to avoid timeouts.
-    #[arg(long)]
+    /// Query by a-z/0-9 prefix (--user default).
+    #[arg(long, overrides_with = "no_auto_prefix")]
     auto_prefix: bool,
+
+    /// Single query; may 504 for a --user sync.
+    #[arg(
+        long,
+        overrides_with = "auto_prefix",
+        conflicts_with_all = ["start_pattern", "end_pattern"]
+    )]
+    no_auto_prefix: bool,
 
     /// Remove packages no longer in dist-git results.
     #[arg(long)]
@@ -1123,6 +1138,51 @@ fn filter_projects<'a>(
         .collect()
 }
 
+/// Build the list of Pagure name patterns to query.
+///
+/// User syncs default to per-prefix queries (a-z, 0-9): Pagure's
+/// unfiltered username filter scans every project's ACLs and
+/// routinely exceeds the gateway timeout (504). An explicit
+/// --pattern restricts the query enough to run in one shot.
+/// --start-pattern / --end-pattern bound the prefix scan (e.g.
+/// to resume an interrupted sync) and imply it, as does
+/// --auto-prefix; --no-auto-prefix forces a single unfiltered
+/// query. An empty string in the result means "query without a
+/// pattern".
+fn build_patterns(args: &SyncDistgitArgs) -> Vec<String> {
+    // Collapse the flags (clap rejects contradictory combinations)
+    // and the mode-dependent default into one scan/no-scan choice.
+    let scan = !args.no_auto_prefix
+        && (args.auto_prefix
+            || args.start_pattern.is_some()
+            || args.end_pattern.is_some()
+            || (args.user.is_some() && args.pattern.is_none()));
+    if !scan {
+        return vec![args.pattern.clone().unwrap_or_default()];
+    }
+    let all_prefixes = ('a'..='z').chain('0'..='9').map(|c| format!("{c}*"));
+    let start = args
+        .start_pattern
+        .as_deref()
+        .map(|p| p.trim_end_matches('*'))
+        .unwrap_or("");
+    let end = args
+        .end_pattern
+        .as_deref()
+        .map(|p| p.trim_end_matches('*'))
+        .unwrap_or("");
+    let iter: Box<dyn Iterator<Item = String>> = if start.is_empty() {
+        Box::new(all_prefixes)
+    } else {
+        Box::new(all_prefixes.skip_while(move |p| !p.starts_with(start)))
+    };
+    if end.is_empty() {
+        iter.collect()
+    } else {
+        iter.take_while(|p| !p.starts_with(end)).collect()
+    }
+}
+
 async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::error::Error>> {
     let client = DistGitClient::new();
 
@@ -1142,36 +1202,7 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         }
     }
 
-    let all_prefixes: Vec<String> = ('a'..='z')
-        .chain('0'..='9')
-        .map(|c| format!("{c}*"))
-        .collect();
-
-    let patterns = if args.auto_prefix {
-        let start = args
-            .pattern
-            .as_deref()
-            .map(|p| p.trim_end_matches('*'))
-            .unwrap_or("");
-        let end = args
-            .end_pattern
-            .as_deref()
-            .map(|p| p.trim_end_matches('*'))
-            .unwrap_or("");
-        let iter = all_prefixes.into_iter();
-        let iter: Box<dyn Iterator<Item = String>> = if start.is_empty() {
-            Box::new(iter)
-        } else {
-            Box::new(iter.skip_while(move |p| !p.starts_with(start)))
-        };
-        if end.is_empty() {
-            iter.collect()
-        } else {
-            iter.take_while(|p| !p.starts_with(end)).collect()
-        }
-    } else {
-        vec![args.pattern.clone().unwrap_or_default()]
-    };
+    let patterns = build_patterns(args);
 
     let source_label = if let Some(ref user) = args.user {
         format!("user:{user}")
@@ -1204,6 +1235,13 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
             Ok(p) => all_projects.extend(p),
             Err(e) => {
                 eprintln!("error: {e}");
+                if pat.is_empty() && e.to_string().contains("504") {
+                    eprintln!(
+                        "hint: Pagure's unfiltered project query often \
+                         exceeds the gateway timeout; retry with \
+                         --auto-prefix (or restrict with --pattern)"
+                    );
+                }
                 fetch_error = Some(e);
                 break;
             }
@@ -1590,8 +1628,10 @@ mod tests {
             exclude_group: vec![],
             exclude: vec![],
             pattern: None,
+            start_pattern: None,
             end_pattern: None,
             auto_prefix: false,
+            no_auto_prefix: false,
             prune: false,
             per_page: 100,
             workload: vec![],
@@ -1717,6 +1757,89 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "a");
         assert_eq!(result[1].name, "b");
+    }
+
+    // ---- build_patterns ----
+
+    #[test]
+    fn build_patterns_user_defaults_to_auto_prefix() {
+        // No --pattern: user syncs scan a-z then 0-9 by default,
+        // since the unfiltered Pagure query times out (504).
+        let args = default_args();
+        let patterns = build_patterns(&args);
+        assert_eq!(patterns.len(), 36);
+        assert_eq!(patterns.first().unwrap(), "a*");
+        assert_eq!(patterns[25], "z*");
+        assert_eq!(patterns[26], "0*");
+        assert_eq!(patterns.last().unwrap(), "9*");
+    }
+
+    #[test]
+    fn build_patterns_user_explicit_pattern_is_single_query() {
+        let mut args = default_args();
+        args.pattern = Some("rust-*".to_string());
+        assert_eq!(build_patterns(&args), vec!["rust-*".to_string()]);
+    }
+
+    #[test]
+    fn build_patterns_no_auto_prefix_forces_single_query() {
+        let mut args = default_args();
+        args.no_auto_prefix = true;
+        assert_eq!(build_patterns(&args), vec![String::new()]);
+    }
+
+    #[test]
+    fn build_patterns_group_defaults_to_single_query() {
+        let args = SyncDistgitArgs {
+            user: None,
+            group: Some("rust-sig".to_string()),
+            ..default_args()
+        };
+        assert_eq!(build_patterns(&args), vec![String::new()]);
+    }
+
+    #[test]
+    fn build_patterns_group_auto_prefix_opt_in() {
+        let args = SyncDistgitArgs {
+            user: None,
+            group: Some("rust-sig".to_string()),
+            auto_prefix: true,
+            ..default_args()
+        };
+        assert_eq!(build_patterns(&args).len(), 36);
+    }
+
+    #[test]
+    fn build_patterns_start_pattern_bounds_scan() {
+        let mut args = default_args();
+        args.start_pattern = Some("x".to_string());
+        let patterns = build_patterns(&args);
+        // x*, y*, z*, then 0*-9*
+        assert_eq!(patterns.len(), 13);
+        assert_eq!(patterns.first().unwrap(), "x*");
+        assert_eq!(patterns[2], "z*");
+        assert_eq!(patterns.last().unwrap(), "9*");
+    }
+
+    #[test]
+    fn build_patterns_end_pattern_stops_scan() {
+        let mut args = default_args();
+        args.start_pattern = Some("b*".to_string());
+        args.end_pattern = Some("e".to_string());
+        assert_eq!(build_patterns(&args), vec!["b*", "c*", "d*"]);
+    }
+
+    #[test]
+    fn build_patterns_group_scan_implied_by_bounds() {
+        // Scan bounds imply prefix mode without --auto-prefix,
+        // also for group syncs.
+        let args = SyncDistgitArgs {
+            user: None,
+            group: Some("rust-sig".to_string()),
+            end_pattern: Some("c".to_string()),
+            ..default_args()
+        };
+        assert_eq!(build_patterns(&args), vec!["a*", "b*"]);
     }
 
     // ---- matches_any_pattern ----
