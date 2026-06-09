@@ -105,11 +105,14 @@ poi-tracker sync-distgit --user salimma \
 ```
 
 User syncs query Pagure one name prefix at a time (`a*`–`z*`,
-`0*`–`9*`) by default: the unfiltered per-user query scans every
-project's ACLs server-side and routinely exceeds Pagure's gateway
-timeout (HTTP 504). `--pattern` switches to a single patterned
-query instead, and `--no-auto-prefix` forces a single unfiltered
-query. `--start-pattern` / `--end-pattern` bound the prefix scan
+`0*`–`9*`) by default: an unfiltered per-user project query is too
+expensive for Pagure to answer within its gateway timeout, so it
+returns HTTP 504. Splitting the query by name prefix keeps each
+request small enough to succeed. (See
+[`sandogasa-distgit`'s development notes](../../crates/sandogasa-distgit/DEVELOPMENT.md)
+for the details — including why group syncs need no such
+workaround.) `--pattern` switches to a single patterned query
+instead, and `--no-auto-prefix` forces a single unfiltered query. `--start-pattern` / `--end-pattern` bound the prefix scan
 (e.g. to resume an interrupted sync: start at this prefix / stop
 before this prefix) and imply prefix mode, as does
 `--auto-prefix` — which is how a group sync opts into scanning.

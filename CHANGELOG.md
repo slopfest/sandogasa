@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Errata: v0.12.1 `sync-distgit --user` rationale
+
+The v0.12.1 note for `poi-tracker sync-distgit` said "there is no
+cheaper API that covers all ACL types." That is accurate but
+misleads — it reads as "Pagure has no per-user endpoint." It does:
+`/api/0/user/<name>` exists, but it returns HTTP 500 for prolific
+users (it can't build the full response), and it wouldn't cover
+non-owner ACLs (commit/collaborator/ticket) even if it worked. The
+real situation is that *every* user-scoped path fails at Fedora
+scale — `/api/0/user/<name>` 500s and `/api/0/projects?username=`
+504s — which is why prefix-scanning is the default for `--user`.
+Group syncs use `/api/0/group/<name>?projects=true`, a bounded,
+indexed lookup, so they need no workaround.
+
 ### fedora-cve-triage: URL-encode Bugzilla query values
 
 `build_multi_query` now percent-encodes product/component/status/
