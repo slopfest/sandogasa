@@ -10,37 +10,65 @@ use serde::Serialize;
 use crate::{bodhi, bugzilla, github, gitlab, koji};
 
 /// Full activity report.
+///
+/// Per-domain activity (Bodhi, Koji, GitLab, GitHub) is rendered as
+/// one section per domain in CLI `--domain` order. Bugzilla is
+/// aggregated across all domains into a single section, placed
+/// after the last domain block that references it.
 #[derive(Debug, Serialize)]
 pub struct Report {
     /// FAS username (if filtered).
     pub user: Option<String>,
-    /// Domain name.
+    /// Combined domain label (CLI `--domain` values joined).
     pub domain: String,
     /// Reporting period start (inclusive).
     pub since: NaiveDate,
     /// Reporting period end (inclusive).
     pub until: NaiveDate,
-    /// Bugzilla section (if applicable).
+    /// Per-domain activity blocks, in CLI `--domain` order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub domains: Vec<DomainReport>,
+    /// Aggregated Bugzilla section (one query across all domains
+    /// that enable Bugzilla).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bugzilla: Option<bugzilla::BugzillaReport>,
-    /// Bodhi section (if applicable).
+    /// Render hint (not serialized): the aggregated Bugzilla section
+    /// is emitted after this many domain blocks, matching the
+    /// position of the last domain that references Bugzilla. `0`
+    /// renders it before all blocks.
+    #[serde(skip)]
+    pub bugzilla_after: usize,
+}
+
+/// One domain's per-domain activity. Each service is present only
+/// when that domain enables it and produced a report.
+#[derive(Debug, Serialize)]
+pub struct DomainReport {
+    /// CLI domain name (e.g. "hyperscale").
+    pub name: String,
+    /// Bodhi section for this domain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bodhi: Option<bodhi::BodhiReport>,
-    /// Koji CBS section per domain (empty if not applicable). Keyed
-    /// by the CLI domain name so multi-domain runs render each
-    /// domain's Koji activity as its own section.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub koji: BTreeMap<String, koji::KojiReport>,
+    /// Koji CBS section for this domain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub koji: Option<koji::KojiReport>,
+    /// GitLab section for this domain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gitlab: Option<gitlab::GitlabReport>,
+    /// GitHub section for this domain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github: Option<github::GithubReport>,
+}
 
-    /// GitLab section per domain (empty if not applicable). Keyed
-    /// by CLI domain name; only domains with `[domains.X.gitlab]`
-    /// in the config appear.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub gitlab: BTreeMap<String, gitlab::GitlabReport>,
-
-    /// GitHub section per domain. Same shape as `gitlab`.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub github: BTreeMap<String, github::GithubReport>,
+impl DomainReport {
+    /// Whether this domain produced any per-domain activity. Empty
+    /// domains are not added to the report.
+    pub fn has_content(&self) -> bool {
+        self.bodhi.is_some()
+            || self.koji.is_some()
+            || self.gitlab.is_some()
+            || self.github.is_some()
+    }
 }
 
 /// Format the full report as Markdown.
@@ -68,20 +96,24 @@ pub fn format_markdown(
     // gets one line per host regardless of forge.
     let fas_user = report.user.as_deref();
     let mut gitlab_aliases: BTreeMap<String, String> = BTreeMap::new();
-    for gl in report.gitlab.values() {
-        let host = crate::gitlab::instance_host(&gl.instance);
-        if Some(gl.user.as_str()) != fas_user {
-            gitlab_aliases
-                .entry(host)
-                .or_insert_with(|| gl.user.clone());
+    for dr in &report.domains {
+        if let Some(ref gl) = dr.gitlab {
+            let host = crate::gitlab::instance_host(&gl.instance);
+            if Some(gl.user.as_str()) != fas_user {
+                gitlab_aliases
+                    .entry(host)
+                    .or_insert_with(|| gl.user.clone());
+            }
         }
     }
-    for gh in report.github.values() {
-        let host = crate::github::instance_host(&gh.instance);
-        if Some(gh.user.as_str()) != fas_user {
-            gitlab_aliases
-                .entry(host)
-                .or_insert_with(|| gh.user.clone());
+    for dr in &report.domains {
+        if let Some(ref gh) = dr.github {
+            let host = crate::github::instance_host(&gh.instance);
+            if Some(gh.user.as_str()) != fas_user {
+                gitlab_aliases
+                    .entry(host)
+                    .or_insert_with(|| gh.user.clone());
+            }
         }
     }
     match (fas_user, gitlab_aliases.is_empty()) {
@@ -114,40 +146,52 @@ pub fn format_markdown(
         report.since, report.until
     ));
 
-    // Bugzilla section.
-    if let Some(ref bz_report) = report.bugzilla {
+    // One section per domain, in CLI --domain order. The aggregated
+    // Bugzilla section is emitted after `bugzilla_after` blocks, so
+    // it lands right after the last domain that references it.
+    for (i, dr) in report.domains.iter().enumerate() {
+        if i == report.bugzilla_after
+            && let Some(ref bz_report) = report.bugzilla
+        {
+            out.push_str(&bugzilla::format_markdown(bz_report, detail));
+        }
+        out.push_str(&format_domain(dr, detail, groups));
+    }
+    // Bugzilla placed after every block (or when there are none).
+    if report.bugzilla_after >= report.domains.len()
+        && let Some(ref bz_report) = report.bugzilla
+    {
         out.push_str(&bugzilla::format_markdown(bz_report, detail));
     }
 
-    // Bodhi section.
-    if let Some(ref bodhi_report) = report.bodhi {
-        out.push_str(&bodhi::format_markdown(bodhi_report, detail));
-    }
-
-    // Koji section(s). One per domain — labeled when multiple,
-    // bare when a single domain reports Koji activity.
-    let multi_koji = report.koji.len() > 1;
-    for (domain_name, koji_report) in &report.koji {
-        let suffix = multi_koji.then_some(domain_name.as_str());
-        out.push_str(&koji::format_markdown(koji_report, detail, groups, suffix));
-    }
-
-    // GitLab section(s). Same pattern as Koji — labeled per-domain
-    // when more than one has GitLab activity configured.
-    let multi_gitlab = report.gitlab.len() > 1;
-    for (domain_name, gl_report) in &report.gitlab {
-        let suffix = multi_gitlab.then_some(domain_name.as_str());
-        out.push_str(&gitlab::format_markdown(gl_report, detail, suffix));
-    }
-
-    // GitHub section(s).
-    let multi_github = report.github.len() > 1;
-    for (domain_name, gh_report) in &report.github {
-        let suffix = multi_github.then_some(domain_name.as_str());
-        out.push_str(&github::format_markdown(gh_report, detail, suffix));
-    }
-
     out
+}
+
+/// Render a single domain's block: a `## <name>` heading followed by
+/// each present service at `###` level. Returns an empty string when
+/// every service renders empty, so no bare heading is emitted.
+fn format_domain(
+    dr: &DomainReport,
+    detail: u8,
+    groups: &BTreeMap<String, crate::config::GroupConfig>,
+) -> String {
+    let mut body = String::new();
+    if let Some(ref bodhi_report) = dr.bodhi {
+        body.push_str(&bodhi::format_markdown(bodhi_report, detail));
+    }
+    if let Some(ref koji_report) = dr.koji {
+        body.push_str(&koji::format_markdown(koji_report, detail, groups));
+    }
+    if let Some(ref gl_report) = dr.gitlab {
+        body.push_str(&gitlab::format_markdown(gl_report, detail));
+    }
+    if let Some(ref gh_report) = dr.github {
+        body.push_str(&github::format_markdown(gh_report, detail));
+    }
+    if body.is_empty() {
+        return String::new();
+    }
+    format!("## {}\n\n{body}", dr.name)
 }
 
 #[cfg(test)]
@@ -155,190 +199,182 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
 
-    #[test]
-    fn format_header() {
-        let report = Report {
-            user: Some("testuser".to_string()),
-            domain: "fedora".to_string(),
+    fn report(user: Option<&str>, domain: &str, domains: Vec<DomainReport>) -> Report {
+        Report {
+            user: user.map(String::from),
+            domain: domain.to_string(),
             since: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             until: NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            domains,
             bugzilla: None,
+            bugzilla_after: 0,
+        }
+    }
+
+    fn domain(name: &str) -> DomainReport {
+        DomainReport {
+            name: name.to_string(),
             bodhi: None,
-            koji: BTreeMap::new(),
-            gitlab: BTreeMap::new(),
-            github: BTreeMap::new(),
-        };
-        let md = format_markdown(&report, 0, &BTreeMap::new());
+            koji: None,
+            gitlab: None,
+            github: None,
+        }
+    }
+
+    fn koji_with(pkg: &str) -> koji::KojiReport {
+        let mut packages = BTreeMap::new();
+        packages.insert(
+            pkg.to_string(),
+            koji::PackageEntry {
+                name: pkg.to_string(),
+                change: koji::ChangeKind::New,
+                versions: BTreeMap::new(),
+                owner: "u".to_string(),
+            },
+        );
+        koji::KojiReport { packages }
+    }
+
+    fn gitlab_with(instance: &str, user: &str) -> gitlab::GitlabReport {
+        gitlab::GitlabReport {
+            instance: instance.to_string(),
+            user: user.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn empty_bugzilla() -> bugzilla::BugzillaReport {
+        bugzilla::BugzillaReport {
+            reviews: Default::default(),
+            security: Default::default(),
+            updates: Default::default(),
+            branches: Default::default(),
+            ftbfs: Default::default(),
+            fti: Default::default(),
+            other: Default::default(),
+        }
+    }
+
+    #[test]
+    fn format_header() {
+        let r = report(Some("testuser"), "fedora", vec![]);
+        let md = format_markdown(&r, 0, &BTreeMap::new());
         assert!(md.contains("# Activity Report: fedora"));
         assert!(md.contains("**User:** `testuser`"));
         assert!(md.contains("**Period:** 2026-01-01 to 2026-03-31"));
     }
 
     #[test]
-    fn format_koji_single_domain_leaves_heading_bare() {
-        let mut koji = BTreeMap::new();
-        koji.insert(
-            "hyperscale".to_string(),
-            koji::KojiReport {
-                packages: BTreeMap::new(),
-            },
-        );
-        let report = Report {
-            user: None,
-            domain: "hyperscale".to_string(),
-            since: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-            until: NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
-            bugzilla: None,
-            bodhi: None,
-            koji,
-            gitlab: BTreeMap::new(),
-            github: BTreeMap::new(),
-        };
-        let md = format_markdown(&report, 0, &BTreeMap::new());
-        // With a single domain, no suffix is added. Empty packages
-        // suppresses the heading entirely, so assert via absence.
-        assert!(!md.contains("## Koji CBS ("));
+    fn format_koji_nested_under_domain_heading() {
+        let mut d = domain("hyperscale");
+        d.koji = Some(koji_with("foo"));
+        let r = report(None, "hyperscale", vec![d]);
+        let md = format_markdown(&r, 0, &BTreeMap::new());
+        // Domain heading at ##, service heading nested at ###.
+        let dom = md.find("## hyperscale").unwrap();
+        let koji = md.find("### Koji CBS").unwrap();
+        assert!(dom < koji, "domain heading precedes its service heading");
+        // No legacy "## Koji CBS (suffix)" labeled heading.
+        assert!(!md.contains("Koji CBS ("));
     }
 
     #[test]
-    fn format_koji_multi_domain_labels_each() {
-        let mut koji = BTreeMap::new();
-        let mut hs_pkgs = BTreeMap::new();
-        hs_pkgs.insert(
-            "foo".to_string(),
-            koji::PackageEntry {
-                name: "x".to_string(),
-                change: koji::ChangeKind::New,
-                versions: BTreeMap::new(),
-                owner: "u".to_string(),
-            },
+    fn format_domain_blocks_follow_cli_order() {
+        // Domains in non-alphabetical CLI order must render in that
+        // order, not sorted.
+        let mut pu = domain("proposed_updates");
+        pu.koji = Some(koji_with("bar"));
+        let mut hs = domain("hyperscale");
+        hs.koji = Some(koji_with("foo"));
+        let r = report(None, "proposed_updates + hyperscale", vec![pu, hs]);
+        let md = format_markdown(&r, 0, &BTreeMap::new());
+        let pu_pos = md.find("## proposed_updates").unwrap();
+        let hs_pos = md.find("## hyperscale").unwrap();
+        assert!(pu_pos < hs_pos, "blocks follow CLI order, not alphabetical");
+    }
+
+    #[test]
+    fn format_bugzilla_after_last_referencing_domain() {
+        // fedora + epel reference Bugzilla; upstream does not. The
+        // aggregated Bugzilla section lands after epel (the last
+        // referencing domain) and before upstream.
+        let mut fedora = domain("fedora");
+        fedora.koji = Some(koji_with("a"));
+        let mut epel = domain("epel");
+        epel.koji = Some(koji_with("b"));
+        let mut upstream = domain("upstream");
+        upstream.koji = Some(koji_with("c"));
+        let mut r = report(
+            Some("u"),
+            "fedora + epel + upstream",
+            vec![fedora, epel, upstream],
         );
-        koji.insert(
-            "hyperscale".to_string(),
-            koji::KojiReport { packages: hs_pkgs },
+        r.bugzilla = Some(empty_bugzilla());
+        r.bugzilla_after = 2; // after fedora + epel blocks
+        let md = format_markdown(&r, 0, &BTreeMap::new());
+        let epel_pos = md.find("## epel").unwrap();
+        let bz_pos = md.find("## Bugzilla").unwrap();
+        let upstream_pos = md.find("## upstream").unwrap();
+        assert!(
+            epel_pos < bz_pos,
+            "Bugzilla follows the last referencing domain"
         );
-        let mut pu_pkgs = BTreeMap::new();
-        pu_pkgs.insert(
-            "bar".to_string(),
-            koji::PackageEntry {
-                name: "x".to_string(),
-                change: koji::ChangeKind::New,
-                versions: BTreeMap::new(),
-                owner: "u".to_string(),
-            },
+        assert!(
+            bz_pos < upstream_pos,
+            "Bugzilla precedes later non-referencing domains"
         );
-        koji.insert(
-            "proposed_updates".to_string(),
-            koji::KojiReport { packages: pu_pkgs },
-        );
-        let report = Report {
-            user: None,
-            domain: "hyperscale + proposed_updates".to_string(),
-            since: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-            until: NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
-            bugzilla: None,
-            bodhi: None,
-            koji,
-            gitlab: BTreeMap::new(),
-            github: BTreeMap::new(),
-        };
-        let md = format_markdown(&report, 0, &BTreeMap::new());
-        assert!(md.contains("## Koji CBS (hyperscale)"));
-        assert!(md.contains("## Koji CBS (proposed_updates)"));
+    }
+
+    #[test]
+    fn format_bugzilla_before_all_when_after_zero() {
+        let mut d = domain("upstream");
+        d.gitlab = Some(gitlab_with("https://gitlab.com", "u"));
+        let mut r = report(Some("u"), "upstream", vec![d]);
+        r.bugzilla = Some(empty_bugzilla());
+        r.bugzilla_after = 0;
+        let md = format_markdown(&r, 0, &BTreeMap::new());
+        assert!(md.find("## Bugzilla").unwrap() < md.find("## upstream").unwrap());
     }
 
     #[test]
     fn format_header_lists_gitlab_aliases_when_different() {
-        let mut gitlab = BTreeMap::new();
-        gitlab.insert(
-            "hyperscale".to_string(),
-            gitlab::GitlabReport {
-                instance: "https://gitlab.com".into(),
-                user: "michel-slm".into(),
-                ..Default::default()
-            },
+        let mut hs = domain("hyperscale");
+        hs.gitlab = Some(gitlab_with("https://gitlab.com", "michel-slm"));
+        let mut pu = domain("proposed-updates");
+        pu.gitlab = Some(gitlab_with("https://gitlab.com", "michel-slm"));
+        let mut deb = domain("debian");
+        deb.gitlab = Some(gitlab_with("https://salsa.debian.org", "michel"));
+        let r = report(
+            Some("salimma"),
+            "hyperscale + proposed-updates + debian",
+            vec![hs, pu, deb],
         );
-        gitlab.insert(
-            "proposed-updates".to_string(),
-            gitlab::GitlabReport {
-                instance: "https://gitlab.com".into(),
-                user: "michel-slm".into(),
-                ..Default::default()
-            },
-        );
-        gitlab.insert(
-            "debian".to_string(),
-            gitlab::GitlabReport {
-                instance: "https://salsa.debian.org".into(),
-                user: "michel".into(),
-                ..Default::default()
-            },
-        );
-        let report = Report {
-            user: Some("salimma".to_string()),
-            domain: "hyperscale + proposed-updates + debian".to_string(),
-            since: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-            until: NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
-            bugzilla: None,
-            bodhi: None,
-            koji: BTreeMap::new(),
-            gitlab,
-            github: BTreeMap::new(),
-        };
-        let md = format_markdown(&report, 0, &BTreeMap::new());
+        let md = format_markdown(&r, 0, &BTreeMap::new());
         // List form: FAS primary (labeled) + one bullet per
-        // instance hostname. The two hyperscale/proposed-updates
-        // entries share a host → only one bullet for gitlab.com.
+        // instance hostname. The two gitlab.com entries dedupe to a
+        // single bullet.
         assert!(md.contains("**User:**\n  - `salimma` (FAS)\n"));
         assert!(md.contains("  - `michel-slm` (gitlab.com)"));
         assert!(md.contains("  - `michel` (salsa.debian.org)"));
-        // Blank line separates the identity block from Period.
-        // BTreeMap sorts hosts alphabetically → salsa.debian.org
-        // is last before the trailing blank.
+        // Aliases are keyed by host in a BTreeMap, so salsa.debian.org
+        // sorts last before the trailing blank.
         assert!(md.contains("(salsa.debian.org)\n\n**Period:**"));
     }
 
     #[test]
     fn format_header_omits_gitlab_line_when_users_match() {
-        let mut gitlab = BTreeMap::new();
-        gitlab.insert(
-            "hyperscale".to_string(),
-            gitlab::GitlabReport {
-                instance: "https://gitlab.com".into(),
-                user: "salimma".into(),
-                ..Default::default()
-            },
-        );
-        let report = Report {
-            user: Some("salimma".to_string()),
-            domain: "hyperscale".to_string(),
-            since: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-            until: NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
-            bugzilla: None,
-            bodhi: None,
-            koji: BTreeMap::new(),
-            gitlab,
-            github: BTreeMap::new(),
-        };
-        let md = format_markdown(&report, 0, &BTreeMap::new());
+        let mut hs = domain("hyperscale");
+        hs.gitlab = Some(gitlab_with("https://gitlab.com", "salimma"));
+        let r = report(Some("salimma"), "hyperscale", vec![hs]);
+        let md = format_markdown(&r, 0, &BTreeMap::new());
         // No override bullet when the domain user matches the CLI user.
         assert!(!md.contains("- GitLab `"));
     }
 
     #[test]
     fn format_empty_report() {
-        let report = Report {
-            user: None,
-            domain: "test".to_string(),
-            since: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-            until: NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
-            bugzilla: None,
-            bodhi: None,
-            koji: BTreeMap::new(),
-            gitlab: BTreeMap::new(),
-            github: BTreeMap::new(),
-        };
-        let md = format_markdown(&report, 0, &BTreeMap::new());
+        let r = report(None, "test", vec![]);
+        let md = format_markdown(&r, 0, &BTreeMap::new());
         assert!(md.contains("# Activity Report: test"));
         assert!(!md.contains("**User:**"));
     }

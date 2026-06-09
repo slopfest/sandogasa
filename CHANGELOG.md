@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### sandogasa-report: group reports by domain in `--domain` order (breaking JSON)
+
+A multi-domain report is now organized by domain rather than by
+service. Each domain is a top-level `## <domain>` section,
+emitted in the order the domains were passed on the command
+line, with its Bodhi/Koji/GitLab/GitHub activity nested beneath
+it as `###` subsections. Previously the report was grouped by
+service (a fixed Bugzilla → Bodhi → Koji → GitLab → GitHub
+sequence), so the first `--domain` had no bearing on output
+order. Bugzilla remains a single aggregated section, now placed
+immediately after the last domain that references it.
+
+Breaking JSON: the top-level `koji`, `gitlab`, and `github`
+objects (previously maps keyed by domain name) and the
+top-level `bodhi` object are removed. They are replaced by a
+`domains` array, each element `{ "name", bodhi?, koji?,
+gitlab?, github? }`, in CLI order. `bugzilla` remains a
+top-level sibling. Consumers that read e.g. `.koji["hyperscale"]`
+must now find the matching entry in `.domains` and read
+`.koji`.
+
+Markdown also re-nests headings: services moved from `##` to
+`###`, and their internal subsections from `###` to `####`.
+`indexmap` is not used; domain order is carried by the
+`domains` array/`Vec` directly.
+
 ### Deprecation tracking: DEPRECATIONS.md
 
 New root-level `DEPRECATIONS.md` records deprecated

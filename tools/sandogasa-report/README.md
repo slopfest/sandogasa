@@ -56,7 +56,10 @@ sandogasa-report report -c config.toml -d fedora \
 sandogasa-report report -c config.toml -d fedora \
     --user username --period 2026Q1 --detailed
 
-# Multiple domains in one report
+# Multiple domains in one report. Each domain is its own section
+# (with Bodhi/Koji/GitLab/GitHub nested beneath), in the order
+# given. Bugzilla is aggregated into one section placed after the
+# last domain that uses it.
 sandogasa-report report -c config.toml -d fedora -d hyperscale \
     --user username --period 2026Q1
 
@@ -81,7 +84,8 @@ sandogasa-report report -c config.toml -d fedora \
 ### Useful flags
 
 - `-c, --config <PATH>` — path to config file (required)
-- `-d, --domain <DOMAIN>` — domain(s) to report on (repeatable)
+- `-d, --domain <DOMAIN>` — domain(s) to report on (repeatable;
+  per-domain sections are rendered in the order given)
 - `-u, --user <USER>` — FAS username to report on
 - `--period <PERIOD>` — reporting period (2026, 2026H1, 2026Q1)
 - `--since <DATE>` / `--until <DATE>` — date range (inclusive)

@@ -218,12 +218,9 @@ pub fn github_report(
 
 /// Format the GitHub section as Markdown. `heading_suffix` is
 /// `Some("<domain>")` for multi-domain runs, `None` otherwise.
-pub fn format_markdown(report: &GithubReport, detail: u8, heading_suffix: Option<&str>) -> String {
+pub fn format_markdown(report: &GithubReport, detail: u8) -> String {
     let detailed = detail >= 1;
-    let heading = match heading_suffix {
-        Some(s) => format!("## GitHub ({s})\n\n"),
-        None => "## GitHub\n\n".to_string(),
-    };
+    let heading = "### GitHub\n\n".to_string();
 
     if report.opened_prs.is_empty()
         && report.merged_prs.is_empty()
@@ -270,34 +267,34 @@ pub fn format_markdown(report: &GithubReport, detail: u8, heading_suffix: Option
     }
 
     if !report.opened_prs.is_empty() {
-        out.push_str("### Opened\n\n");
+        out.push_str("#### Opened\n\n");
         write_pr_list(&mut out, &report.opened_prs);
     }
     if !report.merged_prs.is_empty() {
-        out.push_str("### Merged\n\n");
+        out.push_str("#### Merged\n\n");
         write_pr_list(&mut out, &report.merged_prs);
     }
     if !report.reviewed_prs.is_empty() {
-        out.push_str("### Reviewed\n\n");
+        out.push_str("#### Reviewed\n\n");
         write_pr_list(&mut out, &report.reviewed_prs);
     }
     if !report.commented_prs.is_empty() {
-        out.push_str("### Commented on\n\n");
+        out.push_str("#### Commented on\n\n");
         write_pr_list(&mut out, &report.commented_prs);
     }
     if !report.commits_authored.is_empty() {
-        out.push_str("### Commits by repo\n\n");
+        out.push_str("#### Commits by repo\n\n");
         for (repo, count) in &report.commits_authored {
             out.push_str(&format!("- `{repo}`: {count}\n"));
         }
         out.push('\n');
     }
     if !report.tags_pushed.is_empty() {
-        out.push_str("### Tags pushed\n\n");
+        out.push_str("#### Tags pushed\n\n");
         write_tag_list(&mut out, &report.tags_pushed);
     }
     if !report.releases_published.is_empty() {
-        out.push_str("### Releases published\n\n");
+        out.push_str("#### Releases published\n\n");
         write_release_list(&mut out, &report.releases_published);
     }
     out
@@ -1047,13 +1044,13 @@ mod tests {
             user: "octocat".into(),
             ..Default::default()
         };
-        let md = format_markdown(&report, 0, None);
-        assert!(md.contains("## GitHub\n"));
+        let md = format_markdown(&report, 0);
+        assert!(md.contains("### GitHub\n"));
         assert!(md.contains("No GitHub activity"));
     }
 
     #[test]
-    fn format_non_empty_with_suffix() {
+    fn format_non_empty() {
         let mut report = GithubReport {
             instance: "https://api.github.com".into(),
             user: "octocat".into(),
@@ -1069,11 +1066,11 @@ mod tests {
         report
             .commits_authored
             .insert("slopfest/sandogasa".into(), 7);
-        let md = format_markdown(&report, 1, Some("upstream"));
-        assert!(md.contains("## GitHub (upstream)"));
+        let md = format_markdown(&report, 1);
+        assert!(md.contains("### GitHub\n"));
         assert!(md.contains("**PRs opened:** 1"));
         assert!(md.contains("**Commits authored:** 7 across 1 repo(s)"));
-        assert!(md.contains("### Opened"));
+        assert!(md.contains("#### Opened"));
         assert!(md.contains("#42"));
         assert!(md.contains("Fix build"));
     }
@@ -1102,13 +1099,13 @@ mod tests {
             url: "https://github.com/slopfest/sandogasa/releases/tag/v0.11.0".into(),
             prerelease: false,
         });
-        let md = format_markdown(&report, 1, None);
+        let md = format_markdown(&report, 1);
         assert!(md.contains("**Tags pushed:** 2 across 1 repo(s)"));
         assert!(md.contains("**Releases published:** 1 across 1 repo(s)"));
-        assert!(md.contains("### Tags pushed"));
+        assert!(md.contains("#### Tags pushed"));
         assert!(md.contains("v0.11.0"));
         assert!(md.contains("v0.10.2"));
-        assert!(md.contains("### Releases published"));
+        assert!(md.contains("#### Releases published"));
         assert!(md.contains("Release v0.11.0"));
     }
 }

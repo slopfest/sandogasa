@@ -308,7 +308,7 @@ fn sorted_releases(by_release: &BTreeMap<String, Vec<UpdateEntry>>) -> Vec<&str>
 pub fn format_markdown(report: &BodhiReport, detail: u8) -> String {
     let mut out = String::new();
 
-    out.push_str("## Bodhi\n\n");
+    out.push_str("### Bodhi\n\n");
 
     out.push_str(&format!(
         "**{}** update(s) with **{}** build(s) across **{}** release(s).\n\n",
@@ -341,7 +341,7 @@ pub fn format_markdown(report: &BodhiReport, detail: u8) -> String {
 
     for release in &releases {
         let updates = &report.by_release[*release];
-        out.push_str(&format!("### {release}\n\n"));
+        out.push_str(&format!("#### {release}\n\n"));
         for u in updates {
             let date = u
                 .date_submitted

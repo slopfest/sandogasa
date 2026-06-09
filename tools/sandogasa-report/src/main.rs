@@ -193,61 +193,144 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
 
     let rt = tokio::runtime::Runtime::new().expect("failed to create async runtime");
 
-    // Build the unified report. The header's "primary" identity is
-    // the resolved FAS login — the profile key is a CLI shorthand,
-    // not a username on any service, so rendering it would be
-    // misleading (and any GitLab username matching the profile key
-    // but not the FAS login would go unlabeled).
-    let mut unified = report::Report {
-        user: fas_user.clone(),
-        domain: domain_label,
-        since,
-        until,
-        bugzilla: None,
-        bodhi: None,
-        koji: std::collections::BTreeMap::new(),
-        gitlab: std::collections::BTreeMap::new(),
-        github: std::collections::BTreeMap::new(),
-    };
-
-    // Collect across all domains.
-    let mut needs_bugzilla = false;
-    let mut bodhi_domains: Vec<(&str, &config::DomainConfig)> = Vec::new();
-    let mut all_koji_domains: Vec<(&str, &config::DomainConfig)> = Vec::new();
-    let mut gitlab_domains: Vec<(&str, &config::GitlabConfig)> = Vec::new();
-    let mut github_domains: Vec<(&str, &config::GithubConfig)> = Vec::new();
+    // Build one report block per domain, in CLI --domain order.
+    // Bugzilla is aggregated across all domains into a single query;
+    // we record the merged Fedora versions and the position of the
+    // last domain that references it so the section can be placed
+    // there. The header's "primary" identity is the resolved FAS
+    // login — the profile key is a CLI shorthand, not a username on
+    // any service, so rendering it would be misleading.
+    let mut domain_reports: Vec<report::DomainReport> = Vec::new();
+    let mut block_cli_idx: Vec<usize> = Vec::new();
     let mut fedora_versions: Vec<u32> = Vec::new();
+    let mut last_bugzilla_idx: Option<usize> = None;
 
-    for (name, domain) in &domains {
+    for (cli_idx, (name, domain)) in domains.iter().enumerate() {
+        // Bugzilla is aggregated; just record membership here.
         if domain.bugzilla && !cli.no_bugzilla {
-            needs_bugzilla = true;
             for &v in &domain.fedora_versions {
                 if !fedora_versions.contains(&v) {
                     fedora_versions.push(v);
                 }
             }
+            last_bugzilla_idx = Some(cli_idx);
         }
+
+        let mut dr = report::DomainReport {
+            name: (*name).to_string(),
+            bodhi: None,
+            koji: None,
+            gitlab: None,
+            github: None,
+        };
+
+        // Bodhi (per-domain).
         if domain.bodhi && !cli.no_bodhi {
-            bodhi_domains.push((name, domain));
+            if let Some(ref user) = fas_user {
+                match rt.block_on(bodhi::bodhi_report(user, domain, since, until, cli.verbose)) {
+                    Ok(bodhi_report) => dr.bodhi = Some(bodhi_report),
+                    Err(e) => {
+                        eprintln!("error: bodhi: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else {
+                eprintln!("warning: --user required for Bodhi reporting, skipping");
+            }
         }
+
+        // Koji CBS (per-domain).
         if !domain.koji_tags.is_empty() && !cli.no_koji {
-            all_koji_domains.push((name, domain));
+            match koji::koji_report(domain, fas_user.as_deref(), since, until, cli.verbose) {
+                Ok(koji_report) => dr.koji = Some(koji_report),
+                Err(e) => {
+                    eprintln!("error: koji: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
         }
+
+        // GitLab (per-domain). Username resolution:
+        // profile.gitlab[<host>] → profile.fas → raw --user.
+        // Domains with no resolvable username are skipped.
         if let Some(gl) = domain.gitlab.as_ref()
             && !cli.no_gitlab
         {
-            gitlab_domains.push((name, gl));
+            let host = gitlab::instance_host(&gl.instance);
+            let resolved = profile
+                .and_then(|p| p.gitlab_username(&host))
+                .map(String::from)
+                .or_else(|| fas_user.clone());
+            match resolved {
+                Some(user) => {
+                    match gitlab::gitlab_report(
+                        gl,
+                        &user,
+                        since,
+                        until,
+                        &cfg.gitlab_tokens,
+                        cli.verbose,
+                    ) {
+                        Ok(gl_report) => dr.gitlab = Some(gl_report),
+                        Err(e) => {
+                            eprintln!("error: gitlab ({name}): {e}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                None => eprintln!(
+                    "warning: GitLab domain '{name}' has no user — \
+                     set --user, or add [users.<name>.gitlab.\"{host}\"] \
+                     to the config, skipping"
+                ),
+            }
         }
+
+        // GitHub (per-domain). Same resolution as GitLab.
         if let Some(gh) = domain.github.as_ref()
             && !cli.no_github
         {
-            github_domains.push((name, gh));
+            let host = github::instance_host(&gh.instance);
+            let resolved = profile
+                .and_then(|p| p.github_username(&host))
+                .map(String::from)
+                .or_else(|| fas_user.clone());
+            match resolved {
+                Some(user) => {
+                    match github::github_report(
+                        gh,
+                        &user,
+                        since,
+                        until,
+                        &cfg.github_tokens,
+                        cli.verbose,
+                    ) {
+                        Ok(gh_report) => dr.github = Some(gh_report),
+                        Err(e) => {
+                            eprintln!("error: github ({name}): {e}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                None => eprintln!(
+                    "warning: GitHub domain '{name}' has no user — \
+                     set --user, or add [users.<name>.github.\"{host}\"] \
+                     to the config, skipping"
+                ),
+            }
+        }
+
+        if dr.has_content() {
+            domain_reports.push(dr);
+            block_cli_idx.push(cli_idx);
         }
     }
     fedora_versions.sort();
 
-    // Bugzilla reporting (only once, regardless of how many domains).
-    if needs_bugzilla {
+    // Aggregated Bugzilla query (one per run, across all domains
+    // that enable it).
+    let mut bugzilla = None;
+    if last_bugzilla_idx.is_some() {
         if let Some(ref user) = fas_user {
             let email = match bugzilla::resolve_email(user, bz_email_override, cli.verbose) {
                 Ok(e) => e,
@@ -263,9 +346,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                 until,
                 cli.verbose,
             )) {
-                Ok(bz_report) => {
-                    unified.bugzilla = Some(bz_report);
-                }
+                Ok(bz_report) => bugzilla = Some(bz_report),
                 Err(e) => {
                     eprintln!("error: bugzilla: {e}");
                     return ExitCode::FAILURE;
@@ -276,120 +357,28 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         }
     }
 
-    // Koji CBS reporting — one section per domain. Each domain's
-    // koji_tags produce its own report so multi-domain runs can
-    // render them separately (e.g. "Koji CBS (Hyperscale)" vs
-    // "Koji CBS (Proposed Updates)").
-    for (name, domain) in &all_koji_domains {
-        match koji::koji_report(domain, fas_user.as_deref(), since, until, cli.verbose) {
-            Ok(koji_report) => {
-                unified.koji.insert((*name).to_string(), koji_report);
-            }
-            Err(e) => {
-                eprintln!("error: koji: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
+    // Place the aggregated Bugzilla section after the last domain
+    // block (in CLI order) that references it: count the rendered
+    // blocks falling at or before that domain's CLI position.
+    let bugzilla_after = match last_bugzilla_idx {
+        Some(idx) if bugzilla.is_some() => block_cli_idx.iter().filter(|&&i| i <= idx).count(),
+        _ => 0,
+    };
 
-    // Bodhi reporting.
-    if !bodhi_domains.is_empty() {
-        if let Some(ref user) = fas_user {
-            for (_, domain) in &bodhi_domains {
-                match rt.block_on(bodhi::bodhi_report(user, domain, since, until, cli.verbose)) {
-                    Ok(bodhi_report) => {
-                        if let Some(ref mut existing) = unified.bodhi {
-                            // Merge: add updates from additional domains.
-                            existing.total_updates += bodhi_report.total_updates;
-                            existing.total_builds += bodhi_report.total_builds;
-                            for (release, updates) in bodhi_report.by_release {
-                                existing
-                                    .by_release
-                                    .entry(release)
-                                    .or_default()
-                                    .extend(updates);
-                            }
-                        } else {
-                            unified.bodhi = Some(bodhi_report);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("error: bodhi: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                }
-            }
-        } else {
-            eprintln!("warning: --user required for Bodhi reporting, skipping");
-        }
-    }
-
-    // GitLab reporting — one section per domain. Username
-    // resolution: profile.gitlab[<instance_host>] → profile.fas →
-    // raw --user. Domains with no resolvable username are skipped
-    // with a warning.
-    for (name, gl) in &gitlab_domains {
-        let host = gitlab::instance_host(&gl.instance);
-        let resolved = profile
-            .and_then(|p| p.gitlab_username(&host))
-            .map(String::from)
-            .or_else(|| fas_user.clone());
-        let Some(user) = resolved else {
-            eprintln!(
-                "warning: GitLab domain '{name}' has no user — \
-                 set --user, or add [users.<name>.gitlab.\"{host}\"] \
-                 to the config, skipping"
-            );
-            continue;
-        };
-        match gitlab::gitlab_report(gl, &user, since, until, &cfg.gitlab_tokens, cli.verbose) {
-            Ok(gl_report) => {
-                unified.gitlab.insert((*name).to_string(), gl_report);
-            }
-            Err(e) => {
-                eprintln!("error: gitlab ({name}): {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-
-    // GitHub reporting — same per-domain pattern as GitLab.
-    // Username resolution: profile.github[<host>] → profile.fas
-    // → raw --user.
-    for (name, gh) in &github_domains {
-        let host = github::instance_host(&gh.instance);
-        let resolved = profile
-            .and_then(|p| p.github_username(&host))
-            .map(String::from)
-            .or_else(|| fas_user.clone());
-        let Some(user) = resolved else {
-            eprintln!(
-                "warning: GitHub domain '{name}' has no user — \
-                 set --user, or add [users.<name>.github.\"{host}\"] \
-                 to the config, skipping"
-            );
-            continue;
-        };
-        match github::github_report(gh, &user, since, until, &cfg.github_tokens, cli.verbose) {
-            Ok(gh_report) => {
-                unified.github.insert((*name).to_string(), gh_report);
-            }
-            Err(e) => {
-                eprintln!("error: github ({name}): {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-
-    if unified.bugzilla.is_none()
-        && unified.bodhi.is_none()
-        && unified.koji.is_empty()
-        && unified.gitlab.is_empty()
-        && unified.github.is_empty()
-    {
+    if domain_reports.is_empty() && bugzilla.is_none() {
         eprintln!("No data sources configured for the selected domain(s).");
         return ExitCode::FAILURE;
     }
+
+    let unified = report::Report {
+        user: fas_user.clone(),
+        domain: domain_label,
+        since,
+        until,
+        domains: domain_reports,
+        bugzilla,
+        bugzilla_after,
+    };
 
     // Format output.
     let output = if cli.json {

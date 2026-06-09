@@ -303,12 +303,9 @@ pub fn gitlab_report(
 /// Format the GitLab section as Markdown. `heading_suffix` is
 /// `Some("<domain>")` for multi-domain runs and `None` otherwise,
 /// mirroring the Koji formatter.
-pub fn format_markdown(report: &GitlabReport, detail: u8, heading_suffix: Option<&str>) -> String {
+pub fn format_markdown(report: &GitlabReport, detail: u8) -> String {
     let detailed = detail >= 1;
-    let heading = match heading_suffix {
-        Some(s) => format!("## GitLab ({s})\n\n"),
-        None => "## GitLab\n\n".to_string(),
-    };
+    let heading = "### GitLab\n\n".to_string();
 
     if report.opened_mrs.is_empty()
         && report.merged_mrs.is_empty()
@@ -360,23 +357,23 @@ pub fn format_markdown(report: &GitlabReport, detail: u8, heading_suffix: Option
     }
 
     if !report.opened_mrs.is_empty() {
-        out.push_str("### Opened\n\n");
+        out.push_str("#### Opened\n\n");
         write_mr_list(&mut out, &report.opened_mrs, &report.instance);
     }
     if !report.merged_mrs.is_empty() {
-        out.push_str("### Merged\n\n");
+        out.push_str("#### Merged\n\n");
         write_mr_list(&mut out, &report.merged_mrs, &report.instance);
     }
     if !report.approved_mrs.is_empty() {
-        out.push_str("### Approved\n\n");
+        out.push_str("#### Approved\n\n");
         write_mr_list(&mut out, &report.approved_mrs, &report.instance);
     }
     if !report.commented_mrs.is_empty() {
-        out.push_str("### Commented on\n\n");
+        out.push_str("#### Commented on\n\n");
         write_mr_list(&mut out, &report.commented_mrs, &report.instance);
     }
     if !report.commits_pushed.is_empty() {
-        out.push_str("### Commits by project\n\n");
+        out.push_str("#### Commits by project\n\n");
         for (project, pushed) in &report.commits_pushed {
             let authored = report.commits_authored.get(project).copied().unwrap_or(0);
             out.push_str(&format!(
@@ -386,7 +383,7 @@ pub fn format_markdown(report: &GitlabReport, detail: u8, heading_suffix: Option
         out.push('\n');
     }
     if !report.tags_pushed.is_empty() {
-        out.push_str("### Tags pushed\n\n");
+        out.push_str("#### Tags pushed\n\n");
         let base = report.instance.trim_end_matches('/');
         let mut by_project: BTreeMap<&str, Vec<&TagRef>> = BTreeMap::new();
         for t in &report.tags_pushed {
@@ -402,7 +399,7 @@ pub fn format_markdown(report: &GitlabReport, detail: u8, heading_suffix: Option
         out.push('\n');
     }
     if !report.releases_published.is_empty() {
-        out.push_str("### Releases published\n\n");
+        out.push_str("#### Releases published\n\n");
         for r in &report.releases_published {
             let upcoming = if r.upcoming { " (upcoming)" } else { "" };
             let suffix = match &r.name {
@@ -743,13 +740,13 @@ mod tests {
             group: None,
             ..Default::default()
         };
-        let md = format_markdown(&report, 0, None);
-        assert!(md.contains("## GitLab\n"));
+        let md = format_markdown(&report, 0);
+        assert!(md.contains("### GitLab\n"));
         assert!(md.contains("No GitLab activity"));
     }
 
     #[test]
-    fn format_non_empty_with_suffix() {
+    fn format_non_empty() {
         let mut report = GitlabReport {
             instance: "https://gitlab.com".into(),
             group: Some("CentOS/Hyperscale".into()),
@@ -760,10 +757,10 @@ mod tests {
             iid: 42,
             title: "Fix build".into(),
         });
-        let md = format_markdown(&report, 1, Some("hyperscale"));
-        assert!(md.contains("## GitLab (hyperscale)"));
+        let md = format_markdown(&report, 1);
+        assert!(md.contains("### GitLab\n"));
         assert!(md.contains("**MRs opened:** 1"));
-        assert!(md.contains("### Opened"));
+        assert!(md.contains("#### Opened"));
         assert!(md.contains("!42"));
         assert!(md.contains("Fix build"));
     }
