@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### fedora-cve-triage: URL-encode Bugzilla query values
+
+`build_multi_query` now percent-encodes product/component/status/
+assignee values (matching `triage-retired`'s query builder),
+instead of interpolating them raw. A value containing a space,
+`&`, or `=` previously malformed the query string or injected an
+extra parameter. These values come from trusted config, so this
+is hardening rather than a fix for an exploitable issue.
+
 ### fedora-cve-triage: new `fix-version` subcommand
 
 `fix-version` corrects CVE bugs filed against a dist-git branch
