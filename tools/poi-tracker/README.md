@@ -193,14 +193,24 @@ poi-tracker -i inventory.toml triage-retired --dry-run
 poi-tracker -i inventory.toml triage-retired
 ```
 
-The `--branch` flag controls which dist-git branch is checked
-(default `rawhide`); the same branch scopes the Bugzilla
-search, so an `epel10` retirement closes the
-`Fedora EPEL`/`epel10` bug:
+The `--branch` flag controls which dist-git branch(es) are
+checked (default `rawhide`); each branch scopes its own Bugzilla
+search, so an `epel9` retirement closes the
+`Fedora EPEL`/`epel9` bug. Pass it more than once (or as a
+comma-separated list) to check several branches in one run — a
+package retired on some branches but live on others only has
+its bugs closed for the branches where it's actually dead:
 
 ```sh
 poi-tracker -i inventory.toml triage-retired --branch epel10
+poi-tracker -i inventory.toml triage-retired --branch epel8,epel9
 ```
+
+Note that retirement (a `dead.package` marker) is distinct from
+"never existed": a bug filed against a branch the package was
+never built for is *not* a retirement and is left untouched —
+`triage-retired` only closes bugs on branches where a
+`dead.package` is present.
 
 Bugs that are already `CLOSED` are skipped. Each closure adds a
 short comment naming the package and the retired branch.

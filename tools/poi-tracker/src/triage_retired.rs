@@ -23,6 +23,8 @@ pub const RELEASE_MONITORING_REPORTER: &str = "upstream-release-monitoring@fedor
 pub struct BugClose {
     pub bug_id: u64,
     pub component: String,
+    /// Dist-git branch whose retirement justifies the closure.
+    pub branch: String,
     pub summary: String,
     pub current_status: String,
 }
@@ -39,10 +41,10 @@ pub enum PackageOutcome {
     RetiredClose(Vec<BugClose>),
 }
 
-/// Decide what to do for one package: which (if any) open bugs
-/// to close. Pure function over the dist-git check + fetched
-/// bug list so it's easy to unit-test.
-pub fn plan_package(package: &str, retired: bool, bugs: &[Bug]) -> PackageOutcome {
+/// Decide what to do for one package on one branch: which (if
+/// any) open bugs to close. Pure function over the dist-git check
+/// + fetched bug list so it's easy to unit-test.
+pub fn plan_package(package: &str, branch: &str, retired: bool, bugs: &[Bug]) -> PackageOutcome {
     if !retired {
         return PackageOutcome::NotRetired;
     }
@@ -52,6 +54,7 @@ pub fn plan_package(package: &str, retired: bool, bugs: &[Bug]) -> PackageOutcom
         .map(|b| BugClose {
             bug_id: b.id,
             component: package.to_string(),
+            branch: branch.to_string(),
             summary: b.summary.clone(),
             current_status: b.status.clone(),
         })
@@ -112,7 +115,10 @@ fn urlencode(s: &str) -> String {
 pub fn print_package_closes(component: &str, closes: &[BugClose]) {
     println!("{component} ({} bug(s)):", closes.len());
     for c in closes {
-        println!("  bug {} [{}]: {}", c.bug_id, c.current_status, c.summary);
+        println!(
+            "  bug {} [{}] ({}): {}",
+            c.bug_id, c.current_status, c.branch, c.summary
+        );
     }
 }
 
@@ -211,7 +217,7 @@ pub async fn run(
     inventory: &Inventory,
     bz: &BzClient,
     dg: &DistGitClient,
-    branch: &str,
+    branches: &[String],
     only_package: Option<&str>,
     start_from: Option<&str>,
     end_with: Option<&str>,
@@ -230,54 +236,65 @@ pub async fn run(
             continue;
         }
         packages_checked += 1;
-        if verbose {
-            eprintln!(
-                "[poi-tracker] {}: checking retirement on {branch}",
-                pkg.name
-            );
-        }
-        let retired = retry(
-            &format!("is_retired({}, {branch})", pkg.name),
-            RETRY_ATTEMPTS,
-            || dg.is_retired(&pkg.name, branch),
-            verbose,
-        )
-        .await
-        .map_err(|e| format!("dist-git is_retired for {}: {e}", pkg.name))?;
-        if !retired {
-            continue;
-        }
-        packages_retired += 1;
+        // Each package is checked on every requested branch; a
+        // package retired on one branch but live on another only
+        // gets its bugs closed for the branch(es) where it's dead.
+        let mut pkg_closes: Vec<BugClose> = Vec::new();
+        let mut retired_anywhere = false;
+        for branch in branches {
+            if verbose {
+                eprintln!(
+                    "[poi-tracker] {}: checking retirement on {branch}",
+                    pkg.name
+                );
+            }
+            let retired = retry(
+                &format!("is_retired({}, {branch})", pkg.name),
+                RETRY_ATTEMPTS,
+                || dg.is_retired(&pkg.name, branch),
+                verbose,
+            )
+            .await
+            .map_err(|e| format!("dist-git is_retired for {} on {branch}: {e}", pkg.name))?;
+            if !retired {
+                continue;
+            }
+            retired_anywhere = true;
 
-        if verbose {
-            eprintln!(
-                "[poi-tracker] {}: retired on {branch}, searching open bugs",
-                pkg.name
-            );
-        }
-        let query = bug_search_query(&pkg.name, branch);
-        let bugs = retry(
-            &format!("bug search for {}", pkg.name),
-            RETRY_ATTEMPTS,
-            || bz.search(&query, 0),
-            verbose,
-        )
-        .await
-        .map_err(|e| format!("Bugzilla search for {}: {e}", pkg.name))?;
-        match plan_package(&pkg.name, true, &bugs) {
-            PackageOutcome::NotRetired => unreachable!("retired check passed above"),
-            PackageOutcome::RetiredNoBugs => {
-                if verbose {
-                    eprintln!(
-                        "[poi-tracker] {}: retired but no open bugs to close",
-                        pkg.name
-                    );
+            if verbose {
+                eprintln!(
+                    "[poi-tracker] {}: retired on {branch}, searching open bugs",
+                    pkg.name
+                );
+            }
+            let query = bug_search_query(&pkg.name, branch);
+            let bugs = retry(
+                &format!("bug search for {} on {branch}", pkg.name),
+                RETRY_ATTEMPTS,
+                || bz.search(&query, 0),
+                verbose,
+            )
+            .await
+            .map_err(|e| format!("Bugzilla search for {} on {branch}: {e}", pkg.name))?;
+            match plan_package(&pkg.name, branch, true, &bugs) {
+                PackageOutcome::NotRetired => unreachable!("retired check passed above"),
+                PackageOutcome::RetiredNoBugs => {
+                    if verbose {
+                        eprintln!(
+                            "[poi-tracker] {}: retired on {branch} but no open bugs to close",
+                            pkg.name
+                        );
+                    }
                 }
+                PackageOutcome::RetiredClose(closes) => pkg_closes.extend(closes),
             }
-            PackageOutcome::RetiredClose(closes) => {
-                print_package_closes(&pkg.name, &closes);
-                all_closes.extend(closes);
-            }
+        }
+        if retired_anywhere {
+            packages_retired += 1;
+        }
+        if !pkg_closes.is_empty() {
+            print_package_closes(&pkg.name, &pkg_closes);
+            all_closes.extend(pkg_closes);
         }
     }
 
@@ -334,7 +351,7 @@ pub async fn run(
         let mut body = serde_json::json!({
             "status": "CLOSED",
             "resolution": "CANTFIX",
-            "comment": { "body": close_comment(&c.component, branch) },
+            "comment": { "body": close_comment(&c.component, &c.branch) },
         });
         if let Some(ref email) = active_claim_email {
             body["assigned_to"] = serde_json::json!(email);
@@ -371,7 +388,10 @@ fn print_tally(closes: &[BugClose]) {
         by_pkg.len()
     );
     for (pkg, bugs) in &by_pkg {
-        let ids: Vec<String> = bugs.iter().map(|b| format!("rhbz#{}", b.bug_id)).collect();
+        let ids: Vec<String> = bugs
+            .iter()
+            .map(|b| format!("rhbz#{} ({})", b.bug_id, b.branch))
+            .collect();
         println!("  {pkg}: {}", ids.join(", "));
     }
 }
@@ -412,13 +432,13 @@ mod tests {
 
     #[test]
     fn plan_skips_live_packages() {
-        let outcome = plan_package("foo", false, &[make_bug(1, "NEW", "x")]);
+        let outcome = plan_package("foo", "rawhide", false, &[make_bug(1, "NEW", "x")]);
         assert!(matches!(outcome, PackageOutcome::NotRetired));
     }
 
     #[test]
     fn plan_no_bugs_when_retired_with_empty_search() {
-        let outcome = plan_package("foo", true, &[]);
+        let outcome = plan_package("foo", "rawhide", true, &[]);
         assert!(matches!(outcome, PackageOutcome::RetiredNoBugs));
     }
 
@@ -431,12 +451,14 @@ mod tests {
             // check guards against a stray CLOSED slipping in.
             make_bug(3, "CLOSED", "foo 0.8 available"),
         ];
-        let outcome = plan_package("foo", true, &bugs);
+        let outcome = plan_package("foo", "epel9", true, &bugs);
         match outcome {
             PackageOutcome::RetiredClose(closes) => {
                 assert_eq!(closes.len(), 2);
                 let ids: Vec<u64> = closes.iter().map(|c| c.bug_id).collect();
                 assert_eq!(ids, vec![1, 2]);
+                // Each close is tagged with the branch it's for.
+                assert!(closes.iter().all(|c| c.branch == "epel9"));
             }
             other => panic!("expected RetiredClose, got {other:?}"),
         }

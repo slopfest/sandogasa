@@ -65,13 +65,19 @@ enum Command {
 
 #[derive(clap::Args)]
 struct TriageRetiredArgs {
-    /// Dist-git branch to check retirement against (e.g.
-    /// `rawhide`, `epel10`, `f43`). Retirement on this branch
-    /// scopes the Bugzilla search too — a `rawhide` retirement
-    /// closes the Fedora/rawhide bug, an `epel10` retirement
-    /// closes the Fedora EPEL/epel10 bug.
-    #[arg(long, default_value = "rawhide")]
-    branch: String,
+    /// Dist-git branch(es) to check retirement against (CSV or
+    /// repeated; e.g. `rawhide`, `epel10`, `f43`). Each branch
+    /// scopes its own Bugzilla search — a `rawhide` retirement
+    /// closes the Fedora/rawhide bug, an `epel9` retirement closes
+    /// the Fedora EPEL/epel9 bug. A package retired on one branch
+    /// but live on another only has bugs closed where it's dead.
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "BRANCH,...",
+        default_value = "rawhide"
+    )]
+    branch: Vec<String>,
 
     /// Only check this single package (must be in the
     /// inventory). Useful for testing.

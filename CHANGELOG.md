@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### poi-tracker: `triage-retired --branch` accepts multiple branches
+
+`--branch` is now repeatable (and comma-separated), so one run
+can check retirement across several dist-git branches (e.g.
+`--branch epel8,epel9`). Each branch scopes its own Bugzilla
+search and closure comment; a package retired on some branches
+but live on others only has its bugs closed for the dead
+branches. The default is still `rawhide`. Per-bug output and the
+final tally now name the branch each closure is for.
+
 ### sandogasa-report: group reports by domain in `--domain` order (breaking JSON)
 
 A multi-domain report is now organized by domain rather than by
