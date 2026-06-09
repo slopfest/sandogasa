@@ -150,6 +150,23 @@ impl DistGitClient {
         }
     }
 
+    /// List the git branches of an RPM package (e.g. `rawhide`,
+    /// `f43`, `epel9`). Returns the branch names as Pagure reports
+    /// them, in the order given by the API.
+    pub async fn list_branches(
+        &self,
+        package: &str,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/0/rpms/{}/git/branches", self.base_url, package);
+        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        #[derive(serde::Deserialize)]
+        struct Branches {
+            branches: Vec<String>,
+        }
+        let body: Branches = resp.json().await?;
+        Ok(body.branches)
+    }
+
     /// Fetch ACLs for an RPM package.
     pub async fn get_acls(&self, package: &str) -> Result<ProjectAcls, Box<dyn std::error::Error>> {
         let url = format!("{}/api/0/rpms/{}", self.base_url, package);
@@ -1361,6 +1378,37 @@ mod tests {
             .mount(&server)
             .await;
         assert!(client.is_retired("foo", "rawhide").await.is_err());
+    }
+
+    // ---- list_branches ----
+
+    #[tokio::test]
+    async fn list_branches_returns_branch_names() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/python-django3/git/branches"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "branches": ["epel8", "epel9", "rawhide"],
+                "total_branches": 3
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let branches = client.list_branches("python-django3").await.unwrap();
+        assert_eq!(branches, vec!["epel8", "epel9", "rawhide"]);
+    }
+
+    #[tokio::test]
+    async fn list_branches_errors_on_404() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/nonexistent/git/branches"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        assert!(client.list_branches("nonexistent").await.is_err());
     }
 
     // ---- user_projects ----

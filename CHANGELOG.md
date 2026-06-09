@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### fedora-cve-triage: new `fix-version` subcommand
+
+`fix-version` corrects CVE bugs filed against a dist-git branch
+the package never shipped on (e.g. an `[epel-all]` bug landing on
+`epel10` for a package that only has `epel8`/`epel9`). It
+reassigns each such bug to the package's latest still-standing
+branch in the same product family and marks it blocking the
+configured tracker; if every branch in that family is retired,
+the bug is reassigned to the latest one and closed as `CANTFIX`.
+Bugs already filed against a real branch are left untouched.
+Defaults to a preview; `--apply` writes the changes (with a
+confirm prompt), and `--component` narrows the run. Branch
+existence and retirement come from dist-git (Pagure) — no Koji
+or git-history lookups.
+
+### sandogasa-distgit: `list_branches`
+
+New `DistGitClient::list_branches` returns a package's dist-git
+branch names via the Pagure `git/branches` API.
+
 ### poi-tracker: `triage-retired --branch` accepts multiple branches
 
 `--branch` is now repeatable (and comma-separated), so one run
