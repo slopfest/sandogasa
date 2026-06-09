@@ -13,9 +13,10 @@ configured tracker; if every branch in that family is retired,
 the bug is reassigned to the latest one and closed as `CANTFIX`.
 Bugs already filed against a real branch are left untouched.
 Defaults to a preview; `--apply` writes the changes (with a
-confirm prompt), and `--component` narrows the run. Branch
-existence and retirement come from dist-git (Pagure) — no Koji
-or git-history lookups.
+confirm prompt, and an offer to reassign the bugs to your
+configured Bugzilla email), and `--component` narrows the run.
+Branch existence and retirement come from dist-git (Pagure) —
+no Koji or git-history lookups.
 
 ### sandogasa-distgit: `list_branches`
 
