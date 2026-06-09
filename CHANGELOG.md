@@ -32,6 +32,15 @@ but live on others only has its bugs closed for the dead
 branches. The default is still `rawhide`. Per-bug output and the
 final tally now name the branch each closure is for.
 
+### poi-tracker: `triage-retired --all-reporters`
+
+New `--all-reporters` flag drops the release-monitoring reporter
+filter so `triage-retired` closes **every** open bug on a retired
+branch (CVEs, FTBFS, and other human-filed bugs included), not
+just Anitya / the-new-hotness new-version bugs. The default
+remains release-monitoring-only, which is safe to run routinely
+across a whole inventory.
+
 ### sandogasa-report: group reports by domain in `--domain` order (breaking JSON)
 
 A multi-domain report is now organized by domain rather than by

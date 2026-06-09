@@ -212,6 +212,19 @@ never built for is *not* a retirement and is left untouched —
 `triage-retired` only closes bugs on branches where a
 `dead.package` is present.
 
+By default only release-monitoring bugs (filed by the Anitya /
+the-new-hotness bot) are closed — those are mechanical and safe
+to bulk-close. Pass `--all-reporters` to instead close **every**
+open bug on the retired branch, including human-filed ones (CVEs,
+FTBFS, etc.). Use it deliberately: across a full inventory run it
+closes a lot, and a CVE filed only against the retired branch
+(with no live-branch counterpart) would be closed as CANTFIX too:
+
+```sh
+poi-tracker -i inventory.toml triage-retired \
+    --branch epel8,epel9 --all-reporters
+```
+
 Bugs that are already `CLOSED` are skipped. Each closure adds a
 short comment naming the package and the retired branch.
 

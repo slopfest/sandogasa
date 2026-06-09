@@ -82,18 +82,27 @@ pub fn product_version_for_branch(branch: &str) -> (&'static str, String) {
 }
 
 /// Build the Bugzilla search query for retired-package triage:
-/// the component's open release-monitoring bugs against the
-/// retirement branch's product/version pair.
-pub fn bug_search_query(component: &str, branch: &str) -> String {
+/// the component's open bugs against the retirement branch's
+/// product/version pair. By default the search is scoped to
+/// release-monitoring bugs (the Anitya / the-new-hotness bot);
+/// with `all_reporters` the reporter filter is dropped so every
+/// open bug on the retired branch is matched, regardless of who
+/// filed it.
+pub fn bug_search_query(component: &str, branch: &str, all_reporters: bool) -> String {
     let (product, version) = product_version_for_branch(branch);
-    [
+    let mut parts = vec![
         format!("component={}", urlencode(component)),
         format!("product={}", urlencode(product)),
         format!("version={}", urlencode(&version)),
-        format!("reporter={}", urlencode(RELEASE_MONITORING_REPORTER)),
-        "bug_status=__open__".to_string(),
-    ]
-    .join("&")
+    ];
+    if !all_reporters {
+        parts.push(format!(
+            "reporter={}",
+            urlencode(RELEASE_MONITORING_REPORTER)
+        ));
+    }
+    parts.push("bug_status=__open__".to_string());
+    parts.join("&")
 }
 
 fn urlencode(s: &str) -> String {
@@ -218,6 +227,7 @@ pub async fn run(
     bz: &BzClient,
     dg: &DistGitClient,
     branches: &[String],
+    all_reporters: bool,
     only_package: Option<&str>,
     start_from: Option<&str>,
     end_with: Option<&str>,
@@ -267,7 +277,7 @@ pub async fn run(
                     pkg.name
                 );
             }
-            let query = bug_search_query(&pkg.name, branch);
+            let query = bug_search_query(&pkg.name, branch, all_reporters);
             let bugs = retry(
                 &format!("bug search for {} on {branch}", pkg.name),
                 RETRY_ATTEMPTS,
@@ -490,16 +500,27 @@ mod tests {
 
     #[test]
     fn bug_search_query_scopes_to_branch() {
-        let q = bug_search_query("python-django6", "epel10");
+        let q = bug_search_query("python-django6", "epel10", false);
         assert!(q.contains("component=python-django6"));
         assert!(q.contains("product=Fedora%20EPEL"));
         assert!(q.contains("version=epel10"));
         assert!(q.contains("bug_status=__open__"));
         assert!(q.contains("reporter=upstream-release-monitoring%40fedoraproject.org"));
 
-        let q = bug_search_query("foo", "rawhide");
+        let q = bug_search_query("foo", "rawhide", false);
         assert!(q.contains("product=Fedora&"));
         assert!(q.contains("version=rawhide"));
+    }
+
+    #[test]
+    fn bug_search_query_all_reporters_drops_reporter_filter() {
+        let q = bug_search_query("python-django3", "epel8", true);
+        assert!(q.contains("component=python-django3"));
+        assert!(q.contains("product=Fedora%20EPEL"));
+        assert!(q.contains("version=epel8"));
+        assert!(q.contains("bug_status=__open__"));
+        // No reporter scoping — every open bug on the branch matches.
+        assert!(!q.contains("reporter="));
     }
 
     #[test]

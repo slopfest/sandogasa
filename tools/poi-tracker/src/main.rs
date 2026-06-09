@@ -101,6 +101,12 @@ struct TriageRetiredArgs {
     #[arg(long, value_name = "NAME", conflicts_with = "package")]
     end_with: Option<String>,
 
+    /// Close ALL open bugs on retired branches, not just
+    /// release-monitoring (Anitya) bugs. Use with care: this
+    /// closes human-filed bugs (CVEs, FTBFS, etc.) too.
+    #[arg(long)]
+    all_reporters: bool,
+
     /// Bugzilla API key (or set BUGZILLA_API_KEY env var, or
     /// run `poi-tracker config`).
     #[arg(long, env = "BUGZILLA_API_KEY")]
@@ -513,6 +519,7 @@ fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> ExitCode {
         &bz,
         &dg,
         &args.branch,
+        args.all_reporters,
         args.package.as_deref(),
         args.start_from.as_deref(),
         args.end_with.as_deref(),
