@@ -57,7 +57,9 @@ already matches the available version — the bug is stale.)
 
 Classification follows Cargo's compatibility rule: a change at or
 before the leftmost non-zero version component is breaking (so
-`1.4 → 1.5` is safe but `0.4 → 0.5` is not). Non-numeric versions
+`1.4 → 1.5` is safe but `0.4 → 0.5` is not). Semver build
+metadata (a `+suffix`, e.g. `1.7.0+v1.7.0`) is ignored for the
+comparison, per the semver spec. Non-numeric versions
 (pre-releases, dates, snapshots) are reported as needs-review
 rather than guessed. A package retired on rawhide (a `dead.package`
 marker, the signal `triage-retired` keys on) is reported as

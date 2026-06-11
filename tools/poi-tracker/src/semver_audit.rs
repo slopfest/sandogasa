@@ -89,8 +89,13 @@ pub struct AuditEntry {
 /// Returns `None` if any component isn't a bare non-negative
 /// integer (pre-release tags, dates with letters, git snapshots,
 /// unexpanded spec macros, ...).
+///
+/// Semver build metadata (a `+suffix`, e.g. libbpf-sys's
+/// `1.7.0+v1.7.0`) must be ignored when determining precedence,
+/// so it is stripped before parsing.
 fn numeric_components(version: &str) -> Option<Vec<u64>> {
     let v = version.trim();
+    let v = v.split('+').next().unwrap_or(v);
     if v.is_empty() {
         return None;
     }
@@ -376,6 +381,16 @@ mod tests {
         assert_eq!(classify("1.0", "2.0rc1"), Bump::NeedsReview);
         assert_eq!(classify("5.000a", "5.000b"), Bump::NeedsReview);
         assert_eq!(classify("1.2.3", "1.2.4.dev-r1"), Bump::NeedsReview);
+    }
+
+    #[test]
+    fn classify_ignores_build_metadata() {
+        // Semver build metadata (`+...`) is ignored for precedence:
+        // rust-libbpf-sys 1.6.2 -> 1.7.0+v1.7.0 is a plain minor bump.
+        assert_eq!(classify("1.6.2", "1.7.0+v1.7.0"), Bump::NonBreaking);
+        assert_eq!(classify("1.6.2+v1.6.2", "2.0.0"), Bump::Breaking);
+        assert_eq!(classify("1.7.0+v1.6.0", "1.7.0+v1.7.0"), Bump::UpToDate);
+        assert!(version_at_least("1.7.0+v1.7.0", "1.7.0"));
     }
 
     #[test]
