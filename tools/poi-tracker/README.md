@@ -243,9 +243,14 @@ field, and:
 Builds that shipped before the current releases existed have no
 Bodhi record (they were inherited at branching); for those the
 branch's dist-git spec is consulted instead, so years-old stale
-bugs close too. Pass `--skip-stale` to disable the whole check
-(also restoring the cheaper priority-only scan), and
-`--pattern <glob>` (e.g. `rust-*`) to scope the run.
+bugs close too. Genuinely pending bugs are cheap: rawhide is
+checked first, and since a stable release may never carry a newer
+version than rawhide, a version absent from rawhide skips the
+stable-release queries entirely (EPEL bugs, whose branches update
+independently, are always checked in full). Pass `--skip-stale`
+to disable the whole check (also restoring the cheaper
+priority-only scan), and `--pattern <glob>` (e.g. `rust-*`) to
+scope the run.
 
 ### Close retired packages' update bugs
 

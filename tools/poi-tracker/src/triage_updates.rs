@@ -691,8 +691,16 @@ async fn plan_stale_for_package(
         }
         relevant.sort_by_key(|r| std::cmp::Reverse(release_rank(&r.name)));
 
+        // Each release is resolved fully before moving to the
+        // next: Bodhi first, then — because Bodhi has no record
+        // for builds that shipped before the active releases
+        // existed (they're inherited via Koji tag inheritance) —
+        // the branch's dist-git spec, where a version already
+        // committed means the update happened long ago. Releases
+        // are visited newest-first, so rawhide is resolved first.
         let mut findings = Vec::with_capacity(relevant.len());
         let mut failed = false;
+        let mut rawhide_pending = false;
         for rel in &relevant {
             let key = (package.to_string(), rel.name.clone());
             if !updates_cache.contains_key(&key) {
@@ -716,52 +724,65 @@ async fn plan_stale_for_package(
                     }
                 }
             }
+            let mut build = find_addressing(&updates_cache[&key], package, &version);
+            if build.is_none() {
+                let spec_key = (package.to_string(), rel.branch.clone());
+                if !spec_cache.contains_key(&spec_key) {
+                    if verbose {
+                        eprintln!(
+                            "[poi-tracker] {package}: checking {} dist-git spec",
+                            rel.branch
+                        );
+                    }
+                    let parsed = match dg.fetch_spec(package, &rel.branch).await {
+                        Ok(spec) => crate::semver_audit::parse_spec_version(&spec)
+                            .map(|v| (v, crate::semver_audit::parse_spec_field(&spec, "Release"))),
+                        Err(_) => None,
+                    };
+                    spec_cache.insert(spec_key.clone(), parsed);
+                }
+                if let Some((spec_version, release_field)) = &spec_cache[&spec_key]
+                    && version_at_least(spec_version, &version)
+                {
+                    build = Some(AddressingBuild {
+                        nvr: nvr_from_spec(
+                            package,
+                            spec_version,
+                            release_field.as_deref(),
+                            &dist_tag(rel),
+                        ),
+                        source: BuildSource::DistGit,
+                    });
+                }
+            }
+            // Short-circuit: Fedora updates land in rawhide first
+            // (a stable release may never carry a newer version
+            // than rawhide), so a version absent from rawhide —
+            // neither in Bodhi nor committed to the spec — can't
+            // be in the stable releases either; skip querying
+            // them. EPEL branches update independently of each
+            // other, so no equivalent shortcut applies there.
+            if build.is_none() && rel.branch == "rawhide" {
+                rawhide_pending = true;
+                break;
+            }
             findings.push(ReleaseFinding {
                 release: rel.name.clone(),
-                build: find_addressing(&updates_cache[&key], package, &version),
+                build,
             });
         }
         if failed {
             continue;
         }
-
-        // Bodhi has no record for builds that shipped before the
-        // active releases existed (they're inherited via Koji tag
-        // inheritance). For those gaps, check the branch's
-        // dist-git spec: a version already committed there means
-        // the update happened long ago.
-        for (finding, rel) in findings.iter_mut().zip(&relevant) {
-            if finding.build.is_some() {
-                continue;
+        if rawhide_pending {
+            if verbose {
+                eprintln!(
+                    "[poi-tracker] {package}: bug {} ({version}) not yet in \
+                     rawhide; skipping stable-release checks",
+                    bug.id
+                );
             }
-            let key = (package.to_string(), rel.branch.clone());
-            if !spec_cache.contains_key(&key) {
-                if verbose {
-                    eprintln!(
-                        "[poi-tracker] {package}: checking {} dist-git spec",
-                        rel.branch
-                    );
-                }
-                let parsed = match dg.fetch_spec(package, &rel.branch).await {
-                    Ok(spec) => crate::semver_audit::parse_spec_version(&spec)
-                        .map(|v| (v, crate::semver_audit::parse_spec_field(&spec, "Release"))),
-                    Err(_) => None,
-                };
-                spec_cache.insert(key.clone(), parsed);
-            }
-            if let Some((spec_version, release_field)) = &spec_cache[&key]
-                && version_at_least(spec_version, &version)
-            {
-                finding.build = Some(AddressingBuild {
-                    nvr: nvr_from_spec(
-                        package,
-                        spec_version,
-                        release_field.as_deref(),
-                        &dist_tag(rel),
-                    ),
-                    source: BuildSource::DistGit,
-                });
-            }
+            continue;
         }
         if let Some(plan) = plan_stale_bug(bug, package, &version, findings) {
             out.push(plan);
@@ -1367,6 +1388,64 @@ mod tests {
         .unwrap();
         assert_eq!(report.stale_planned, 0, "AskClose dropped under -y");
         assert_eq!(report.stale_applied, 0);
+    }
+
+    #[tokio::test]
+    async fn run_short_circuits_stable_checks_when_rawhide_pending() {
+        let server = MockServer::start().await;
+        mount_common(&server).await;
+        // Rawhide (F45) has no Bodhi update and its spec still
+        // carries the old version -> the bug is genuinely pending,
+        // and the stable release (F43) must never be queried at
+        // all (neither Bodhi nor dist-git).
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F45"))
+            .respond_with(updates_response(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rpms/foo/raw/rawhide/f/foo.spec"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("Name: foo\nVersion: 1.1.0\nRelease: 1%{?dist}\n"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F43"))
+            .respond_with(updates_response(serde_json::json!([])))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rpms/foo/raw/f43/f/foo.spec"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(""))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let inventory = test_inventory(None);
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let bodhi = BodhiClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory,
+            &bz,
+            &dg,
+            &bodhi,
+            &[],
+            false,
+            false,
+            false,
+            true,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.stale_planned, 0);
+        // MockServer verifies the expect(0) mocks on drop.
     }
 
     #[test]

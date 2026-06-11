@@ -20,6 +20,14 @@ partial cases without asking, `--skip-stale` disables the check
 `semver-audit` now points at `triage-updates` from its "up to
 date (stale bug)" group, mirroring its `triage-retired` hint.
 
+The check short-circuits on rawhide: Fedora updates land in
+rawhide first (a stable release may never carry a newer version
+than rawhide), so a bug whose version isn't in rawhide — neither
+in Bodhi nor committed to the dist-git spec — skips the
+stable-release queries entirely. EPEL branches update
+independently of each other, so EPEL bugs are always checked in
+full.
+
 ### poi-tracker: new `semver-audit` subcommand
 
 `semver-audit` classifies the pending upstream update for each
