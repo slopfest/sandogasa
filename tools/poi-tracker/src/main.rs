@@ -143,6 +143,14 @@ struct TriageUpdatesArgs {
     #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
     pattern: Vec<String>,
 
+    /// Batch mode: one Bugzilla query for bugs assigned to or
+    /// CC'ing EMAIL (default: the configured email), matched
+    /// against the inventory locally. Much faster on a large
+    /// inventory, but misses bugs where EMAIL is neither
+    /// assignee nor CC'd.
+    #[arg(long, value_name = "EMAIL", num_args = 0..=1)]
+    batch: Option<Option<String>>,
+
     /// Close partially-addressed bugs without asking.
     #[arg(long, conflicts_with = "skip_stale")]
     close_stale: bool,
@@ -175,6 +183,14 @@ struct SemverAuditArgs {
     /// Comma-separated or repeated; default: all packages.
     #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
     pattern: Vec<String>,
+
+    /// Batch mode: one Bugzilla query for bugs assigned to or
+    /// CC'ing EMAIL (default: the configured email), matched
+    /// against the inventory locally. Much faster on a large
+    /// inventory, but misses bugs where EMAIL is neither
+    /// assignee nor CC'd.
+    #[arg(long, value_name = "EMAIL", num_args = 0..=1)]
+    batch: Option<Option<String>>,
 
     /// Show only non-breaking updates.
     #[arg(long)]
@@ -463,6 +479,20 @@ fn workloads_from_names(names: &[String]) -> BTreeMap<String, sandogasa_inventor
 }
 
 /// Collect inventory paths from -i and -I flags.
+/// Resolve a `--batch [EMAIL]` flag: an explicit email wins, a
+/// bare `--batch` falls back to the configured Bugzilla email.
+fn resolve_batch_email(batch: &Option<Option<String>>) -> Result<Option<String>, String> {
+    match batch {
+        None => Ok(None),
+        Some(Some(email)) => Ok(Some(email.clone())),
+        Some(None) => config::resolve_email().map(Some).ok_or_else(|| {
+            "--batch needs an email: none configured (run `poi-tracker \
+             config`) and none passed (--batch <email>)"
+                .to_string()
+        }),
+    }
+}
+
 fn resolve_inventory_paths(cli: &Cli) -> Vec<String> {
     let mut paths = cli.inventory.clone();
 
@@ -535,12 +565,20 @@ fn cmd_semver_audit(paths: &[String], args: &SemverAuditArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let batch_email = match resolve_batch_email(&args.batch) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     match rt.block_on(semver_audit::run(
         &inventory,
         &bz,
         &dg,
         &args.pattern,
         args.non_breaking,
+        batch_email.as_deref(),
         args.verbose,
     )) {
         Ok(entries) => {
@@ -690,6 +728,13 @@ fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let batch_email = match resolve_batch_email(&args.batch) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let dg = sandogasa_distgit::DistGitClient::new();
     let bodhi = sandogasa_bodhi::BodhiClient::new();
     match rt.block_on(triage_updates::run(
@@ -698,6 +743,7 @@ fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
         &dg,
         &bodhi,
         &args.pattern,
+        batch_email.as_deref(),
         args.skip_stale,
         args.close_stale,
         args.dry_run,

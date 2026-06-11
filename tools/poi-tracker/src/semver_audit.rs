@@ -229,9 +229,31 @@ pub async fn run(
     dg: &DistGitClient,
     patterns: &[String],
     non_breaking_only: bool,
+    batch_email: Option<&str>,
     verbose: bool,
 ) -> Result<Vec<AuditEntry>, String> {
     let mut entries = Vec::new();
+
+    // Batch mode: one Bugzilla query up front instead of one per
+    // package; see `triage_updates::batch_bug_query`.
+    let batch_bugs = match batch_email {
+        Some(email) => {
+            if verbose {
+                eprintln!("[poi-tracker] batch: querying bugs for {email}");
+            }
+            let query = crate::triage_updates::batch_bug_query(email);
+            let bugs = retry(
+                "batch bug search",
+                RETRY_ATTEMPTS,
+                || bz.search(&query, 0),
+                verbose,
+            )
+            .await
+            .map_err(|e| format!("Bugzilla batch search: {e}"))?;
+            Some(crate::triage_updates::group_bugs_by_component(bugs))
+        }
+        None => None,
+    };
 
     for pkg in &inventory.package {
         if !crate::matches_any_pattern(&pkg.name, patterns) {
@@ -240,17 +262,24 @@ pub async fn run(
         if verbose {
             eprintln!("[poi-tracker] {}: checking for pending update", pkg.name);
         }
-        let query = bug_search_query(&pkg.name);
-        let bugs = retry(
-            &format!("bug search for {}", pkg.name),
-            RETRY_ATTEMPTS,
-            || bz.search(&query, 0),
-            verbose,
-        )
-        .await
-        .map_err(|e| format!("Bugzilla search for {}: {e}", pkg.name))?;
+        let per_pkg;
+        let bugs: &[Bug] = match &batch_bugs {
+            Some(map) => map.get(&pkg.name).map(Vec::as_slice).unwrap_or(&[]),
+            None => {
+                let query = bug_search_query(&pkg.name);
+                per_pkg = retry(
+                    &format!("bug search for {}", pkg.name),
+                    RETRY_ATTEMPTS,
+                    || bz.search(&query, 0),
+                    verbose,
+                )
+                .await
+                .map_err(|e| format!("Bugzilla search for {}: {e}", pkg.name))?;
+                &per_pkg
+            }
+        };
 
-        let Some((bug_id, new)) = pick_latest(&bugs, &pkg.name) else {
+        let Some((bug_id, new)) = pick_latest(bugs, &pkg.name) else {
             // No recognizable "is available" bug — nothing pending.
             continue;
         };
@@ -346,6 +375,73 @@ pub fn print_report(entries: &[AuditEntry]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn run_batch_mode_classifies_from_one_query() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("email1", "me@example.com"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{
+                    "id": 7,
+                    "summary": "foo-1.2.0 is available",
+                    "status": "NEW",
+                    "resolution": "",
+                    "product": "Fedora",
+                    "component": ["foo"],
+                    "severity": "unspecified",
+                    "priority": "unspecified",
+                    "assigned_to": "me@example.com",
+                    "creator": "upstream-release-monitoring@fedoraproject.org",
+                    "creation_time": "2026-05-01T00:00:00Z",
+                    "last_change_time": "2026-05-01T00:00:00Z",
+                }],
+                "total_matches": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rpms/foo/raw/rawhide/f/foo.spec"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("Name: foo\nVersion: 1.2.0\nRelease: 1%{?dist}\n"),
+            )
+            .mount(&server)
+            .await;
+
+        let inventory: sandogasa_inventory::Inventory = toml::from_str(
+            "[inventory]\n\
+             name = \"test\"\n\
+             description = \"test\"\n\
+             maintainer = \"tester\"\n\
+             \n\
+             [[package]]\n\
+             name = \"foo\"\n",
+        )
+        .unwrap();
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let entries = run(
+            &inventory,
+            &bz,
+            &dg,
+            &[],
+            false,
+            Some("me@example.com"),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].package, "foo");
+        // Packaged version already matches the available one.
+        assert_eq!(entries[0].bump, Bump::UpToDate);
+        print_report(&entries);
+    }
 
     #[test]
     fn classify_minor_and_patch_are_non_breaking() {

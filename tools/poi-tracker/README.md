@@ -195,7 +195,13 @@ live package to update; run `triage-retired` to close those bugs.
 limits the audit to matching packages, and `--non-breaking` shows
 only the safe updates. The audit makes a Bugzilla search and a
 dist-git spec fetch per matching package, so scope it with
-`--pattern` for a large inventory.
+`--pattern` for a large inventory — or use `--batch [EMAIL]`,
+which replaces the per-package searches with **one** Bugzilla
+query for all open release-monitoring bugs assigned to or CC'ing
+EMAIL (default: the email set via `poi-tracker config`), matched
+against the inventory locally. Batch mode misses bugs where that
+email is neither assignee nor CC'd, so it fits inventories of
+packages you (co-)maintain or watch.
 
 ### Triage update bugs
 
@@ -250,7 +256,9 @@ stable-release queries entirely (EPEL bugs, whose branches update
 independently, are always checked in full). Pass `--skip-stale`
 to disable the whole check (also restoring the cheaper
 priority-only scan), and `--pattern <glob>` (e.g. `rust-*`) to
-scope the run.
+scope the run. `--batch [EMAIL]` works as in `semver-audit`: one
+Bugzilla query for everything assigned to or CC'ing EMAIL
+(default: the configured email) instead of one query per package.
 
 ### Close retired packages' update bugs
 

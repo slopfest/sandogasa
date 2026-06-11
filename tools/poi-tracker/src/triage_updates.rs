@@ -131,6 +131,41 @@ pub fn bug_search_query(component: &str) -> String {
     parts.join("&")
 }
 
+/// Build the single batch-mode Bugzilla query: every open
+/// release-monitoring bug where `email` is the assignee or is
+/// CC'd, across all components at once. The `email1`/`emailtype1`
+/// search-form parameters are not part of the documented REST
+/// field list but Red Hat Bugzilla passes them through (verified
+/// live against bugzilla.redhat.com).
+pub fn batch_bug_query(email: &str) -> String {
+    let mut parts: Vec<String> = vec![
+        format!("reporter={}", urlencode(RELEASE_MONITORING_REPORTER)),
+        "bug_status=__open__".to_string(),
+        format!("email1={}", urlencode(email)),
+        "emailassigned_to1=1".to_string(),
+        "emailcc1=1".to_string(),
+        "emailtype1=equals".to_string(),
+    ];
+    for product in PRODUCTS {
+        parts.push(format!("product={}", urlencode(product)));
+    }
+    parts.join("&")
+}
+
+/// Group a batch query's results by component so the per-package
+/// loop can look bugs up locally instead of querying Bugzilla per
+/// package.
+pub fn group_bugs_by_component(bugs: Vec<Bug>) -> BTreeMap<String, Vec<Bug>> {
+    let mut map: BTreeMap<String, Vec<Bug>> = BTreeMap::new();
+    for bug in bugs {
+        let Some(component) = bug.component.first() else {
+            continue;
+        };
+        map.entry(component.clone()).or_default().push(bug);
+    }
+    map
+}
+
 /// Bugzilla expects standard URL encoding. We could pull in
 /// `percent-encoding`, but the only characters we ever encode in
 /// these search queries are spaces, `@`, and `+`. Keep it tight
@@ -414,6 +449,7 @@ pub async fn run(
     dg: &DistGitClient,
     bodhi: &BodhiClient,
     patterns: &[String],
+    batch_email: Option<&str>,
     skip_stale: bool,
     close_stale: bool,
     dry_run: bool,
@@ -431,6 +467,27 @@ pub async fn run(
     // (package, branch) -> spec Version/Release fields, for the
     // dist-git fallback (None = spec unreadable).
     let mut spec_cache = SpecCache::new();
+
+    // Batch mode: one Bugzilla query up front for every open
+    // release-monitoring bug assigned to or CC'ing the email,
+    // matched against inventory packages locally — instead of one
+    // query per package.
+    let batch_bugs: Option<BTreeMap<String, Vec<Bug>>> = match batch_email {
+        Some(email) => {
+            if verbose {
+                eprintln!("[poi-tracker] batch: querying bugs for {email}");
+            }
+            let bugs = client
+                .search(&batch_bug_query(email), 0)
+                .await
+                .map_err(|e| format!("Bugzilla batch search: {e}"))?;
+            if verbose {
+                eprintln!("[poi-tracker] batch: {} open bug(s) found", bugs.len());
+            }
+            Some(group_bugs_by_component(bugs))
+        }
+        None => None,
+    };
 
     for pkg in &inventory.package {
         if !crate::matches_any_pattern(&pkg.name, patterns) {
@@ -461,20 +518,27 @@ pub async fn run(
             continue;
         }
 
-        if verbose {
-            eprintln!(
-                "[poi-tracker] {}: searching release-monitoring bugs",
-                pkg.name
-            );
-        }
-        let query = bug_search_query(&pkg.name);
-        let bugs = client
-            .search(&query, 0)
-            .await
-            .map_err(|e| format!("Bugzilla search for {}: {e}", pkg.name))?;
+        let per_pkg;
+        let bugs: &[Bug] = match &batch_bugs {
+            Some(map) => map.get(&pkg.name).map(Vec::as_slice).unwrap_or(&[]),
+            None => {
+                if verbose {
+                    eprintln!(
+                        "[poi-tracker] {}: searching release-monitoring bugs",
+                        pkg.name
+                    );
+                }
+                let query = bug_search_query(&pkg.name);
+                per_pkg = client
+                    .search(&query, 0)
+                    .await
+                    .map_err(|e| format!("Bugzilla search for {}: {e}", pkg.name))?;
+                &per_pkg
+            }
+        };
 
         if target.is_some() {
-            match plan_package(&pkg.name, resolved, &bugs) {
+            match plan_package(&pkg.name, resolved, bugs) {
                 PackageOutcome::NoPriority | PackageOutcome::OptedOut => {}
                 PackageOutcome::NoBugs => {
                     if verbose {
@@ -503,7 +567,7 @@ pub async fn run(
         }
         plan_stale_for_package(
             &pkg.name,
-            &bugs,
+            bugs,
             dg,
             bodhi,
             &mut releases,
@@ -1266,6 +1330,7 @@ mod tests {
             &dg,
             &bodhi,
             &[],
+            None,
             false,
             false,
             false,
@@ -1325,6 +1390,7 @@ mod tests {
             &dg,
             &bodhi,
             &[],
+            None,
             false,
             false,
             false,
@@ -1378,6 +1444,7 @@ mod tests {
             &dg,
             &bodhi,
             &[],
+            None,
             false,
             false,
             false,
@@ -1436,6 +1503,7 @@ mod tests {
             &dg,
             &bodhi,
             &[],
+            None,
             false,
             false,
             false,
@@ -1446,6 +1514,113 @@ mod tests {
         .unwrap();
         assert_eq!(report.stale_planned, 0);
         // MockServer verifies the expect(0) mocks on drop.
+    }
+
+    #[test]
+    fn batch_bug_query_filters_by_email_assignee_or_cc() {
+        let q = batch_bug_query("user@example.com");
+        assert!(q.contains("reporter=upstream-release-monitoring%40fedoraproject.org"));
+        assert!(q.contains("bug_status=__open__"));
+        assert!(q.contains("email1=user%40example.com"));
+        assert!(q.contains("emailassigned_to1=1"));
+        assert!(q.contains("emailcc1=1"));
+        assert!(q.contains("emailtype1=equals"));
+        assert!(q.contains("product=Fedora"));
+        // No per-component filter: one query covers everything.
+        assert!(!q.contains("component="));
+    }
+
+    #[test]
+    fn group_bugs_by_component_groups() {
+        let mut a = make_bug(1, "unspecified", "foo-1.0 is available");
+        a.component = vec!["foo".to_string()];
+        let mut b = make_bug(2, "unspecified", "bar-2.0 is available");
+        b.component = vec!["bar".to_string()];
+        let mut c = make_bug(3, "unspecified", "foo-1.1 is available");
+        c.component = vec!["foo".to_string()];
+        let map = group_bugs_by_component(vec![a, b, c]);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["foo"].len(), 2);
+        assert_eq!(map["bar"].len(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_batch_mode_makes_one_bugzilla_query() {
+        let server = MockServer::start().await;
+        // Bugs come from a single email-scoped query (expect(1));
+        // the result includes a bug for a package NOT in the
+        // inventory, which must be ignored by local matching.
+        let mut other = bug_json(99, "other-pkg-3.0 is available");
+        other["component"] = serde_json::json!(["other-pkg"]);
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("email1", "me@example.com"))
+            .and(query_param("emailassigned_to1", "1"))
+            .and(query_param("emailcc1", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(1, "foo-1.2.0 is available"), other],
+                "total_matches": 2
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/releases/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "releases": [
+                    {"name": "F45", "branch": "rawhide", "id_prefix": "FEDORA", "state": "pending"}
+                ],
+                "total": 1, "page": 1, "pages": 1
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/foo/git/branches"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "branches": ["rawhide"]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F45"))
+            .respond_with(updates_response(serde_json::json!([{
+                "alias": "FEDORA-2026-aaa",
+                "status": "stable",
+                "builds": [{"nvr": "foo-1.2.0-1.fc45"}]
+            }])))
+            .mount(&server)
+            .await;
+        // Only foo's bug is closed; a PUT for bug 99 would fail
+        // the expect(1) below and bump report.failures.
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let inventory = test_inventory(None);
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let bodhi = BodhiClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory,
+            &bz,
+            &dg,
+            &bodhi,
+            &[],
+            Some("me@example.com"),
+            false,
+            false,
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.stale_applied, 1);
+        assert_eq!(report.failures, 0);
     }
 
     #[test]

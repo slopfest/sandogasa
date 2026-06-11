@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### poi-tracker: `--batch` mode for `semver-audit` and `triage-updates`
+
+Both subcommands previously issued one Bugzilla search per
+inventory package, which dominates the runtime on a large
+inventory. The new `--batch [EMAIL]` flag replaces them with a
+single query for every open release-monitoring bug assigned to or
+CC'ing EMAIL (default: the email configured via `poi-tracker
+config`), matched against the inventory locally. Caveat: bugs
+where that email is neither assignee nor CC'd are not seen, so
+batch mode fits inventories of packages you (co-)maintain or
+watch.
+
 ### Security: `--` separators before external-tool positional arguments
 
 Shell-outs to `fedrq`, `koji`, `bodhi`, and `curl` now pass `--`
