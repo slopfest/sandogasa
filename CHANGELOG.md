@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### poi-tracker: new `semver-audit` subcommand
+
+`semver-audit` classifies the pending upstream update for each
+maintained package by semver impact, so a maintainer can see which
+updates are safe to push. For every package (optionally filtered
+by `--pattern <glob>`, e.g. `rust-*`) it reads the open
+`upstream-release-monitoring@` "X is available" bug for the new
+version, compares it against the rawhide dist-git spec's current
+version, and reports **non-breaking** / **breaking** / **up to
+date (stale bug)** / **retired (update request invalid)** /
+**needs review**, grouped (or as `--json`). `--non-breaking` shows
+only the safe updates. ("Up to date" means the packaged version
+already matches the available version — the bug is stale.)
+
+Classification follows Cargo's compatibility rule: a change at or
+before the leftmost non-zero version component is breaking (so
+`1.4 → 1.5` is safe but `0.4 → 0.5` is not). Non-numeric versions
+(pre-releases, dates, snapshots) are reported as needs-review
+rather than guessed. A package retired on rawhide (a `dead.package`
+marker, the signal `triage-retired` keys on) is reported as
+retired, consistent with that flow.
+
 ### sandogasa-distgit: validate identifiers before URL interpolation
 
 `DistGitClient` now rejects package, branch, user, and group

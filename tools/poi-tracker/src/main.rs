@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 mod config;
+mod semver_audit;
 mod triage_retired;
 mod triage_updates;
 
@@ -46,6 +47,9 @@ enum Command {
     Import(ImportArgs),
     /// Remove a package from the inventory.
     Remove(RemoveArgs),
+    /// Audit pending upstream updates by semver impact, flagging
+    /// which are non-breaking, breaking, or need review.
+    SemverAudit(SemverAuditArgs),
     /// Show inventory contents.
     Show(ShowArgs),
     /// Sync inventory from Fedora dist-git (Pagure) access.
@@ -146,6 +150,26 @@ struct TriageUpdatesArgs {
     /// Skip the confirmation prompt.
     #[arg(short, long)]
     yes: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+#[derive(clap::Args)]
+struct SemverAuditArgs {
+    /// Only audit packages matching this glob (e.g. `rust-*`).
+    /// Comma-separated or repeated; default: all packages.
+    #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
+    pattern: Vec<String>,
+
+    /// Show only non-breaking updates.
+    #[arg(long)]
+    non_breaking: bool,
+
+    /// Output as JSON instead of human-readable text.
+    #[arg(long)]
+    json: bool,
 
     /// Print progress to stderr.
     #[arg(short, long)]
@@ -470,12 +494,60 @@ fn main() -> ExitCode {
         Command::Find(args) => cmd_find(&paths, args),
         Command::Import(args) => cmd_import(args),
         Command::Remove(args) => cmd_remove(&paths[0], args),
+        Command::SemverAudit(args) => cmd_semver_audit(&paths, args),
         Command::Show(args) => cmd_show(&paths, args),
         Command::SyncDistgit(args) => cmd_sync_distgit(args),
         Command::SyncGitlab(args) => cmd_sync_gitlab(args),
         Command::TriageRetired(args) => cmd_triage_retired(&paths, args),
         Command::TriageUpdates(args) => cmd_triage_updates(&paths, args),
         Command::Validate => cmd_validate(&paths),
+    }
+}
+
+fn cmd_semver_audit(paths: &[String], args: &SemverAuditArgs) -> ExitCode {
+    let inventory = match sandogasa_inventory::load_and_merge(paths) {
+        Ok(inv) => inv,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Read-only: anonymous Bugzilla search + public dist-git.
+    let bz = sandogasa_bugzilla::BzClient::new(&config::resolve_url());
+    let dg = sandogasa_distgit::DistGitClient::new();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to create runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match rt.block_on(semver_audit::run(
+        &inventory,
+        &bz,
+        &dg,
+        &args.pattern,
+        args.non_breaking,
+        args.verbose,
+    )) {
+        Ok(entries) => {
+            if args.json {
+                match serde_json::to_string_pretty(&entries) {
+                    Ok(s) => println!("{s}"),
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else {
+                semver_audit::print_report(&entries);
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

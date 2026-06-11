@@ -158,6 +158,45 @@ env var → config file.
 Generate an API key at
 <https://bugzilla.redhat.com/userprefs.cgi?tab=apikey>.
 
+### Audit pending updates by semver impact
+
+`semver-audit` looks at each maintained package's pending upstream
+release notification (the open `upstream-release-monitoring@`
+"X is available" bug) and classifies the version bump against the
+version currently packaged in rawhide dist-git, so you can see
+which updates are safe to push and which need care:
+
+```sh
+# All pending updates, grouped by impact
+poi-tracker -i inventory.toml semver-audit
+
+# Just the safe ones for your Rust packages
+poi-tracker -i inventory.toml semver-audit --pattern 'rust-*' --non-breaking
+
+# Machine-readable
+poi-tracker -i inventory.toml semver-audit --json
+```
+
+Bumps are classified with Cargo's compatibility rule (the Rust
+convention): a change at or before the version's leftmost non-zero
+component is **breaking**. So `1.4 → 1.5` is non-breaking, but
+`0.4 → 0.5` is breaking (pre-1.0 minor bumps can break), and
+`0.0.3 → 0.0.4` is breaking too. Versions that aren't plain dotted
+integers — pre-releases, dates, git snapshots — are reported as
+**needs review** rather than guessed at. A package whose packaged
+version already equals the "available" version (a stale
+release-monitoring bug, nothing to push) is reported as **up to
+date (stale bug)**. A package that's retired on rawhide (a
+`dead.package` marker — the same signal `triage-retired` uses) is
+reported as **retired (update request invalid)**, since there's no
+live package to update; run `triage-retired` to close those bugs.
+
+`--pattern <glob>` (comma-separated or repeated, e.g. `rust-*`)
+limits the audit to matching packages, and `--non-breaking` shows
+only the safe updates. The audit makes a Bugzilla search and a
+dist-git spec fetch per matching package, so scope it with
+`--pattern` for a large inventory.
+
 ### Triage update bugs
 
 Some packages reliably need attention when a new upstream version
