@@ -528,7 +528,7 @@ mod tests {
                 // list_tagged_nvrs for the precondition check:
                 // no xz build currently tagged → passes.
                 (
-                    "list-tagged --quiet proposed_updates10s-packages-main-release",
+                    "list-tagged --quiet -- proposed_updates10s-packages-main-release",
                     &koji_empty_list_tagged(),
                 ),
             ],

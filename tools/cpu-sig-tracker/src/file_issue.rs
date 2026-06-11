@@ -840,12 +840,12 @@ mod tests {
                 // Koji list for start_date discovery — package
                 // is in -release, with a canned NVR.
                 (
-                    "list-tagged --quiet proposed_updates10s-packages-main-release",
+                    "list-tagged --quiet -- proposed_updates10s-packages-main-release",
                     "xz-5.6.4-1~proposed.el10\n",
                 ),
                 // buildinfo for the date.
                 (
-                    "buildinfo xz-5.6.4-1~proposed.el10",
+                    "buildinfo -- xz-5.6.4-1~proposed.el10",
                     "BUILD: xz-5.6.4-1~proposed.el10\nCreation time: 2026-04-22 10:11:12\n",
                 ),
             ],

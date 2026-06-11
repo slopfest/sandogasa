@@ -383,7 +383,7 @@ mod tests {
             dir.path(),
             "koji",
             &[(
-                "list-tagged --quiet proposed_updates10s-packages-main-release",
+                "list-tagged --quiet -- proposed_updates10s-packages-main-release",
                 "PackageKit-1.2.8-9~proposed.el10\nxz-5.6.4-1~proposed.el10\n",
             )],
         );
@@ -437,11 +437,11 @@ name = "PackageKit"
             "koji",
             &[
                 (
-                    "list-tagged --quiet proposed_updates10s-packages-main-release",
+                    "list-tagged --quiet -- proposed_updates10s-packages-main-release",
                     "PackageKit-1.2.8-9~proposed.el10\n",
                 ),
                 (
-                    "list-tagged --quiet proposed_updates10s-packages-main-testing",
+                    "list-tagged --quiet -- proposed_updates10s-packages-main-testing",
                     "",
                 ),
             ],

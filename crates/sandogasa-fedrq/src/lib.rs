@@ -242,7 +242,7 @@ impl Fedrq {
         let mut cmd = Command::new("fedrq");
         cmd.args(["pkgs", "-P", "-F", "provides"]);
         self.apply_opts(&mut cmd);
-        cmd.arg(capability);
+        cmd.args(["--", capability]);
         Self::run(&mut cmd)
     }
 
@@ -253,7 +253,7 @@ impl Fedrq {
         let mut cmd = Command::new("fedrq");
         cmd.args(["pkgs", "--src"]);
         self.apply_opts(&mut cmd);
-        cmd.arg(srpm);
+        cmd.args(["--", srpm]);
         let result = Self::run(&mut cmd)?;
         Ok(result.iter().any(|s| !s.is_empty() && s != "(none)"))
     }
@@ -263,7 +263,7 @@ impl Fedrq {
         let mut cmd = Command::new("fedrq");
         cmd.args(["pkgs", "--src", "-F", "requires"]);
         self.apply_opts(&mut cmd);
-        cmd.arg(srpm);
+        cmd.args(["--", srpm]);
         Self::run(&mut cmd)
     }
 
@@ -289,6 +289,7 @@ impl Fedrq {
         let mut cmd = Command::new("fedrq");
         cmd.args(["pkgs", "--src", "-F", "line:name,version,release"]);
         self.apply_opts(&mut cmd);
+        cmd.arg("--");
         cmd.args(packages);
         let raw = Self::run(&mut cmd)?;
         let mut seen = std::collections::HashSet::new();

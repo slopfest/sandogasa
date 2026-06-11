@@ -1834,7 +1834,7 @@ name = "PackageKit"
             dir.path(),
             "koji",
             &[(
-                "list-tagged --latest proposed_updates10s-packages-main-release",
+                "list-tagged --latest -- proposed_updates10s-packages-main-release",
                 &koji_list_tagged_output(
                     "PackageKit-1.2.8-9~proposed.el10",
                     "proposed_updates10s-packages-main-release",
@@ -1845,7 +1845,7 @@ name = "PackageKit"
             dir.path(),
             "fedrq",
             &[(
-                "pkgs --src -F line:name,version,release -b c10s PackageKit",
+                "pkgs --src -F line:name,version,release -b c10s -- PackageKit",
                 "PackageKit : 1.2.8 : 8.el10",
             )],
         );
@@ -2010,14 +2010,14 @@ name = "PackageKit"
             "koji",
             &[
                 (
-                    "list-tagged --latest proposed_updates10s-packages-main-release",
+                    "list-tagged --latest -- proposed_updates10s-packages-main-release",
                     &koji_list_tagged_output(
                         "xz-5.6.4-1~proposed.el10",
                         "proposed_updates10s-packages-main-release",
                     ),
                 ),
                 (
-                    "list-tagged --quiet proposed_updates10s-packages-main-testing",
+                    "list-tagged --quiet -- proposed_updates10s-packages-main-testing",
                     "",
                 ),
             ],
@@ -2026,7 +2026,7 @@ name = "PackageKit"
             dir.path(),
             "fedrq",
             &[(
-                "pkgs --src -F line:name,version,release -b c10s xz",
+                "pkgs --src -F line:name,version,release -b c10s -- xz",
                 "xz : 5.6.4 : 1.el10",
             )],
         );

@@ -432,16 +432,22 @@ mod tests {
             &[
                 // NVR currently tagged in both -release and -testing.
                 (
-                    "list-tagged --quiet proposed_updates10s-packages-main-release",
+                    "list-tagged --quiet -- proposed_updates10s-packages-main-release",
                     "xz-5.6.4-1~proposed.el10\n",
                 ),
                 (
-                    "list-tagged --quiet proposed_updates10s-packages-main-testing",
+                    "list-tagged --quiet -- proposed_updates10s-packages-main-testing",
                     "xz-5.6.4-1~proposed.el10\n",
                 ),
                 // untag-build succeeds silently.
-                ("untag-build proposed_updates10s-packages-main-release", ""),
-                ("untag-build proposed_updates10s-packages-main-testing", ""),
+                (
+                    "untag-build -- proposed_updates10s-packages-main-release",
+                    "",
+                ),
+                (
+                    "untag-build -- proposed_updates10s-packages-main-testing",
+                    "",
+                ),
             ],
         );
         let existing_path = std::env::var("PATH").unwrap_or_default();
