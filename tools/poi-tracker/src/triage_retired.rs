@@ -131,32 +131,15 @@ pub fn print_package_closes(component: &str, closes: &[BugClose]) {
     }
 }
 
-/// Whether a package should be included in this run given the
-/// optional `--package` (only that name), `--start-from` (skip
-/// earlier names in iteration order), and `--end-with` (stop
-/// after this name, inclusive) filters. `--package` is mutually
-/// exclusive with the range flags at the CLI layer;
-/// `--start-from` and `--end-with` compose to bound a sub-range.
-pub fn should_include(
-    name: &str,
-    only: Option<&str>,
-    start_from: Option<&str>,
-    end_with: Option<&str>,
-) -> bool {
-    if let Some(o) = only {
-        return name == o;
-    }
-    if let Some(s) = start_from
-        && name < s
-    {
-        return false;
-    }
-    if let Some(e) = end_with
-        && name > e
-    {
-        return false;
-    }
-    true
+/// From a component's batch-mode bug list, keep only the bugs
+/// filed against `branch` (matched via the same product/version
+/// mapping the per-branch query uses).
+pub fn bugs_for_branch(bugs: &[Bug], branch: &str) -> Vec<Bug> {
+    let (product, version) = product_version_for_branch(branch);
+    bugs.iter()
+        .filter(|b| b.product == product && b.version.iter().any(|v| v == &version))
+        .cloned()
+        .collect()
 }
 
 /// Retry an async fallible operation a few times, sleeping a
@@ -274,9 +257,8 @@ pub async fn run(
     dg: &DistGitClient,
     branches: &[String],
     all_reporters: bool,
-    only_package: Option<&str>,
-    start_from: Option<&str>,
-    end_with: Option<&str>,
+    filter: &crate::WalkFilterArgs,
+    batch_email: Option<&str>,
     claim: bool,
     claim_email: Option<&str>,
     dry_run: bool,
@@ -288,8 +270,32 @@ pub async fn run(
     let mut packages_retired = 0usize;
     let mut checks: Vec<BranchCheck> = Vec::new();
 
+    // Batch mode: one Bugzilla query up front for every open bug
+    // assigned to or CC'ing the email, matched locally against
+    // (package, branch) — instead of one query per retired
+    // package per branch. Honors --all-reporters by dropping the
+    // reporter filter from the query.
+    let batch_bugs: Option<BTreeMap<String, Vec<Bug>>> = match batch_email {
+        Some(email) => {
+            if verbose {
+                eprintln!("[poi-tracker] batch: querying bugs for {email}");
+            }
+            let query = crate::triage_updates::batch_bug_query(email, all_reporters);
+            let bugs = retry(
+                "batch bug search",
+                RETRY_ATTEMPTS,
+                || bz.search(&query, 0),
+                verbose,
+            )
+            .await
+            .map_err(|e| format!("Bugzilla batch search: {e}"))?;
+            Some(crate::triage_updates::group_bugs_by_component(bugs))
+        }
+        None => None,
+    };
+
     for pkg in &inventory.package {
-        if !should_include(&pkg.name, only_package, start_from, end_with) {
+        if !filter.matches(&pkg.name) {
             continue;
         }
         packages_checked += 1;
@@ -323,21 +329,29 @@ pub async fn run(
             }
             retired_anywhere = true;
 
-            if verbose {
-                eprintln!(
-                    "[poi-tracker] {}: retired on {branch}, searching open bugs",
-                    pkg.name
-                );
-            }
-            let query = bug_search_query(&pkg.name, branch, all_reporters);
-            let bugs = retry(
-                &format!("bug search for {} on {branch}", pkg.name),
-                RETRY_ATTEMPTS,
-                || bz.search(&query, 0),
-                verbose,
-            )
-            .await
-            .map_err(|e| format!("Bugzilla search for {} on {branch}: {e}", pkg.name))?;
+            let bugs = match &batch_bugs {
+                Some(map) => map
+                    .get(&pkg.name)
+                    .map(|all| bugs_for_branch(all, branch))
+                    .unwrap_or_default(),
+                None => {
+                    if verbose {
+                        eprintln!(
+                            "[poi-tracker] {}: retired on {branch}, searching open bugs",
+                            pkg.name
+                        );
+                    }
+                    let query = bug_search_query(&pkg.name, branch, all_reporters);
+                    retry(
+                        &format!("bug search for {} on {branch}", pkg.name),
+                        RETRY_ATTEMPTS,
+                        || bz.search(&query, 0),
+                        verbose,
+                    )
+                    .await
+                    .map_err(|e| format!("Bugzilla search for {} on {branch}: {e}", pkg.name))?
+                }
+            };
             match plan_package(&pkg.name, branch, true, &bugs) {
                 PackageOutcome::NotRetired => unreachable!("retired check passed above"),
                 PackageOutcome::RetiredNoBugs => {
@@ -652,43 +666,22 @@ mod tests {
     }
 
     #[test]
-    fn should_include_no_filters_keeps_everything() {
-        assert!(should_include("foo", None, None, None));
-        assert!(should_include("zzz", None, None, None));
-    }
+    fn bugs_for_branch_filters_by_product_and_version() {
+        let mut rawhide = make_bug(1, "NEW", "foo 1.0 is available");
+        rawhide.version = vec!["rawhide".to_string()];
+        let mut epel8 = make_bug(2, "NEW", "foo 1.0 is available");
+        epel8.product = "Fedora EPEL".to_string();
+        epel8.version = vec!["epel8".to_string()];
+        let bugs = vec![rawhide, epel8];
 
-    #[test]
-    fn should_include_only_matches_exact() {
-        assert!(should_include("foo", Some("foo"), None, None));
-        assert!(!should_include("foo-utils", Some("foo"), None, None));
-        assert!(!should_include("foo", Some("bar"), None, None));
-    }
+        let on_rawhide = bugs_for_branch(&bugs, "rawhide");
+        assert_eq!(on_rawhide.len(), 1);
+        assert_eq!(on_rawhide[0].id, 1);
 
-    #[test]
-    fn should_include_start_from_is_inclusive() {
-        // Skip until name >= start_from; include start and onward.
-        assert!(!should_include("apple", None, Some("mango"), None));
-        assert!(should_include("mango", None, Some("mango"), None));
-        assert!(should_include("zebra", None, Some("mango"), None));
-    }
+        let on_epel8 = bugs_for_branch(&bugs, "epel8");
+        assert_eq!(on_epel8.len(), 1);
+        assert_eq!(on_epel8[0].id, 2);
 
-    #[test]
-    fn should_include_end_with_is_inclusive() {
-        // Include up to and including end_with; skip anything after.
-        assert!(should_include("apple", None, None, Some("mango")));
-        assert!(should_include("mango", None, None, Some("mango")));
-        assert!(!should_include("zebra", None, None, Some("mango")));
-    }
-
-    #[test]
-    fn should_include_range_bounds_both_inclusive() {
-        // [start, end] inclusive sub-range — handy for "all rust-nu-*".
-        let s = Some("rust-nu-cli");
-        let e = Some("rust-nu-engine");
-        assert!(!should_include("rust-itertools", None, s, e));
-        assert!(should_include("rust-nu-cli", None, s, e));
-        assert!(should_include("rust-nu-cmd-base", None, s, e));
-        assert!(should_include("rust-nu-engine", None, s, e));
-        assert!(!should_include("rust-nu-utils", None, s, e));
+        assert!(bugs_for_branch(&bugs, "epel9").is_empty());
     }
 }

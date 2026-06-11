@@ -133,19 +133,26 @@ pub fn bug_search_query(component: &str) -> String {
 
 /// Build the single batch-mode Bugzilla query: every open
 /// release-monitoring bug where `email` is the assignee or is
-/// CC'd, across all components at once. The `email1`/`emailtype1`
-/// search-form parameters are not part of the documented REST
-/// field list but Red Hat Bugzilla passes them through (verified
-/// live against bugzilla.redhat.com).
-pub fn batch_bug_query(email: &str) -> String {
+/// CC'd, across all components at once. With `any_reporter` the
+/// reporter filter is dropped (triage-retired's
+/// `--all-reporters`). The `email1`/`emailtype1` search-form
+/// parameters are not part of the documented REST field list but
+/// Red Hat Bugzilla passes them through (verified live against
+/// bugzilla.redhat.com).
+pub fn batch_bug_query(email: &str, any_reporter: bool) -> String {
     let mut parts: Vec<String> = vec![
-        format!("reporter={}", urlencode(RELEASE_MONITORING_REPORTER)),
         "bug_status=__open__".to_string(),
         format!("email1={}", urlencode(email)),
         "emailassigned_to1=1".to_string(),
         "emailcc1=1".to_string(),
         "emailtype1=equals".to_string(),
     ];
+    if !any_reporter {
+        parts.insert(
+            0,
+            format!("reporter={}", urlencode(RELEASE_MONITORING_REPORTER)),
+        );
+    }
     for product in PRODUCTS {
         parts.push(format!("product={}", urlencode(product)));
     }
@@ -448,7 +455,7 @@ pub async fn run(
     client: &BzClient,
     dg: &DistGitClient,
     bodhi: &BodhiClient,
-    patterns: &[String],
+    filter: &crate::WalkFilterArgs,
     batch_email: Option<&str>,
     skip_stale: bool,
     close_stale: bool,
@@ -478,7 +485,7 @@ pub async fn run(
                 eprintln!("[poi-tracker] batch: querying bugs for {email}");
             }
             let bugs = client
-                .search(&batch_bug_query(email), 0)
+                .search(&batch_bug_query(email, false), 0)
                 .await
                 .map_err(|e| format!("Bugzilla batch search: {e}"))?;
             if verbose {
@@ -491,7 +498,7 @@ pub async fn run(
 
     let mut marked_retired = 0usize;
     for pkg in &inventory.package {
-        if !crate::matches_any_pattern(&pkg.name, patterns) {
+        if !filter.matches(&pkg.name) {
             continue;
         }
         // Inventory says it's retired on rawhide (recorded by
@@ -1351,7 +1358,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
-            &[],
+            &crate::WalkFilterArgs::default(),
             None,
             false,
             false,
@@ -1411,7 +1418,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
-            &[],
+            &crate::WalkFilterArgs::default(),
             None,
             false,
             false,
@@ -1465,7 +1472,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
-            &[],
+            &crate::WalkFilterArgs::default(),
             None,
             false,
             false,
@@ -1524,7 +1531,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
-            &[],
+            &crate::WalkFilterArgs::default(),
             None,
             false,
             false,
@@ -1540,7 +1547,7 @@ mod tests {
 
     #[test]
     fn batch_bug_query_filters_by_email_assignee_or_cc() {
-        let q = batch_bug_query("user@example.com");
+        let q = batch_bug_query("user@example.com", false);
         assert!(q.contains("reporter=upstream-release-monitoring%40fedoraproject.org"));
         assert!(q.contains("bug_status=__open__"));
         assert!(q.contains("email1=user%40example.com"));
@@ -1590,7 +1597,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
-            &[],
+            &crate::WalkFilterArgs::default(),
             None,
             false,
             false,
@@ -1669,7 +1676,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
-            &[],
+            &crate::WalkFilterArgs::default(),
             Some("me@example.com"),
             false,
             false,

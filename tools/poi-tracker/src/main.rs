@@ -83,27 +83,16 @@ struct TriageRetiredArgs {
     )]
     branch: Vec<String>,
 
-    /// Only check this single package (must be in the
-    /// inventory). Useful for testing.
-    #[arg(
-        long,
-        value_name = "NAME",
-        conflicts_with_all = ["start_from", "end_with"],
-    )]
-    package: Option<String>,
+    #[command(flatten)]
+    filter: WalkFilterArgs,
 
-    /// Resume from this package onwards (inclusive), skipping
-    /// earlier ones in the inventory's iteration order. Useful
-    /// to continue an interrupted run.
-    #[arg(long, value_name = "NAME", conflicts_with = "package")]
-    start_from: Option<String>,
-
-    /// Stop after this package (inclusive), skipping anything
-    /// later in the inventory's iteration order. Combine with
-    /// `--start-from` to bound a sub-range, e.g.
-    /// `--start-from rust-nu-cli --end-with rust-nu-utils`.
-    #[arg(long, value_name = "NAME", conflicts_with = "package")]
-    end_with: Option<String>,
+    /// Batch mode: one Bugzilla query for bugs assigned to or
+    /// CC'ing EMAIL (default: the configured email), matched
+    /// against the inventory locally. Much faster on a large
+    /// inventory, but misses bugs where EMAIL is neither
+    /// assignee nor CC'd.
+    #[arg(long, value_name = "EMAIL", num_args = 0..=1)]
+    batch: Option<Option<String>>,
 
     /// Close ALL open bugs on retired branches, not just
     /// release-monitoring (Anitya) bugs. Use with care: this
@@ -143,10 +132,8 @@ struct TriageRetiredArgs {
 
 #[derive(clap::Args)]
 struct TriageUpdatesArgs {
-    /// Only triage packages matching this glob (e.g. `rust-*`).
-    /// Comma-separated or repeated; default: all packages.
-    #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
-    pattern: Vec<String>,
+    #[command(flatten)]
+    filter: WalkFilterArgs,
 
     /// Batch mode: one Bugzilla query for bugs assigned to or
     /// CC'ing EMAIL (default: the configured email), matched
@@ -182,12 +169,42 @@ struct TriageUpdatesArgs {
     verbose: bool,
 }
 
-#[derive(clap::Args)]
-struct SemverAuditArgs {
-    /// Only audit packages matching this glob (e.g. `rust-*`).
-    /// Comma-separated or repeated; default: all packages.
+/// Package filters shared by the inventory-walking commands
+/// (`semver-audit`, `triage-retired`, `triage-updates`). The
+/// filters compose: a package must match the pattern AND fall
+/// inside the `[start-from, end-with]` range.
+#[derive(clap::Args, Default)]
+struct WalkFilterArgs {
+    /// Only process packages matching this glob (e.g. `rust-*`;
+    /// a bare name matches exactly). Comma-separated or
+    /// repeated; default: all packages.
     #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
     pattern: Vec<String>,
+
+    /// Resume from this package onwards (inclusive), in the
+    /// inventory's iteration order.
+    #[arg(long, value_name = "NAME")]
+    start_from: Option<String>,
+
+    /// Stop after this package (inclusive). Combine with
+    /// `--start-from` to bound a sub-range.
+    #[arg(long, value_name = "NAME")]
+    end_with: Option<String>,
+}
+
+impl WalkFilterArgs {
+    /// Whether `name` passes every configured filter.
+    fn matches(&self, name: &str) -> bool {
+        matches_any_pattern(name, &self.pattern)
+            && self.start_from.as_deref().is_none_or(|s| name >= s)
+            && self.end_with.as_deref().is_none_or(|e| name <= e)
+    }
+}
+
+#[derive(clap::Args)]
+struct SemverAuditArgs {
+    #[command(flatten)]
+    filter: WalkFilterArgs,
 
     /// Batch mode: one Bugzilla query for bugs assigned to or
     /// CC'ing EMAIL (default: the configured email), matched
@@ -581,7 +598,7 @@ fn cmd_semver_audit(paths: &[String], args: &SemverAuditArgs) -> ExitCode {
         &inventory,
         &bz,
         &dg,
-        &args.pattern,
+        &args.filter,
         args.non_breaking,
         batch_email.as_deref(),
         args.verbose,
@@ -650,6 +667,13 @@ fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let batch_email = match resolve_batch_email(&args.batch) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -663,9 +687,8 @@ fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> ExitCode {
         &dg,
         &args.branch,
         args.all_reporters,
-        args.package.as_deref(),
-        args.start_from.as_deref(),
-        args.end_with.as_deref(),
+        &args.filter,
+        batch_email.as_deref(),
         args.claim,
         claim_email.as_deref(),
         args.dry_run,
@@ -780,7 +803,7 @@ fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
         &client,
         &dg,
         &bodhi,
-        &args.pattern,
+        &args.filter,
         batch_email.as_deref(),
         args.skip_stale,
         args.close_stale,
@@ -2118,6 +2141,52 @@ mod tests {
         let pats = vec!["systemd".to_string()];
         assert!(matches_any_pattern("systemd", &pats));
         assert!(!matches_any_pattern("systemd-networkd", &pats));
+    }
+
+    #[test]
+    fn walk_filter_defaults_match_everything() {
+        let f = WalkFilterArgs::default();
+        assert!(f.matches("anything"));
+    }
+
+    #[test]
+    fn walk_filter_range_is_inclusive_both_ends() {
+        let f = WalkFilterArgs {
+            pattern: vec![],
+            start_from: Some("rust-nu-cli".to_string()),
+            end_with: Some("rust-nu-engine".to_string()),
+        };
+        assert!(!f.matches("rust-itertools"));
+        assert!(f.matches("rust-nu-cli"));
+        assert!(f.matches("rust-nu-cmd-base"));
+        assert!(f.matches("rust-nu-engine"));
+        assert!(!f.matches("rust-nu-utils"));
+    }
+
+    #[test]
+    fn walk_filter_pattern_and_range_compose() {
+        let f = WalkFilterArgs {
+            pattern: vec!["rust-*".to_string()],
+            start_from: Some("rust-nu".to_string()),
+            end_with: None,
+        };
+        // In range but wrong pattern:
+        assert!(!f.matches("systemd"));
+        // Matches pattern but before the range:
+        assert!(!f.matches("rust-libc"));
+        assert!(f.matches("rust-nu-cli"));
+    }
+
+    #[test]
+    fn walk_filter_bare_pattern_is_exact() {
+        // A bare name (no glob) replaces the old --package flag.
+        let f = WalkFilterArgs {
+            pattern: vec!["python-django3".to_string()],
+            start_from: None,
+            end_with: None,
+        };
+        assert!(f.matches("python-django3"));
+        assert!(!f.matches("python-django30"));
     }
 
     #[test]

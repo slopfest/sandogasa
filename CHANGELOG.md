@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### poi-tracker: consistent filters across walking commands (breaking CLI)
+
+`semver-audit`, `triage-retired`, and `triage-updates` now share
+the same package filters — `--pattern <glob>` (a bare name
+matches exactly), `--start-from <name>`, and `--end-with <name>`
+— and all three compose. `--batch [EMAIL]` is now available on
+`triage-retired` too, replacing its per-retired-package-per-branch
+Bugzilla searches with one email-scoped query matched locally;
+with `--all-reporters` the batch query drops the reporter filter
+as well.
+
+Breaking CLI: `triage-retired --package <name>` is removed — use
+`--pattern <name>` (an exact match when no glob characters are
+used). `--pattern` no longer conflicts with the range flags.
+
 ### poi-tracker: record retirement in the inventory (breaking)
 
 `triage-retired --mark` (single `-i` file only) now records its

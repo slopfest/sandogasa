@@ -321,10 +321,13 @@ packages marked retired on rawhide, saving their per-package
 queries; re-running `triage-retired --mark` is how the markers
 are refreshed.
 
-Useful flags for big inventories:
+Useful flags for big inventories (shared by all
+inventory-walking commands — `semver-audit`, `triage-retired`,
+and `triage-updates` — and freely combinable):
 
-- `--package <name>` — only check this one package. Handy for
-  testing or when re-running after fixing a single entry.
+- `--pattern <glob>` — only process matching packages
+  (comma-separated or repeated; a bare name matches exactly,
+  e.g. `--pattern python-django3` to check a single package).
 - `--start-from <name>` — resume from this package onwards in
   the inventory's iteration order, e.g. to continue an
   interrupted run.
@@ -332,6 +335,11 @@ Useful flags for big inventories:
   Combine with `--start-from` to scope to a name-range, e.g.
   `--start-from rust-nu-cli --end-with rust-nu-utils` to test
   the change against every `rust-nu-*` package in one shot.
+- `--batch [EMAIL]` — one Bugzilla query for everything assigned
+  to or CC'ing EMAIL (default: the configured email) instead of
+  one query per retired package per branch; with
+  `--all-reporters` the batch query drops the reporter filter
+  too.
 
 Network reads (dist-git probes, Bugzilla searches) retry up to
 3 times with exponential backoff, so a transient connection

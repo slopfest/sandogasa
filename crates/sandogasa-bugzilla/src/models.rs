@@ -26,7 +26,7 @@ pub struct CreateBugResponse {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Bug {
     pub id: u64,
     pub summary: String,
@@ -60,7 +60,7 @@ pub struct Bug {
     pub cf_fixed_in: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Flag {
     pub name: String,
     pub status: String,

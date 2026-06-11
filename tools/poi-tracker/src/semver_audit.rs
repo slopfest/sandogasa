@@ -227,7 +227,7 @@ pub async fn run(
     inventory: &Inventory,
     bz: &BzClient,
     dg: &DistGitClient,
-    patterns: &[String],
+    filter: &crate::WalkFilterArgs,
     non_breaking_only: bool,
     batch_email: Option<&str>,
     verbose: bool,
@@ -241,7 +241,7 @@ pub async fn run(
             if verbose {
                 eprintln!("[poi-tracker] batch: querying bugs for {email}");
             }
-            let query = crate::triage_updates::batch_bug_query(email);
+            let query = crate::triage_updates::batch_bug_query(email, false);
             let bugs = retry(
                 "batch bug search",
                 RETRY_ATTEMPTS,
@@ -257,7 +257,7 @@ pub async fn run(
 
     let mut marked_retired = 0usize;
     for pkg in &inventory.package {
-        if !crate::matches_any_pattern(&pkg.name, patterns) {
+        if !filter.matches(&pkg.name) {
             continue;
         }
         // Inventory says it's retired on rawhide (recorded by
@@ -417,9 +417,17 @@ mod tests {
         .unwrap();
         let bz = BzClient::new("http://127.0.0.1:1");
         let dg = DistGitClient::with_base_url("http://127.0.0.1:1");
-        let entries = run(&inventory, &bz, &dg, &[], false, None, false)
-            .await
-            .unwrap();
+        let entries = run(
+            &inventory,
+            &bz,
+            &dg,
+            &crate::WalkFilterArgs::default(),
+            false,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
         assert!(entries.is_empty());
     }
 
@@ -474,7 +482,7 @@ mod tests {
             &inventory,
             &bz,
             &dg,
-            &[],
+            &crate::WalkFilterArgs::default(),
             false,
             Some("me@example.com"),
             false,
