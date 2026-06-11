@@ -81,6 +81,7 @@ impl Client {
         project_path: &str,
         token: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        sandogasa_cli::ensure_secure_url(base_url)?;
         let http = build_http_client(token)?;
         Ok(Self {
             http,
@@ -445,6 +446,7 @@ impl GroupClient {
         group_path: &str,
         token: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        sandogasa_cli::ensure_secure_url(base_url)?;
         let http = build_http_client(token)?;
         Ok(Self {
             http,
@@ -610,6 +612,7 @@ fn check_response(resp: reqwest::blocking::Response) -> Result<Issue, Box<dyn st
 
 /// Check whether a token is valid by calling `GET /api/v4/user`.
 pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    sandogasa_cli::ensure_secure_url(base_url)?;
     let mut headers = HeaderMap::new();
     headers.insert(
         HeaderName::from_static("private-token"),
@@ -1165,6 +1168,13 @@ pub fn project_releases(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_rejects_plaintext_remote() {
+        // A token must not be sent to a plaintext http non-loopback URL.
+        assert!(Client::new("http://gitlab.example.com", "g/p", "tok").is_err());
+        assert!(GroupClient::new("http://gitlab.example.com", "g", "tok").is_err());
+    }
 
     #[test]
     fn test_parse_project_url() {

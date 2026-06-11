@@ -19,9 +19,15 @@ impl BzClient {
         }
     }
 
-    pub fn with_api_key(mut self, key: String) -> Self {
+    /// Attach an API key for authenticated requests.
+    ///
+    /// Refuses (returns an error) if the client's base URL would
+    /// send the key over plaintext `http` to a non-loopback host;
+    /// see [`sandogasa_cli::ensure_secure_url`].
+    pub fn with_api_key(mut self, key: String) -> Result<Self, Box<dyn std::error::Error>> {
+        sandogasa_cli::ensure_secure_url(&self.base_url)?;
         self.api_key = Some(key);
-        self
+        Ok(self)
     }
 
     fn url(&self, path: &str) -> String {
@@ -237,8 +243,17 @@ mod tests {
 
     #[test]
     fn with_api_key_sets_key() {
-        let client = BzClient::new("https://example.com").with_api_key("secret123".to_string());
+        let client = BzClient::new("https://example.com")
+            .with_api_key("secret123".to_string())
+            .unwrap();
         assert_eq!(client.api_key.as_deref(), Some("secret123"));
+    }
+
+    #[test]
+    fn with_api_key_rejects_plaintext_remote() {
+        // Refuse to attach a key to a plaintext http non-loopback URL.
+        let result = BzClient::new("http://bugzilla.example.com").with_api_key("k".to_string());
+        assert!(result.is_err());
     }
 
     // ---- url() ----
@@ -275,7 +290,9 @@ mod tests {
     #[tokio::test]
     async fn valid_login_returns_true() {
         let server = MockServer::start().await;
-        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap();
 
         Mock::given(method("GET"))
             .and(path("/rest/valid_login"))
@@ -293,7 +310,9 @@ mod tests {
     #[tokio::test]
     async fn valid_login_returns_false() {
         let server = MockServer::start().await;
-        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap();
 
         Mock::given(method("GET"))
             .and(path("/rest/valid_login"))
@@ -310,7 +329,9 @@ mod tests {
     #[tokio::test]
     async fn valid_login_returns_error_on_bad_key() {
         let server = MockServer::start().await;
-        let client = BzClient::new(&server.uri()).with_api_key("bad".into());
+        let client = BzClient::new(&server.uri())
+            .with_api_key("bad".into())
+            .unwrap();
 
         Mock::given(method("GET"))
             .and(path("/rest/valid_login"))
@@ -327,7 +348,9 @@ mod tests {
     #[tokio::test]
     async fn create_posts_and_returns_id() {
         let server = MockServer::start().await;
-        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap();
 
         Mock::given(method("POST"))
             .and(path("/rest/bug"))
@@ -360,7 +383,9 @@ mod tests {
     #[tokio::test]
     async fn create_surfaces_bugzilla_error_without_erroring() {
         let server = MockServer::start().await;
-        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap();
 
         // Bugzilla rejects an invalid component with a 400 + error body.
         Mock::given(method("POST"))
@@ -387,7 +412,9 @@ mod tests {
     #[tokio::test]
     async fn update_sends_put_with_body() {
         let server = MockServer::start().await;
-        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap();
 
         Mock::given(method("PUT"))
             .and(path("/rest/bug/42"))
@@ -406,7 +433,9 @@ mod tests {
     #[tokio::test]
     async fn update_returns_error_on_server_failure() {
         let server = MockServer::start().await;
-        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap();
 
         Mock::given(method("PUT"))
             .and(path("/rest/bug/99"))
@@ -425,7 +454,9 @@ mod tests {
     #[tokio::test]
     async fn update_many_sends_ids_in_body() {
         let server = MockServer::start().await;
-        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap();
 
         Mock::given(method("PUT"))
             .and(path("/rest/bug/1"))
@@ -451,7 +482,9 @@ mod tests {
     #[tokio::test]
     async fn update_many_single_id() {
         let server = MockServer::start().await;
-        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap();
 
         Mock::given(method("PUT"))
             .and(path("/rest/bug/42"))
@@ -473,7 +506,9 @@ mod tests {
     #[tokio::test]
     async fn update_many_returns_error_on_server_failure() {
         let server = MockServer::start().await;
-        let client = BzClient::new(&server.uri()).with_api_key("key".into());
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap();
 
         Mock::given(method("PUT"))
             .respond_with(ResponseTemplate::new(403))

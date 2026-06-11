@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Security: refuse to send credentials over plaintext HTTP (breaking)
+
+API clients now fail closed when a token would be sent to a
+plaintext `http://` URL on a non-loopback host, so a misconfigured
+base URL can no longer leak a Bugzilla API key or GitLab/GitHub
+token in cleartext. Loopback hosts (`localhost`, `127.0.0.0/8`,
+`::1`) stay allowed for mock servers and local development, and the
+`SANDOGASA_ALLOW_INSECURE_URL=1` environment variable overrides the
+guard for testing or a trusted internal proxy (see
+`crates/sandogasa-cli/DEVELOPMENT.md`).
+
+The shared check is the new
+`sandogasa_cli::ensure_secure_url` (plus the
+`sandogasa_cli::ALLOW_INSECURE_URL_ENV` constant), wired into the
+Bugzilla, GitLab, and GitHub client constructors.
+
+Breaking: `sandogasa_bugzilla::BzClient::with_api_key` now returns
+`Result<Self, Box<dyn std::error::Error>>` instead of `Self` (it
+can now reject an insecure URL). Migration: append `?` (or handle
+the `Result`) at call sites — e.g.
+`BzClient::new(url).with_api_key(key)?`. The GitLab/GitHub
+`new()`/`validate_token()` signatures are unchanged (already
+`Result`); they just gained the check. Jira and Discourse clients
+are not yet guarded.
+
 ### Errata: v0.12.1 `sync-distgit --user` rationale
 
 The v0.12.1 note for `poi-tracker sync-distgit` said "there is no

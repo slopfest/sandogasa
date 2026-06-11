@@ -46,7 +46,9 @@ pub fn check_pkg_reviews(opts: &CheckPkgReviewsOptions) -> Result<(), String> {
 async fn check_pkg_reviews_async(opts: &CheckPkgReviewsOptions) -> Result<(), String> {
     let mut report = check_crate::load_report(&opts.toml_path)?;
 
-    let bz = BzClient::new(&opts.bugzilla_url).with_api_key(opts.api_key.clone());
+    let bz = BzClient::new(&opts.bugzilla_url)
+        .with_api_key(opts.api_key.clone())
+        .map_err(|e| e.to_string())?;
 
     // Build package name → crate name mapping and collect edges.
     let (pkg_to_crate, edges) = collect_packages_and_edges(&report);

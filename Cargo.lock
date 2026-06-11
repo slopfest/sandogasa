@@ -1619,6 +1619,7 @@ version = "0.12.1"
 dependencies = [
  "chrono",
  "reqwest",
+ "sandogasa-cli",
  "serde",
  "serde_json",
  "tokio",
@@ -1630,6 +1631,7 @@ name = "sandogasa-cli"
 version = "0.12.1"
 dependencies = [
  "chrono",
+ "url",
 ]
 
 [[package]]
@@ -1690,6 +1692,7 @@ dependencies = [
  "chrono",
  "mockito",
  "reqwest",
+ "sandogasa-cli",
  "serde",
  "serde_json",
 ]
@@ -1701,6 +1704,7 @@ dependencies = [
  "chrono",
  "mockito",
  "reqwest",
+ "sandogasa-cli",
  "serde",
  "serde_json",
 ]

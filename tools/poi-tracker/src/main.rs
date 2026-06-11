@@ -495,7 +495,13 @@ fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> ExitCode {
         }
     };
     let url = config::resolve_url();
-    let bz = sandogasa_bugzilla::BzClient::new(&url).with_api_key(api_key);
+    let bz = match sandogasa_bugzilla::BzClient::new(&url).with_api_key(api_key) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let dg = sandogasa_distgit::DistGitClient::new();
 
     let claim_email = config::resolve_email();
@@ -584,7 +590,13 @@ fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
         }
     };
     let url = config::resolve_url();
-    let client = sandogasa_bugzilla::BzClient::new(&url).with_api_key(api_key);
+    let client = match sandogasa_bugzilla::BzClient::new(&url).with_api_key(api_key) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,

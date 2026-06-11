@@ -222,7 +222,9 @@ pub async fn resolve_refs(bz: &BzClient, tokens: &[String]) -> Result<Vec<u64>, 
 /// then link them: a package's request `depends_on` the requests
 /// for the packages it needs (following `report.edges`).
 pub async fn file_batch(report: &mut ResolveReport, opts: &Options) -> Result<bool, String> {
-    let bz = BzClient::new(&opts.bugzilla_url).with_api_key(opts.api_key.clone());
+    let bz = BzClient::new(&opts.bugzilla_url)
+        .with_api_key(opts.api_key.clone())
+        .map_err(|e| e.to_string())?;
 
     if report.packages.is_empty() {
         println!("No packages in report to file requests for.");
@@ -338,7 +340,9 @@ fn preview_links(
 /// request older than [`PING_MIN_DAYS`] that hasn't been pinged,
 /// marking it pinged. Returns whether the report changed.
 pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool, String> {
-    let bz = BzClient::new(&opts.bugzilla_url).with_api_key(opts.api_key.clone());
+    let bz = BzClient::new(&opts.bugzilla_url)
+        .with_api_key(opts.api_key.clone())
+        .map_err(|e| e.to_string())?;
     let now = chrono::Utc::now();
     let mut changed = false;
 
@@ -415,7 +419,9 @@ pub fn run_file_request(
             return Ok(());
         }
 
-        let bz = BzClient::new(&opts.bugzilla_url).with_api_key(opts.api_key.clone());
+        let bz = BzClient::new(&opts.bugzilla_url)
+            .with_api_key(opts.api_key.clone())
+            .map_err(|e| e.to_string())?;
         let mut blocks = resolve_refs(&bz, blocked).await?;
         if blocks.is_empty() {
             blocks = resolve_refs(&bz, &[EPEL_SIG_TRACKER.to_string()]).await?;

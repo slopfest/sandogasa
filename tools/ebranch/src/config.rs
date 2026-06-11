@@ -86,7 +86,8 @@ pub async fn cmd_config() -> Result<(), String> {
     // Validate the key with a minimal search.
     print!("Validating API key... ");
     let bz = sandogasa_bugzilla::BzClient::new(&config.bugzilla.url)
-        .with_api_key(config.bugzilla.api_key.clone());
+        .with_api_key(config.bugzilla.api_key.clone())
+        .map_err(|e| e.to_string())?;
 
     match bz.search("product=Fedora&limit=1", 1).await {
         Ok(_) => println!("valid."),

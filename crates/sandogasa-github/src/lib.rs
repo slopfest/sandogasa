@@ -238,6 +238,7 @@ impl Client {
     /// endpoint) authenticated with the given personal access
     /// token.
     pub fn new(base_url: &str, token: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        sandogasa_cli::ensure_secure_url(base_url)?;
         let http = build_http_client(token)?;
         Ok(Self {
             http,
@@ -452,6 +453,7 @@ impl Client {
 /// callers can distinguish "tried and was rejected" from
 /// "couldn't reach the server".
 pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    sandogasa_cli::ensure_secure_url(base_url)?;
     let http = build_http_client(token)?;
     let url = format!("{}/user", base_url.trim_end_matches('/'));
     let resp = http.get(&url).send()?;
@@ -493,6 +495,12 @@ fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_rejects_plaintext_remote() {
+        // A token must not be sent to a plaintext http non-loopback URL.
+        assert!(Client::new("http://api.example.com", "tok").is_err());
+    }
 
     #[test]
     fn user_by_username_returns_user() {
