@@ -10,12 +10,30 @@
 //! their `priority` field. Existing non-`unspecified` priorities
 //! are left alone so a human triager who already set a value
 //! isn't stomped.
+//!
+//! Independently of priorities, every open release-monitoring bug
+//! is also checked against Bodhi (unless `--skip-stale`): if
+//! builds with the advertised version (or newer) already exist,
+//! the latest addressing build per release is recorded in the
+//! bug's Fixed In Version field, and the bug is closed as
+//! `ERRATA` when the fix is stable in every active release the
+//! package has a branch for, moved to `MODIFIED` while any
+//! addressing update is still in testing, or — when only some
+//! releases have the fix (commonly just rawhide, since stable
+//! branches often intentionally stay behind) — offered for
+//! closing interactively (`--close-stale` skips the prompt).
 
 use std::collections::BTreeMap;
 
+use sandogasa_bodhi::BodhiClient;
+use sandogasa_bodhi::models::{BodhiRelease, Update};
 use sandogasa_bugzilla::BzClient;
 use sandogasa_bugzilla::models::Bug;
+use sandogasa_distgit::DistGitClient;
 use sandogasa_inventory::{Inventory, Priority};
+use sandogasa_koji::parse_nvr;
+
+use crate::semver_audit::{extract_new_version, version_at_least};
 
 /// Reporter address for Fedora's release-monitoring bot.
 /// Anitya / the-new-hotness opens a new bug under this account
@@ -139,47 +157,314 @@ pub fn group_by_component(updates: &[PriorityUpdate]) -> BTreeMap<String, Vec<&P
     out
 }
 
-/// Run the whole `sync-priorities` flow.
+// ---- stale-bug handling (Bodhi-backed) ----
+
+/// Where an addressing build was found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildSource {
+    /// A Bodhi update (alias + whether it reached stable).
+    Bodhi { alias: String, stable: bool },
+    /// No Bodhi record, but the branch's dist-git spec already
+    /// carries the version — the update shipped before the
+    /// active releases existed and was inherited.
+    DistGit,
+}
+
+/// The best build addressing a bug in one release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressingBuild {
+    /// Build NVR (e.g. `rust-clircle-0.6.1-1.fc43`).
+    pub nvr: String,
+    pub source: BuildSource,
+}
+
+impl AddressingBuild {
+    /// Whether the build is shipped (stable update, or already in
+    /// dist-git with no in-flight Bodhi update).
+    pub fn is_stable(&self) -> bool {
+        match &self.source {
+            BuildSource::Bodhi { stable, .. } => *stable,
+            BuildSource::DistGit => true,
+        }
+    }
+}
+
+/// Cache of branch spec fields: `(package, branch)` to the spec's
+/// `(Version, Release)` (`None` when the spec is unreadable, e.g.
+/// a retired branch).
+type SpecCache = BTreeMap<(String, String), Option<(String, Option<String>)>>;
+
+/// One release's verdict for a bug: the addressing build, or
+/// `None` when no update in that release carries the version.
+#[derive(Debug, Clone)]
+pub struct ReleaseFinding {
+    /// Bodhi release name (e.g. `F43`).
+    pub release: String,
+    pub build: Option<AddressingBuild>,
+}
+
+/// What to do with a bug whose version is already built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleAction {
+    /// Stable everywhere the package has a branch — close ERRATA.
+    CloseErrata,
+    /// Addressed, but at least one update is still in testing.
+    Modified,
+    /// Stable in some releases only (commonly just rawhide) —
+    /// close only with confirmation or `--close-stale`.
+    AskClose,
+}
+
+/// One planned stale-bug change.
+#[derive(Debug, Clone)]
+pub struct StaleBugPlan {
+    pub bug_id: u64,
+    pub component: String,
+    pub summary: String,
+    /// Version the bug advertises as available.
+    pub version: String,
+    pub action: StaleAction,
+    /// Space-joined latest addressing NVR per release, for the
+    /// bug's Fixed In Version field.
+    pub fixed_in: String,
+    pub findings: Vec<ReleaseFinding>,
+}
+
+/// Find the best build in `updates` addressing `target_version`
+/// of `package`: the highest addressing version, preferring a
+/// stable update on ties.
+pub fn find_addressing(
+    updates: &[Update],
+    package: &str,
+    target_version: &str,
+) -> Option<AddressingBuild> {
+    let mut best: Option<(AddressingBuild, String)> = None;
+    for update in updates {
+        let stable = update.status == "stable";
+        for build in &update.builds {
+            let Some((name, version, _)) = parse_nvr(&build.nvr) else {
+                continue;
+            };
+            if name != package || !version_at_least(version, target_version) {
+                continue;
+            }
+            let replace = match &best {
+                None => true,
+                Some((cur, cur_version)) => {
+                    version_at_least(version, cur_version)
+                        && (version != cur_version || (stable && !cur.is_stable()))
+                }
+            };
+            if replace {
+                best = Some((
+                    AddressingBuild {
+                        nvr: build.nvr.clone(),
+                        source: BuildSource::Bodhi {
+                            alias: update.alias.clone(),
+                            stable,
+                        },
+                    },
+                    version.to_string(),
+                ));
+            }
+        }
+    }
+    best.map(|(b, _)| b)
+}
+
+/// Decide the action for one bug from its per-release findings.
+/// Returns `None` when nothing addresses the bug yet (it's a
+/// genuine pending update).
+pub fn plan_stale_bug(
+    bug: &Bug,
+    component: &str,
+    version: &str,
+    findings: Vec<ReleaseFinding>,
+) -> Option<StaleBugPlan> {
+    let addressed: Vec<&AddressingBuild> =
+        findings.iter().filter_map(|f| f.build.as_ref()).collect();
+    if addressed.is_empty() {
+        return None;
+    }
+    let action = if addressed.iter().any(|b| !b.is_stable()) {
+        StaleAction::Modified
+    } else if addressed.len() == findings.len() {
+        StaleAction::CloseErrata
+    } else {
+        StaleAction::AskClose
+    };
+    // Dedupe NVRs: dist-git-derived entries with an unexpandable
+    // release field collapse to the same name-version string.
+    let mut nvrs: Vec<&str> = Vec::new();
+    for b in &addressed {
+        if !nvrs.contains(&b.nvr.as_str()) {
+            nvrs.push(&b.nvr);
+        }
+    }
+    let fixed_in = nvrs.join(" ");
+    // Already recorded and still mid-flight: nothing new to write.
+    if action == StaleAction::Modified && bug.status == "MODIFIED" && !bug.cf_fixed_in.is_empty() {
+        return None;
+    }
+    Some(StaleBugPlan {
+        bug_id: bug.id,
+        component: component.to_string(),
+        summary: bug.summary.clone(),
+        version: version.to_string(),
+        action,
+        fixed_in,
+        findings,
+    })
+}
+
+/// Build the Bugzilla comment for a stale-bug change.
+pub fn stale_comment(plan: &StaleBugPlan) -> String {
+    let mut out = format!(
+        "Bodhi has builds addressing this update (version {} or \
+         newer):\n",
+        plan.version
+    );
+    for f in &plan.findings {
+        match &f.build {
+            Some(b) => match &b.source {
+                BuildSource::Bodhi { alias, stable } => out.push_str(&format!(
+                    "  {}: {} — https://bodhi.fedoraproject.org/updates/{} ({})\n",
+                    f.release,
+                    b.nvr,
+                    alias,
+                    if *stable { "stable" } else { "testing" }
+                )),
+                BuildSource::DistGit => out.push_str(&format!(
+                    "  {}: {} (already in dist-git; shipped before \
+                     this release existed)\n",
+                    f.release, b.nvr
+                )),
+            },
+            None => out.push_str(&format!("  {}: no update found\n", f.release)),
+        }
+    }
+    out.push('\n');
+    out.push_str(match plan.action {
+        StaleAction::CloseErrata => {
+            "The new version is in stable updates for every active \
+             release this package has a branch for; closing as ERRATA."
+        }
+        StaleAction::Modified => {
+            "Some updates are still in testing; marking this bug \
+             MODIFIED until they reach stable."
+        }
+        StaleAction::AskClose => {
+            "The releases without an update are listed above — their \
+             branches are not expected to rebase; closing as ERRATA."
+        }
+    });
+    out
+}
+
+/// Sort key for Bodhi release names ("F45" > "F43", "EPEL-10" >
+/// "EPEL-9") so findings render newest-first.
+fn release_rank(name: &str) -> u64 {
+    name.chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0)
+}
+
+/// The `%{?dist}` expansion for a Bodhi release (e.g. `.fc43`,
+/// `.el9`).
+fn dist_tag(release: &BodhiRelease) -> String {
+    let n = release_rank(&release.name);
+    if release.id_prefix == "FEDORA-EPEL" {
+        format!(".el{n}")
+    } else {
+        format!(".fc{n}")
+    }
+}
+
+/// Reconstruct an NVR from a branch spec's Version/Release fields.
+/// `%{?dist}` is expanded from the release; a release field with
+/// other unexpandable macros (e.g. rpmautospec's `%autorelease`)
+/// degrades to the bare `name-version`.
+pub fn nvr_from_spec(
+    package: &str,
+    version: &str,
+    release_field: Option<&str>,
+    dist: &str,
+) -> String {
+    if let Some(rel) = release_field {
+        let expanded = rel.replace("%{?dist}", dist).replace("%{dist}", dist);
+        if !expanded.contains('%') {
+            return format!("{package}-{version}-{expanded}");
+        }
+    }
+    format!("{package}-{version}")
+}
+
+/// Run the whole `triage-updates` flow.
 ///
 /// Loads the inventories (already merged by the caller), iterates
-/// every package, queries Bugzilla, plans updates, prints them,
-/// optionally prompts, then applies. `dry_run = true` short-
-/// circuits before any PUT.
+/// every package, queries Bugzilla, plans priority and stale-bug
+/// updates, prints them, optionally prompts, then applies.
+/// `dry_run = true` short-circuits before any PUT.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     inventory: &Inventory,
     client: &BzClient,
+    dg: &DistGitClient,
+    bodhi: &BodhiClient,
+    patterns: &[String],
+    skip_stale: bool,
+    close_stale: bool,
     dry_run: bool,
     yes: bool,
     verbose: bool,
 ) -> Result<RunReport, String> {
     let mut all_updates: Vec<PriorityUpdate> = Vec::new();
+    let mut stale_plans: Vec<StaleBugPlan> = Vec::new();
     let mut packages_with_priority = 0usize;
+    // Active Bodhi releases, fetched once on first need.
+    let mut releases: Option<Vec<BodhiRelease>> = None;
+    // (package, release-name) -> updates, shared across a
+    // package's bugs.
+    let mut updates_cache: BTreeMap<(String, String), Vec<Update>> = BTreeMap::new();
+    // (package, branch) -> spec Version/Release fields, for the
+    // dist-git fallback (None = spec unreadable).
+    let mut spec_cache = SpecCache::new();
 
     for pkg in &inventory.package {
+        if !crate::matches_any_pattern(&pkg.name, patterns) {
+            continue;
+        }
         let resolved = inventory.priority_for(&pkg.name);
-        match resolved {
+        let target = match resolved {
             None => {
                 if verbose {
                     eprintln!("[poi-tracker] {}: no priority configured", pkg.name);
                 }
-                continue;
+                None
             }
             Some(Priority::Unspecified) => {
                 if verbose {
                     eprintln!("[poi-tracker] {}: priority=unspecified (opt-out)", pkg.name);
                 }
-                continue;
+                None
             }
-            Some(_) => {
+            Some(p) => {
                 packages_with_priority += 1;
+                Some(p)
             }
+        };
+        // Without a priority to set, the search only feeds the
+        // stale check — skip it entirely under --skip-stale.
+        if target.is_none() && skip_stale {
+            continue;
         }
 
         if verbose {
             eprintln!(
-                "[poi-tracker] {}: searching release-monitoring bugs (target: {})",
-                pkg.name,
-                resolved.unwrap().as_bugzilla_str()
+                "[poi-tracker] {}: searching release-monitoring bugs",
+                pkg.name
             );
         }
         let query = bug_search_query(&pkg.name);
@@ -187,58 +472,117 @@ pub async fn run(
             .search(&query, 0)
             .await
             .map_err(|e| format!("Bugzilla search for {}: {e}", pkg.name))?;
-        match plan_package(&pkg.name, resolved, &bugs) {
-            PackageOutcome::NoPriority | PackageOutcome::OptedOut => {}
-            PackageOutcome::NoBugs => {
-                if verbose {
-                    eprintln!(
-                        "[poi-tracker] {}: no open release-monitoring bugs",
-                        pkg.name
-                    );
+
+        if target.is_some() {
+            match plan_package(&pkg.name, resolved, &bugs) {
+                PackageOutcome::NoPriority | PackageOutcome::OptedOut => {}
+                PackageOutcome::NoBugs => {
+                    if verbose {
+                        eprintln!(
+                            "[poi-tracker] {}: no open release-monitoring bugs",
+                            pkg.name
+                        );
+                    }
                 }
-            }
-            PackageOutcome::AllAlreadyTriaged(n) => {
-                if verbose {
-                    eprintln!(
-                        "[poi-tracker] {}: {n} open bug(s) already triaged",
-                        pkg.name
-                    );
+                PackageOutcome::AllAlreadyTriaged(n) => {
+                    if verbose {
+                        eprintln!(
+                            "[poi-tracker] {}: {n} open bug(s) already triaged",
+                            pkg.name
+                        );
+                    }
                 }
-            }
-            PackageOutcome::Updates(updates) => {
-                all_updates.extend(updates);
+                PackageOutcome::Updates(updates) => {
+                    all_updates.extend(updates);
+                }
             }
         }
+
+        if skip_stale || bugs.is_empty() {
+            continue;
+        }
+        plan_stale_for_package(
+            &pkg.name,
+            &bugs,
+            dg,
+            bodhi,
+            &mut releases,
+            &mut updates_cache,
+            &mut spec_cache,
+            &mut stale_plans,
+            verbose,
+        )
+        .await;
     }
 
     print_plan(&all_updates);
+    print_stale_plan(&stale_plans);
 
-    let report = RunReport {
+    let mut report = RunReport {
         packages_with_priority,
         updates_planned: all_updates.len(),
         updates_applied: 0,
+        stale_planned: stale_plans.len(),
+        stale_applied: 0,
         failures: 0,
     };
 
-    if all_updates.is_empty() {
+    if all_updates.is_empty() && stale_plans.is_empty() {
         return Ok(report);
     }
     if dry_run {
         eprintln!("\n(dry-run: not applying)");
         return Ok(report);
     }
-    if !yes && !confirm(&format!("\nApply {} update(s)?", all_updates.len()))? {
+
+    // Resolve the AskClose set: --close-stale promotes them all,
+    // -y without it drops them, otherwise prompt once for the lot.
+    let ask_count = stale_plans
+        .iter()
+        .filter(|p| p.action == StaleAction::AskClose)
+        .count();
+    let close_partial = if ask_count == 0 || close_stale {
+        close_stale
+    } else if yes {
+        eprintln!(
+            "(skipping {ask_count} partially-addressed bug(s); pass \
+             --close-stale to close them under -y)"
+        );
+        false
+    } else {
+        confirm(&format!(
+            "\nClose {ask_count} bug(s) addressed only in some \
+             releases as ERRATA?"
+        ))?
+    };
+    if !close_partial {
+        stale_plans.retain(|p| p.action != StaleAction::AskClose);
+    }
+    report.stale_planned = stale_plans.len();
+
+    // A bug about to be closed doesn't need a priority bump.
+    let closing: Vec<u64> = stale_plans
+        .iter()
+        .filter(|p| p.action != StaleAction::Modified)
+        .map(|p| p.bug_id)
+        .collect();
+    all_updates.retain(|u| !closing.contains(&u.bug_id));
+    report.updates_planned = all_updates.len();
+
+    let total = all_updates.len() + stale_plans.len();
+    if total == 0 {
+        return Ok(report);
+    }
+    if !yes && !confirm(&format!("\nApply {total} update(s)?"))? {
         eprintln!("aborted.");
         return Ok(report);
     }
 
-    let mut applied = 0usize;
-    let mut failures = 0usize;
     for u in &all_updates {
         let body = serde_json::json!({"priority": u.target_priority.as_bugzilla_str()});
         match client.update(u.bug_id, &body).await {
             Ok(()) => {
-                applied += 1;
+                report.updates_applied += 1;
                 eprintln!(
                     "updated bug {} ({}): {} -> {}",
                     u.bug_id,
@@ -248,17 +592,186 @@ pub async fn run(
                 );
             }
             Err(e) => {
-                failures += 1;
+                report.failures += 1;
                 eprintln!("error: bug {} ({}): {e}", u.bug_id, u.component);
             }
         }
     }
-    Ok(RunReport {
-        packages_with_priority,
-        updates_planned: all_updates.len(),
-        updates_applied: applied,
-        failures,
-    })
+
+    for plan in &stale_plans {
+        let mut body = serde_json::json!({
+            "cf_fixed_in": plan.fixed_in,
+            "comment": { "body": stale_comment(plan) },
+        });
+        let outcome = match plan.action {
+            StaleAction::Modified => {
+                body["status"] = serde_json::json!("MODIFIED");
+                "-> MODIFIED"
+            }
+            StaleAction::CloseErrata | StaleAction::AskClose => {
+                body["status"] = serde_json::json!("CLOSED");
+                body["resolution"] = serde_json::json!("ERRATA");
+                "-> CLOSED/ERRATA"
+            }
+        };
+        match client.update(plan.bug_id, &body).await {
+            Ok(()) => {
+                report.stale_applied += 1;
+                eprintln!(
+                    "updated bug {} ({}): {outcome} (fixed in: {})",
+                    plan.bug_id, plan.component, plan.fixed_in
+                );
+            }
+            Err(e) => {
+                report.failures += 1;
+                eprintln!("error: bug {} ({}): {e}", plan.bug_id, plan.component);
+            }
+        }
+    }
+    Ok(report)
+}
+
+/// Plan stale-bug actions for one package's open bugs. Network
+/// failures (Bodhi, dist-git) skip the package with a warning
+/// rather than failing the whole run — a missing answer must not
+/// be mistaken for "no update exists".
+#[allow(clippy::too_many_arguments)]
+async fn plan_stale_for_package(
+    package: &str,
+    bugs: &[Bug],
+    dg: &DistGitClient,
+    bodhi: &BodhiClient,
+    releases: &mut Option<Vec<BodhiRelease>>,
+    updates_cache: &mut BTreeMap<(String, String), Vec<Update>>,
+    spec_cache: &mut SpecCache,
+    out: &mut Vec<StaleBugPlan>,
+    verbose: bool,
+) {
+    let with_version: Vec<(&Bug, String)> = bugs
+        .iter()
+        .filter_map(|b| extract_new_version(&b.summary, package).map(|v| (b, v)))
+        .collect();
+    if with_version.is_empty() {
+        return;
+    }
+
+    if releases.is_none() {
+        match bodhi.active_releases().await {
+            Ok(r) => *releases = Some(r),
+            Err(e) => {
+                eprintln!("warning: cannot fetch Bodhi releases: {e}");
+                return;
+            }
+        }
+    }
+    let releases = releases.as_ref().unwrap();
+
+    let branches = match dg.list_branches(package).await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("warning: {package}: cannot list dist-git branches: {e}");
+            return;
+        }
+    };
+
+    for (bug, version) in with_version {
+        // Match the bug's product family: a Fedora bug is only
+        // addressed by Fedora releases, an EPEL bug by EPEL ones.
+        let prefix = match bug.product.as_str() {
+            "Fedora" => "FEDORA",
+            "Fedora EPEL" => "FEDORA-EPEL",
+            _ => continue,
+        };
+        let mut relevant: Vec<&BodhiRelease> = releases
+            .iter()
+            .filter(|r| r.id_prefix == prefix && branches.iter().any(|b| b == &r.branch))
+            .collect();
+        if relevant.is_empty() {
+            continue;
+        }
+        relevant.sort_by_key(|r| std::cmp::Reverse(release_rank(&r.name)));
+
+        let mut findings = Vec::with_capacity(relevant.len());
+        let mut failed = false;
+        for rel in &relevant {
+            let key = (package.to_string(), rel.name.clone());
+            if !updates_cache.contains_key(&key) {
+                if verbose {
+                    eprintln!("[poi-tracker] {package}: querying Bodhi for {}", rel.name);
+                }
+                match bodhi
+                    .updates_for_package(package, &rel.name, &["stable", "testing"])
+                    .await
+                {
+                    Ok(u) => {
+                        updates_cache.insert(key.clone(), u);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "warning: {package}: Bodhi query for {} failed: {e}",
+                            rel.name
+                        );
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+            findings.push(ReleaseFinding {
+                release: rel.name.clone(),
+                build: find_addressing(&updates_cache[&key], package, &version),
+            });
+        }
+        if failed {
+            continue;
+        }
+
+        // Bodhi has no record for builds that shipped before the
+        // active releases existed (they're inherited via Koji tag
+        // inheritance). For those gaps, check the branch's
+        // dist-git spec: a version already committed there means
+        // the update happened long ago.
+        for (finding, rel) in findings.iter_mut().zip(&relevant) {
+            if finding.build.is_some() {
+                continue;
+            }
+            let key = (package.to_string(), rel.branch.clone());
+            if !spec_cache.contains_key(&key) {
+                if verbose {
+                    eprintln!(
+                        "[poi-tracker] {package}: checking {} dist-git spec",
+                        rel.branch
+                    );
+                }
+                let parsed = match dg.fetch_spec(package, &rel.branch).await {
+                    Ok(spec) => crate::semver_audit::parse_spec_version(&spec)
+                        .map(|v| (v, crate::semver_audit::parse_spec_field(&spec, "Release"))),
+                    Err(_) => None,
+                };
+                spec_cache.insert(key.clone(), parsed);
+            }
+            if let Some((spec_version, release_field)) = &spec_cache[&key]
+                && version_at_least(spec_version, &version)
+            {
+                finding.build = Some(AddressingBuild {
+                    nvr: nvr_from_spec(
+                        package,
+                        spec_version,
+                        release_field.as_deref(),
+                        &dist_tag(rel),
+                    ),
+                    source: BuildSource::DistGit,
+                });
+            }
+        }
+        if let Some(plan) = plan_stale_bug(bug, package, &version, findings) {
+            out.push(plan);
+        } else if verbose {
+            eprintln!(
+                "[poi-tracker] {package}: bug {} ({version}) still pending",
+                bug.id
+            );
+        }
+    }
 }
 
 /// Summary returned from `run` so the caller can pick an exit
@@ -268,6 +781,8 @@ pub struct RunReport {
     pub packages_with_priority: usize,
     pub updates_planned: usize,
     pub updates_applied: usize,
+    pub stale_planned: usize,
+    pub stale_applied: usize,
     pub failures: usize,
 }
 
@@ -292,6 +807,37 @@ fn print_plan(updates: &[PriorityUpdate]) {
         }
     }
     println!("\nTotal: {} update(s).", updates.len());
+}
+
+/// Print planned stale-bug actions, grouped by action.
+fn print_stale_plan(plans: &[StaleBugPlan]) {
+    if plans.is_empty() {
+        return;
+    }
+    println!("\nBugs already addressed in Bodhi:");
+    for (action, heading) in [
+        (
+            StaleAction::CloseErrata,
+            "Close as ERRATA (stable everywhere)",
+        ),
+        (StaleAction::Modified, "Mark MODIFIED (still in testing)"),
+        (
+            StaleAction::AskClose,
+            "Addressed only in some releases (close on confirm / --close-stale)",
+        ),
+    ] {
+        let group: Vec<&StaleBugPlan> = plans.iter().filter(|p| p.action == action).collect();
+        if group.is_empty() {
+            continue;
+        }
+        println!("  {heading}:");
+        for p in &group {
+            println!(
+                "    bug {} ({}): {} — fixed in: {}",
+                p.bug_id, p.component, p.summary, p.fixed_in
+            );
+        }
+    }
 }
 
 fn confirm(prompt: &str) -> Result<bool, String> {
@@ -383,6 +929,180 @@ mod tests {
         }
     }
 
+    // ---- stale-bug handling ----
+
+    fn make_update(alias: &str, status: &str, nvrs: &[&str]) -> Update {
+        serde_json::from_value(serde_json::json!({
+            "alias": alias,
+            "status": status,
+            "builds": nvrs.iter().map(|n| serde_json::json!({"nvr": n})).collect::<Vec<_>>(),
+        }))
+        .unwrap()
+    }
+
+    fn finding(release: &str, build: Option<(&str, &str, bool)>) -> ReleaseFinding {
+        ReleaseFinding {
+            release: release.to_string(),
+            build: build.map(|(nvr, alias, stable)| AddressingBuild {
+                nvr: nvr.to_string(),
+                source: BuildSource::Bodhi {
+                    alias: alias.to_string(),
+                    stable,
+                },
+            }),
+        }
+    }
+
+    #[test]
+    fn find_addressing_picks_highest_matching_build() {
+        let updates = vec![
+            make_update("FEDORA-1", "stable", &["foo-1.2.0-1.fc43", "bar-9-1.fc43"]),
+            make_update("FEDORA-2", "testing", &["foo-1.3.0-1.fc43"]),
+        ];
+        let best = find_addressing(&updates, "foo", "1.2.0").unwrap();
+        assert_eq!(best.nvr, "foo-1.3.0-1.fc43");
+        assert_eq!(
+            best.source,
+            BuildSource::Bodhi {
+                alias: "FEDORA-2".to_string(),
+                stable: false
+            }
+        );
+        assert!(!best.is_stable());
+    }
+
+    #[test]
+    fn find_addressing_prefers_stable_on_version_tie() {
+        let updates = vec![
+            make_update("FEDORA-T", "testing", &["foo-1.2.0-1.fc43"]),
+            make_update("FEDORA-S", "stable", &["foo-1.2.0-2.fc43"]),
+        ];
+        let best = find_addressing(&updates, "foo", "1.2.0").unwrap();
+        assert!(matches!(
+            best.source,
+            BuildSource::Bodhi { ref alias, stable: true } if alias == "FEDORA-S"
+        ));
+    }
+
+    #[test]
+    fn nvr_from_spec_expands_dist() {
+        assert_eq!(
+            nvr_from_spec("foo", "1.2.0", Some("1%{?dist}"), ".fc43"),
+            "foo-1.2.0-1.fc43"
+        );
+        // rpmautospec releases can't be expanded -> name-version.
+        assert_eq!(
+            nvr_from_spec("foo", "1.2.0", Some("%autorelease"), ".fc43"),
+            "foo-1.2.0"
+        );
+        assert_eq!(nvr_from_spec("foo", "1.2.0", None, ".fc43"), "foo-1.2.0");
+    }
+
+    #[test]
+    fn plan_stale_dedupes_identical_nvrs() {
+        // Two releases falling back to the same unexpandable
+        // name-version must not repeat it in Fixed In Version.
+        let bug = make_bug(1, "unspecified", "foo-1.2.0 is available");
+        let distgit = |rel: &str| ReleaseFinding {
+            release: rel.to_string(),
+            build: Some(AddressingBuild {
+                nvr: "foo-1.2.0".to_string(),
+                source: BuildSource::DistGit,
+            }),
+        };
+        let plan =
+            plan_stale_bug(&bug, "foo", "1.2.0", vec![distgit("F45"), distgit("F43")]).unwrap();
+        assert_eq!(plan.action, StaleAction::CloseErrata);
+        assert_eq!(plan.fixed_in, "foo-1.2.0");
+    }
+
+    #[test]
+    fn find_addressing_ignores_older_versions_and_other_packages() {
+        let updates = vec![make_update(
+            "FEDORA-1",
+            "stable",
+            &["foo-1.1.0-1.fc43", "foolish-2.0-1.fc43"],
+        )];
+        assert!(find_addressing(&updates, "foo", "1.2.0").is_none());
+    }
+
+    #[test]
+    fn plan_stale_pending_when_nothing_addresses() {
+        let bug = make_bug(1, "unspecified", "foo-1.2.0 is available");
+        let findings = vec![finding("F45", None), finding("F43", None)];
+        assert!(plan_stale_bug(&bug, "foo", "1.2.0", findings).is_none());
+    }
+
+    #[test]
+    fn plan_stale_close_when_stable_everywhere() {
+        let bug = make_bug(1, "unspecified", "foo-1.2.0 is available");
+        let findings = vec![
+            finding("F45", Some(("foo-1.2.0-1.fc45", "FEDORA-A", true))),
+            finding("F43", Some(("foo-1.2.0-1.fc43", "FEDORA-B", true))),
+        ];
+        let plan = plan_stale_bug(&bug, "foo", "1.2.0", findings).unwrap();
+        assert_eq!(plan.action, StaleAction::CloseErrata);
+        assert_eq!(plan.fixed_in, "foo-1.2.0-1.fc45 foo-1.2.0-1.fc43");
+    }
+
+    #[test]
+    fn plan_stale_modified_when_any_testing() {
+        let bug = make_bug(1, "unspecified", "foo-1.2.0 is available");
+        let findings = vec![
+            finding("F45", Some(("foo-1.2.0-1.fc45", "FEDORA-A", true))),
+            finding("F43", Some(("foo-1.2.0-1.fc43", "FEDORA-B", false))),
+        ];
+        let plan = plan_stale_bug(&bug, "foo", "1.2.0", findings).unwrap();
+        assert_eq!(plan.action, StaleAction::Modified);
+    }
+
+    #[test]
+    fn plan_stale_ask_when_partially_addressed_stable() {
+        // Stable in rawhide only — the "ask before closing" case.
+        let bug = make_bug(1, "unspecified", "foo-1.2.0 is available");
+        let findings = vec![
+            finding("F45", Some(("foo-1.2.0-1.fc45", "FEDORA-A", true))),
+            finding("F43", None),
+        ];
+        let plan = plan_stale_bug(&bug, "foo", "1.2.0", findings).unwrap();
+        assert_eq!(plan.action, StaleAction::AskClose);
+        assert_eq!(plan.fixed_in, "foo-1.2.0-1.fc45");
+    }
+
+    #[test]
+    fn plan_stale_skips_already_modified_with_fixed_in() {
+        let mut bug = make_bug(1, "unspecified", "foo-1.2.0 is available");
+        bug.status = "MODIFIED".to_string();
+        bug.cf_fixed_in = "foo-1.2.0-1.fc43".to_string();
+        let findings = vec![finding(
+            "F43",
+            Some(("foo-1.2.0-1.fc43", "FEDORA-B", false)),
+        )];
+        assert!(plan_stale_bug(&bug, "foo", "1.2.0", findings).is_none());
+    }
+
+    #[test]
+    fn stale_comment_lists_releases_and_action() {
+        let bug = make_bug(1, "unspecified", "foo-1.2.0 is available");
+        let findings = vec![
+            finding("F45", Some(("foo-1.2.0-1.fc45", "FEDORA-A", true))),
+            finding("F43", None),
+        ];
+        let plan = plan_stale_bug(&bug, "foo", "1.2.0", findings).unwrap();
+        let comment = stale_comment(&plan);
+        assert!(comment.contains("F45: foo-1.2.0-1.fc45"));
+        assert!(comment.contains("https://bodhi.fedoraproject.org/updates/FEDORA-A"));
+        assert!(comment.contains("(stable)"));
+        assert!(comment.contains("F43: no update found"));
+        assert!(comment.contains("closing as ERRATA"));
+    }
+
+    #[test]
+    fn release_rank_orders_names() {
+        assert!(release_rank("F45") > release_rank("F43"));
+        assert!(release_rank("EPEL-10") > release_rank("EPEL-9"));
+    }
+
     #[test]
     fn bug_search_query_includes_required_filters() {
         let q = bug_search_query("python-django");
@@ -391,6 +1111,262 @@ mod tests {
         assert!(q.contains("product=Fedora"));
         assert!(q.contains("product=Fedora%20EPEL"));
         assert!(q.contains("reporter=upstream-release-monitoring%40fedoraproject.org"));
+    }
+
+    // ---- wiremock end-to-end (run) ----
+
+    use wiremock::matchers::{body_partial_json, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn test_inventory(priority: Option<&str>) -> Inventory {
+        let prio = priority
+            .map(|p| format!("priority = \"{p}\"\n"))
+            .unwrap_or_default();
+        toml::from_str(&format!(
+            "[inventory]\n\
+             name = \"test\"\n\
+             description = \"test\"\n\
+             maintainer = \"tester\"\n\
+             \n\
+             [[package]]\n\
+             name = \"foo\"\n\
+             {prio}"
+        ))
+        .unwrap()
+    }
+
+    fn bug_json(id: u64, summary: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "summary": summary,
+            "status": "NEW",
+            "resolution": "",
+            "product": "Fedora",
+            "component": ["foo"],
+            "severity": "unspecified",
+            "priority": "unspecified",
+            "assigned_to": "nobody@fedoraproject.org",
+            "creator": RELEASE_MONITORING_REPORTER,
+            "creation_time": "2026-05-01T00:00:00Z",
+            "last_change_time": "2026-05-01T00:00:00Z",
+        })
+    }
+
+    /// Mount the shared scaffolding: one open bug for foo-1.2.0,
+    /// Bodhi releases F45 (rawhide) + F43, dist-git branches.
+    async fn mount_common(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("component", "foo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(1, "foo-1.2.0 is available")],
+                "total_matches": 1
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/releases/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "releases": [
+                    {"name": "F45", "branch": "rawhide", "id_prefix": "FEDORA", "state": "pending"},
+                    {"name": "F43", "branch": "f43", "id_prefix": "FEDORA", "state": "current"}
+                ],
+                "total": 2, "page": 1, "pages": 1
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/foo/git/branches"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "branches": ["rawhide", "f43"]
+            })))
+            .mount(server)
+            .await;
+    }
+
+    fn updates_response(updates: serde_json::Value) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "updates": updates, "total": 1, "page": 1, "pages": 1
+        }))
+    }
+
+    #[tokio::test]
+    async fn run_closes_bug_stable_everywhere_with_distgit_fallback() {
+        let server = MockServer::start().await;
+        mount_common(&server).await;
+        // F45: stable Bodhi update. F43: nothing in Bodhi, but the
+        // branch spec already carries 1.2.0 (inherited build).
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F45"))
+            .respond_with(updates_response(serde_json::json!([{
+                "alias": "FEDORA-2026-aaa",
+                "status": "stable",
+                "builds": [{"nvr": "foo-1.2.0-1.fc45"}]
+            }])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F43"))
+            .respond_with(updates_response(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rpms/foo/raw/f43/f/foo.spec"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("Name: foo\nVersion: 1.2.0\nRelease: 1%{?dist}\n"),
+            )
+            .mount(&server)
+            .await;
+        // The close PUT: ERRATA + Fixed In Version from both
+        // releases. The priority bump for the same bug must be
+        // dropped (the bug is closing), so this is the only PUT.
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/1"))
+            .and(body_partial_json(serde_json::json!({
+                "status": "CLOSED",
+                "resolution": "ERRATA",
+                "cf_fixed_in": "foo-1.2.0-1.fc45 foo-1.2.0-1.fc43"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let inventory = test_inventory(Some("high"));
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let bodhi = BodhiClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory,
+            &bz,
+            &dg,
+            &bodhi,
+            &[],
+            false,
+            false,
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.stale_applied, 1);
+        assert_eq!(
+            report.updates_planned, 0,
+            "priority bump dropped for closing bug"
+        );
+        assert_eq!(report.failures, 0);
+    }
+
+    #[tokio::test]
+    async fn run_marks_modified_when_update_in_testing() {
+        let server = MockServer::start().await;
+        mount_common(&server).await;
+        // Both releases addressed, F43 only in testing.
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F45"))
+            .respond_with(updates_response(serde_json::json!([{
+                "alias": "FEDORA-2026-aaa",
+                "status": "stable",
+                "builds": [{"nvr": "foo-1.2.0-1.fc45"}]
+            }])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F43"))
+            .respond_with(updates_response(serde_json::json!([{
+                "alias": "FEDORA-2026-bbb",
+                "status": "testing",
+                "builds": [{"nvr": "foo-1.2.0-1.fc43"}]
+            }])))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/1"))
+            .and(body_partial_json(serde_json::json!({"status": "MODIFIED"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let inventory = test_inventory(None);
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let bodhi = BodhiClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory,
+            &bz,
+            &dg,
+            &bodhi,
+            &[],
+            false,
+            false,
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.stale_applied, 1);
+    }
+
+    #[tokio::test]
+    async fn run_skips_partial_close_under_yes_without_close_stale() {
+        let server = MockServer::start().await;
+        mount_common(&server).await;
+        // Stable in rawhide only; F43 has nothing anywhere.
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F45"))
+            .respond_with(updates_response(serde_json::json!([{
+                "alias": "FEDORA-2026-aaa",
+                "status": "stable",
+                "builds": [{"nvr": "foo-1.2.0-1.fc45"}]
+            }])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F43"))
+            .respond_with(updates_response(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        // Spec on f43 still behind -> AskClose; under -y without
+        // --close-stale nothing is written.
+        Mock::given(method("GET"))
+            .and(path("/rpms/foo/raw/f43/f/foo.spec"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("Name: foo\nVersion: 1.1.0\nRelease: 1%{?dist}\n"),
+            )
+            .mount(&server)
+            .await;
+
+        let inventory = test_inventory(None);
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let bodhi = BodhiClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory,
+            &bz,
+            &dg,
+            &bodhi,
+            &[],
+            false,
+            false,
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.stale_planned, 0, "AskClose dropped under -y");
+        assert_eq!(report.stale_applied, 0);
     }
 
     #[test]

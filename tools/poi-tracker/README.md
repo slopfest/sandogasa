@@ -222,6 +222,31 @@ package is in multiple workloads, the highest workload
 default applies. Set `priority = "unspecified"` on a package
 to explicitly opt out of a workload default.
 
+Independently of priorities, every open release-monitoring bug
+is also checked against Bodhi for builds that already carry the
+advertised version (or newer). When found, the latest addressing
+build per release is recorded in the bug's **Fixed In Version**
+field, and:
+
+- stable in **every** active release the package has a branch
+  for → the bug is closed as `ERRATA`, with a comment listing
+  the Bodhi updates;
+- any addressing update still in **testing** → the bug is moved
+  to `MODIFIED` (a later run closes it once everything is
+  stable);
+- addressed only in **some** releases (commonly just rawhide,
+  since stable branches often intentionally stay behind) → you
+  are asked before closing. `--close-stale` closes these without
+  asking; under `-y` they are skipped unless `--close-stale` is
+  given.
+
+Builds that shipped before the current releases existed have no
+Bodhi record (they were inherited at branching); for those the
+branch's dist-git spec is consulted instead, so years-old stale
+bugs close too. Pass `--skip-stale` to disable the whole check
+(also restoring the cheaper priority-only scan), and
+`--pattern <glob>` (e.g. `rust-*`) to scope the run.
+
 ### Close retired packages' update bugs
 
 When a package gets retired on a dist-git branch (a

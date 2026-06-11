@@ -1201,15 +1201,18 @@ name = "poi-tracker"
 version = "0.12.1"
 dependencies = [
  "clap",
+ "sandogasa-bodhi",
  "sandogasa-bugzilla",
  "sandogasa-config",
  "sandogasa-distgit",
  "sandogasa-gitlab",
  "sandogasa-inventory",
+ "sandogasa-koji",
  "serde",
  "serde_json",
  "tokio",
  "toml",
+ "wiremock",
 ]
 
 [[package]]

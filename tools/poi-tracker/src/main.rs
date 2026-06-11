@@ -138,6 +138,19 @@ struct TriageRetiredArgs {
 
 #[derive(clap::Args)]
 struct TriageUpdatesArgs {
+    /// Only triage packages matching this glob (e.g. `rust-*`).
+    /// Comma-separated or repeated; default: all packages.
+    #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
+    pattern: Vec<String>,
+
+    /// Close partially-addressed bugs without asking.
+    #[arg(long, conflicts_with = "skip_stale")]
+    close_stale: bool,
+
+    /// Skip the Bodhi check for already-built updates.
+    #[arg(long)]
+    skip_stale: bool,
+
     /// Bugzilla API key (or set BUGZILLA_API_KEY env var, or
     /// run `poi-tracker config`).
     #[arg(long, env = "BUGZILLA_API_KEY")]
@@ -677,20 +690,30 @@ fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let dg = sandogasa_distgit::DistGitClient::new();
+    let bodhi = sandogasa_bodhi::BodhiClient::new();
     match rt.block_on(triage_updates::run(
         &inventory,
         &client,
+        &dg,
+        &bodhi,
+        &args.pattern,
+        args.skip_stale,
+        args.close_stale,
         args.dry_run,
         args.yes,
         args.verbose,
     )) {
         Ok(report) => {
             eprintln!(
-                "\n{} package(s) with managed priority, {} planned update(s), \
-                 {} applied, {} failed",
+                "\n{} package(s) with managed priority, {} priority update(s) \
+                 planned, {} applied; {} stale-bug action(s) planned, {} \
+                 applied, {} failed",
                 report.packages_with_priority,
                 report.updates_planned,
                 report.updates_applied,
+                report.stale_planned,
+                report.stale_applied,
                 report.failures
             );
             if report.failures > 0 {

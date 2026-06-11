@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### poi-tracker: `triage-updates` closes already-addressed bugs via Bodhi
+
+`triage-updates` now checks every open release-monitoring bug
+against Bodhi (and, for builds that predate the active releases,
+against the branch's dist-git spec): when builds with the
+advertised version or newer already exist, the latest addressing
+build per release is written to the bug's Fixed In Version field,
+and the bug is closed as `ERRATA` when stable in every active
+release the package has a branch for, moved to `MODIFIED` while
+any addressing update is still in testing, or — when only some
+releases carry the fix (commonly just rawhide) — offered for
+closing interactively. New flags: `--close-stale` closes the
+partial cases without asking, `--skip-stale` disables the check
+(restoring the previous priority-only behavior and cost), and
+`--pattern <glob>` scopes the run to matching packages.
+`semver-audit` now points at `triage-updates` from its "up to
+date (stale bug)" group, mirroring its `triage-retired` hint.
+
 ### poi-tracker: new `semver-audit` subcommand
 
 `semver-audit` classifies the pending upstream update for each

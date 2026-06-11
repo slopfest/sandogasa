@@ -97,6 +97,23 @@ fn numeric_components(version: &str) -> Option<Vec<u64>> {
     v.split('.').map(|c| c.parse::<u64>().ok()).collect()
 }
 
+/// Whether `candidate` is at least `target`, comparing dotted
+/// numeric components (shorter versions are zero-padded). Used to
+/// decide whether a build addresses a release-monitoring bug.
+/// Non-numeric versions only match on exact string equality.
+pub fn version_at_least(candidate: &str, target: &str) -> bool {
+    match (numeric_components(candidate), numeric_components(target)) {
+        (Some(c), Some(t)) => {
+            let width = c.len().max(t.len());
+            let pad = |v: &[u64]| -> Vec<u64> {
+                (0..width).map(|i| v.get(i).copied().unwrap_or(0)).collect()
+            };
+            pad(&c) >= pad(&t)
+        }
+        _ => candidate == target,
+    }
+}
+
 /// Classify a `current -> new` bump using Cargo's compatibility
 /// rule: a change at or before the leftmost non-zero component of
 /// `current` is breaking.
@@ -154,10 +171,11 @@ pub fn extract_new_version(summary: &str, component: &str) -> Option<String> {
     (!version.is_empty()).then(|| version.to_string())
 }
 
-/// Read the `Version:` field from a spec file.
-pub fn parse_spec_version(spec: &str) -> Option<String> {
+/// Read a `Tag:` field (e.g. `Version`, `Release`) from a spec file.
+pub fn parse_spec_field(spec: &str, tag: &str) -> Option<String> {
+    let prefix = format!("{tag}:");
     for line in spec.lines() {
-        if let Some(rest) = line.trim_start().strip_prefix("Version:") {
+        if let Some(rest) = line.trim_start().strip_prefix(&prefix) {
             let v = rest.trim();
             if !v.is_empty() {
                 return Some(v.to_string());
@@ -165,6 +183,11 @@ pub fn parse_spec_version(spec: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Read the `Version:` field from a spec file.
+pub fn parse_spec_version(spec: &str) -> Option<String> {
+    parse_spec_field(spec, "Version")
 }
 
 /// Choose the bug advertising the highest new version among a
@@ -306,6 +329,12 @@ pub fn print_report(entries: &[AuditEntry]) {
         if kind == Bump::Retired {
             println!("  (run `poi-tracker triage-retired` to close these)");
         }
+        if kind == Bump::UpToDate {
+            println!(
+                "  (run `poi-tracker triage-updates` to record fixed \
+                 builds and close these)"
+            );
+        }
     }
 }
 
@@ -352,6 +381,17 @@ mod tests {
     #[test]
     fn classify_downgrade_needs_review() {
         assert_eq!(classify("2.0.0", "1.9.0"), Bump::NeedsReview);
+    }
+
+    #[test]
+    fn version_at_least_compares_numerically() {
+        assert!(version_at_least("1.10.0", "1.9.0"));
+        assert!(version_at_least("0.6.1", "0.6.1"));
+        assert!(version_at_least("1.4", "1.4.0"));
+        assert!(!version_at_least("1.4.0", "1.4.1"));
+        // Non-numeric: exact match only.
+        assert!(version_at_least("2.0rc1", "2.0rc1"));
+        assert!(!version_at_least("2.0rc2", "2.0rc1"));
     }
 
     #[test]
