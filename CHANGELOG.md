@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### sandogasa-distgit: validate identifiers before URL interpolation
+
+`DistGitClient` now rejects package, branch, user, and group
+names that aren't bare dist-git tokens (`[A-Za-z0-9._+-]`, and not
+`.`/`..`) before building a request URL, returning an error
+instead. This stops a value containing a path separator or a
+parent-directory segment — which URL normalization could redirect
+to a different resource — from reaching the wire. It matters
+because some of these names arrive from API responses (e.g. a
+Bugzilla component fed to `fix-version`), not just local config.
+Valid Fedora names are unaffected; this is defense-in-depth.
+
 ### Security: refuse to send credentials over plaintext HTTP (breaking)
 
 API clients now fail closed when a token would be sent to a

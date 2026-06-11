@@ -76,6 +76,34 @@ pub fn dedup_projects(projects: &mut Vec<ProjectInfo>) {
     projects.retain(|p| seen.insert(p.name.clone()));
 }
 
+/// Reject an identifier that could shape or escape a URL path
+/// before it is interpolated into a request URL.
+///
+/// Package, branch, user, and group names are bare dist-git tokens
+/// (`[A-Za-z0-9._+-]`). Anything else — most importantly a path
+/// separator (`/`) or a `.`/`..` parent-directory segment, which
+/// URL normalization could turn into a request against a different
+/// resource — is refused. This matters because some of these
+/// values arrive from API responses (e.g. a Bugzilla component
+/// name), not just local config.
+fn validate_segment(value: &str, what: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let safe = !value.is_empty()
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'+' | b'-'));
+    if safe {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid {what} '{value}': expected a bare dist-git name \
+             (letters, digits, '.', '_', '+', '-')"
+        )
+        .into())
+    }
+}
+
 pub struct DistGitClient {
     base_url: String,
     client: Client,
@@ -119,6 +147,8 @@ impl DistGitClient {
         package: &str,
         branch: &str,
     ) -> Result<String, Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
+        validate_segment(branch, "branch name")?;
         let url = format!(
             "{}/rpms/{}/raw/{}/f/{}.spec",
             self.base_url, package, branch, package
@@ -138,6 +168,8 @@ impl DistGitClient {
         package: &str,
         branch: &str,
     ) -> Result<bool, Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
+        validate_segment(branch, "branch name")?;
         let url = format!(
             "{}/rpms/{}/raw/{}/f/dead.package",
             self.base_url, package, branch
@@ -157,6 +189,7 @@ impl DistGitClient {
         &self,
         package: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}/git/branches", self.base_url, package);
         let resp = self.client.get(&url).send().await?.error_for_status()?;
         #[derive(serde::Deserialize)]
@@ -169,6 +202,7 @@ impl DistGitClient {
 
     /// Fetch ACLs for an RPM package.
     pub async fn get_acls(&self, package: &str) -> Result<ProjectAcls, Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}", self.base_url, package);
         let resp = self.client.get(&url).send().await?.error_for_status()?;
         let acls: ProjectAcls = resp.json().await?;
@@ -182,6 +216,7 @@ impl DistGitClient {
         &self,
         package: &str,
     ) -> Result<Contributors, Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}/contributors", self.base_url, package);
         let resp = self.client.get(&url).send().await?.error_for_status()?;
         let contributors: Contributors = resp.json().await?;
@@ -199,6 +234,7 @@ impl DistGitClient {
         name: &str,
         acl: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}/git/modifyacls", self.base_url, package);
         let form = [("user_type", user_type), ("name", name), ("acl", acl)];
         self.auth(self.client.post(&url))
@@ -216,6 +252,7 @@ impl DistGitClient {
         user_type: &str,
         name: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}/git/modifyacls", self.base_url, package);
         let form = [("user_type", user_type), ("name", name), ("acl", "")];
         self.auth(self.client.post(&url))
@@ -250,6 +287,7 @@ impl DistGitClient {
         package: &str,
         new_owner: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}", self.base_url, package);
         let form = [("main_admin", new_owner)];
         self.auth(self.client.patch(&url))
@@ -262,6 +300,7 @@ impl DistGitClient {
 
     /// Check whether a user exists on the Pagure instance.
     pub async fn user_exists(&self, username: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        validate_segment(username, "username")?;
         let url = format!("{}/api/0/user/{}", self.base_url, username);
         let resp = self.client.get(&url).send().await?;
         Ok(resp.status().is_success())
@@ -269,6 +308,7 @@ impl DistGitClient {
 
     /// Check whether a group exists on the Pagure instance.
     pub async fn group_exists(&self, group: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        validate_segment(group, "group name")?;
         let url = format!("{}/api/0/group/{}", self.base_url, group);
         let resp = self.client.get(&url).send().await?;
         Ok(resp.status().is_success())
@@ -279,6 +319,7 @@ impl DistGitClient {
         &self,
         group: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        validate_segment(group, "group name")?;
         let url = format!("{}/api/0/group/{}", self.base_url, group);
         let resp = self.client.get(&url).send().await?.error_for_status()?;
         #[derive(serde::Deserialize)]
@@ -328,6 +369,7 @@ impl DistGitClient {
         &self,
         username: &str,
     ) -> Result<HashMap<String, u64>, Box<dyn std::error::Error>> {
+        validate_segment(username, "username")?;
         let url = format!("{}/api/0/user/{}/activity/stats", self.base_url, username);
         let resp = self.client.get(&url).send().await?.error_for_status()?;
         let stats: HashMap<String, u64> = resp.json().await?;
@@ -343,6 +385,7 @@ impl DistGitClient {
         status: &str,
         limit: u32,
     ) -> Result<Vec<PullRequest>, Box<dyn std::error::Error>> {
+        validate_segment(username, "username")?;
         let url = format!(
             "{}/api/0/user/{}/requests/filed?per_page={}&status={}&page=1",
             self.base_url, username, limit, status
@@ -362,6 +405,7 @@ impl DistGitClient {
         username: &str,
         limit: u32,
     ) -> Result<(Vec<PullRequest>, u64), Box<dyn std::error::Error>> {
+        validate_segment(username, "username")?;
         let url = format!(
             "{}/api/0/user/{}/requests/actionable?per_page={}&page=1",
             self.base_url, username, limit
@@ -393,6 +437,7 @@ impl DistGitClient {
         per_page: u32,
         pattern: Option<&str>,
     ) -> Result<Vec<ProjectInfo>, Box<dyn std::error::Error>> {
+        validate_segment(username, "username")?;
         let mut all = Vec::new();
         let mut page = 1u64;
         let pattern_param = pattern.map(|p| format!("&pattern={p}")).unwrap_or_default();
@@ -427,6 +472,7 @@ impl DistGitClient {
         per_page: u32,
         pattern: Option<&str>,
     ) -> Result<Vec<ProjectInfo>, Box<dyn std::error::Error>> {
+        validate_segment(group, "group name")?;
         let mut all = Vec::new();
         let mut page = 1u64;
         let pattern_param = pattern.map(|p| format!("&pattern={p}")).unwrap_or_default();
@@ -1378,6 +1424,52 @@ mod tests {
             .mount(&server)
             .await;
         assert!(client.is_retired("foo", "rawhide").await.is_err());
+    }
+
+    // ---- validate_segment ----
+
+    #[test]
+    fn validate_segment_accepts_real_names() {
+        for name in [
+            "freerdp",
+            "python-django3",
+            "gtk+",
+            "rust-nu_cli",
+            "f43",
+            "epel9",
+            "rawhide",
+        ] {
+            assert!(
+                validate_segment(name, "test").is_ok(),
+                "{name} should be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_segment_rejects_path_shaping() {
+        for bad in [
+            "", ".", "..", "foo/bar", "../etc", "a b", "x&y=z", "pkg?q", "%2e%2e",
+        ] {
+            assert!(
+                validate_segment(bad, "test").is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn is_retired_rejects_traversal_package() {
+        // Never reaches the network — rejected before the request.
+        let client = DistGitClient::with_base_url("https://src.fedoraproject.org");
+        assert!(client.is_retired("..", "rawhide").await.is_err());
+        assert!(client.is_retired("foo/bar", "rawhide").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_branches_rejects_traversal_package() {
+        let client = DistGitClient::with_base_url("https://src.fedoraproject.org");
+        assert!(client.list_branches("../../admin").await.is_err());
     }
 
     // ---- list_branches ----
