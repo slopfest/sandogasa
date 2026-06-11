@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Security: `--` separators before external-tool positional arguments
+
+Shell-outs to `fedrq`, `koji`, `bodhi`, and `curl` now pass `--`
+before positional arguments (package, tag, NVR, update alias,
+URL), so a value beginning with `-` can never be parsed as a
+flag by the external tool. Each tool's handling of `--` was
+verified against the real CLI before the change; two call sites
+in fedora-cve-triage also had their options reordered to come
+before the positionals. `kinit` is intentionally unchanged
+(verification was inconclusive, and its principal comes from
+local user config). Defense-in-depth — Fedora package names
+can't start with `-`.
+
 ### poi-tracker: `triage-updates` closes already-addressed bugs via Bodhi
 
 `triage-updates` now checks every open release-monitoring bug

@@ -94,6 +94,8 @@ pub fn list_tagged(
         args.push("--ts");
         args.push(ts);
     }
+    // `--` so a tag starting with `-` can't be read as a flag.
+    args.push("--");
     args.push(tag);
     let stdout = run_koji(profile, &args)?;
     let mut builds = Vec::new();
@@ -218,7 +220,7 @@ pub fn parse_tag_history(stdout: &str) -> Vec<TagAddEvent> {
 /// koji stderr otherwise. Koji tolerates re-tagging a build
 /// already in the tag, so this is effectively idempotent.
 pub fn tag_build(tag: &str, nvr: &str, profile: Option<&str>) -> Result<(), String> {
-    run_koji(profile, &["tag-build", "--wait", tag, nvr])?;
+    run_koji(profile, &["tag-build", "--wait", "--", tag, nvr])?;
     Ok(())
 }
 
@@ -228,7 +230,7 @@ pub fn tag_build(tag: &str, nvr: &str, profile: Option<&str>) -> Result<(), Stri
 /// the koji stderr otherwise. No-op on whether the build was
 /// actually present beforehand — Koji tolerates re-untagging.
 pub fn untag_build(tag: &str, nvr: &str, profile: Option<&str>) -> Result<(), String> {
-    run_koji(profile, &["untag-build", tag, nvr])?;
+    run_koji(profile, &["untag-build", "--", tag, nvr])?;
     Ok(())
 }
 
@@ -238,12 +240,12 @@ pub fn untag_build(tag: &str, nvr: &str, profile: Option<&str>) -> Result<(), St
 /// date/rpm helpers, an unexpected failure here is worth
 /// surfacing during an interactive review).
 pub fn build_info_with_changelog(nvr: &str, profile: Option<&str>) -> Result<String, String> {
-    run_koji(profile, &["buildinfo", "--changelog", nvr])
+    run_koji(profile, &["buildinfo", "--changelog", "--", nvr])
 }
 
 /// List NVRs in a Koji tag (quiet mode, NVRs only).
 pub fn list_tagged_nvrs(tag: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
-    let stdout = run_koji(profile, &["list-tagged", "--quiet", tag])?;
+    let stdout = run_koji(profile, &["list-tagged", "--quiet", "--", tag])?;
     Ok(stdout
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -262,7 +264,7 @@ pub fn build_creation_date(
     nvr: &str,
     profile: Option<&str>,
 ) -> Result<Option<chrono::NaiveDate>, String> {
-    let stdout = run_koji(profile, &["buildinfo", nvr])?;
+    let stdout = run_koji(profile, &["buildinfo", "--", nvr])?;
     for line in stdout.lines() {
         if let Some(rest) = line.strip_prefix("Creation time:") {
             let value = rest.trim();
@@ -281,7 +283,7 @@ pub fn build_creation_date(
 /// Parses the RPMs section, returning binary package names
 /// (excluding `.src.rpm` entries).
 pub fn build_rpms(nvr: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
-    let stdout = run_koji(profile, &["buildinfo", nvr])?;
+    let stdout = run_koji(profile, &["buildinfo", "--", nvr])?;
 
     let mut in_rpms = false;
     let mut names = Vec::new();

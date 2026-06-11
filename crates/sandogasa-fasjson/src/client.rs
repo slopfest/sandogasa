@@ -36,8 +36,9 @@ impl FasjsonClient {
     /// that avoids a build-time dependency on system krb5 libraries.
     pub fn user(&self, username: &str) -> Result<FasUser, FasjsonError> {
         let url = format!("{}/v1/users/{}/", self.base_url, username);
+        // `--` so the URL can never be read as a curl option.
         let output = Command::new("curl")
-            .args(["--negotiate", "-u", ":", "-sf", &url])
+            .args(["--negotiate", "-u", ":", "-sf", "--", &url])
             .output()
             .map_err(|e| FasjsonError::Curl(format!("failed to run curl: {e}")))?;
 

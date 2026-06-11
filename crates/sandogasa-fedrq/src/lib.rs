@@ -119,7 +119,8 @@ impl Fedrq {
         let mut cmd = Command::new("fedrq");
         cmd.args(["subpkgs", "-S", "-F", formatter]);
         self.apply_opts(&mut cmd);
-        cmd.arg(srpm);
+        // `--` so a name starting with `-` can't be read as a flag.
+        cmd.args(["--", srpm]);
         Self::run(&mut cmd)
     }
 
@@ -172,6 +173,7 @@ impl Fedrq {
         let mut cmd = Command::new("fedrq");
         cmd.args(["whatrequires", "-F", "source"]);
         self.apply_opts(&mut cmd);
+        cmd.arg("--");
         cmd.args(packages);
         Self::run(&mut cmd)
     }
@@ -185,7 +187,7 @@ impl Fedrq {
         let mut cmd = Command::new("fedrq");
         cmd.args(["pkgs", "-P", "-S", "-F", "source_name"]);
         self.apply_opts(&mut cmd);
-        cmd.arg(dep);
+        cmd.args(["--", dep]);
         Self::run(&mut cmd)
     }
 
@@ -194,7 +196,7 @@ impl Fedrq {
         let mut cmd = Command::new("fedrq");
         cmd.args(["pkgs", "-F", "provides"]);
         self.apply_opts(&mut cmd);
-        cmd.arg(name);
+        cmd.args(["--", name]);
         Self::run(&mut cmd)
     }
 
@@ -207,7 +209,7 @@ impl Fedrq {
         let mut cmd = Command::new("fedrq");
         cmd.args(["pkgs", "-F", "line:name,version,release"]);
         self.apply_opts(&mut cmd);
-        cmd.arg(name);
+        cmd.args(["--", name]);
         let raw = Self::run(&mut cmd)?;
         let mut out = Vec::new();
         for line in raw {
