@@ -175,6 +175,7 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
                     distros: None,
                     file_issue: None,
                     priority: None,
+                    retired_on: None,
                 });
                 added += 1;
             }

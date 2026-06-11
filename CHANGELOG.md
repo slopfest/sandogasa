@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### poi-tracker: record retirement in the inventory (breaking)
+
+`triage-retired --mark` (single `-i` file only) now records its
+findings in each package's new `retired_on` field — the list of
+dist-git branches carrying a `dead.package` marker. The update is
+bidirectional: a branch found live again is removed, so re-running
+`triage-retired --mark` keeps the markers fresh. `semver-audit`
+and `triage-updates` skip packages marked retired on rawhide
+(their checks couldn't succeed anyway), which also saves their
+per-package network traffic.
+
+Breaking: `sandogasa_inventory::Package` gained the public field
+`retired_on: Option<Vec<String>>` (and an `is_retired_on()`
+helper); code constructing `Package` via a struct literal must add
+`retired_on: None`. Inventories without the field parse unchanged.
+
 ### poi-tracker: `--batch` mode for `semver-audit` and `triage-updates`
 
 Both subcommands previously issued one Bugzilla search per

@@ -255,8 +255,24 @@ pub async fn run(
         None => None,
     };
 
+    let mut marked_retired = 0usize;
     for pkg in &inventory.package {
         if !crate::matches_any_pattern(&pkg.name, patterns) {
+            continue;
+        }
+        // Inventory says it's retired on rawhide (recorded by
+        // `triage-retired --mark`): the update request is moot and
+        // the checks below would fail anyway — skip without any
+        // network traffic.
+        if pkg.is_retired_on(CURRENT_BRANCH) {
+            marked_retired += 1;
+            if verbose {
+                eprintln!(
+                    "[poi-tracker] {}: marked retired on {CURRENT_BRANCH} in \
+                     the inventory; skipping",
+                    pkg.name
+                );
+            }
             continue;
         }
         if verbose {
@@ -329,6 +345,12 @@ pub async fn run(
         });
     }
 
+    if marked_retired > 0 {
+        eprintln!(
+            "({marked_retired} package(s) skipped: marked retired on \
+             {CURRENT_BRANCH} in the inventory)"
+        );
+    }
     Ok(entries)
 }
 
@@ -377,6 +399,29 @@ mod tests {
     use super::*;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn run_skips_packages_marked_retired() {
+        // No servers are running: if the marked package weren't
+        // skipped, the Bugzilla search would error the run.
+        let inventory: sandogasa_inventory::Inventory = toml::from_str(
+            "[inventory]\n\
+             name = \"test\"\n\
+             description = \"test\"\n\
+             maintainer = \"tester\"\n\
+             \n\
+             [[package]]\n\
+             name = \"foo\"\n\
+             retired_on = [\"rawhide\"]\n",
+        )
+        .unwrap();
+        let bz = BzClient::new("http://127.0.0.1:1");
+        let dg = DistGitClient::with_base_url("http://127.0.0.1:1");
+        let entries = run(&inventory, &bz, &dg, &[], false, None, false)
+            .await
+            .unwrap();
+        assert!(entries.is_empty());
+    }
 
     #[tokio::test]
     async fn run_batch_mode_classifies_from_one_query() {

@@ -152,6 +152,25 @@ pub struct Package {
     /// opt out of a workload default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
+
+    // --- dist-git state ---
+    /// Dist-git branches where this package is retired (a
+    /// `dead.package` marker is present), as recorded by
+    /// `poi-tracker triage-retired --mark`. Consumers skip checks
+    /// that can't succeed for a retired branch (e.g. auditing
+    /// rawhide update requests). Refreshed — in both directions —
+    /// each time `triage-retired --mark` checks the branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_on: Option<Vec<String>>,
+}
+
+impl Package {
+    /// Whether this package is recorded as retired on `branch`.
+    pub fn is_retired_on(&self, branch: &str) -> bool {
+        self.retired_on
+            .as_ref()
+            .is_some_and(|branches| branches.iter().any(|b| b == branch))
+    }
 }
 
 impl Inventory {
@@ -297,6 +316,7 @@ mod tests {
             distros: None,
             file_issue: None,
             priority: None,
+            retired_on: None,
         }
     }
 

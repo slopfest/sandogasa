@@ -209,6 +209,50 @@ pub fn close_comment(package: &str, branch: &str) -> String {
     )
 }
 
+/// One `(package, branch)` retirement check performed during a
+/// run, retained so `--mark` can record the results in the
+/// inventory afterwards.
+#[derive(Debug, Clone)]
+pub struct BranchCheck {
+    pub package: String,
+    pub branch: String,
+    pub retired: bool,
+}
+
+/// Apply branch-check results to the inventory's `retired_on`
+/// markers: a checked-and-retired branch is added, a
+/// checked-and-live branch removed (so un-retirement heals the
+/// marker). Branches that weren't checked this run are left
+/// alone. Returns how many packages changed.
+pub fn apply_retirement_marks(inventory: &mut Inventory, checks: &[BranchCheck]) -> usize {
+    let mut changed = 0usize;
+    for pkg in &mut inventory.package {
+        let mut branches = pkg.retired_on.clone().unwrap_or_default();
+        let mut touched = false;
+        for check in checks.iter().filter(|c| c.package == pkg.name) {
+            touched = true;
+            if check.retired {
+                if !branches.contains(&check.branch) {
+                    branches.push(check.branch.clone());
+                }
+            } else {
+                branches.retain(|b| b != &check.branch);
+            }
+        }
+        if !touched {
+            continue;
+        }
+        branches.sort();
+        branches.dedup();
+        let new = (!branches.is_empty()).then_some(branches);
+        if new != pkg.retired_on {
+            pkg.retired_on = new;
+            changed += 1;
+        }
+    }
+    changed
+}
+
 /// Summary returned from `run` so the caller can pick an exit
 /// code without re-counting.
 #[derive(Debug, Default)]
@@ -218,6 +262,8 @@ pub struct RunReport {
     pub closes_planned: usize,
     pub closes_applied: usize,
     pub failures: usize,
+    /// Every retirement check performed, for `--mark`.
+    pub checks: Vec<BranchCheck>,
 }
 
 /// Run the whole `triage-retired` flow.
@@ -240,6 +286,7 @@ pub async fn run(
     let mut all_closes: Vec<BugClose> = Vec::new();
     let mut packages_checked = 0usize;
     let mut packages_retired = 0usize;
+    let mut checks: Vec<BranchCheck> = Vec::new();
 
     for pkg in &inventory.package {
         if !should_include(&pkg.name, only_package, start_from, end_with) {
@@ -266,6 +313,11 @@ pub async fn run(
             )
             .await
             .map_err(|e| format!("dist-git is_retired for {} on {branch}: {e}", pkg.name))?;
+            checks.push(BranchCheck {
+                package: pkg.name.clone(),
+                branch: branch.clone(),
+                retired,
+            });
             if !retired {
                 continue;
             }
@@ -320,6 +372,7 @@ pub async fn run(
         closes_planned: all_closes.len(),
         closes_applied: 0,
         failures: 0,
+        checks,
     };
 
     if all_closes.is_empty() {
@@ -529,6 +582,73 @@ mod tests {
         assert!(c.contains("python-django6"));
         assert!(c.contains("epel10"));
         assert!(c.contains("CANTFIX"));
+    }
+
+    // ---- apply_retirement_marks ----
+
+    fn check(package: &str, branch: &str, retired: bool) -> BranchCheck {
+        BranchCheck {
+            package: package.to_string(),
+            branch: branch.to_string(),
+            retired,
+        }
+    }
+
+    fn inventory_with(packages: &[(&str, Option<Vec<&str>>)]) -> Inventory {
+        let mut toml =
+            String::from("[inventory]\nname = \"t\"\ndescription = \"t\"\nmaintainer = \"t\"\n");
+        for (name, retired_on) in packages {
+            toml.push_str(&format!("\n[[package]]\nname = \"{name}\"\n"));
+            if let Some(branches) = retired_on {
+                let list: Vec<String> = branches.iter().map(|b| format!("\"{b}\"")).collect();
+                toml.push_str(&format!("retired_on = [{}]\n", list.join(", ")));
+            }
+        }
+        toml::from_str(&toml).unwrap()
+    }
+
+    #[test]
+    fn apply_marks_adds_retired_branches_sorted() {
+        let mut inv = inventory_with(&[("foo", None)]);
+        let changed = apply_retirement_marks(
+            &mut inv,
+            &[check("foo", "rawhide", true), check("foo", "epel8", true)],
+        );
+        assert_eq!(changed, 1);
+        assert_eq!(
+            inv.package[0].retired_on,
+            Some(vec!["epel8".to_string(), "rawhide".to_string()])
+        );
+    }
+
+    #[test]
+    fn apply_marks_removes_unretired_branch_and_clears_empty() {
+        // Un-retirement heals the marker; an emptied list drops
+        // the field entirely.
+        let mut inv = inventory_with(&[("foo", Some(vec!["rawhide"]))]);
+        let changed = apply_retirement_marks(&mut inv, &[check("foo", "rawhide", false)]);
+        assert_eq!(changed, 1);
+        assert_eq!(inv.package[0].retired_on, None);
+    }
+
+    #[test]
+    fn apply_marks_leaves_unchecked_branches_alone() {
+        let mut inv = inventory_with(&[("foo", Some(vec!["epel8"]))]);
+        let changed = apply_retirement_marks(&mut inv, &[check("foo", "rawhide", true)]);
+        assert_eq!(changed, 1);
+        assert_eq!(
+            inv.package[0].retired_on,
+            Some(vec!["epel8".to_string(), "rawhide".to_string()])
+        );
+    }
+
+    #[test]
+    fn apply_marks_no_change_counts_zero() {
+        let mut inv = inventory_with(&[("foo", Some(vec!["rawhide"])), ("bar", None)]);
+        // foo already marked; bar not checked at all.
+        let changed = apply_retirement_marks(&mut inv, &[check("foo", "rawhide", true)]);
+        assert_eq!(changed, 0);
+        assert_eq!(inv.package[1].retired_on, None);
     }
 
     #[test]

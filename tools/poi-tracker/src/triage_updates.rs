@@ -489,8 +489,24 @@ pub async fn run(
         None => None,
     };
 
+    let mut marked_retired = 0usize;
     for pkg in &inventory.package {
         if !crate::matches_any_pattern(&pkg.name, patterns) {
+            continue;
+        }
+        // Inventory says it's retired on rawhide (recorded by
+        // `triage-retired --mark`): its release-monitoring bugs
+        // belong to triage-retired, not here — skip without any
+        // network traffic.
+        if pkg.is_retired_on("rawhide") {
+            marked_retired += 1;
+            if verbose {
+                eprintln!(
+                    "[poi-tracker] {}: marked retired on rawhide in the \
+                     inventory; skipping (run triage-retired)",
+                    pkg.name
+                );
+            }
             continue;
         }
         let resolved = inventory.priority_for(&pkg.name);
@@ -579,6 +595,12 @@ pub async fn run(
         .await;
     }
 
+    if marked_retired > 0 {
+        eprintln!(
+            "({marked_retired} package(s) skipped: marked retired on \
+             rawhide in the inventory)"
+        );
+    }
     print_plan(&all_updates);
     print_stale_plan(&stale_plans);
 
@@ -1542,6 +1564,44 @@ mod tests {
         assert_eq!(map.len(), 2);
         assert_eq!(map["foo"].len(), 2);
         assert_eq!(map["bar"].len(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_skips_packages_marked_retired() {
+        // No servers are running: if the marked package weren't
+        // skipped, the Bugzilla search would error the run.
+        let inventory: Inventory = toml::from_str(
+            "[inventory]\n\
+             name = \"test\"\n\
+             description = \"test\"\n\
+             maintainer = \"tester\"\n\
+             \n\
+             [[package]]\n\
+             name = \"foo\"\n\
+             priority = \"high\"\n\
+             retired_on = [\"rawhide\"]\n",
+        )
+        .unwrap();
+        let bz = BzClient::new("http://127.0.0.1:1");
+        let dg = DistGitClient::with_base_url("http://127.0.0.1:1");
+        let bodhi = BodhiClient::with_base_url("http://127.0.0.1:1");
+        let report = run(
+            &inventory,
+            &bz,
+            &dg,
+            &bodhi,
+            &[],
+            None,
+            false,
+            false,
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.updates_planned, 0);
+        assert_eq!(report.stale_planned, 0);
     }
 
     #[tokio::test]

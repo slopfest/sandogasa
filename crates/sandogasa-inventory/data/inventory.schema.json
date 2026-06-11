@@ -135,6 +135,16 @@
             "null"
           ]
         },
+        "retired_on": {
+          "description": "Dist-git branches where this package is retired (a\n`dead.package` marker is present), as recorded by\n`poi-tracker triage-retired --mark`. Consumers skip checks\nthat can't succeed for a retired branch (e.g. auditing\nrawhide update requests). Refreshed — in both directions —\neach time `triage-retired --mark` checks the branch.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
         "rpms": {
           "description": "Binary RPM subpackages to track. If omitted, all are assumed.",
           "type": [

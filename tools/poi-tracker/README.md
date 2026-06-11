@@ -313,6 +313,14 @@ Interactive runs offer to claim ownership of each closed bug
 `--claim` to claim without prompting — under `-y` this is the
 only way to opt in. The email is set via `poi-tracker config`.
 
+Pass `--mark` (needs a single `-i` file; conflicts with
+`--dry-run`) to record the run's findings in each package's
+`retired_on` field — in both directions, so a branch found live
+again is removed. `semver-audit` and `triage-updates` skip
+packages marked retired on rawhide, saving their per-package
+queries; re-running `triage-retired --mark` is how the markers
+are refreshed.
+
 Useful flags for big inventories:
 
 - `--package <name>` — only check this one package. Handy for
@@ -390,6 +398,7 @@ track = "upstream"
 | `distros` | package | hs-relmon distribution list |
 | `file_issue` | package | File GitLab issues |
 | `priority` | package | Bugzilla priority for `triage-updates` (`unspecified`/`low`/`medium`/`high`/`urgent`) |
+| `retired_on` | package | Dist-git branches where the package is retired; written by `triage-retired --mark` |
 | `default_priority` | workload | Default Bugzilla priority for packages in this workload |
 
 Each `[inventory.workloads.<key>]` section can override `name`,

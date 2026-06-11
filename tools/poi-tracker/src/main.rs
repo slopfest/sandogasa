@@ -111,6 +111,11 @@ struct TriageRetiredArgs {
     #[arg(long)]
     all_reporters: bool,
 
+    /// Record results in the inventory's `retired_on` markers
+    /// (adds and removes; needs a single -i file).
+    #[arg(long, conflicts_with = "dry_run")]
+    mark: bool,
+
     /// Bugzilla API key (or set BUGZILLA_API_KEY env var, or
     /// run `poi-tracker config`).
     #[arg(long, env = "BUGZILLA_API_KEY")]
@@ -603,6 +608,15 @@ fn cmd_semver_audit(paths: &[String], args: &SemverAuditArgs) -> ExitCode {
 }
 
 fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> ExitCode {
+    // --mark writes results back, which only makes sense for a
+    // single inventory file (a merged view has no single home).
+    if args.mark && paths.len() != 1 {
+        eprintln!(
+            "error: --mark needs exactly one inventory file (got {})",
+            paths.len()
+        );
+        return ExitCode::FAILURE;
+    }
     let inventory = match sandogasa_inventory::load_and_merge(paths) {
         Ok(inv) => inv,
         Err(e) => {
@@ -667,6 +681,30 @@ fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> ExitCode {
                 report.closes_applied,
                 report.failures
             );
+            // Record the retirement checks in the inventory. The
+            // facts were gathered regardless of whether any bug
+            // closures were confirmed, so marking is independent
+            // of the close outcome.
+            if args.mark {
+                let path = &paths[0];
+                let mut inv = match sandogasa_inventory::load(path) {
+                    Ok(inv) => inv,
+                    Err(e) => {
+                        eprintln!("error: reloading {path} for --mark: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                let changed = triage_retired::apply_retirement_marks(&mut inv, &report.checks);
+                if changed > 0 {
+                    if let Err(e) = sandogasa_inventory::save(&inv, path) {
+                        eprintln!("error: saving {path}: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                    eprintln!("marked {changed} package(s) in {path}");
+                } else {
+                    eprintln!("retirement markers already up to date");
+                }
+            }
             if report.failures > 0 {
                 ExitCode::FAILURE
             } else {
@@ -1135,6 +1173,7 @@ fn cmd_add(paths: &[String], args: &AddArgs) -> ExitCode {
             distros: None,
             file_issue: None,
             priority: None,
+            retired_on: None,
         };
         inventory.add_package(pkg);
         eprintln!("Added {} to {target_path}", args.name);
@@ -1500,6 +1539,7 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
             distros: None,
             file_issue: None,
             priority: None,
+            retired_on: None,
         });
         for wl in &args.workload {
             inventory.add_to_workload(wl, &p.name);
@@ -1698,6 +1738,7 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
             distros: None,
             file_issue: None,
             priority: None,
+            retired_on: None,
         });
         for wl in &args.workload {
             inventory.add_to_workload(wl, name);
