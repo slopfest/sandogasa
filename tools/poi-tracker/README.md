@@ -119,11 +119,6 @@ before this prefix) and imply prefix mode, as does
 If both `--auto-prefix` and `--no-auto-prefix` are given, the
 last one wins.
 
-The pre-0.12.1 scan-resume spelling `--auto-prefix --pattern
-<start>` still works but is deprecated and will be removed in
-0.13.0; using it prints a warning (see the repository's
-[DEPRECATIONS.md](../../DEPRECATIONS.md)).
-
 Packages where the user has both direct and group-based access
 are always included, regardless of group filters.
 

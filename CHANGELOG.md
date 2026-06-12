@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### poi-tracker: remove deprecated `--auto-prefix --pattern` spelling (breaking CLI)
+
+The pre-0.12.1 scan-resume spelling `sync-distgit --auto-prefix
+--pattern <start>` — deprecated with a warning since v0.12.1 — is
+now rejected: `--pattern` conflicts with `--auto-prefix`,
+`--start-pattern`, and `--end-pattern`. Migration: use
+`--start-pattern <prefix>` (optionally with `--end-pattern`).
+This completes the removal scheduled in DEPRECATIONS.md.
+
 ### poi-tracker: consistent filters across walking commands (breaking CLI)
 
 `semver-audit`, `triage-retired`, and `triage-updates` now share
