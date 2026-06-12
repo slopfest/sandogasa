@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.13.0
 
 ### poi-tracker: `sync-distgit --fast` via the owner-alias dump
 

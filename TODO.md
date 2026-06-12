@@ -1,5 +1,13 @@
 # TODO
 
+## Workspace
+
+- Major dependency bumps available (checked 2026-06-12, deferred
+  from 0.13.0): reqwest 0.12->0.13 (touches every client crate;
+  reqwest::Error appears in public signatures, so it is itself a
+  breaking change — bundle with the next breaking release),
+  toml 0.8->1.x, toml_edit 0.22->0.25, quick-xml 0.37->0.40.
+
 ## poi-tracker
 
 - Detect packages no longer carried on any supported branch
