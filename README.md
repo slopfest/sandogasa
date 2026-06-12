@@ -16,7 +16,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 ## Tools
 
 - **[cpu-sig-tracker](tools/cpu-sig-tracker/)** — CentOS Proposed Updates SIG package-state tracker across Koji, GitLab, and JIRA
-- **[ebranch](tools/ebranch/)** — build dependency resolver for cross-branch package porting
+- **[ebranch](tools/ebranch/)** — cross-branch porting helper: build-order resolution, branch requests, and update checking with Bodhi karma
 - **[fedora-cve-triage](tools/fedora-cve-triage/)** — triage CVEs reported against Fedora components in Red Hat Bugzilla
 - **[hs-intake](tools/hs-intake/)** — Hyperscale package intake analysis
 - **[hs-meetings](tools/hs-meetings/)** — list and sync CentOS Hyperscale SIG meeting archives from meetbot

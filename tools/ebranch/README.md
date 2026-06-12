@@ -8,6 +8,14 @@ closure, detects dependency cycles, and produces a phased build order
 for parallel execution. It can also verify that all subpackages will
 be installable after building, expanding the closure as needed.
 
+Beyond dependency resolution, ebranch files and escalates branch
+requests (`branch-request`), analyzes crates.io dependencies
+(`check-crate`), links Bugzilla package review requests
+(`check-pkg-reviews`), and checks whether a Koji side tag or
+Bodhi update would break reverse dependencies (`check-update`) —
+optionally casting Bodhi karma with per-bug feedback based on the
+result (`--give-karma`).
+
 Shells out to [fedrq](https://src.fedoraproject.org/rpms/fedrq) for
 repository queries.
 

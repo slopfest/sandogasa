@@ -1,7 +1,7 @@
 [package]
 name = "ebranch"
 version.workspace = true
-description = "Build dependency resolver — compute build order for cross-branch package porting"
+description = "Cross-branch porting: build order, branch requests, update checks, Bodhi karma"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
