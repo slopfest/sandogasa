@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### ebranch: reviewer notes and provenance in posted reports
+
+The comment `--give-karma` posts is always the full Markdown
+check report, now with a provenance footer recording the ebranch
+version and the command invocation that produced the analysis.
+`--comment <TEXT>` adds reviewer notes as a section near the top
+of the report (it no longer replaces the report); when the flag
+is omitted you are prompted for notes interactively, and `--yes`
+skips the prompt.
+
 ### ebranch: own-update detection no longer aborts the vote
 
 A transient network failure looking up the session username (for

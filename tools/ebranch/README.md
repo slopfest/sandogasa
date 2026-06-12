@@ -204,8 +204,11 @@ update delivers at least the requested version and `-1`
 otherwise; for any other bug you are prompted (`+1`/`-1`/`0`).
 The full voting plan is shown for confirmation before anything
 is posted; `--yes` skips the prompts (non-update bugs then get
-`0`) and `--comment <TEXT>` overrides the comment text (default:
-the full Markdown check report). When the update is your own,
+`0`). The posted comment is the full Markdown check report with
+a provenance footer (ebranch version and the command invocation);
+`--comment <TEXT>` adds reviewer notes as a section near the top,
+and you are prompted for notes interactively when the flag is
+omitted. When the update is your own,
 the overall karma is skipped (Bodhi ignores submitter karma) but
 per-bug feedback is still posted. Voting
 requires a Bodhi update (not a bare side tag) and reuses the

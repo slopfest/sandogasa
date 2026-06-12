@@ -224,8 +224,16 @@ shown for confirmation before posting."
     )]
     give_karma: bool,
 
-    /// Comment text (default: the full check report).
-    #[arg(long, requires = "give_karma")]
+    /// Reviewer notes added near the top of the report.
+    #[arg(
+        long,
+        requires = "give_karma",
+        long_help = "\
+Reviewer notes added as a section near the top
+of the posted report. Prompted for
+interactively when omitted; --yes skips the
+prompt."
+    )]
     comment: Option<String>,
 
     /// Skip voting confirmation; non-update bugs get 0.
@@ -668,14 +676,14 @@ fn main() -> ExitCode {
                     && let Some(alias) = &vote_alias
                 {
                     let (karma, reason) = karma::derive_karma(&report);
-                    // Don't post a bare-karma comment: default the
-                    // text to the full Markdown report so the vote
-                    // documents the analysis it is based on.
-                    let text = a
-                        .comment
-                        .clone()
-                        .unwrap_or_else(|| check_update::render_report(&report));
-                    if let Err(e) = karma::run(alias, karma, &reason, &text, a.yes) {
+                    // The posted comment is the full Markdown
+                    // report; --comment adds reviewer notes near
+                    // the top (prompted for interactively when
+                    // absent).
+                    let report_md = check_update::render_report(&report);
+                    if let Err(e) =
+                        karma::run(alias, karma, &reason, &report_md, a.comment.clone(), a.yes)
+                    {
                         eprintln!("error: {e}");
                         return ExitCode::FAILURE;
                     }
