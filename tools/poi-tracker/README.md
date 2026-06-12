@@ -314,14 +314,14 @@ delete the entries outright instead. Packages are checked
 concurrently (`-j`/`--jobs`, default 8 in-flight dist-git
 requests).
 
-An entry whose dist-git project doesn't exist at all (404) is
-reported as **invalid** rather than marked: that usually means
-the entry itself is wrong — a *binary subpackage* name recorded
-instead of the source package (e.g. `askalono-cli`, which is
-built from `rust-askalono-cli`), or a typo — and only rarely a
-genuinely deleted project. Either way the fix is editing or
-removing the entry, which is a human call. A stale `unshipped`
-marker on such an entry is cleared by the next run.
+An entry with no `rpms/` dist-git project (404) is reported as
+**invalid** rather than marked: the entry itself is wrong — a
+non-RPM repo (module, container image, tests) imported under its
+bare name by an older group sync (e.g. `modules/askalono-cli`
+showing up as `askalono-cli`), a *binary subpackage* name
+recorded instead of the source package, or a typo. The fix is
+editing or removing the entry, which is a human call. A stale
+`unshipped` marker on such an entry is cleared by the next run.
 
 `sync-distgit --mark-unshipped` runs the same check on the
 packages a sync adds, so a fresh inventory starts with its

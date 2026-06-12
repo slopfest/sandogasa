@@ -758,9 +758,10 @@ fn cmd_prune_retired(paths: &[String], args: &PruneRetiredArgs) -> ExitCode {
     }
     if !report.invalid.is_empty() {
         println!(
-            "\nInvalid entries — no such dist-git project (fix or \
-             remove; often a binary subpackage name recorded \
-             instead of the source package):"
+            "\nInvalid entries — no such dist-git package (fix or \
+             remove; often a non-rpms project imported by an older \
+             sync, or a binary subpackage name recorded instead of \
+             the source package):"
         );
         for name in &report.invalid {
             println!("- {name}");

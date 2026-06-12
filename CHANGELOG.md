@@ -2,16 +2,30 @@
 
 ## Unreleased
 
+### sandogasa-distgit: group syncs no longer import non-rpms projects
+
+A Pagure group's project listing includes everything the group
+can access — `container/`, `tests/`, and `modules/` projects and
+forks, all reported under their bare names — and the group
+endpoint honors neither `namespace=` nor `fork=false` (found
+live: `container/python-classroom` imported into a
+python-packagers-sig inventory as package "python-classroom",
+`modules/askalono-cli` into a rust-sig inventory as
+"askalono-cli", plus 117 forks). `group_projects` now records each project's
+`fullname` and keeps only the `rpms/` namespace; skipped
+projects are counted in the sync output. A re-sync with
+`--prune` clears previously imported strays.
+
 ### poi-tracker: `prune-retired` flags nonexistent projects as invalid entries
 
-A dist-git 404 usually doesn't mean a deleted project — it means
-the inventory entry itself is wrong, most often a binary
-subpackage name recorded instead of the source package (e.g.
-`askalono-cli`, built from `rust-askalono-cli`). The first full
-scan marked such an entry `unshipped`, which was misleading.
-404s are now reported as a separate "invalid entries — fix or
-remove" list, never marked; a stale marker on such an entry is
-cleared by the next run.
+A dist-git 404 means the inventory entry itself is wrong — a
+non-RPM repo (module, container image, tests) imported under its
+bare name by an older group sync, or a binary subpackage name
+recorded instead of the source package. The first full scan
+marked such an entry `unshipped`, which was misleading. 404s are
+now reported as a separate "invalid entries — fix or remove"
+list, never marked; a stale marker on such an entry is cleared
+by the next run.
 
 ### poi-tracker: `sync-distgit --mark-unshipped`
 

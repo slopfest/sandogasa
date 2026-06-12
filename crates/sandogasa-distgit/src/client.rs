@@ -50,10 +50,26 @@ pub struct PullRequestProject {
 #[derive(Debug, Deserialize)]
 pub struct ProjectInfo {
     pub name: String,
+    /// Namespaced path (e.g. `rpms/python-foo`,
+    /// `container/python-classroom`, `forks/user/rpms/python-foo`).
+    /// `None` only when the API omits it.
+    #[serde(default)]
+    pub fullname: Option<String>,
     #[serde(default)]
     pub access_users: AccessUsers,
     #[serde(default)]
     pub access_groups: AccessGroups,
+}
+
+/// Keep only projects in the `rpms/` namespace. Group listings
+/// include everything a group can access — `container/`,
+/// `tests/`, `modules/` projects and forks, all reported under
+/// their bare `name` — and unlike the projects endpoint, the
+/// group endpoint honors neither `namespace=` nor `fork=false`.
+/// Projects without a fullname are kept (the API always sends
+/// one; only minimal test fixtures omit it).
+pub fn retain_rpms_namespace(projects: &mut Vec<ProjectInfo>) {
+    projects.retain(|p| p.fullname.as_deref().is_none_or(|f| f.starts_with("rpms/")));
 }
 
 #[derive(Debug, Deserialize)]
@@ -514,6 +530,7 @@ impl DistGitClient {
             .into_iter()
             .filter(|(_, users)| users.iter().any(|u| u == username))
             .map(|(name, _)| ProjectInfo {
+                fullname: Some(format!("rpms/{name}")),
                 name,
                 access_users: AccessUsers {
                     commit: vec![username.to_string()],
@@ -554,8 +571,19 @@ impl DistGitClient {
                 _ => break,
             }
         }
+        let fetched = all.len();
+        retain_rpms_namespace(&mut all);
+        let dropped = fetched - all.len();
         dedup_projects(&mut all);
-        eprintln!("\r  fetched {} package(s)", all.len());
+        if dropped > 0 {
+            eprintln!(
+                "\r  fetched {} package(s) ({dropped} non-rpms \
+                 project(s) skipped)",
+                all.len()
+            );
+        } else {
+            eprintln!("\r  fetched {} package(s)", all.len());
+        }
         Ok(all)
     }
 
@@ -1819,6 +1847,49 @@ mod tests {
         let projects = client.group_projects("btrfs-sig", 100, None).await.unwrap();
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "systemd");
+    }
+
+    #[tokio::test]
+    async fn group_projects_keeps_only_rpms_namespace() {
+        // A group's project list includes everything it can
+        // access — container/tests projects and forks, all
+        // reported under their bare name (found live:
+        // container/python-classroom imported into a
+        // python-packagers-sig inventory as "python-classroom").
+        // The group endpoint honors neither namespace= nor
+        // fork=false, so the filtering is client-side.
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        let with_fullname = |name: &str, fullname: &str| {
+            let mut p = project_json(name, "someone", &["python-packagers-sig"]);
+            p["fullname"] = serde_json::json!(fullname);
+            p
+        };
+        Mock::given(method("GET"))
+            .and(path("/api/0/group/python-packagers-sig"))
+            .and(query_param("projects", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "members": ["salimma"],
+                "projects": [
+                    with_fullname("python-foo", "rpms/python-foo"),
+                    with_fullname("python-classroom", "container/python-classroom"),
+                    with_fullname("python-classroom", "tests/python-classroom"),
+                    with_fullname("python-foo", "forks/someone/rpms/python-foo"),
+                ],
+                "pagination": { "pages": 1, "per_page": 100 }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let projects = client
+            .group_projects("python-packagers-sig", 100, None)
+            .await
+            .unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "python-foo");
+        assert_eq!(projects[0].fullname.as_deref(), Some("rpms/python-foo"));
     }
 
     #[tokio::test]

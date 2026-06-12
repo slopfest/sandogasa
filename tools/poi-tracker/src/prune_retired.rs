@@ -3,11 +3,14 @@
 //! Detect inventory packages no longer carried on any active
 //! branch (`prune-retired`).
 //!
-//! A package is a prune candidate when its dist-git project is
-//! gone entirely (404), when none of its branches is an active
-//! release branch, or when it is retired (`dead.package`) on
-//! every active branch it has. A package retired on only *some*
-//! branches stays. The default action is to mark candidates
+//! A package is a prune candidate when none of its branches is
+//! an active release branch, or when it is retired
+//! (`dead.package`) on every active branch it has. A package
+//! retired on only *some* branches stays, and a name with no
+//! `rpms/` project at all (404) is reported as an invalid entry
+//! — in practice a non-RPM repo (module, container image, tests)
+//! imported under its bare name, or a binary subpackage name.
+//! The default action is to mark candidates
 //! `unshipped` in the inventory rather than delete them: a fresh
 //! `sync-distgit` would re-add retired packages (their ACLs
 //! remain), and keeping the tombstone lets `triage-retired`
@@ -61,19 +64,19 @@ pub struct RunReport {
     /// Packages retired or absent on every active branch —
     /// candidates for marking `unshipped` (or removal).
     pub candidates: Vec<PruneCandidate>,
-    /// Entries whose dist-git project doesn't exist at all (404).
-    /// That usually means the entry itself is invalid — a binary
-    /// subpackage name recorded instead of the source package
-    /// (e.g. `askalono-cli` instead of `rust-askalono-cli`), a
-    /// typo — or, rarely, a genuinely deleted project. Either way
-    /// a human should fix or remove the entry, so these are
-    /// reported and never marked `unshipped`.
+    /// Entries with no `rpms/` dist-git project (404): the entry
+    /// itself is invalid — a non-RPM repo (module, container,
+    /// tests) imported under its bare name by an older group
+    /// sync, a binary subpackage name recorded instead of the
+    /// source package, or a typo. A human should fix or remove
+    /// the entry, so these are reported and never marked
+    /// `unshipped`.
     pub invalid: Vec<String>,
 }
 
 /// Separate project-gone hits from the real prune candidates: a
-/// 404 means there is no such source package, which is far more
-/// often a bad inventory entry than a deleted project.
+/// 404 means there is no such source package — in practice a bad
+/// inventory entry (non-RPM repo or binary subpackage name).
 pub fn split_invalid(findings: Vec<PruneCandidate>) -> (Vec<PruneCandidate>, Vec<String>) {
     let mut candidates = Vec::new();
     let mut invalid = Vec::new();
