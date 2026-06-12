@@ -33,7 +33,8 @@ use sandogasa_distgit::DistGitClient;
 use sandogasa_inventory::{Inventory, Priority};
 use sandogasa_koji::parse_nvr;
 
-use crate::semver_audit::{extract_new_version, version_at_least};
+use crate::semver_audit::version_at_least;
+use sandogasa_bugclass::bugzilla::extract_new_version;
 
 /// Reporter address for Fedora's release-monitoring bot.
 /// Anitya / the-new-hotness opens a new bug under this account

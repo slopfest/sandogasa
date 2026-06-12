@@ -192,6 +192,33 @@ For EPEL side tags, the testing branch is auto-detected from the
 side tag name (e.g. `epel9-build-side-*` uses `epel9`). Use
 `--testing-branch` to override if needed.
 
+After the check, `--give-karma` casts karma on the update. The
+check result suggests the value — `+1` when no issues are found,
+`-1` when reverse deps break or the updated packages have
+unsatisfied deps, `0` when the analysis was incomplete — and you
+are prompted with that suggestion as the default (Enter accepts,
+or override with `+1`/`-1`/`0`). Listed bugs get per-bug
+feedback like the Bodhi web UI: update-request bugs
+(`<pkg>-<version> is available`) are auto-voted `+1` when the
+update delivers at least the requested version and `-1`
+otherwise; for any other bug you are prompted (`+1`/`-1`/`0`).
+The full voting plan is shown for confirmation before anything
+is posted; `--yes` skips the prompts (non-update bugs then get
+`0`) and `--comment <TEXT>` overrides the comment text (default:
+the full Markdown check report). When the update is your own,
+the overall karma is skipped (Bodhi ignores submitter karma) but
+per-bug feedback is still posted. Voting
+requires a Bodhi update (not a bare side tag) and reuses the
+`bodhi` CLI's login session. The session is validated before the
+analysis starts: if there is none, an interactive login is run
+for you (via `bodhi overrides query --mine`), and expired tokens
+are refreshed automatically.
+
+```sh
+ebranch check-update FEDORA-2026-94cb04410a --give-karma \
+    --comment "no broken reverse deps; works for me"
+```
+
 ### Detect dependency cycles
 
 ```sh

@@ -9,6 +9,7 @@ mod check_crate;
 mod check_update;
 mod config;
 mod dag;
+mod karma;
 mod resolve;
 mod review_deps;
 
@@ -198,6 +199,38 @@ Otherwise defaults to --branch."
     /// Parallel fedrq queries (0 = CPUs).
     #[arg(short = 'j', long, default_value = "0", hide_default_value = true)]
     jobs: usize,
+
+    /// Cast karma on the update based on the check result.
+    #[arg(
+        long = "give-karma",
+        conflicts_with = "json",
+        long_help = "\
+Cast karma on the Bodhi update. The check
+result suggests the value (+1 when no issues
+are found, -1 when reverse deps break or the
+updated packages have unsatisfied deps, 0 when
+the analysis was incomplete); you are prompted
+with that suggestion as the default. Requires a
+Bodhi update alias or URL as input. Reuses the
+bodhi CLI's login session, starting an
+interactive login first if there is none.
+
+Listed bugs get per-bug feedback: update-request
+bugs (\"<pkg>-<version> is available\") are
+auto-voted +1 when the update delivers at least
+the requested version and -1 otherwise; for
+other bugs you are prompted. The full plan is
+shown for confirmation before posting."
+    )]
+    give_karma: bool,
+
+    /// Comment text (default: the full check report).
+    #[arg(long, requires = "give_karma")]
+    comment: Option<String>,
+
+    /// Skip voting confirmation; non-update bugs get 0.
+    #[arg(short = 'y', long, requires = "give_karma")]
+    yes: bool,
 }
 
 #[derive(clap::Args, Clone)]
@@ -586,6 +619,24 @@ fn main() -> ExitCode {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
+        // Voting needs a Bodhi update; fail fast on side-tag input.
+        let vote_alias = match check_update::detect_input_type(&a.input) {
+            check_update::InputKind::BodhiAlias(alias) => Some(alias),
+            check_update::InputKind::SideTag(_) => None,
+        };
+        if a.give_karma && vote_alias.is_none() {
+            eprintln!("error: --give-karma requires a Bodhi update alias or URL as input");
+            return ExitCode::FAILURE;
+        }
+        // Validate the bodhi session up front (logging in if
+        // needed) so a missing session doesn't surface only after
+        // the analysis has run for minutes.
+        if a.give_karma
+            && let Err(e) = karma::ensure_session()
+        {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
         if let Err(code) = handle_refresh(a.refresh, a.verbose) {
             return code;
         }
@@ -612,6 +663,22 @@ fn main() -> ExitCode {
                     print_json(&report);
                 } else {
                     check_update::print_report(&report);
+                }
+                if a.give_karma
+                    && let Some(alias) = &vote_alias
+                {
+                    let (karma, reason) = karma::derive_karma(&report);
+                    // Don't post a bare-karma comment: default the
+                    // text to the full Markdown report so the vote
+                    // documents the analysis it is based on.
+                    let text = a
+                        .comment
+                        .clone()
+                        .unwrap_or_else(|| check_update::render_report(&report));
+                    if let Err(e) = karma::run(alias, karma, &reason, &text, a.yes) {
+                        eprintln!("error: {e}");
+                        return ExitCode::FAILURE;
+                    }
                 }
                 let has_broken = report.reverse_deps.values().any(|r| r.status == "broken");
                 if has_broken {

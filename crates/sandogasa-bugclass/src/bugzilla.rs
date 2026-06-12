@@ -17,6 +17,17 @@ pub struct TrackerIds {
     pub fti: HashSet<u64>,
 }
 
+/// Extract the new version from a release-monitoring bug summary
+/// of the form `"<component>-<version> is available"`.
+pub fn extract_new_version(summary: &str, component: &str) -> Option<String> {
+    let body = summary.trim().strip_suffix(" is available")?;
+    // The component prefix is followed by a single `-`; the rest is
+    // the version (which may itself contain `-`, e.g. `1.0-r2707`).
+    let rest = body.strip_prefix(component)?;
+    let version = rest.strip_prefix('-').unwrap_or(rest);
+    (!version.is_empty()).then(|| version.to_string())
+}
+
 /// Classify a Bugzilla bug into a [`BugKind`].
 ///
 /// Returns `Review` for bugs filed against the "Package Review"
@@ -135,6 +146,36 @@ mod tests {
             version: vec![],
             cf_fixed_in: String::new(),
         }
+    }
+
+    #[test]
+    fn extract_new_version_handles_real_summaries() {
+        assert_eq!(
+            extract_new_version(
+                "transmission-remote-cli-1.7.1 is available",
+                "transmission-remote-cli"
+            )
+            .as_deref(),
+            Some("1.7.1")
+        );
+        // Version containing a dash is preserved after the first one.
+        assert_eq!(
+            extract_new_version(
+                "python-peak-rules-0.5a1.dev-r2707 is available",
+                "python-peak-rules"
+            )
+            .as_deref(),
+            Some("0.5a1.dev-r2707")
+        );
+    }
+
+    #[test]
+    fn extract_new_version_rejects_unrecognized() {
+        assert_eq!(extract_new_version("something unrelated", "foo"), None);
+        assert_eq!(
+            extract_new_version("otherpkg-1.0 is available", "foo"),
+            None
+        );
     }
 
     #[test]

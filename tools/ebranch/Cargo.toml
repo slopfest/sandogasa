@@ -13,12 +13,14 @@ dashmap = { workspace = true }
 rayon = { workspace = true }
 reqwest = { workspace = true }
 sandogasa-bodhi = { workspace = true }
+sandogasa-bugclass = { workspace = true }
 sandogasa-bugzilla = { workspace = true }
 sandogasa-config = { workspace = true }
 sandogasa-cli = { workspace = true }
 sandogasa-depfilter = { workspace = true }
 sandogasa-fedrq = { workspace = true }
 sandogasa-koji = { workspace = true }
+sandogasa-rpmvercmp = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

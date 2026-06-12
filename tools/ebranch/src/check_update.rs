@@ -438,19 +438,29 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
 
 /// Print a human-readable report to stdout.
 pub fn print_report(report: &CheckUpdateReport) {
-    println!("# Checking update: {}\n", report.input);
+    print!("{}", render_report(report));
+}
+
+/// Render the report as Markdown — the same text `print_report`
+/// writes to stdout, reusable as a Bodhi comment body.
+pub fn render_report(report: &CheckUpdateReport) -> String {
+    use std::fmt::Write as _;
+    let mut o = String::new();
+    let _ = writeln!(o, "# Checking update: {}\n", report.input);
     if let Some(ref repo) = report.repo {
-        println!("**Branch:** {} ({})\n", report.branch, repo);
+        let _ = writeln!(o, "**Branch:** {} ({})\n", report.branch, repo);
     } else {
-        println!("**Branch:** {}\n", report.branch);
+        let _ = writeln!(o, "**Branch:** {}\n", report.branch);
     }
-    println!(
+    let _ = writeln!(
+        o,
         "**Updated packages:** {}\n",
         report.updated_packages.join(", ")
     );
 
     if !report.stale_side_tag.is_empty() {
-        println!(
+        let _ = writeln!(
+            o,
             "> **Warning:** side tag repodata is stale for {} \
              source package(s); the reverse-dep analysis below \
              may be incomplete. Run `koji regen-repo` on the side \
@@ -460,48 +470,56 @@ pub fn print_report(report: &CheckUpdateReport) {
         );
         for w in &report.stale_side_tag {
             match &w.actual_vr {
-                Some(actual) => println!(
-                    "> - **{}**: expected `{}`, found `{}` in repodata",
-                    w.package, w.expected_nvr, actual
-                ),
-                None => println!(
-                    "> - **{}**: expected `{}`, no matching binary RPMs in repodata",
-                    w.package, w.expected_nvr
-                ),
+                Some(actual) => {
+                    let _ = writeln!(
+                        o,
+                        "> - **{}**: expected `{}`, found `{}` in repodata",
+                        w.package, w.expected_nvr, actual
+                    );
+                }
+                None => {
+                    let _ = writeln!(
+                        o,
+                        "> - **{}**: expected `{}`, no matching binary RPMs in repodata",
+                        w.package, w.expected_nvr
+                    );
+                }
             }
         }
-        println!();
+        let _ = writeln!(o);
     }
 
     if !report.full_analysis {
         // No side tag available — informational mode.
-        println!(
+        let _ = writeln!(
+            o,
             "> **Note:** no side tag available; cannot compare \
              Provides. Listing reverse dependencies for manual \
              review.\n"
         );
         if report.reverse_deps.is_empty() {
-            println!("No reverse dependencies found.");
+            let _ = writeln!(o, "No reverse dependencies found.");
         } else {
-            println!("## Reverse dependencies\n");
+            let _ = writeln!(o, "## Reverse dependencies\n");
             for pkg in report.reverse_deps.keys() {
-                println!("- {pkg}");
+                let _ = writeln!(o, "- {pkg}");
             }
-            println!(
+            let _ = writeln!(
+                o,
                 "\n**Total:** {} reverse dependencies.",
                 report.reverse_deps.len()
             );
         }
-        return;
+        return o;
     }
 
     if report.changed_provides.is_empty() && report.installability_issues.is_empty() {
-        println!("No changed Provides. No breakage expected.");
-        return;
+        let _ = writeln!(o, "No changed Provides. No breakage expected.");
+        return o;
     }
 
     if report.changed_provides.is_empty() {
-        println!("No changed Provides.");
+        let _ = writeln!(o, "No changed Provides.");
     }
 
     let updated: Vec<&ChangedProvide> = report
@@ -516,7 +534,7 @@ pub fn print_report(report: &CheckUpdateReport) {
         .collect();
 
     if !updated.is_empty() {
-        println!("## Updated Provides ({})\n", updated.len());
+        let _ = writeln!(o, "## Updated Provides ({})\n", updated.len());
         for c in &updated {
             let name = provide_name(&c.old);
             let old_ver = c
@@ -532,60 +550,68 @@ pub fn print_report(report: &CheckUpdateReport) {
                 .unwrap_or("")
                 .trim()
                 .trim_start_matches("= ");
-            println!("- `{name}` ({old_ver} → {new_ver})");
+            let _ = writeln!(o, "- `{name}` ({old_ver} → {new_ver})");
         }
     }
     if !removed.is_empty() {
-        println!("\n## Removed Provides ({})\n", removed.len());
+        let _ = writeln!(o, "\n## Removed Provides ({})\n", removed.len());
         for c in &removed {
-            println!("- `{}`", c.old);
+            let _ = writeln!(o, "- `{}`", c.old);
         }
     }
 
     if !report.installability_issues.is_empty() {
-        println!(
+        let _ = writeln!(
+            o,
             "\n## Installability issues ({})\n",
             report.installability_issues.len()
         );
         for issue in &report.installability_issues {
-            println!("- **{}**: `{}`", issue.package, issue.dep);
+            let _ = writeln!(o, "- **{}**: `{}`", issue.package, issue.dep);
         }
     }
 
     if !report.reverse_deps.is_empty() {
-        println!("\n## Reverse dependencies\n");
+        let _ = writeln!(o, "\n## Reverse dependencies\n");
         let mut broken_count = 0;
         for (pkg, result) in &report.reverse_deps {
             if result.status == "ok" {
-                println!("- **{pkg}:** OK");
+                let _ = writeln!(o, "- **{pkg}:** OK");
             } else {
                 broken_count += 1;
-                println!("- **{pkg}:** BROKEN");
+                let _ = writeln!(o, "- **{pkg}:** BROKEN");
                 for issue in &result.issues {
-                    println!("  - `{}` (changed: `{}`)", issue.dep, issue.changed_provide);
+                    let _ = writeln!(
+                        o,
+                        "  - `{}` (changed: `{}`)",
+                        issue.dep, issue.changed_provide
+                    );
                 }
             }
         }
 
         let total = report.reverse_deps.len();
         if broken_count > 0 {
-            println!(
+            let _ = writeln!(
+                o,
                 "\n**Summary:** {broken_count} of {total} reverse \
                  dependencies would break."
             );
         } else {
-            println!("\n**Summary:** all {total} reverse dependencies OK.");
+            let _ = writeln!(o, "\n**Summary:** all {total} reverse dependencies OK.");
         }
     }
 
     if report.reverse_deps.is_empty() && report.installability_issues.is_empty() {
-        println!("\nNo breakage expected.");
+        let _ = writeln!(o, "\nNo breakage expected.");
     } else if !report.installability_issues.is_empty() {
-        println!(
+        let _ = writeln!(
+            o,
             "\n**Warning:** {} installability issue(s) found.",
             report.installability_issues.len()
         );
     }
+    o
 }
 
 // ---- Private helpers ----

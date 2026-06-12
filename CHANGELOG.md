@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### ebranch: `check-update --give-karma` casts karma with per-bug feedback
+
+`check-update` can now vote on the Bodhi update it just checked:
+`--give-karma` posts a comment with overall karma plus per-bug
+feedback, like the web UI. The check result suggests the overall
+karma — `+1` when no issues are found, `-1` when reverse deps
+break or the updated packages have unsatisfied deps, `0` when
+the analysis was incomplete — and the user is prompted with that
+suggestion as the default. Update-request bugs
+(`<pkg>-<version> is available`) are auto-voted `+1` when the
+update delivers at least the requested version (by rpm version
+comparison) and `-1` otherwise; other bugs are put to the user.
+The full plan is shown for confirmation before posting; `--yes`
+skips prompts (non-update bugs get `0`) and `--comment <TEXT>`
+overrides the comment text, which defaults to the full Markdown
+check report. On the user's own updates the overall karma is
+skipped (Bodhi ignores submitter karma; the plan says so) while
+per-bug feedback is still posted. Before any manual bug prompt
+the update's notes are printed for context, and server-side
+caveats from Bodhi are echoed after posting. Authentication reuses the bodhi CLI's cached OIDC
+session (`~/.config/bodhi/client.json`), refreshing expired
+tokens against the ID provider and writing them back. The
+session is validated before the analysis runs; with no session,
+an interactive bodhi CLI login is started up front.
+
+New library surface: `sandogasa_bodhi::auth` (bodhi CLI session
+reuse: `cli_session_token`, `load_tokens`/`save_tokens`,
+`refresh_tokens`), `BodhiClient::with_token` (guarded by
+`ensure_secure_url`), `BodhiClient::comment` with `bug_feedback`,
+a `title` field on `BodhiBug`, and
+`sandogasa_bugclass::bugzilla::extract_new_version` (moved from
+poi-tracker's `semver_audit`, which now re-uses it).
+
 ### ebranch: `check-update` offers to regenerate stale side-tag repos
 
 When the side-tag repodata lags koji (the V-R cross-check fails),

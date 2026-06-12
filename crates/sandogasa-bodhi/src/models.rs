@@ -10,10 +10,20 @@ pub struct UpdatesResponse {
     pub pages: u64,
 }
 
+/// The user who submitted an update.
+#[derive(Debug, Deserialize)]
+pub struct BodhiUser {
+    pub name: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Update {
     pub alias: String,
     pub status: String,
+    /// Submitter. Bodhi zeroes overall karma from the submitter
+    /// on their own updates (per-bug feedback still counts).
+    #[serde(default)]
+    pub user: Option<BodhiUser>,
     /// Bodhi's auto-generated NVR-joined title (space-separated
     /// list of builds). Rarely what a reader wants; prefer
     /// `display_name` or the first line of `notes`.
@@ -52,6 +62,19 @@ pub struct Build {
 #[derive(Debug, Deserialize)]
 pub struct BodhiBug {
     pub bug_id: u64,
+    /// Bug summary as cached by Bodhi from Bugzilla. May be
+    /// missing or stale if Bodhi couldn't fetch it.
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// Per-bug karma sent with a comment (the web UI's per-bug
+/// thumbs up/down).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BugFeedbackItem {
+    pub bug_id: u64,
+    /// -1, 0, or +1.
+    pub karma: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +109,25 @@ pub struct Comment {
     pub author: Option<String>,
     #[serde(default)]
     pub update_alias: Option<String>,
+}
+
+/// A server-side adjustment note returned alongside a write
+/// response (e.g. "You may not give karma to your own updates."
+/// when Bodhi zeroes the karma instead of rejecting the comment).
+#[derive(Debug, Deserialize)]
+pub struct Caveat {
+    #[serde(default)]
+    pub name: Option<String>,
+    pub description: String,
+}
+
+/// Response from posting a comment (`POST /comments/`).
+#[derive(Debug, Deserialize)]
+pub struct SingleCommentResponse {
+    pub comment: Comment,
+    /// Server-side adjustments, e.g. karma zeroed on own update.
+    #[serde(default)]
+    pub caveats: Vec<Caveat>,
 }
 
 /// A Bodhi release entry from the releases API.
