@@ -190,6 +190,55 @@ impl Package {
     pub fn is_unshipped(&self) -> bool {
         self.unshipped.is_some()
     }
+
+    /// Merge another entry for the same package into this one,
+    /// field by field: fields set in `other` win, fields unset in
+    /// `other` keep this entry's values, and retirement knowledge
+    /// is combined (`retired_on` is unioned; `unshipped` keeps
+    /// whichever side knows). Returns a human-readable note for
+    /// each field where both sides were set to different values
+    /// (the `other` side won).
+    pub fn merge_from(&mut self, other: &Package) -> Vec<String> {
+        let mut conflicts = Vec::new();
+        macro_rules! take {
+            ($field:ident) => {
+                if let Some(theirs) = &other.$field {
+                    if let Some(ours) = &self.$field
+                        && ours != theirs
+                    {
+                        conflicts.push(format!(
+                            "{}: conflicting {} ({ours:?} vs {theirs:?}; later file wins)",
+                            self.name,
+                            stringify!($field),
+                        ));
+                    }
+                    self.$field = Some(theirs.clone());
+                }
+            };
+        }
+        take!(poc);
+        take!(reason);
+        take!(team);
+        take!(task);
+        take!(rpms);
+        take!(arch_rpms);
+        take!(track);
+        take!(repology_name);
+        take!(distros);
+        take!(file_issue);
+        take!(priority);
+        take!(unshipped);
+        // Retirement branches are facts about dist-git, not
+        // per-inventory preferences: union them.
+        if let Some(theirs) = &other.retired_on {
+            let mut branches = self.retired_on.take().unwrap_or_default();
+            branches.extend(theirs.iter().cloned());
+            branches.sort();
+            branches.dedup();
+            self.retired_on = Some(branches);
+        }
+        conflicts
+    }
 }
 
 impl Inventory {
@@ -307,13 +356,23 @@ impl Inventory {
 
     /// Merge another inventory into this one.
     ///
-    /// Packages from `other` are added (or replace existing ones with
-    /// the same name). Metadata (name, description, etc.) is kept
-    /// from the original.
-    pub fn merge(&mut self, other: &Inventory) {
+    /// New packages from `other` are added. A package present in
+    /// both is merged field by field ([`Package::merge_from`]):
+    /// `other`'s set fields win, its unset fields keep this
+    /// inventory's values, and retirement knowledge is combined —
+    /// so a marker recorded in one file survives the package also
+    /// appearing bare in another. Metadata (name, description,
+    /// workloads, etc.) is kept from the original. Returns a
+    /// note per field where the two files genuinely disagreed.
+    pub fn merge(&mut self, other: &Inventory) -> Vec<String> {
+        let mut conflicts = Vec::new();
         for pkg in &other.package {
-            self.add_package(pkg.clone());
+            match self.find_package_mut(&pkg.name) {
+                Some(existing) => conflicts.extend(existing.merge_from(pkg)),
+                None => self.add_package(pkg.clone()),
+            }
         }
+        conflicts
     }
 }
 
@@ -512,6 +571,79 @@ mod tests {
         assert!(inv1.find_package("new-pkg").is_some());
         // Metadata stays from inv1.
         assert_eq!(inv1.inventory.name, "test");
+    }
+
+    #[test]
+    fn merge_from_set_fields_win_unset_preserved() {
+        let mut earlier = make_pkg("foo");
+        earlier.poc = Some("alice".to_string());
+        earlier.priority = Some(Priority::High);
+        let mut later = make_pkg("foo");
+        later.reason = Some("rust SIG".to_string());
+
+        let conflicts = earlier.merge_from(&later);
+        assert!(conflicts.is_empty());
+        // Later file's set field landed...
+        assert_eq!(earlier.reason.as_deref(), Some("rust SIG"));
+        // ...and its unset fields kept the earlier values.
+        assert_eq!(earlier.poc.as_deref(), Some("alice"));
+        assert_eq!(earlier.priority, Some(Priority::High));
+    }
+
+    #[test]
+    fn merge_from_reports_conflicts_later_wins() {
+        let mut earlier = make_pkg("foo");
+        earlier.priority = Some(Priority::High);
+        let mut later = make_pkg("foo");
+        later.priority = Some(Priority::Low);
+
+        let conflicts = earlier.merge_from(&later);
+        assert_eq!(conflicts.len(), 1);
+        assert!(conflicts[0].contains("priority"), "{}", conflicts[0]);
+        assert_eq!(earlier.priority, Some(Priority::Low));
+    }
+
+    #[test]
+    fn merge_from_combines_retirement_knowledge() {
+        let mut earlier = make_pkg("foo");
+        earlier.retired_on = Some(vec!["rawhide".to_string()]);
+        earlier.unshipped = Some("dist-git project gone (404)".to_string());
+        let mut later = make_pkg("foo");
+        later.retired_on = Some(vec!["epel9".to_string(), "rawhide".to_string()]);
+
+        let conflicts = earlier.merge_from(&later);
+        assert!(conflicts.is_empty());
+        // retired_on unioned, not replaced.
+        assert_eq!(
+            earlier.retired_on,
+            Some(vec!["epel9".to_string(), "rawhide".to_string()])
+        );
+        // A bare later entry doesn't erase the unshipped marker.
+        assert!(earlier.is_unshipped());
+    }
+
+    #[test]
+    fn merge_preserves_markers_from_earlier_files() {
+        // The original motivation: a package marked unshipped in
+        // one inventory also appears bare in a later-merged one.
+        let mut inv1 = make_inventory();
+        inv1.find_package_mut("foo").unwrap().unshipped = Some("gone".to_string());
+        let inv2 = Inventory {
+            inventory: InventoryMeta {
+                name: "other".to_string(),
+                description: "other".to_string(),
+                maintainer: "other".to_string(),
+                labels: vec![],
+                workloads: BTreeMap::new(),
+                private_fields: vec![],
+            },
+            package: vec![make_pkg("foo")],
+        };
+        let conflicts = inv1.merge(&inv2);
+        assert!(conflicts.is_empty());
+        assert!(inv1.find_package("foo").unwrap().is_unshipped());
+        // Still two packages — merged, not duplicated.
+        assert_eq!(inv1.package.len(), 2);
     }
 
     #[test]

@@ -23,7 +23,10 @@ pub fn json_schema() -> String {
 /// Load multiple inventories and merge them into one.
 ///
 /// The first inventory provides the metadata (name, description,
-/// etc.). Packages from subsequent inventories are merged in.
+/// etc.). Packages from subsequent inventories are merged in
+/// field by field (see [`Inventory::merge`]); genuine conflicts —
+/// the same package with different values for the same field —
+/// are reported on stderr, with the later file winning.
 pub fn load_and_merge(paths: &[String]) -> Result<Inventory, String> {
     let mut iter = paths.iter();
     let first = iter
@@ -32,7 +35,9 @@ pub fn load_and_merge(paths: &[String]) -> Result<Inventory, String> {
     let mut inventory = load(first)?;
     for path in iter {
         let other = load(path)?;
-        inventory.merge(&other);
+        for conflict in inventory.merge(&other) {
+            eprintln!("warning: {path}: {conflict}");
+        }
     }
     Ok(inventory)
 }

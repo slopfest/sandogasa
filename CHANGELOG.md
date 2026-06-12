@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### sandogasa-inventory: field-aware multi-inventory merge (breaking)
+
+Merging inventories (poi-tracker's `-i`/`-I` with multiple files)
+previously replaced a colliding package entry wholesale with the
+later file's version, silently dropping fields the later file
+didn't set — including `priority`, `retired_on`, and `unshipped`
+markers. Merges are now field-aware: the later file's set fields
+win, its unset fields keep the earlier values, `retired_on` is
+unioned, and `unshipped` survives a bare later entry. Genuine
+conflicts (both files set different values) are reported on
+stderr, later file winning.
+
+Breaking (API): `Inventory::merge` now returns `Vec<String>`
+(conflict notes) instead of `()`; new `Package::merge_from`.
+Callers that ignored the old unit return just discard the new
+return value.
+
 ### poi-tracker: parallel `prune-retired` scan
 
 The scan now checks packages concurrently, bounded by `-j`/`--jobs`
