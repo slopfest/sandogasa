@@ -266,11 +266,11 @@ impl BodhiClient {
     /// store and rides along on subsequent requests.
     async fn login(&self) -> Result<(), Box<dyn std::error::Error>> {
         let url = format!("{}/oidc/login-token", self.base_url);
-        let resp = self
-            .auth(self.client.get(&url))
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send()
-            .await?;
+        let resp = crate::auth::send_with_retry("bodhi login", || {
+            self.auth(self.client.get(&url))
+                .header(reqwest::header::ACCEPT, "application/json")
+        })
+        .await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -291,14 +291,14 @@ impl BodhiClient {
             csrf_token: String,
         }
         let url = format!("{}/csrf", self.base_url);
-        let resp: CsrfResponse = self
-            .auth(self.client.get(&url))
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+        let resp: CsrfResponse = crate::auth::send_with_retry("bodhi csrf fetch", || {
+            self.auth(self.client.get(&url))
+                .header(reqwest::header::ACCEPT, "application/json")
+        })
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
         Ok(resp.csrf_token)
     }
 
@@ -335,6 +335,10 @@ impl BodhiClient {
             form.push((format!("bug_feedback.{i}.bug_id"), fb.bug_id.to_string()));
             form.push((format!("bug_feedback.{i}.karma"), fb.karma.to_string()));
         }
+        // The POST itself is deliberately not auto-retried: a
+        // transport error after the server processed the request
+        // would double-post the comment. The retried login/csrf
+        // steps above absorb most transient failures.
         let url = format!("{}/comments/", self.base_url);
         let resp = self
             .auth(self.client.post(&url))

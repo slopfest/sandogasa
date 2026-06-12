@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### sandogasa-bodhi: retry transient failures on the auth path
+
+Token refresh, OIDC metadata/userinfo fetches, and Bodhi's
+login/csrf requests now retry transport errors and 5xx responses
+with backoff (new `auth::send_with_retry`). These requests run
+right when `--give-karma` is about to post — after minutes of
+analysis — so a single connection blip previously wasted the
+whole run. The comment POST itself is deliberately not
+auto-retried, since repeating it after an ambiguous failure could
+double-post.
+
 ### ebranch: reviewer notes and provenance in posted reports
 
 The comment `--give-karma` posts is always the full Markdown

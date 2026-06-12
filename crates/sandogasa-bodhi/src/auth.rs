@@ -122,6 +122,64 @@ pub fn save_tokens(path: &Path, id_provider: &str, tokens: &OidcTokens) -> Resul
     Ok(())
 }
 
+/// Retry attempts for transient failures (transport errors and
+/// 5xx) on the auth endpoints. The whole point of these requests
+/// is usually to post something after a long-running analysis —
+/// dying on a connection blip at the finish line wastes all of
+/// that work.
+const AUTH_RETRY_ATTEMPTS: u32 = 3;
+
+/// Send a request (rebuilt fresh per attempt) with retries on
+/// transport errors and 5xx responses. Other statuses return the
+/// response for the caller to interpret. Only use with requests
+/// that are safe to repeat.
+pub(crate) async fn send_with_retry<F>(what: &str, build: F) -> Result<reqwest::Response, String>
+where
+    F: Fn() -> reqwest::RequestBuilder,
+{
+    let mut last_err = String::new();
+    for attempt in 0..AUTH_RETRY_ATTEMPTS {
+        if attempt > 0 {
+            let delay = std::time::Duration::from_secs(1 << (attempt - 1));
+            eprintln!(
+                "{what}: {last_err}; retrying in {}s ({attempt}/{})",
+                delay.as_secs(),
+                AUTH_RETRY_ATTEMPTS - 1
+            );
+            tokio::time::sleep(delay).await;
+        }
+        match build().send().await {
+            Ok(resp) if resp.status().is_server_error() => {
+                last_err = format!("HTTP {}", resp.status());
+            }
+            Ok(resp) => return Ok(resp),
+            Err(e) => last_err = format!("{e}"),
+        }
+    }
+    Err(format!("{what} failed after retries: {last_err}"))
+}
+
+#[derive(Deserialize)]
+struct OidcMetadata {
+    token_endpoint: Option<String>,
+    userinfo_endpoint: Option<String>,
+}
+
+/// Fetch the OIDC discovery document, with retries.
+async fn fetch_metadata(http: &reqwest::Client, id_provider: &str) -> Result<OidcMetadata, String> {
+    let metadata_url = format!(
+        "{}/.well-known/openid-configuration",
+        id_provider.trim_end_matches('/')
+    );
+    send_with_retry("OIDC metadata fetch", || http.get(&metadata_url))
+        .await?
+        .error_for_status()
+        .map_err(|e| format!("OIDC metadata request failed: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("cannot parse OIDC metadata: {e}"))
+}
+
 /// Refresh an OIDC token set against `id_provider`'s token
 /// endpoint (discovered via `.well-known/openid-configuration`).
 ///
@@ -136,36 +194,24 @@ pub async fn refresh_tokens(
     scope: &str,
     refresh_token: &str,
 ) -> Result<OidcTokens, String> {
-    #[derive(Deserialize)]
-    struct Metadata {
-        token_endpoint: String,
-    }
-    let metadata_url = format!(
-        "{}/.well-known/openid-configuration",
-        id_provider.trim_end_matches('/')
-    );
-    let metadata: Metadata = http
-        .get(&metadata_url)
-        .send()
-        .await
-        .map_err(|e| format!("cannot fetch OIDC metadata from {metadata_url}: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("OIDC metadata request failed: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("cannot parse OIDC metadata: {e}"))?;
+    let token_endpoint = fetch_metadata(http, id_provider)
+        .await?
+        .token_endpoint
+        .ok_or("OIDC metadata has no token_endpoint")?;
 
-    let resp = http
-        .post(&metadata.token_endpoint)
-        .form(&[
+    // Retried like the GETs: a token refresh is repeatable (the
+    // worst case with a rotating provider is a dead session that
+    // needs one interactive re-login, vs. certainly losing the
+    // whole run to a connection blip).
+    let resp = send_with_retry("token refresh", || {
+        http.post(&token_endpoint).form(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
             ("client_id", client_id),
             ("scope", scope),
         ])
-        .send()
-        .await
-        .map_err(|e| format!("token refresh request failed: {e}"))?;
+    })
+    .await?;
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
@@ -202,38 +248,22 @@ pub async fn username(
     access_token: &str,
 ) -> Result<String, String> {
     #[derive(Deserialize)]
-    struct Metadata {
-        userinfo_endpoint: String,
-    }
-    #[derive(Deserialize)]
     struct UserInfo {
         nickname: String,
     }
-    let metadata_url = format!(
-        "{}/.well-known/openid-configuration",
-        id_provider.trim_end_matches('/')
-    );
-    let metadata: Metadata = http
-        .get(&metadata_url)
-        .send()
-        .await
-        .map_err(|e| format!("cannot fetch OIDC metadata from {metadata_url}: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("OIDC metadata request failed: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("cannot parse OIDC metadata: {e}"))?;
-    let info: UserInfo = http
-        .get(&metadata.userinfo_endpoint)
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .map_err(|e| format!("userinfo request failed: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("userinfo request failed: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("cannot parse userinfo: {e}"))?;
+    let userinfo_endpoint = fetch_metadata(http, id_provider)
+        .await?
+        .userinfo_endpoint
+        .ok_or("OIDC metadata has no userinfo_endpoint")?;
+    let info: UserInfo = send_with_retry("userinfo request", || {
+        http.get(&userinfo_endpoint).bearer_auth(access_token)
+    })
+    .await?
+    .error_for_status()
+    .map_err(|e| format!("userinfo request failed: {e}"))?
+    .json()
+    .await
+    .map_err(|e| format!("cannot parse userinfo: {e}"))?;
     Ok(info.nickname)
 }
 
@@ -419,6 +449,43 @@ mod tests {
             ..tokens
         };
         assert!(!no_expiry.is_expired(i64::MAX));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn send_with_retry_retries_transport_errors() {
+        // Nothing listens on port 1: every attempt fails at the
+        // transport level. Paused time fast-forwards the backoff
+        // sleeps; the error names the operation after retries.
+        let http = reqwest::Client::new();
+        let err = send_with_retry("token refresh", || http.post("http://127.0.0.1:1/Token"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("token refresh failed after retries"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn send_with_retry_recovers_from_5xx() {
+        let server = MockServer::start().await;
+        // First attempt: 500. Subsequent: 200.
+        Mock::given(method("GET"))
+            .and(path("/flaky"))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/flaky"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let url = format!("{}/flaky", server.uri());
+        let resp = send_with_retry("flaky fetch", || http.get(&url))
+            .await
+            .unwrap();
+        assert!(resp.status().is_success());
     }
 
     #[tokio::test]
