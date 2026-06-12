@@ -365,6 +365,18 @@ struct SyncDistgitArgs {
     #[arg(short, long, default_value = "inventory.toml")]
     output: String,
 
+    /// One owner-alias request instead of a prefix scan.
+    /// Direct owner/admin/commit only: collaborator/ticket
+    /// grants are missed (and removed under --prune). Implies
+    /// --no-groups.
+    #[arg(
+        long,
+        conflicts_with_all = ["group", "include_group", "exclude_group",
+                              "auto_prefix", "no_auto_prefix",
+                              "start_pattern", "end_pattern"]
+    )]
+    fast: bool,
+
     /// Exclude group-only access.
     #[arg(
         long,
@@ -1450,7 +1462,7 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
     // partial replaces the output as the base inventory below.
     let partial_path = format!("{}.partial", args.output);
     let state_path = format!("{partial_path}.state");
-    let resuming = std::path::Path::new(&partial_path).exists();
+    let resuming = !args.fast && std::path::Path::new(&partial_path).exists();
     if resuming {
         if let Ok(state) = std::fs::read_to_string(&state_path) {
             patterns = resume_patterns(patterns, state.trim());
@@ -1472,7 +1484,20 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
     let mut all_projects = Vec::new();
     let mut fetch_error = None;
     let mut failed_pattern: Option<String> = None;
-    for pat in &patterns {
+    if args.fast {
+        // One request against the owner-alias dump. Entries are
+        // synthesized as direct access, so the group filters below
+        // pass them through; --pattern applies client-side. The
+        // prune scope collapses to that single pattern.
+        let user = args.user.as_ref().unwrap();
+        all_projects = client.user_packages_fast(user).await?;
+        if let Some(ref pat) = args.pattern {
+            all_projects.retain(|p| matches_any_pattern(&p.name, std::slice::from_ref(pat)));
+        }
+        patterns = vec![args.pattern.clone().unwrap_or_default()];
+    }
+    let scan_patterns: &[String] = if args.fast { &[] } else { &patterns };
+    for pat in scan_patterns {
         let result = if pat.is_empty() {
             if let Some(ref user) = args.user {
                 client.user_projects(user, args.per_page, None).await
@@ -1898,6 +1923,7 @@ mod tests {
             user: Some("alice".to_string()),
             group: None,
             output: "out.toml".to_string(),
+            fast: false,
             no_groups: false,
             include_group: vec![],
             exclude_group: vec![],

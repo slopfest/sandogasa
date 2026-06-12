@@ -431,6 +431,12 @@ impl DistGitClient {
     /// transient server errors (502/503/504). Deduplicates by name.
     /// An optional `pattern` filters by project name (supports `*`
     /// wildcards, e.g. `"python-*"`).
+    ///
+    /// `fork=false` is essential: without it Pagure includes the
+    /// user's *forks* in the listing, and a fork is reported under
+    /// its bare package name with the user as `owner` — making
+    /// `forks/<user>/rpms/<pkg>` indistinguishable from a real
+    /// `rpms/<pkg>` the user owns.
     pub async fn user_projects(
         &self,
         username: &str,
@@ -443,7 +449,7 @@ impl DistGitClient {
         let pattern_param = pattern.map(|p| format!("&pattern={p}")).unwrap_or_default();
         loop {
             let url = format!(
-                "{}/api/0/projects?namespace=rpms&username={}&per_page={}&page={}{}",
+                "{}/api/0/projects?namespace=rpms&fork=false&username={}&per_page={}&page={}{}",
                 self.base_url, username, per_page, page, pattern_param
             );
             eprint!("\r  fetching page {page}...");
@@ -458,6 +464,44 @@ impl DistGitClient {
         dedup_projects(&mut all);
         eprintln!("\r  fetched {} package(s)", all.len());
         Ok(all)
+    }
+
+    /// Fetch a user's directly-maintained RPM packages from the
+    /// Pagure owner-alias dump (`/extras/pagure_owner_alias.json`)
+    /// — a single ~3 MB request covering every rpm, instead of the
+    /// expensive per-user project scan.
+    ///
+    /// Trade-off: the dump records only direct owner/admin/commit
+    /// maintainers. Collaborator- and ticket-level grants are NOT
+    /// included, and neither is group-derived access. The returned
+    /// `ProjectInfo`s list the user under `commit` (the dump
+    /// doesn't distinguish levels).
+    pub async fn user_packages_fast(
+        &self,
+        username: &str,
+    ) -> Result<Vec<ProjectInfo>, Box<dyn std::error::Error>> {
+        validate_segment(username, "username")?;
+        let url = format!("{}/extras/pagure_owner_alias.json", self.base_url);
+        eprintln!("  fetching owner-alias dump...");
+        let resp = self.get_with_retry(&url).await?;
+        #[derive(serde::Deserialize)]
+        struct OwnerAlias {
+            rpms: std::collections::BTreeMap<String, Vec<String>>,
+        }
+        let data: OwnerAlias = resp.json().await?;
+        Ok(data
+            .rpms
+            .into_iter()
+            .filter(|(_, users)| users.iter().any(|u| u == username))
+            .map(|(name, _)| ProjectInfo {
+                name,
+                access_users: AccessUsers {
+                    commit: vec![username.to_string()],
+                    ..Default::default()
+                },
+                access_groups: AccessGroups::default(),
+            })
+            .collect())
     }
 
     /// Fetch all RPM packages a group has access to.
@@ -1493,6 +1537,38 @@ mod tests {
         assert!(err.contains("127.0.0.1:1"), "unexpected error: {err}");
     }
 
+    // ---- user_packages_fast ----
+
+    #[tokio::test]
+    async fn user_packages_fast_filters_direct_maintainers() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/extras/pagure_owner_alias.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "rpms": {
+                    "freerdp": ["salimma", "dcavalca"],
+                    "systemd": ["zbyszek"],
+                    "pcem": ["salimma"]
+                },
+                "container": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let projects = client.user_packages_fast("salimma").await.unwrap();
+        let names: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["freerdp", "pcem"]);
+        // Direct access is synthesized so --no-groups filtering keeps them.
+        assert!(
+            projects[0]
+                .access_users
+                .commit
+                .contains(&"salimma".to_string())
+        );
+    }
+
     // ---- list_branches ----
 
     #[tokio::test]
@@ -1555,6 +1631,9 @@ mod tests {
             .and(path("/api/0/projects"))
             .and(query_param("namespace", "rpms"))
             .and(query_param("username", "salimma"))
+            // Forks must be excluded: they masquerade as the real
+            // package with the user as owner.
+            .and(query_param("fork", "false"))
             .and(query_param("page", "1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "projects": [

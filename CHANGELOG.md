@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### poi-tracker: `sync-distgit --fast` via the owner-alias dump
+
+User syncs can now skip the prefix scan entirely: `--fast` fetches
+Pagure's `extras/pagure_owner_alias.json` (one ~3 MB request) and
+takes the user's directly-maintained packages from it — seconds
+instead of minutes, with none of the group-derived download the
+scan can't avoid. Trade-off (now also documented in
+`crates/sandogasa-distgit/DEVELOPMENT.md` alongside the other
+per-user query semantics): the dump records only direct
+owner/admin/commit maintainers, so collaborator- and ticket-level
+grants are missed — and `--prune --fast` would remove them.
+`--fast` implies `--no-groups`; `--pattern`/`--exclude` apply
+client-side. New `DistGitClient::user_packages_fast` backs it.
+
 ### poi-tracker: `sync-distgit` retries transport errors and resumes from partials
 
 `DistGitClient`'s project queries now retry transient transport
@@ -12,6 +26,16 @@ failed pattern to `<output>.partial.state` next to the existing
 `<output>.partial`; re-running the same command resumes from that
 pattern (loading the partial as the base inventory), and a
 completed run replaces `<output>` and removes both files.
+
+### sandogasa-distgit: exclude forks from per-user project queries
+
+`DistGitClient::user_projects` now passes `fork=false`: without
+it, Pagure's listing includes the user's forks, and a fork is
+reported under its bare package name with the user as `owner` —
+indistinguishable from really owning `rpms/<pkg>`. Fork-only
+packages therefore leaked into `sync-distgit --user` inventories
+as direct/owner entries (even under `--no-groups`). Re-syncing an
+affected inventory with `--prune` removes them.
 
 ### poi-tracker: remove deprecated `--auto-prefix --pattern` spelling (breaking CLI)
 

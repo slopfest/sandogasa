@@ -133,6 +133,17 @@ command resumes from the failed pattern, and a completed run
 replaces `<output>` and removes both files. Delete the
 `.partial` to start over instead.
 
+For user syncs, `--fast` replaces the whole prefix scan with one
+request against Pagure's owner-alias dump. The trade-off: the
+dump only records direct owner/admin/commit maintainers, so
+collaborator- and ticket-level grants won't appear (and
+`--prune --fast` would *remove* them from an inventory the full
+scan had populated). It implies `--no-groups`; `--pattern` and
+`--exclude` still apply, client-side. Use `--fast` for routine
+refreshes and an occasional full scan to true up — the full
+trade-off analysis lives in
+[`sandogasa-distgit`'s development notes](../../crates/sandogasa-distgit/DEVELOPMENT.md).
+
 ### Import from legacy JSON
 
 ```sh
