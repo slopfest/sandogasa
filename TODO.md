@@ -17,19 +17,16 @@
 
 ## poi-tracker
 
-- Detect packages no longer carried on any supported branch
-  (rawhide + every active EPEL release, presumably also active
-  Fedora releases) and surface them for removal from the
-  inventory. The signal is similar to `triage-retired`'s
-  per-branch check — `dead.package` present on every relevant
-  branch, or the dist-git project itself gone (404) — but the
-  *action* is "drop from the inventory" rather than "close the
-  update bug". A new subcommand (e.g. `prune-retired`) seems
-  right; consider a `--dry-run`/confirm flow matching
-  `triage-retired`. Also: extend `sync-distgit` /
-  `sync-gitlab` to filter such packages out when generating an
-  inventory in the first place, so a fresh sync never adds them
-  back.
+- `prune-retired` follow-ups (the subcommand itself landed
+  2026-06-12): (a) parallelize the scan — it is sequential at
+  ~1-2 requests per package, so a 4500-package inventory takes
+  a long while; bound concurrency to be polite to Pagure.
+  (b) Optionally check retirement during a *fresh* sync
+  (`sync-distgit`/`sync-gitlab` with no existing inventory), so
+  newly synced inventories start with `unshipped` markers
+  instead of needing a follow-up `prune-retired` run. Existing
+  inventories are already covered: markers survive re-syncs and
+  `--prune` preserves the tombstones.
 
 ## ebranch
 
