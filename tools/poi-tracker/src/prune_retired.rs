@@ -58,7 +58,33 @@ pub struct RunReport {
     /// Names of every package the scan checked (scoped by the
     /// walk filter), for bidirectional marker updates.
     pub checked: Vec<String>,
+    /// Packages retired or absent on every active branch —
+    /// candidates for marking `unshipped` (or removal).
     pub candidates: Vec<PruneCandidate>,
+    /// Entries whose dist-git project doesn't exist at all (404).
+    /// That usually means the entry itself is invalid — a binary
+    /// subpackage name recorded instead of the source package
+    /// (e.g. `askalono-cli` instead of `rust-askalono-cli`), a
+    /// typo — or, rarely, a genuinely deleted project. Either way
+    /// a human should fix or remove the entry, so these are
+    /// reported and never marked `unshipped`.
+    pub invalid: Vec<String>,
+}
+
+/// Separate project-gone hits from the real prune candidates: a
+/// 404 means there is no such source package, which is far more
+/// often a bad inventory entry than a deleted project.
+pub fn split_invalid(findings: Vec<PruneCandidate>) -> (Vec<PruneCandidate>, Vec<String>) {
+    let mut candidates = Vec::new();
+    let mut invalid = Vec::new();
+    for f in findings {
+        if f.reason == PruneReason::ProjectGone {
+            invalid.push(f.package);
+        } else {
+            candidates.push(f);
+        }
+    }
+    (candidates, invalid)
 }
 
 /// Apply scan results to the inventory's `unshipped` markers:
@@ -158,11 +184,13 @@ pub async fn run(
         .filter(|p| filter.matches(&p.name))
         .map(|p| p.name.clone())
         .collect();
-    let candidates = scan_packages(dg, checked.clone(), active, jobs, verbose).await?;
+    let findings = scan_packages(dg, checked.clone(), active, jobs, verbose).await?;
+    let (candidates, invalid) = split_invalid(findings);
     Ok(RunReport {
         packages_checked: checked.len(),
         checked,
         candidates,
+        invalid,
     })
 }
 
@@ -486,22 +514,49 @@ mod tests {
             .unwrap();
         assert_eq!(report.packages_checked, 4);
         assert_eq!(report.checked.len(), 4);
+        // A 404 is an invalid entry, not a prune candidate.
+        assert_eq!(report.invalid, s(&["gone-pkg"]));
         // Inventory order, live-pkg absent.
         let got: Vec<(&str, &PruneReason)> = report
             .candidates
             .iter()
             .map(|c| (c.package.as_str(), &c.reason))
             .collect();
-        assert_eq!(got.len(), 3);
-        assert_eq!(got[0], ("gone-pkg", &PruneReason::ProjectGone));
+        assert_eq!(got.len(), 2);
         assert_eq!(
-            got[1],
+            got[0],
             (
                 "dead-pkg",
                 &PruneReason::RetiredEverywhere(s(&["rawhide", "epel9"]))
             )
         );
-        assert_eq!(got[2], ("eol-pkg", &PruneReason::NoActiveBranch));
+        assert_eq!(got[1], ("eol-pkg", &PruneReason::NoActiveBranch));
+    }
+
+    #[test]
+    fn split_invalid_separates_project_gone() {
+        let findings = vec![
+            PruneCandidate {
+                package: "askalono-cli".to_string(),
+                reason: PruneReason::ProjectGone,
+            },
+            PruneCandidate {
+                package: "dead-pkg".to_string(),
+                reason: PruneReason::RetiredEverywhere(s(&["rawhide"])),
+            },
+            PruneCandidate {
+                package: "eol-pkg".to_string(),
+                reason: PruneReason::NoActiveBranch,
+            },
+        ];
+        let (candidates, invalid) = split_invalid(findings);
+        assert_eq!(invalid, s(&["askalono-cli"]));
+        assert_eq!(candidates.len(), 2);
+        assert!(
+            candidates
+                .iter()
+                .all(|c| c.reason != PruneReason::ProjectGone)
+        );
     }
 
     #[test]

@@ -314,12 +314,24 @@ delete the entries outright instead. Packages are checked
 concurrently (`-j`/`--jobs`, default 8 in-flight dist-git
 requests).
 
+An entry whose dist-git project doesn't exist at all (404) is
+reported as **invalid** rather than marked: that usually means
+the entry itself is wrong — a *binary subpackage* name recorded
+instead of the source package (e.g. `askalono-cli`, which is
+built from `rust-askalono-cli`), or a typo — and only rarely a
+genuinely deleted project. Either way the fix is editing or
+removing the entry, which is a human call. A stale `unshipped`
+marker on such an entry is cleared by the next run.
+
 `sync-distgit --mark-unshipped` runs the same check on the
 packages a sync adds, so a fresh inventory starts with its
 `unshipped` markers in place instead of needing a follow-up
-`prune-retired` run. (Projects that are gone entirely never
-appear in sync results, so only `prune-retired` can detect
-those.)
+`prune-retired` run. This catches retired packages, which keep
+their ACLs and so still appear in sync listings. A package whose
+dist-git project was deleted outright never appears in a listing
+at all — harmless for a fresh inventory (it simply isn't added),
+but if an existing inventory recorded it before the project
+vanished, only `prune-retired` notices the 404.
 
 ### Close retired packages' update bugs
 

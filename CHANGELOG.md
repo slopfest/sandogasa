@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### poi-tracker: `prune-retired` flags nonexistent projects as invalid entries
+
+A dist-git 404 usually doesn't mean a deleted project — it means
+the inventory entry itself is wrong, most often a binary
+subpackage name recorded instead of the source package (e.g.
+`askalono-cli`, built from `rust-askalono-cli`). The first full
+scan marked such an entry `unshipped`, which was misleading.
+404s are now reported as a separate "invalid entries — fix or
+remove" list, never marked; a stale marker on such an entry is
+cleared by the next run.
+
 ### poi-tracker: `sync-distgit --mark-unshipped`
 
 Run the prune-retired check on the packages a sync adds (bounded

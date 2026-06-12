@@ -756,10 +756,21 @@ fn cmd_prune_retired(paths: &[String], args: &PruneRetiredArgs) -> ExitCode {
             println!("- {}: {}", c.package, c.reason.describe());
         }
     }
+    if !report.invalid.is_empty() {
+        println!(
+            "\nInvalid entries — no such dist-git project (fix or \
+             remove; often a binary subpackage name recorded \
+             instead of the source package):"
+        );
+        for name in &report.invalid {
+            println!("- {name}");
+        }
+    }
     eprintln!(
-        "\n{} checked, {} prunable",
+        "\n{} checked, {} prunable, {} invalid",
         report.packages_checked,
-        report.candidates.len()
+        report.candidates.len(),
+        report.invalid.len()
     );
     if args.dry_run {
         return ExitCode::SUCCESS;
@@ -1882,16 +1893,17 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         );
         let marked = match prune_retired::active_branches_from_bodhi().await {
             Ok(active) => {
-                match prune_retired::scan_packages(
+                let scanned = prune_retired::scan_packages(
                     &client,
                     added_names.clone(),
                     &active,
                     args.jobs,
                     false,
                 )
-                .await
-                {
-                    Ok(candidates) => {
+                .await;
+                match scanned {
+                    Ok(findings) => {
+                        let (candidates, invalid) = prune_retired::split_invalid(findings);
                         let n = prune_retired::apply_unshipped_marks(
                             &mut inventory,
                             &added_names,
@@ -1899,6 +1911,11 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
                         );
                         for c in &candidates {
                             eprintln!("  {}: {}", c.package, c.reason.describe());
+                        }
+                        for name in &invalid {
+                            eprintln!(
+                                "  {name}: no such dist-git project — fix or remove the entry"
+                            );
                         }
                         Some(n)
                     }
