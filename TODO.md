@@ -7,6 +7,13 @@
   reqwest::Error appears in public signatures, so it is itself a
   breaking change — bundle with the next breaking release),
   toml 0.8->1.x, toml_edit 0.22->0.25, quick-xml 0.37->0.40.
+  Fedora availability (checked 2026-06-12 via fedrq, rawhide +
+  f42-f44 + epel9/epel10): reqwest 0.13, toml 1.1, and
+  toml_edit 0.25 are shipped on every branch — only our own
+  migration work blocks them. quick-xml 0.40 is rawhide-only;
+  stable/EPEL branches ship 0.39 with 0.40 updates still in
+  Bodhi testing. Re-check before bumping:
+  https://bodhi.fedoraproject.org/updates/?search=0.40&packages=rust-quick-xml
 
 ## poi-tracker
 

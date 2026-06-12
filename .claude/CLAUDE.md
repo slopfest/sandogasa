@@ -53,6 +53,7 @@
 ## Dependencies
 - Before starting feature work, run `cargo audit` and address any reported vulnerabilities first (patch bump or `cargo update -p <crate> --precise <version>`)
 - Before a semver-breaking release, check for deps that themselves require a major version bump and consider bundling those upgrades with your own breaking release. Use `cargo update --dry-run --verbose` and look for `Unchanged <crate> (available: <new major>)` lines — do NOT use `cargo outdated`, which doesn't understand `[workspace.dependencies]` inheritance and falsely reports "All dependencies are up to date" for this workspace
+- For every candidate major dep bump (whether taken or deferred), check Fedora availability of the new version so we don't get blocked later: `fedrq pkgs -b <branch> -F nev rust-<crate>` across rawhide, the active Fedora branches, and epel9/epel10. Record the result in TODO.md next to the bump entry, and explicitly flag any dep whose new version is not packaged at all or has not reached stable on every branch (e.g. still in Bodhi testing — check `https://bodhi.fedoraproject.org/updates/?packages=rust-<crate>`) so the Fedora packaging work can be done first
 - Routine `cargo update` (semver-compatible bumps) should be a separate commit from feature work so it is easy to revert if something regresses
 - After any dependency change, run `cargo clippy --workspace && cargo cov` to verify nothing broke
 
