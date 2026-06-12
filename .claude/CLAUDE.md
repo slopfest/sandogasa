@@ -34,6 +34,24 @@
 ## CLI behavior
 - Non-interactive subcommands (e.g. `show`, `search`) must support a `--json` flag that outputs pretty-printed, machine-readable JSON instead of human-readable text
 - Each tool must support `--version` and display its name, version, and short description (matching `Cargo.toml` `description`) in the `--help` header. In clap, use `#[command(version, about, long_about = None, before_help = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")))]`
+- Don't throw away the result of expensive computation. When a tool
+  detects a fixable problem mid-run (stale metadata, missing
+  credentials/session, a transient failure), it should offer to fix
+  it on the user's behalf and continue with the already-computed
+  state — not print "here's how to fix it, then rerun" and discard
+  the work. Corollaries:
+  - Validate preconditions that are cheap to check (external tools,
+    auth sessions, output-path writability) *before* starting
+    expensive work, so failures surface in seconds, not minutes
+  - When a long run does fail partway, persist partial state and
+    support resuming from it (retrying the failed step first),
+    replacing the final output only on success
+  - Interactive fix-it prompts should default to the safe productive
+    choice (e.g. "fix and continue" default yes; "continue with bad
+    data" default no), and must not fire in `--json` mode or when
+    stdin isn't a terminal — non-interactive runs keep the
+    warn-and-continue or fail-with-remedy behavior
+
 
 ## Workspace layout
 - Library crates go in `crates/`, binary crates go in `tools/`
