@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### ebranch: own-update detection no longer aborts the vote
+
+A transient network failure looking up the session username (for
+own-update karma skipping) aborted `--give-karma` after the whole
+analysis had already run. The lookup now retries with backoff and,
+if it still fails, warns and proceeds assuming a foreign update —
+Bodhi enforces the own-update karma rule server-side regardless.
+
 ### ebranch: fix false "removed Provides" for compat packages (@testing path)
 
 `check-update` compared provides per source package when querying

@@ -243,6 +243,42 @@ pub fn ensure_session() -> Result<(), String> {
     })
 }
 
+/// Look up the session's username for own-update detection,
+/// retrying transient failures and giving up gracefully: returns
+/// `None` (with a warning) when the lookup keeps failing, since
+/// it only gates a client-side nicety.
+async fn session_username_with_retry(http: &reqwest::Client) -> Option<String> {
+    const ATTEMPTS: u32 = 3;
+    let mut last_err = String::new();
+    for attempt in 0..ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+        }
+        let result = async {
+            let token =
+                auth::cli_session_token(http, &auth::cli_cache_path(), auth::FEDORA_IDP).await?;
+            auth::username(http, auth::FEDORA_IDP, &token).await
+        }
+        .await;
+        match result {
+            Ok(user) => return Some(user),
+            Err(e) => {
+                if attempt + 1 < ATTEMPTS {
+                    eprintln!("username lookup failed ({e}); retrying...");
+                }
+                last_err = e;
+            }
+        }
+    }
+    eprintln!(
+        "warning: could not determine the session username \
+         ({last_err}); assuming this is not your own update \
+         (Bodhi enforces the own-update karma rule server-side \
+         anyway)"
+    );
+    None
+}
+
 /// Cast karma on a Bodhi update with per-bug feedback. `karma`
 /// and `reason` come from [`derive_karma`] on the check report.
 pub fn run(
@@ -271,14 +307,17 @@ async fn run_async(
 
     // Bodhi zeroes overall karma from the submitter on their own
     // updates (per-bug feedback still counts), so don't pretend
-    // we are casting one.
+    // we are casting one. The lookup is best-effort with retries:
+    // a transient failure here must not abort a vote the user
+    // already spent minutes of analysis on — Bodhi enforces the
+    // own-update rule server-side regardless (we'd just echo its
+    // caveat instead of pre-empting it).
     let http = reqwest::Client::new();
-    let session_user = {
-        let token =
-            auth::cli_session_token(&http, &auth::cli_cache_path(), auth::FEDORA_IDP).await?;
-        auth::username(&http, auth::FEDORA_IDP, &token).await?
+    let session_user = session_username_with_retry(&http).await;
+    let own_update = match (&session_user, &update.user) {
+        (Some(session), Some(submitter)) => *session == submitter.name,
+        _ => false,
     };
-    let own_update = update.user.as_ref().is_some_and(|u| u.name == session_user);
     let (karma, reason) = if own_update && karma != 0 {
         (
             0,
