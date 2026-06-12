@@ -139,9 +139,22 @@ dump only records direct owner/admin/commit maintainers, so
 collaborator- and ticket-level grants won't appear (and
 `--prune --fast` would *remove* them from an inventory the full
 scan had populated). It implies `--no-groups`; `--pattern` and
-`--exclude` still apply, client-side. Use `--fast` for routine
-refreshes and an occasional full scan to true up — the full
-trade-off analysis lives in
+`--exclude` still apply, client-side.
+
+A fast layout that covers nearly everything: keep one `--fast`
+inventory for your own packages plus one group inventory per SIG
+you're in (each a single cheap query) —
+
+```sh
+poi-tracker sync-distgit --user salimma --fast -o mine.toml
+poi-tracker sync-distgit --group rust-sig -o rust-sig.toml
+poi-tracker sync-distgit --group go-sig -o go-sig.toml
+```
+
+Together those cover everything except user-level
+collaborator/ticket grants, which only the full prefix scan can
+see — run one occasionally to true up. The full trade-off
+analysis lives in
 [`sandogasa-distgit`'s development notes](../../crates/sandogasa-distgit/DEVELOPMENT.md).
 
 ### Import from legacy JSON

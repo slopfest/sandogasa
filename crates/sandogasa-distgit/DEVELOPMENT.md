@@ -73,7 +73,11 @@ There is no exact-and-fast option: the API has no server-side
 "direct ACLs only" filter (so `--no-groups` must filter
 client-side after downloading everything), and the owner-alias
 dump is the only single-request source but doesn't track
-collaborator/ticket. Practical guidance: use `--fast` for routine
-refreshes and the full scan occasionally to true up — and beware
-that `--prune --fast` removes collaborator/ticket-granted packages
+collaborator/ticket. Practical guidance: keep one `--fast`
+inventory for your own packages plus a per-SIG group inventory
+for each group you're in — every one of those is a single cheap
+query, and together they cover everything except user-level
+collaborator/ticket grants, which only the full prefix scan can
+see (run one occasionally to true up). Beware that
+`--prune --fast` removes collaborator/ticket-granted packages
 from an inventory that the full scan had added.
