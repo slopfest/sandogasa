@@ -502,24 +502,32 @@ impl DistGitClient {
     ) -> Result<reqwest::Response, Box<dyn std::error::Error>> {
         let mut last_err = None;
         for attempt in 0..=3u32 {
-            let resp = self.client.get(url).send().await?;
-            let status = resp.status();
-            if status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
-                || status == reqwest::StatusCode::BAD_GATEWAY
-                || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
-                || status == reqwest::StatusCode::GATEWAY_TIMEOUT
-            {
-                let delay = std::time::Duration::from_secs(1 << attempt);
-                eprintln!(
-                    "  {status}, retrying in {}s ({}/3)",
-                    delay.as_secs(),
-                    attempt + 1,
-                );
-                tokio::time::sleep(delay).await;
-                last_err = Some(format!("{status} for {url}"));
-                continue;
-            }
-            return Ok(resp.error_for_status()?);
+            // Transport failures (connection reset, timeout, DNS)
+            // are just as transient as a 5xx — retry them with the
+            // same backoff instead of aborting the whole sync.
+            let problem = match self.client.get(url).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
+                        || status == reqwest::StatusCode::BAD_GATEWAY
+                        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+                        || status == reqwest::StatusCode::GATEWAY_TIMEOUT
+                    {
+                        format!("{status}")
+                    } else {
+                        return Ok(resp.error_for_status()?);
+                    }
+                }
+                Err(e) => format!("{e}"),
+            };
+            let delay = std::time::Duration::from_secs(1 << attempt);
+            eprintln!(
+                "  {problem}, retrying in {}s ({}/3)",
+                delay.as_secs(),
+                attempt + 1,
+            );
+            tokio::time::sleep(delay).await;
+            last_err = Some(format!("{problem} for {url}"));
         }
         Err(last_err.unwrap().into())
     }
@@ -1470,6 +1478,19 @@ mod tests {
     async fn list_branches_rejects_traversal_package() {
         let client = DistGitClient::with_base_url("https://src.fedoraproject.org");
         assert!(client.list_branches("../../admin").await.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn get_with_retry_retries_transport_errors() {
+        // Nothing listens on port 1: every attempt fails at the
+        // transport level. The old code aborted on the first
+        // connection error; now it retries and eventually returns
+        // an error mentioning the URL. Paused time fast-forwards
+        // the backoff sleeps.
+        let client = DistGitClient::with_base_url("http://127.0.0.1:1");
+        let result = client.user_projects("salimma", 100, None).await;
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("127.0.0.1:1"), "unexpected error: {err}");
     }
 
     // ---- list_branches ----

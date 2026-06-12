@@ -1411,6 +1411,17 @@ fn build_patterns(args: &SyncDistgitArgs) -> Vec<String> {
     }
 }
 
+/// Trim the pattern list for a resumed run: fetching restarts at
+/// the recorded failed pattern. A recorded pattern that's no
+/// longer in the list (the flags changed between runs) keeps the
+/// full list — safe, since re-fetching merges idempotently.
+fn resume_patterns(patterns: Vec<String>, failed: &str) -> Vec<String> {
+    match patterns.iter().position(|p| p == failed) {
+        Some(idx) => patterns[idx..].to_vec(),
+        None => patterns,
+    }
+}
+
 async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::error::Error>> {
     let client = DistGitClient::new();
 
@@ -1430,7 +1441,27 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         }
     }
 
-    let patterns = build_patterns(args);
+    let mut patterns = build_patterns(args);
+
+    // Resume support: a failed run leaves `<output>.partial` (the
+    // inventory as of the failure) and `<output>.partial.state`
+    // (the pattern that failed). When both exist, pick up from the
+    // failed pattern instead of re-fetching completed ones; the
+    // partial replaces the output as the base inventory below.
+    let partial_path = format!("{}.partial", args.output);
+    let state_path = format!("{partial_path}.state");
+    let resuming = std::path::Path::new(&partial_path).exists();
+    if resuming {
+        if let Ok(state) = std::fs::read_to_string(&state_path) {
+            patterns = resume_patterns(patterns, state.trim());
+            eprintln!(
+                "resuming from pattern '{}' using {partial_path}",
+                patterns.first().map(String::as_str).unwrap_or("")
+            );
+        } else {
+            eprintln!("found {partial_path} but no state file; re-fetching all patterns");
+        }
+    }
 
     let source_label = if let Some(ref user) = args.user {
         format!("user:{user}")
@@ -1440,6 +1471,7 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
 
     let mut all_projects = Vec::new();
     let mut fetch_error = None;
+    let mut failed_pattern: Option<String> = None;
     for pat in &patterns {
         let result = if pat.is_empty() {
             if let Some(ref user) = args.user {
@@ -1471,6 +1503,7 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
                     );
                 }
                 fetch_error = Some(e);
+                failed_pattern = Some(pat.clone());
                 break;
             }
         }
@@ -1498,8 +1531,12 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         eprintln!("  {}", parts.join(", "));
     }
 
-    // Load existing inventory or create a new one.
-    let mut inventory = if std::path::Path::new(&args.output).exists() {
+    // Load the base inventory: the partial when resuming (it was
+    // derived from the output plus everything fetched before the
+    // failure), the existing output otherwise, or a fresh one.
+    let mut inventory = if resuming {
+        sandogasa_inventory::load(&partial_path).map_err(|e| format!("{partial_path}: {e}"))?
+    } else if std::path::Path::new(&args.output).exists() {
         sandogasa_inventory::load(&args.output).map_err(|e| format!("{}: {e}", args.output))?
     } else {
         let inv_name = args
@@ -1554,13 +1591,16 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         added += 1;
     }
 
-    // On fetch error, save partial results and bail.
+    // On fetch error, save partial results plus the failed
+    // pattern, so the next run with the same -o resumes there.
     if let Some(e) = fetch_error {
-        let partial = format!("{}.partial", args.output);
-        sandogasa_inventory::save(&inventory, &partial)?;
+        sandogasa_inventory::save(&inventory, &partial_path)?;
+        if let Some(pat) = failed_pattern {
+            std::fs::write(&state_path, format!("{pat}\n"))?;
+        }
         eprintln!(
-            "Saved {} package(s) to {partial} (incomplete, \
-             verify before renaming)",
+            "Saved {} package(s) to {partial_path} (incomplete); \
+             re-run the same command to resume",
             inventory.package.len()
         );
         return Err(e);
@@ -1597,6 +1637,11 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
     }
 
     sandogasa_inventory::save(&inventory, &args.output)?;
+    // A completed run supersedes any leftover resume state.
+    if resuming {
+        let _ = std::fs::remove_file(&partial_path);
+        let _ = std::fs::remove_file(&state_path);
+    }
 
     let pruned_msg = if args.prune && pruned > 0 {
         format!(", {pruned} pruned")
@@ -2092,6 +2137,22 @@ mod tests {
         let pats = vec!["systemd".to_string()];
         assert!(matches_any_pattern("systemd", &pats));
         assert!(!matches_any_pattern("systemd-networkd", &pats));
+    }
+
+    #[test]
+    fn resume_patterns_restarts_at_failed_pattern() {
+        let pats = vec!["a*".to_string(), "b*".to_string(), "c*".to_string()];
+        assert_eq!(resume_patterns(pats.clone(), "b*"), vec!["b*", "c*"]);
+        // Failed on the first pattern: nothing was completed.
+        assert_eq!(resume_patterns(pats.clone(), "a*"), pats);
+    }
+
+    #[test]
+    fn resume_patterns_unknown_state_keeps_all() {
+        // Flags changed between runs: re-fetch everything (safe,
+        // merging is idempotent).
+        let pats = vec!["a*".to_string(), "b*".to_string()];
+        assert_eq!(resume_patterns(pats.clone(), "x*"), pats);
     }
 
     #[test]

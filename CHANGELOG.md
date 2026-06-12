@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### poi-tracker: `sync-distgit` retries transport errors and resumes from partials
+
+`DistGitClient`'s project queries now retry transient transport
+failures (connection reset, timeout) with the same backoff already
+used for 5xx responses, so a network blip no longer aborts a long
+prefix scan. When a fetch still fails, `sync-distgit` saves the
+failed pattern to `<output>.partial.state` next to the existing
+`<output>.partial`; re-running the same command resumes from that
+pattern (loading the partial as the base inventory), and a
+completed run replaces `<output>` and removes both files.
+
 ### poi-tracker: remove deprecated `--auto-prefix --pattern` spelling (breaking CLI)
 
 The pre-0.12.1 scan-resume spelling `sync-distgit --auto-prefix

@@ -125,6 +125,14 @@ are always included, regardless of group filters.
 Without `--prune`, packages in the inventory that are no longer
 in the dist-git results are listed as a warning but kept.
 
+Transient network failures are retried with backoff (both 5xx
+responses and connection errors). If a fetch still fails, the
+progress so far is saved to `<output>.partial` along with the
+failed pattern in `<output>.partial.state` — re-running the same
+command resumes from the failed pattern, and a completed run
+replaces `<output>` and removes both files. Delete the
+`.partial` to start over instead.
+
 ### Import from legacy JSON
 
 ```sh
