@@ -772,28 +772,29 @@ fn fetch_bodhi_update(alias: &str) -> Result<BodhiUpdateInfo, String> {
 /// Compute changed provides using `subpkgs_provides` on both repos.
 ///
 /// Works for @testing and any repo where source RPM queries work.
+///
+/// Provides are unioned across all updated packages on *both*
+/// sides before comparing (matching the koji path): an update can
+/// move a capability between its packages — e.g. a version bump
+/// paired with a new compat package that keeps shipping the old
+/// version's provides. A per-package comparison would falsely
+/// report such provides as removed.
 fn compute_changed_provides_via_subpkgs(
     updated_packages: &[String],
     stable_fedrq: &sandogasa_fedrq::Fedrq,
     new_fedrq: &sandogasa_fedrq::Fedrq,
 ) -> Vec<ChangedProvide> {
-    updated_packages
+    let old_provides: BTreeSet<String> = updated_packages
         .par_iter()
-        .flat_map(|srpm| {
-            let old_provides: BTreeSet<String> =
-                filter_none(stable_fedrq.subpkgs_provides(srpm).unwrap_or_default())
-                    .into_iter()
-                    .collect();
+        .flat_map(|srpm| filter_none(stable_fedrq.subpkgs_provides(srpm).unwrap_or_default()))
+        .collect();
 
-            let new_provides: BTreeSet<String> = new_fedrq
-                .subpkgs_provides(srpm)
-                .ok()
-                .map(|v| filter_none(v).into_iter().collect())
-                .unwrap_or_default();
+    let new_provides: BTreeSet<String> = updated_packages
+        .par_iter()
+        .flat_map(|srpm| filter_none(new_fedrq.subpkgs_provides(srpm).unwrap_or_default()))
+        .collect();
 
-            compare_provides(&old_provides, &new_provides)
-        })
-        .collect()
+    compare_provides(&old_provides, &new_provides)
 }
 
 /// Compute changed provides for side tags using `koji buildinfo`
@@ -1395,6 +1396,24 @@ mod tests {
         let new: BTreeSet<String> = ["bash".to_string()].into();
         let changed = compare_provides(&old, &new);
         assert!(changed.is_empty());
+    }
+
+    #[test]
+    fn compare_provides_credits_compat_package_in_same_update() {
+        // const-oid 0.9 -> 0.10 drops crate(const-oid/std), but the
+        // same update introduces the compat package rust-const-oid0.9
+        // which still ships it. The callers union provides across
+        // all packages in the update on both sides, so the provide
+        // must come out unchanged — not "removed" (the bug behind
+        // the wrong FEDORA-EPEL-2026-b89b964abe report).
+        let old: BTreeSet<String> = ["crate(const-oid/std) = 0.9.6".to_string()].into();
+        let new: BTreeSet<String> = [
+            "crate(const-oid) = 0.10.2".to_string(),
+            // From the compat package, same version string as old.
+            "crate(const-oid/std) = 0.9.6".to_string(),
+        ]
+        .into();
+        assert!(compare_provides(&old, &new).is_empty());
     }
 
     // --- testing_has_update_nvrs ---

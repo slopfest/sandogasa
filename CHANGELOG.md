@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### ebranch: fix false "removed Provides" for compat packages (@testing path)
+
+`check-update` compared provides per source package when querying
+via `@testing`, so an update that bumps a crate and adds a compat
+package shipping the old version (e.g. rust-const-oid 0.10 +
+rust-const-oid0.9) falsely reported the old provides as removed —
+and flagged reverse deps as broken. Provides are now unioned
+across all packages in the update on both sides before comparing,
+matching what the side-tag (koji) path already did.
+
 ### poi-tracker: new `prune-retired` subcommand
 
 Finds inventory packages no longer carried on any active branch:
