@@ -158,7 +158,39 @@ pub async fn run(
         .filter(|p| filter.matches(&p.name))
         .map(|p| p.name.clone())
         .collect();
+    let candidates = scan_packages(dg, checked.clone(), active, jobs, verbose).await?;
+    Ok(RunReport {
+        packages_checked: checked.len(),
+        checked,
+        candidates,
+    })
+}
 
+/// Resolve the active branch set from Bodhi's active releases
+/// (plus rawhide), ordered newest-first for early short-circuits.
+pub async fn active_branches_from_bodhi() -> Result<Vec<String>, String> {
+    let bodhi = sandogasa_bodhi::BodhiClient::new();
+    let releases = bodhi
+        .active_releases()
+        .await
+        .map_err(|e| format!("fetching active releases from Bodhi: {e}"))?;
+    let mut branches: Vec<String> = releases.into_iter().map(|r| r.branch).collect();
+    if !branches.iter().any(|b| b == "rawhide") {
+        branches.push("rawhide".to_string());
+    }
+    Ok(order_active_branches(branches))
+}
+
+/// Check `names` against the active branch set with at most
+/// `jobs` in-flight dist-git requests, returning the packages no
+/// longer carried anywhere (in input order).
+pub async fn scan_packages(
+    dg: &DistGitClient,
+    names: Vec<String>,
+    active: &[String],
+    jobs: usize,
+    verbose: bool,
+) -> Result<Vec<PruneCandidate>, String> {
     // The dist-git client's error type isn't Send, so the tasks
     // run on a LocalSet: single-threaded, but the work is purely
     // network-bound, so concurrent in-flight requests are all the
@@ -166,9 +198,9 @@ pub async fn run(
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(jobs.max(1)));
     let active: std::sync::Arc<Vec<String>> = std::sync::Arc::new(active.to_vec());
     let local = tokio::task::LocalSet::new();
-    let checked_for_tasks = checked.clone();
+    let checked_for_tasks = names;
     let dg = dg.clone();
-    let candidates = local
+    local
         .run_until(async move {
             let handles: Vec<_> = checked_for_tasks
                 .into_iter()
@@ -207,13 +239,7 @@ pub async fn run(
                 None => Ok(candidates),
             }
         })
-        .await?;
-
-    Ok(RunReport {
-        packages_checked: checked.len(),
-        checked,
-        candidates,
-    })
+        .await
 }
 
 /// Check one package against the active branch set. `Ok(None)`

@@ -314,6 +314,13 @@ delete the entries outright instead. Packages are checked
 concurrently (`-j`/`--jobs`, default 8 in-flight dist-git
 requests).
 
+`sync-distgit --mark-unshipped` runs the same check on the
+packages a sync adds, so a fresh inventory starts with its
+`unshipped` markers in place instead of needing a follow-up
+`prune-retired` run. (Projects that are gone entirely never
+appear in sync results, so only `prune-retired` can detect
+those.)
+
 ### Close retired packages' update bugs
 
 When a package gets retired on a dist-git branch (a

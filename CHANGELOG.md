@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### poi-tracker: `sync-distgit --mark-unshipped`
+
+Run the prune-retired check on the packages a sync adds (bounded
+by `-j`/`--jobs`, default 8), so a fresh inventory starts with
+its `unshipped` markers in place instead of needing a follow-up
+`prune-retired` run. Best-effort: a failing check warns and the
+sync still saves. New library surface:
+`prune_retired::scan_packages` and `active_branches_from_bodhi`
+extracted from the prune-retired flow.
+
 ### sandogasa-inventory: field-aware multi-inventory merge (breaking)
 
 Merging inventories (poi-tracker's `-i`/`-I` with multiple files)

@@ -471,6 +471,15 @@ struct SyncDistgitArgs {
     #[arg(long)]
     prune: bool,
 
+    /// Mark packages added by this sync that are already
+    /// retired everywhere (like prune-retired).
+    #[arg(long)]
+    mark_unshipped: bool,
+
+    /// Parallel dist-git queries for --mark-unshipped.
+    #[arg(short = 'j', long, default_value = "8")]
+    jobs: usize,
+
     /// Pagure API page size.
     #[arg(long, default_value = "100")]
     per_page: u32,
@@ -708,26 +717,19 @@ fn cmd_prune_retired(paths: &[String], args: &PruneRetiredArgs) -> ExitCode {
     };
 
     // The active branch set defines "carried anywhere": explicit
-    // --branch wins, otherwise ask Bodhi for the active releases.
+    // --branch wins (keeping the user's order), otherwise ask
+    // Bodhi for the active releases, ordered most-likely-live
+    // first so per-package checks short-circuit early.
     let active: Vec<String> = if !args.branch.is_empty() {
         args.branch.clone()
     } else {
-        let bodhi = sandogasa_bodhi::BodhiClient::new();
-        let releases = match rt.block_on(bodhi.active_releases()) {
-            Ok(r) => r,
+        match rt.block_on(prune_retired::active_branches_from_bodhi()) {
+            Ok(b) => b,
             Err(e) => {
-                eprintln!("error: fetching active releases from Bodhi: {e}");
+                eprintln!("error: {e}");
                 return ExitCode::FAILURE;
             }
-        };
-        let mut branches: Vec<String> = releases.into_iter().map(|r| r.branch).collect();
-        if !branches.iter().any(|b| b == "rawhide") {
-            branches.push("rawhide".to_string());
         }
-        // Most-likely-live first, so per-package checks
-        // short-circuit early. Explicit --branch keeps the
-        // user's order.
-        prune_retired::order_active_branches(branches)
     };
     if args.verbose {
         eprintln!("[poi-tracker] active branches: {}", active.join(", "));
@@ -1789,8 +1791,9 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
     let remote_names: std::collections::HashSet<&str> =
         filtered.iter().map(|p| p.name.as_str()).collect();
 
-    // Add new packages.
-    let mut added = 0usize;
+    // Add new packages, remembering which ones for
+    // --mark-unshipped.
+    let mut added_names: Vec<String> = Vec::new();
     for p in &filtered {
         if inventory.find_package(&p.name).is_some() {
             continue;
@@ -1814,8 +1817,9 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         for wl in &args.workload {
             inventory.add_to_workload(wl, &p.name);
         }
-        added += 1;
+        added_names.push(p.name.clone());
     }
+    let added = added_names.len();
 
     // On fetch error, save partial results plus the failed
     // pattern, so the next run with the same -o resumes there.
@@ -1863,6 +1867,60 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
             for name in &stale {
                 eprintln!("  {name}");
             }
+        }
+    }
+
+    // Check the packages this run added against the active
+    // branches, so a fresh inventory starts with `unshipped`
+    // markers instead of needing a follow-up prune-retired run.
+    // Best-effort: a failure here loses the markers, not the
+    // sync (prune-retired can backfill them).
+    if args.mark_unshipped && !added_names.is_empty() {
+        eprintln!(
+            "checking {} newly added package(s) for retirement...",
+            added_names.len()
+        );
+        let marked = match prune_retired::active_branches_from_bodhi().await {
+            Ok(active) => {
+                match prune_retired::scan_packages(
+                    &client,
+                    added_names.clone(),
+                    &active,
+                    args.jobs,
+                    false,
+                )
+                .await
+                {
+                    Ok(candidates) => {
+                        let n = prune_retired::apply_unshipped_marks(
+                            &mut inventory,
+                            &added_names,
+                            &candidates,
+                        );
+                        for c in &candidates {
+                            eprintln!("  {}: {}", c.package, c.reason.describe());
+                        }
+                        Some(n)
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "warning: retirement check failed ({e}); \
+                             run prune-retired to mark unshipped packages"
+                        );
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: {e}; \
+                     run prune-retired to mark unshipped packages"
+                );
+                None
+            }
+        };
+        if let Some(n) = marked {
+            eprintln!("marked {n} package(s) unshipped");
         }
     }
 
@@ -2142,6 +2200,8 @@ mod tests {
             auto_prefix: false,
             no_auto_prefix: false,
             prune: false,
+            mark_unshipped: false,
+            jobs: 8,
             per_page: 100,
             workload: vec![],
             name: None,

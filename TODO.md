@@ -17,12 +17,11 @@
 
 ## poi-tracker
 
-- `prune-retired` follow-up: optionally check retirement during
-  a *fresh* sync (`sync-distgit`/`sync-gitlab` with no existing
-  inventory), so newly synced inventories start with `unshipped`
-  markers instead of needing a follow-up `prune-retired` run.
-  Existing inventories are already covered: markers survive
-  re-syncs and `--prune` preserves the tombstones.
+- `sync-gitlab` analog of `sync-distgit --mark-unshipped`
+  (landed 2026-06-12): GitLab-synced packages are CentOS Stream
+  projects, so the retirement check needs a GitLab-aware signal
+  (archived project? removed from the group?) rather than Fedora
+  dist-git's `dead.package`.
 
 ## ebranch
 
