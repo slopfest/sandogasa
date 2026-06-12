@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### ebranch: `check-update` offers to regenerate stale side-tag repos
+
+When the side-tag repodata lags koji (the V-R cross-check fails),
+`check-update` no longer just warns: it now offers to run
+`koji regen-repo --wait <side-tag>` on the user's behalf (default
+yes), clears the fedrq metadata cache, and re-checks freshness
+before running the provides comparison — so the analysis uses the
+regenerated data instead of silently dropping reverse deps. If the
+regen is declined, a second prompt asks whether to continue with
+stale data (default no — the check aborts). Prompts only appear in
+interactive runs; `--json` mode and non-terminal stdin keep the old
+warn-and-continue behavior. New `sandogasa_koji::regen_repo()`
+backs this.
+
 ## v0.13.0
 
 ### poi-tracker: `sync-distgit --fast` via the owner-alias dump

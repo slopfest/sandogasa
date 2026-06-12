@@ -29,6 +29,10 @@ pub struct CheckUpdateOptions {
     pub testing_branch: Option<String>,
     pub koji_profile: Option<String>,
     pub verbose: bool,
+    /// Offer to fix stale side-tag repodata interactively (regen
+    /// the repo, or confirm continuing with stale data). Off for
+    /// `--json` and when stdin isn't a terminal.
+    pub interactive: bool,
 }
 
 /// A Provide that changed between old and new versions.
@@ -326,6 +330,9 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
     }
 
     if let Some(ref side_fq) = side_tag_fedrq {
+        let tag = side_tag
+            .as_deref()
+            .expect("side_tag_fedrq implies side_tag");
         if opts.verbose {
             eprintln!("[check-update] comparing provides via koji + side tag");
         }
@@ -336,20 +343,35 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+
+        // Detect side-tag repodata that lags koji (V-R mismatch)
+        // before the expensive provides comparison, so a regen can
+        // fix the data the comparison runs on.
+        let mut stale_side_tag = check_side_tag_staleness(
+            &nvrs,
+            &koji_bins,
+            |bin| side_fq.pkg_nvrs(bin).unwrap_or_default(),
+            opts.verbose,
+        );
+
+        if !stale_side_tag.is_empty() && opts.interactive {
+            stale_side_tag = resolve_stale_side_tag(
+                stale_side_tag,
+                tag,
+                opts.koji_profile.as_deref(),
+                &nvrs,
+                &koji_bins,
+                |bin| side_fq.pkg_nvrs(bin).unwrap_or_default(),
+                opts.verbose,
+            )?;
+        }
+
         let changed = compute_changed_provides_via_koji(
             &nvrs,
             &updated_packages,
             &stable_fedrq,
             side_fq,
             opts.koji_profile.as_deref(),
-            opts.verbose,
-        );
-
-        // Detect side-tag repodata that lags koji (V-R mismatch).
-        let stale_side_tag = check_side_tag_staleness(
-            &nvrs,
-            &koji_bins,
-            |bin| side_fq.pkg_nvrs(bin).unwrap_or_default(),
             opts.verbose,
         );
 
@@ -1098,11 +1120,124 @@ where
     warnings
 }
 
+/// Interpret a y/n answer line, falling back to `default_yes` on
+/// empty input.
+fn parse_confirm(line: &str, default_yes: bool) -> bool {
+    match line.trim() {
+        "" => default_yes,
+        s => s.eq_ignore_ascii_case("y") || s.eq_ignore_ascii_case("yes"),
+    }
+}
+
+/// Prompt on stderr and read a y/n answer from stdin.
+fn confirm(prompt: &str, default_yes: bool) -> Result<bool, String> {
+    use std::io::{BufRead, Write};
+    let hint = if default_yes { "Y/n" } else { "y/N" };
+    eprint!("{prompt} [{hint}]: ");
+    std::io::stderr().flush().map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
+    Ok(parse_confirm(&line, default_yes))
+}
+
+/// Interactively resolve stale side-tag repodata: offer to run
+/// `koji regen-repo` on the user's behalf (default yes) and
+/// re-check freshness afterwards; if declined, ask whether to
+/// continue with stale data (default no — abort).
+///
+/// Returns the (possibly now empty) staleness warnings to carry
+/// into the report.
+fn resolve_stale_side_tag<F>(
+    stale: Vec<StaleSideTag>,
+    tag: &str,
+    profile: Option<&str>,
+    nvrs: &[String],
+    koji_bins: &[String],
+    lookup: F,
+    verbose: bool,
+) -> Result<Vec<StaleSideTag>, String>
+where
+    F: Fn(&str) -> Vec<(String, String, String)>,
+{
+    eprintln!(
+        "side tag repodata is stale for {} source package(s):",
+        stale.len()
+    );
+    for w in &stale {
+        match &w.actual_vr {
+            Some(actual) => eprintln!(
+                "  - {}: expected {}, found {} in repodata",
+                w.package, w.expected_nvr, actual
+            ),
+            None => eprintln!(
+                "  - {}: expected {}, no matching binary RPMs in repodata",
+                w.package, w.expected_nvr
+            ),
+        }
+    }
+    eprintln!("without a repo regen the reverse-dep analysis may be incomplete.");
+
+    if confirm(
+        &format!("Run `koji regen-repo --wait {tag}` now? (may take several minutes)"),
+        true,
+    )? {
+        eprintln!("waiting for koji to regenerate the {tag} repo...");
+        sandogasa_koji::regen_repo(tag, profile)?;
+        sandogasa_fedrq::clear_cache()
+            .map_err(|e| format!("failed to clear fedrq metadata cache: {e}"))?;
+        let still_stale = check_side_tag_staleness(nvrs, koji_bins, lookup, verbose);
+        if !still_stale.is_empty() {
+            eprintln!(
+                "side tag repodata is still stale for {} source \
+                 package(s) after the regen; continuing with \
+                 warnings in the report.",
+                still_stale.len()
+            );
+        }
+        Ok(still_stale)
+    } else if confirm("Continue the check with stale data?", false)? {
+        Ok(stale)
+    } else {
+        Err(format!(
+            "aborted: side tag repodata is stale; run \
+             `koji regen-repo {tag}`, then rerun this check with \
+             --refresh to drop the cached metadata"
+        ))
+    }
+}
+
 // ---- Tests ----
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- parse_confirm ---
+
+    #[test]
+    fn parse_confirm_empty_uses_default() {
+        assert!(parse_confirm("", true));
+        assert!(parse_confirm("\n", true));
+        assert!(!parse_confirm("", false));
+        assert!(!parse_confirm("  \n", false));
+    }
+
+    #[test]
+    fn parse_confirm_explicit_yes() {
+        for answer in ["y", "Y", "yes", "YES", " y \n"] {
+            assert!(parse_confirm(answer, false), "{answer:?}");
+        }
+    }
+
+    #[test]
+    fn parse_confirm_explicit_no() {
+        for answer in ["n", "N", "no", "anything-else"] {
+            assert!(!parse_confirm(answer, true), "{answer:?}");
+        }
+    }
 
     // --- parse_nvr ---
 

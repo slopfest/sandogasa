@@ -234,6 +234,18 @@ pub fn untag_build(tag: &str, nvr: &str, profile: Option<&str>) -> Result<(), St
     Ok(())
 }
 
+/// Regenerate a Koji tag's repo (`koji regen-repo --wait <tag>`).
+///
+/// `--wait` is explicit because koji defaults to `--nowait` when
+/// its stdout isn't a TTY (as when run as a subprocess): callers
+/// re-query the regenerated repo immediately after this returns,
+/// so the regen must actually have completed. Repo regeneration
+/// can take several minutes on large tags.
+pub fn regen_repo(tag: &str, profile: Option<&str>) -> Result<(), String> {
+    run_koji(profile, &["regen-repo", "--wait", "--", tag])?;
+    Ok(())
+}
+
 /// Fetch `koji buildinfo --changelog <nvr>` output verbatim for
 /// display. Returns the raw stdout so callers can show it to a
 /// human reviewing the build. Errors propagate (unlike the

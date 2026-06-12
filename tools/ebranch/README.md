@@ -176,8 +176,14 @@ For new provides, ebranch checks these sources in order:
 2. **Side tag** — via `koji buildinfo` + `fedrq pkg_provides`.
    Cross-checks each koji NVR against the V-R the side-tag
    repodata actually serves; if they disagree (typically
-   because `koji regen-repo` hasn't run yet), the report opens
-   with a banner listing the stale sources. The remedy is
+   because `koji regen-repo` hasn't run yet), ebranch offers to
+   run `koji regen-repo --wait <side-tag>` on your behalf
+   (default yes), clears fedrq's smartcache, and re-checks
+   before continuing. Declining the regen prompts whether to
+   continue with stale data (default no — the check aborts).
+   In `--json` mode or when stdin isn't a terminal there are no
+   prompts; the report opens with a banner listing the stale
+   sources instead, and the remedy is a manual
    `koji regen-repo <side-tag>` followed by a rerun with
    `--refresh` (which clears fedrq's smartcache).
 3. **Reverse deps only** — lists affected packages for manual review

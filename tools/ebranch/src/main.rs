@@ -601,6 +601,10 @@ fn main() -> ExitCode {
             testing_branch: a.testing_branch.clone(),
             koji_profile: a.koji_profile.clone(),
             verbose: a.verbose,
+            interactive: {
+                use std::io::IsTerminal;
+                !a.json && std::io::stdin().is_terminal()
+            },
         };
         return match check_update::check_update(&a.input, &opts) {
             Ok(report) => {
