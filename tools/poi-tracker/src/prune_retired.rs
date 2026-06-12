@@ -138,92 +138,145 @@ pub fn relevant_branches(project: &[String], active: &[String]) -> Vec<String> {
 /// Scan the inventory for packages that are no longer carried on
 /// any branch in `active`. Read-only — the caller decides what to
 /// do with the candidates.
+///
+/// Packages are checked concurrently, bounded by `jobs` in-flight
+/// dist-git requests (a 4500-package inventory is ~1-2 requests
+/// per package, so this is the difference between minutes and an
+/// hour). Candidate order follows the inventory; the first
+/// persistent (post-retry) failure aborts the scan.
 pub async fn run(
     inventory: &Inventory,
     dg: &DistGitClient,
     active: &[String],
     filter: &crate::WalkFilterArgs,
+    jobs: usize,
     verbose: bool,
 ) -> Result<RunReport, String> {
-    let mut candidates = Vec::new();
-    let mut checked = Vec::new();
+    let checked: Vec<String> = inventory
+        .package
+        .iter()
+        .filter(|p| filter.matches(&p.name))
+        .map(|p| p.name.clone())
+        .collect();
 
-    for pkg in &inventory.package {
-        if !filter.matches(&pkg.name) {
-            continue;
-        }
-        checked.push(pkg.name.clone());
+    // The dist-git client's error type isn't Send, so the tasks
+    // run on a LocalSet: single-threaded, but the work is purely
+    // network-bound, so concurrent in-flight requests are all the
+    // parallelism that matters.
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(jobs.max(1)));
+    let active: std::sync::Arc<Vec<String>> = std::sync::Arc::new(active.to_vec());
+    let local = tokio::task::LocalSet::new();
+    let checked_for_tasks = checked.clone();
+    let dg = dg.clone();
+    let candidates = local
+        .run_until(async move {
+            let handles: Vec<_> = checked_for_tasks
+                .into_iter()
+                .map(|name| {
+                    let dg = dg.clone();
+                    let semaphore = semaphore.clone();
+                    let active = active.clone();
+                    tokio::task::spawn_local(async move {
+                        let _permit = semaphore
+                            .acquire_owned()
+                            .await
+                            .expect("semaphore never closed");
+                        check_package(&dg, &name, &active, verbose).await
+                    })
+                })
+                .collect();
 
-        let branches = retry(
-            &format!("project_branches({})", pkg.name),
-            RETRY_ATTEMPTS,
-            || dg.project_branches(&pkg.name),
-            verbose,
-        )
-        .await
-        .map_err(|e| format!("dist-git branches for {}: {e}", pkg.name))?;
-
-        let Some(branches) = branches else {
-            if verbose {
-                eprintln!("[poi-tracker] {}: project gone", pkg.name);
+            // Await in spawn order: the report stays in inventory
+            // order regardless of completion order. On the first
+            // persistent failure, cancel the rest.
+            let mut candidates = Vec::new();
+            let mut first_err: Option<String> = None;
+            for handle in handles {
+                if first_err.is_some() {
+                    handle.abort();
+                    continue;
+                }
+                match handle.await {
+                    Ok(Ok(candidate)) => candidates.extend(candidate),
+                    Ok(Err(e)) => first_err = Some(e),
+                    Err(e) => first_err = Some(format!("prune-retired worker failed: {e}")),
+                }
             }
-            candidates.push(PruneCandidate {
-                package: pkg.name.clone(),
-                reason: PruneReason::ProjectGone,
-            });
-            continue;
-        };
-
-        let relevant = relevant_branches(&branches, active);
-        if relevant.is_empty() {
-            if verbose {
-                eprintln!(
-                    "[poi-tracker] {}: no active branch (has: {})",
-                    pkg.name,
-                    branches.join(", ")
-                );
+            match first_err {
+                Some(e) => Err(e),
+                None => Ok(candidates),
             }
-            candidates.push(PruneCandidate {
-                package: pkg.name.clone(),
-                reason: PruneReason::NoActiveBranch,
-            });
-            continue;
-        }
-
-        let mut all_retired = true;
-        for branch in &relevant {
-            if verbose {
-                eprintln!(
-                    "[poi-tracker] {}: checking retirement on {branch}",
-                    pkg.name
-                );
-            }
-            let retired = retry(
-                &format!("is_retired({}, {branch})", pkg.name),
-                RETRY_ATTEMPTS,
-                || dg.is_retired(&pkg.name, branch),
-                verbose,
-            )
-            .await
-            .map_err(|e| format!("dist-git is_retired for {} on {branch}: {e}", pkg.name))?;
-            if !retired {
-                all_retired = false;
-                break;
-            }
-        }
-        if all_retired {
-            candidates.push(PruneCandidate {
-                package: pkg.name.clone(),
-                reason: PruneReason::RetiredEverywhere(relevant),
-            });
-        }
-    }
+        })
+        .await?;
 
     Ok(RunReport {
         packages_checked: checked.len(),
         checked,
         candidates,
     })
+}
+
+/// Check one package against the active branch set. `Ok(None)`
+/// means it is still carried somewhere.
+async fn check_package(
+    dg: &DistGitClient,
+    name: &str,
+    active: &[String],
+    verbose: bool,
+) -> Result<Option<PruneCandidate>, String> {
+    let branches = retry(
+        &format!("project_branches({name})"),
+        RETRY_ATTEMPTS,
+        || dg.project_branches(name),
+        verbose,
+    )
+    .await
+    .map_err(|e| format!("dist-git branches for {name}: {e}"))?;
+
+    let Some(branches) = branches else {
+        if verbose {
+            eprintln!("[poi-tracker] {name}: project gone");
+        }
+        return Ok(Some(PruneCandidate {
+            package: name.to_string(),
+            reason: PruneReason::ProjectGone,
+        }));
+    };
+
+    let relevant = relevant_branches(&branches, active);
+    if relevant.is_empty() {
+        if verbose {
+            eprintln!(
+                "[poi-tracker] {name}: no active branch (has: {})",
+                branches.join(", ")
+            );
+        }
+        return Ok(Some(PruneCandidate {
+            package: name.to_string(),
+            reason: PruneReason::NoActiveBranch,
+        }));
+    }
+
+    for branch in &relevant {
+        if verbose {
+            eprintln!("[poi-tracker] {name}: checking retirement on {branch}");
+        }
+        let retired = retry(
+            &format!("is_retired({name}, {branch})"),
+            RETRY_ATTEMPTS,
+            || dg.is_retired(name, branch),
+            verbose,
+        )
+        .await
+        .map_err(|e| format!("dist-git is_retired for {name} on {branch}: {e}"))?;
+        if !retired {
+            return Ok(None);
+        }
+    }
+    Ok(Some(PruneCandidate {
+        package: name.to_string(),
+        reason: PruneReason::RetiredEverywhere(relevant),
+    }))
 }
 
 #[cfg(test)]
@@ -343,6 +396,86 @@ mod tests {
             apply_unshipped_marks(&mut inventory, &checked, &candidates),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn run_classifies_packages_concurrently_in_inventory_order() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let branches = |list: &[&str]| {
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"branches": list}))
+        };
+
+        // gone-pkg: project 404s.
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/gone-pkg/git/branches"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        // live-pkg: live on rawhide.
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/live-pkg/git/branches"))
+            .respond_with(branches(&["rawhide"]))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rpms/live-pkg/raw/rawhide/f/dead.package"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        // dead-pkg: retired on both active branches it has.
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/dead-pkg/git/branches"))
+            .respond_with(branches(&["rawhide", "epel9"]))
+            .mount(&server)
+            .await;
+        for branch in ["rawhide", "epel9"] {
+            Mock::given(method("GET"))
+                .and(path(format!("/rpms/dead-pkg/raw/{branch}/f/dead.package")))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+        }
+        // eol-pkg: only an EOL branch left.
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/eol-pkg/git/branches"))
+            .respond_with(branches(&["f20"]))
+            .mount(&server)
+            .await;
+
+        let inventory = inv(&[
+            ("gone-pkg", None),
+            ("live-pkg", None),
+            ("dead-pkg", None),
+            ("eol-pkg", None),
+        ]);
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let active = s(&["rawhide", "epel9"]);
+        let filter = crate::WalkFilterArgs::default();
+
+        let report = run(&inventory, &dg, &active, &filter, 4, false)
+            .await
+            .unwrap();
+        assert_eq!(report.packages_checked, 4);
+        assert_eq!(report.checked.len(), 4);
+        // Inventory order, live-pkg absent.
+        let got: Vec<(&str, &PruneReason)> = report
+            .candidates
+            .iter()
+            .map(|c| (c.package.as_str(), &c.reason))
+            .collect();
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], ("gone-pkg", &PruneReason::ProjectGone));
+        assert_eq!(
+            got[1],
+            (
+                "dead-pkg",
+                &PruneReason::RetiredEverywhere(s(&["rawhide", "epel9"]))
+            )
+        );
+        assert_eq!(got[2], ("eol-pkg", &PruneReason::NoActiveBranch));
     }
 
     #[test]

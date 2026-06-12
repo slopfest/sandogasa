@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### poi-tracker: parallel `prune-retired` scan
+
+The scan now checks packages concurrently, bounded by `-j`/`--jobs`
+in-flight dist-git requests (default 8) — roughly an 8x speedup,
+turning a 4500-package inventory from an hour into minutes. The
+report order and the abort-on-persistent-failure behavior are
+unchanged.
+
 ### sandogasa-bodhi: retry transient failures on the auth path
 
 Token refresh, OIDC metadata/userinfo fetches, and Bodhi's

@@ -104,6 +104,7 @@ fn validate_segment(value: &str, what: &str) -> Result<(), Box<dyn std::error::E
     }
 }
 
+#[derive(Clone)]
 pub struct DistGitClient {
     base_url: String,
     client: Client,

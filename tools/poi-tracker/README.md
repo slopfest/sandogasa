@@ -310,7 +310,9 @@ skip unshipped packages; `triage-retired` still processes them
 so their remaining bugs get closed; the sync commands' `--prune`
 preserves them. Markers are refreshed in both directions — a
 revived package gets its marker cleared. Pass `--remove` to
-delete the entries outright instead.
+delete the entries outright instead. Packages are checked
+concurrently (`-j`/`--jobs`, default 8 in-flight dist-git
+requests).
 
 ### Close retired packages' update bugs
 

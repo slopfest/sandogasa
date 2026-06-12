@@ -17,16 +17,12 @@
 
 ## poi-tracker
 
-- `prune-retired` follow-ups (the subcommand itself landed
-  2026-06-12): (a) parallelize the scan — it is sequential at
-  ~1-2 requests per package, so a 4500-package inventory takes
-  a long while; bound concurrency to be polite to Pagure.
-  (b) Optionally check retirement during a *fresh* sync
-  (`sync-distgit`/`sync-gitlab` with no existing inventory), so
-  newly synced inventories start with `unshipped` markers
-  instead of needing a follow-up `prune-retired` run. Existing
-  inventories are already covered: markers survive re-syncs and
-  `--prune` preserves the tombstones.
+- `prune-retired` follow-up: optionally check retirement during
+  a *fresh* sync (`sync-distgit`/`sync-gitlab` with no existing
+  inventory), so newly synced inventories start with `unshipped`
+  markers instead of needing a follow-up `prune-retired` run.
+  Existing inventories are already covered: markers survive
+  re-syncs and `--prune` preserves the tombstones.
 
 ## ebranch
 

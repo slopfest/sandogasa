@@ -83,6 +83,10 @@ struct PruneRetiredArgs {
     #[command(flatten)]
     filter: WalkFilterArgs,
 
+    /// Parallel dist-git queries.
+    #[arg(short = 'j', long, default_value = "8")]
+    jobs: usize,
+
     /// Preview without modifying the inventory.
     #[arg(long)]
     dry_run: bool,
@@ -734,6 +738,7 @@ fn cmd_prune_retired(paths: &[String], args: &PruneRetiredArgs) -> ExitCode {
         &dg,
         &active,
         &args.filter,
+        args.jobs,
         args.verbose,
     )) {
         Ok(report) => report,
