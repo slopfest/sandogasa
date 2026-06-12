@@ -162,6 +162,19 @@ pub struct Package {
     /// each time `triage-retired --mark` checks the branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retired_on: Option<Vec<String>>,
+
+    /// Set when the package is no longer shipped on any active
+    /// branch — the dist-git project is gone, it has no branch on
+    /// an active release, or it is retired everywhere — as
+    /// recorded by `poi-tracker prune-retired`. The value records
+    /// why. Most operations skip such packages; `triage-retired`
+    /// still processes them so remaining bugs get closed, and the
+    /// sync commands' `--prune` preserves them (a fresh sync
+    /// would otherwise re-add retired packages, whose ACLs
+    /// remain). Refreshed — in both directions — each time
+    /// `prune-retired` checks the package.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unshipped: Option<String>,
 }
 
 impl Package {
@@ -170,6 +183,12 @@ impl Package {
         self.retired_on
             .as_ref()
             .is_some_and(|branches| branches.iter().any(|b| b == branch))
+    }
+
+    /// Whether this package is recorded as no longer shipped on
+    /// any active branch.
+    pub fn is_unshipped(&self) -> bool {
+        self.unshipped.is_some()
     }
 }
 
@@ -317,6 +336,7 @@ mod tests {
             file_issue: None,
             priority: None,
             retired_on: None,
+            unshipped: None,
         }
     }
 

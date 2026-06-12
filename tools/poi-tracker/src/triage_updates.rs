@@ -502,6 +502,20 @@ pub async fn run(
         if !filter.matches(&pkg.name) {
             continue;
         }
+        // No longer shipped anywhere (recorded by
+        // `prune-retired`): nothing to triage. Its remaining bugs
+        // belong to triage-retired, which still processes it.
+        if pkg.is_unshipped() {
+            marked_retired += 1;
+            if verbose {
+                eprintln!(
+                    "[poi-tracker] {}: marked unshipped in the \
+                     inventory; skipping (run triage-retired)",
+                    pkg.name
+                );
+            }
+            continue;
+        }
         // Inventory says it's retired on rawhide (recorded by
         // `triage-retired --mark`): its release-monitoring bugs
         // belong to triage-retired, not here — skip without any
@@ -955,7 +969,7 @@ fn print_stale_plan(plans: &[StaleBugPlan]) {
     }
 }
 
-fn confirm(prompt: &str) -> Result<bool, String> {
+pub(crate) fn confirm(prompt: &str) -> Result<bool, String> {
     use std::io::{BufRead, Write};
     eprint!("{prompt} [y/N]: ");
     std::io::stderr().flush().map_err(|e| e.to_string())?;

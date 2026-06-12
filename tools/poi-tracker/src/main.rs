@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 mod config;
+mod prune_retired;
 mod semver_audit;
 mod triage_retired;
 mod triage_updates;
@@ -45,6 +46,10 @@ enum Command {
     Find(FindArgs),
     /// Import from legacy JSON format.
     Import(ImportArgs),
+    /// Mark (or remove) packages no longer carried on any
+    /// active branch (dist-git project gone or retired
+    /// everywhere).
+    PruneRetired(PruneRetiredArgs),
     /// Remove a package from the inventory.
     Remove(RemoveArgs),
     /// Audit pending upstream updates by semver impact, flagging
@@ -65,6 +70,36 @@ enum Command {
     TriageUpdates(TriageUpdatesArgs),
     /// Validate inventory consistency.
     Validate,
+}
+
+#[derive(clap::Args)]
+struct PruneRetiredArgs {
+    /// Active branch(es) to check against (CSV or repeated;
+    /// e.g. `rawhide,f44,epel9`). Default: queried from Bodhi's
+    /// active releases, plus rawhide.
+    #[arg(long, value_delimiter = ',', value_name = "BRANCH,...")]
+    branch: Vec<String>,
+
+    #[command(flatten)]
+    filter: WalkFilterArgs,
+
+    /// Preview without modifying the inventory.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Delete matched packages from the inventory instead of
+    /// marking them `unshipped` (the default; marking survives
+    /// re-syncs and lets triage-retired keep closing bugs).
+    #[arg(long, conflicts_with = "dry_run")]
+    remove: bool,
+
+    /// Skip the confirmation prompt.
+    #[arg(short, long)]
+    yes: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[derive(clap::Args)]
@@ -573,6 +608,7 @@ fn main() -> ExitCode {
         Command::Export(args) => cmd_export(&paths, args),
         Command::Find(args) => cmd_find(&paths, args),
         Command::Import(args) => cmd_import(args),
+        Command::PruneRetired(args) => cmd_prune_retired(&paths, args),
         Command::Remove(args) => cmd_remove(&paths[0], args),
         Command::SemverAudit(args) => cmd_semver_audit(&paths, args),
         Command::Show(args) => cmd_show(&paths, args),
@@ -637,6 +673,164 @@ fn cmd_semver_audit(paths: &[String], args: &SemverAuditArgs) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn cmd_prune_retired(paths: &[String], args: &PruneRetiredArgs) -> ExitCode {
+    // Pruning rewrites the inventory, which only makes sense for
+    // a single file; --dry-run may preview a merged view.
+    if !args.dry_run && paths.len() != 1 {
+        eprintln!(
+            "error: prune-retired modifies the inventory and needs \
+             exactly one inventory file (got {}); use --dry-run to \
+             preview a merged view",
+            paths.len()
+        );
+        return ExitCode::FAILURE;
+    }
+    let inventory = match sandogasa_inventory::load_and_merge(paths) {
+        Ok(inv) => inv,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let dg = sandogasa_distgit::DistGitClient::new();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to create runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // The active branch set defines "carried anywhere": explicit
+    // --branch wins, otherwise ask Bodhi for the active releases.
+    let active: Vec<String> = if !args.branch.is_empty() {
+        args.branch.clone()
+    } else {
+        let bodhi = sandogasa_bodhi::BodhiClient::new();
+        let releases = match rt.block_on(bodhi.active_releases()) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("error: fetching active releases from Bodhi: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let mut branches: Vec<String> = releases.into_iter().map(|r| r.branch).collect();
+        if !branches.iter().any(|b| b == "rawhide") {
+            branches.push("rawhide".to_string());
+        }
+        // Most-likely-live first, so per-package checks
+        // short-circuit early. Explicit --branch keeps the
+        // user's order.
+        prune_retired::order_active_branches(branches)
+    };
+    if args.verbose {
+        eprintln!("[poi-tracker] active branches: {}", active.join(", "));
+    }
+
+    let report = match rt.block_on(prune_retired::run(
+        &inventory,
+        &dg,
+        &active,
+        &args.filter,
+        args.verbose,
+    )) {
+        Ok(report) => report,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if !report.candidates.is_empty() {
+        println!("Packages no longer carried on any active branch:");
+        for c in &report.candidates {
+            println!("- {}: {}", c.package, c.reason.describe());
+        }
+    }
+    eprintln!(
+        "\n{} checked, {} prunable",
+        report.packages_checked,
+        report.candidates.len()
+    );
+    if args.dry_run {
+        return ExitCode::SUCCESS;
+    }
+
+    // Apply to the single inventory file. Default: update the
+    // `unshipped` markers (both directions — clears marks on
+    // revived packages). --remove deletes the entries instead.
+    let path = &paths[0];
+    let mut inv = match sandogasa_inventory::load(path) {
+        Ok(inv) => inv,
+        Err(e) => {
+            eprintln!("error: reloading {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if args.remove {
+        if report.candidates.is_empty() {
+            eprintln!("nothing to remove");
+            return ExitCode::SUCCESS;
+        }
+        if !args.yes {
+            match triage_updates::confirm(&format!(
+                "Remove {} package(s) from {path}?",
+                report.candidates.len()
+            )) {
+                Ok(true) => {}
+                Ok(false) => {
+                    eprintln!("aborted: inventory not modified");
+                    return ExitCode::SUCCESS;
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        let mut removed = 0usize;
+        for c in &report.candidates {
+            if inv.remove_package(&c.package) {
+                removed += 1;
+            }
+        }
+        if let Err(e) = sandogasa_inventory::save(&inv, path) {
+            eprintln!("error: saving {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+        eprintln!("removed {removed} package(s) from {path}");
+        return ExitCode::SUCCESS;
+    }
+
+    let changed =
+        prune_retired::apply_unshipped_marks(&mut inv, &report.checked, &report.candidates);
+    if changed == 0 {
+        eprintln!("unshipped markers already up to date");
+        return ExitCode::SUCCESS;
+    }
+    if !args.yes {
+        match triage_updates::confirm(&format!(
+            "Update unshipped markers on {changed} package(s) in {path}?"
+        )) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("aborted: inventory not modified");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    if let Err(e) = sandogasa_inventory::save(&inv, path) {
+        eprintln!("error: saving {path}: {e}");
+        return ExitCode::FAILURE;
+    }
+    eprintln!("updated unshipped markers on {changed} package(s) in {path}");
+    ExitCode::SUCCESS
 }
 
 fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> ExitCode {
@@ -1212,6 +1406,7 @@ fn cmd_add(paths: &[String], args: &AddArgs) -> ExitCode {
             file_issue: None,
             priority: None,
             retired_on: None,
+            unshipped: None,
         };
         inventory.add_package(pkg);
         eprintln!("Added {} to {target_path}", args.name);
@@ -1609,6 +1804,7 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
             file_issue: None,
             priority: None,
             retired_on: None,
+            unshipped: None,
         });
         for wl in &args.workload {
             inventory.add_to_workload(wl, &p.name);
@@ -1634,10 +1830,14 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
     // Detect packages in the inventory but not in the filtered results.
     // Scoped to the active pattern(s) so --prune with --pattern 'a*'
     // won't drop non-a* packages. Excluded packages naturally fall
-    // out of remote_names since they were filtered above.
+    // out of remote_names since they were filtered above. Packages
+    // marked unshipped are preserved: a gone project is absent from
+    // the remote listing by definition, and the tombstone is what
+    // keeps triage-retired processing it.
     let stale: Vec<String> = inventory
         .package
         .iter()
+        .filter(|p| !p.is_unshipped())
         .filter(|p| !remote_names.contains(p.name.as_str()))
         .filter(|p| matches_any_pattern(&p.name, &patterns))
         .map(|p| p.name.clone())
@@ -1816,6 +2016,7 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
             file_issue: None,
             priority: None,
             retired_on: None,
+            unshipped: None,
         });
         for wl in &args.workload {
             inventory.add_to_workload(wl, name);
@@ -1823,10 +2024,12 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
         added += 1;
     }
 
-    // Detect stale packages.
+    // Detect stale packages. Unshipped tombstones are preserved
+    // (see the sync-distgit prune above).
     let stale: Vec<String> = inventory
         .package
         .iter()
+        .filter(|p| !p.is_unshipped())
         .filter(|p| !remote_names.contains(p.name.as_str()))
         .map(|p| p.name.clone())
         .collect();

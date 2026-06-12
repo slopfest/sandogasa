@@ -184,20 +184,39 @@ impl DistGitClient {
 
     /// List the git branches of an RPM package (e.g. `rawhide`,
     /// `f43`, `epel9`). Returns the branch names as Pagure reports
-    /// them, in the order given by the API.
+    /// them, in the order given by the API. Errors when the
+    /// project doesn't exist; use [`Self::project_branches`] to
+    /// treat that as a signal instead.
     pub async fn list_branches(
         &self,
         package: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        self.project_branches(package)
+            .await?
+            .ok_or_else(|| format!("no such package: rpms/{package}").into())
+    }
+
+    /// Like [`Self::list_branches`], but returns `Ok(None)` when
+    /// the project doesn't exist (HTTP 404) — callers use this to
+    /// distinguish "package gone from dist-git" from transport
+    /// failures.
+    pub async fn project_branches(
+        &self,
+        package: &str,
+    ) -> Result<Option<Vec<String>>, Box<dyn std::error::Error>> {
         validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}/git/branches", self.base_url, package);
-        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let resp = self.client.get(&url).send().await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let resp = resp.error_for_status()?;
         #[derive(serde::Deserialize)]
         struct Branches {
             branches: Vec<String>,
         }
         let body: Branches = resp.json().await?;
-        Ok(body.branches)
+        Ok(Some(body.branches))
     }
 
     /// Fetch ACLs for an RPM package.
@@ -1598,6 +1617,38 @@ mod tests {
             .mount(&server)
             .await;
         assert!(client.list_branches("nonexistent").await.is_err());
+    }
+
+    // ---- project_branches ----
+
+    #[tokio::test]
+    async fn project_branches_none_on_404() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/removed-pkg/git/branches"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        assert!(
+            client
+                .project_branches("removed-pkg")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn project_branches_surfaces_server_errors() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/flaky-pkg/git/branches"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        assert!(client.project_branches("flaky-pkg").await.is_err());
     }
 
     // ---- user_projects ----

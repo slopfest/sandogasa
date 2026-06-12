@@ -84,6 +84,7 @@ pub fn import(json_str: &str) -> Result<Inventory, String> {
             file_issue: None,
             priority: None,
             retired_on: None,
+            unshipped: None,
         });
     }
 

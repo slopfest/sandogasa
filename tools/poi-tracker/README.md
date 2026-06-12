@@ -287,6 +287,31 @@ scope the run. `--batch [EMAIL]` works as in `semver-audit`: one
 Bugzilla query for everything assigned to or CC'ing EMAIL
 (default: the configured email) instead of one query per package.
 
+### Mark packages no longer shipped anywhere
+
+`prune-retired` finds inventory packages that are no longer
+carried on **any** active branch — the dist-git project is gone
+(404), it has no branch on an active release, or it carries a
+`dead.package` marker on every active branch it has. The active
+branch set is queried from Bodhi's active releases (plus
+rawhide) or overridden with `--branch`:
+
+```sh
+poi-tracker -i inventory.toml prune-retired --dry-run
+poi-tracker -i inventory.toml prune-retired
+```
+
+By default matches are *marked* with an `unshipped` reason in
+the inventory rather than deleted: retired packages keep their
+ACLs, so a deleted entry would come straight back on the next
+`sync-distgit` run, and the marker is what lets the rest of the
+tooling do the right thing. `triage-updates` and `semver-audit`
+skip unshipped packages; `triage-retired` still processes them
+so their remaining bugs get closed; the sync commands' `--prune`
+preserves them. Markers are refreshed in both directions — a
+revived package gets its marker cleared. Pass `--remove` to
+delete the entries outright instead.
+
 ### Close retired packages' update bugs
 
 When a package gets retired on a dist-git branch (a
@@ -434,6 +459,7 @@ track = "upstream"
 | `file_issue` | package | File GitLab issues |
 | `priority` | package | Bugzilla priority for `triage-updates` (`unspecified`/`low`/`medium`/`high`/`urgent`) |
 | `retired_on` | package | Dist-git branches where the package is retired; written by `triage-retired --mark` |
+| `unshipped` | package | Reason the package is no longer shipped on any active branch; written by `prune-retired`. Skipped by most operations, still processed by `triage-retired`, preserved by sync `--prune` |
 | `default_priority` | workload | Default Bugzilla priority for packages in this workload |
 
 Each `[inventory.workloads.<key>]` section can override `name`,

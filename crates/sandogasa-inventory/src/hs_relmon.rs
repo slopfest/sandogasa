@@ -235,6 +235,7 @@ mod tests {
             file_issue: None,
             priority: None,
             retired_on: None,
+            unshipped: None,
         }
     }
 

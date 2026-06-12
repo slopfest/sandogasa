@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### poi-tracker: new `prune-retired` subcommand
+
+Finds inventory packages no longer carried on any active branch:
+the dist-git project is gone (404), it has no branch on an active
+release, or it is retired (`dead.package`) on every active branch
+it has. The active branch set is queried from Bodhi's active
+releases (plus rawhide), or set explicitly with `--branch`.
+
+By default matches are marked with an `unshipped` reason in the
+inventory rather than deleted — retired packages keep their ACLs,
+so deleted entries would come straight back on the next
+`sync-distgit`. The marker drives the rest of the tooling:
+`triage-updates` and `semver-audit` skip unshipped packages,
+`triage-retired` still processes them so remaining bugs get
+closed, and `sync-distgit`/`sync-gitlab` `--prune` preserve them.
+Markers are refreshed in both directions (a revived package is
+unmarked). `--remove` deletes entries outright; `--dry-run`
+previews; the usual `--pattern`/`--start-from`/`--end-with`
+filters apply.
+
+New library surface: `Package.unshipped` + `is_unshipped()` in
+sandogasa-inventory (and the JSON schema), and
+`DistGitClient::project_branches` in sandogasa-distgit
+(`list_branches` that reports a missing project as `Ok(None)`
+instead of an error).
+
 ### ebranch: `check-update --give-karma` casts karma with per-bug feedback
 
 `check-update` can now vote on the Bodhi update it just checked:

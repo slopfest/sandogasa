@@ -175,6 +175,13 @@
             "string",
             "null"
           ]
+        },
+        "unshipped": {
+          "description": "Set when the package is no longer shipped on any active\nbranch — the dist-git project is gone, it has no branch on\nan active release, or it is retired everywhere — as\nrecorded by `poi-tracker prune-retired`. The value records\nwhy. Most operations skip such packages; `triage-retired`\nstill processes them so remaining bugs get closed, and the\nsync commands' `--prune` preserves them (a fresh sync\nwould otherwise re-add retired packages, whose ACLs\nremain). Refreshed — in both directions — each time\n`prune-retired` checks the package.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

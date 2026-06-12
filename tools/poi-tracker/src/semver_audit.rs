@@ -250,6 +250,19 @@ pub async fn run(
         if !filter.matches(&pkg.name) {
             continue;
         }
+        // No longer shipped anywhere (recorded by
+        // `prune-retired`): nothing to audit.
+        if pkg.is_unshipped() {
+            marked_retired += 1;
+            if verbose {
+                eprintln!(
+                    "[poi-tracker] {}: marked unshipped in the \
+                     inventory; skipping",
+                    pkg.name
+                );
+            }
+            continue;
+        }
         // Inventory says it's retired on rawhide (recorded by
         // `triage-retired --mark`): the update request is moot and
         // the checks below would fail anyway — skip without any
