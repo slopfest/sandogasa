@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### hs-relmon: new `prune-archived` subcommand
+
+Cleans up CBS builds for packages whose upstream repo is archived
+(manifest `archived = true`, from
+`poi-tracker sync-gitlab --mark-unshipped`). For each archived
+package it compares every build in its `-release`/`-testing` tags
+against the stock distro version for that tag's channel — CentOS
+Stream N for Stream tags (`hyperscaleNs`), AlmaLinux N for RHEL
+tags (`hyperscaleN`) — and untags builds at or behind stock
+(redundant now). Builds newer than stock, or with no stock entry,
+are never untagged automatically (the archived repo may be their
+only source): they are prompted per build, and `--yes` warns and
+skips them. New `repology::{centos_stream_release, almalinux_release}`
+and an `archived` field on hs-relmon's manifest `PackageEntry`.
+
 ### poi-tracker: export carries the archived-builds marker to hs-relmon
 
 `poi-tracker export` (hs-relmon manifest) now writes `archived =

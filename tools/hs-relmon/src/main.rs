@@ -11,6 +11,7 @@ use hs_relmon::config;
 use hs_relmon::gitlab;
 use hs_relmon::list_issues;
 use hs_relmon::manifest;
+use hs_relmon::prune_archived;
 use hs_relmon::prune_tags;
 use hs_relmon::repology;
 use hs_relmon::review;
@@ -187,6 +188,42 @@ are missing from the manifest. Requires --manifest.
 Packages are inserted in sorted order."
         )]
         add_missing: bool,
+    },
+
+    /// Untag CBS builds for archived-upstream packages stock caught up to.
+    PruneArchived {
+        /// Path to the TOML manifest file.
+        manifest: PathBuf,
+
+        /// Comma-separated Hyperscale repositories to manage.
+        #[arg(
+            long,
+            default_value = prune_tags::DEFAULT_REPOSITORY,
+            long_help = "\
+Comma-separated Hyperscale repositories to manage.
+The repository is the segment between `-packages-`
+and the stage suffix, e.g. `main` in
+`hyperscale10s-packages-main-release`. Tags whose
+repository is not in this list are not touched."
+        )]
+        repositories: String,
+
+        /// Comma-separated packages to skip.
+        #[arg(long, value_name = "LIST")]
+        skip: Option<String>,
+
+        /// Preview operations without applying them.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Untag at/behind-stock without prompting; skip
+        /// ahead-of-stock.
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// Untag old hyperscale builds for every package in a
@@ -605,6 +642,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let client = cbs::Client::new();
             run_prune_one(&client, &package, &opts, dry_run, yes, verbose)?;
+        }
+        Command::PruneArchived {
+            manifest: path,
+            repositories,
+            skip,
+            dry_run,
+            yes,
+            verbose,
+        } => {
+            let opts = prune_tags::PruneOptions {
+                repositories: prune_tags::parse_repositories(&repositories),
+                ..prune_tags::PruneOptions::default()
+            };
+            let skip_set: HashSet<String> = skip
+                .as_deref()
+                .unwrap_or("")
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            let m = manifest::Manifest::load(&path)?;
+            let cbs_client = cbs::Client::new();
+            let repology_client = repology::Client::new();
+            let mut total_failures = 0usize;
+            for pkg in &m.packages {
+                // Only archived-upstream packages are in scope.
+                if pkg.archived != Some(true) {
+                    continue;
+                }
+                if skip_set.contains(&pkg.name) {
+                    if verbose {
+                        eprintln!("{}: skipped (--skip)", pkg.name);
+                    }
+                    continue;
+                }
+                let plan = match prune_archived::plan_for_package(
+                    &cbs_client,
+                    &pkg.name,
+                    &opts,
+                    |n| repology_client.get_project(n),
+                    verbose,
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("{}: {e}", pkg.name);
+                        total_failures += 1;
+                        continue;
+                    }
+                };
+                print!("{}", prune_archived::render_plan(&plan));
+                if dry_run {
+                    continue;
+                }
+                if plan.total_untag() == 0 && plan.total_ahead() == 0 {
+                    continue;
+                }
+                let outcome = prune_archived::apply_plan(&plan, yes, verbose);
+                total_failures += outcome.errors;
+            }
+            if total_failures > 0 {
+                std::process::exit(1);
+            }
         }
         Command::PruneManifest {
             manifest: path,

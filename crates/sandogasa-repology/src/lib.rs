@@ -153,6 +153,20 @@ pub fn latest_centos_stream(packages: &[Package]) -> Option<&Package> {
         .copied()
 }
 
+/// Find the package in a specific CentOS Stream release
+/// (`centos_stream_<release>`), best entry by status then version.
+pub fn centos_stream_release(packages: &[Package], release: u32) -> Option<&Package> {
+    latest_for_repo(packages, &format!("centos_stream_{release}"))
+}
+
+/// Find the package in a specific AlmaLinux release
+/// (`almalinux_<release>`), best entry by status then version.
+/// AlmaLinux is the RHEL-`N` stand-in for Hyperscale's non-stream
+/// (`hyperscaleN`) lifecycle.
+pub fn almalinux_release(packages: &[Package], release: u32) -> Option<&Package> {
+    latest_for_repo(packages, &format!("almalinux_{release}"))
+}
+
 /// Ranking for Repology status values (higher = more preferred).
 fn status_priority(status: &Option<Status>) -> u8 {
     match status.as_ref() {
@@ -364,6 +378,42 @@ mod tests {
         assert_eq!(pkg.repo, "centos_stream_10");
         assert_eq!(pkg.version, "6.15");
         assert_eq!(pkg.status, Some(Status::Outdated));
+    }
+
+    #[test]
+    fn test_centos_stream_release_picks_named_release() {
+        let packages: Vec<Package> = vec![
+            serde_json::from_str(
+                r#"{"repo":"centos_stream_9","version":"6.10","status":"outdated"}"#,
+            )
+            .unwrap(),
+            serde_json::from_str(
+                r#"{"repo":"centos_stream_10","version":"6.15","status":"outdated"}"#,
+            )
+            .unwrap(),
+        ];
+        // Per-release, not "latest stream": el9 returns the el9 entry.
+        assert_eq!(centos_stream_release(&packages, 9).unwrap().version, "6.10");
+        assert_eq!(
+            centos_stream_release(&packages, 10).unwrap().version,
+            "6.15"
+        );
+        assert!(centos_stream_release(&packages, 8).is_none());
+    }
+
+    #[test]
+    fn test_almalinux_release_picks_named_release() {
+        let packages: Vec<Package> = vec![
+            serde_json::from_str(
+                r#"{"repo":"almalinux_9","version":"1.7.4.1","status":"outdated"}"#,
+            )
+            .unwrap(),
+            serde_json::from_str(r#"{"repo":"almalinux_10","version":"1.8.0","status":"newest"}"#)
+                .unwrap(),
+        ];
+        assert_eq!(almalinux_release(&packages, 9).unwrap().version, "1.7.4.1");
+        assert_eq!(almalinux_release(&packages, 10).unwrap().version, "1.8.0");
+        assert!(almalinux_release(&packages, 8).is_none());
     }
 
     #[test]

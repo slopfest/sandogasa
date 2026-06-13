@@ -6,6 +6,7 @@ pub mod config;
 pub mod gitlab;
 pub mod list_issues;
 pub mod manifest;
+pub mod prune_archived;
 pub mod prune_tags;
 pub mod review;
 

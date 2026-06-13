@@ -30,6 +30,9 @@ hs-relmon prune-tags <package>
 hs-relmon prune-manifest <manifest>
     [--release-keep <N>] [--testing-keep <N>] [--repositories <list>]
     [--skip <list>] [--dry-run] [--yes] [--verbose]
+hs-relmon prune-archived <manifest>
+    [--repositories <list>] [--skip <list>] [--dry-run] [--yes]
+    [--verbose]
 hs-relmon review [<package>|<nvr>]
     [--repositories <list>] [--skip <list>] [--dry-run] [--verbose]
 ```
@@ -259,6 +262,38 @@ $ hs-relmon prune-manifest packages.toml --skip systemd,kernel
 
 `-candidate` and tags whose repository isn't in `--repositories`
 are left alone.
+
+### Pruning builds for archived packages
+
+When a package's upstream repo is archived (recorded as
+`archived = true` in the manifest by
+`poi-tracker sync-gitlab --mark-unshipped`), its CBS builds
+should eventually be retired once stock catches up.
+`prune-archived <manifest>` walks the archived packages and, for
+each build in their `-release`/`-testing` tags, compares the
+build version against the **stock** distro version for that
+tag's channel:
+
+- Stream tags (`hyperscaleNs-…`) compare against CentOS Stream N.
+- RHEL tags (`hyperscaleN-…`) compare against AlmaLinux N.
+
+```
+$ hs-relmon prune-archived packages.toml --dry-run
+nvme-cli: 2 build(s) at/behind stock to untag, 0 ahead of stock
+  hyperscale9s-packages-main-release [stock 2.16]
+    untag (<= stock): nvme-cli-2.8-1.hs.el9
+socat: 0 build(s) at/behind stock to untag, 1 ahead of stock
+  hyperscale9s-packages-main-release [stock 1.7.4.1]
+    ahead of stock:   socat-1.7.4.4-4.hs.el9
+```
+
+Builds at or behind stock are redundant and untagged (one batch
+confirmation per package). Builds **ahead** of stock — or for
+which stock has no entry at all — are never untagged
+automatically: the archived repo may be their only source, so
+each is prompted individually, and `--yes` warns about and skips
+them. Stock versions come from Repology; `prune-archived`
+requires `koji` with the `cbs` profile.
 
 ### Reviewing testing builds
 
