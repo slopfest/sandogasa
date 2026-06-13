@@ -3,11 +3,47 @@
 # Default settings applied to all packages unless overridden.
 [defaults]
 distros = "upstream,fedora,centos,hyperscale"
-track = "upstream"
+track = "centos"
 file_issue = true
 
-# Each [[package]] entry defines a package to check.
-# All fields except 'name' are optional and override the defaults.
+[[package]]
+name = "anaconda"
+
+[[package]]
+name = "asahi-platform-metapackage"
+
+[[package]]
+name = "asahi-scripts"
+
+[[package]]
+name = "atuin"
+
+[[package]]
+name = "autoconf"
+
+[[package]]
+name = "awscli2"
+
+[[package]]
+name = "btrfs-progs"
+
+[[package]]
+name = "centos-release-hyperscale"
+
+[[package]]
+name = "centos-stream-spin-hyperscale-release"
+
+[[package]]
+name = "chkconfig"
+
+[[package]]
+name = "createrepo_c"
+
+[[package]]
+name = "dbus-broker"
+
+[[package]]
+name = "dnf-plugin-cow"
 
 [[package]]
 name = "dnsmasq"
@@ -18,15 +54,120 @@ name = "dracut"
 track = "fedora-rawhide"
 
 [[package]]
+name = "e2fsprogs"
+
+[[package]]
 name = "elfutils"
 track = "centos"
 
 [[package]]
+name = "emacs"
+
+[[package]]
+name = "emacs-filesystem"
+
+[[package]]
 name = "ethtool"
+track = "upstream"
+
+[[package]]
+name = "fio"
+
+[[package]]
+name = "fluent-bit"
+
+[[package]]
+name = "freetype"
+
+[[package]]
+name = "gdal"
+
+[[package]]
+name = "git-lfs"
+
+[[package]]
+name = "iperf3"
+
+[[package]]
+name = "iptables"
+
+[[package]]
+name = "kernel"
+
+[[package]]
+name = "kernel-headers"
+
+[[package]]
+name = "kexec-tools"
+
+[[package]]
+name = "kpatch"
+
+[[package]]
+name = "libblockdev"
+
+[[package]]
+name = "libbpf"
+
+[[package]]
+name = "librepo"
+
+[[package]]
+name = "libvirt"
+
+[[package]]
+name = "linux-firmware"
+
+[[package]]
+name = "mesa"
+
+[[package]]
+name = "mstflint"
+
+[[package]]
+name = "neovim"
+
+[[package]]
+name = "nvme-cli"
+archived = true
+
+[[package]]
+name = "openssh"
+
+[[package]]
+name = "pciutils"
 
 [[package]]
 name = "perf"
+track = "upstream"
 repology_name = "linux"
+
+[[package]]
+name = "pinentry"
+
+[[package]]
+name = "pykickstart"
+
+[[package]]
+name = "python-blivet"
+
+[[package]]
+name = "python-ynl"
+
+[[package]]
+name = "qemu"
+
+[[package]]
+name = "rasdaemon"
+
+[[package]]
+name = "redhat-rpm-config-hyperscale"
+
+[[package]]
+name = "repo"
+
+[[package]]
+name = "rpm"
 
 [[package]]
 name = "rubygem-asciidoctor"
@@ -35,9 +176,25 @@ distros = "upstream,fedora,centos,hs9"
 track = "fedora-stable"
 
 [[package]]
+name = "rust-libsqlite3-sys"
+
+[[package]]
+name = "rust-sqlx"
+
+[[package]]
+name = "rust-sqlx-sqlite"
+
+[[package]]
 name = "selinux-policy"
 distros = "upstream,fedora,centos,hs10"
 track = "fedora-rawhide"
+
+[[package]]
+name = "socat"
+archived = true
+
+[[package]]
+name = "sqlite"
 
 [[package]]
 name = "systemd"
@@ -45,5 +202,18 @@ track = "fedora-rawhide"
 file_issue = false
 
 [[package]]
+name = "tar"
+
+[[package]]
+name = "tmux"
+
+[[package]]
+name = "tree-sitter"
+
+[[package]]
+name = "udisks2"
+
+[[package]]
 name = "wprof"
+track = "upstream"
 
