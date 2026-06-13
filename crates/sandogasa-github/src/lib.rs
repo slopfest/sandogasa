@@ -485,6 +485,7 @@ fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn s
         HeaderName::from_static("x-github-api-version"),
         HeaderValue::from_static("2022-11-28"),
     );
+    sandogasa_cli::install_crypto_provider();
     Ok(reqwest::blocking::Client::builder()
         .user_agent(concat!("sandogasa-github/", env!("CARGO_PKG_VERSION")))
         .default_headers(headers)

@@ -118,6 +118,7 @@ fn parse_acl_level(s: &str) -> Result<String, String> {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    sandogasa_cli::init();
     let cli = Cli::parse();
 
     match run(cli).await {

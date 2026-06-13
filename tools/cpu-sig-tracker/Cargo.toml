@@ -10,6 +10,7 @@ repository.workspace = true
 chrono = { workspace = true }
 clap = { workspace = true }
 rpassword = { workspace = true }
+sandogasa-cli = { workspace = true }
 sandogasa-config = { workspace = true }
 sandogasa-fedrq = { workspace = true }
 sandogasa-gitlab = { workspace = true }

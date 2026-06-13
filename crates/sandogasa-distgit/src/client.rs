@@ -135,6 +135,8 @@ impl Default for DistGitClient {
 
 impl DistGitClient {
     pub fn new() -> Self {
+        sandogasa_cli::install_crypto_provider();
+
         Self {
             base_url: DISTGIT_BASE.to_string(),
             client: Client::new(),
@@ -143,6 +145,8 @@ impl DistGitClient {
     }
 
     pub fn with_base_url(base_url: &str) -> Self {
+        sandogasa_cli::install_crypto_provider();
+
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: Client::new(),

@@ -505,6 +505,7 @@ fn handle_refresh(refresh: bool, verbose: bool) -> Result<(), ExitCode> {
 }
 
 fn main() -> ExitCode {
+    sandogasa_cli::init();
     let cli = Cli::parse();
 
     // config and check-pkg-reviews don't need fedrq.

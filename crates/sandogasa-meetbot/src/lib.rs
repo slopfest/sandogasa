@@ -73,6 +73,7 @@ impl Meetbot {
     /// the same base so callers can mock the whole surface in
     /// a single wiremock server.
     pub fn with_base_url(base_url: &str) -> Self {
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::blocking::Client::builder()
             .user_agent(concat!("sandogasa-meetbot/", env!("CARGO_PKG_VERSION"),))
             .build()

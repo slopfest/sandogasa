@@ -19,6 +19,8 @@ impl JiraClient {
     /// Construct a new client. The base URL should NOT include the
     /// `/rest/api/2` path — that's added by each endpoint.
     pub fn new(base_url: &str) -> Self {
+        sandogasa_cli::install_crypto_provider();
+
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: Client::new(),

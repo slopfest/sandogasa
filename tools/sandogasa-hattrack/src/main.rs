@@ -278,6 +278,7 @@ struct DiscourseStatus {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    sandogasa_cli::init();
     let cli = Cli::parse();
     locale::init_source(cli.tz_source);
 

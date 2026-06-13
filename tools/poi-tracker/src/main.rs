@@ -599,6 +599,7 @@ fn resolve_inventory_paths(cli: &Cli) -> Vec<String> {
 }
 
 fn main() -> ExitCode {
+    sandogasa_cli::init();
     let cli = Cli::parse();
 
     // Import/sync commands produce new files and don't need existing

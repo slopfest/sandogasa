@@ -100,6 +100,7 @@ fn run_compare(
 }
 
 fn main() {
+    sandogasa_cli::init();
     let cli = Cli::parse();
 
     match cli.command {

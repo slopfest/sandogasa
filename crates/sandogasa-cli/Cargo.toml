@@ -8,4 +8,5 @@ repository.workspace = true
 
 [dependencies]
 chrono = { workspace = true }
+rustls = { workspace = true }
 url = { workspace = true }

@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### Dependencies: reqwest 0.13, toml 1, toml_edit 0.25, quick-xml 0.40 (breaking)
+
+Bumped the four deferred major dependency upgrades, all now in
+Fedora/EPEL (reqwest 0.13.3, toml 1.1, toml_edit 0.25.12,
+quick-xml 0.40.1; lockfile pinned to the Fedora-shipped point
+releases).
+
+Breaking (API): `reqwest::Error` appears in some public
+signatures (e.g. `sandogasa-bodhi`'s query methods), so the
+reqwest major bump changes that type's identity for library
+consumers. No sandogasa API was intentionally changed.
+
+TLS posture change: reqwest 0.13's default `rustls` feature pulls
+in `aws-lc-rs`, which is not packaged in Fedora, so we build with
+`rustls-no-provider` and keep the ring crypto provider (as
+before, statically linked, build-dep only — no runtime RPM). The
+provider is no longer compiled in as a default, so it is
+registered at startup via the new `sandogasa_cli::init()` (called
+from every tool's `main`) and defensively in the library client
+builders. Trust roots now come from the system store
+(`rustls-platform-verifier` → Fedora's `ca-certificates`) instead
+of a copy of Mozilla's CA list baked into the binary, so CA
+updates flow through `dnf` rather than a rebuild.
+
+New `sandogasa-cli` surface: `init()` (standard per-`main`
+startup hook — extend it for future cross-cutting setup) and
+`install_crypto_provider()`.
+
+quick-xml 0.40 migration: `BytesText::unescape` is gone and
+`read_text` now yields a raw `BytesText`; the koji-diff and
+hs-relmon XML-RPC parsers decode + unescape explicitly via a
+local helper.
+
+### koji-diff: fix the koji availability check
+
+`koji-diff` checked for koji with `koji --version`, which exits 2
+(koji uses the `version` subcommand), so it always aborted with
+"is it installed correctly?" even on a working koji. Switched to
+`require_tool_with_arg("koji", "version", ...)`, matching ebranch.
+
 ### sandogasa-distgit: group syncs no longer import non-rpms projects
 
 A Pagure group's project listing includes everything the group

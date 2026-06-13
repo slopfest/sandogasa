@@ -62,6 +62,7 @@ fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn s
         HeaderName::from_static("private-token"),
         HeaderValue::from_str(token)?,
     );
+    sandogasa_cli::install_crypto_provider();
     Ok(reqwest::blocking::Client::builder()
         .user_agent("sandogasa-gitlab/0.6.2")
         .default_headers(headers)
@@ -618,6 +619,7 @@ pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::
         HeaderName::from_static("private-token"),
         HeaderValue::from_str(token)?,
     );
+    sandogasa_cli::install_crypto_provider();
     let client = reqwest::blocking::Client::builder()
         .user_agent("sandogasa-gitlab/0.6.2")
         .default_headers(headers)
@@ -644,6 +646,7 @@ pub fn list_group_projects(
 ) -> Result<Vec<GroupProject>, Box<dyn std::error::Error>> {
     let (base_url, group_path) = parse_project_url(group_url)?;
     let encoded = group_path.replace('/', "%2F");
+    sandogasa_cli::install_crypto_provider();
     let client = reqwest::blocking::Client::builder()
         .user_agent("sandogasa-gitlab")
         .build()?;

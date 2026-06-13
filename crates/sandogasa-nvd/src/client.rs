@@ -19,6 +19,8 @@ impl Default for NvdClient {
 
 impl NvdClient {
     pub fn new() -> Self {
+        sandogasa_cli::install_crypto_provider();
+
         Self {
             base_url: NVD_API_BASE.to_string(),
             client: Client::new(),
@@ -26,6 +28,8 @@ impl NvdClient {
     }
 
     pub fn with_base_url(base_url: &str) -> Self {
+        sandogasa_cli::install_crypto_provider();
+
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: Client::new(),

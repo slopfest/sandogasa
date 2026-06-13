@@ -31,6 +31,7 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    sandogasa_cli::init();
     let cli = Cli::parse();
     match cli.command {
         Command::List(args) => list::run(&args),

@@ -8,6 +8,43 @@ use std::process::{Command, Stdio};
 
 use url::{Host, Url};
 
+/// Standard process-wide initialization for sandogasa tools.
+///
+/// Call this once as the first statement of `main()` in every
+/// binary. It is the single place for cross-cutting startup work:
+/// anything added to this function is automatically picked up by
+/// every tool that calls it, so prefer extending `init` over
+/// scattering setup across mains.
+///
+/// Today it registers the rustls crypto provider that reqwest's
+/// TLS support needs (see [`install_crypto_provider`]). Idempotent
+/// and cheap, so calling it from a tool that does no networking is
+/// harmless.
+pub fn init() {
+    install_crypto_provider();
+}
+
+/// Install the ring-based rustls [`CryptoProvider`] as the process
+/// default.
+///
+/// We build reqwest with the `rustls-no-provider` feature to keep
+/// `aws-lc-rs` — reqwest 0.13's default provider, which is not
+/// packaged in Fedora — out of the dependency tree. That leaves
+/// rustls with no compiled-in default provider, so one must be
+/// registered at runtime before the first HTTPS request or reqwest
+/// panics with "No provider set". `ring` is statically linked into
+/// the binary (a build-time dependency only); this just points
+/// rustls at it.
+///
+/// Idempotent: the underlying `install_default` only takes effect
+/// on the first call and reports an error on subsequent ones, which
+/// we ignore so repeated calls (e.g. across tests) are harmless.
+///
+/// [`CryptoProvider`]: rustls::crypto::CryptoProvider
+pub fn install_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// Environment variable that, when set to a non-empty value,
 /// disables [`ensure_secure_url`]'s plaintext-credential guard.
 /// Intended for local testing against `http://` mock servers or a

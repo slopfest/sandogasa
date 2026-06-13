@@ -13,6 +13,8 @@ pub struct DiscourseClient {
 
 impl DiscourseClient {
     pub fn new(base_url: &str) -> Self {
+        sandogasa_cli::install_crypto_provider();
+
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: Client::new(),

@@ -72,6 +72,7 @@ impl Client {
 
     /// Create a client with a custom base URL (useful for testing).
     pub fn with_base_url(base_url: &str) -> Self {
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::blocking::Client::builder()
             .user_agent("sandogasa-repology/0.6.2")
             .build()

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use quick_xml::Reader;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesText, Event};
 
 /// An XML-RPC value.
 #[derive(Debug, Clone)]
@@ -124,6 +124,7 @@ pub struct Client {
 
 impl Client {
     pub fn new(hub_url: &str) -> Self {
+        sandogasa_cli::install_crypto_provider();
         Self {
             http: reqwest::blocking::Client::new(),
             hub_url: hub_url.to_string(),
@@ -328,10 +329,7 @@ fn parse_value_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
                 return Ok(Value::Nil);
             }
             Ok(Event::Text(t)) => {
-                let text = t
-                    .unescape()
-                    .map_err(|e| Error::Xml(e.to_string()))?
-                    .into_owned();
+                let text = decode_text(&t)?;
                 if !text.trim().is_empty() {
                     // Bare text in <value> is implicitly a string.
                     skip_to_end(reader, b"value")?;
@@ -430,12 +428,23 @@ fn parse_array_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
 }
 
 /// Read text content until the matching end tag.
+/// Decode and unescape a quick-xml text node to an owned String.
+///
+/// quick-xml 0.40 dropped `BytesText::unescape`; decoding and
+/// entity-unescaping are now separate explicit steps.
+fn decode_text(t: &BytesText) -> Result<String, Error> {
+    let decoded = t.decode().map_err(|e| Error::Xml(e.to_string()))?;
+    Ok(quick_xml::escape::unescape(&decoded)
+        .map_err(|e| Error::Xml(e.to_string()))?
+        .into_owned())
+}
+
 fn read_text_content(reader: &mut Reader<&[u8]>) -> Result<String, Error> {
     let mut text = String::new();
     loop {
         match reader.read_event() {
             Ok(Event::Text(t)) => {
-                text.push_str(&t.unescape().map_err(|e| Error::Xml(e.to_string()))?);
+                text.push_str(&decode_text(&t)?);
             }
             Ok(Event::End(_)) => return Ok(text),
             Ok(Event::Eof) => {

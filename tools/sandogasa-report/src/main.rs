@@ -118,6 +118,7 @@ fn resolve_date_range(cli: &ReportArgs) -> Result<(NaiveDate, NaiveDate), String
 }
 
 fn main() -> ExitCode {
+    sandogasa_cli::init();
     let cli = Cli::parse();
     match cli.command {
         Command::Config(args) => configure::run(&args),

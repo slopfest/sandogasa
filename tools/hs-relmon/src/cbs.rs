@@ -1,8 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use quick_xml::Reader;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesText, Event};
 use serde::Serialize;
+
+/// Decode and unescape a quick-xml text node to an owned String.
+///
+/// quick-xml 0.40 made `read_text` and `Event::Text` yield a raw
+/// `BytesText`; decoding and entity-unescaping are now explicit.
+fn decode_text(t: &BytesText) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(quick_xml::escape::unescape(&t.decode()?)?.into_owned())
+}
 
 /// Build the CBS web URL for a given build ID.
 pub fn build_url(build_id: i64) -> String {
@@ -80,6 +88,7 @@ impl Client {
     }
 
     pub fn with_hub_url(hub_url: &str) -> Self {
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::blocking::Client::builder()
             .user_agent("hs-relmon/0.1.0")
             .build()
@@ -372,16 +381,16 @@ fn parse_value(
                 depth.push(tag.clone());
                 match tag.as_str() {
                     "int" | "i4" | "i8" => {
-                        let text = reader.read_text(e.name())?;
+                        let text = decode_text(&reader.read_text(e.name())?)?;
                         depth.pop();
                         consume_end_value(reader, depth)?;
                         return Ok(XmlRpcValue::Int(text.trim().parse()?));
                     }
                     "string" => {
-                        let text = reader.read_text(e.name())?;
+                        let text = decode_text(&reader.read_text(e.name())?)?;
                         depth.pop();
                         consume_end_value(reader, depth)?;
-                        return Ok(XmlRpcValue::Str(text.to_string()));
+                        return Ok(XmlRpcValue::Str(text));
                     }
                     "array" => {
                         let arr = parse_array(reader, depth)?;
@@ -401,10 +410,10 @@ fn parse_value(
                     }
                     _ => {
                         // Unknown type, read as string
-                        let text = reader.read_text(e.name())?;
+                        let text = decode_text(&reader.read_text(e.name())?)?;
                         depth.pop();
                         consume_end_value(reader, depth)?;
-                        return Ok(XmlRpcValue::Str(text.to_string()));
+                        return Ok(XmlRpcValue::Str(text));
                     }
                 }
             }
@@ -417,7 +426,7 @@ fn parse_value(
             }
             Event::Text(e) => {
                 // Bare text inside <value> without type tag = string
-                let text = e.unescape()?.to_string();
+                let text = decode_text(&e)?;
                 if !text.trim().is_empty() {
                     consume_end_value(reader, depth)?;
                     return Ok(XmlRpcValue::Str(text));
@@ -496,9 +505,9 @@ fn parse_struct(
                 depth.push(tag.clone());
                 match tag.as_str() {
                     "name" => {
-                        let text = reader.read_text(e.name())?;
+                        let text = decode_text(&reader.read_text(e.name())?)?;
                         depth.pop();
-                        current_name = Some(text.to_string());
+                        current_name = Some(text);
                     }
                     "value" => {
                         let val = parse_value(reader, depth)?;

@@ -13,6 +13,7 @@ clap = { workspace = true }
 dirs = { workspace = true }
 reqwest = { workspace = true }
 emojis = { workspace = true }
+sandogasa-cli = { workspace = true }
 sandogasa-bodhi = { workspace = true }
 sandogasa-bugzilla = { workspace = true }
 sandogasa-discourse = { workspace = true }

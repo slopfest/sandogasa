@@ -456,6 +456,7 @@ mod tests {
         // Nothing listens on port 1: every attempt fails at the
         // transport level. Paused time fast-forwards the backoff
         // sleeps; the error names the operation after retries.
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::Client::new();
         let err = send_with_retry("token refresh", || http.post("http://127.0.0.1:1/Token"))
             .await
@@ -480,6 +481,7 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::Client::new();
         let url = format!("{}/flaky", server.uri());
         let resp = send_with_retry("flaky fetch", || http.get(&url))
@@ -515,6 +517,7 @@ mod tests {
             .mount(&server)
             .await;
 
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::Client::new();
         let tokens = refresh_tokens(
             &http,
@@ -566,6 +569,7 @@ mod tests {
         });
         std::fs::write(&path, store.to_string()).unwrap();
 
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::Client::new();
         let token = cli_session_token(&http, &path, &server.uri())
             .await
@@ -615,6 +619,7 @@ mod tests {
         });
         std::fs::write(&path, store.to_string()).unwrap();
 
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::Client::new();
         let token = cli_session_token_refreshed(&http, &path, &server.uri())
             .await
@@ -638,6 +643,7 @@ mod tests {
             }
         });
         std::fs::write(&path, store.to_string()).unwrap();
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::Client::new();
         let token = cli_session_token_refreshed(&http, &path, FEDORA_IDP)
             .await
@@ -649,6 +655,7 @@ mod tests {
     async fn cli_session_token_errors_without_cache() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("client.json");
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::Client::new();
         let err = cli_session_token(&http, &path, FEDORA_IDP)
             .await
@@ -665,6 +672,7 @@ mod tests {
         let path = dir.path().join("client.json");
         let future = chrono::Utc::now().timestamp() + 3600;
         std::fs::write(&path, sample_store(future)).unwrap();
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::Client::new();
         let token = cli_session_token(&http, &path, FEDORA_IDP).await.unwrap();
         assert_eq!(token, "abc123");

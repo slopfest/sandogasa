@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 clap = { workspace = true }
+sandogasa-cli = { workspace = true }
 sandogasa-bodhi = { workspace = true }
 sandogasa-bugclass = { workspace = true }
 sandogasa-bugzilla = { workspace = true }

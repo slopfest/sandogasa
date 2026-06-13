@@ -78,9 +78,14 @@ struct FailureLog {
 }
 
 fn main() -> ExitCode {
+    sandogasa_cli::init();
     let cli = Cli::parse();
 
-    if let Err(e) = sandogasa_cli::require_tool("koji", "sudo dnf install koji") {
+    // koji uses the `version` subcommand, not `--version` (the
+    // latter exits 2), so the generic require_tool would always
+    // report koji as broken.
+    if let Err(e) = sandogasa_cli::require_tool_with_arg("koji", "version", "sudo dnf install koji")
+    {
         eprintln!("error: {e}");
         return ExitCode::FAILURE;
     }

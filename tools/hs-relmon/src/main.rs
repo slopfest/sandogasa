@@ -342,6 +342,7 @@ newer than the released build."
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    sandogasa_cli::init();
     let cli = Cli::parse();
 
     match cli.command {

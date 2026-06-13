@@ -30,6 +30,7 @@ impl Default for BodhiClient {
 }
 
 fn build_http_client() -> Client {
+    sandogasa_cli::install_crypto_provider();
     Client::builder()
         .timeout(DEFAULT_TIMEOUT)
         // Bodhi authenticates write requests by the `auth_tkt`
