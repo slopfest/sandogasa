@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.14.0
 
 ### poi-tracker: export drops unshipped packages from the hs-relmon manifest
 
@@ -112,7 +112,7 @@ local helper.
 "is it installed correctly?" even on a working koji. Switched to
 `require_tool_with_arg("koji", "version", ...)`, matching ebranch.
 
-### sandogasa-distgit: group syncs no longer import non-rpms projects
+### sandogasa-distgit: group syncs no longer import non-rpms projects (breaking)
 
 A Pagure group's project listing includes everything the group
 can access — `container/`, `tests/`, and `modules/` projects and
@@ -125,6 +125,9 @@ python-packagers-sig inventory as package "python-classroom",
 `fullname` and keeps only the `rpms/` namespace; skipped
 projects are counted in the sync output. A re-sync with
 `--prune` clears previously imported strays.
+
+Breaking (API): `ProjectInfo` gained a public `fullname` field —
+code constructing it with a struct literal must add it.
 
 ### poi-tracker: `prune-retired` flags nonexistent projects as invalid entries
 
@@ -162,7 +165,9 @@ stderr, later file winning.
 Breaking (API): `Inventory::merge` now returns `Vec<String>`
 (conflict notes) instead of `()`; new `Package::merge_from`.
 Callers that ignored the old unit return just discard the new
-return value.
+return value. `Package` also gained public fields this release
+(`unshipped`, `archived_builds`) — code constructing one with a
+struct literal must add them.
 
 ### poi-tracker: parallel `prune-retired` scan
 
