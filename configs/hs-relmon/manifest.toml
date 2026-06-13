@@ -128,10 +128,6 @@ name = "mstflint"
 name = "neovim"
 
 [[package]]
-name = "nvme-cli"
-archived = true
-
-[[package]]
 name = "openssh"
 
 [[package]]
