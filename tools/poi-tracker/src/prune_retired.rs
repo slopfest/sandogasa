@@ -104,12 +104,44 @@ pub fn apply_unshipped_marks(
         .iter()
         .map(|c| (c.package.as_str(), c.reason.describe()))
         .collect();
+    apply_unshipped_reasons(inventory, checked, &reasons)
+}
+
+/// Set or clear `unshipped` markers across `checked` packages from
+/// a name→reason map: a checked package present in `reasons` gets
+/// that reason, one absent from it has any marker cleared, and a
+/// package outside `checked` is left untouched. Returns the count
+/// of packages whose marker changed. Shared by `prune-retired` and
+/// `sync-* --mark-unshipped`.
+pub fn apply_unshipped_reasons(
+    inventory: &mut Inventory,
+    checked: &[String],
+    reasons: &std::collections::BTreeMap<&str, String>,
+) -> usize {
+    apply_marker(inventory, checked, reasons, |pkg| &mut pkg.unshipped)
+}
+
+/// Bidirectionally set/clear an `Option<String>` marker field
+/// (selected by `field`) across `checked` packages from a
+/// name→reason map. Generic over the field so the same logic
+/// drives `unshipped` and `archived_builds`. Returns how many
+/// packages changed.
+pub fn apply_marker<F>(
+    inventory: &mut Inventory,
+    checked: &[String],
+    reasons: &std::collections::BTreeMap<&str, String>,
+    mut field: F,
+) -> usize
+where
+    F: FnMut(&mut sandogasa_inventory::Package) -> &mut Option<String>,
+{
     let mut changed = 0usize;
     for name in checked {
         if let Some(pkg) = inventory.find_package_mut(name) {
+            let slot = field(pkg);
             let new = reasons.get(name.as_str()).cloned();
-            if new != pkg.unshipped {
-                pkg.unshipped = new;
+            if new != *slot {
+                *slot = new;
                 changed += 1;
             }
         }

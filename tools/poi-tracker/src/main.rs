@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 mod config;
+mod gitlab_unshipped;
 mod prune_retired;
 mod semver_audit;
 mod triage_retired;
@@ -536,6 +537,21 @@ struct SyncGitlabArgs {
     /// Workload tags (CSV or repeated).
     #[arg(long, value_delimiter = ',', value_name = "WORKLOAD,...")]
     workload: Vec<String>,
+
+    /// Mark archived projects with no released CBS build as
+    /// unshipped (Hyperscale: RHEL or Stream; Proposed Updates:
+    /// Stream only).
+    #[arg(long)]
+    mark_unshipped: bool,
+
+    /// CentOS releases to count as currently shipped (CSV).
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "REL,...",
+        default_value = "9,10"
+    )]
+    centos_release: Vec<u32>,
 
     /// Inventory name (default: derived from group).
     #[arg(long)]
@@ -1427,6 +1443,7 @@ fn cmd_add(paths: &[String], args: &AddArgs) -> ExitCode {
             priority: None,
             retired_on: None,
             unshipped: None,
+            archived_builds: None,
         };
         inventory.add_package(pkg);
         eprintln!("Added {} to {target_path}", args.name);
@@ -1826,6 +1843,7 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
             priority: None,
             retired_on: None,
             unshipped: None,
+            archived_builds: None,
         });
         for wl in &args.workload {
             inventory.add_to_workload(wl, &p.name);
@@ -2023,6 +2041,30 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
 
     let source_label = args.preset.clone().unwrap_or_else(|| group_url.clone());
 
+    // Validate the cheap --mark-unshipped preconditions before the
+    // long GitLab/CBS fetches: the source must map to a known CBS
+    // SIG, and koji (cbs profile) must be available.
+    let sig = if args.mark_unshipped {
+        let Some(sig) = gitlab_unshipped::Sig::from_source(args.preset.as_deref(), &group_url)
+        else {
+            eprintln!(
+                "error: --mark-unshipped supports the hyperscale and \
+                 proposed-updates sources only (no CBS release \
+                 lifecycle for {source_label})"
+            );
+            return ExitCode::FAILURE;
+        };
+        if let Err(e) =
+            sandogasa_cli::require_tool_with_arg("koji", "version", "sudo dnf install koji")
+        {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+        Some(sig)
+    } else {
+        None
+    };
+
     let projects = match sandogasa_gitlab::list_group_projects(&group_url) {
         Ok(p) => p,
         Err(e) => {
@@ -2099,6 +2141,7 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
             priority: None,
             retired_on: None,
             unshipped: None,
+            archived_builds: None,
         });
         for wl in &args.workload {
             inventory.add_to_workload(wl, name);
@@ -2131,6 +2174,52 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
             for name in &stale {
                 eprintln!("  {name}");
             }
+        }
+    }
+
+    // Mark archived projects with no released CBS build as
+    // unshipped. Best-effort: a CBS/GitLab failure warns but the
+    // sync still saves (re-run --mark-unshipped to backfill).
+    if let Some(sig) = sig {
+        let synced: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+        eprintln!(
+            "checking {} package(s) for CBS release status...",
+            synced.len()
+        );
+        match gitlab_unshipped::shipped_packages(sig, &args.centos_release, false) {
+            Ok(shipped) => match sandogasa_gitlab::list_archived_project_names(&group_url) {
+                Ok(archived) => {
+                    let outcome =
+                        gitlab_unshipped::mark(&mut inventory, &synced, &archived, &shipped);
+                    eprintln!(
+                        "{} unshipped, {} archived-with-builds; {} marker(s) updated",
+                        outcome.unshipped.len(),
+                        outcome.archived_builds.len(),
+                        outcome.changed
+                    );
+                    if !outcome.unshipped.is_empty() {
+                        eprintln!(
+                            "  unshipped (archived, no CBS build): {}",
+                            outcome.unshipped.join(", ")
+                        );
+                    }
+                    if !outcome.archived_builds.is_empty() {
+                        eprintln!(
+                            "  archived but still have CBS builds (run hs-relmon \
+                             to prune): {}",
+                            outcome.archived_builds.join(", ")
+                        );
+                    }
+                }
+                Err(e) => eprintln!(
+                    "warning: fetching archived projects failed ({e}); \
+                     re-run --mark-unshipped to mark unshipped packages"
+                ),
+            },
+            Err(e) => eprintln!(
+                "warning: CBS release scan failed ({e}); \
+                 re-run --mark-unshipped to mark unshipped packages"
+            ),
         }
     }
 

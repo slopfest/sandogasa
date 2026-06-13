@@ -1,12 +1,16 @@
 # TODO
 
-## poi-tracker
+## hs-relmon
 
-- `sync-gitlab` analog of `sync-distgit --mark-unshipped`
-  (landed 2026-06-12): GitLab-synced packages are CentOS Stream
-  projects, so the retirement check needs a GitLab-aware signal
-  (archived project? removed from the group?) rather than Fedora
-  dist-git's `dead.package`.
+- Prune CBS builds for archived-upstream packages, driven by the
+  inventory's `archived_builds` markers (set by
+  `sync-gitlab --mark-unshipped`). For each marked package, untag
+  builds older than the version in stock CentOS Stream
+  (c9s/c10s, for the `Ns` Stream tags) or AlmaLinux (al9/al10,
+  for the bare-`N` RHEL tags); if a marked package's build is
+  *newer* than stock, prompt for confirmation before untagging
+  (the archived repo may still be the only source). Needs the
+  stock-version lookup per release channel.
 
 ## ebranch
 

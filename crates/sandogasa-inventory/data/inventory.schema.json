@@ -85,6 +85,13 @@
             }
           }
         },
+        "archived_builds": {
+          "description": "Set when the package's upstream repo is archived but it\nstill has builds tagged into CBS release tags — recorded by\n`poi-tracker sync-gitlab --mark-unshipped`. The value records\nwhy. Unlike [`Self::unshipped`] the package still ships, so\nit is NOT skipped by triage/audit; instead it is a build\ncleanup candidate for `hs-relmon` to untag. Refreshed — in\nboth directions — each `--mark-unshipped` run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "distros": {
           "description": "Comma-separated distribution list for hs-relmon.",
           "type": [

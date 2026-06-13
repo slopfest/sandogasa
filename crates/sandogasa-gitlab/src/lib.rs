@@ -644,6 +644,28 @@ pub struct GroupProject {
 pub fn list_group_projects(
     group_url: &str,
 ) -> Result<Vec<GroupProject>, Box<dyn std::error::Error>> {
+    list_group_projects_query(group_url, "")
+}
+
+/// List the **archived** projects under a GitLab group, returning
+/// their names. GitLab's `archived=true` filter narrows the
+/// listing server-side, so this is a cheap separate query rather
+/// than enriching every project in the main listing.
+pub fn list_archived_project_names(
+    group_url: &str,
+) -> Result<std::collections::HashSet<String>, Box<dyn std::error::Error>> {
+    Ok(list_group_projects_query(group_url, "&archived=true")?
+        .into_iter()
+        .map(|p| p.name)
+        .collect())
+}
+
+/// Paginate a group's project listing, appending `extra_query`
+/// (e.g. `&archived=true`) to each request.
+fn list_group_projects_query(
+    group_url: &str,
+    extra_query: &str,
+) -> Result<Vec<GroupProject>, Box<dyn std::error::Error>> {
     let (base_url, group_path) = parse_project_url(group_url)?;
     let encoded = group_path.replace('/', "%2F");
     sandogasa_cli::install_crypto_provider();
@@ -654,8 +676,8 @@ pub fn list_group_projects(
     let mut page = 1u32;
     loop {
         let url = format!(
-            "{}/api/v4/groups/{}/projects?per_page=100&page={}&simple=true&include_subgroups=false",
-            base_url, encoded, page
+            "{}/api/v4/groups/{}/projects?per_page=100&page={}&simple=true&include_subgroups=false{}",
+            base_url, encoded, page, extra_query
         );
         eprint!("\r  fetching page {page}...");
         let resp = get_with_retry_blocking(&client, &url)?;

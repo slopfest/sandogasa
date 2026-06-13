@@ -165,6 +165,7 @@ mod tests {
                     priority: None,
                     retired_on: None,
                     unshipped: None,
+                    archived_builds: None,
                 },
                 Package {
                     name: "systemd".to_string(),
@@ -190,6 +191,7 @@ mod tests {
                     priority: None,
                     retired_on: None,
                     unshipped: None,
+                    archived_builds: None,
                 },
                 Package {
                     name: "neovim".to_string(),
@@ -206,6 +208,7 @@ mod tests {
                     priority: None,
                     retired_on: None,
                     unshipped: None,
+                    archived_builds: None,
                 },
             ],
         }

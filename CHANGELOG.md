@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### poi-tracker: `sync-gitlab --mark-unshipped` (CBS release check)
+
+Cross-checks each GitLab-synced project against CBS (CentOS koji)
+and records archival state. An archived GitLab repo with no
+released CBS build is marked `unshipped` (a tombstone, skipped
+like a retired package); an archived repo that *still* has
+release builds is marked `archived_builds` — it still ships, so
+it is not skipped, but its lingering builds are a cleanup
+candidate and the command suggests running hs-relmon to prune
+them. "Released" respects each SIG's lifecycle: Hyperscale ships
+for both RHEL `N` and CentOS Stream `Ns` (`hyperscaleN-*-release`
+or `hyperscaleNs-*-release`), Proposed Updates is Stream-only;
+`--centos-release` sets the valid majors (default `9,10`).
+Requires `koji` with the `cbs` profile.
+
+New surface: `Package.archived_builds` + `has_archived_builds()`
+in sandogasa-inventory (schema regenerated; merged field-aware),
+`sandogasa_koji::{list_tags, list_tagged_package_names}`, and
+`sandogasa_gitlab::list_archived_project_names`. The marker
+apply logic is now field-generic (`prune_retired::apply_marker`),
+shared by `unshipped` and `archived_builds`.
+
 ### Dependencies: reqwest 0.13, toml 1, toml_edit 0.25, quick-xml 0.40 (breaking)
 
 Bumped the four deferred major dependency upgrades, all now in

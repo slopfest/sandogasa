@@ -12,6 +12,13 @@ YAML and hs-relmon manifest formats.
 cargo install poi-tracker
 ```
 
+Some subcommands shell out to external tools: `prune-retired` and
+`sync-distgit --mark-unshipped` need
+[fedrq](https://src.fedoraproject.org/rpms/fedrq)
+(`sudo dnf install fedrq`); `sync-gitlab --mark-unshipped` needs
+`koji` configured with the `cbs` profile (from the
+`centos-packager` package).
+
 ## Usage
 
 ### Show inventory
@@ -156,6 +163,38 @@ collaborator/ticket grants, which only the full prefix scan can
 see — run one occasionally to true up. The full trade-off
 analysis lives in
 [`sandogasa-distgit`'s development notes](../../crates/sandogasa-distgit/DEVELOPMENT.md).
+
+### Sync from GitLab
+
+Create or update an inventory from a CentOS SIG's GitLab RPM
+group. Presets cover the common groups:
+
+```sh
+poi-tracker sync-gitlab --preset hyperscale -o hyperscale.toml
+poi-tracker sync-gitlab --preset proposed-updates -o pu.toml
+poi-tracker sync-gitlab --url https://gitlab.com/CentOS/Hyperscale/rpms
+```
+
+`--mark-unshipped` cross-checks each project against CBS (CentOS
+koji) and records archival state. A project's GitLab repo being
+**archived** means upstream maintenance stopped; what happens
+next depends on whether CBS still carries the package:
+
+- **archived, no released CBS build** → marked `unshipped` (a
+  tombstone, skipped by triage/audit like a retired Fedora
+  package).
+- **archived, but release builds remain** → marked
+  `archived_builds`: it still ships, so it is *not* skipped, but
+  its lingering builds are a cleanup candidate — the command
+  prints a reminder to run `hs-relmon` to prune them.
+
+"Released" follows each SIG's lifecycle: Hyperscale ships for
+both RHEL `N` and CentOS Stream `Ns`, so a release build in
+either `hyperscaleN-*-release` or `hyperscaleNs-*-release`
+counts; Proposed Updates is Stream-only. `--centos-release` sets
+which major releases count (default `9,10`). Requires `koji` with
+the `cbs` profile. Markers are refreshed in both directions on
+each run.
 
 ### Import from legacy JSON
 
@@ -481,6 +520,7 @@ track = "upstream"
 | `priority` | package | Bugzilla priority for `triage-updates` (`unspecified`/`low`/`medium`/`high`/`urgent`) |
 | `retired_on` | package | Dist-git branches where the package is retired; written by `triage-retired --mark` |
 | `unshipped` | package | Reason the package is no longer shipped on any active branch; written by `prune-retired`. Skipped by most operations, still processed by `triage-retired`, preserved by sync `--prune` |
+| `archived_builds` | package | Reason an archived-upstream package still has CBS builds; written by `sync-gitlab --mark-unshipped`. Still ships (not skipped); a build-cleanup candidate for `hs-relmon` |
 | `default_priority` | workload | Default Bugzilla priority for packages in this workload |
 
 Each `[inventory.workloads.<key>]` section can override `name`,

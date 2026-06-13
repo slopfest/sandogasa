@@ -266,6 +266,36 @@ pub fn list_tagged_nvrs(tag: &str, profile: Option<&str>) -> Result<Vec<String>,
         .collect())
 }
 
+/// List the latest source package names tagged into a Koji tag.
+///
+/// Uses `--latest` so each package appears once (its newest build
+/// in the tag), then reduces NVRs to source package names. Useful
+/// for "which packages are currently shipped in this tag".
+pub fn list_tagged_package_names(tag: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
+    let stdout = run_koji(profile, &["list-tagged", "--latest", "--quiet", "--", tag])?;
+    let mut names: Vec<String> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| l.split_whitespace().next())
+        .filter_map(|nvr| parse_nvr_name(nvr).map(|s| s.to_string()))
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+/// List Koji tag names matching a glob `pattern` (e.g.
+/// `hyperscale10s-*-release`). Wraps `koji list-tags <pattern>`.
+pub fn list_tags(pattern: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
+    let stdout = run_koji(profile, &["list-tags", "--", pattern])?;
+    Ok(stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|s| s.to_string())
+        .collect())
+}
+
 /// Parse the build's creation date from `koji buildinfo`.
 ///
 /// Looks for a `Creation time: YYYY-MM-DD HH:MM:SS` line and

@@ -177,6 +177,7 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
                     priority: None,
                     retired_on: None,
                     unshipped: None,
+                    archived_builds: None,
                 });
                 added += 1;
             }

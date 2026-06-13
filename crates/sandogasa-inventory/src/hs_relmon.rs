@@ -236,6 +236,7 @@ mod tests {
             priority: None,
             retired_on: None,
             unshipped: None,
+            archived_builds: None,
         }
     }
 

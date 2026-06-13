@@ -175,6 +175,16 @@ pub struct Package {
     /// `prune-retired` checks the package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unshipped: Option<String>,
+
+    /// Set when the package's upstream repo is archived but it
+    /// still has builds tagged into CBS release tags — recorded by
+    /// `poi-tracker sync-gitlab --mark-unshipped`. The value records
+    /// why. Unlike [`Self::unshipped`] the package still ships, so
+    /// it is NOT skipped by triage/audit; instead it is a build
+    /// cleanup candidate for `hs-relmon` to untag. Refreshed — in
+    /// both directions — each `--mark-unshipped` run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_builds: Option<String>,
 }
 
 impl Package {
@@ -189,6 +199,12 @@ impl Package {
     /// any active branch.
     pub fn is_unshipped(&self) -> bool {
         self.unshipped.is_some()
+    }
+
+    /// Whether this package's upstream repo is archived while it
+    /// still has CBS builds (a cleanup candidate for hs-relmon).
+    pub fn has_archived_builds(&self) -> bool {
+        self.archived_builds.is_some()
     }
 
     /// Merge another entry for the same package into this one,
@@ -228,6 +244,7 @@ impl Package {
         take!(file_issue);
         take!(priority);
         take!(unshipped);
+        take!(archived_builds);
         // Retirement branches are facts about dist-git, not
         // per-inventory preferences: union them.
         if let Some(theirs) = &other.retired_on {
@@ -396,6 +413,7 @@ mod tests {
             priority: None,
             retired_on: None,
             unshipped: None,
+            archived_builds: None,
         }
     }
 
