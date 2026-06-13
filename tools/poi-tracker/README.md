@@ -69,6 +69,14 @@ poi-tracker export hs-relmon -i inventory.toml \
     --workload hyperscale -o manifest.toml
 ```
 
+Existing manifest entries and their per-package overrides are
+preserved across re-exports. An `archived_builds` package gets
+`archived = true` written so hs-relmon can prune its stale CBS
+builds; an `unshipped` package (gone, no builds) is dropped from
+the manifest entirely — hs-relmon has nothing to track for it
+(the inventory keeps the tombstone). Both are reconciled every
+export, so a revived package returns to normal tracking.
+
 ### Find a package
 
 ```sh

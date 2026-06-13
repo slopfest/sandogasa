@@ -1292,6 +1292,13 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
 
+                if !result.unshipped_removed.is_empty() {
+                    eprintln!(
+                        "removed {} unshipped package(s) from {path}: {}",
+                        result.unshipped_removed.len(),
+                        result.unshipped_removed.join(", ")
+                    );
+                }
                 let pruned_msg = if result.pruned > 0 {
                     format!(", {} pruned", result.pruned)
                 } else {

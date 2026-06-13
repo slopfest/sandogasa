@@ -75,6 +75,10 @@ pub struct MergeResult {
     pub pruned: usize,
     /// Package names in the manifest but not in the inventory.
     pub stale: Vec<String>,
+    /// Unshipped package names dropped from the manifest (the
+    /// inventory keeps the tombstone; hs-relmon has nothing to
+    /// track for a gone package). Removed unconditionally.
+    pub unshipped_removed: Vec<String>,
     /// Total packages in the result.
     pub total: usize,
 }
@@ -123,10 +127,22 @@ pub fn merge_into_manifest(
         .cloned()
         .collect();
 
-    // New packages from the inventory not already in the manifest.
+    // Unshipped packages are gone (no builds) — hs-relmon has
+    // nothing to track or prune for them, so they're never added
+    // and any existing entry is dropped below. The inventory keeps
+    // the tombstone (sync --prune preserves it); only the manifest
+    // excludes them.
+    let unshipped: std::collections::HashSet<&str> = packages
+        .iter()
+        .filter(|p| p.is_unshipped())
+        .map(|p| p.name.as_str())
+        .collect();
+
+    // New packages from the inventory not already in the manifest
+    // (excluding unshipped ones).
     let new_packages: Vec<&&Package> = packages
         .iter()
-        .filter(|p| !existing.contains(&p.name))
+        .filter(|p| !existing.contains(&p.name) && !p.is_unshipped())
         .collect();
     let added = new_packages.len();
 
@@ -182,6 +198,7 @@ pub fn merge_into_manifest(
         packages.iter().map(|p| (p.name.as_str(), *p)).collect();
 
     let mut entries: Vec<(String, toml_edit::Table)> = Vec::new();
+    let mut unshipped_removed: Vec<String> = Vec::new();
     let arr = doc["package"].as_array_of_tables().unwrap();
     for table in arr.iter() {
         let name = table
@@ -190,6 +207,12 @@ pub fn merge_into_manifest(
             .unwrap_or("")
             .to_string();
         if prune_set.contains(name.as_str()) {
+            continue;
+        }
+        // Drop unshipped packages unconditionally — nothing to
+        // track for a gone package.
+        if unshipped.contains(name.as_str()) {
+            unshipped_removed.push(name.clone());
             continue;
         }
         let mut new_table = toml_edit::Table::new();
@@ -221,11 +244,13 @@ pub fn merge_into_manifest(
     doc.remove("package");
     doc.insert("package", toml_edit::Item::ArrayOfTables(new_arr));
 
+    unshipped_removed.sort();
     Ok(MergeResult {
         content: doc.to_string(),
         added,
         pruned,
         stale,
+        unshipped_removed,
         total,
     })
 }
@@ -433,6 +458,36 @@ archived = true
         let react = result.content.split("[[package]]").nth(2).unwrap();
         assert!(react.contains("name = \"reactivated\""));
         assert!(!react.contains("archived"), "{react}");
+    }
+
+    #[test]
+    fn merge_drops_unshipped_unconditionally() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            &dir,
+            r#"[defaults]
+track = "upstream"
+
+[[package]]
+name = "gone"
+
+[[package]]
+name = "kept"
+"#,
+        );
+        let mut gone = make_pkg("gone", Some("upstream"));
+        gone.unshipped = Some("archived in GitLab, no released CBS build".to_string());
+        // A brand-new unshipped package must not be added either.
+        let mut new_gone = make_pkg("new-gone", Some("upstream"));
+        new_gone.unshipped = Some("gone".to_string());
+        let inv = make_inventory(vec![gone, new_gone, make_pkg("kept", Some("upstream"))]);
+        // No --prune, yet the unshipped entry is still removed.
+        let result =
+            merge_into_manifest(&path, &inv, None, &RelmonDefaults::default(), false).unwrap();
+        assert_eq!(result.unshipped_removed, vec!["gone"]);
+        assert!(result.content.contains("name = \"kept\""));
+        assert!(!result.content.contains("name = \"gone\""));
+        assert!(!result.content.contains("name = \"new-gone\""));
     }
 
     #[test]

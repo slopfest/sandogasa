@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### poi-tracker: export drops unshipped packages from the hs-relmon manifest
+
+`export` (hs-relmon manifest) now excludes packages marked
+`unshipped` in the inventory — they're gone (no CBS builds), so
+hs-relmon has nothing to track or prune for them. Existing
+manifest entries for unshipped packages are removed
+unconditionally (not gated by `--prune`, since `unshipped` is an
+explicit marker), and new ones are never added; the count is
+reported. The inventory keeps the tombstone, so a revived package
+returns to the manifest on the next export. Fixes unshipped
+packages (e.g. one whose builds `prune-archived` cleaned up)
+lingering in the manifest as normal tracked entries. New
+`MergeResult.unshipped_removed`.
+
 ### hs-relmon: check CBS auth before pruning
 
 `prune-tags`, `prune-manifest`, and `prune-archived` now verify an
