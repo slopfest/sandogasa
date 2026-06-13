@@ -175,6 +175,12 @@ pub fn merge_into_manifest(
         std::collections::HashSet::new()
     };
 
+    // Inventory packages by name, to reconcile per-package markers
+    // (e.g. `archived`) onto every retained manifest entry — new
+    // and pre-existing alike — bidirectionally.
+    let inv_by_name: std::collections::HashMap<&str, &Package> =
+        packages.iter().map(|p| (p.name.as_str(), *p)).collect();
+
     let mut entries: Vec<(String, toml_edit::Table)> = Vec::new();
     let arr = doc["package"].as_array_of_tables().unwrap();
     for table in arr.iter() {
@@ -189,6 +195,17 @@ pub fn merge_into_manifest(
         let mut new_table = toml_edit::Table::new();
         for (key, item) in table.iter() {
             new_table.insert(key, item.clone());
+        }
+        // Reflect the inventory's archived-builds marker so
+        // hs-relmon knows to prune the package's stale CBS builds.
+        // Bidirectional: cleared when no longer marked. Packages
+        // absent from the inventory keep what the manifest had.
+        if let Some(pkg) = inv_by_name.get(name.as_str()) {
+            if pkg.has_archived_builds() {
+                new_table.insert("archived", toml_edit::value(true));
+            } else {
+                new_table.remove("archived");
+            }
         }
         entries.push((name, new_table));
     }
@@ -385,6 +402,37 @@ issue_url = "https://example.com/issue/1"
                 .content
                 .contains("issue_url = \"https://example.com/issue/1\"")
         );
+    }
+
+    #[test]
+    fn merge_reflects_archived_builds_marker_bidirectionally() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_manifest(
+            &dir,
+            r#"[defaults]
+track = "upstream"
+
+[[package]]
+name = "newly-archived"
+
+[[package]]
+name = "reactivated"
+archived = true
+"#,
+        );
+        // newly-archived gains the marker; reactivated loses it.
+        let mut archived = make_pkg("newly-archived", Some("upstream"));
+        archived.archived_builds = Some("archived in GitLab; CBS builds remain".to_string());
+        let inv = make_inventory(vec![archived, make_pkg("reactivated", Some("upstream"))]);
+        let result =
+            merge_into_manifest(&path, &inv, None, &RelmonDefaults::default(), false).unwrap();
+
+        let newly = result.content.split("[[package]]").nth(1).unwrap();
+        assert!(newly.contains("name = \"newly-archived\""));
+        assert!(newly.contains("archived = true"), "{newly}");
+        let react = result.content.split("[[package]]").nth(2).unwrap();
+        assert!(react.contains("name = \"reactivated\""));
+        assert!(!react.contains("archived"), "{react}");
     }
 
     #[test]

@@ -42,6 +42,12 @@ pub struct PackageEntry {
     pub file_issue: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_url: Option<String>,
+    /// The package's upstream repo is archived but it still has CBS
+    /// builds; set by `poi-tracker export` from the inventory's
+    /// `archived_builds` marker. A build-cleanup candidate (its
+    /// stale CBS builds should be untagged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
 }
 
 /// A package entry with all defaults resolved.
@@ -53,6 +59,9 @@ pub struct ResolvedPackage {
     pub repology_name: Option<String>,
     pub file_issue: bool,
     pub issue_url: Option<String>,
+    /// Whether the package is archived upstream (CBS build cleanup
+    /// candidate). Carried through from [`PackageEntry::archived`].
+    pub archived: bool,
 }
 
 impl Manifest {
@@ -75,6 +84,7 @@ impl Manifest {
                     repology_name: None,
                     file_issue: None,
                     issue_url: None,
+                    archived: None,
                 });
             }
         }
@@ -144,6 +154,7 @@ impl Manifest {
             repology_name,
             file_issue,
             issue_url,
+            archived: pkg.archived.unwrap_or(false),
         })
     }
 }

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### poi-tracker: export carries the archived-builds marker to hs-relmon
+
+`poi-tracker export` (hs-relmon manifest) now writes `archived =
+true` on packages whose inventory `archived_builds` marker is set,
+so hs-relmon knows which archived-upstream packages have CBS
+builds to prune. Reconciled bidirectionally on every export — a
+reactivated package loses the flag. hs-relmon's manifest gains a
+matching `archived` field on `PackageEntry`/`ResolvedPackage`
+(its prune logic is still the pending follow-up).
+
 ### poi-tracker: `sync-gitlab --mark-unshipped` (CBS release check)
 
 Cross-checks each GitLab-synced project against CBS (CentOS koji)
