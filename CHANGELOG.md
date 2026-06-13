@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### hs-relmon: check CBS auth before pruning
+
+`prune-tags`, `prune-manifest`, and `prune-archived` now verify an
+authenticated CBS koji session up front (via `koji moshimoshi`)
+before any read-side planning, failing fast with an actionable
+hint (`run centos-cert`) instead of erroring at the first
+untag after a long scan. Dry runs skip the check (read-only). New
+`sandogasa_koji::check_auth`.
+
 ### hs-relmon: new `prune-archived` subcommand
 
 Cleans up CBS builds for packages whose upstream repo is archived

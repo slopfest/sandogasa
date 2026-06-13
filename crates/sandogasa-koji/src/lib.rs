@@ -205,6 +205,27 @@ pub fn parse_tag_history(stdout: &str) -> Vec<TagAddEvent> {
     out
 }
 
+/// Verify an authenticated Koji session is available for `profile`
+/// by running `koji moshimoshi` (the authenticated hello).
+///
+/// Write operations (tag/untag) need authentication, which the
+/// read-only queries don't — so callers run this up front, before
+/// any expensive read-side work, to fail fast with an actionable
+/// message instead of erroring at the first write. Returns the
+/// koji error plus a profile-aware hint on how to authenticate.
+pub fn check_auth(profile: Option<&str>) -> Result<(), String> {
+    run_koji(profile, &["moshimoshi"]).map(|_| ()).map_err(|e| {
+        let hint = match profile {
+            Some("cbs") => "run `centos-cert` to obtain a CentOS client certificate",
+            _ => "authenticate to Koji (e.g. `kinit`, or the profile's client cert)",
+        };
+        format!(
+            "not authenticated to {} koji: {e}\n{hint}",
+            profile.unwrap_or("the")
+        )
+    })
+}
+
 /// Tag a build into a Koji tag (`koji tag-build --wait <tag>
 /// <nvr>`).
 ///

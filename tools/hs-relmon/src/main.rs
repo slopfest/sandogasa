@@ -635,6 +635,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             yes,
             verbose,
         } => {
+            ensure_cbs_auth(dry_run)?;
             let opts = prune_tags::PruneOptions {
                 release_keep,
                 testing_keep,
@@ -651,6 +652,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             yes,
             verbose,
         } => {
+            ensure_cbs_auth(dry_run)?;
             let opts = prune_tags::PruneOptions {
                 repositories: prune_tags::parse_repositories(&repositories),
                 ..prune_tags::PruneOptions::default()
@@ -716,6 +718,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             yes,
             verbose,
         } => {
+            ensure_cbs_auth(dry_run)?;
             let opts = prune_tags::PruneOptions {
                 release_keep,
                 testing_keep,
@@ -771,6 +774,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    Ok(())
+}
+
+/// Fail fast if CBS write authentication isn't set up. Skipped for
+/// dry runs (read-only) so previewing never needs credentials.
+fn ensure_cbs_auth(dry_run: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if !dry_run {
+        sandogasa_koji::check_auth(Some(prune_tags::KOJI_PROFILE))?;
+    }
     Ok(())
 }
 
