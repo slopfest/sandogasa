@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### fedora-cve-triage: new `interpreter-fps` subcommand
+
+Detects CVEs that live in a language interpreter/runtime but were
+filed against an application merely written in that language — e.g.
+CVE-2025-13836 (a DoS in CPython's `http.client`, NVD product
+`python:python`, fixed in cpython) misfiled against `asahi-installer`,
+a Python app that ships no interpreter. The fix arrives via the
+`python3.x` update, so the application's bug is a false positive.
+
+A bug is flagged only when every product the CVE marks affected is
+the interpreter itself (so a CVE that also names a real product is
+never swept up) and the component is not an interpreter package
+(`python3`, `python3.NN`, `pypy`, …). Scans by `components` or by `assignees`
+(sweep a maintainer's CVE bugs); closes detected FPs as NOTABUG +
+tracker block with `--close-bugs`, mirroring `js-fps`. Python today;
+the interpreter table extends to other runtimes. New
+`sandogasa_nvd::CveResponse::affected_products`.
+
 ## v0.14.0
 
 ### poi-tracker: export drops unshipped packages from the hs-relmon manifest

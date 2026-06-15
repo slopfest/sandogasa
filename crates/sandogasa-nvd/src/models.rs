@@ -129,6 +129,37 @@ impl CveResponse {
         repos
     }
 
+    /// Distinct `(vendor, product)` pairs of the CPEs this CVE
+    /// marks vulnerable (falling back to all CPEs if none carry
+    /// the `vulnerable` flag). Lets callers identify what the CVE
+    /// actually affects — e.g. that every affected product is a
+    /// language interpreter rather than the package the bug was
+    /// filed against.
+    pub fn affected_products(&self) -> Vec<(String, String)> {
+        let all: Vec<&CpeMatch> = self
+            .vulnerabilities
+            .iter()
+            .flat_map(|v| &v.cve.configurations)
+            .flat_map(|c| &c.nodes)
+            .flat_map(|n| &n.cpe_match)
+            .collect();
+        let vulnerable: Vec<&CpeMatch> = all.iter().copied().filter(|m| m.vulnerable).collect();
+        let chosen = if vulnerable.is_empty() {
+            &all
+        } else {
+            &vulnerable
+        };
+        let mut out: Vec<(String, String)> = Vec::new();
+        for m in chosen {
+            if let Some(vp) = cpe_vendor_product(&m.criteria)
+                && !out.contains(&vp)
+            {
+                out.push(vp);
+            }
+        }
+        out
+    }
+
     /// Extract fixed versions from CPE match data.
     ///
     /// Looks for vulnerable CPE matches with `versionEndExcluding` set,
@@ -243,6 +274,19 @@ impl CveResponse {
 ///
 /// Accepts URLs like `https://github.com/indutny/elliptic/issues/321`
 /// and returns `("indutny", "elliptic")`.
+/// Extract `(vendor, product)` from a CPE 2.3 string.
+/// `cpe:2.3:part:vendor:product:...` — vendor is index 3, product
+/// index 4.
+fn cpe_vendor_product(criteria: &str) -> Option<(String, String)> {
+    let mut parts = criteria.split(':');
+    let vendor = parts.nth(3)?;
+    let product = parts.next()?;
+    if vendor.is_empty() || product.is_empty() {
+        return None;
+    }
+    Some((vendor.to_string(), product.to_string()))
+}
+
 fn parse_github_repo(url: &str) -> Option<(String, String)> {
     let rest = url
         .strip_prefix("https://github.com/")
@@ -346,6 +390,46 @@ mod tests {
                 },
             }],
         }
+    }
+
+    #[test]
+    fn affected_products_extracts_vendor_product() {
+        // The CVE-2025-13836 shape: python:python interpreter CPEs.
+        let cve = CveResponse {
+            vulnerabilities: vec![Vulnerability {
+                cve: CveItem {
+                    id: "CVE-2025-13836".to_string(),
+                    source_identifier: String::new(),
+                    descriptions: vec![],
+                    configurations: vec![Configuration {
+                        nodes: vec![Node {
+                            cpe_match: vec![
+                                vulnerable_cpe_match(
+                                    "cpe:2.3:a:python:python:*:*:*:*:*:*:*:*",
+                                    "3.14",
+                                ),
+                                cpe_match("cpe:2.3:a:python:python:3.14.0:-:*:*:*:*:*:*"),
+                            ],
+                        }],
+                    }],
+                    references: vec![],
+                },
+            }],
+        };
+        // Only the vulnerable match counts; deduped.
+        assert_eq!(
+            cve.affected_products(),
+            vec![("python".to_string(), "python".to_string())]
+        );
+    }
+
+    #[test]
+    fn affected_products_falls_back_to_all_when_no_vulnerable_flag() {
+        let cve = cve_with_cpe("cpe:2.3:a:python:python:*:*:*:*:*:*:*:*");
+        assert_eq!(
+            cve.affected_products(),
+            vec![("python".to_string(), "python".to_string())]
+        );
     }
 
     fn cve_with_source(source_id: &str) -> CveResponse {
