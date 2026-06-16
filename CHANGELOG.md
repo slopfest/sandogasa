@@ -17,11 +17,20 @@ Stream variants) via Koji `listTaggedRPMS` (latest build per source,
 binary-RPM name → distinct sources, and flags any with two or more.
 Detection is per-tag (a collision only matters when both providers
 land in the same enabled repository); `-debuginfo`/`-debugsource`
-RPMs are excluded. Read-only (no Koji auth), `--json` output,
-`--repositories` to scan beyond `main`, and exits non-zero when any
-collision is found. Acting on a collision is left to
-`prune-archived` and the GitLab tooling. New
-`cbs::Client::list_tagged_binaries` and `cbs::TaggedBinary`.
+RPMs are excluded. Read-only by default (no Koji auth), `--json`
+output, `--repositories` to scan beyond `main`, and exits non-zero
+when any collision is found.
+
+`--fix` adds an interactive resolution pass: for each cluster of
+sources sharing a binary it recommends untagging the oldest build
+(the likely stale leftover) and — crucially — lists the binaries
+that only each candidate provides, so you can see what would vanish
+from the tag. Untagging `kernel-tools` to resolve a `perf` collision
+would also drop `cpupower`, `rtla`, `rv`, … so the choice stays with
+a human (one prompt per cluster, default skip; requires CBS auth). In
+`--json` mode or without a terminal the plan is printed and nothing
+is untagged. New `cbs::Client::list_tagged_binaries`,
+`cbs::TaggedBinary`.
 
 ### fedora-cve-triage: new `interpreter-fps` subcommand
 

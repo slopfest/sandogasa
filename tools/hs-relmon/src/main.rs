@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use std::collections::HashSet;
+use std::io::IsTerminal;
 
 use hs_relmon::cbs;
 use hs_relmon::check_latest::{self, Distros, TrackRef};
@@ -148,6 +149,20 @@ repository's `-release` and `-testing` tags across
 EL9/EL10 (and the Stream variants) are scanned."
         )]
         repositories: String,
+
+        /// Interactively untag the redundant build of each
+        /// collision.
+        #[arg(
+            long,
+            long_help = "\
+For each collision, show the candidate builds and the
+binaries only each one provides (which would vanish
+from the tag if it were untagged), then prompt for
+which build to untag. Defaults to skipping. Requires
+CBS write authentication. In --json mode or without a
+terminal the plan is printed and nothing is untagged."
+        )]
+        fix: bool,
 
         /// Output as JSON instead of a table.
         #[arg(long)]
@@ -604,20 +619,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::DupeBinaries {
             repositories,
+            fix,
             json,
             verbose,
         } => {
             let repos = prune_tags::parse_repositories(&repositories);
+            // Only the interactive fix path untags, so it's the only
+            // one that needs CBS auth — checked before the scan so a
+            // missing session fails in seconds, not minutes.
+            let interactive_fix = fix && !json && std::io::stdin().is_terminal();
+            if interactive_fix {
+                ensure_cbs_auth(false)?;
+            }
             let client = cbs::Client::new();
             let results =
                 dupe_binaries::scan(&repos, |tag| client.list_tagged_binaries(tag), verbose);
-            if json {
-                println!("{}", serde_json::to_string_pretty(&results)?);
+
+            if fix {
+                let plans: Vec<dupe_binaries::TagFixPlan> =
+                    results.iter().map(dupe_binaries::build_fix_plan).collect();
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&plans)?);
+                } else if interactive_fix {
+                    let outcome = dupe_binaries::apply_fix(&plans, verbose);
+                    eprintln!(
+                        "\nUntagged {}, skipped {}, {} error(s).",
+                        outcome.untagged, outcome.skipped, outcome.errors
+                    );
+                    if outcome.errors > 0 {
+                        std::process::exit(1);
+                    }
+                } else {
+                    // No terminal: print the plan, untag nothing.
+                    print!("{}", dupe_binaries::render_fix_plans(&plans));
+                    eprintln!("Not a terminal; nothing untagged. Run with a TTY to act.");
+                    if !results.is_empty() {
+                        std::process::exit(1);
+                    }
+                }
             } else {
-                print!("{}", dupe_binaries::render(&results));
-            }
-            if !results.is_empty() {
-                std::process::exit(1);
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&dupe_binaries::collision_report(&results))?
+                    );
+                } else {
+                    print!("{}", dupe_binaries::render(&results));
+                }
+                // Non-zero exit flags collisions for CI / scripting.
+                if !results.is_empty() {
+                    std::process::exit(1);
+                }
             }
         }
         Command::ListIssues {

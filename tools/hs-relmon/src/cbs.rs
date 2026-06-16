@@ -82,6 +82,10 @@ pub struct TaggedBinary {
     pub source: String,
     /// NVR of the source build, for reporting.
     pub source_nvr: String,
+    /// Koji build ID of the source build. Monotonic with build
+    /// creation, so a lower ID means an older build — used to pick
+    /// the likely-stale side of a collision.
+    pub build_id: i64,
 }
 
 /// Client for the CentOS Build System (CBS) Koji XML-RPC API.
@@ -732,10 +736,10 @@ fn parse_tagged_binaries(xml: &str) -> Result<Vec<TaggedBinary>, Box<dyn std::er
         if name.is_empty() {
             continue;
         }
-        let Some((source, source_nvr)) = struct_int(&members, "build_id")
-            .and_then(|id| sources.get(&id))
-            .cloned()
-        else {
+        let Some(build_id) = struct_int(&members, "build_id") else {
+            continue;
+        };
+        let Some((source, source_nvr)) = sources.get(&build_id).cloned() else {
             continue;
         };
         out.push(TaggedBinary {
@@ -743,6 +747,7 @@ fn parse_tagged_binaries(xml: &str) -> Result<Vec<TaggedBinary>, Box<dyn std::er
             arch: arch.to_string(),
             source,
             source_nvr,
+            build_id,
         });
     }
     Ok(out)
@@ -1000,6 +1005,7 @@ mod tests {
             .unwrap();
         assert_eq!(ethtool_x.source, "ethtool");
         assert_eq!(ethtool_x.source_nvr, "ethtool-7.0-1.hs.el9");
+        assert_eq!(ethtool_x.build_id, 100);
         // `ynl` is built by two different sources — both retained
         // (the collision logic lives in dupe_binaries).
         let ynl_sources: std::collections::BTreeSet<&str> = bins

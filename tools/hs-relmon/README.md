@@ -205,9 +205,33 @@ hyperscale9s-packages-main-release:
 
 Pass `--repositories` to scan repositories other than `main`
 (CSV), `--json` for machine-readable output, and `--verbose` to see
-each tag as it is scanned. Acting on a collision — untagging the
-stale build, archiving the redundant project — is left to
-`prune-archived` and the GitLab tooling.
+each tag as it is scanned.
+
+`--fix` adds an interactive resolution pass. For each collision it
+recommends untagging the oldest build (the likely stale leftover)
+but lists, for every candidate, the binaries that *only* it provides
+— those would disappear from the tag if it were untagged — so you
+act with full context:
+
+```
+$ hs-relmon dupe-binaries --fix
+hyperscale9s-packages-main-release:
+  duplicate binaries: libperf, libperf-devel, perf, python3-perf
+    [1] untag kernel-tools-6.4.13-200.1.hs.el9 (build 50532) [recommended, oldest]
+        also removes from the tag (only provided here): kernel-tools, kernel-tools-libs, rtla, rv
+    [2] untag perf-6.19~rc6-4.hs.el9 (build 74013)
+        removes nothing else — ships only duplicated binaries
+Untag which build? [1-2, Enter to skip]:
+```
+
+Here untagging the recommended `kernel-tools` would also drop
+`rtla`, `rv`, and the `kernel-tools` binaries — so the right move is
+a rebuilt `kernel-tools` that no longer ships `perf`, not a blind
+untag. The default is to skip; `--fix` requires CBS write
+authentication (`koji` configured for the `cbs` profile). In
+`--json` mode or when stdout is not a terminal the plan is printed
+and nothing is untagged. Archiving the redundant upstream project is
+still left to `prune-archived` and the GitLab tooling.
 
 ### Listing issues
 
