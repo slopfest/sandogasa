@@ -122,7 +122,7 @@ impl Meetbot {
             .into_iter()
             .filter_map(|r| r.into_meeting(&self.artefact_base))
             .collect();
-        meetings.sort_by(|a, b| a.datetime.cmp(&b.datetime));
+        meetings.sort_by_key(|a| a.datetime);
         Ok(meetings)
     }
 }
@@ -196,7 +196,7 @@ where
         on_warning(&winner, &dropped);
         out.push(winner);
     }
-    out.sort_by(|a, b| a.datetime.cmp(&b.datetime));
+    out.sort_by_key(|a| a.datetime);
     out
 }
 
