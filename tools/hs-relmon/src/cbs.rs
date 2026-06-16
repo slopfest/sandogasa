@@ -70,6 +70,20 @@ impl Build {
     }
 }
 
+/// A binary RPM tagged in a CBS tag, joined to the source
+/// package (Koji build) that produced it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TaggedBinary {
+    /// Binary RPM name (e.g. `ynl`).
+    pub name: String,
+    /// Architecture (`x86_64`, `aarch64`, `noarch`); never `src`.
+    pub arch: String,
+    /// Source package name that built it.
+    pub source: String,
+    /// NVR of the source build, for reporting.
+    pub source_nvr: String,
+}
+
 /// Client for the CentOS Build System (CBS) Koji XML-RPC API.
 pub struct Client {
     http: reqwest::blocking::Client,
@@ -189,6 +203,37 @@ impl Client {
         parse_builds(&resp)
     }
 
+    /// List the binary RPMs currently tagged in `tag`, each joined
+    /// to the source package that built it.
+    ///
+    /// Uses `listTaggedRPMS` with `latest=true` (one build per
+    /// package, so old superseded builds of the same source don't
+    /// masquerade as extra sources) and `inherit=false` (only
+    /// builds tagged directly in `tag`, not inherited base-distro
+    /// content), so the result is exactly the Hyperscale-built
+    /// binaries in that tag. `.src` RPMs are dropped — only binary
+    /// RPMs are returned.
+    pub fn list_tagged_binaries(
+        &self,
+        tag: &str,
+    ) -> Result<Vec<TaggedBinary>, Box<dyn std::error::Error>> {
+        // listTaggedRPMS(tag, event=nil, inherit=False, latest=True)
+        let body = format!(
+            r#"<?xml version="1.0"?>
+<methodCall>
+  <methodName>listTaggedRPMS</methodName>
+  <params>
+    <param><value><string>{tag}</string></value></param>
+    <param><value><nil/></value></param>
+    <param><value><boolean>0</boolean></value></param>
+    <param><value><boolean>1</boolean></value></param>
+  </params>
+</methodCall>"#
+        );
+        let resp = self.call(&body)?;
+        parse_tagged_binaries(&resp)
+    }
+
     /// List tag names for a given build ID.
     pub fn list_tags(&self, build_id: i64) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let body = format!(
@@ -274,10 +319,8 @@ where
                 summary.release = Some(build.clone());
                 break;
             }
-            Some(TagStage::Testing) => {
-                if summary.testing.is_none() {
-                    summary.testing = Some(build.clone());
-                }
+            Some(TagStage::Testing) if summary.testing.is_none() => {
+                summary.testing = Some(build.clone());
             }
             _ => {}
         }
@@ -620,6 +663,91 @@ fn parse_builds(xml: &str) -> Result<Vec<Build>, Box<dyn std::error::Error>> {
     Ok(builds)
 }
 
+/// Read a string member from an XML-RPC struct's members.
+fn struct_str<'a>(members: &'a [(String, XmlRpcValue)], key: &str) -> Option<&'a str> {
+    members.iter().find_map(|(k, v)| match v {
+        XmlRpcValue::Str(s) if k == key => Some(s.as_str()),
+        _ => None,
+    })
+}
+
+/// Read an int member from an XML-RPC struct's members.
+fn struct_int(members: &[(String, XmlRpcValue)], key: &str) -> Option<i64> {
+    members.iter().find_map(|(k, v)| match v {
+        XmlRpcValue::Int(i) if k == key => Some(*i),
+        _ => None,
+    })
+}
+
+/// Parse a `listTaggedRPMS` response — a two-element array
+/// `[rpms, builds]` — into binary RPMs joined to their source
+/// package. `.src` RPMs are dropped (only binary RPMs are
+/// returned); RPMs whose build is missing from the `builds` array
+/// are skipped.
+fn parse_tagged_binaries(xml: &str) -> Result<Vec<TaggedBinary>, Box<dyn std::error::Error>> {
+    let value = parse_single_value(xml)?;
+    let XmlRpcValue::Array(outer) = value else {
+        return Err("expected [rpms, builds] array response".into());
+    };
+    let mut outer = outer.into_iter();
+    let Some(XmlRpcValue::Array(rpms)) = outer.next() else {
+        return Err("missing rpms array".into());
+    };
+    let Some(XmlRpcValue::Array(builds)) = outer.next() else {
+        return Err("missing builds array".into());
+    };
+
+    // build_id -> (source package name, nvr)
+    let mut sources: std::collections::HashMap<i64, (String, String)> =
+        std::collections::HashMap::new();
+    for item in builds {
+        let XmlRpcValue::Struct(members) = item else {
+            continue;
+        };
+        // Build structs carry both `id` and `build_id` (equal), and
+        // both `name` and `package_name` (the source name).
+        let Some(id) = struct_int(&members, "id").or_else(|| struct_int(&members, "build_id"))
+        else {
+            continue;
+        };
+        let name = struct_str(&members, "package_name")
+            .or_else(|| struct_str(&members, "name"))
+            .unwrap_or("")
+            .to_string();
+        let nvr = struct_str(&members, "nvr").unwrap_or("").to_string();
+        sources.insert(id, (name, nvr));
+    }
+
+    let mut out = Vec::new();
+    for item in rpms {
+        let XmlRpcValue::Struct(members) = item else {
+            continue;
+        };
+        let arch = struct_str(&members, "arch").unwrap_or("");
+        // Drop source RPMs — we only care about binary RPMs.
+        if arch == "src" {
+            continue;
+        }
+        let name = struct_str(&members, "name").unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        let Some((source, source_nvr)) = struct_int(&members, "build_id")
+            .and_then(|id| sources.get(&id))
+            .cloned()
+        else {
+            continue;
+        };
+        out.push(TaggedBinary {
+            name: name.to_string(),
+            arch: arch.to_string(),
+            source,
+            source_nvr,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -857,6 +985,36 @@ mod tests {
         assert!(builds[1].is_hyperscale());
 
         assert_eq!(builds[2].nvr, "ethtool-6.14-1.hs.el10");
+    }
+
+    #[test]
+    fn test_parse_tagged_binaries_joins_source_and_drops_src() {
+        let xml = include_str!("../tests/fixtures/koji_tagged_rpms.xml");
+        let bins = parse_tagged_binaries(xml).unwrap();
+        // 8 RPM structs minus 2 `.src` = 6 binary RPMs.
+        assert_eq!(bins.len(), 6);
+        // Every binary is joined to its source build's NVR.
+        let ethtool_x = bins
+            .iter()
+            .find(|b| b.name == "ethtool" && b.arch == "x86_64")
+            .unwrap();
+        assert_eq!(ethtool_x.source, "ethtool");
+        assert_eq!(ethtool_x.source_nvr, "ethtool-7.0-1.hs.el9");
+        // `ynl` is built by two different sources — both retained
+        // (the collision logic lives in dupe_binaries).
+        let ynl_sources: std::collections::BTreeSet<&str> = bins
+            .iter()
+            .filter(|b| b.name == "ynl")
+            .map(|b| b.source.as_str())
+            .collect();
+        assert_eq!(
+            ynl_sources,
+            ["ethtool", "ynl"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        // No `.src` arch survives.
+        assert!(bins.iter().all(|b| b.arch != "src"));
     }
 
     #[test]

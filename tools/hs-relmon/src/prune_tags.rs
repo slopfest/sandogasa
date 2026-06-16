@@ -240,7 +240,7 @@ pub fn build_plan(package: &str, tag_builds: &[TagBuilds], opts: &PruneOptions) 
         }
 
         // Apply retention to the non-superseded bucket.
-        considered.sort_by(|a, b| b.build_id.cmp(&a.build_id));
+        considered.sort_by_key(|b| std::cmp::Reverse(b.build_id));
         let keep_count = if tag.ends_with("-release") {
             opts.release_keep
         } else {
@@ -260,7 +260,7 @@ pub fn build_plan(package: &str, tag_builds: &[TagBuilds], opts: &PruneOptions) 
                 .iter()
                 .map(|b| (b.build_id, b.nvr.clone())),
         );
-        untag_pairs.sort_by(|a, b| b.0.cmp(&a.0));
+        untag_pairs.sort_by_key(|p| std::cmp::Reverse(p.0));
         let untag: Vec<String> = untag_pairs.into_iter().map(|(_, n)| n).collect();
 
         tag_plans.push(TagPlan {

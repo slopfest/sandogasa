@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### hs-relmon: new `dupe-binaries` subcommand
+
+Finds binary RPMs shipped by more than one source package within a
+single Hyperscale tag. Hyperscale overrides stock CentOS packages
+and occasionally moves where a binary RPM is built from (e.g.
+splitting `perf` out of `kernel-tools`); mid-move, two source
+packages can ship the same binary in the same tag, leaving the
+depsolver to pick one. The redundant source should be retired.
+
+Scans each repository's `-release`/`-testing` tags (EL9/EL10 and the
+Stream variants) via Koji `listTaggedRPMS` (latest build per source,
+`inherit=false` so only Hyperscale-tagged content counts), maps
+binary-RPM name → distinct sources, and flags any with two or more.
+Detection is per-tag (a collision only matters when both providers
+land in the same enabled repository); `-debuginfo`/`-debugsource`
+RPMs are excluded. Read-only (no Koji auth), `--json` output,
+`--repositories` to scan beyond `main`, and exits non-zero when any
+collision is found. Acting on a collision is left to
+`prune-archived` and the GitLab tooling. New
+`cbs::Client::list_tagged_binaries` and `cbs::TaggedBinary`.
+
 ### fedora-cve-triage: new `interpreter-fps` subcommand
 
 Detects CVEs that live in a language interpreter/runtime but were

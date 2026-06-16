@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use hs_relmon::cbs;
 use hs_relmon::check_latest::{self, Distros, TrackRef};
 use hs_relmon::config;
+use hs_relmon::dupe_binaries;
 use hs_relmon::gitlab;
 use hs_relmon::list_issues;
 use hs_relmon::manifest;
@@ -130,6 +131,31 @@ issues. Packages without an issue or without a
 matching assignee are excluded."
         )]
         issue_assignee: Option<String>,
+    },
+
+    /// Find binary RPMs shipped by 2+ source packages in a tag.
+    DupeBinaries {
+        /// Comma-separated Hyperscale repositories to scan.
+        #[arg(
+            long,
+            default_value = prune_tags::DEFAULT_REPOSITORY,
+            long_help = "\
+Comma-separated Hyperscale repositories to scan.
+The repository is the segment between `-packages-`
+and the stage suffix, e.g. `main` in
+`hyperscale10s-packages-main-release`. Each
+repository's `-release` and `-testing` tags across
+EL9/EL10 (and the Stream variants) are scanned."
+        )]
+        repositories: String,
+
+        /// Output as JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// List GitLab issues labeled rfe::new-version.
@@ -574,6 +600,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if errors > 0 {
                 return Err(format!("{errors} package(s) had errors").into());
+            }
+        }
+        Command::DupeBinaries {
+            repositories,
+            json,
+            verbose,
+        } => {
+            let repos = prune_tags::parse_repositories(&repositories);
+            let client = cbs::Client::new();
+            let results =
+                dupe_binaries::scan(&repos, |tag| client.list_tagged_binaries(tag), verbose);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&results)?);
+            } else {
+                print!("{}", dupe_binaries::render(&results));
+            }
+            if !results.is_empty() {
+                std::process::exit(1);
             }
         }
         Command::ListIssues {

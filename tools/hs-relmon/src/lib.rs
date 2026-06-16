@@ -3,6 +3,7 @@
 pub mod cbs;
 pub mod check_latest;
 pub mod config;
+pub mod dupe_binaries;
 pub mod gitlab;
 pub mod list_issues;
 pub mod manifest;

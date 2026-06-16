@@ -172,6 +172,43 @@ Saved to /home/user/.config/hs-relmon/config.toml.
 
 The `GITLAB_TOKEN` environment variable overrides the config file token.
 
+### Detecting duplicate binaries
+
+Hyperscale overrides stock CentOS packages and occasionally moves
+where a binary RPM is built from — e.g. splitting `perf` out of
+`kernel-tools` into its own source package. Mid-move, two source
+packages can end up shipping the same binary RPM in the same tag;
+whichever the depsolver picks is undefined, and the redundant
+source should be retired.
+
+`dupe-binaries` scans each repository's `-release` and `-testing`
+tags (across EL9/EL10 and the Stream variants), asks Koji for the
+binary RPMs in each (latest build per source, no inherited
+base-distro content), and flags any binary name produced by two or
+more distinct sources. Detection is per-tag, since a collision only
+matters when both providers land in the same enabled repository.
+`-debuginfo`/`-debugsource` RPMs are excluded — a collision there
+only mirrors the base binary's. The scan is read-only (no Koji
+authentication needed) and exits non-zero when any collision is
+found.
+
+```
+$ hs-relmon dupe-binaries
+Found 4 duplicate binary RPM(s) across 1 tag(s):
+
+hyperscale9s-packages-main-release:
+  perf shipped by 2 sources:
+    kernel-tools (kernel-tools-6.4.13-200.1.hs.el9)
+    perf (perf-6.19~rc6-4.hs.el9)
+  ...
+```
+
+Pass `--repositories` to scan repositories other than `main`
+(CSV), `--json` for machine-readable output, and `--verbose` to see
+each tag as it is scanned. Acting on a collision — untagging the
+stale build, archiving the redundant project — is left to
+`prune-archived` and the GitLab tooling.
+
 ### Listing issues
 
 List all `rfe::new-version` issues under a GitLab group:
