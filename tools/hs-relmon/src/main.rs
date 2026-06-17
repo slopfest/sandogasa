@@ -9,7 +9,7 @@ use std::io::IsTerminal;
 use hs_relmon::cbs;
 use hs_relmon::check_latest::{self, Distros, TrackRef};
 use hs_relmon::config;
-use hs_relmon::dupe_binaries;
+use hs_relmon::dupe_subpkgs;
 use hs_relmon::file_conflicts;
 use hs_relmon::gitlab;
 use hs_relmon::list_issues;
@@ -136,7 +136,7 @@ matching assignee are excluded."
     },
 
     /// Find binary RPMs shipped by 2+ source packages in a tag.
-    DupeBinaries {
+    DupeSubpkgs {
         /// Comma-separated Hyperscale repositories to scan.
         #[arg(
             long,
@@ -150,6 +150,34 @@ repository's `-release` and `-testing` tags across
 EL9/EL10 (and the Stream variants) are scanned."
         )]
         repositories: String,
+
+        /// Hyperscale release(s) to scan (repeatable or CSV).
+        #[arg(
+            long,
+            value_delimiter = ',',
+            value_name = "RELEASE",
+            long_help = "\
+Hyperscale release(s) to scan, repeatable or comma-
+separated. Each value is a short EL token (`9`, `9s`,
+`10`, `10s`) or the equivalent full release name
+(`hyperscale9s`, `hyperscale10s`, ...) — both forms
+mean the same release. Defaults to all four."
+        )]
+        release: Vec<String>,
+
+        /// Source package(s) to limit the report to (repeatable
+        /// or CSV).
+        #[arg(
+            long,
+            value_delimiter = ',',
+            value_name = "PACKAGE",
+            long_help = "\
+Source package name(s), repeatable or comma-separated.
+Only collisions that involve one of these sources are
+reported (the whole tag is still scanned to find what
+they collide with). Defaults to all packages."
+        )]
+        package: Vec<String>,
 
         /// Interactively untag the redundant build of each
         /// collision.
@@ -188,6 +216,34 @@ tag of each is combined and files owned by two or more
 distinct source packages are flagged."
         )]
         repositories: Option<String>,
+
+        /// Hyperscale release(s) to scan (repeatable or CSV).
+        #[arg(
+            long,
+            value_delimiter = ',',
+            value_name = "RELEASE",
+            long_help = "\
+Hyperscale release(s) to scan, repeatable or comma-
+separated. Each value is a short EL token (`9`, `9s`,
+`10`, `10s`) or the equivalent full release name
+(`hyperscale9s`, `hyperscale10s`, ...) — both forms
+mean the same release. Defaults to all four."
+        )]
+        release: Vec<String>,
+
+        /// Source package(s) to limit the report to (repeatable
+        /// or CSV).
+        #[arg(
+            long,
+            value_delimiter = ',',
+            value_name = "PACKAGE",
+            long_help = "\
+Source package name(s), repeatable or comma-separated.
+Only conflicts that involve one of these sources are
+reported (the whole repo set is still scanned to find
+what they conflict with). Defaults to all packages."
+        )]
+        package: Vec<String>,
 
         /// Output as JSON instead of a table.
         #[arg(long)]
@@ -642,13 +698,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err(format!("{errors} package(s) had errors").into());
             }
         }
-        Command::DupeBinaries {
+        Command::DupeSubpkgs {
             repositories,
+            release,
+            package,
             fix,
             json,
             verbose,
         } => {
             let repos = prune_tags::parse_repositories(&repositories);
+            let els = resolve_releases(&release)?;
+            let els: Vec<&str> = els.iter().map(String::as_str).collect();
+            let packages = package;
             // Only the interactive fix path untags, so it's the only
             // one that needs CBS auth — checked before the scan so a
             // missing session fails in seconds, not minutes.
@@ -657,16 +718,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ensure_cbs_auth(false)?;
             }
             let client = cbs::Client::new();
-            let results =
-                dupe_binaries::scan(&repos, |tag| client.list_tagged_binaries(tag), verbose);
+            let results = dupe_subpkgs::scan(
+                &repos,
+                &els,
+                |tag| client.list_tagged_binaries(tag),
+                verbose,
+            );
+            let results = dupe_subpkgs::filter_by_packages(results, &packages);
 
             if fix {
-                let plans: Vec<dupe_binaries::TagFixPlan> =
-                    results.iter().map(dupe_binaries::build_fix_plan).collect();
+                let plans: Vec<dupe_subpkgs::TagFixPlan> = results
+                    .iter()
+                    .map(dupe_subpkgs::build_fix_plan)
+                    .map(|p| dupe_subpkgs::filter_plan_by_packages(p, &packages))
+                    .filter(|p| !p.clusters.is_empty())
+                    .collect();
                 if json {
                     println!("{}", serde_json::to_string_pretty(&plans)?);
                 } else if interactive_fix {
-                    let outcome = dupe_binaries::apply_fix(&plans, verbose);
+                    let outcome = dupe_subpkgs::apply_fix(&plans, verbose);
                     eprintln!(
                         "\nUntagged {}, skipped {}, {} error(s).",
                         outcome.untagged, outcome.skipped, outcome.errors
@@ -676,9 +746,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 } else {
                     // No terminal: print the plan, untag nothing.
-                    print!("{}", dupe_binaries::render_fix_plans(&plans));
+                    print!("{}", dupe_subpkgs::render_fix_plans(&plans));
                     eprintln!("Not a terminal; nothing untagged. Run with a TTY to act.");
-                    if !results.is_empty() {
+                    if !plans.is_empty() {
                         std::process::exit(1);
                     }
                 }
@@ -686,10 +756,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if json {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(&dupe_binaries::collision_report(&results))?
+                        serde_json::to_string_pretty(&dupe_subpkgs::collision_report(&results))?
                     );
                 } else {
-                    print!("{}", dupe_binaries::render(&results));
+                    print!("{}", dupe_subpkgs::render(&results));
                 }
                 // Non-zero exit flags collisions for CI / scripting.
                 if !results.is_empty() {
@@ -699,18 +769,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::FileConflicts {
             repositories,
+            release,
+            package,
             json,
             verbose,
         } => {
             let repo_override = repositories.as_deref().map(prune_tags::parse_repositories);
+            let els = resolve_releases(&release)?;
+            let els: Vec<&str> = els.iter().map(String::as_str).collect();
+            let packages = package;
             let client = cbs::Client::new();
             let results = file_conflicts::scan(
                 repo_override.as_deref(),
-                file_conflicts::EL_TOKENS,
+                &els,
                 |tag| client.list_tagged_binaries(tag),
                 |ids| client.list_rpm_files_multi(ids),
                 verbose,
             );
+            let results = file_conflicts::filter_by_packages(results, &packages);
             if json {
                 println!("{}", serde_json::to_string_pretty(&results)?);
             } else {
@@ -920,6 +996,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Resolve the `--release` selector to validated EL tokens,
+/// defaulting to all Hyperscale releases when none are given.
+fn resolve_releases(release: &[String]) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let normalized = prune_tags::normalize_releases(release)?;
+    if normalized.is_empty() {
+        Ok(prune_tags::EL_TOKENS
+            .iter()
+            .map(|s| s.to_string())
+            .collect())
+    } else {
+        Ok(normalized)
+    }
 }
 
 /// Fail fast if CBS write authentication isn't set up. Skipped for

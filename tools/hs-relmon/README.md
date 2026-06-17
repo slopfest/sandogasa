@@ -21,6 +21,10 @@ hs-relmon check-latest <package> [--distros <list>] [--track <distro>]
 hs-relmon check-manifest <manifest> [--json]
     [--issue-status <status>] [--issue-assignee <username>]
 hs-relmon config
+hs-relmon dupe-subpkgs [--repositories <list>] [--release <list>]
+    [--package <list>] [--fix] [--json] [--verbose]
+hs-relmon file-conflicts [--repositories <list>] [--release <list>]
+    [--package <list>] [--json] [--verbose]
 hs-relmon list-issues [--group <url>] [--json]
     [--issue-status <status>] [--issue-assignee <username>]
     [--manifest <path>] [--add-missing]
@@ -181,7 +185,7 @@ packages can end up shipping the same binary RPM in the same tag;
 whichever the depsolver picks is undefined, and the redundant
 source should be retired.
 
-`dupe-binaries` scans each repository's `-release` and `-testing`
+`dupe-subpkgs` scans each repository's `-release` and `-testing`
 tags (across EL9/EL10 and the Stream variants), asks Koji for the
 binary RPMs in each (latest build per source, no inherited
 base-distro content), and flags any binary name produced by two or
@@ -193,7 +197,7 @@ authentication needed) and exits non-zero when any collision is
 found.
 
 ```
-$ hs-relmon dupe-binaries
+$ hs-relmon dupe-subpkgs
 Found 4 duplicate binary RPM(s) across 1 tag(s):
 
 hyperscale9s-packages-main-release:
@@ -203,9 +207,14 @@ hyperscale9s-packages-main-release:
   ...
 ```
 
-Pass `--repositories` to scan repositories other than `main`
-(CSV), `--json` for machine-readable output, and `--verbose` to see
-each tag as it is scanned.
+Pass `--repositories` to scan repositories other than `main` (CSV),
+`--release` to limit the scan to specific Hyperscale releases (CSV
+of `9`, `9s`, `10`, `10s`; default all), `--package` to report only
+collisions involving named source packages (CSV), `--json` for
+machine-readable output, and `--verbose` to see each tag as it is
+scanned. Both selectors take repeated flags or a comma-separated
+list. Narrowing also makes a run much faster — e.g. `--release 9s
+--package perf` touches a single tag.
 
 `--fix` adds an interactive resolution pass. For each collision it
 recommends untagging the oldest build (the likely stale leftover)
@@ -214,7 +223,7 @@ but lists, for every candidate, the binaries that *only* it provides
 act with full context:
 
 ```
-$ hs-relmon dupe-binaries --fix
+$ hs-relmon dupe-subpkgs --fix
 hyperscale9s-packages-main-release:
   duplicate binaries: libperf, libperf-devel, perf, python3-perf
     [1] untag kernel-tools-6.4.13-200.1.hs.el9 (build 50532) [recommended, oldest]
@@ -235,7 +244,7 @@ still left to `prune-archived` and the GitLab tooling.
 
 ### Detecting file conflicts
 
-`dupe-binaries` catches two sources shipping the same binary RPM
+`dupe-subpkgs` catches two sources shipping the same binary RPM
 *name* in one tag. The sharper breakage is a **file** conflict
 between differently-named RPMs in *different* repos that are enabled
 together: the `kernel` source ships `/usr/bin/ynl` and the `pyynl`
@@ -264,9 +273,16 @@ hyperscale9s (repos: main):
 ```
 
 Pass `--repositories` (CSV) to override the per-EL enabled set,
-`--json` for machine-readable output, and `--verbose` to watch the
-scan. The scan is read-only and exits non-zero when any conflict is
-found.
+`--release` to limit which Hyperscale releases are scanned (`9`,
+`9s`, `10`, `10s`; default all), `--package` to report only
+conflicts involving named source packages, `--json` for
+machine-readable output, and `--verbose` to watch the scan.
+`--release` and `--package` each take repeated flags or a comma-
+separated list. The full
+repo set is still scanned even with `--package` (a package's
+conflicts are only found by comparing it against everything else), so
+that flag narrows the report, not the work. The scan is read-only and
+exits non-zero when any conflict is found.
 
 ### Listing issues
 

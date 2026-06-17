@@ -40,6 +40,11 @@ pub const DEFAULT_TESTING_KEEP: usize = 1;
 /// `--repositories`.
 pub const DEFAULT_REPOSITORY: &str = "main";
 
+/// Hyperscale EL release tokens, matching the `hyperscale<EL>-`
+/// tag prefix. The default release set for the duplicate / file
+/// conflict scanners.
+pub const EL_TOKENS: &[&str] = &["9", "9s", "10", "10s"];
+
 /// The retention rules for one prune invocation.
 #[derive(Debug, Clone)]
 pub struct PruneOptions {
@@ -354,6 +359,32 @@ pub fn parse_repositories(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// Validate and normalize release-selector tokens (already split
+/// from CSV / repeated flags by the arg parser), deduped in input
+/// order. Each token may carry an optional `hyperscale` prefix
+/// (`hyperscale10s` == `10s`). Errors on an unknown token so a typo
+/// fails loudly rather than silently scanning nothing. An empty
+/// input yields an empty result — the caller substitutes the
+/// default release set.
+pub fn normalize_releases(tokens: &[String]) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for token in tokens {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let norm = trimmed.strip_prefix("hyperscale").unwrap_or(trimmed);
+        if !EL_TOKENS.contains(&norm) {
+            return Err(format!("unknown release '{token}' (valid: 9, 9s, 10, 10s)"));
+        }
+        let norm = norm.to_string();
+        if !out.contains(&norm) {
+            out.push(norm);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,6 +673,26 @@ mod tests {
         // Tag is still tracked so the render shows it as kept.
         assert_eq!(plan.tags.len(), 1);
         assert_eq!(plan.tags[0].keep, vec!["ethtool-6.18-1.hs.el10"]);
+    }
+
+    #[test]
+    fn normalize_releases_validates_and_dedups() {
+        let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(normalize_releases(&v(&["10s"])).unwrap(), vec!["10s"]);
+        // The `hyperscale` prefix is stripped.
+        assert_eq!(
+            normalize_releases(&v(&["hyperscale10s", "9s"])).unwrap(),
+            vec!["10s", "9s"]
+        );
+        // Dedup in input order (covers both CSV-split and repeated).
+        assert_eq!(
+            normalize_releases(&v(&["9", "9", "10"])).unwrap(),
+            vec!["9", "10"]
+        );
+        // Unknown token is an error.
+        assert!(normalize_releases(&v(&["11s"])).is_err());
+        // Empty input is OK (caller defaults).
+        assert_eq!(normalize_releases(&[]).unwrap(), Vec::<String>::new());
     }
 
     #[test]

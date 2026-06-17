@@ -4,7 +4,7 @@
 //! one source package across the repositories enabled together on
 //! a Hyperscale host.
 //!
-//! [`crate::dupe_binaries`] catches two sources shipping the same
+//! [`crate::dupe_subpkgs`] catches two sources shipping the same
 //! binary RPM *name* within one tag. But the sharper, real-world
 //! breakage is a **file** conflict between differently-named RPMs
 //! in *different* repos: the `kernel` source ships `/usr/bin/ynl`
@@ -35,8 +35,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::cbs::{RpmFile, TaggedBinary};
 
 /// EL version tokens scanned by default, matching the
-/// `hyperscale<EL>-packages-…` tag prefix.
-pub const EL_TOKENS: &[&str] = &["9", "9s", "10", "10s"];
+/// `hyperscale<EL>-packages-…` tag prefix. Re-exported from
+/// [`crate::prune_tags`] so the release selector shares one source
+/// of truth.
+pub use crate::prune_tags::EL_TOKENS;
 
 /// Files shared by a set of source packages — a file conflict.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -210,6 +212,24 @@ pub fn total_conflicting_files(results: &[ElConflicts]) -> usize {
         .flat_map(|e| &e.conflicts)
         .map(|c| c.files.len())
         .sum()
+}
+
+/// Narrow results to conflicts that involve one of `packages` (by
+/// source name), dropping ELs left with nothing. Empty `packages`
+/// is a no-op. The full repo set is still scanned beforehand — a
+/// package's conflicts are only found by comparing it against
+/// everything else — so this filters the *report*, not the work.
+pub fn filter_by_packages(mut results: Vec<ElConflicts>, packages: &[String]) -> Vec<ElConflicts> {
+    if packages.is_empty() {
+        return results;
+    }
+    let set: BTreeSet<&str> = packages.iter().map(String::as_str).collect();
+    results.retain_mut(|el| {
+        el.conflicts
+            .retain(|c| c.sources.iter().any(|s| set.contains(s.as_str())));
+        !el.conflicts.is_empty()
+    });
+    results
 }
 
 /// Render the scan results for human review. Each source set's file
@@ -400,6 +420,37 @@ mod tests {
         assert_eq!(results[0].conflicts[0].sources, vec!["kernel", "ynl"]);
         assert_eq!(results[0].conflicts[0].files, vec!["/usr/bin/ynl"]);
         assert_eq!(total_conflicting_files(&results), 1);
+    }
+
+    #[test]
+    fn filter_by_packages_keeps_only_involved_sources() {
+        let results = vec![ElConflicts {
+            el: "10s".to_string(),
+            repos: vec!["main".to_string(), "kernel".to_string()],
+            conflicts: vec![
+                SourceConflict {
+                    sources: vec!["kernel".to_string(), "ynl".to_string()],
+                    files: vec!["/usr/bin/ynl".to_string()],
+                },
+                SourceConflict {
+                    sources: vec!["a".to_string(), "b".to_string()],
+                    files: vec!["/usr/bin/x".to_string()],
+                },
+            ],
+        }];
+        // Empty filter is a no-op.
+        assert_eq!(filter_by_packages(results.clone(), &[]).len(), 1);
+        assert_eq!(
+            filter_by_packages(results.clone(), &[])[0].conflicts.len(),
+            2
+        );
+        // Filtering to `ynl` keeps only the kernel+ynl conflict.
+        let only_ynl = filter_by_packages(results.clone(), &["ynl".to_string()]);
+        assert_eq!(only_ynl.len(), 1);
+        assert_eq!(only_ynl[0].conflicts.len(), 1);
+        assert_eq!(only_ynl[0].conflicts[0].sources, vec!["kernel", "ynl"]);
+        // Filtering to an uninvolved package drops the EL entirely.
+        assert!(filter_by_packages(results, &["zzz".to_string()]).is_empty());
     }
 
     #[test]

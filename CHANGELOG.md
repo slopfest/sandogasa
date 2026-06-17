@@ -6,7 +6,7 @@
 
 Finds files shipped by more than one source package across the
 repositories enabled together on a Hyperscale host. Where
-`dupe-binaries` catches two sources shipping the same binary RPM
+`dupe-subpkgs` catches two sources shipping the same binary RPM
 *name* in one tag, this catches the sharper case: a **file** conflict
 between differently-named RPMs in *different* repos — e.g. the
 `kernel` source ships `/usr/bin/ynl` and the `pyynl` tree inside
@@ -21,11 +21,14 @@ list from Koji via `listRPMFiles` batched through `system.multicall`
 (a whole tag is a handful of HTTP requests, not one per RPM), then
 flags any path owned by two or more distinct sources. Directories,
 `%ghost` entries, and debug payloads under `/usr/lib/debug` /
-`/usr/src/debug` are excluded. Read-only, `--json` output, exits
-non-zero on any conflict. New `cbs::Client::list_rpm_files_multi`,
-`cbs::RpmFile`, `cbs::RpmFileList`, and `cbs::TaggedBinary.rpm_id`.
+`/usr/src/debug` are excluded. `--release` limits which Hyperscale
+releases are scanned (CSV of `9`, `9s`, `10`, `10s`) and `--package`
+reports only conflicts involving named source packages. Read-only,
+`--json` output, exits non-zero on any conflict. New
+`cbs::Client::list_rpm_files_multi`, `cbs::RpmFile`,
+`cbs::RpmFileList`, and `cbs::TaggedBinary.rpm_id`.
 
-### hs-relmon: new `dupe-binaries` subcommand
+### hs-relmon: new `dupe-subpkgs` subcommand
 
 Finds binary RPMs shipped by more than one source package within a
 single Hyperscale tag. Hyperscale overrides stock CentOS packages
@@ -41,8 +44,10 @@ binary-RPM name → distinct sources, and flags any with two or more.
 Detection is per-tag (a collision only matters when both providers
 land in the same enabled repository); `-debuginfo`/`-debugsource`
 RPMs are excluded. Read-only by default (no Koji auth), `--json`
-output, `--repositories` to scan beyond `main`, and exits non-zero
-when any collision is found.
+output, `--repositories` to scan beyond `main`, `--release` to limit
+to specific Hyperscale releases (CSV of `9`, `9s`, `10`, `10s`), and
+`--package` to report only collisions involving named sources;
+exits non-zero when any collision is found.
 
 `--fix` adds an interactive resolution pass: for each cluster of
 sources sharing a binary it recommends untagging the oldest build

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! `dupe-binaries` subcommand — find binary RPMs shipped by more
+//! `dupe-subpkgs` subcommand — find binary RPMs shipped by more
 //! than one source package within a single Hyperscale tag, and
 //! (with `--fix`) interactively untag the redundant build.
 //!
@@ -161,17 +161,24 @@ pub fn find_collisions(binaries: &[TaggedBinary]) -> Vec<Collision> {
         .collect()
 }
 
-/// Scan every managed candidate tag for collisions, retaining each
-/// colliding tag's full binary listing. The fetch is injected so
-/// tests can supply canned tag contents; in production it is
-/// `cbs::Client::list_tagged_binaries`. Tags that error out (don't
-/// exist on this hub, transport hiccup) are skipped.
-pub fn scan<F>(repositories: &[String], fetch: F, verbose: bool) -> Vec<TagScan>
+/// Scan the managed candidate tags for collisions, retaining each
+/// colliding tag's full binary listing. Only tags whose EL token is
+/// in `els` (e.g. `["9s", "10s"]`) are scanned. The fetch is
+/// injected so tests can supply canned tag contents; in production
+/// it is `cbs::Client::list_tagged_binaries`. Tags that error out
+/// (don't exist on this hub, transport hiccup) are skipped.
+pub fn scan<F>(repositories: &[String], els: &[&str], fetch: F, verbose: bool) -> Vec<TagScan>
 where
     F: Fn(&str) -> Result<Vec<TaggedBinary>, Box<dyn std::error::Error>>,
 {
     let mut out = Vec::new();
     for tag in candidate_tags(repositories) {
+        if !els
+            .iter()
+            .any(|el| tag.starts_with(&format!("hyperscale{el}-")))
+        {
+            continue;
+        }
         if verbose {
             eprintln!("[hs-relmon] scanning {tag}");
         }
@@ -207,6 +214,22 @@ where
 /// Total number of colliding binary RPMs across all tags.
 pub fn total_collisions(results: &[TagScan]) -> usize {
     results.iter().map(|t| t.collisions.len()).sum()
+}
+
+/// Narrow detect results to collisions that involve one of
+/// `packages` (by source name), dropping tags left with none.
+/// Empty `packages` is a no-op.
+pub fn filter_by_packages(mut results: Vec<TagScan>, packages: &[String]) -> Vec<TagScan> {
+    if packages.is_empty() {
+        return results;
+    }
+    let set: BTreeSet<&str> = packages.iter().map(String::as_str).collect();
+    results.retain_mut(|ts| {
+        ts.collisions
+            .retain(|c| c.sources.iter().any(|s| set.contains(s.source.as_str())));
+        !ts.collisions.is_empty()
+    });
+    results
 }
 
 /// Project scan results to the slim `TagCollisions` view for
@@ -350,6 +373,23 @@ pub fn build_fix_plan(scan: &TagScan) -> TagFixPlan {
         tag: scan.tag.clone(),
         clusters,
     }
+}
+
+/// Narrow a fix plan to clusters that involve one of `packages` (by
+/// source name). Collateral (`unique`) stays correct because
+/// [`build_fix_plan`] computed it against the tag's full binary
+/// set before this filter runs. Empty `packages` is a no-op.
+pub fn filter_plan_by_packages(mut plan: TagFixPlan, packages: &[String]) -> TagFixPlan {
+    if packages.is_empty() {
+        return plan;
+    }
+    let set: BTreeSet<&str> = packages.iter().map(String::as_str).collect();
+    plan.clusters.retain(|c| {
+        c.candidates
+            .iter()
+            .any(|cand| set.contains(cand.source.as_str()))
+    });
+    plan
 }
 
 /// Render an entire set of fix plans for review (no prompting).
@@ -598,7 +638,8 @@ mod tests {
                 _ => Ok(vec![]),
             }
         };
-        let results = scan(&["main".to_string()], fetch, false);
+        let els = ["9", "9s", "10", "10s"];
+        let results = scan(&["main".to_string()], &els, fetch, false);
         // Only the one tag with a real collision is reported.
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].tag, "hyperscale9s-packages-main-release");
@@ -606,6 +647,68 @@ mod tests {
         assert_eq!(results[0].collisions[0].binary, "ynl");
         // Full binaries are retained for the fix path.
         assert_eq!(results[0].binaries.len(), 2);
+    }
+
+    #[test]
+    fn scan_release_selector_limits_tags() {
+        // The same fetch as above, but restricting to EL10s skips the
+        // EL9s collision entirely.
+        let fetch = |tag: &str| -> Result<Vec<TaggedBinary>, Box<dyn std::error::Error>> {
+            match tag {
+                "hyperscale9s-packages-main-release" => Ok(vec![
+                    bin("ynl", "x86_64", "ethtool", "ethtool-7.0-1.hs.el9", 100),
+                    bin("ynl", "x86_64", "ynl", "ynl-1.0-1.hs.el9", 200),
+                ]),
+                _ => Ok(vec![]),
+            }
+        };
+        let results = scan(&["main".to_string()], &["10s"], fetch, false);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn filter_by_packages_keeps_only_involved_collisions() {
+        let results = vec![scan_of(
+            "hyperscale9s-packages-main-release",
+            vec![
+                bin("ynl", "x86_64", "ethtool", "ethtool-7.0-1.hs.el9", 100),
+                bin("ynl", "x86_64", "ynl", "ynl-1.0-1.hs.el9", 200),
+            ],
+        )];
+        // Empty filter is a no-op.
+        assert_eq!(filter_by_packages(results.clone(), &[]).len(), 1);
+        // `ynl` is one of the sources → kept.
+        assert_eq!(
+            filter_by_packages(results.clone(), &["ynl".to_string()]).len(),
+            1
+        );
+        // An uninvolved package drops everything.
+        assert!(filter_by_packages(results, &["zzz".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn filter_plan_by_packages_keeps_only_involved_clusters() {
+        let scan = scan_of(
+            "hyperscale9s-packages-main-release",
+            vec![
+                bin(
+                    "perf",
+                    "x86_64",
+                    "kernel-tools",
+                    "kernel-tools-6.4-1.hs.el9",
+                    100,
+                ),
+                bin("perf", "x86_64", "perf", "perf-6.19-1.hs.el9", 200),
+            ],
+        );
+        let plan = build_fix_plan(&scan);
+        assert_eq!(plan.clusters.len(), 1);
+        // Filtering to an involved source keeps the cluster.
+        let kept = filter_plan_by_packages(plan.clone(), &["perf".to_string()]);
+        assert_eq!(kept.clusters.len(), 1);
+        // Filtering to an uninvolved source drops it.
+        let dropped = filter_plan_by_packages(plan, &["zzz".to_string()]);
+        assert!(dropped.clusters.is_empty());
     }
 
     #[test]

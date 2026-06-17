@@ -1140,7 +1140,7 @@ mod tests {
         assert_eq!(ethtool_x.build_id, 100);
         assert_eq!(ethtool_x.rpm_id, 1002);
         // `ynl` is built by two different sources — both retained
-        // (the collision logic lives in dupe_binaries).
+        // (the collision logic lives in dupe_subpkgs).
         let ynl_sources: std::collections::BTreeSet<&str> = bins
             .iter()
             .filter(|b| b.name == "ynl")
