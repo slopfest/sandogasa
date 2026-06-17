@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### dbranch: new tool
+
+A helper for propagating a Debian package across its Ubuntu/PPA
+branches. Run from the Debian branch (whatever is checked out —
+`master`, `debian/unstable`, …), `dbranch rebuild <branch>...` brings
+that branch into each named PPA branch. A target that doesn't exist
+yet is created from the Debian branch; with no targets it does all
+existing PPA branches (every local branch except the current one and
+gbp's `upstream` / pristine-tar). The codename comes from an existing
+branch's `debian/gbp.conf` (`debian-branch` basename) or the branch
+name's basename.
+
+Work runs in `rpmbuild`-style stages via `--stage` (default `merge`):
+
+- `merge` — switch to / create the target, merge the Debian branch,
+  resolve the `debian/changelog` conflict deterministically (incoming
+  Debian entry above the existing rebuild entry — the
+  `dpkg-mergechangelogs` result), then `gbp dch --bpo -R -D <codename>`
+  and normalize the stanza to `<debver>~<codename>+<N>` /
+  `* Rebuild for <codename>`. The Debian base version is detected even
+  from a PPA branch (a `~<codename>+<N>` suffix is stripped).
+- `build` — `debuild -S -sa -d` + `pbuilder-dist` (opt-in for now),
+  creating the codename's pbuilder chroot first
+  (`pbuilder-dist <codename> create`) when
+  `~/pbuilder/<codename>-base.tgz` is absent.
+- `all` — both.
+
+dbranch is also a learning tool. `--dry-run` prints every command
+without running anything; `--explain` runs the workflow but narrates
+each command and pauses for Enter before running it (a step-through,
+Ctrl-C aborts) for following along or sanity-checking; the two
+compose. Narration is color-coded via `anstream`/`anstyle`,
+auto-disabled when piped or under `NO_COLOR`. Also adds `anstream`
+and `anstyle` to the workspace.
+
 ### hs-relmon: skip archived / issues-disabled GitLab projects when filing
 
 `check-manifest` and `check-latest --file-issue` now check a

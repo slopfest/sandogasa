@@ -1,5 +1,19 @@
 # TODO
 
+## dbranch
+
+- (2026-06-18) Add more `rebuild` stages after `build`:
+  - `lint` — run `lintian` on the built `.changes`/`.dsc` and surface
+    warnings/errors (decide whether a lint failure should stop the
+    pipeline or just warn).
+  - `push` — `git push` the rebuilt PPA branch(es) to GitLab (the
+    `salsa`/origin remote), respecting `--explain`/`--dry-run`.
+  - `ci` — after pushing, poll the branch's GitLab CI/CD pipeline and
+    report whether it passes (reuse `sandogasa-gitlab`; needs a
+    pipeline-status query, which that crate doesn't have yet).
+  - Wire these into the `--stage` selector (e.g.
+    `merge,build,lint,push,ci` / `all`) in pipeline order.
+
 ## ebranch
 
 - Second-level branch-request escalation: when a `needinfo?` ping

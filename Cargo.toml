@@ -22,6 +22,7 @@ members = [
     "crates/sandogasa-repology",
     "crates/sandogasa-rpmvercmp",
     "tools/cpu-sig-tracker",
+    "tools/dbranch",
     "tools/ebranch",
     "tools/fedora-cve-triage",
     "tools/hs-intake",
@@ -45,6 +46,8 @@ license = "Apache-2.0 OR MIT"
 repository = "https://github.com/slopfest/fedora-cve-triage"
 
 [workspace.dependencies]
+anstream = "0.6"
+anstyle = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }

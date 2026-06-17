@@ -1,0 +1,15 @@
+[package]
+name = "dbranch"
+version.workspace = true
+description = "Propagate a Debian package across its Ubuntu/PPA branches"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anstream = { workspace = true }
+anstyle = { workspace = true }
+clap = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
