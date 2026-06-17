@@ -35,6 +35,54 @@ pub struct Issue {
     pub created_at: Option<String>,
 }
 
+/// A project's status flags relevant to filing issues. Fetched
+/// from the project endpoint; the issue-feature flags only appear
+/// for authenticated requests.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectStatus {
+    /// Archived projects are read-only — issue writes return 403.
+    #[serde(default)]
+    pub archived: bool,
+    /// Modern feature gate: `"enabled"`, `"private"`, or
+    /// `"disabled"`. Preferred over `issues_enabled` when present.
+    #[serde(default)]
+    pub issues_access_level: Option<String>,
+    /// Legacy boolean for the Issues feature; still returned by
+    /// GitLab alongside `issues_access_level`.
+    #[serde(default)]
+    pub issues_enabled: Option<bool>,
+}
+
+impl ProjectStatus {
+    /// Whether the Issues feature is on (independent of archival),
+    /// preferring `issues_access_level` and falling back to the
+    /// legacy `issues_enabled`; assumes on when neither is present.
+    pub fn issues_feature_enabled(&self) -> bool {
+        match &self.issues_access_level {
+            Some(level) => level != "disabled",
+            None => self.issues_enabled.unwrap_or(true),
+        }
+    }
+
+    /// Whether a new issue can be filed: the project is writable
+    /// (not archived) and the Issues feature is enabled.
+    pub fn can_file_issues(&self) -> bool {
+        !self.archived && self.issues_feature_enabled()
+    }
+
+    /// Human-readable reason issues can't be filed here, or `None`
+    /// when they can.
+    pub fn issue_block_reason(&self) -> Option<&'static str> {
+        if self.archived {
+            Some("project is archived")
+        } else if !self.issues_feature_enabled() {
+            Some("issues are disabled")
+        } else {
+            None
+        }
+    }
+}
+
 /// A GitLab merge request (minimal fields).
 #[derive(Debug, Deserialize)]
 pub struct MergeRequest {
@@ -114,6 +162,21 @@ impl Client {
             "{}/api/v4/projects/{}/issues/{}",
             self.base_url, encoded, iid
         );
+        let resp = self.http.get(&url).send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!("GitLab GET {url} failed: {status}: {text}").into());
+        }
+        Ok(resp.json()?)
+    }
+
+    /// Fetch the project's status flags (archival, Issues feature).
+    /// The issue-feature fields only populate for authenticated
+    /// requests; this client always sends a token.
+    pub fn project_status(&self) -> Result<ProjectStatus, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!("{}/api/v4/projects/{}", self.base_url, encoded);
         let resp = self.http.get(&url).send()?;
         if !resp.status().is_success() {
             let status = resp.status();
@@ -1193,6 +1256,52 @@ pub fn project_releases(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn status(archived: bool, access: Option<&str>, enabled: Option<bool>) -> ProjectStatus {
+        ProjectStatus {
+            archived,
+            issues_access_level: access.map(String::from),
+            issues_enabled: enabled,
+        }
+    }
+
+    #[test]
+    fn project_status_gates_issue_filing() {
+        // Healthy project: file away.
+        let ok = status(false, Some("enabled"), Some(true));
+        assert!(ok.can_file_issues());
+        assert_eq!(ok.issue_block_reason(), None);
+
+        // Archived (socat shape): read-only, even though issues are
+        // enabled. Archival wins.
+        let arch = status(true, Some("enabled"), Some(true));
+        assert!(!arch.can_file_issues());
+        assert_eq!(arch.issue_block_reason(), Some("project is archived"));
+
+        // Issues disabled (mesa / centos-release-hyperscale shape).
+        let disabled = status(false, Some("disabled"), Some(false));
+        assert!(!disabled.can_file_issues());
+        assert_eq!(disabled.issue_block_reason(), Some("issues are disabled"));
+
+        // Legacy fallback: no access_level, only the boolean.
+        assert!(!status(false, None, Some(false)).can_file_issues());
+        assert!(status(false, None, Some(true)).can_file_issues());
+
+        // Neither field present (e.g. unauthenticated): assume on.
+        assert!(status(false, None, None).can_file_issues());
+    }
+
+    #[test]
+    fn project_status_deserializes_partial_json() {
+        // GitLab's authenticated project payload, trimmed.
+        let s: ProjectStatus =
+            serde_json::from_str(r#"{"archived":true,"issues_access_level":"enabled"}"#).unwrap();
+        assert!(s.archived);
+        assert!(!s.can_file_issues());
+        // Missing fields default sanely.
+        let bare: ProjectStatus = serde_json::from_str("{}").unwrap();
+        assert!(bare.can_file_issues());
+    }
 
     #[test]
     fn new_rejects_plaintext_remote() {

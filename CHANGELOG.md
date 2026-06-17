@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### hs-relmon: skip archived / issues-disabled GitLab projects when filing
+
+`check-manifest` and `check-latest --file-issue` now check a
+project's status before filing and skip — with a one-line note rather
+than a counted error — when the GitLab project is archived
+(read-only) or has the Issues feature disabled. Both states return
+`403 Forbidden` on issue creation; previously each such package was
+reported as a failure (and `check-manifest` exited non-zero). Seen on
+e.g. `socat` (archived) and `mesa` / `centos-release-hyperscale`
+(issues disabled). On a status-lookup failure the tool assumes filing
+is allowed so a transient error never silently suppresses an issue.
+New `sandogasa_gitlab::ProjectStatus` and
+`sandogasa_gitlab::Client::project_status`.
+
 ### hs-relmon: new `file-conflicts` subcommand
 
 Finds files shipped by more than one source package across the

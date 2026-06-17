@@ -537,24 +537,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     url_override.clone()
                 };
-                if result.is_outdated() {
-                    let issue_ref = maybe_file_issue(&package, &result, &project_url)?;
-                    result.issue = Some(issue_ref);
+                if let Some(reason) = project_issue_block_reason(&project_url) {
+                    eprintln!("{package}: skipping issue filing ({reason})");
                 } else {
-                    result.issue = lookup_issue(&project_url)?;
-                }
-                if result.is_in_testing() {
-                    let mut errors = 0u32;
-                    maybe_set_in_progress(&mut result, &project_url, &package, &mut errors);
-                    if errors > 0 {
-                        return Err("failed to set issue status".into());
+                    if result.is_outdated() {
+                        let issue_ref = maybe_file_issue(&package, &result, &project_url)?;
+                        result.issue = Some(issue_ref);
+                    } else {
+                        result.issue = lookup_issue(&project_url)?;
                     }
-                }
-                if result.is_released() {
-                    let mut errors = 0u32;
-                    maybe_close_issue(&mut result, &project_url, &package, &mut errors);
-                    if errors > 0 {
-                        return Err("failed to close issue".into());
+                    if result.is_in_testing() {
+                        let mut errors = 0u32;
+                        maybe_set_in_progress(&mut result, &project_url, &package, &mut errors);
+                        if errors > 0 {
+                            return Err("failed to set issue status".into());
+                        }
+                    }
+                    if result.is_released() {
+                        let mut errors = 0u32;
+                        maybe_close_issue(&mut result, &project_url, &package, &mut errors);
+                        if errors > 0 {
+                            return Err("failed to close issue".into());
+                        }
                     }
                 }
             }
@@ -606,66 +610,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .as_deref()
                         .map(String::from)
                         .unwrap_or_else(|| default_issue_url(&pkg.name));
-                    if result.is_outdated() && !filtering {
-                        match maybe_file_issue(&pkg.name, &result, &project_url) {
-                            Ok(issue_ref) => {
-                                result.issue = Some(issue_ref);
-                            }
-                            Err(e) => {
-                                eprintln!("{}: filing issue: {e}", pkg.name);
-                                errors += 1;
-                            }
-                        }
+                    if let Some(reason) = project_issue_block_reason(&project_url) {
+                        eprintln!("{}: skipping issue filing ({reason})", pkg.name);
                     } else {
-                        // Look up existing issue first so
-                        // we can check filters before
-                        // deciding whether to file/update.
-                        match lookup_issue(&project_url) {
-                            Ok(found) => {
-                                result.issue = found;
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "{}: looking up issue: \
-                                    {e}",
-                                    pkg.name
-                                );
-                                errors += 1;
-                            }
-                        }
-                        if result.is_outdated()
-                            && result.matches_issue_filter(
-                                issue_status.as_deref(),
-                                issue_assignee.as_deref(),
-                            )
-                        {
+                        if result.is_outdated() && !filtering {
                             match maybe_file_issue(&pkg.name, &result, &project_url) {
                                 Ok(issue_ref) => {
                                     result.issue = Some(issue_ref);
                                 }
                                 Err(e) => {
+                                    eprintln!("{}: filing issue: {e}", pkg.name);
+                                    errors += 1;
+                                }
+                            }
+                        } else {
+                            // Look up existing issue first so
+                            // we can check filters before
+                            // deciding whether to file/update.
+                            match lookup_issue(&project_url) {
+                                Ok(found) => {
+                                    result.issue = found;
+                                }
+                                Err(e) => {
                                     eprintln!(
-                                        "{}: filing issue: \
-                                        {e}",
+                                        "{}: looking up issue: \
+                                    {e}",
                                         pkg.name
                                     );
                                     errors += 1;
                                 }
                             }
+                            if result.is_outdated()
+                                && result.matches_issue_filter(
+                                    issue_status.as_deref(),
+                                    issue_assignee.as_deref(),
+                                )
+                            {
+                                match maybe_file_issue(&pkg.name, &result, &project_url) {
+                                    Ok(issue_ref) => {
+                                        result.issue = Some(issue_ref);
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "{}: filing issue: \
+                                        {e}",
+                                            pkg.name
+                                        );
+                                        errors += 1;
+                                    }
+                                }
+                            }
                         }
-                    }
-                    // When the build is in testing,
-                    // transition the issue to
-                    // "In progress" so it is not
-                    // mistaken for un-started work.
-                    if result.is_in_testing() {
-                        maybe_set_in_progress(&mut result, &project_url, &pkg.name, &mut errors);
-                    }
-                    // When every distro has an
-                    // up-to-date release build, close
-                    // the issue with a comment.
-                    if result.is_released() {
-                        maybe_close_issue(&mut result, &project_url, &pkg.name, &mut errors);
+                        // When the build is in testing,
+                        // transition the issue to
+                        // "In progress" so it is not
+                        // mistaken for un-started work.
+                        if result.is_in_testing() {
+                            maybe_set_in_progress(
+                                &mut result,
+                                &project_url,
+                                &pkg.name,
+                                &mut errors,
+                            );
+                        }
+                        // When every distro has an
+                        // up-to-date release build, close
+                        // the issue with a comment.
+                        if result.is_released() {
+                            maybe_close_issue(&mut result, &project_url, &pkg.name, &mut errors);
+                        }
                     }
                 }
 
@@ -1010,6 +1023,17 @@ fn resolve_releases(release: &[String]) -> Result<Vec<String>, Box<dyn std::erro
     } else {
         Ok(normalized)
     }
+}
+
+/// Reason a project can't accept new issues — archived or Issues
+/// feature disabled — or `None` when filing is allowed. On any
+/// lookup failure returns `None` (assume allowed) so a transient
+/// error doesn't silently suppress issue filing; the filing attempt
+/// itself will then surface the real error.
+fn project_issue_block_reason(project_url: &str) -> Option<&'static str> {
+    let client = gitlab::Client::from_project_url(project_url).ok()?;
+    let status = client.project_status().ok()?;
+    status.issue_block_reason()
 }
 
 /// Fail fast if CBS write authentication isn't set up. Skipped for

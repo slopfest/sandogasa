@@ -6,7 +6,7 @@
 
 // Re-export everything from the library crate.
 pub use sandogasa_gitlab::{
-    Assignee, Issue, IssueUpdate, package_from_issue_url, parse_project_url,
+    Assignee, Issue, IssueUpdate, ProjectStatus, package_from_issue_url, parse_project_url,
     project_path_from_issue_url, validate_token,
 };
 
@@ -68,6 +68,10 @@ impl Client {
         state: Option<&str>,
     ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
         self.0.list_issues(label, state)
+    }
+
+    pub fn project_status(&self) -> Result<ProjectStatus, Box<dyn std::error::Error>> {
+        self.0.project_status()
     }
 
     pub fn add_note(&self, iid: u64, body: &str) -> Result<(), Box<dyn std::error::Error>> {
