@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### hs-relmon: new `file-conflicts` subcommand
+
+Finds files shipped by more than one source package across the
+repositories enabled together on a Hyperscale host. Where
+`dupe-binaries` catches two sources shipping the same binary RPM
+*name* in one tag, this catches the sharper case: a **file** conflict
+between differently-named RPMs in *different* repos — e.g. the
+`kernel` source ships `/usr/bin/ynl` and the `pyynl` tree inside
+`python3-kernel-tools` (kernel repo) while a standalone `python3-ynl`
+(main repo) ships the same paths, so dnf hits a conflict that name-
+and-tag matching never sees.
+
+Scans per EL version over the enabled repo set (default `main` +
+`kernel` on EL10/10s; `main` only on EL9/9s, which has no kernel
+repo; override with `--repositories`), pulling each binary RPM's file
+list from Koji via `listRPMFiles` batched through `system.multicall`
+(a whole tag is a handful of HTTP requests, not one per RPM), then
+flags any path owned by two or more distinct sources. Directories,
+`%ghost` entries, and debug payloads under `/usr/lib/debug` /
+`/usr/src/debug` are excluded. Read-only, `--json` output, exits
+non-zero on any conflict. New `cbs::Client::list_rpm_files_multi`,
+`cbs::RpmFile`, `cbs::RpmFileList`, and `cbs::TaggedBinary.rpm_id`.
+
 ### hs-relmon: new `dupe-binaries` subcommand
 
 Finds binary RPMs shipped by more than one source package within a

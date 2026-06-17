@@ -487,6 +487,7 @@ mod tests {
 
     fn bin(name: &str, arch: &str, source: &str, nvr: &str, build_id: i64) -> TaggedBinary {
         TaggedBinary {
+            rpm_id: 0, // unused by collision detection
             name: name.to_string(),
             arch: arch.to_string(),
             source: source.to_string(),

@@ -233,6 +233,41 @@ authentication (`koji` configured for the `cbs` profile). In
 and nothing is untagged. Archiving the redundant upstream project is
 still left to `prune-archived` and the GitLab tooling.
 
+### Detecting file conflicts
+
+`dupe-binaries` catches two sources shipping the same binary RPM
+*name* in one tag. The sharper breakage is a **file** conflict
+between differently-named RPMs in *different* repos that are enabled
+together: the `kernel` source ships `/usr/bin/ynl` and the `pyynl`
+tree inside `python3-kernel-tools` (kernel repo), while a standalone
+`python3-ynl` (main repo) ships the same paths — dnf hits a file
+conflict, but the RPM names differ and they live in separate tags, so
+name matching misses it.
+
+`file-conflicts` scans, per EL version, the set of repos enabled
+together (default `main` + `kernel` on EL10/10s; `main` only on
+EL9/9s, which has no kernel repo), pulls each binary RPM's file list
+from Koji — batched via `multicall`, so a whole tag is a handful of
+requests, not one per RPM — and flags any path owned by two or more
+distinct source packages. Directories, `%ghost` entries, and debug
+payloads under `/usr/lib/debug` / `/usr/src/debug` are excluded.
+
+```
+$ hs-relmon file-conflicts
+Found 192 conflicting file(s) across 1 source set(s):
+
+hyperscale9s (repos: main):
+  kernel-tools + perf — 192 file(s):
+    /usr/bin/perf
+    /usr/lib64/libperf.so.0
+    …
+```
+
+Pass `--repositories` (CSV) to override the per-EL enabled set,
+`--json` for machine-readable output, and `--verbose` to watch the
+scan. The scan is read-only and exits non-zero when any conflict is
+found.
+
 ### Listing issues
 
 List all `rfe::new-version` issues under a GitLab group:

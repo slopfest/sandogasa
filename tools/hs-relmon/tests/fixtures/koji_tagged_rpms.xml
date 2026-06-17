@@ -7,6 +7,7 @@
 <value><struct>
 <member><name>arch</name><value><string>src</string></value></member>
 <member><name>build_id</name><value><int>100</int></value></member>
+<member><name>id</name><value><int>1001</int></value></member>
 <member><name>name</name><value><string>ethtool</string></value></member>
 <member><name>release</name><value><string>1.hs.el9</string></value></member>
 <member><name>version</name><value><string>7.0</string></value></member>
@@ -14,6 +15,7 @@
 <value><struct>
 <member><name>arch</name><value><string>x86_64</string></value></member>
 <member><name>build_id</name><value><int>100</int></value></member>
+<member><name>id</name><value><int>1002</int></value></member>
 <member><name>name</name><value><string>ethtool</string></value></member>
 <member><name>release</name><value><string>1.hs.el9</string></value></member>
 <member><name>version</name><value><string>7.0</string></value></member>
@@ -21,6 +23,7 @@
 <value><struct>
 <member><name>arch</name><value><string>x86_64</string></value></member>
 <member><name>build_id</name><value><int>100</int></value></member>
+<member><name>id</name><value><int>1003</int></value></member>
 <member><name>name</name><value><string>ynl</string></value></member>
 <member><name>release</name><value><string>1.hs.el9</string></value></member>
 <member><name>version</name><value><string>7.0</string></value></member>
@@ -28,6 +31,7 @@
 <value><struct>
 <member><name>arch</name><value><string>aarch64</string></value></member>
 <member><name>build_id</name><value><int>100</int></value></member>
+<member><name>id</name><value><int>1004</int></value></member>
 <member><name>name</name><value><string>ynl</string></value></member>
 <member><name>release</name><value><string>1.hs.el9</string></value></member>
 <member><name>version</name><value><string>7.0</string></value></member>
@@ -35,6 +39,7 @@
 <value><struct>
 <member><name>arch</name><value><string>x86_64</string></value></member>
 <member><name>build_id</name><value><int>100</int></value></member>
+<member><name>id</name><value><int>1005</int></value></member>
 <member><name>name</name><value><string>ethtool-debuginfo</string></value></member>
 <member><name>release</name><value><string>1.hs.el9</string></value></member>
 <member><name>version</name><value><string>7.0</string></value></member>
@@ -42,6 +47,7 @@
 <value><struct>
 <member><name>arch</name><value><string>src</string></value></member>
 <member><name>build_id</name><value><int>200</int></value></member>
+<member><name>id</name><value><int>1006</int></value></member>
 <member><name>name</name><value><string>ynl</string></value></member>
 <member><name>release</name><value><string>1.hs.el9</string></value></member>
 <member><name>version</name><value><string>1.0</string></value></member>
@@ -49,6 +55,7 @@
 <value><struct>
 <member><name>arch</name><value><string>x86_64</string></value></member>
 <member><name>build_id</name><value><int>200</int></value></member>
+<member><name>id</name><value><int>1007</int></value></member>
 <member><name>name</name><value><string>ynl</string></value></member>
 <member><name>release</name><value><string>1.hs.el9</string></value></member>
 <member><name>version</name><value><string>1.0</string></value></member>
@@ -56,6 +63,7 @@
 <value><struct>
 <member><name>arch</name><value><string>x86_64</string></value></member>
 <member><name>build_id</name><value><int>200</int></value></member>
+<member><name>id</name><value><int>1008</int></value></member>
 <member><name>name</name><value><string>ynl-devel</string></value></member>
 <member><name>release</name><value><string>1.hs.el9</string></value></member>
 <member><name>version</name><value><string>1.0</string></value></member>

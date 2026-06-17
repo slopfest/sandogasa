@@ -74,6 +74,9 @@ impl Build {
 /// package (Koji build) that produced it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TaggedBinary {
+    /// Koji RPM ID of this binary RPM — the key for
+    /// [`Client::list_rpm_files_multi`].
+    pub rpm_id: i64,
     /// Binary RPM name (e.g. `ynl`).
     pub name: String,
     /// Architecture (`x86_64`, `aarch64`, `noarch`); never `src`.
@@ -87,6 +90,37 @@ pub struct TaggedBinary {
     /// the likely-stale side of a collision.
     pub build_id: i64,
 }
+
+/// One file entry in an RPM payload (from `listRPMFiles`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RpmFile {
+    /// Absolute installed path.
+    pub path: String,
+    /// POSIX mode bits — the file-type field distinguishes
+    /// directories from regular files and symlinks.
+    pub mode: u32,
+    /// RPM file flags; bit `RPMFILE_GHOST` (64) marks `%ghost`
+    /// entries, which don't actually ship in the payload.
+    pub flags: i64,
+}
+
+impl RpmFile {
+    /// Whether this entry is a directory (`S_IFDIR`). Shared
+    /// directory ownership is normal and not a conflict.
+    pub fn is_dir(&self) -> bool {
+        self.mode & 0o170000 == 0o040000
+    }
+
+    /// Whether this entry is a `%ghost` (not shipped in the
+    /// payload, so it never conflicts on disk).
+    pub fn is_ghost(&self) -> bool {
+        self.flags & 64 != 0
+    }
+}
+
+/// A binary RPM's file listing keyed by Koji RPM ID, as returned by
+/// [`Client::list_rpm_files_multi`].
+pub type RpmFileList = Vec<(i64, Vec<RpmFile>)>;
 
 /// Client for the CentOS Build System (CBS) Koji XML-RPC API.
 pub struct Client {
@@ -236,6 +270,58 @@ impl Client {
         );
         let resp = self.call(&body)?;
         parse_tagged_binaries(&resp)
+    }
+
+    /// List the files of many RPMs in one shot, batching the
+    /// per-RPM `listRPMFiles` calls through koji `system.multicall`
+    /// so a whole tag's file listing costs a handful of HTTP
+    /// requests rather than one per RPM (which would look like
+    /// scraping). Returns `(rpm_id, files)` in the input order.
+    ///
+    /// A per-call fault (e.g. an RPM that vanished) yields an empty
+    /// file list for that ID rather than failing the batch.
+    pub fn list_rpm_files_multi(
+        &self,
+        rpm_ids: &[i64],
+    ) -> Result<RpmFileList, Box<dyn std::error::Error>> {
+        const BATCH: usize = 200;
+        let mut out = Vec::with_capacity(rpm_ids.len());
+        for chunk in rpm_ids.chunks(BATCH) {
+            let inner: String = chunk
+                .iter()
+                .map(|id| {
+                    format!(
+                        "<value><struct>\
+                         <member><name>methodName</name>\
+                         <value><string>listRPMFiles</string></value></member>\
+                         <member><name>params</name><value><array><data>\
+                         <value><int>{id}</int></value>\
+                         </data></array></value></member></struct></value>"
+                    )
+                })
+                .collect();
+            let body = format!(
+                r#"<?xml version="1.0"?>
+<methodCall>
+  <methodName>system.multicall</methodName>
+  <params><param><value><array><data>{inner}</data></array></value></param></params>
+</methodCall>"#
+            );
+            let resp = self.call(&body)?;
+            let per_call = parse_multicall_rpmfiles(&resp)?;
+            if per_call.len() != chunk.len() {
+                return Err(format!(
+                    "multicall returned {} results for {} calls",
+                    per_call.len(),
+                    chunk.len()
+                )
+                .into());
+            }
+            for (id, files) in chunk.iter().zip(per_call) {
+                out.push((*id, files));
+            }
+        }
+        Ok(out)
     }
 
     /// List tag names for a given build ID.
@@ -739,16 +825,62 @@ fn parse_tagged_binaries(xml: &str) -> Result<Vec<TaggedBinary>, Box<dyn std::er
         let Some(build_id) = struct_int(&members, "build_id") else {
             continue;
         };
+        // The RPM's own id (distinct from build_id) keys file lists.
+        let Some(rpm_id) = struct_int(&members, "id") else {
+            continue;
+        };
         let Some((source, source_nvr)) = sources.get(&build_id).cloned() else {
             continue;
         };
         out.push(TaggedBinary {
+            rpm_id,
             name: name.to_string(),
             arch: arch.to_string(),
             source,
             source_nvr,
             build_id,
         });
+    }
+    Ok(out)
+}
+
+/// Build an [`RpmFile`] from a `listRPMFiles` struct entry.
+fn rpmfile_from_value(value: XmlRpcValue) -> Option<RpmFile> {
+    let XmlRpcValue::Struct(members) = value else {
+        return None;
+    };
+    let path = struct_str(&members, "name")?.to_string();
+    let mode = struct_int(&members, "mode").unwrap_or(0) as u32;
+    let flags = struct_int(&members, "flags").unwrap_or(0);
+    Some(RpmFile { path, mode, flags })
+}
+
+/// Parse a `system.multicall` response wrapping a series of
+/// `listRPMFiles` calls into one file list per call, in order.
+///
+/// Each multicall element is either `[result]` (an array holding
+/// the single return value — here itself an array of file structs)
+/// or a fault struct. Faults and malformed entries become an empty
+/// file list so one bad RPM doesn't sink the batch.
+fn parse_multicall_rpmfiles(xml: &str) -> Result<Vec<Vec<RpmFile>>, Box<dyn std::error::Error>> {
+    let value = parse_single_value(xml)?;
+    let XmlRpcValue::Array(results) = value else {
+        return Err("expected multicall array response".into());
+    };
+    let mut out = Vec::with_capacity(results.len());
+    for item in results {
+        let files = match item {
+            // Success: [ [file, file, ...] ]
+            XmlRpcValue::Array(wrapper) => match wrapper.into_iter().next() {
+                Some(XmlRpcValue::Array(entries)) => {
+                    entries.into_iter().filter_map(rpmfile_from_value).collect()
+                }
+                _ => Vec::new(),
+            },
+            // Fault struct or anything unexpected: no files.
+            _ => Vec::new(),
+        };
+        out.push(files);
     }
     Ok(out)
 }
@@ -1006,6 +1138,7 @@ mod tests {
         assert_eq!(ethtool_x.source, "ethtool");
         assert_eq!(ethtool_x.source_nvr, "ethtool-7.0-1.hs.el9");
         assert_eq!(ethtool_x.build_id, 100);
+        assert_eq!(ethtool_x.rpm_id, 1002);
         // `ynl` is built by two different sources — both retained
         // (the collision logic lives in dupe_binaries).
         let ynl_sources: std::collections::BTreeSet<&str> = bins
@@ -1021,6 +1154,49 @@ mod tests {
         );
         // No `.src` arch survives.
         assert!(bins.iter().all(|b| b.arch != "src"));
+    }
+
+    #[test]
+    fn test_parse_multicall_rpmfiles() {
+        // Two listRPMFiles results: the first RPM owns a regular
+        // file, a directory, and a %ghost; the second is empty.
+        let xml = r#"<?xml version='1.0'?>
+<methodResponse><params><param><value><array><data>
+<value><array><data>
+<value><array><data>
+<value><struct>
+<member><name>name</name><value><string>/usr/bin/ynl</string></value></member>
+<member><name>mode</name><value><int>33261</int></value></member>
+<member><name>flags</name><value><int>0</int></value></member>
+</struct></value>
+<value><struct>
+<member><name>name</name><value><string>/usr/lib/python3.12/site-packages/pyynl</string></value></member>
+<member><name>mode</name><value><int>16877</int></value></member>
+<member><name>flags</name><value><int>0</int></value></member>
+</struct></value>
+<value><struct>
+<member><name>name</name><value><string>/var/log/ynl.log</string></value></member>
+<member><name>mode</name><value><int>33188</int></value></member>
+<member><name>flags</name><value><int>64</int></value></member>
+</struct></value>
+</data></array></value>
+</data></array></value>
+<value><array><data>
+<value><array><data></data></array></value>
+</data></array></value>
+</data></array></value></param></params></methodResponse>"#;
+        let per_call = parse_multicall_rpmfiles(xml).unwrap();
+        assert_eq!(per_call.len(), 2);
+        // First call: three entries returned.
+        assert_eq!(per_call[0].len(), 3);
+        let bin = &per_call[0][0];
+        assert_eq!(bin.path, "/usr/bin/ynl");
+        assert!(!bin.is_dir());
+        assert!(!bin.is_ghost());
+        assert!(per_call[0][1].is_dir()); // pyynl directory
+        assert!(per_call[0][2].is_ghost()); // %ghost log
+        // Second call: no files.
+        assert!(per_call[1].is_empty());
     }
 
     #[test]

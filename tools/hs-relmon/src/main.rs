@@ -10,6 +10,7 @@ use hs_relmon::cbs;
 use hs_relmon::check_latest::{self, Distros, TrackRef};
 use hs_relmon::config;
 use hs_relmon::dupe_binaries;
+use hs_relmon::file_conflicts;
 use hs_relmon::gitlab;
 use hs_relmon::list_issues;
 use hs_relmon::manifest;
@@ -163,6 +164,30 @@ CBS write authentication. In --json mode or without a
 terminal the plan is printed and nothing is untagged."
         )]
         fix: bool,
+
+        /// Output as JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Find files shipped by 2+ sources across enabled repos.
+    FileConflicts {
+        /// Comma-separated repositories enabled together to scan.
+        #[arg(
+            long,
+            long_help = "\
+Comma-separated repositories that are enabled together
+on a host, compared per EL version. Overrides the
+per-EL defaults (main + kernel on EL10/10s; main only
+on EL9/9s, which has no kernel repo). The `-release`
+tag of each is combined and files owned by two or more
+distinct source packages are flagged."
+        )]
+        repositories: Option<String>,
 
         /// Output as JSON instead of a table.
         #[arg(long)]
@@ -670,6 +695,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !results.is_empty() {
                     std::process::exit(1);
                 }
+            }
+        }
+        Command::FileConflicts {
+            repositories,
+            json,
+            verbose,
+        } => {
+            let repo_override = repositories.as_deref().map(prune_tags::parse_repositories);
+            let client = cbs::Client::new();
+            let results = file_conflicts::scan(
+                repo_override.as_deref(),
+                file_conflicts::EL_TOKENS,
+                |tag| client.list_tagged_binaries(tag),
+                |ids| client.list_rpm_files_multi(ids),
+                verbose,
+            );
+            if json {
+                println!("{}", serde_json::to_string_pretty(&results)?);
+            } else {
+                print!("{}", file_conflicts::render(&results));
+            }
+            // Non-zero exit flags conflicts for CI / scripting.
+            if !results.is_empty() {
+                std::process::exit(1);
             }
         }
         Command::ListIssues {
