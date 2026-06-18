@@ -2,6 +2,27 @@
 
 ## dbranch
 
+- (2026-06-18) Refresh a stale pbuilder chroot before building. The
+  build stage already creates `~/pbuilder/<codename>-base.tgz` when
+  absent; additionally, when it exists but is old, run
+  `pbuilder-dist <codename> update` first so the build isn't against
+  stale packages. Default staleness threshold ~1 day (use the
+  base.tgz mtime; there's already a `plan::pbuilder_base_tgz` path
+  helper). Add a mutually-exclusive pair (clap `conflicts_with`):
+  `--refresh-chroot` to force a refresh regardless of age, and
+  `--no-refresh-chroot` to skip the auto-update entirely and build
+  against the chroot as-is. Slots into `build_stage` right after the
+  create check, before `debuild` / `pbuilder-dist <codename> <dsc>`.
+
+- (2026-06-18) Group `rebuild`'s flags in `--help` for readability now
+  that there are many. clap supports labeled sections via
+  `#[arg(help_heading = "…")]` (or `#[command(next_help_heading)]` for
+  a run of args); within a section args show in declaration order, so
+  this both groups and orders. Proposed groups: Stages (`--stage`,
+  `--source`, `--nowait`), Upload (`--ppa`, `--upload-target`), Output
+  (`--dry-run`, `--explain`, `--quiet`), leaving `-C/--repo` under the
+  default Options. Pure-annotation change.
+
 - (2026-06-18) Bulk run should confirm the branch set before
   processing, and flag/skip EOL releases.
   - A no-argument `dbranch rebuild` (and now potentially a
