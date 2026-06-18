@@ -142,9 +142,14 @@ pub fn lintian_argv(targets: &[String]) -> Vec<String> {
     a
 }
 
-/// `git push <remote> <branch>` — publish the rebuilt PPA branch.
+/// `git push -u <remote> <branch>` — publish the rebuilt PPA branch
+/// and set its upstream. `-u` makes the first push of a brand-new
+/// branch establish tracking (you can't set upstream beforehand — the
+/// remote ref doesn't exist yet); it's a harmless no-op on later
+/// pushes and on branches that already track, so the push stage needs
+/// no special first-push handling.
 pub fn push_argv(remote: &str, branch: &str) -> Vec<String> {
-    argv(&["git", "push", remote, branch])
+    argv(&["git", "push", "-u", remote, branch])
 }
 
 /// `glab ci list --sha <sha> -F json` — list the CI pipeline(s) for an
@@ -332,7 +337,7 @@ mod tests {
         );
         assert_eq!(
             push_argv("origin", "noble"),
-            ["git", "push", "origin", "noble"]
+            ["git", "push", "-u", "origin", "noble"]
         );
         assert_eq!(
             glab_ci_list_sha_argv("ea4102c"),

@@ -86,7 +86,9 @@ Work runs in `rpmbuild`-style stages via `--stage` (default `merge`):
   linting binaries directly avoids re-unpacking the source, which
   `debuild -S` already lints). lintian is quiet when clean, so its
   output is echoed and a tag-count summary printed.
-- `push` — `git push origin <branch>`, then (unless `--nowait`) watch
+- `push` — `git push -u origin <branch>` (sets the branch's upstream,
+  so a brand-new branch's first push establishes tracking and later
+  pushes need no special handling), then (unless `--nowait`) watch
   that commit's GitLab CI pipeline to completion via the `glab` CLI,
   which auto-detects the salsa host / project from the git remote.
   dbranch polls `glab ci list --sha <commit> -F json` — targeting the
