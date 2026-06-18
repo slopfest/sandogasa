@@ -61,6 +61,29 @@
   the learning-tool goal of showing the minimal correct command for
   the current state.
 
+- (2026-06-18) New `upload` stage: `dput` the built package to its
+  archive. Name it `upload`, not `publish` — "upload" is the idiomatic
+  Debian term (dput's whole purpose) and works for both the Debian
+  archive and a PPA; "publish" connotes apt-repo publishing
+  (reprepro/aptly), a different operation.
+  - PPA: take the PPA name via a single-purpose flag, e.g.
+    `--ppa <user/name>`, tolerating but not requiring a `ppa:` prefix
+    (strip it if present), then run
+    `dput ppa:<name> ../<pkg>_<version>_source.changes` — the source
+    `.changes` from `debuild -S`, epoch stripped (add a
+    `changes_filename` plan helper next to `dsc_filename`).
+  - Debian: also needs a dput target (default from dput config, or
+    ftp-master / mentors). Consider a general `--upload-target` with
+    `--ppa` as PPA sugar, or detect a `ppa:` prefix; settle the
+    surface per the CLI-flag conventions (single-purpose, name the
+    real object).
+  - Add `dput` (the `dput` / `dput-ng` package) to the `require_tools`
+    batch for this stage.
+  - Pipeline order: after `build`/`lint`. Decide its place vs `push`
+    (git push + CI watch) — likely push (let CI pass) then upload, or
+    keep upload independent. Pairs with the bulk EOL-check TODO:
+    uploading to an EOL release is rejected.
+
 - (2026-06-18) Quiet mode that swallows shelled-out tool output.
   A `--quiet`/`-q` flag suppressing the chatter from git, debuild,
   pbuilder-dist, lintian, glab, etc., leaving only dbranch's own
