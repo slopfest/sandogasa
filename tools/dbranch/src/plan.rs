@@ -11,6 +11,16 @@ pub fn codename_from_branch(branch: &str) -> &str {
     branch.rsplit('/').next().unwrap_or(branch)
 }
 
+/// The gbp `debian-tag` format for a PPA branch: the branch's
+/// namespace (the part before the last `/`, e.g. `ubuntu/questing` →
+/// `ubuntu`) plus `/%(version)s`, so tags land under that namespace
+/// (`ubuntu/<version>`) rather than gbp's default `debian/<version>`.
+/// A branch with no namespace defaults to `ubuntu`.
+pub fn debian_tag_format(branch: &str) -> String {
+    let namespace = branch.rsplit_once('/').map_or("ubuntu", |(ns, _)| ns);
+    format!("{namespace}/%(version)s")
+}
+
 /// The PPA target branches for a no-argument bulk run: every local
 /// branch except those in `exclude` (the current Debian branch and
 /// gbp's plumbing branches — `upstream-branch` and the pristine-tar
@@ -326,6 +336,13 @@ mod tests {
         assert_eq!(codename_from_branch("ubuntu/questing"), "questing");
         assert_eq!(codename_from_branch("noble"), "noble");
         assert_eq!(codename_from_branch("ubuntu/resolute"), "resolute");
+    }
+
+    #[test]
+    fn debian_tag_format_uses_branch_namespace() {
+        assert_eq!(debian_tag_format("ubuntu/questing"), "ubuntu/%(version)s");
+        // No namespace → default to `ubuntu`.
+        assert_eq!(debian_tag_format("noble"), "ubuntu/%(version)s");
     }
 
     #[test]

@@ -67,32 +67,33 @@ pub fn parse(text: &str) -> GbpConfig {
     cfg
 }
 
-/// Return `text` with `debian-branch` set to `branch`, preserving all
-/// other lines, comments, and formatting. Rewrites the existing
-/// `debian-branch = …` line in place (keeping its indentation); if
-/// there isn't one, appends the key. Used when creating a new PPA
-/// branch, whose gbp.conf should point `debian-branch` at itself.
-pub fn set_debian_branch(text: &str, branch: &str) -> String {
+/// Return `text` with `key` set to `value`, preserving all other
+/// lines, comments, and formatting. Rewrites the existing `key = …`
+/// line in place (keeping its indentation); if there isn't one,
+/// appends the key. Used to set a new PPA branch's `debian-branch`
+/// (point it at itself) and `debian-tag` (the `ubuntu/%(version)s`
+/// tag format).
+pub fn set_key(text: &str, key: &str, value: &str) -> String {
     let mut out: Vec<String> = Vec::with_capacity(text.lines().count() + 1);
     let mut replaced = false;
     for raw in text.lines() {
         let trimmed = raw.trim_start();
-        let is_debian_branch = !replaced
+        let is_target = !replaced
             && !trimmed.starts_with('#')
             && !trimmed.starts_with(';')
             && trimmed
                 .split_once('=')
-                .is_some_and(|(k, _)| k.trim() == "debian-branch");
-        if is_debian_branch {
+                .is_some_and(|(k, _)| k.trim() == key);
+        if is_target {
             let indent = &raw[..raw.len() - trimmed.len()];
-            out.push(format!("{indent}debian-branch = {branch}"));
+            out.push(format!("{indent}{key} = {value}"));
             replaced = true;
         } else {
             out.push(raw.to_string());
         }
     }
     if !replaced {
-        out.push(format!("debian-branch = {branch}"));
+        out.push(format!("{key} = {value}"));
     }
     let mut result = out.join("\n");
     if text.ends_with('\n') {
@@ -172,15 +173,15 @@ upstream-branch = upstream
     }
 
     #[test]
-    fn set_debian_branch_rewrites_in_place() {
+    fn set_key_rewrites_in_place() {
         let text = "[DEFAULT]\npristine-tar = True\ndebian-branch = debian/unstable\nupstream-branch = upstream\n";
-        let out = set_debian_branch(text, "ubuntu/questing");
+        let out = set_key(text, "debian-branch", "ubuntu/questing");
         assert_eq!(
             out,
             "[DEFAULT]\npristine-tar = True\ndebian-branch = ubuntu/questing\nupstream-branch = upstream\n"
         );
         // Idempotent.
-        assert_eq!(set_debian_branch(&out, "ubuntu/questing"), out);
+        assert_eq!(set_key(&out, "debian-branch", "ubuntu/questing"), out);
         // Comments are not mistaken for the key.
         assert_eq!(
             parse(&out).debian_branch.as_deref(),
@@ -189,8 +190,12 @@ upstream-branch = upstream
     }
 
     #[test]
-    fn set_debian_branch_appends_when_absent() {
-        let out = set_debian_branch("pristine-tar = True\n", "noble");
-        assert_eq!(out, "pristine-tar = True\ndebian-branch = noble\n");
+    fn set_key_appends_when_absent() {
+        // e.g. adding debian-tag to a gbp.conf that lacks it.
+        let out = set_key("pristine-tar = True\n", "debian-tag", "ubuntu/%(version)s");
+        assert_eq!(
+            out,
+            "pristine-tar = True\ndebian-tag = ubuntu/%(version)s\n"
+        );
     }
 }

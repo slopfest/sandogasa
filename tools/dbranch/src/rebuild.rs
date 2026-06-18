@@ -541,7 +541,7 @@ fn merge_stage(
         // the new packaging) — no merge needed.
         ui.step(&format!("Create {target} from {source}"));
         ui.run_required(&plan::checkout_new_argv(target, source), repo)?;
-        adjust_new_branch_packaging(ui, repo, target)?;
+        adjust_branch_packaging(ui, repo, target)?;
     } else {
         checkout_existing(ui, repo, target, location)?;
         // The changelog conflict is expected and resolved
@@ -583,20 +583,26 @@ fn merge_stage(
     Ok(())
 }
 
-/// One-time packaging tweaks when a brand-new PPA branch is created:
-/// point gbp.conf's `debian-branch` at the new branch, and inject the
-/// salsa-ci.yml PPA-rebuild preset. Each is committed separately
-/// (matching the by-hand workflow), and skipped when the file is
-/// absent or already adjusted.
-fn adjust_new_branch_packaging(
+/// Apply the PPA-branch packaging adjustments and commit each that
+/// changed: point gbp.conf's `debian-branch` at the branch and set its
+/// `debian-tag` to the `ubuntu/%(version)s` format (so `gbp tag` tags
+/// under `ubuntu/` instead of the default `debian/`), and inject the
+/// salsa-ci.yml PPA-rebuild preset. Idempotent and skipped when a file
+/// is absent — run both when creating a new branch and to fix up an
+/// existing one.
+fn adjust_branch_packaging(
     ui: &Ui,
     repo: &Path,
     target: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if repo.join("debian/gbp.conf").exists() {
-        ui.step(&format!("Point gbp.conf debian-branch at {target}"));
+        ui.step(&format!(
+            "Adjust gbp.conf (debian-branch, debian-tag) for {target}"
+        ));
+        let tag_format = plan::debian_tag_format(target);
         let changed = edit_file(ui, repo, "debian/gbp.conf", |text| {
-            Some(gbpconf::set_debian_branch(text, target))
+            let text = gbpconf::set_key(text, "debian-branch", target);
+            Some(gbpconf::set_key(&text, "debian-tag", &tag_format))
         })?;
         if changed {
             ui.run_required(
@@ -1092,12 +1098,12 @@ mod tests {
             dry_run: false,
             quiet: false,
         };
-        let transform = |t: &str| Some(gbpconf::set_debian_branch(t, "noble"));
+        let transform = |t: &str| Some(gbpconf::set_key(t, "debian-branch", "noble"));
         assert!(edit_file(&ui, p, "debian/gbp.conf", transform).unwrap());
         let after = std::fs::read_to_string(p.join("debian/gbp.conf")).unwrap();
         assert!(after.contains("debian-branch = noble"));
         // Re-applying the same transform reports no change.
-        let transform = |t: &str| Some(gbpconf::set_debian_branch(t, "noble"));
+        let transform = |t: &str| Some(gbpconf::set_key(t, "debian-branch", "noble"));
         assert!(!edit_file(&ui, p, "debian/gbp.conf", transform).unwrap());
     }
 

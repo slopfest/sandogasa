@@ -57,7 +57,9 @@ packaging tweaks the workflow needs, each as its own signed commit:
 
 - `debian/gbp.conf`: point `debian-branch` at the new branch itself
   (so its codename resolves correctly and gbp treats it as its own
-  Debian branch).
+  Debian branch), and set `debian-tag` to the `ubuntu/%(version)s`
+  format so `gbp tag` tags under `ubuntu/` (matching the branch's
+  namespace) rather than gbp's default `debian/`.
 - `debian/salsa-ci.yml`: inject the PPA-rebuild `variables` preset —
   `RELEASE: "unstable"` (salsa-ci builds against Debian unstable) plus
   the backports-style relaxations `SALSA_CI_LINTIAN_SUPPRESS_TAGS`,
