@@ -30,3 +30,8 @@ target
 # Added by cargo
 
 /target
+
+# Member crates share the workspace root Cargo.lock; per-member
+# lockfiles are spurious (and confuse Dependabot).
+tools/*/Cargo.lock
+crates/*/Cargo.lock
