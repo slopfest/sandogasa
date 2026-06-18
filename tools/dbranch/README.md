@@ -41,12 +41,21 @@ stages you run need:
 ## Usage
 
 ```
+dbranch fixup [<branch>...] [-C <dir>] [--dry-run] [--explain] [--quiet]
 dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
     [--source <branch>] [--nowait]
     [--ppa <name> | --upload-target <host>]
     [--dry-run] [--explain] [--quiet]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
 ```
+
+`rebuild` is the main command (below). `fixup [<branch>...]` applies
+the PPA-branch packaging adjustments — gbp.conf's `debian-branch` /
+`debian-tag` and the salsa-ci.yml preset, the same ones the `merge`
+stage makes for a new branch — to **existing** branches, to repair
+ones set up before (or outside) dbranch. It checks each branch out,
+adjusts, and commits what changed (idempotent; defaults to the current
+branch). `watch-ci` is described under the `push` stage.
 
 Run it from the package's git working tree **with the Debian branch
 checked out** (e.g. `master` or `debian/unstable`) — that branch is

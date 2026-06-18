@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### dbranch: `fixup` subcommand for existing branches
+
+`dbranch fixup [<branch>...]` applies the PPA-branch packaging
+adjustments — gbp.conf's `debian-branch` / `debian-tag` and the
+salsa-ci.yml preset, the same ones the `merge` stage makes when
+creating a branch — to **existing** branches, to repair ones set up
+before (or outside) dbranch (e.g. branches missing `debian-tag`, which
+made `gbp tag` use the wrong namespace). It checks each branch out,
+adjusts, and commits what changed; idempotent, and defaults to the
+current branch. Errors up front if there's no `debian/` directory (run
+from the wrong repo).
+
 ### dbranch: `--source` to override the merge source branch
 
 `dbranch rebuild --source <branch>` sets the branch merged into each

@@ -243,6 +243,46 @@ pub fn watch_ci(
     watch_pipeline(ui, repo, &sha)
 }
 
+/// Apply the PPA-branch packaging adjustments (gbp.conf `debian-branch`
+/// / `debian-tag`, the salsa-ci.yml preset) to existing branches —
+/// the same fixups the merge stage does when creating a branch,
+/// exposed for repairing branches set up before (or outside) dbranch.
+/// Defaults to the current branch; checks each out first.
+pub fn fixup(
+    ui: &Ui,
+    repo: &Path,
+    branches: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Guard against being run in the wrong repo: a Debian package
+    // working tree has a debian/ directory.
+    if !repo.join("debian").is_dir() {
+        return Err(format!(
+            "no debian/ directory in {} — not a Debian package working tree?",
+            repo.display()
+        )
+        .into());
+    }
+    let targets = if branches.is_empty() {
+        vec![git::current_branch(repo)?]
+    } else {
+        branches
+    };
+    let all = git::local_branches(repo)?;
+    for target in &targets {
+        match classify_target(repo, &all, target) {
+            TargetLocation::New => {
+                return Err(format!("branch {target} does not exist").into());
+            }
+            location => {
+                ui.step(&format!("Fix up {target}"));
+                checkout_existing(ui, repo, target, location)?;
+                adjust_branch_packaging(ui, repo, target)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// All existing PPA branches: everything except the Debian branch and
 /// gbp's plumbing branches (`upstream-branch` and the pristine-tar
 /// branch). Pure — `cfg` is the effective gbp config.
@@ -1081,6 +1121,39 @@ mod tests {
             source: None,
         };
         run(&ui_dry(), p, &opts).unwrap();
+    }
+
+    #[test]
+    fn fixup_dry_run_adjusts_existing_branch() {
+        let dir = setup();
+        let p = dir.path();
+        std::fs::write(
+            p.join("debian/gbp.conf"),
+            "[DEFAULT]\npristine-tar = True\ndebian-branch = debian/unstable\nupstream-branch = upstream\n",
+        )
+        .unwrap();
+        std::fs::write(
+            p.join("debian/salsa-ci.yml"),
+            "---\nvariables:\n  SALSA_CI_DISABLE_BUILD_PACKAGE_ANY: '1'\n",
+        )
+        .unwrap();
+        git(p, &["add", "-A"]);
+        git(p, &["commit", "-qm", "add packaging"]);
+        // noble exists locally in setup().
+        fixup(&ui_dry(), p, vec!["noble".to_string()]).unwrap();
+    }
+
+    #[test]
+    fn fixup_unknown_branch_errors() {
+        let dir = setup();
+        assert!(fixup(&ui_dry(), dir.path(), vec!["ubuntu/nope".to_string()]).is_err());
+    }
+
+    #[test]
+    fn fixup_without_debian_dir_errors() {
+        // A directory with no debian/ (wrong repo) is rejected up front.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(fixup(&ui_dry(), dir.path(), vec!["noble".to_string()]).is_err());
     }
 
     #[test]

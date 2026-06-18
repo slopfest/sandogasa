@@ -23,6 +23,29 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Fix up gbp.conf / salsa-ci.yml on existing PPA branch(es).
+    Fixup {
+        /// Branch(es) to fix up (default: the current branch).
+        #[arg(value_name = "BRANCH")]
+        branches: Vec<String>,
+
+        /// Run in this package working directory.
+        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        repo: PathBuf,
+
+        /// Print the commands without running anything (a tutorial).
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Run, but narrate each step + command first (follow along).
+        #[arg(long)]
+        explain: bool,
+
+        /// Suppress tool output, showing it only when a step fails.
+        #[arg(short, long, conflicts_with = "explain")]
+        quiet: bool,
+    },
+
     /// Rebuild a Debian package across its Ubuntu/PPA branches.
     Rebuild {
         /// PPA branch(es) to rebuild (repeatable or CSV).
@@ -134,6 +157,20 @@ fn main() -> ExitCode {
 
 fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
+        Command::Fixup {
+            branches,
+            repo,
+            dry_run,
+            explain,
+            quiet,
+        } => {
+            let ui = Ui {
+                explain,
+                dry_run,
+                quiet,
+            };
+            rebuild::fixup(&ui, &repo, branches)
+        }
         Command::Rebuild {
             branches,
             repo,
