@@ -206,7 +206,9 @@ pub fn ensure_tools(
         required.push(("dput", "dput", None));
     }
     if need_tag {
-        required.push(("dh", "debhelper", Some("--version")));
+        // Probe by $PATH only — `dh` has no reliable side-effect-free
+        // version flag (neither `--version` nor `--help` exits 0).
+        required.push(("dh", "debhelper", None));
     }
     sandogasa_cli::require_tools(&required).map_err(Into::into)
 }
