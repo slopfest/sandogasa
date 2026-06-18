@@ -81,6 +81,22 @@ pub fn show_file(repo: &Path, branch: &str, path: &str) -> Option<String> {
     }
 }
 
+/// Whether `branch` has an upstream configured (`<branch>@{upstream}`
+/// resolves). Lets the push stage drop the `-u origin <branch>` once
+/// tracking is set and just run `git push`.
+pub fn has_upstream(repo: &Path, branch: &str) -> bool {
+    Command::new("git")
+        .args([
+            "rev-parse",
+            "--abbrev-ref",
+            &format!("{branch}@{{upstream}}"),
+        ])
+        .current_dir(repo)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Whether `<remote>/<branch>` exists as a remote-tracking ref
 /// (`refs/remotes/<remote>/<branch>`) — i.e. the branch is on the
 /// remote and has been fetched, even if it was never checked out
@@ -222,5 +238,38 @@ mod tests {
         );
         // An unknown remote yields None rather than erroring.
         assert_eq!(remote_host(p, "nope"), None);
+    }
+
+    #[test]
+    fn has_upstream_reflects_tracking() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(p)
+                    .env("GIT_AUTHOR_NAME", "T")
+                    .env("GIT_AUTHOR_EMAIL", "t@x")
+                    .env("GIT_COMMITTER_NAME", "T")
+                    .env("GIT_COMMITTER_EMAIL", "t@x")
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(p.join("f"), "x").unwrap();
+        git(&["add", "-A"]);
+        git(&["-c", "commit.gpgsign=false", "commit", "-qm", "init"]);
+        assert!(!has_upstream(p, "main"));
+        // Fake a fetched remote branch and set main to track it. The
+        // remote (with its fetch refspec) is needed for @{upstream} to
+        // recognize the ref as a remote-tracking branch.
+        git(&["remote", "add", "origin", "/tmp/dbranch-test.git"]);
+        git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(&["config", "branch.main.remote", "origin"]);
+        git(&["config", "branch.main.merge", "refs/heads/main"]);
+        assert!(has_upstream(p, "main"));
     }
 }

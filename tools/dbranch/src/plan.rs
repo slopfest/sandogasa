@@ -142,13 +142,17 @@ pub fn lintian_argv(targets: &[String]) -> Vec<String> {
     a
 }
 
-/// `git push -u <remote> <branch>` — publish the rebuilt PPA branch
-/// and set its upstream. `-u` makes the first push of a brand-new
-/// branch establish tracking (you can't set upstream beforehand — the
-/// remote ref doesn't exist yet); it's a harmless no-op on later
-/// pushes and on branches that already track, so the push stage needs
-/// no special first-push handling.
-pub fn push_argv(remote: &str, branch: &str) -> Vec<String> {
+/// `git push` — publish the checked-out branch to its already-set
+/// upstream (the minimal command once tracking exists).
+pub fn push_argv() -> Vec<String> {
+    argv(&["git", "push"])
+}
+
+/// `git push -u <remote> <branch>` — publish the branch and set its
+/// upstream. Used for the first push of a branch with no upstream yet
+/// (you can't set tracking beforehand — the remote ref doesn't exist
+/// until this push). Later pushes use the plain [`push_argv`].
+pub fn push_set_upstream_argv(remote: &str, branch: &str) -> Vec<String> {
     argv(&["git", "push", "-u", remote, branch])
 }
 
@@ -335,8 +339,9 @@ mod tests {
                 "debian/gbp.conf"
             ]
         );
+        assert_eq!(push_argv(), ["git", "push"]);
         assert_eq!(
-            push_argv("origin", "noble"),
+            push_set_upstream_argv("origin", "noble"),
             ["git", "push", "-u", "origin", "noble"]
         );
         assert_eq!(

@@ -287,7 +287,14 @@ fn push_stage(
     nowait: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     ui.step(&format!("Push {branch} to origin"));
-    ui.run_required(&plan::push_argv("origin", branch), repo)?;
+    // Once the branch tracks origin/<branch> a plain `git push` (of the
+    // checked-out branch) suffices; the first push sets the upstream.
+    let push = if git::has_upstream(repo, branch) {
+        plan::push_argv()
+    } else {
+        plan::push_set_upstream_argv("origin", branch)
+    };
+    ui.run_required(&push, repo)?;
 
     if nowait {
         eprintln!("--nowait: pushed; not watching CI (use `dbranch watch-ci {branch}` later)");

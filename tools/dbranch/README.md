@@ -90,10 +90,10 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   lintian is quiet when clean, so its output is echoed with a
   tag-count summary. It uses lintian's default exit convention
   (non-zero on error-level tags) and propagates that status.
-- **`push`** — `git push -u origin <branch>` (the `-u` sets the
-  branch's upstream, so a brand-new branch's first push establishes
-  tracking and later pushes need no special handling), then (unless
-  `--nowait`)
+- **`push`** — push the branch (`git push -u origin <branch>` the
+  first time, to set the upstream tracking the new remote ref didn't
+  have yet; a plain `git push` once it tracks `origin/<branch>`), then
+  (unless `--nowait`)
   watch the pushed commit's GitLab CI pipeline to completion. dbranch
   polls `glab ci list --sha <commit> -F json`, targeting the **exact
   commit** rather than the branch — so it can't accidentally report
