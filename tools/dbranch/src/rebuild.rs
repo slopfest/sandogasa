@@ -12,6 +12,7 @@
 //! dbranch is run from the Debian branch (whatever is checked out —
 //! `master`, `debian/unstable`, …); that branch is the merge source.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -329,6 +330,7 @@ fn watch_pipeline(ui: &Ui, repo: &Path, sha: &str) -> Result<(), Box<dyn std::er
     let short = sha.get(..8).unwrap_or(sha);
     let start = Instant::now();
     let mut last_status = String::new();
+    let mut reported_jobs: HashSet<String> = HashSet::new();
     loop {
         let (code, out, err) = ui.run_query(&argv, repo)?;
         if code != 0 {
@@ -356,6 +358,9 @@ fn watch_pipeline(ui: &Ui, repo: &Path, sha: &str) -> Result<(), Box<dyn std::er
             eprintln!("pipeline {} for {short}: {}", p.id, p.status);
             last_status = p.status.clone();
         }
+        // Report each job as it finishes (best-effort; the pipeline
+        // poll above is the source of truth for pass/fail).
+        report_finished_jobs(ui, repo, p.id, &mut reported_jobs);
         if plan::is_terminal_status(&p.status) {
             return match p.status.as_str() {
                 "failed" | "canceled" => Err(Box::new(crate::ui::StageFailure {
@@ -380,6 +385,35 @@ fn watch_pipeline(ui: &Ui, repo: &Path, sha: &str) -> Result<(), Box<dyn std::er
 fn first_nonempty<'a>(a: &'a str, b: &'a str) -> &'a str {
     let a = a.trim();
     if a.is_empty() { b.trim() } else { a }
+}
+
+/// Poll a pipeline's jobs and print each one as it first reaches a
+/// terminal state, tracking which have already been reported.
+/// Best-effort: a failed jobs query is ignored (the pipeline-level
+/// poll drives pass/fail), so transient hiccups don't abort the watch.
+fn report_finished_jobs(ui: &Ui, repo: &Path, pipeline_id: i64, reported: &mut HashSet<String>) {
+    let Ok((code, out, _err)) = ui.run_query(&plan::glab_pipeline_jobs_argv(pipeline_id), repo)
+    else {
+        return;
+    };
+    if code != 0 {
+        return;
+    }
+    for job in plan::parse_jobs(&out) {
+        if plan::is_terminal_status(&job.status) && reported.insert(job.name.clone()) {
+            eprintln!("{}", format_job_line(&job));
+        }
+    }
+}
+
+/// One-line progress marker for a finished job: `✓` for success, `✗`
+/// for failed/canceled (with the status), `•` for skipped/manual etc.
+fn format_job_line(job: &plan::JobInfo) -> String {
+    match job.status.as_str() {
+        "success" => format!("  ✓ {} ({})", job.name, job.stage),
+        "failed" | "canceled" => format!("  ✗ {} ({}) — {}", job.name, job.stage, job.status),
+        other => format!("  • {} ({}) — {}", job.name, job.stage, other),
+    }
 }
 
 /// Check out an existing target branch: a local one directly, or a
@@ -935,6 +969,25 @@ mod tests {
         // Re-applying the same transform reports no change.
         let transform = |t: &str| Some(gbpconf::set_debian_branch(t, "noble"));
         assert!(!edit_file(&ui, p, "debian/gbp.conf", transform).unwrap());
+    }
+
+    #[test]
+    fn format_job_line_marks_by_status() {
+        let job = |status: &str| plan::JobInfo {
+            id: 1,
+            name: "build source".to_string(),
+            stage: "build".to_string(),
+            status: status.to_string(),
+        };
+        assert_eq!(format_job_line(&job("success")), "  ✓ build source (build)");
+        assert_eq!(
+            format_job_line(&job("failed")),
+            "  ✗ build source (build) — failed"
+        );
+        assert_eq!(
+            format_job_line(&job("skipped")),
+            "  • build source (build) — skipped"
+        );
     }
 
     #[test]

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### dbranch: per-job CI watch progress
+
+While watching a pipeline (push stage / `watch-ci`), dbranch now also
+polls the pipeline's jobs (`glab api projects/:id/pipelines/<id>/jobs`)
+and prints each job as it finishes — `✓ <name> (<stage>)` on success,
+`✗ … — <status>` on failure — instead of only the pipeline-level
+state. Best-effort: a failed jobs query is ignored (the pipeline poll
+still drives pass/fail).
+
 ### dbranch: `--quiet` mode
 
 `dbranch rebuild --quiet` (`-q`) suppresses the shelled-out tools'

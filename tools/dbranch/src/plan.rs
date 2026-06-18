@@ -194,6 +194,57 @@ pub fn latest_pipeline(json: &str) -> Option<PipelineInfo> {
     })
 }
 
+/// `glab api projects/:id/pipelines/<id>/jobs?per_page=100` — list a
+/// pipeline's jobs as JSON. `glab` substitutes `:id` with the current
+/// repo and emits the raw API response; `per_page=100` avoids needing
+/// pagination for any realistic pipeline. Used to report per-job
+/// progress while watching (see [`crate::rebuild`]).
+pub fn glab_pipeline_jobs_argv(pipeline_id: i64) -> Vec<String> {
+    vec![
+        "glab".to_string(),
+        "api".to_string(),
+        format!("projects/:id/pipelines/{pipeline_id}/jobs?per_page=100"),
+    ]
+}
+
+/// One CI job's identity and state, parsed from glab's jobs JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobInfo {
+    pub id: i64,
+    pub name: String,
+    pub stage: String,
+    pub status: String,
+}
+
+/// Parse the jobs array from `glab api .../jobs`, sorted by id
+/// (ascending ≈ stage/creation order, for readable progress output).
+/// Empty on unparseable/empty input.
+pub fn parse_jobs(json: &str) -> Vec<JobInfo> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(array) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut jobs: Vec<JobInfo> = array
+        .iter()
+        .filter_map(|j| {
+            Some(JobInfo {
+                id: j.get("id")?.as_i64()?,
+                name: j.get("name")?.as_str()?.to_string(),
+                stage: j
+                    .get("stage")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                status: j.get("status")?.as_str()?.to_string(),
+            })
+        })
+        .collect();
+    jobs.sort_by_key(|j| j.id);
+    jobs
+}
+
 /// Whether a pipeline status is terminal (the pipeline has finished);
 /// the complement of the in-progress states glab keeps polling
 /// through. Mirrors GitLab's pipeline status vocabulary.
@@ -371,6 +422,36 @@ mod tests {
         // Empty list (no pipeline yet) / junk → None.
         assert_eq!(latest_pipeline("[]"), None);
         assert_eq!(latest_pipeline("not json"), None);
+    }
+
+    #[test]
+    fn parse_jobs_extracts_and_sorts_by_id() {
+        let json = r#"[
+            {"id": 20, "name": "lintian", "stage": "test", "status": "running"},
+            {"id": 18, "name": "build source", "stage": "build", "status": "success"}
+        ]"#;
+        let jobs = parse_jobs(json);
+        assert_eq!(jobs.len(), 2);
+        // Sorted ascending by id.
+        assert_eq!(jobs[0].name, "build source");
+        assert_eq!(jobs[0].stage, "build");
+        assert_eq!(jobs[0].status, "success");
+        assert_eq!(jobs[1].name, "lintian");
+        assert_eq!(jobs[1].status, "running");
+        assert!(parse_jobs("not json").is_empty());
+        assert!(parse_jobs("{}").is_empty());
+    }
+
+    #[test]
+    fn glab_pipeline_jobs_argv_targets_current_repo() {
+        assert_eq!(
+            glab_pipeline_jobs_argv(1111431),
+            [
+                "glab",
+                "api",
+                "projects/:id/pipelines/1111431/jobs?per_page=100"
+            ]
+        );
     }
 
     #[test]

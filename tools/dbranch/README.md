@@ -103,7 +103,9 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   waits until the pipeline finishes: a `failed`/`canceled` result
   makes dbranch exit non-zero; `success`/`skipped`/`manual` pass; if
   no pipeline shows up within ~3 minutes it's treated as benign
-  (nothing to watch). Before watching, dbranch checks `glab auth
+  (nothing to watch). It also polls the pipeline's jobs and prints each
+  one as it finishes (`✓ build source (build)`, `✗ … — failed`).
+  Before watching, dbranch checks `glab auth
   status --hostname <host>` for that instance (glab stores a token per
   host) and fails early with the `glab auth login` command to run if
   you're not logged in. `--nowait` pushes without waiting; attach to a
