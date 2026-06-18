@@ -10,6 +10,7 @@ repository.workspace = true
 anstream = { workspace = true }
 anstyle = { workspace = true }
 clap = { workspace = true }
+sandogasa-cli = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

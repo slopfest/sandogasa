@@ -550,7 +550,9 @@ fn main() -> ExitCode {
     }
 
     // All other subcommands need fedrq.
-    if let Err(e) = sandogasa_cli::require_tool("fedrq", "sudo dnf install fedrq") {
+    if let Err(e) =
+        sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])
+    {
         eprintln!("error: {e}");
         return ExitCode::FAILURE;
     }
@@ -623,7 +625,7 @@ fn main() -> ExitCode {
     if let Command::CheckUpdate(a) = &cli.command {
         // check-update also needs koji for side tag queries.
         if let Err(e) =
-            sandogasa_cli::require_tool_with_arg("koji", "version", "sudo dnf install koji")
+            sandogasa_cli::require_tools(&[("koji", "sudo dnf install koji", Some("version"))])
         {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;

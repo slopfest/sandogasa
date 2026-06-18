@@ -81,18 +81,6 @@ pub fn show_file(repo: &Path, branch: &str, path: &str) -> Option<String> {
     }
 }
 
-/// Whether an executable is on `PATH`.
-pub fn tool_exists(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| {
-                let p = dir.join(name);
-                p.is_file()
-            })
-        })
-        .unwrap_or(false)
-}
-
 /// Verify the external tools the selected stages need are installed,
 /// with an actionable message naming the providing package when one
 /// is missing. `git` is always required; the rest are per-stage.
@@ -101,28 +89,20 @@ pub fn ensure_tools(
     need_build: bool,
     need_lint: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // (executable, providing package)
-    let mut required: Vec<(&str, &str)> = vec![("git", "git")];
+    // (executable, providing package, version/help probe). Most tools
+    // answer `--version`; pbuilder-dist doesn't, but `--help` exits 0.
+    let mut required: Vec<(&str, &str, Option<&str>)> = vec![("git", "git", Some("--version"))];
     if need_gbp {
-        required.push(("gbp", "git-buildpackage"));
+        required.push(("gbp", "git-buildpackage", Some("--version")));
     }
     if need_build {
-        required.push(("debuild", "devscripts"));
-        required.push(("pbuilder-dist", "ubuntu-dev-tools"));
+        required.push(("debuild", "devscripts", Some("--version")));
+        required.push(("pbuilder-dist", "ubuntu-dev-tools", Some("--help")));
     }
     if need_lint {
-        required.push(("lintian", "lintian"));
+        required.push(("lintian", "lintian", Some("--version")));
     }
-    let missing: Vec<String> = required
-        .iter()
-        .filter(|(exe, _)| !tool_exists(exe))
-        .map(|(exe, pkg)| format!("{exe} (install: {pkg})"))
-        .collect();
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("missing required tool(s): {}", missing.join(", ")).into())
-    }
+    sandogasa_cli::require_tools(&required).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -130,9 +110,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tool_exists_detects_present_and_absent() {
-        // `sh` is on PATH in any dev/CI environment.
-        assert!(tool_exists("sh"));
-        assert!(!tool_exists("definitely-not-a-real-tool-xyzzy"));
+    fn ensure_tools_ok_for_present_basics() {
+        // git is present in dev/CI; with no extra stages this passes.
+        assert!(ensure_tools(false, false, false).is_ok());
     }
 }

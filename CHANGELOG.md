@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### sandogasa-cli: unified tool-availability check (breaking)
+
+One batch function now covers both existence and probe checks:
+`require_tools(&[(exe, install_hint, Option<probe>)])`. Each tuple's
+optional probe means *run* `<exe> <arg>` and require a zero exit
+(e.g. `Some("--version")`, `Some("version")` for koji, `Some("--help")`
+for pbuilder-dist); `None` checks only `$PATH` existence. It checks
+every entry and returns one error listing all missing tools with
+their install hints. `tool_exists(name)` remains as the bare PATH
+check.
+
+Removed `require_tool` and `require_tool_with_arg`. Migrate:
+`require_tool(n, h)` → `require_tools(&[(n, h, Some("--version"))])`;
+`require_tool_with_arg(n, arg, h)` → `require_tools(&[(n, h, Some(arg))])`.
+Callers updated: ebranch (fedrq/koji/bodhi), poi-tracker (koji),
+koji-diff (koji), and dbranch (git/gbp/debuild/lintian probe
+`--version`, pbuilder-dist probes `--help`).
+
 ### dbranch: new tool
 
 A helper for propagating a Debian package across its Ubuntu/PPA

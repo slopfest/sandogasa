@@ -2062,7 +2062,7 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
             return ExitCode::FAILURE;
         };
         if let Err(e) =
-            sandogasa_cli::require_tool_with_arg("koji", "version", "sudo dnf install koji")
+            sandogasa_cli::require_tools(&[("koji", "sudo dnf install koji", Some("version"))])
         {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;

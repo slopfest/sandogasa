@@ -274,7 +274,11 @@ pub fn ensure_session() -> Result<(), String> {
             Ok(_) => return Ok(()),
             Err(e) => e,
         };
-        sandogasa_cli::require_tool("bodhi", "sudo dnf install bodhi-client")?;
+        sandogasa_cli::require_tools(&[(
+            "bodhi",
+            "sudo dnf install bodhi-client",
+            Some("--version"),
+        )])?;
         eprintln!("{first_err}");
         eprintln!("starting a bodhi CLI login (`bodhi overrides query --mine`)...");
         let status = std::process::Command::new("bodhi")

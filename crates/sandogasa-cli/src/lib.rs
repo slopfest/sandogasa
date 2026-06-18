@@ -96,54 +96,63 @@ fn host_is_loopback(u: &Url) -> bool {
     }
 }
 
-/// Check that an external tool is available in `$PATH`.
-///
-/// Runs `<name> <version_arg>` and returns `Ok(())` if it exits
-/// successfully, or an error message with the install hint.
-/// Most tools use `--version`; see [`require_tool`] for a
-/// convenience wrapper.
-///
-/// # Example
-///
-/// ```no_run
-/// // koji uses `version` subcommand instead of `--version`
-/// sandogasa_cli::require_tool_with_arg("koji", "version", "sudo dnf install koji").unwrap();
-/// ```
-pub fn require_tool_with_arg(
-    name: &str,
-    version_arg: &str,
-    install_hint: &str,
-) -> Result<(), String> {
-    match Command::new(name)
-        .arg(version_arg)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => Err(format!(
-            "{name} exited with {s}; is it installed correctly? \
-             Install it with: {install_hint}"
-        )),
-        Err(_) => Err(format!("{name} not found. Install it with: {install_hint}")),
+/// Whether an executable named `name` is on `$PATH` (a lightweight
+/// check that does **not** run the tool).
+pub fn tool_exists(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
+        .unwrap_or(false)
+}
+
+/// Whether `exe` is available, per its `probe`: `Some(arg)` runs
+/// `exe arg` and requires a zero exit (confirms it executes);
+/// `None` checks only `$PATH` existence.
+fn tool_available(exe: &str, probe: Option<&str>) -> bool {
+    match probe {
+        Some(arg) => Command::new(exe)
+            .arg(arg)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success()),
+        None => tool_exists(exe),
     }
 }
 
-/// Check that an external tool is available in `$PATH`.
+/// Check that a batch of external tools is available, returning a
+/// single error that lists every missing one with its install hint.
 ///
-/// Runs `<name> --version` and returns `Ok(())` if it exits
-/// successfully, or an error message with the install hint.
+/// Each entry is `(executable, install_hint, probe)`:
+/// - `probe = Some(arg)` *runs* `<executable> <arg>` (e.g.
+///   `Some("--version")`, or `Some("version")` for `koji`, or
+///   `Some("--help")` for `pbuilder-dist`) and requires a zero exit,
+///   confirming the tool actually executes.
+/// - `probe = None` checks only `$PATH` existence, for tools with no
+///   usable version/help flag.
 ///
-/// For tools that use a different version probe (e.g. `koji version`
-/// instead of `koji --version`), use [`require_tool_with_arg`].
+/// All entries are checked, so the error names every missing tool
+/// rather than failing on the first.
 ///
 /// # Example
 ///
 /// ```no_run
-/// sandogasa_cli::require_tool("fedrq", "sudo dnf install fedrq").unwrap();
+/// sandogasa_cli::require_tools(&[
+///     ("git", "sudo apt install git", Some("--version")),
+///     ("pbuilder-dist", "sudo apt install ubuntu-dev-tools", Some("--help")),
+/// ])
+/// .unwrap();
 /// ```
-pub fn require_tool(name: &str, install_hint: &str) -> Result<(), String> {
-    require_tool_with_arg(name, "--version", install_hint)
+pub fn require_tools(tools: &[(&str, &str, Option<&str>)]) -> Result<(), String> {
+    let missing: Vec<String> = tools
+        .iter()
+        .filter(|(exe, _, probe)| !tool_available(exe, *probe))
+        .map(|(exe, hint, _)| format!("{exe} (install: {hint})"))
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("missing required tool(s): {}", missing.join(", ")))
+    }
 }
 
 #[cfg(test)]
@@ -151,23 +160,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn require_missing_tool() {
-        let result = require_tool("nonexistent_tool_xyz_123", "magic install");
-        assert!(result.is_err());
-        let msg = result.unwrap_err();
-        assert!(msg.contains("nonexistent_tool_xyz_123"));
-        assert!(msg.contains("magic install"));
+    fn tool_exists_detects_present_and_absent() {
+        assert!(tool_exists("sh"));
+        assert!(!tool_exists("nonexistent_tool_xyz_123"));
     }
 
     #[test]
-    fn require_available_tool() {
-        // `true` is a standard Unix utility that always succeeds.
-        // It doesn't support --version but some impls exit 0 anyway.
-        // Use `sh` which reliably exists and handles --version.
-        let result = require_tool("sh", "should already be installed");
-        // sh --version may or may not succeed depending on implementation,
-        // so just verify it doesn't panic.
-        let _ = result;
+    fn require_tools_path_and_probe_modes() {
+        // PATH mode (probe None): present is OK, absent is missing.
+        assert!(require_tools(&[("sh", "present", None)]).is_ok());
+        assert!(require_tools(&[("nonexistent_zzz", "install zzz", None)]).is_err());
+
+        // Probe mode: `true` runs and exits 0; a missing executable
+        // fails the probe. The error lists every missing tool with its
+        // hint, and skips the present one.
+        assert!(require_tools(&[("true", "ok", Some("--version"))]).is_ok());
+        let err = require_tools(&[
+            ("true", "ok", Some("--version")),
+            ("nonexistent_aaa_111", "install aaa", Some("--version")),
+            ("nonexistent_bbb_222", "install bbb", None),
+        ])
+        .unwrap_err();
+        assert!(err.contains("nonexistent_aaa_111"));
+        assert!(err.contains("install aaa"));
+        assert!(err.contains("nonexistent_bbb_222"));
+        assert!(err.contains("install bbb"));
+        assert!(!err.contains("true ("));
     }
 
     #[test]
