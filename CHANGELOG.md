@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### dbranch: `tag` stage (gbp tag)
+
+A new `tag` stage tags the release: it first runs `dh clean` (`gbp tag`
+refuses a dirty tree, and `debuild -S` leaves a generated
+`debian/files`), then `gbp tag` — which derives the version from
+`debian/changelog` and gbp's `debian-tag` format. Runs after `upload`
+in the pipeline and is **opt-in** (not part of `all`). Adds `dh`
+(debhelper) to the per-stage tool check, and requires `gbp` whenever
+`tag` is selected.
+
 ### dbranch: `upload` stage (dput)
 
 A new `upload` stage `dput`s the built source `.changes` (from

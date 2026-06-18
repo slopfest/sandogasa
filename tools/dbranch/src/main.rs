@@ -59,7 +59,9 @@ Stages to run, repeatable or comma-separated:
           pipeline via glab (see --nowait)
   upload  dput the built package (needs --ppa or
           --upload-target)
-  all     merge + build + lint + push (upload is opt-in)
+  tag     dh clean + gbp tag the release
+  all     merge + build + lint + push
+          (upload and tag are opt-in)
 Defaults to `merge` (the others are opt-in for now)."
         )]
         stage: Vec<String>,

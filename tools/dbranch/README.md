@@ -120,8 +120,12 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   (e.g. `mentors`, `ftp-master`); the two are mutually exclusive and
   one is required. Runs after `push` so CI can pass before publishing.
   **Opt-in** — not part of `all`.
-- **`all`** — `merge`, `build`, `lint`, `push` (not `upload`, which is
-  a deliberate publish needing a target).
+- **`tag`** — tag the release: `dh clean` (so `gbp tag` sees a clean
+  tree — `debuild -S` leaves a `debian/files`) then `gbp tag`, which
+  derives the version from `debian/changelog` and gbp's `debian-tag`
+  format. Runs after `upload`. **Opt-in** — not part of `all`.
+- **`all`** — `merge`, `build`, `lint`, `push` (not `upload`/`tag`,
+  which are deliberate publish/release steps).
 
 ```
 $ dbranch rebuild noble                  # merge stage only (default)

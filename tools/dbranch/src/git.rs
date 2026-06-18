@@ -182,6 +182,7 @@ pub fn ensure_tools(
     need_lint: bool,
     need_glab: bool,
     need_upload: bool,
+    need_tag: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // (executable, providing package, version/help probe). Most tools
     // answer `--version`; pbuilder-dist doesn't, but `--help` exits 0.
@@ -204,6 +205,9 @@ pub fn ensure_tools(
         // between dput and dput-ng.
         required.push(("dput", "dput", None));
     }
+    if need_tag {
+        required.push(("dh", "debhelper", Some("--version")));
+    }
     sandogasa_cli::require_tools(&required).map_err(Into::into)
 }
 
@@ -214,7 +218,7 @@ mod tests {
     #[test]
     fn ensure_tools_ok_for_present_basics() {
         // git is present in dev/CI; with no extra stages this passes.
-        assert!(ensure_tools(false, false, false, false, false).is_ok());
+        assert!(ensure_tools(false, false, false, false, false, false).is_ok());
     }
 
     #[test]

@@ -38,11 +38,12 @@ pub struct Stages {
     pub lint: bool,
     pub push: bool,
     pub upload: bool,
+    pub tag: bool,
 }
 
 impl Stages {
     fn any(&self) -> bool {
-        self.merge || self.build || self.lint || self.push || self.upload
+        self.merge || self.build || self.lint || self.push || self.upload || self.tag
     }
 }
 
@@ -63,9 +64,10 @@ pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
             "lint" => s.lint = true,
             "push" => s.push = true,
             "upload" => s.upload = true,
+            "tag" => s.tag = true,
             "all" => {
-                // `all` is the build-and-verify flow; `upload` (a
-                // deliberate publish needing a target) stays opt-in.
+                // `all` is the build-and-verify flow; `upload` and `tag`
+                // (deliberate publish/release steps) stay opt-in.
                 s.merge = true;
                 s.build = true;
                 s.lint = true;
@@ -73,7 +75,8 @@ pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
             }
             other => {
                 return Err(format!(
-                    "unknown stage '{other}' (valid: merge, build, lint, push, upload, all)"
+                    "unknown stage '{other}' \
+                     (valid: merge, build, lint, push, upload, tag, all)"
                 ));
             }
         }
@@ -111,12 +114,14 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
     if !ui.dry_run {
         // glab is only needed when the push stage actually waits on CI.
         let need_glab = opts.stages.push && !opts.nowait;
+        // gbp is used by both the merge stage and `gbp tag`.
         git::ensure_tools(
-            opts.stages.merge,
+            opts.stages.merge || opts.stages.tag,
             opts.stages.build,
             opts.stages.lint,
             need_glab,
             opts.stages.upload,
+            opts.stages.tag,
         )?;
         // glab keeps a token per host; check the one this repo lives on.
         if let Some(host) = need_glab
@@ -204,7 +209,7 @@ pub fn watch_ci(
     branch: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !ui.dry_run {
-        git::ensure_tools(false, false, false, true, false)?;
+        git::ensure_tools(false, false, false, true, false, false)?;
         if let Some(host) = git::remote_host(repo, "origin") {
             git::ensure_glab_auth(repo, &host)?;
         }
@@ -266,7 +271,7 @@ fn rebuild_one(
             &codename,
             &mut rebuilt_version,
         )?;
-    } else if stages.build || stages.lint || stages.push || stages.upload {
+    } else if stages.build || stages.lint || stages.push || stages.upload || stages.tag {
         // Not merging: still need to be on the target.
         if location == TargetLocation::New {
             return Err(format!(
@@ -277,32 +282,48 @@ fn rebuild_one(
         checkout_existing(ui, repo, target, location)?;
     }
 
-    if stages.build || stages.lint || stages.upload {
-        // Prefer the version the merge stage just produced; else read
-        // the current top changelog entry.
+    // The package/version are needed by build, lint, and upload; compute
+    // them once (preferring the version the merge stage just produced).
+    let pkg_ver = if stages.build || stages.lint || stages.upload {
         let (package, top_version) = top_package_version(repo)?;
-        let version = rebuilt_version.unwrap_or(top_version);
-        if stages.build {
-            build_stage(ui, repo, &codename, &package, &version)?;
-        }
-        if stages.lint {
-            lint_stage(ui, repo, &codename, &version)?;
-        }
-        // push (git + CI) before upload, so CI has a chance to pass
-        // before the package is published to its archive.
-        if stages.push {
-            push_stage(ui, repo, target, nowait)?;
-        }
-        if stages.upload {
-            let target =
-                upload_target.ok_or("the upload stage needs a target (--ppa / --upload-target)")?;
-            upload_stage(ui, repo, &package, &version, target)?;
-        }
-    } else if stages.push {
+        Some((package, rebuilt_version.unwrap_or(top_version)))
+    } else {
+        None
+    };
+
+    // Stages run in pipeline order: build, lint, push, upload, tag.
+    if stages.build {
+        let (package, version) = pkg_ver.as_ref().unwrap();
+        build_stage(ui, repo, &codename, package, version)?;
+    }
+    if stages.lint {
+        let (_, version) = pkg_ver.as_ref().unwrap();
+        lint_stage(ui, repo, &codename, version)?;
+    }
+    if stages.push {
         push_stage(ui, repo, target, nowait)?;
+    }
+    if stages.upload {
+        let (package, version) = pkg_ver.as_ref().unwrap();
+        let target =
+            upload_target.ok_or("the upload stage needs a target (--ppa / --upload-target)")?;
+        upload_stage(ui, repo, package, version, target)?;
+    }
+    if stages.tag {
+        tag_stage(ui, repo)?;
     }
 
     Ok(())
+}
+
+/// The tag stage: clean the work tree (`gbp tag` refuses a dirty one,
+/// and `debuild -S` leaves a generated `debian/files`) and tag the
+/// release with `gbp tag`.
+fn tag_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    ui.step("Clean the work tree (gbp tag needs it clean)");
+    ui.run_required(&plan::dh_clean_argv(), repo)?;
+    ui.step("Tag the release");
+    ui.run_required(&plan::gbp_tag_argv(), repo)
 }
 
 /// The upload stage: `dput` the source `.changes` to its archive.
@@ -855,6 +876,7 @@ mod tests {
         lint: false,
         push: false,
         upload: false,
+        tag: false,
     };
     const BUILD: Stages = Stages {
         merge: false,
@@ -862,6 +884,7 @@ mod tests {
         lint: false,
         push: false,
         upload: false,
+        tag: false,
     };
 
     #[test]
@@ -874,8 +897,9 @@ mod tests {
                 build: true,
                 lint: true,
                 push: true,
-                // `all` excludes upload (deliberate publish, opt-in).
+                // `all` excludes upload/tag (deliberate, opt-in).
                 upload: false,
+                tag: false,
             }
         );
         assert_eq!(parse_stages(&["build".to_string()]).unwrap(), BUILD);
@@ -897,6 +921,13 @@ mod tests {
             parse_stages(&["upload".to_string()]).unwrap(),
             Stages {
                 upload: true,
+                ..Stages::default()
+            }
+        );
+        assert_eq!(
+            parse_stages(&["tag".to_string()]).unwrap(),
+            Stages {
+                tag: true,
                 ..Stages::default()
             }
         );
@@ -1125,6 +1156,21 @@ mod tests {
             },
             nowait: false,
             upload_target: Some("ppa:michel/sugarjar".to_string()),
+        };
+        run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn tag_dry_run_cleans_then_tags() {
+        let dir = setup();
+        let opts = Options {
+            branches: vec!["noble".to_string()],
+            stages: Stages {
+                tag: true,
+                ..Stages::default()
+            },
+            nowait: false,
+            upload_target: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }

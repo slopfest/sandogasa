@@ -124,6 +124,19 @@ pub fn debuild_argv() -> Vec<String> {
     argv(&["debuild", "-S", "-sa", "-d"])
 }
 
+/// `dh clean` — run the package's clean target, removing build cruft
+/// like the `debian/files` `debuild -S` leaves, so the work tree is
+/// clean for `gbp tag`.
+pub fn dh_clean_argv() -> Vec<String> {
+    argv(&["dh", "clean"])
+}
+
+/// `gbp tag` — tag the release on the current (Debian) branch, using
+/// the version from `debian/changelog` and gbp's `debian-tag` format.
+pub fn gbp_tag_argv() -> Vec<String> {
+    argv(&["gbp", "tag"])
+}
+
 /// `pbuilder-dist <codename> ../<pkg>_<version>.dsc` — scratch-build
 /// the source package in the codename's chroot.
 pub fn pbuilder_argv(codename: &str, dsc_relpath: &str) -> Vec<String> {
@@ -393,6 +406,8 @@ mod tests {
             ]
         );
         assert_eq!(debuild_argv(), ["debuild", "-S", "-sa", "-d"]);
+        assert_eq!(dh_clean_argv(), ["dh", "clean"]);
+        assert_eq!(gbp_tag_argv(), ["gbp", "tag"]);
         assert_eq!(
             pbuilder_argv("questing", "../damo_3.2.8-1~questing+1.dsc"),
             [
