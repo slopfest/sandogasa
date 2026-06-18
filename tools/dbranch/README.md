@@ -74,8 +74,9 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   `~/pbuilder/<codename>_result/` (`-I` surfaces info-level tags too;
   linting the binaries directly, rather than the `.changes`, avoids
   lintian re-unpacking the source, which `debuild -S` already lints).
-  It warns but does **not** fail the run — rebuild lint tags are
-  mostly inherited from Debian.
+  lintian is quiet when clean, so its output is echoed with a
+  tag-count summary. It uses lintian's default exit convention
+  (non-zero on error-level tags) and propagates that status.
 - **`all`** — all of the above.
 
 ```
@@ -83,6 +84,9 @@ $ dbranch rebuild noble                  # merge stage only (default)
 $ dbranch rebuild noble --stage all      # merge, build, lint
 $ dbranch rebuild noble --stage build,lint   # build an already-merged branch, then lint
 ```
+
+When a stage command fails, `dbranch` exits with that command's own
+exit code (not a generic `1`), so CI sees the real status.
 
 `<N>` is `1` for a new Debian version, bumped if you rebuild the same
 version again. The Debian base version is detected even when run from

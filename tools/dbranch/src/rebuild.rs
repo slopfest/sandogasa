@@ -302,15 +302,18 @@ fn lint_stage(
         return Ok(());
     }
     let n = debs.len();
-    let (ok, output) = ui.run_capture(&plan::lintian_argv(&debs), repo)?;
+    let (code, output) = ui.run_capture(&plan::lintian_argv(&debs), repo)?;
     // lintian is silent when clean — echo its output, then always
     // print a summary so a clean run is visibly confirmed.
     print!("{output}");
-    let summary = summarize_lintian(&output);
-    if ok {
-        println!("lintian: {summary} ({n} .deb(s))");
-    } else {
-        println!("lintian: {summary} ({n} .deb(s)) — errors not fatal for a rebuild");
+    println!("lintian: {} ({n} .deb(s))", summarize_lintian(&output));
+    // Use lintian's own exit convention (non-zero on error-level tags)
+    // and propagate it.
+    if code != 0 {
+        return Err(Box::new(crate::ui::StageFailure {
+            command: format!("lintian -I ({n} .deb(s))"),
+            code,
+        }));
     }
     Ok(())
 }

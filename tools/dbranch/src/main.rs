@@ -75,7 +75,13 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("dbranch: {e}");
-            ExitCode::FAILURE
+            // Propagate a failing stage command's real exit code; any
+            // other error is a generic failure.
+            let code = e
+                .downcast_ref::<dbranch::ui::StageFailure>()
+                .map(|f| f.code)
+                .unwrap_or(1);
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
     }
 }

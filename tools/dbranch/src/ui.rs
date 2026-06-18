@@ -10,6 +10,22 @@ use std::process::Command;
 
 use anstyle::{AnsiColor, Style};
 
+/// A stage command exited non-zero. Carries the exit code so the
+/// process can propagate the real status instead of a generic `1`.
+#[derive(Debug)]
+pub struct StageFailure {
+    pub command: String,
+    pub code: i32,
+}
+
+impl std::fmt::Display for StageFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "`{}` exited with status {}", self.command, self.code)
+    }
+}
+
+impl std::error::Error for StageFailure {}
+
 /// Controls how steps are narrated and whether they execute.
 pub struct Ui {
     /// Narrate each step and run it (follow-along / sanity-check).
@@ -67,13 +83,14 @@ impl Ui {
         let _ = std::io::stdin().read_line(&mut line);
     }
 
-    /// Run a command in `cwd`, narrating it first. Returns whether it
-    /// exited successfully. In `--dry-run` nothing runs and this
-    /// returns `Ok(true)`; in `--explain` it pauses for Enter first.
-    pub fn run(&self, argv: &[String], cwd: &Path) -> std::io::Result<bool> {
+    /// Run a command in `cwd`, narrating it first, and return its exit
+    /// code (`0` on success). In `--dry-run` nothing runs and this
+    /// returns `Ok(0)`; in `--explain` it pauses for Enter first. A
+    /// signal-terminated child reports `1`.
+    pub fn run_status(&self, argv: &[String], cwd: &Path) -> std::io::Result<i32> {
         self.show_command(argv);
         if self.dry_run {
-            return Ok(true);
+            return Ok(0);
         }
         if self.explain {
             self.pause();
@@ -82,17 +99,22 @@ impl Ui {
             .args(&argv[1..])
             .current_dir(cwd)
             .status()?;
-        Ok(status.success())
+        Ok(status.code().unwrap_or(1))
     }
 
-    /// Like [`run`], but captures the command's combined stdout+stderr
-    /// and returns it alongside success. Used where the tool is quiet
-    /// on success (e.g. lintian) and we want to echo + summarize its
-    /// output. In `--dry-run` returns `(true, "")` without running.
-    pub fn run_capture(&self, argv: &[String], cwd: &Path) -> std::io::Result<(bool, String)> {
+    /// Whether the command exited successfully.
+    pub fn run(&self, argv: &[String], cwd: &Path) -> std::io::Result<bool> {
+        Ok(self.run_status(argv, cwd)? == 0)
+    }
+
+    /// Like [`Ui::run_status`], but captures the command's combined
+    /// stdout+stderr alongside the exit code. Used where the tool is
+    /// quiet on success (e.g. lintian) and we want to echo + summarize
+    /// its output. In `--dry-run` returns `(0, "")` without running.
+    pub fn run_capture(&self, argv: &[String], cwd: &Path) -> std::io::Result<(i32, String)> {
         self.show_command(argv);
         if self.dry_run {
-            return Ok((true, String::new()));
+            return Ok((0, String::new()));
         }
         if self.explain {
             self.pause();
@@ -103,19 +125,25 @@ impl Ui {
             .output()?;
         let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
         combined.push_str(&String::from_utf8_lossy(&out.stderr));
-        Ok((out.status.success(), combined))
+        Ok((out.status.code().unwrap_or(1), combined))
     }
 
-    /// Run a command that must succeed; error otherwise.
+    /// Run a command that must succeed; otherwise return a
+    /// [`StageFailure`] carrying its exit code so the process can exit
+    /// with the same status.
     pub fn run_required(
         &self,
         argv: &[String],
         cwd: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if self.run(argv, cwd)? {
+        let code = self.run_status(argv, cwd)?;
+        if code == 0 {
             Ok(())
         } else {
-            Err(format!("command failed: {}", argv.join(" ")).into())
+            Err(Box::new(StageFailure {
+                command: argv.join(" "),
+                code,
+            }))
         }
     }
 }
@@ -149,6 +177,24 @@ mod tests {
             "../damo_3.2.8-1~questing+1.dsc"
         );
         assert_eq!(shell_quote("3.2.8-1~questing+1"), "3.2.8-1~questing+1");
+    }
+
+    #[test]
+    fn run_required_propagates_exit_code() {
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+        };
+        let err = ui
+            .run_required(
+                &["sh".to_string(), "-c".to_string(), "exit 7".to_string()],
+                Path::new("."),
+            )
+            .unwrap_err();
+        let failure = err
+            .downcast_ref::<StageFailure>()
+            .expect("a StageFailure with the child's code");
+        assert_eq!(failure.code, 7);
     }
 
     #[test]

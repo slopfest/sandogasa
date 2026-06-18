@@ -30,9 +30,13 @@ Work runs in `rpmbuild`-style stages via `--stage` (default `merge`):
 - `lint` — `lintian -I` on the built `.deb`s in
   `~/pbuilder/<codename>_result/` (`-I` includes info-level tags;
   linting binaries directly avoids re-unpacking the source, which
-  `debuild -S` already lints); warns but does not fail the run
-  (rebuild lint tags are mostly inherited).
+  `debuild -S` already lints). lintian is quiet when clean, so its
+  output is echoed and a tag-count summary printed.
 - `all` — all of the above.
+
+A failing stage command propagates its **real exit code** (lintian
+uses its default — non-zero on error-level tags), so `dbranch` exits
+with the same status rather than a generic `1`.
 
 dbranch is also a learning tool. `--dry-run` prints every command
 without running anything; `--explain` runs the workflow but narrates
