@@ -2,6 +2,16 @@
 
 ## dbranch
 
+- (2026-06-18) Allow an explicit merge source branch (e.g. `--source
+  <branch>`), defaulting to the checked-out branch. Today the source
+  is always `git::current_branch`; let the user override it so dbranch
+  can run without first checking out the Debian branch (handy when a
+  different branch is checked out). The source only needs to be a valid
+  ref (merge and checkout-new take any ref), so this is mostly
+  threading a resolved `source` through from a flag instead of
+  `current_branch`, keeping the `target == source` guard and bulk
+  exclusions on the resolved source.
+
 - (done) Add more `rebuild` stages after `lint`:
   - (done) `push` — `git push origin <branch>`, then watch the
     branch's GitLab CI pipeline via the `glab` CLI (auto-detects the
@@ -36,6 +46,14 @@
     to the safe choice and must NOT fire in `--json` or when stdin
     isn't a terminal (those keep warn-and-continue / fail-with-remedy
     behavior).
+  - Safer selection: bulk should *positively* pick PPA branches (e.g.
+    `ubuntu/*`) rather than "every local branch except a few", so it
+    can't accidentally process the Debian branch — especially once a
+    `--source` override means the Debian branch need not be the
+    checked-out one — or unrelated branches like `master`/`main`. The
+    prefix is target-type-dependent (Ubuntu PPAs are `ubuntu/*`;
+    Debian backports branches differ), so this ties into the
+    target-type abstraction.
   - Related scope: bulk runs currently consider only *local* branches
     (see the remote-only handling for explicit targets). A
     remote-inclusive bulk mode would make the confirm + EOL check even
