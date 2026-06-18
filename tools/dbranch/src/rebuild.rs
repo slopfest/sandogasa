@@ -385,7 +385,17 @@ fn checkout_existing(
     location: TargetLocation,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match location {
-        TargetLocation::Local => ui.run_required(&plan::checkout_argv(target), repo),
+        TargetLocation::Local => {
+            // Skip a no-op checkout when we're already on the branch —
+            // it just prints "Already on '<branch>'" and, under
+            // --explain, adds a pointless pause on a do-nothing command.
+            if git::current_branch(repo)? == target {
+                ui.step(&format!("Already on {target}"));
+                Ok(())
+            } else {
+                ui.run_required(&plan::checkout_argv(target), repo)
+            }
+        }
         TargetLocation::Remote => {
             ui.step(&format!("Check out {target} tracking origin/{target}"));
             ui.run_required(
@@ -817,6 +827,21 @@ mod tests {
             nowait: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn build_only_when_already_on_target_skips_checkout() {
+        let dir = setup();
+        let p = dir.path();
+        // Already on the target: checkout would be a no-op, so the
+        // Local path takes the "Already on …" branch instead.
+        git(p, &["checkout", "-q", "noble"]);
+        let opts = Options {
+            branches: vec!["noble".to_string()],
+            stages: BUILD,
+            nowait: false,
+        };
+        run(&ui_dry(), p, &opts).unwrap();
     }
 
     #[test]

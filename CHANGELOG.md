@@ -15,6 +15,11 @@ from `origin/<branch>`'s `debian/gbp.conf`. Only a branch that exists
 nowhere is created from the Debian branch. (Bulk, no-argument runs
 still only consider local branches.)
 
+dbranch also skips a redundant `git checkout <branch>` when already on
+the target branch (the build/lint/push path) — it would otherwise just
+print `Already on '<branch>'` and add a pointless `--explain` pause on
+a no-op.
+
 ### sandogasa-cli: unified tool-availability check (breaking)
 
 One batch function now covers both existence and probe checks:
