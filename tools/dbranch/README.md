@@ -74,6 +74,13 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   entry — the `dpkg-mergechangelogs` result, committed), then
   `gbp dch --bpo -R -D <codename>` and **normalize** the new stanza to
   `<debver>~<codename>+<N>` / `* Rebuild for <codename>` and commit.
+  When the target branch is **brand new**, it is created from the
+  Debian branch and two one-time packaging tweaks are committed first:
+  `debian/gbp.conf`'s `debian-branch` is pointed at the new branch,
+  and `debian/salsa-ci.yml` gets the PPA-rebuild `variables` preset
+  (`RELEASE: "unstable"` plus the backports-style relaxations). A
+  branch that already exists locally or only on `origin` is checked
+  out and merged into instead — no recreation, no packaging tweaks.
 - **`build`** — `debuild -S -sa -d` then
   `pbuilder-dist <codename> ../<dsc>`.
 - **`lint`** — `lintian -I` on the built **`.deb`s** in

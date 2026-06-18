@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### dbranch: adjust gbp.conf and salsa-ci.yml when creating a new PPA branch
+
+Creating a brand-new PPA branch now performs the two one-time
+packaging tweaks the workflow needs, each as its own signed commit:
+
+- `debian/gbp.conf`: point `debian-branch` at the new branch itself
+  (so its codename resolves correctly and gbp treats it as its own
+  Debian branch).
+- `debian/salsa-ci.yml`: inject the PPA-rebuild `variables` preset —
+  `RELEASE: "unstable"` (salsa-ci builds against Debian unstable) plus
+  the backports-style relaxations `SALSA_CI_LINTIAN_SUPPRESS_TAGS`,
+  `SALSA_CI_DISABLE_VERSION_BUMP`, `SALSA_CI_DISABLE_PIUPARTS` —
+  preserving the file's existing entries and comments.
+
+Both edits are idempotent and skipped when the file is absent or
+already adjusted; they only run on the new-branch (create) path, not
+when merging into an existing branch.
+
 ### dbranch: track remote-only target branches instead of recreating them
 
 A target branch that exists on `origin` but was never checked out

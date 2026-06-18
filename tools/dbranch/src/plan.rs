@@ -85,6 +85,12 @@ pub fn commit_changelog_argv(message: &str) -> Vec<String> {
     argv(&["git", "commit", "-s", "-m", message, "debian/changelog"])
 }
 
+/// `git commit -s -m <message> <file>` — commit a single file (used
+/// for the one-time gbp.conf / salsa-ci.yml tweaks on a new branch).
+pub fn commit_file_argv(message: &str, file: &str) -> Vec<String> {
+    argv(&["git", "commit", "-s", "-m", message, file])
+}
+
 /// `gbp dch --bpo -R -D <codename> --spawn-editor=never` — create the
 /// finalized rebuild stanza (with the correct date/maintainer
 /// footer). `-R`/`--release` would otherwise spawn an editor by
@@ -312,6 +318,17 @@ mod tests {
         assert_eq!(
             changelog_commit_message("3.2.8-1~questing+1"),
             "Update changelog for 3.2.8-1~questing+1 release"
+        );
+        assert_eq!(
+            commit_file_argv("Adjust gbp.conf for noble", "debian/gbp.conf"),
+            [
+                "git",
+                "commit",
+                "-s",
+                "-m",
+                "Adjust gbp.conf for noble",
+                "debian/gbp.conf"
+            ]
         );
         assert_eq!(
             push_argv("origin", "noble"),

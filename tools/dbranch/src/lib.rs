@@ -10,4 +10,5 @@ pub mod gbpconf;
 pub mod git;
 pub mod plan;
 pub mod rebuild;
+pub mod salsaci;
 pub mod ui;

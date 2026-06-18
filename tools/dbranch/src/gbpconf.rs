@@ -67,6 +67,40 @@ pub fn parse(text: &str) -> GbpConfig {
     cfg
 }
 
+/// Return `text` with `debian-branch` set to `branch`, preserving all
+/// other lines, comments, and formatting. Rewrites the existing
+/// `debian-branch = …` line in place (keeping its indentation); if
+/// there isn't one, appends the key. Used when creating a new PPA
+/// branch, whose gbp.conf should point `debian-branch` at itself.
+pub fn set_debian_branch(text: &str, branch: &str) -> String {
+    let mut out: Vec<String> = Vec::with_capacity(text.lines().count() + 1);
+    let mut replaced = false;
+    for raw in text.lines() {
+        let trimmed = raw.trim_start();
+        let is_debian_branch = !replaced
+            && !trimmed.starts_with('#')
+            && !trimmed.starts_with(';')
+            && trimmed
+                .split_once('=')
+                .is_some_and(|(k, _)| k.trim() == "debian-branch");
+        if is_debian_branch {
+            let indent = &raw[..raw.len() - trimmed.len()];
+            out.push(format!("{indent}debian-branch = {branch}"));
+            replaced = true;
+        } else {
+            out.push(raw.to_string());
+        }
+    }
+    if !replaced {
+        out.push(format!("debian-branch = {branch}"));
+    }
+    let mut result = out.join("\n");
+    if text.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
 /// ConfigParser booleans: `1/yes/true/on` are true.
 fn is_truthy(val: &str) -> bool {
     matches!(
@@ -135,5 +169,28 @@ upstream-branch = upstream
     fn parse_ignores_non_default_sections() {
         let cfg = parse("[buildpackage]\nupstream-branch = wrong\n");
         assert_eq!(cfg.upstream_branch, None);
+    }
+
+    #[test]
+    fn set_debian_branch_rewrites_in_place() {
+        let text = "[DEFAULT]\npristine-tar = True\ndebian-branch = debian/unstable\nupstream-branch = upstream\n";
+        let out = set_debian_branch(text, "ubuntu/questing");
+        assert_eq!(
+            out,
+            "[DEFAULT]\npristine-tar = True\ndebian-branch = ubuntu/questing\nupstream-branch = upstream\n"
+        );
+        // Idempotent.
+        assert_eq!(set_debian_branch(&out, "ubuntu/questing"), out);
+        // Comments are not mistaken for the key.
+        assert_eq!(
+            parse(&out).debian_branch.as_deref(),
+            Some("ubuntu/questing")
+        );
+    }
+
+    #[test]
+    fn set_debian_branch_appends_when_absent() {
+        let out = set_debian_branch("pristine-tar = True\n", "noble");
+        assert_eq!(out, "pristine-tar = True\ndebian-branch = noble\n");
     }
 }

@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use crate::git;
 use crate::plan::{self, changelog_commit_message};
 use crate::ui::Ui;
-use crate::{changelog, gbpconf};
+use crate::{changelog, gbpconf, salsaci};
 
 /// How often to re-poll `glab ci status` while a pipeline runs.
 const POLL_INTERVAL: Duration = Duration::from_secs(8);
@@ -426,6 +426,7 @@ fn merge_stage(
         // the new packaging) — no merge needed.
         ui.step(&format!("Create {target} from {source}"));
         ui.run_required(&plan::checkout_new_argv(target, source), repo)?;
+        adjust_new_branch_packaging(ui, repo, target)?;
     } else {
         checkout_existing(ui, repo, target, location)?;
         // The changelog conflict is expected and resolved
@@ -465,6 +466,76 @@ fn merge_stage(
 
     *out_version = Some(version);
     Ok(())
+}
+
+/// One-time packaging tweaks when a brand-new PPA branch is created:
+/// point gbp.conf's `debian-branch` at the new branch, and inject the
+/// salsa-ci.yml PPA-rebuild preset. Each is committed separately
+/// (matching the by-hand workflow), and skipped when the file is
+/// absent or already adjusted.
+fn adjust_new_branch_packaging(
+    ui: &Ui,
+    repo: &Path,
+    target: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if repo.join("debian/gbp.conf").exists() {
+        ui.step(&format!("Point gbp.conf debian-branch at {target}"));
+        let changed = edit_file(ui, repo, "debian/gbp.conf", |text| {
+            Some(gbpconf::set_debian_branch(text, target))
+        })?;
+        if changed {
+            ui.run_required(
+                &plan::commit_file_argv(
+                    &format!("Adjust gbp.conf for {target}"),
+                    "debian/gbp.conf",
+                ),
+                repo,
+            )?;
+        }
+    }
+    if repo.join("debian/salsa-ci.yml").exists() {
+        ui.step(&format!("Adjust salsa-ci.yml for {target}"));
+        let changed = edit_file(ui, repo, "debian/salsa-ci.yml", salsaci::adjust_salsa_ci)?;
+        if changed {
+            ui.run_required(
+                &plan::commit_file_argv(
+                    &format!("Adjust salsa-ci.yml for {target}"),
+                    "debian/salsa-ci.yml",
+                ),
+                repo,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Apply an in-place text transform to a repo file, returning whether
+/// the file changed. In `--dry-run` nothing is read or written and it
+/// returns `true`, so the follow-up commit is still narrated. A
+/// transform returning `None` (unexpected format) is left unchanged
+/// with a warning.
+fn edit_file(
+    ui: &Ui,
+    repo: &Path,
+    rel: &str,
+    transform: impl FnOnce(&str) -> Option<String>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if ui.dry_run {
+        return Ok(true);
+    }
+    let path = repo.join(rel);
+    let text = std::fs::read_to_string(&path)?;
+    match transform(&text) {
+        Some(new) if new != text => {
+            std::fs::write(&path, new)?;
+            Ok(true)
+        }
+        Some(_) => Ok(false),
+        None => {
+            eprintln!("{rel}: unexpected format; left unchanged");
+            Ok(false)
+        }
+    }
 }
 
 /// The build stage: build the source package and scratch-build it in
@@ -805,6 +876,54 @@ mod tests {
             nowait: false,
         };
         run(&ui_dry(), p, &opts).unwrap();
+    }
+
+    #[test]
+    fn dry_run_create_branch_adjusts_packaging() {
+        let dir = setup();
+        let p = dir.path();
+        // A new branch with packaging files to adjust.
+        std::fs::write(
+            p.join("debian/gbp.conf"),
+            "[DEFAULT]\npristine-tar = True\ndebian-branch = debian/unstable\nupstream-branch = upstream\n",
+        )
+        .unwrap();
+        std::fs::write(
+            p.join("debian/salsa-ci.yml"),
+            "---\ninclude:\n  - x\nvariables:\n  SALSA_CI_DISABLE_BUILD_PACKAGE_ANY: '1'\n",
+        )
+        .unwrap();
+        git(p, &["add", "-A"]);
+        git(p, &["commit", "-qm", "add packaging"]);
+        let opts = Options {
+            branches: vec!["ubuntu/plucky".to_string()],
+            stages: MERGE,
+            nowait: false,
+        };
+        run(&ui_dry(), p, &opts).unwrap();
+    }
+
+    #[test]
+    fn edit_file_writes_when_changed_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        std::fs::create_dir_all(p.join("debian")).unwrap();
+        std::fs::write(
+            p.join("debian/gbp.conf"),
+            "debian-branch = debian/unstable\n",
+        )
+        .unwrap();
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+        };
+        let transform = |t: &str| Some(gbpconf::set_debian_branch(t, "noble"));
+        assert!(edit_file(&ui, p, "debian/gbp.conf", transform).unwrap());
+        let after = std::fs::read_to_string(p.join("debian/gbp.conf")).unwrap();
+        assert!(after.contains("debian-branch = noble"));
+        // Re-applying the same transform reports no change.
+        let transform = |t: &str| Some(gbpconf::set_debian_branch(t, "noble"));
+        assert!(!edit_file(&ui, p, "debian/gbp.conf", transform).unwrap());
     }
 
     #[test]
