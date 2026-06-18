@@ -137,10 +137,44 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             )
             .into());
         }
-        let exists = all.iter().any(|b| b == target);
-        rebuild_one(ui, repo, &source, target, exists, opts.stages, opts.nowait)?;
+        let location = classify_target(repo, &all, target);
+        rebuild_one(
+            ui,
+            repo,
+            &source,
+            target,
+            location,
+            opts.stages,
+            opts.nowait,
+        )?;
     }
     Ok(())
+}
+
+/// Where a target branch lives, which decides how dbranch gets onto it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetLocation {
+    /// A local branch — check it out directly.
+    Local,
+    /// Only on the remote (`origin/<branch>`) — check out a tracking
+    /// branch from it; do NOT recreate it from the Debian branch.
+    Remote,
+    /// Doesn't exist anywhere — create it from the Debian branch.
+    New,
+}
+
+/// Classify a target branch as local, remote-only, or new. A branch on
+/// `origin` that was never checked out locally is `Remote`, not `New`,
+/// so we track the existing PPA branch rather than clobbering it with a
+/// fresh branch off the Debian branch.
+fn classify_target(repo: &Path, local: &[String], target: &str) -> TargetLocation {
+    if local.iter().any(|b| b == target) {
+        TargetLocation::Local
+    } else if git::remote_branch_exists(repo, "origin", target) {
+        TargetLocation::Remote
+    } else {
+        TargetLocation::New
+    }
 }
 
 /// Attach to a branch's CI pipeline via `glab` and wait for it —
@@ -193,11 +227,11 @@ fn rebuild_one(
     repo: &Path,
     source: &str,
     target: &str,
-    exists: bool,
+    location: TargetLocation,
     stages: Stages,
     nowait: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let codename = target_codename(repo, target, exists);
+    let codename = target_codename(repo, target, location);
     ui.step(&format!("{target} (codename: {codename})"));
 
     // The version the merge stage produced, reused by build/lint.
@@ -209,19 +243,19 @@ fn rebuild_one(
             repo,
             source,
             target,
-            exists,
+            location,
             &codename,
             &mut rebuilt_version,
         )?;
     } else if stages.build || stages.lint || stages.push {
         // Not merging: still need to be on the target.
-        if !exists {
+        if location == TargetLocation::New {
             return Err(format!(
                 "branch {target} does not exist; run the merge stage to create it"
             )
             .into());
         }
-        ui.run_required(&plan::checkout_argv(target), repo)?;
+        checkout_existing(ui, repo, target, location)?;
     }
 
     if stages.build || stages.lint {
@@ -341,6 +375,30 @@ fn first_nonempty<'a>(a: &'a str, b: &'a str) -> &'a str {
     if a.is_empty() { b.trim() } else { a }
 }
 
+/// Check out an existing target branch: a local one directly, or a
+/// fresh tracking branch from `origin/<branch>` when it only exists on
+/// the remote (so we build on the real PPA branch, not a new one).
+fn checkout_existing(
+    ui: &Ui,
+    repo: &Path,
+    target: &str,
+    location: TargetLocation,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match location {
+        TargetLocation::Local => ui.run_required(&plan::checkout_argv(target), repo),
+        TargetLocation::Remote => {
+            ui.step(&format!("Check out {target} tracking origin/{target}"));
+            ui.run_required(
+                &plan::checkout_new_argv(target, &format!("origin/{target}")),
+                repo,
+            )
+        }
+        TargetLocation::New => {
+            unreachable!("checkout_existing must not be called for a new branch")
+        }
+    }
+}
+
 /// The merge stage: get onto the target branch (create if needed),
 /// merge the Debian branch, resolve the changelog conflict, and write
 /// the normalized rebuild entry.
@@ -349,12 +407,17 @@ fn merge_stage(
     repo: &Path,
     source: &str,
     target: &str,
-    exists: bool,
+    location: TargetLocation,
     codename: &str,
     out_version: &mut Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if exists {
-        ui.run_required(&plan::checkout_argv(target), repo)?;
+    if location == TargetLocation::New {
+        // A new PPA branch starts from the Debian branch (already has
+        // the new packaging) — no merge needed.
+        ui.step(&format!("Create {target} from {source}"));
+        ui.run_required(&plan::checkout_new_argv(target, source), repo)?;
+    } else {
+        checkout_existing(ui, repo, target, location)?;
         // The changelog conflict is expected and resolved
         // deterministically; in dry-run we always narrate it.
         let merged_ok = ui.run(&plan::merge_argv(source), repo)?;
@@ -366,11 +429,6 @@ fn merge_stage(
             ui.run_required(&plan::add_changelog_argv(), repo)?;
             ui.run_required(&plan::commit_merge_argv(), repo)?;
         }
-    } else {
-        // A new PPA branch starts from the Debian branch (already has
-        // the new packaging) — no merge needed.
-        ui.step(&format!("Create {target} from {source}"));
-        ui.run_required(&plan::checkout_new_argv(target, source), repo)?;
     }
 
     let version = {
@@ -529,9 +587,16 @@ fn matching_debs(dir: &Path, version_no_epoch: &str) -> Vec<String> {
 /// its `debian/gbp.conf` `debian-branch` (read without checking it
 /// out); otherwise the branch name's basename (`ubuntu/<rel>` →
 /// `<rel>`).
-fn target_codename(repo: &Path, target: &str, exists: bool) -> String {
-    if exists
-        && let Some(text) = git::show_file(repo, target, "debian/gbp.conf")
+fn target_codename(repo: &Path, target: &str, location: TargetLocation) -> String {
+    // Read the branch's own gbp.conf where it lives: a local branch by
+    // name, a remote-only one via its origin/<branch> ref.
+    let config_ref = match location {
+        TargetLocation::Local => Some(target.to_string()),
+        TargetLocation::Remote => Some(format!("origin/{target}")),
+        TargetLocation::New => None,
+    };
+    if let Some(config_ref) = config_ref
+        && let Some(text) = git::show_file(repo, &config_ref, "debian/gbp.conf")
         && let Some(db) = gbpconf::parse(&text).debian_branch
     {
         return plan::codename_from_branch(&db).to_string();
@@ -691,6 +756,45 @@ mod tests {
             nowait: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn classify_target_distinguishes_local_remote_new() {
+        let dir = setup();
+        let p = dir.path();
+        // A remote-only branch: a remote-tracking ref, no local branch.
+        git(
+            p,
+            &["update-ref", "refs/remotes/origin/ubuntu/questing", "HEAD"],
+        );
+        let local = crate::git::local_branches(p).unwrap();
+        assert_eq!(classify_target(p, &local, "noble"), TargetLocation::Local);
+        assert_eq!(
+            classify_target(p, &local, "ubuntu/questing"),
+            TargetLocation::Remote
+        );
+        assert_eq!(
+            classify_target(p, &local, "ubuntu/plucky"),
+            TargetLocation::New
+        );
+    }
+
+    #[test]
+    fn dry_run_merge_remote_only_branch_tracks_origin() {
+        let dir = setup();
+        let p = dir.path();
+        // origin has the branch but it was never checked out locally —
+        // dbranch must track it, not recreate it from the Debian branch.
+        git(
+            p,
+            &["update-ref", "refs/remotes/origin/ubuntu/questing", "HEAD"],
+        );
+        let opts = Options {
+            branches: vec!["ubuntu/questing".to_string()],
+            stages: MERGE,
+            nowait: false,
+        };
+        run(&ui_dry(), p, &opts).unwrap();
     }
 
     #[test]

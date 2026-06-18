@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### dbranch: track remote-only target branches instead of recreating them
+
+A target branch that exists on `origin` but was never checked out
+locally was misclassified as new and recreated from the Debian branch
+(`git checkout -b <branch> <debian-branch>`), discarding the real PPA
+branch's history. dbranch now classifies a target as local,
+remote-only, or new: a remote-only branch is checked out as a tracking
+branch from `origin/<branch>` (`git checkout -b <branch>
+origin/<branch>`) and then merged/built as usual; its codename is read
+from `origin/<branch>`'s `debian/gbp.conf`. Only a branch that exists
+nowhere is created from the Debian branch. (Bulk, no-argument runs
+still only consider local branches.)
+
 ### sandogasa-cli: unified tool-availability check (breaking)
 
 One batch function now covers both existence and probe checks:

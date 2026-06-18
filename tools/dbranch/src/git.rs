@@ -81,6 +81,26 @@ pub fn show_file(repo: &Path, branch: &str, path: &str) -> Option<String> {
     }
 }
 
+/// Whether `<remote>/<branch>` exists as a remote-tracking ref
+/// (`refs/remotes/<remote>/<branch>`) — i.e. the branch is on the
+/// remote and has been fetched, even if it was never checked out
+/// locally. Lets dbranch distinguish "branch I haven't created locally
+/// yet" from "brand-new branch", so it tracks the existing remote one
+/// instead of recreating it from the Debian branch.
+pub fn remote_branch_exists(repo: &Path, remote: &str, branch: &str) -> bool {
+    Command::new("git")
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/{remote}/{branch}"),
+        ])
+        .current_dir(repo)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Resolve a revision to its full commit SHA (`git rev-parse <rev>`).
 /// `None` if it can't be resolved (unknown ref, etc.).
 pub fn rev_parse(repo: &Path, rev: &str) -> Option<String> {
