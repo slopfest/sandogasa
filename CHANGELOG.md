@@ -50,11 +50,35 @@ Work runs in `rpmbuild`-style stages via `--stage` (default `merge`):
   linting binaries directly avoids re-unpacking the source, which
   `debuild -S` already lints). lintian is quiet when clean, so its
   output is echoed and a tag-count summary printed.
+- `push` — `git push origin <branch>`, then (unless `--nowait`) watch
+  that commit's GitLab CI pipeline to completion via the `glab` CLI,
+  which auto-detects the salsa host / project from the git remote.
+  dbranch polls `glab ci list --sha <commit> -F json` — targeting the
+  exact pushed commit, not the branch, so it never latches onto the
+  *previous* commit's pipeline during the post-push window before the
+  new one is created. (It deliberately avoids `glab ci status`, whose
+  `--live` needs a TTY to wait and whose action menu otherwise blocks;
+  glab is still run with stdin on `/dev/null` as a backstop.) It waits
+  until the pipeline reaches a terminal state: `failed`/`canceled`
+  propagates a non-zero exit; `success`/`skipped`/`manual` pass; if no
+  pipeline appears within ~3 min it's treated as benign (nothing to
+  watch). The instance's glab auth is verified first
+  (`glab auth status --hostname <host>`, host derived from the
+  `origin` remote) — glab keeps a token per host, so this fails early
+  with the `glab auth login --hostname <host>` command rather than a
+  downstream API error (glab's own output is captured and only shown
+  on failure, since older glab misreports a working token as invalid).
+  `--nowait` pushes without waiting; attach later with
+  `dbranch watch-ci [<branch>]` (defaults to the current branch, and
+  likewise watches the branch-tip commit's pipeline) — e.g. after a
+  `--nowait` push or a dropped connection. Adds a `serde_json`
+  dependency (to parse glab's pipeline JSON).
 - `all` — all of the above.
 
 A failing stage command propagates its **real exit code** (lintian
-uses its default — non-zero on error-level tags), so `dbranch` exits
-with the same status rather than a generic `1`.
+uses its default — non-zero on error-level tags; a failed push or CI
+pipeline propagates `git`'s / `glab`'s code), so `dbranch` exits with
+the same status rather than a generic `1`.
 
 dbranch is also a learning tool. `--dry-run` prints every command
 without running anything; `--explain` runs the workflow but narrates

@@ -13,11 +13,21 @@
 //! `master`, `debian/unstable`, …); that branch is the merge source.
 
 use std::path::Path;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use crate::git;
 use crate::plan::{self, changelog_commit_message};
 use crate::ui::Ui;
 use crate::{changelog, gbpconf};
+
+/// How often to re-poll `glab ci status` while a pipeline runs.
+const POLL_INTERVAL: Duration = Duration::from_secs(8);
+/// How long to wait for the just-pushed commit's pipeline to appear
+/// (the post-push race) before giving up and reporting the latest.
+const CREATE_TIMEOUT: Duration = Duration::from_secs(180);
+/// Overall safety cap on a single watch so it can't poll forever.
+const WATCH_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
 /// Which workflow stages to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -25,11 +35,12 @@ pub struct Stages {
     pub merge: bool,
     pub build: bool,
     pub lint: bool,
+    pub push: bool,
 }
 
 impl Stages {
     fn any(&self) -> bool {
-        self.merge || self.build || self.lint
+        self.merge || self.build || self.lint || self.push
     }
 }
 
@@ -48,14 +59,16 @@ pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
             "merge" => s.merge = true,
             "build" => s.build = true,
             "lint" => s.lint = true,
+            "push" => s.push = true,
             "all" => {
                 s.merge = true;
                 s.build = true;
                 s.lint = true;
+                s.push = true;
             }
             other => {
                 return Err(format!(
-                    "unknown stage '{other}' (valid: merge, build, lint, all)"
+                    "unknown stage '{other}' (valid: merge, build, lint, push, all)"
                 ));
             }
         }
@@ -74,12 +87,28 @@ pub struct Options {
     pub branches: Vec<String>,
     /// Stages to run.
     pub stages: Stages,
+    /// In the push stage, push but don't wait for / watch CI.
+    pub nowait: bool,
 }
 
 /// Run the rebuild workflow over the selected branches.
 pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::error::Error>> {
     if !ui.dry_run {
-        git::ensure_tools(opts.stages.merge, opts.stages.build, opts.stages.lint)?;
+        // glab is only needed when the push stage actually waits on CI.
+        let need_glab = opts.stages.push && !opts.nowait;
+        git::ensure_tools(
+            opts.stages.merge,
+            opts.stages.build,
+            opts.stages.lint,
+            need_glab,
+        )?;
+        // glab keeps a token per host; check the one this repo lives on.
+        if let Some(host) = need_glab
+            .then(|| git::remote_host(repo, "origin"))
+            .flatten()
+        {
+            git::ensure_glab_auth(repo, &host)?;
+        }
     }
 
     // The Debian branch is wherever we start.
@@ -109,9 +138,39 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             .into());
         }
         let exists = all.iter().any(|b| b == target);
-        rebuild_one(ui, repo, &source, target, exists, opts.stages)?;
+        rebuild_one(ui, repo, &source, target, exists, opts.stages, opts.nowait)?;
     }
     Ok(())
+}
+
+/// Attach to a branch's CI pipeline via `glab` and wait for it —
+/// standalone of a rebuild, e.g. after a `--nowait` push or a dropped
+/// connection. Defaults to the current branch. Propagates glab's exit
+/// code on pipeline failure.
+pub fn watch_ci(
+    ui: &Ui,
+    repo: &Path,
+    branch: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !ui.dry_run {
+        git::ensure_tools(false, false, false, true)?;
+        if let Some(host) = git::remote_host(repo, "origin") {
+            git::ensure_glab_auth(repo, &host)?;
+        }
+    }
+    let branch = match branch {
+        Some(b) => b,
+        None => git::current_branch(repo)?,
+    };
+    // Watch the pipeline for the commit at the branch tip (what was
+    // pushed), not just "the branch", to target the right pipeline.
+    let sha = git::rev_parse(repo, &branch)
+        .ok_or_else(|| format!("could not resolve branch {branch} to a commit"))?;
+    ui.step(&format!(
+        "Watch the CI pipeline for {branch} ({})",
+        sha.get(..8).unwrap_or(&sha)
+    ));
+    watch_pipeline(ui, repo, &sha)
 }
 
 /// All existing PPA branches: everything except the Debian branch and
@@ -136,6 +195,7 @@ fn rebuild_one(
     target: &str,
     exists: bool,
     stages: Stages,
+    nowait: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let codename = target_codename(repo, target, exists);
     ui.step(&format!("{target} (codename: {codename})"));
@@ -153,7 +213,7 @@ fn rebuild_one(
             &codename,
             &mut rebuilt_version,
         )?;
-    } else if stages.build || stages.lint {
+    } else if stages.build || stages.lint || stages.push {
         // Not merging: still need to be on the target.
         if !exists {
             return Err(format!(
@@ -177,7 +237,108 @@ fn rebuild_one(
         }
     }
 
+    if stages.push {
+        push_stage(ui, repo, target, nowait)?;
+    }
+
     Ok(())
+}
+
+/// The push stage: publish the branch, then (unless `nowait`) attach
+/// to its CI pipeline via `glab` and wait for the result.
+fn push_stage(
+    ui: &Ui,
+    repo: &Path,
+    branch: &str,
+    nowait: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ui.step(&format!("Push {branch} to origin"));
+    ui.run_required(&plan::push_argv("origin", branch), repo)?;
+
+    if nowait {
+        eprintln!("--nowait: pushed; not watching CI (use `dbranch watch-ci {branch}` later)");
+        return Ok(());
+    }
+    ui.step("Watch the CI pipeline");
+    match git::rev_parse(repo, branch) {
+        Some(sha) => watch_pipeline(ui, repo, &sha),
+        None => {
+            eprintln!("could not resolve {branch} to a commit; skipping CI watch");
+            Ok(())
+        }
+    }
+}
+
+/// Watch the CI pipeline for commit `sha` to completion by polling
+/// `glab ci list --sha <sha>` until it reaches a terminal state.
+/// Targeting the commit — not the branch — means we never latch onto
+/// the *previous* commit's pipeline that GitLab hasn't replaced yet
+/// (the post-push race). A `failed`/`canceled` pipeline becomes a
+/// [`StageFailure`] so the run exits non-zero; `success`/`skipped`/
+/// `manual` pass; if no pipeline appears within [`CREATE_TIMEOUT`] it
+/// is reported as benign (nothing to watch).
+fn watch_pipeline(ui: &Ui, repo: &Path, sha: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let argv = plan::glab_ci_list_sha_argv(sha);
+    ui.show_command(&argv);
+    if ui.dry_run {
+        return Ok(());
+    }
+    // In --explain, pause once before starting the poll loop.
+    ui.pause_if_explain();
+    let short = sha.get(..8).unwrap_or(sha);
+    let start = Instant::now();
+    let mut last_status = String::new();
+    loop {
+        let (code, out, err) = ui.run_query(&argv, repo)?;
+        if code != 0 {
+            // A real error (auth / host / network), not "no pipeline".
+            return Err(format!(
+                "`glab ci list --sha {short}` failed: {}",
+                first_nonempty(&err, &out)
+            )
+            .into());
+        }
+        let Some(p) = plan::latest_pipeline(&out) else {
+            // No pipeline for this commit yet — wait for it to appear.
+            if start.elapsed() < CREATE_TIMEOUT {
+                eprintln!("waiting for the CI pipeline for {short} to be created…");
+                sleep(POLL_INTERVAL);
+                continue;
+            }
+            eprintln!("no CI pipeline found for {short} (nothing to watch)");
+            return Ok(());
+        };
+        if p.status != last_status {
+            if last_status.is_empty() && !p.web_url.is_empty() {
+                eprintln!("pipeline {} — {}", p.id, p.web_url);
+            }
+            eprintln!("pipeline {} for {short}: {}", p.id, p.status);
+            last_status = p.status.clone();
+        }
+        if plan::is_terminal_status(&p.status) {
+            return match p.status.as_str() {
+                "failed" | "canceled" => Err(Box::new(crate::ui::StageFailure {
+                    command: format!("CI pipeline {} ({})", p.id, p.status),
+                    code: 1,
+                })),
+                _ => Ok(()),
+            };
+        }
+        if start.elapsed() > WATCH_TIMEOUT {
+            eprintln!(
+                "giving up watching pipeline {} after the time cap (still {})",
+                p.id, p.status
+            );
+            return Ok(());
+        }
+        sleep(POLL_INTERVAL);
+    }
+}
+
+/// The first of two strings that is non-empty after trimming.
+fn first_nonempty<'a>(a: &'a str, b: &'a str) -> &'a str {
+    let a = a.trim();
+    if a.is_empty() { b.trim() } else { a }
 }
 
 /// The merge stage: get onto the target branch (create if needed),
@@ -464,11 +625,13 @@ mod tests {
         merge: true,
         build: false,
         lint: false,
+        push: false,
     };
     const BUILD: Stages = Stages {
         merge: false,
         build: true,
         lint: false,
+        push: false,
     };
 
     #[test]
@@ -480,6 +643,7 @@ mod tests {
                 merge: true,
                 build: true,
                 lint: true,
+                push: true,
             }
         );
         assert_eq!(parse_stages(&["build".to_string()]).unwrap(), BUILD);
@@ -487,6 +651,13 @@ mod tests {
             parse_stages(&["lint".to_string()]).unwrap(),
             Stages {
                 lint: true,
+                ..Stages::default()
+            }
+        );
+        assert_eq!(
+            parse_stages(&["push".to_string()]).unwrap(),
+            Stages {
+                push: true,
                 ..Stages::default()
             }
         );
@@ -506,6 +677,7 @@ mod tests {
         let opts = Options {
             branches: vec!["noble".to_string()],
             stages: MERGE,
+            nowait: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -516,6 +688,7 @@ mod tests {
         let opts = Options {
             branches: vec!["ubuntu/plucky".to_string()],
             stages: MERGE,
+            nowait: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -526,6 +699,7 @@ mod tests {
         let opts = Options {
             branches: vec!["ubuntu/plucky".to_string()],
             stages: BUILD,
+            nowait: false,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -536,8 +710,50 @@ mod tests {
         let opts = Options {
             branches: vec!["noble".to_string()],
             stages: BUILD,
+            nowait: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn push_stage_dry_run_pushes_and_watches() {
+        let dir = setup();
+        let opts = Options {
+            branches: vec!["noble".to_string()],
+            stages: Stages {
+                push: true,
+                ..Stages::default()
+            },
+            nowait: false,
+        };
+        run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn push_stage_nowait_dry_run_skips_watch() {
+        let dir = setup();
+        let opts = Options {
+            branches: vec!["noble".to_string()],
+            stages: Stages {
+                push: true,
+                ..Stages::default()
+            },
+            nowait: true,
+        };
+        run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn watch_ci_dry_run_with_explicit_branch() {
+        let dir = setup();
+        watch_ci(&ui_dry(), dir.path(), Some("noble".to_string())).unwrap();
+    }
+
+    #[test]
+    fn watch_ci_dry_run_defaults_to_current_branch() {
+        let dir = setup();
+        // setup() leaves debian/unstable checked out.
+        watch_ci(&ui_dry(), dir.path(), None).unwrap();
     }
 
     #[test]
@@ -604,6 +820,7 @@ E: damo: an-error\n";
         let opts = Options {
             branches: vec!["debian/unstable".to_string()],
             stages: MERGE,
+            nowait: false,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -616,6 +833,7 @@ E: damo: an-error\n";
         let opts = Options {
             branches: vec!["debian/unstable".to_string()],
             stages: BUILD,
+            nowait: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }

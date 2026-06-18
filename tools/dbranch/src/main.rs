@@ -54,10 +54,35 @@ Stages to run, repeatable or comma-separated:
   build   debuild + pbuilder-dist
   lint    lintian on the built source package (warns,
           does not fail the run)
+  push    git push the branch, then watch its CI
+          pipeline via glab (see --nowait)
   all     all of the above
 Defaults to `merge` (the others are opt-in for now)."
         )]
         stage: Vec<String>,
+
+        /// In the push stage, push but don't wait for / watch CI.
+        #[arg(long)]
+        nowait: bool,
+
+        /// Print the commands without running anything (a tutorial).
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Run, but narrate each step + command first (follow along).
+        #[arg(long)]
+        explain: bool,
+    },
+
+    /// Watch a branch's GitLab CI pipeline via glab.
+    WatchCi {
+        /// Branch to watch (defaults to the current branch).
+        #[arg(value_name = "BRANCH")]
+        branch: Option<String>,
+
+        /// Run in this package working directory.
+        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        repo: PathBuf,
 
         /// Print the commands without running anything (a tutorial).
         #[arg(long)]
@@ -92,13 +117,27 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             branches,
             repo,
             stage,
+            nowait,
             dry_run,
             explain,
         } => {
             let ui = Ui { explain, dry_run };
             let stages = rebuild::parse_stages(&stage)?;
-            let opts = Options { branches, stages };
+            let opts = Options {
+                branches,
+                stages,
+                nowait,
+            };
             rebuild::run(&ui, &repo, &opts)
+        }
+        Command::WatchCi {
+            branch,
+            repo,
+            dry_run,
+            explain,
+        } => {
+            let ui = Ui { explain, dry_run };
+            rebuild::watch_ci(&ui, &repo, branch)
         }
     }
 }

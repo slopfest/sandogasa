@@ -373,6 +373,7 @@ dependencies = [
  "anstyle",
  "clap",
  "sandogasa-cli",
+ "serde_json",
  "tempfile",
 ]
 

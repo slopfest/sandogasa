@@ -6,7 +6,7 @@
 //! terminal or `NO_COLOR` is set, so piped output stays clean.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anstyle::{AnsiColor, Style};
 
@@ -71,6 +71,16 @@ impl Ui {
         );
     }
 
+    /// In `--explain`, pause for Enter before proceeding; a no-op
+    /// otherwise. For steps that aren't a single `run_*` call (e.g.
+    /// the `glab ci list` poll loop) the caller invokes this after
+    /// `show_command` to keep the step-through walkthrough contract.
+    pub fn pause_if_explain(&self) {
+        if self.explain {
+            self.pause();
+        }
+    }
+
     /// In `--explain`, wait for the user to press Enter before
     /// running the command just shown (a step-through walkthrough).
     /// A non-interactive stdin (EOF) continues without blocking.
@@ -126,6 +136,26 @@ impl Ui {
         let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
         combined.push_str(&String::from_utf8_lossy(&out.stderr));
         Ok((out.status.code().unwrap_or(1), combined))
+    }
+
+    /// Run a query command with stdin on `/dev/null` and capture its
+    /// stdout and stderr separately, returning the exit code too. The
+    /// null stdin keeps an interactive tool from blocking on a prompt
+    /// (glab's `ci status` action menu only appears with a TTY on
+    /// stdin). Unlike [`Ui::run_status`] this neither narrates nor
+    /// pauses — it's a silent probe meant to be called repeatedly in a
+    /// poll loop. The caller is responsible for the `--dry-run` guard.
+    pub fn run_query(&self, argv: &[String], cwd: &Path) -> std::io::Result<(i32, String, String)> {
+        let out = Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .output()?;
+        Ok((
+            out.status.code().unwrap_or(1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ))
     }
 
     /// Run a command that must succeed; otherwise return a
@@ -195,6 +225,28 @@ mod tests {
             .downcast_ref::<StageFailure>()
             .expect("a StageFailure with the child's code");
         assert_eq!(failure.code, 7);
+    }
+
+    #[test]
+    fn run_query_captures_stdout_with_null_stdin() {
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+        };
+        // Reads stdin; null stdin means it gets EOF and prints nothing
+        // extra, proving the probe can't hang on input.
+        let (code, out, _err) = ui
+            .run_query(
+                &[
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    "echo 'Pipeline state: success'; cat".to_string(),
+                ],
+                Path::new("."),
+            )
+            .unwrap();
+        assert_eq!(code, 0);
+        assert!(out.contains("Pipeline state: success"));
     }
 
     #[test]

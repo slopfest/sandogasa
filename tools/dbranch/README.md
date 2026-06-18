@@ -32,12 +32,18 @@ stages you run need:
 - `debuild` (`devscripts`) and `pbuilder-dist` (`ubuntu-dev-tools`) —
   `build` stage
 - `lintian` (`lintian`) — `lint` stage
+- `glab` (the [GitLab CLI](https://gitlab.com/gitlab-org/cli)) —
+  `push` stage CI watch and `watch-ci` (skip with `--nowait`).
+  Authenticate to the instance the repo lives on first:
+  `glab auth login --hostname salsa.debian.org` (glab keeps a separate
+  token per host, so a gitlab.com login alone won't do)
 
 ## Usage
 
 ```
 dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
-    [--dry-run] [--explain]
+    [--nowait] [--dry-run] [--explain]
+dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
 ```
 
 Run it from the package's git working tree **with the Debian branch
@@ -77,12 +83,31 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   lintian is quiet when clean, so its output is echoed with a
   tag-count summary. It uses lintian's default exit convention
   (non-zero on error-level tags) and propagates that status.
+- **`push`** — `git push origin <branch>`, then (unless `--nowait`)
+  watch the pushed commit's GitLab CI pipeline to completion. dbranch
+  polls `glab ci list --sha <commit> -F json`, targeting the **exact
+  commit** rather than the branch — so it can't accidentally report
+  the *previous* commit's pipeline in the window after `git push`
+  before GitLab has created the new one. `glab` reads the git remote
+  to find the host / project (e.g. `salsa.debian.org`) itself. It
+  waits until the pipeline finishes: a `failed`/`canceled` result
+  makes dbranch exit non-zero; `success`/`skipped`/`manual` pass; if
+  no pipeline shows up within ~3 minutes it's treated as benign
+  (nothing to watch). Before watching, dbranch checks `glab auth
+  status --hostname <host>` for that instance (glab stores a token per
+  host) and fails early with the `glab auth login` command to run if
+  you're not logged in. `--nowait` pushes without waiting; attach to a
+  running pipeline later — after a `--nowait` push or a dropped
+  connection — with `dbranch watch-ci [<branch>]` (defaults to the
+  current branch; it watches the branch-tip commit's pipeline).
 - **`all`** — all of the above.
 
 ```
 $ dbranch rebuild noble                  # merge stage only (default)
-$ dbranch rebuild noble --stage all      # merge, build, lint
+$ dbranch rebuild noble --stage all      # merge, build, lint, push
 $ dbranch rebuild noble --stage build,lint   # build an already-merged branch, then lint
+$ dbranch rebuild noble --stage push --nowait   # push, don't wait for CI
+$ dbranch watch-ci noble                 # attach to noble's CI pipeline
 ```
 
 When a stage command fails, `dbranch` exits with that command's own

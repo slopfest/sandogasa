@@ -136,6 +136,84 @@ pub fn lintian_argv(targets: &[String]) -> Vec<String> {
     a
 }
 
+/// `git push <remote> <branch>` — publish the rebuilt PPA branch.
+pub fn push_argv(remote: &str, branch: &str) -> Vec<String> {
+    argv(&["git", "push", remote, branch])
+}
+
+/// `glab ci list --sha <sha> -F json` — list the CI pipeline(s) for an
+/// exact commit, as JSON. dbranch polls this (see [`crate::rebuild`])
+/// to watch the pipeline for the commit it just pushed: targeting the
+/// SHA dodges the post-push race where `glab ci status -b <branch>`
+/// would report the *previous* commit's pipeline (the new one not yet
+/// created), and dodges `--live`, which needs a TTY and won't wait
+/// unattended. glab finds the GitLab host/project from the git remote
+/// itself (e.g. salsa.debian.org). Run with stdin on `/dev/null` (see
+/// [`crate::ui::Ui::run_query`]).
+pub fn glab_ci_list_sha_argv(sha: &str) -> Vec<String> {
+    argv(&["glab", "ci", "list", "--sha", sha, "-F", "json"])
+}
+
+/// One CI pipeline's identity and state, parsed from glab's JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineInfo {
+    pub id: i64,
+    pub status: String,
+    pub web_url: String,
+}
+
+/// The most recent pipeline from `glab ci list ... -F json` output
+/// (the list is newest-first). `None` if the JSON is empty/unparseable
+/// — i.e. no pipeline exists for the commit yet.
+pub fn latest_pipeline(json: &str) -> Option<PipelineInfo> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let first = value.as_array()?.first()?;
+    Some(PipelineInfo {
+        id: first.get("id")?.as_i64()?,
+        status: first.get("status")?.as_str()?.to_string(),
+        web_url: first
+            .get("web_url")
+            .and_then(|u| u.as_str())
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
+/// Whether a pipeline status is terminal (the pipeline has finished);
+/// the complement of the in-progress states glab keeps polling
+/// through. Mirrors GitLab's pipeline status vocabulary.
+pub fn is_terminal_status(status: &str) -> bool {
+    matches!(
+        status,
+        "success" | "failed" | "canceled" | "skipped" | "manual"
+    )
+}
+
+/// `glab auth status --hostname <host>` — verify glab has a token for
+/// the specific instance the repo lives on. glab stores a separate
+/// token per host, so a bare `glab auth status` would pass on a
+/// gitlab.com login even with no salsa.debian.org token; scoping to
+/// `host` checks the one the CI commands will actually use.
+pub fn glab_auth_status_argv(host: &str) -> Vec<String> {
+    argv(&["glab", "auth", "status", "--hostname", host])
+}
+
+/// The host of a git remote URL — scp-like (`git@host:path`),
+/// `ssh://[user@]host/path`, or `https://[user@]host/path` →
+/// `host`. `None` if it can't be parsed.
+pub fn host_from_remote_url(url: &str) -> Option<String> {
+    // Drop any `scheme://` prefix; scp-like URLs have none.
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    // Drop `user@` (or `git@`) credentials before the host.
+    let rest = rest.rsplit_once('@').map(|(_, r)| r).unwrap_or(rest);
+    // The host runs up to the first `/` (path) or `:` (scp path/port).
+    let host: String = rest
+        .chars()
+        .take_while(|c| *c != '/' && *c != ':')
+        .collect();
+    (!host.is_empty()).then_some(host)
+}
+
 /// The gbp-style commit subject for a changelog release commit.
 pub fn changelog_commit_message(version: &str) -> String {
     format!("Update changelog for {version} release")
@@ -235,5 +313,69 @@ mod tests {
             changelog_commit_message("3.2.8-1~questing+1"),
             "Update changelog for 3.2.8-1~questing+1 release"
         );
+        assert_eq!(
+            push_argv("origin", "noble"),
+            ["git", "push", "origin", "noble"]
+        );
+        assert_eq!(
+            glab_ci_list_sha_argv("ea4102c"),
+            ["glab", "ci", "list", "--sha", "ea4102c", "-F", "json"]
+        );
+        assert_eq!(
+            glab_auth_status_argv("salsa.debian.org"),
+            ["glab", "auth", "status", "--hostname", "salsa.debian.org"]
+        );
+    }
+
+    #[test]
+    fn latest_pipeline_parses_newest_first() {
+        let json = r#"[
+            {"id": 1111431, "status": "running",
+             "web_url": "https://salsa.debian.org/x/-/pipelines/1111431",
+             "sha": "ea4102c40f70ec2f7c1df38624b19818d7b1363e"},
+            {"id": 1106046, "status": "success",
+             "web_url": "https://salsa.debian.org/x/-/pipelines/1106046",
+             "sha": "270aea27409e80c6592a93f0e81234cd32180306"}
+        ]"#;
+        let p = latest_pipeline(json).unwrap();
+        assert_eq!(p.id, 1111431);
+        assert_eq!(p.status, "running");
+        assert_eq!(p.web_url, "https://salsa.debian.org/x/-/pipelines/1111431");
+        // Empty list (no pipeline yet) / junk → None.
+        assert_eq!(latest_pipeline("[]"), None);
+        assert_eq!(latest_pipeline("not json"), None);
+    }
+
+    #[test]
+    fn terminal_status_covers_finished_states() {
+        for s in ["success", "failed", "canceled", "skipped", "manual"] {
+            assert!(is_terminal_status(s), "{s} should be terminal");
+        }
+        for s in ["created", "pending", "running", "preparing", "scheduled"] {
+            assert!(!is_terminal_status(s), "{s} should be in-progress");
+        }
+    }
+
+    #[test]
+    fn host_from_remote_url_parses_each_form() {
+        assert_eq!(
+            host_from_remote_url("git@salsa.debian.org:python-team/packages/damo.git").as_deref(),
+            Some("salsa.debian.org")
+        );
+        assert_eq!(
+            host_from_remote_url("ssh://git@salsa.debian.org/python-team/packages/damo.git")
+                .as_deref(),
+            Some("salsa.debian.org")
+        );
+        assert_eq!(
+            host_from_remote_url("https://salsa.debian.org/python-team/packages/damo.git")
+                .as_deref(),
+            Some("salsa.debian.org")
+        );
+        assert_eq!(
+            host_from_remote_url("https://user@gitlab.com/foo/bar.git").as_deref(),
+            Some("gitlab.com")
+        );
+        assert_eq!(host_from_remote_url("").as_deref(), None);
     }
 }

@@ -2,14 +2,15 @@
 
 ## dbranch
 
-- (2026-06-18) Add more `rebuild` stages after `lint`:
-  - `push` — `git push` the rebuilt PPA branch(es) to GitLab (the
-    `salsa`/origin remote), respecting `--explain`/`--dry-run`.
-  - `ci` — after pushing, poll the branch's GitLab CI/CD pipeline and
-    report whether it passes (reuse `sandogasa-gitlab`; needs a
-    pipeline-status query, which that crate doesn't have yet).
-  - Wire these into the `--stage` selector (e.g.
-    `merge,build,lint,push,ci` / `all`) in pipeline order.
+- (done) Add more `rebuild` stages after `lint`:
+  - (done) `push` — `git push origin <branch>`, then watch the
+    branch's GitLab CI pipeline via the `glab` CLI (auto-detects the
+    salsa host/project from the remote). `--nowait` pushes without
+    waiting; `dbranch watch-ci [<branch>]` attaches to a live pipeline
+    later. Chose `glab` over a `sandogasa-gitlab` pipeline query: it
+    handles host/project detection, auth, and watching for free.
+  - (done) Wired into the `--stage` selector
+    (`merge,build,lint,push` / `all`) in pipeline order.
   - (done) `lint` — `lintian` on the built source package, warns
     only.
 
