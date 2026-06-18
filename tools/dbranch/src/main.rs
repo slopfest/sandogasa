@@ -52,8 +52,10 @@ Stages to run, repeatable or comma-separated:
   merge   merge the Debian branch + write the rebuild
           changelog entry
   build   debuild + pbuilder-dist
-  all     both
-Defaults to `merge` (build is opt-in for now)."
+  lint    lintian on the built source package (warns,
+          does not fail the run)
+  all     all of the above
+Defaults to `merge` (the others are opt-in for now)."
         )]
         stage: Vec<String>,
 

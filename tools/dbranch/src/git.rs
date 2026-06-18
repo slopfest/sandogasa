@@ -93,15 +93,25 @@ pub fn tool_exists(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Verify the external tools dbranch needs are installed, with an
-/// actionable message naming the providing package when one is
-/// missing. `need_build` toggles the build-only tools.
-pub fn ensure_tools(need_build: bool) -> Result<(), Box<dyn std::error::Error>> {
+/// Verify the external tools the selected stages need are installed,
+/// with an actionable message naming the providing package when one
+/// is missing. `git` is always required; the rest are per-stage.
+pub fn ensure_tools(
+    need_gbp: bool,
+    need_build: bool,
+    need_lint: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     // (executable, providing package)
-    let mut required: Vec<(&str, &str)> = vec![("git", "git"), ("gbp", "git-buildpackage")];
+    let mut required: Vec<(&str, &str)> = vec![("git", "git")];
+    if need_gbp {
+        required.push(("gbp", "git-buildpackage"));
+    }
     if need_build {
         required.push(("debuild", "devscripts"));
         required.push(("pbuilder-dist", "ubuntu-dev-tools"));
+    }
+    if need_lint {
+        required.push(("lintian", "lintian"));
     }
     let missing: Vec<String> = required
         .iter()

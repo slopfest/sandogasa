@@ -36,6 +36,16 @@ pub fn dsc_filename(package: &str, version: &str) -> String {
     format!("{package}_{}.dsc", version_no_epoch(version))
 }
 
+/// pbuilder-dist's result directory for a codename
+/// (`~/pbuilder/<codename>_result`); `None` if `$HOME` is unset.
+pub fn pbuilder_result_dir(codename: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|home| {
+        std::path::Path::new(&home)
+            .join("pbuilder")
+            .join(format!("{codename}_result"))
+    })
+}
+
 fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| s.to_string()).collect()
 }
@@ -116,6 +126,14 @@ pub fn pbuilder_base_tgz(codename: &str) -> Option<std::path::PathBuf> {
             .join("pbuilder")
             .join(format!("{codename}-base.tgz"))
     })
+}
+
+/// `lintian -I <target>...` — lint built artifacts. `-I` surfaces the
+/// info-level (`I:`) tags too, not just warnings/errors.
+pub fn lintian_argv(targets: &[String]) -> Vec<String> {
+    let mut a = vec!["lintian".to_string(), "-I".to_string()];
+    a.extend(targets.iter().cloned());
+    a
 }
 
 /// The gbp-style commit subject for a changelog release commit.
@@ -208,6 +226,10 @@ mod tests {
         assert_eq!(
             pbuilder_create_argv("questing"),
             ["pbuilder-dist", "questing", "create"]
+        );
+        assert_eq!(
+            lintian_argv(&["/r/damo_3.2.8-1~questing+1_arm64.deb".to_string()]),
+            ["lintian", "-I", "/r/damo_3.2.8-1~questing+1_arm64.deb"]
         );
         assert_eq!(
             changelog_commit_message("3.2.8-1~questing+1"),

@@ -20,42 +20,42 @@ use crate::ui::Ui;
 use crate::{changelog, gbpconf};
 
 /// Which workflow stages to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Stages {
     pub merge: bool,
     pub build: bool,
+    pub lint: bool,
 }
 
 impl Stages {
     fn any(&self) -> bool {
-        self.merge || self.build
+        self.merge || self.build || self.lint
     }
 }
 
 /// Parse the `--stage` selector. Empty defaults to **merge** only
-/// (the build stage is opt-in for now). `all` enables every stage.
+/// (the other stages are opt-in for now). `all` enables every stage.
 pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
     if tokens.is_empty() {
         return Ok(Stages {
             merge: true,
-            build: false,
+            ..Stages::default()
         });
     }
-    let mut s = Stages {
-        merge: false,
-        build: false,
-    };
+    let mut s = Stages::default();
     for token in tokens {
         match token.trim() {
             "merge" => s.merge = true,
             "build" => s.build = true,
+            "lint" => s.lint = true,
             "all" => {
                 s.merge = true;
                 s.build = true;
+                s.lint = true;
             }
             other => {
                 return Err(format!(
-                    "unknown stage '{other}' (valid: merge, build, all)"
+                    "unknown stage '{other}' (valid: merge, build, lint, all)"
                 ));
             }
         }
@@ -79,7 +79,7 @@ pub struct Options {
 /// Run the rebuild workflow over the selected branches.
 pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::error::Error>> {
     if !ui.dry_run {
-        git::ensure_tools(opts.stages.build)?;
+        git::ensure_tools(opts.stages.merge, opts.stages.build, opts.stages.lint)?;
     }
 
     // The Debian branch is wherever we start.
@@ -140,8 +140,7 @@ fn rebuild_one(
     let codename = target_codename(repo, target, exists);
     ui.step(&format!("{target} (codename: {codename})"));
 
-    // The version produced by the merge stage, reused by the build
-    // stage's `.dsc` path when both run.
+    // The version the merge stage produced, reused by build/lint.
     let mut rebuilt_version: Option<String> = None;
 
     if stages.merge {
@@ -154,8 +153,8 @@ fn rebuild_one(
             &codename,
             &mut rebuilt_version,
         )?;
-    } else {
-        // Not merging: we still need to be on the target to build it.
+    } else if stages.build || stages.lint {
+        // Not merging: still need to be on the target.
         if !exists {
             return Err(format!(
                 "branch {target} does not exist; run the merge stage to create it"
@@ -165,8 +164,17 @@ fn rebuild_one(
         ui.run_required(&plan::checkout_argv(target), repo)?;
     }
 
-    if stages.build {
-        build_stage(ui, repo, &codename, rebuilt_version.as_deref())?;
+    if stages.build || stages.lint {
+        // Prefer the version the merge stage just produced; else read
+        // the current top changelog entry.
+        let (package, top_version) = top_package_version(repo)?;
+        let version = rebuilt_version.unwrap_or(top_version);
+        if stages.build {
+            build_stage(ui, repo, &codename, &package, &version)?;
+        }
+        if stages.lint {
+            lint_stage(ui, repo, &codename, &version)?;
+        }
     }
 
     Ok(())
@@ -236,13 +244,9 @@ fn build_stage(
     ui: &Ui,
     repo: &Path,
     codename: &str,
-    merged_version: Option<&str>,
+    package: &str,
+    version: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Prefer the version the merge stage just produced; otherwise read
-    // the current top changelog entry (build-only run).
-    let (package, version) = top_package_version(repo)?;
-    let version = merged_version.map(str::to_string).unwrap_or(version);
-
     ui.step("Build the source package");
     ui.run_required(&plan::debuild_argv(), repo)?;
 
@@ -255,10 +259,106 @@ fn build_stage(
         ui.run_required(&plan::pbuilder_create_argv(codename), repo)?;
     }
 
-    let dsc = format!("../{}", plan::dsc_filename(&package, &version));
+    let dsc = format!("../{}", plan::dsc_filename(package, version));
     ui.step(&format!("Scratch-build in the {codename} chroot"));
     ui.run_required(&plan::pbuilder_argv(codename, &dsc), repo)?;
     Ok(())
+}
+
+/// The lint stage: run `lintian` on the **`.deb`s** the build
+/// produced in `~/pbuilder/<codename>_result/`. Linting the binaries
+/// directly (rather than the `.changes`) avoids lintian re-unpacking
+/// the source — the `.orig.tar.gz` isn't in the result dir, and
+/// `debuild -S` already linted the source anyway. A non-zero exit is
+/// reported but does not fail the run; rebuild lint tags are mostly
+/// inherited from Debian.
+fn lint_stage(
+    ui: &Ui,
+    repo: &Path,
+    codename: &str,
+    version: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ui.step("Lint the built .deb packages");
+    let Some(dir) = plan::pbuilder_result_dir(codename) else {
+        eprintln!("could not locate the pbuilder result dir ($HOME unset); skipping lint");
+        return Ok(());
+    };
+    let ver = plan::version_no_epoch(version);
+
+    if ui.dry_run {
+        // Can't enumerate (the dir may not exist yet); narrate a
+        // shell-expandable glob of this build's .debs.
+        let pattern = format!("{}/*_{ver}_*.deb", dir.display());
+        ui.show_command(&plan::lintian_argv(&[pattern]));
+        return Ok(());
+    }
+
+    let debs = matching_debs(&dir, ver);
+    if debs.is_empty() {
+        eprintln!(
+            "no .deb files for {version} in {}; did the build stage run?",
+            dir.display()
+        );
+        return Ok(());
+    }
+    let n = debs.len();
+    let (ok, output) = ui.run_capture(&plan::lintian_argv(&debs), repo)?;
+    // lintian is silent when clean — echo its output, then always
+    // print a summary so a clean run is visibly confirmed.
+    print!("{output}");
+    let summary = summarize_lintian(&output);
+    if ok {
+        println!("lintian: {summary} ({n} .deb(s))");
+    } else {
+        println!("lintian: {summary} ({n} .deb(s)) — errors not fatal for a rebuild");
+    }
+    Ok(())
+}
+
+/// One-line tally of lintian tags by severity from its output.
+fn summarize_lintian(output: &str) -> String {
+    let (mut e, mut w, mut i, mut p) = (0u32, 0u32, 0u32, 0u32);
+    for line in output.lines() {
+        match line.get(..3) {
+            Some("E: ") => e += 1,
+            Some("W: ") => w += 1,
+            Some("I: ") => i += 1,
+            Some("P: ") => p += 1,
+            _ => {}
+        }
+    }
+    if e + w + i + p == 0 {
+        return "clean — no tags".to_string();
+    }
+    let mut parts = vec![format!("{e} error(s)"), format!("{w} warning(s)")];
+    if i > 0 {
+        parts.push(format!("{i} info"));
+    }
+    if p > 0 {
+        parts.push(format!("{p} pedantic"));
+    }
+    parts.join(", ")
+}
+
+/// The built `.deb` paths for this version in `dir` (both arch and
+/// `_all` packages, matched by the `_<version>_` infix), sorted.
+fn matching_debs(dir: &Path, version_no_epoch: &str) -> Vec<String> {
+    let infix = format!("_{version_no_epoch}_");
+    let mut out: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().is_some_and(|x| x == "deb")
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.contains(&infix))
+        })
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    out.sort();
+    out
 }
 
 /// The codename for a target: for an existing branch, the basename of
@@ -360,10 +460,12 @@ mod tests {
     const MERGE: Stages = Stages {
         merge: true,
         build: false,
+        lint: false,
     };
     const BUILD: Stages = Stages {
         merge: false,
         build: true,
+        lint: false,
     };
 
     #[test]
@@ -373,10 +475,18 @@ mod tests {
             parse_stages(&["all".to_string()]).unwrap(),
             Stages {
                 merge: true,
-                build: true
+                build: true,
+                lint: true,
             }
         );
         assert_eq!(parse_stages(&["build".to_string()]).unwrap(), BUILD);
+        assert_eq!(
+            parse_stages(&["lint".to_string()]).unwrap(),
+            Stages {
+                lint: true,
+                ..Stages::default()
+            }
+        );
         assert!(parse_stages(&["bogus".to_string()]).is_err());
     }
 
@@ -425,6 +535,50 @@ mod tests {
             stages: BUILD,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn summarize_lintian_counts_or_reports_clean() {
+        assert_eq!(summarize_lintian(""), "clean — no tags");
+        assert_eq!(summarize_lintian("N: just a note\n"), "clean — no tags");
+        let out = "\
+W: damo: some-warning here
+I: damo: an-info-tag
+I: python3-damo: another-info
+E: damo: an-error\n";
+        assert_eq!(summarize_lintian(out), "1 error(s), 1 warning(s), 2 info");
+    }
+
+    #[test]
+    fn matching_debs_filters_by_version_and_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        for f in [
+            "damo_3.2.8-1~noble+1_arm64.deb",
+            "python3-damo_3.2.8-1~noble+1_all.deb",
+            "damo-dbgsym_3.2.8-1~noble+1_arm64.ddeb", // debug, excluded
+            "damo_3.2.8-1~noble+1_arm64.changes",     // not a .deb
+            "other_9.9-1~noble+1_arm64.deb",          // different version
+        ] {
+            std::fs::write(p.join(f), "").unwrap();
+        }
+        let names: Vec<String> = matching_debs(p, "3.2.8-1~noble+1")
+            .iter()
+            .map(|s| {
+                Path::new(s)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "damo_3.2.8-1~noble+1_arm64.deb",
+                "python3-damo_3.2.8-1~noble+1_all.deb"
+            ]
+        );
     }
 
     #[test]

@@ -85,6 +85,27 @@ impl Ui {
         Ok(status.success())
     }
 
+    /// Like [`run`], but captures the command's combined stdout+stderr
+    /// and returns it alongside success. Used where the tool is quiet
+    /// on success (e.g. lintian) and we want to echo + summarize its
+    /// output. In `--dry-run` returns `(true, "")` without running.
+    pub fn run_capture(&self, argv: &[String], cwd: &Path) -> std::io::Result<(bool, String)> {
+        self.show_command(argv);
+        if self.dry_run {
+            return Ok((true, String::new()));
+        }
+        if self.explain {
+            self.pause();
+        }
+        let out = Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(cwd)
+            .output()?;
+        let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
+        combined.push_str(&String::from_utf8_lossy(&out.stderr));
+        Ok((out.status.success(), combined))
+    }
+
     /// Run a command that must succeed; error otherwise.
     pub fn run_required(
         &self,

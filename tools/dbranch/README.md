@@ -24,13 +24,14 @@ along or learn to do it by hand.
 cargo install dbranch
 ```
 
-`dbranch` shells out to the standard Debian tooling; install:
+`dbranch` shells out to the standard Debian tooling; install what the
+stages you run need:
 
-- `git` and `gbp` (Debian package `git-buildpackage`)
-- `debuild` (`devscripts`)
-- `pbuilder-dist` (`ubuntu-dev-tools`)
-
-(The build tools are only needed unless you pass `--no-build`.)
+- `git` — always
+- `gbp` (`git-buildpackage`) — `merge` stage
+- `debuild` (`devscripts`) and `pbuilder-dist` (`ubuntu-dev-tools`) —
+  `build` stage
+- `lintian` (`lintian`) — `lint` stage
 
 ## Usage
 
@@ -69,12 +70,18 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   `<debver>~<codename>+<N>` / `* Rebuild for <codename>` and commit.
 - **`build`** — `debuild -S -sa -d` then
   `pbuilder-dist <codename> ../<dsc>`.
-- **`all`** — both.
+- **`lint`** — `lintian -I` on the built **`.deb`s** in
+  `~/pbuilder/<codename>_result/` (`-I` surfaces info-level tags too;
+  linting the binaries directly, rather than the `.changes`, avoids
+  lintian re-unpacking the source, which `debuild -S` already lints).
+  It warns but does **not** fail the run — rebuild lint tags are
+  mostly inherited from Debian.
+- **`all`** — all of the above.
 
 ```
-$ dbranch rebuild noble                 # merge stage only (default)
-$ dbranch rebuild noble --stage all     # merge then build
-$ dbranch rebuild noble --stage build   # build an already-merged branch
+$ dbranch rebuild noble                  # merge stage only (default)
+$ dbranch rebuild noble --stage all      # merge, build, lint
+$ dbranch rebuild noble --stage build,lint   # build an already-merged branch, then lint
 ```
 
 `<N>` is `1` for a new Debian version, bumped if you rebuild the same

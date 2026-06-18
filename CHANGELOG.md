@@ -27,7 +27,12 @@ Work runs in `rpmbuild`-style stages via `--stage` (default `merge`):
   creating the codename's pbuilder chroot first
   (`pbuilder-dist <codename> create`) when
   `~/pbuilder/<codename>-base.tgz` is absent.
-- `all` — both.
+- `lint` — `lintian -I` on the built `.deb`s in
+  `~/pbuilder/<codename>_result/` (`-I` includes info-level tags;
+  linting binaries directly avoids re-unpacking the source, which
+  `debuild -S` already lints); warns but does not fail the run
+  (rebuild lint tags are mostly inherited).
+- `all` — all of the above.
 
 dbranch is also a learning tool. `--dry-run` prints every command
 without running anything; `--explain` runs the workflow but narrates
