@@ -51,6 +51,28 @@
   `glab ci status`'s table, which is branch-scoped and reprints the
   whole list each time.
 
+- (2026-06-18) Simplify the push command when upstream is already set.
+  The push stage always runs `git push -u origin <branch>`; once the
+  branch tracks `origin/<branch>` the `-u origin <branch>` is
+  redundant. Detect tracking (`git rev-parse --abbrev-ref
+  <branch>@{upstream}` succeeds) and, since the push stage has the
+  target checked out, fall back to plain `git push` (or `git push
+  <branch>`), reserving `-u origin <branch>` for the first push. Fits
+  the learning-tool goal of showing the minimal correct command for
+  the current state.
+
+- (2026-06-18) Quiet mode that swallows shelled-out tool output.
+  A `--quiet`/`-q` flag suppressing the chatter from git, debuild,
+  pbuilder-dist, lintian, glab, etc., leaving only dbranch's own
+  narration/headings and errors. Implementation: thread a `quiet`
+  flag into `Ui` and have `run_status`/`run_required` redirect the
+  child's stdout/stderr (capture and show only on failure, like
+  `run_capture` already does, rather than discard outright — so a
+  failure is still diagnosable). Note the tension with the
+  learning-tool transparency: `--quiet` is the opposite end from
+  `--explain`, and the two should be mutually exclusive (or `--quiet`
+  ignored under `--explain`/`--dry-run`).
+
 ## ebranch
 
 - Second-level branch-request escalation: when a `needinfo?` ping
