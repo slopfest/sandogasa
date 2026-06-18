@@ -102,6 +102,22 @@
     keep upload independent. Pairs with the bulk EOL-check TODO:
     uploading to an EOL release is rejected.
 
+- (2026-06-18) New `tag` stage: `gbp tag` the release. Make it its own
+  stage (not folded into `upload`) — distinct operation, fits the
+  selectable-stage model, lets you tag without uploading. Order it
+  after `upload` so only an actually-released build is tagged (a failed
+  upload leaves no tag).
+  - `gbp tag` refuses on an unclean work tree, and `debuild -S` (the
+    build stage) leaves a generated `debian/files`. So the stage first
+    cleans the tree — `dh clean` (≡ `debian/rules clean`) — then runs
+    `gbp tag`. (`gbp tag --ignore-new` is a lazier alternative, but
+    actually cleaning matches the by-hand workflow and is tidier.) The
+    clean only drops in-tree build cruft, not the `../*.changes` the
+    upload stage consumed, so ordering upload-then-tag is fine.
+  - Add `dh` (debhelper) to the `require_tools` batch for this stage.
+    The tag name follows gbp's `debian-tag` format (default
+    `debian/<version>`), so PPA rebuilds get a per-rebuild tag.
+
 - (2026-06-18) Quiet mode that swallows shelled-out tool output.
   A `--quiet`/`-q` flag suppressing the chatter from git, debuild,
   pbuilder-dist, lintian, glab, etc., leaving only dbranch's own
