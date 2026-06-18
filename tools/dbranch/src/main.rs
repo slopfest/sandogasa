@@ -66,6 +66,10 @@ Defaults to `merge` (the others are opt-in for now)."
         )]
         stage: Vec<String>,
 
+        /// Merge source branch (default: the checked-out branch).
+        #[arg(long, value_name = "BRANCH")]
+        source: Option<String>,
+
         /// In the push stage, push but don't wait for / watch CI.
         #[arg(long)]
         nowait: bool,
@@ -134,6 +138,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             branches,
             repo,
             stage,
+            source,
             nowait,
             ppa,
             upload_target,
@@ -154,6 +159,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 stages,
                 nowait,
                 upload_target,
+                source,
             };
             rebuild::run(&ui, &repo, &opts)
         }

@@ -42,17 +42,20 @@ stages you run need:
 
 ```
 dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
-    [--nowait] [--ppa <name> | --upload-target <host>]
+    [--source <branch>] [--nowait]
+    [--ppa <name> | --upload-target <host>]
     [--dry-run] [--explain] [--quiet]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
 ```
 
 Run it from the package's git working tree **with the Debian branch
 checked out** (e.g. `master` or `debian/unstable`) — that branch is
-the merge source. Name the PPA branch(es) to rebuild; a branch that
-doesn't exist yet is created from the Debian branch. With no branches
-given it rebuilds every local branch except the current one and gbp's
-`upstream` / pristine-tar branches.
+the merge source. (Use `--source <branch>` to merge from a specific
+branch instead, so you needn't check it out first.) Name the PPA
+branch(es) to rebuild; a branch that doesn't exist yet is created from
+the Debian branch. With no branches given it rebuilds every local
+branch except the current one and gbp's `upstream` / pristine-tar
+branches.
 
 ```
 $ dbranch rebuild noble ubuntu/questing

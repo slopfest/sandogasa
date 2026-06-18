@@ -100,6 +100,10 @@ pub struct Options {
     /// dput target for the upload stage (e.g. `ppa:user/name` or a
     /// dput host); `None` when not uploading.
     pub upload_target: Option<String>,
+    /// Explicit merge source branch; `None` uses the checked-out
+    /// branch. Lets dbranch run without first checking out the Debian
+    /// branch.
+    pub source: Option<String>,
 }
 
 /// Run the rebuild workflow over the selected branches.
@@ -109,6 +113,11 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
         return Err(
             "the upload stage needs a target: pass --ppa <name> or --upload-target <host>".into(),
         );
+    }
+    if let Some(s) = &opts.source
+        && git::rev_parse(repo, s).is_none()
+    {
+        return Err(format!("source branch {s} not found").into());
     }
 
     if !ui.dry_run {
@@ -132,8 +141,13 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
         }
     }
 
-    // The Debian branch is wherever we start.
-    let source = git::current_branch(repo)?;
+    // The merge source: an explicit --source, else the checked-out
+    // branch. The override lets dbranch run without first checking out
+    // the Debian branch.
+    let source = match &opts.source {
+        Some(s) => s.clone(),
+        None => git::current_branch(repo)?,
+    };
     let all = git::local_branches(repo)?;
 
     let targets = if opts.branches.is_empty() {
@@ -950,6 +964,7 @@ mod tests {
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            source: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -962,8 +977,36 @@ mod tests {
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            source: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn source_override_is_used_as_merge_source() {
+        let dir = setup();
+        // On debian/unstable, but merge from noble into a new branch.
+        let opts = Options {
+            branches: vec!["ubuntu/plucky".to_string()],
+            stages: MERGE,
+            nowait: false,
+            upload_target: None,
+            source: Some("noble".to_string()),
+        };
+        run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn source_override_unknown_branch_errors() {
+        let dir = setup();
+        let opts = Options {
+            branches: vec!["ubuntu/plucky".to_string()],
+            stages: MERGE,
+            nowait: false,
+            upload_target: None,
+            source: Some("does-not-exist".to_string()),
+        };
+        assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
 
     #[test]
@@ -1002,6 +1045,7 @@ mod tests {
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            source: None,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -1028,6 +1072,7 @@ mod tests {
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            source: None,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -1083,6 +1128,7 @@ mod tests {
             stages: BUILD,
             nowait: false,
             upload_target: None,
+            source: None,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1095,6 +1141,7 @@ mod tests {
             stages: BUILD,
             nowait: false,
             upload_target: None,
+            source: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1111,6 +1158,7 @@ mod tests {
             stages: BUILD,
             nowait: false,
             upload_target: None,
+            source: None,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -1126,6 +1174,7 @@ mod tests {
             },
             nowait: false,
             upload_target: None,
+            source: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1141,6 +1190,7 @@ mod tests {
             },
             nowait: false,
             upload_target: None,
+            source: None,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1156,6 +1206,7 @@ mod tests {
             },
             nowait: false,
             upload_target: Some("ppa:michel/sugarjar".to_string()),
+            source: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1171,6 +1222,7 @@ mod tests {
             },
             nowait: false,
             upload_target: None,
+            source: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1186,6 +1238,7 @@ mod tests {
             },
             nowait: true,
             upload_target: None,
+            source: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1269,6 +1322,7 @@ E: damo: an-error\n";
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            source: None,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1283,6 +1337,7 @@ E: damo: an-error\n";
             stages: BUILD,
             nowait: false,
             upload_target: None,
+            source: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }

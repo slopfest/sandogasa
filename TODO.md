@@ -2,16 +2,6 @@
 
 ## dbranch
 
-- (2026-06-18) Allow an explicit merge source branch (e.g. `--source
-  <branch>`), defaulting to the checked-out branch. Today the source
-  is always `git::current_branch`; let the user override it so dbranch
-  can run without first checking out the Debian branch (handy when a
-  different branch is checked out). The source only needs to be a valid
-  ref (merge and checkout-new take any ref), so this is mostly
-  threading a resolved `source` through from a flag instead of
-  `current_branch`, keeping the `target == source` guard and bulk
-  exclusions on the resolved source.
-
 - (2026-06-18) Bulk run should confirm the branch set before
   processing, and flag/skip EOL releases.
   - A no-argument `dbranch rebuild` (and now potentially a
@@ -48,7 +38,8 @@
     more valuable, since it would surface every PPA branch on origin.
 
 Done (shipped): the `push`/`upload`/`tag` stages, per-job CI watch
-progress, `git push -u`→plain-push simplification, and `--quiet` mode.
+progress, `git push -u`→plain-push simplification, `--quiet` mode, and
+the `--source` merge-source override.
 
 ## ebranch
 

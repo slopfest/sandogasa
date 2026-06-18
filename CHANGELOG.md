@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### dbranch: `--source` to override the merge source branch
+
+`dbranch rebuild --source <branch>` sets the branch merged into each
+target, instead of always using the checked-out branch — so dbranch
+can run without first checking out the Debian branch (e.g. from another
+branch or a detached HEAD). The source is validated up front (clear
+error if the ref doesn't exist) and feeds the `target == source` guard
+and bulk exclusions.
+
 ### dbranch: `tag` stage (gbp tag)
 
 A new `tag` stage tags the release: it first runs `dh clean` (`gbp tag`
