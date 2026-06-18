@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use dbranch::plan;
 use dbranch::rebuild::{self, Options};
 use dbranch::ui::Ui;
 
@@ -56,7 +57,9 @@ Stages to run, repeatable or comma-separated:
           does not fail the run)
   push    git push the branch, then watch its CI
           pipeline via glab (see --nowait)
-  all     all of the above
+  upload  dput the built package (needs --ppa or
+          --upload-target)
+  all     merge + build + lint + push (upload is opt-in)
 Defaults to `merge` (the others are opt-in for now)."
         )]
         stage: Vec<String>,
@@ -64,6 +67,14 @@ Defaults to `merge` (the others are opt-in for now)."
         /// In the push stage, push but don't wait for / watch CI.
         #[arg(long)]
         nowait: bool,
+
+        /// Upload stage: target PPA (e.g. `user/name`; `ppa:` optional).
+        #[arg(long, value_name = "PPA", conflicts_with = "upload_target")]
+        ppa: Option<String>,
+
+        /// Upload stage: dput target host (e.g. `mentors`, `ftp-master`).
+        #[arg(long, value_name = "TARGET")]
+        upload_target: Option<String>,
 
         /// Print the commands without running anything (a tutorial).
         #[arg(long)]
@@ -122,6 +133,8 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             repo,
             stage,
             nowait,
+            ppa,
+            upload_target,
             dry_run,
             explain,
             quiet,
@@ -132,10 +145,13 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 quiet,
             };
             let stages = rebuild::parse_stages(&stage)?;
+            // --ppa is sugar for a `ppa:<name>` dput target.
+            let upload_target = ppa.map(|p| plan::ppa_target(&p)).or(upload_target);
             let opts = Options {
                 branches,
                 stages,
                 nowait,
+                upload_target,
             };
             rebuild::run(&ui, &repo, &opts)
         }

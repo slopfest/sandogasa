@@ -42,7 +42,8 @@ stages you run need:
 
 ```
 dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
-    [--nowait] [--dry-run] [--explain] [--quiet]
+    [--nowait] [--ppa <name> | --upload-target <host>]
+    [--dry-run] [--explain] [--quiet]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
 ```
 
@@ -112,13 +113,22 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   running pipeline later — after a `--nowait` push or a dropped
   connection — with `dbranch watch-ci [<branch>]` (defaults to the
   current branch; it watches the branch-tip commit's pipeline).
-- **`all`** — all of the above.
+- **`upload`** — `dput` the built source `.changes` (from
+  `debuild -S`) to its archive. Give the target with `--ppa
+  <user/name>` (sugar for a `ppa:<user/name>` dput target; a leading
+  `ppa:` is accepted) or `--upload-target <host>` for any dput host
+  (e.g. `mentors`, `ftp-master`); the two are mutually exclusive and
+  one is required. Runs after `push` so CI can pass before publishing.
+  **Opt-in** — not part of `all`.
+- **`all`** — `merge`, `build`, `lint`, `push` (not `upload`, which is
+  a deliberate publish needing a target).
 
 ```
 $ dbranch rebuild noble                  # merge stage only (default)
 $ dbranch rebuild noble --stage all      # merge, build, lint, push
 $ dbranch rebuild noble --stage build,lint   # build an already-merged branch, then lint
 $ dbranch rebuild noble --stage push --nowait   # push, don't wait for CI
+$ dbranch rebuild ubuntu/questing --stage upload --ppa me/sugarjar  # dput to a PPA
 $ dbranch watch-ci noble                 # attach to noble's CI pipeline
 ```
 

@@ -37,11 +37,12 @@ pub struct Stages {
     pub build: bool,
     pub lint: bool,
     pub push: bool,
+    pub upload: bool,
 }
 
 impl Stages {
     fn any(&self) -> bool {
-        self.merge || self.build || self.lint || self.push
+        self.merge || self.build || self.lint || self.push || self.upload
     }
 }
 
@@ -61,7 +62,10 @@ pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
             "build" => s.build = true,
             "lint" => s.lint = true,
             "push" => s.push = true,
+            "upload" => s.upload = true,
             "all" => {
+                // `all` is the build-and-verify flow; `upload` (a
+                // deliberate publish needing a target) stays opt-in.
                 s.merge = true;
                 s.build = true;
                 s.lint = true;
@@ -69,7 +73,7 @@ pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
             }
             other => {
                 return Err(format!(
-                    "unknown stage '{other}' (valid: merge, build, lint, push, all)"
+                    "unknown stage '{other}' (valid: merge, build, lint, push, upload, all)"
                 ));
             }
         }
@@ -90,10 +94,20 @@ pub struct Options {
     pub stages: Stages,
     /// In the push stage, push but don't wait for / watch CI.
     pub nowait: bool,
+    /// dput target for the upload stage (e.g. `ppa:user/name` or a
+    /// dput host); `None` when not uploading.
+    pub upload_target: Option<String>,
 }
 
 /// Run the rebuild workflow over the selected branches.
 pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::error::Error>> {
+    // Validate cheap preconditions before any work.
+    if opts.stages.upload && opts.upload_target.is_none() {
+        return Err(
+            "the upload stage needs a target: pass --ppa <name> or --upload-target <host>".into(),
+        );
+    }
+
     if !ui.dry_run {
         // glab is only needed when the push stage actually waits on CI.
         let need_glab = opts.stages.push && !opts.nowait;
@@ -102,6 +116,7 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             opts.stages.build,
             opts.stages.lint,
             need_glab,
+            opts.stages.upload,
         )?;
         // glab keeps a token per host; check the one this repo lives on.
         if let Some(host) = need_glab
@@ -147,6 +162,7 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             location,
             opts.stages,
             opts.nowait,
+            opts.upload_target.as_deref(),
         )?;
     }
     Ok(())
@@ -188,7 +204,7 @@ pub fn watch_ci(
     branch: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !ui.dry_run {
-        git::ensure_tools(false, false, false, true)?;
+        git::ensure_tools(false, false, false, true, false)?;
         if let Some(host) = git::remote_host(repo, "origin") {
             git::ensure_glab_auth(repo, &host)?;
         }
@@ -223,6 +239,7 @@ fn bulk_targets(source: &str, all: &[String], cfg: &gbpconf::GbpConfig) -> Vec<S
     plan::ppa_branches(all, &exclude)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rebuild_one(
     ui: &Ui,
     repo: &Path,
@@ -231,11 +248,12 @@ fn rebuild_one(
     location: TargetLocation,
     stages: Stages,
     nowait: bool,
+    upload_target: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let codename = target_codename(repo, target, location);
     ui.step(&format!("{target} (codename: {codename})"));
 
-    // The version the merge stage produced, reused by build/lint.
+    // The version the merge stage produced, reused by build/lint/upload.
     let mut rebuilt_version: Option<String> = None;
 
     if stages.merge {
@@ -248,7 +266,7 @@ fn rebuild_one(
             &codename,
             &mut rebuilt_version,
         )?;
-    } else if stages.build || stages.lint || stages.push {
+    } else if stages.build || stages.lint || stages.push || stages.upload {
         // Not merging: still need to be on the target.
         if location == TargetLocation::New {
             return Err(format!(
@@ -259,7 +277,7 @@ fn rebuild_one(
         checkout_existing(ui, repo, target, location)?;
     }
 
-    if stages.build || stages.lint {
+    if stages.build || stages.lint || stages.upload {
         // Prefer the version the merge stage just produced; else read
         // the current top changelog entry.
         let (package, top_version) = top_package_version(repo)?;
@@ -270,13 +288,34 @@ fn rebuild_one(
         if stages.lint {
             lint_stage(ui, repo, &codename, &version)?;
         }
-    }
-
-    if stages.push {
+        // push (git + CI) before upload, so CI has a chance to pass
+        // before the package is published to its archive.
+        if stages.push {
+            push_stage(ui, repo, target, nowait)?;
+        }
+        if stages.upload {
+            let target =
+                upload_target.ok_or("the upload stage needs a target (--ppa / --upload-target)")?;
+            upload_stage(ui, repo, &package, &version, target)?;
+        }
+    } else if stages.push {
         push_stage(ui, repo, target, nowait)?;
     }
 
     Ok(())
+}
+
+/// The upload stage: `dput` the source `.changes` to its archive.
+fn upload_stage(
+    ui: &Ui,
+    repo: &Path,
+    package: &str,
+    version: &str,
+    target: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ui.step(&format!("Upload {package} {version} to {target}"));
+    let changes = format!("../{}", plan::changes_filename(package, version));
+    ui.run_required(&plan::dput_argv(target, &changes), repo)
 }
 
 /// The push stage: publish the branch, then (unless `nowait`) attach
@@ -815,12 +854,14 @@ mod tests {
         build: false,
         lint: false,
         push: false,
+        upload: false,
     };
     const BUILD: Stages = Stages {
         merge: false,
         build: true,
         lint: false,
         push: false,
+        upload: false,
     };
 
     #[test]
@@ -833,6 +874,8 @@ mod tests {
                 build: true,
                 lint: true,
                 push: true,
+                // `all` excludes upload (deliberate publish, opt-in).
+                upload: false,
             }
         );
         assert_eq!(parse_stages(&["build".to_string()]).unwrap(), BUILD);
@@ -847,6 +890,13 @@ mod tests {
             parse_stages(&["push".to_string()]).unwrap(),
             Stages {
                 push: true,
+                ..Stages::default()
+            }
+        );
+        assert_eq!(
+            parse_stages(&["upload".to_string()]).unwrap(),
+            Stages {
+                upload: true,
                 ..Stages::default()
             }
         );
@@ -868,6 +918,7 @@ mod tests {
             branches: vec!["noble".to_string()],
             stages: MERGE,
             nowait: false,
+            upload_target: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -879,6 +930,7 @@ mod tests {
             branches: vec!["ubuntu/plucky".to_string()],
             stages: MERGE,
             nowait: false,
+            upload_target: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -918,6 +970,7 @@ mod tests {
             branches: vec!["ubuntu/questing".to_string()],
             stages: MERGE,
             nowait: false,
+            upload_target: None,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -943,6 +996,7 @@ mod tests {
             branches: vec!["ubuntu/plucky".to_string()],
             stages: MERGE,
             nowait: false,
+            upload_target: None,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -997,6 +1051,7 @@ mod tests {
             branches: vec!["ubuntu/plucky".to_string()],
             stages: BUILD,
             nowait: false,
+            upload_target: None,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1008,6 +1063,7 @@ mod tests {
             branches: vec!["noble".to_string()],
             stages: BUILD,
             nowait: false,
+            upload_target: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1023,6 +1079,7 @@ mod tests {
             branches: vec!["noble".to_string()],
             stages: BUILD,
             nowait: false,
+            upload_target: None,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -1037,6 +1094,37 @@ mod tests {
                 ..Stages::default()
             },
             nowait: false,
+            upload_target: None,
+        };
+        run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn upload_without_target_errors() {
+        let dir = setup();
+        let opts = Options {
+            branches: vec!["noble".to_string()],
+            stages: Stages {
+                upload: true,
+                ..Stages::default()
+            },
+            nowait: false,
+            upload_target: None,
+        };
+        assert!(run(&ui_dry(), dir.path(), &opts).is_err());
+    }
+
+    #[test]
+    fn upload_dry_run_with_ppa_target() {
+        let dir = setup();
+        let opts = Options {
+            branches: vec!["noble".to_string()],
+            stages: Stages {
+                upload: true,
+                ..Stages::default()
+            },
+            nowait: false,
+            upload_target: Some("ppa:michel/sugarjar".to_string()),
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1051,6 +1139,7 @@ mod tests {
                 ..Stages::default()
             },
             nowait: true,
+            upload_target: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1133,6 +1222,7 @@ E: damo: an-error\n";
             branches: vec!["debian/unstable".to_string()],
             stages: MERGE,
             nowait: false,
+            upload_target: None,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1146,6 +1236,7 @@ E: damo: an-error\n";
             branches: vec!["debian/unstable".to_string()],
             stages: BUILD,
             nowait: false,
+            upload_target: None,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }

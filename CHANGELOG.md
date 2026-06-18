@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### dbranch: `upload` stage (dput)
+
+A new `upload` stage `dput`s the built source `.changes` (from
+`debuild -S`) to its archive. The target is given by `--ppa
+<user/name>` (sugar that becomes a `ppa:<user/name>` dput target; a
+leading `ppa:` is tolerated) or `--upload-target <host>` for any dput
+host (e.g. `mentors`, `ftp-master`); the two are mutually exclusive,
+and the stage errors up front if neither is given. It runs after
+`push` in the pipeline (so CI can pass before publishing) and is
+**opt-in** — `--stage all` stays `merge + build + lint + push` and does
+not upload. Adds `dput` to the per-stage tool check.
+
 ### dbranch: per-job CI watch progress
 
 While watching a pipeline (push stage / `watch-ci`), dbranch now also

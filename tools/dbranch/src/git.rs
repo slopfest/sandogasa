@@ -181,6 +181,7 @@ pub fn ensure_tools(
     need_build: bool,
     need_lint: bool,
     need_glab: bool,
+    need_upload: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // (executable, providing package, version/help probe). Most tools
     // answer `--version`; pbuilder-dist doesn't, but `--help` exits 0.
@@ -198,6 +199,11 @@ pub fn ensure_tools(
     if need_glab {
         required.push(("glab", "apt install glab (GitLab CLI)", Some("--version")));
     }
+    if need_upload {
+        // Probe by $PATH only — dput's `--version` support varies
+        // between dput and dput-ng.
+        required.push(("dput", "dput", None));
+    }
     sandogasa_cli::require_tools(&required).map_err(Into::into)
 }
 
@@ -208,7 +214,7 @@ mod tests {
     #[test]
     fn ensure_tools_ok_for_present_basics() {
         // git is present in dev/CI; with no extra stages this passes.
-        assert!(ensure_tools(false, false, false, false).is_ok());
+        assert!(ensure_tools(false, false, false, false, false).is_ok());
     }
 
     #[test]

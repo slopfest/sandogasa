@@ -36,6 +36,18 @@ pub fn dsc_filename(package: &str, version: &str) -> String {
     format!("{package}_{}.dsc", version_no_epoch(version))
 }
 
+/// The source `.changes` filename `debuild -S` produces (in the parent
+/// directory) — what the upload stage hands to `dput`.
+pub fn changes_filename(package: &str, version: &str) -> String {
+    format!("{package}_{}_source.changes", version_no_epoch(version))
+}
+
+/// Turn a PPA name into a dput target, tolerating a `ppa:` prefix:
+/// `michel/sugarjar` and `ppa:michel/sugarjar` both → `ppa:michel/sugarjar`.
+pub fn ppa_target(ppa: &str) -> String {
+    format!("ppa:{}", ppa.strip_prefix("ppa:").unwrap_or(ppa))
+}
+
 /// pbuilder-dist's result directory for a codename
 /// (`~/pbuilder/<codename>_result`); `None` if `$HOME` is unset.
 pub fn pbuilder_result_dir(codename: &str) -> Option<std::path::PathBuf> {
@@ -154,6 +166,13 @@ pub fn push_argv() -> Vec<String> {
 /// until this push). Later pushes use the plain [`push_argv`].
 pub fn push_set_upstream_argv(remote: &str, branch: &str) -> Vec<String> {
     argv(&["git", "push", "-u", remote, branch])
+}
+
+/// `dput <target> <changes>` — upload a `.changes` to its archive.
+/// `target` is a dput host (e.g. `mentors`, `ftp-master`) or a PPA
+/// (`ppa:<user>/<name>`, see [`ppa_target`]).
+pub fn dput_argv(target: &str, changes: &str) -> Vec<String> {
+    argv(&["dput", target, changes])
 }
 
 /// `glab ci list --sha <sha> -F json` — list the CI pipeline(s) for an
@@ -327,6 +346,21 @@ mod tests {
         assert_eq!(
             dsc_filename("damo", "1:3.2.8-1~questing+1"),
             "damo_3.2.8-1~questing+1.dsc"
+        );
+    }
+
+    #[test]
+    fn changes_filename_and_dput_and_ppa() {
+        assert_eq!(
+            changes_filename("damo", "1:3.2.8-1~questing+1"),
+            "damo_3.2.8-1~questing+1_source.changes"
+        );
+        assert_eq!(ppa_target("michel/sugarjar"), "ppa:michel/sugarjar");
+        // A leading `ppa:` is tolerated, not doubled.
+        assert_eq!(ppa_target("ppa:michel/sugarjar"), "ppa:michel/sugarjar");
+        assert_eq!(
+            dput_argv("ppa:michel/sugarjar", "../damo_1_source.changes"),
+            ["dput", "ppa:michel/sugarjar", "../damo_1_source.changes"]
         );
     }
 
