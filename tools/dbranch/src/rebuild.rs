@@ -641,8 +641,14 @@ fn adjust_branch_packaging(
         ));
         let tag_format = plan::debian_tag_format(target);
         let changed = edit_file(ui, repo, "debian/gbp.conf", |text| {
-            let text = gbpconf::set_key(text, "debian-branch", target);
-            Some(gbpconf::set_key(&text, "debian-tag", &tag_format))
+            let text = gbpconf::set_key(text, "debian-branch", target, None);
+            // Keep debian-tag right under debian-branch.
+            Some(gbpconf::set_key(
+                &text,
+                "debian-tag",
+                &tag_format,
+                Some("debian-branch"),
+            ))
         })?;
         if changed {
             ui.run_required(
@@ -1171,12 +1177,12 @@ mod tests {
             dry_run: false,
             quiet: false,
         };
-        let transform = |t: &str| Some(gbpconf::set_key(t, "debian-branch", "noble"));
+        let transform = |t: &str| Some(gbpconf::set_key(t, "debian-branch", "noble", None));
         assert!(edit_file(&ui, p, "debian/gbp.conf", transform).unwrap());
         let after = std::fs::read_to_string(p.join("debian/gbp.conf")).unwrap();
         assert!(after.contains("debian-branch = noble"));
         // Re-applying the same transform reports no change.
-        let transform = |t: &str| Some(gbpconf::set_key(t, "debian-branch", "noble"));
+        let transform = |t: &str| Some(gbpconf::set_key(t, "debian-branch", "noble", None));
         assert!(!edit_file(&ui, p, "debian/gbp.conf", transform).unwrap());
     }
 

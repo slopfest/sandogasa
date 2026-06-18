@@ -67,32 +67,47 @@ pub fn parse(text: &str) -> GbpConfig {
     cfg
 }
 
+/// The `key` of a config line (`key = value`), or `None` for blanks,
+/// comments, and section headers.
+fn key_of(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    if t.starts_with('#') || t.starts_with(';') {
+        return None;
+    }
+    t.split_once('=').map(|(k, _)| k.trim())
+}
+
 /// Return `text` with `key` set to `value`, preserving all other
-/// lines, comments, and formatting. Rewrites the existing `key = …`
-/// line in place (keeping its indentation); if there isn't one,
-/// appends the key. Used to set a new PPA branch's `debian-branch`
+/// lines, comments, and formatting. If the key is already present its
+/// value is rewritten in place (keeping its indentation). Otherwise it
+/// is inserted right after the `after` key's line when given and
+/// present (so e.g. `debian-tag` sits under `debian-branch`), else
+/// appended at the end. Used to set a new PPA branch's `debian-branch`
 /// (point it at itself) and `debian-tag` (the `ubuntu/%(version)s`
 /// tag format).
-pub fn set_key(text: &str, key: &str, value: &str) -> String {
+pub fn set_key(text: &str, key: &str, value: &str, after: Option<&str>) -> String {
+    let exists = text.lines().any(|l| key_of(l) == Some(key));
     let mut out: Vec<String> = Vec::with_capacity(text.lines().count() + 1);
-    let mut replaced = false;
+    let mut done = false;
     for raw in text.lines() {
-        let trimmed = raw.trim_start();
-        let is_target = !replaced
-            && !trimmed.starts_with('#')
-            && !trimmed.starts_with(';')
-            && trimmed
-                .split_once('=')
-                .is_some_and(|(k, _)| k.trim() == key);
-        if is_target {
-            let indent = &raw[..raw.len() - trimmed.len()];
+        let this_key = key_of(raw);
+        let indent = &raw[..raw.len() - raw.trim_start().len()];
+        if exists {
+            // Rewrite the existing line in place.
+            if !done && this_key == Some(key) {
+                out.push(format!("{indent}{key} = {value}"));
+                done = true;
+                continue;
+            }
+        }
+        out.push(raw.to_string());
+        // Insert a brand-new key right after its anchor line.
+        if !exists && !done && after.is_some() && this_key == after {
             out.push(format!("{indent}{key} = {value}"));
-            replaced = true;
-        } else {
-            out.push(raw.to_string());
+            done = true;
         }
     }
-    if !replaced {
+    if !done {
         out.push(format!("{key} = {value}"));
     }
     let mut result = out.join("\n");
@@ -175,13 +190,13 @@ upstream-branch = upstream
     #[test]
     fn set_key_rewrites_in_place() {
         let text = "[DEFAULT]\npristine-tar = True\ndebian-branch = debian/unstable\nupstream-branch = upstream\n";
-        let out = set_key(text, "debian-branch", "ubuntu/questing");
+        let out = set_key(text, "debian-branch", "ubuntu/questing", None);
         assert_eq!(
             out,
             "[DEFAULT]\npristine-tar = True\ndebian-branch = ubuntu/questing\nupstream-branch = upstream\n"
         );
         // Idempotent.
-        assert_eq!(set_key(&out, "debian-branch", "ubuntu/questing"), out);
+        assert_eq!(set_key(&out, "debian-branch", "ubuntu/questing", None), out);
         // Comments are not mistaken for the key.
         assert_eq!(
             parse(&out).debian_branch.as_deref(),
@@ -190,9 +205,40 @@ upstream-branch = upstream
     }
 
     #[test]
-    fn set_key_appends_when_absent() {
-        // e.g. adding debian-tag to a gbp.conf that lacks it.
-        let out = set_key("pristine-tar = True\n", "debian-tag", "ubuntu/%(version)s");
+    fn set_key_inserts_after_anchor() {
+        // debian-tag lands right under debian-branch, not at the end.
+        let text = "[DEFAULT]\npristine-tar = True\ndebian-branch = ubuntu/questing\nupstream-branch = upstream\n";
+        let out = set_key(
+            text,
+            "debian-tag",
+            "ubuntu/%(version)s",
+            Some("debian-branch"),
+        );
+        assert_eq!(
+            out,
+            "[DEFAULT]\npristine-tar = True\ndebian-branch = ubuntu/questing\ndebian-tag = ubuntu/%(version)s\nupstream-branch = upstream\n"
+        );
+        // Idempotent (already present → rewritten in place, not added).
+        assert_eq!(
+            set_key(
+                &out,
+                "debian-tag",
+                "ubuntu/%(version)s",
+                Some("debian-branch")
+            ),
+            out
+        );
+    }
+
+    #[test]
+    fn set_key_appends_when_anchor_absent() {
+        // No anchor present → fall back to appending at the end.
+        let out = set_key(
+            "pristine-tar = True\n",
+            "debian-tag",
+            "ubuntu/%(version)s",
+            Some("debian-branch"),
+        );
         assert_eq!(
             out,
             "pristine-tar = True\ndebian-tag = ubuntu/%(version)s\n"
