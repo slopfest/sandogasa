@@ -42,7 +42,7 @@ stages you run need:
 
 ```
 dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
-    [--nowait] [--dry-run] [--explain]
+    [--nowait] [--dry-run] [--explain] [--quiet]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
 ```
 
@@ -137,6 +137,10 @@ a PPA branch (a `~<codename>+<N>` suffix is stripped first).
   pauses for Enter before running it (Ctrl-C aborts), so you can step
   through, learn it, or sanity-check a real run.
 - `--explain --dry-run` together is a pure walkthrough.
+- `--quiet` (`-q`) is the opposite end: it suppresses the tools'
+  output, leaving only dbranch's step headings, and replays a
+  command's output only if it fails. Mutually exclusive with
+  `--explain`.
 
 ```
 $ dbranch rebuild noble --dry-run        # on debian/unstable, damo 3.2.8-1

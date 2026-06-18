@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### dbranch: `--quiet` mode
+
+`dbranch rebuild --quiet` (`-q`) suppresses the shelled-out tools'
+output (git, gbp, debuild, pbuilder-dist, lintian), leaving just
+dbranch's own step narration. Each command's output is captured and
+replayed only if it fails, so problems stay diagnosable. Mutually
+exclusive with `--explain` (the opposite, step-through verbose mode).
+
 ### dbranch: adjust gbp.conf and salsa-ci.yml when creating a new PPA branch
 
 Creating a brand-new PPA branch now performs the two one-time

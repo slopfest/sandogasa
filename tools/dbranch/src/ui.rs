@@ -32,6 +32,8 @@ pub struct Ui {
     pub explain: bool,
     /// Narrate without running anything.
     pub dry_run: bool,
+    /// Suppress shelled-out tool output, surfacing it only on failure.
+    pub quiet: bool,
 }
 
 impl Ui {
@@ -96,7 +98,9 @@ impl Ui {
     /// Run a command in `cwd`, narrating it first, and return its exit
     /// code (`0` on success). In `--dry-run` nothing runs and this
     /// returns `Ok(0)`; in `--explain` it pauses for Enter first. A
-    /// signal-terminated child reports `1`.
+    /// signal-terminated child reports `1`. In `--quiet` the command's
+    /// output is captured and replayed only if it fails, so a normal
+    /// run shows just dbranch's own narration.
     pub fn run_status(&self, argv: &[String], cwd: &Path) -> std::io::Result<i32> {
         self.show_command(argv);
         if self.dry_run {
@@ -105,11 +109,21 @@ impl Ui {
         if self.explain {
             self.pause();
         }
-        let status = Command::new(&argv[0])
-            .args(&argv[1..])
-            .current_dir(cwd)
-            .status()?;
-        Ok(status.code().unwrap_or(1))
+        let mut cmd = Command::new(&argv[0]);
+        cmd.args(&argv[1..]).current_dir(cwd);
+        if !self.quiet {
+            return Ok(cmd.status()?.code().unwrap_or(1));
+        }
+        // Quiet: swallow the tool's chatter, but replay it on failure
+        // so a problem is still diagnosable.
+        let out = cmd.output()?;
+        let code = out.status.code().unwrap_or(1);
+        if code != 0 {
+            use std::io::Write;
+            let _ = std::io::stdout().write_all(&out.stdout);
+            let _ = std::io::stderr().write_all(&out.stderr);
+        }
+        Ok(code)
     }
 
     /// Whether the command exited successfully.
@@ -214,6 +228,7 @@ mod tests {
         let ui = Ui {
             explain: false,
             dry_run: false,
+            quiet: false,
         };
         let err = ui
             .run_required(
@@ -232,6 +247,7 @@ mod tests {
         let ui = Ui {
             explain: false,
             dry_run: false,
+            quiet: false,
         };
         // Reads stdin; null stdin means it gets EOF and prints nothing
         // extra, proving the probe can't hang on input.
@@ -247,6 +263,30 @@ mod tests {
             .unwrap();
         assert_eq!(code, 0);
         assert!(out.contains("Pipeline state: success"));
+    }
+
+    #[test]
+    fn quiet_run_status_still_reports_exit_code() {
+        // Quiet swallows output but the exit code is unaffected, so a
+        // failing command still propagates through run_required.
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: true,
+        };
+        assert_eq!(
+            ui.run_status(
+                &[
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    "echo hi; exit 3".to_string()
+                ],
+                Path::new("."),
+            )
+            .unwrap(),
+            3
+        );
+        assert!(ui.run(&["true".to_string()], Path::new(".")).unwrap());
     }
 
     #[test]

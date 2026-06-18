@@ -72,6 +72,10 @@ Defaults to `merge` (the others are opt-in for now)."
         /// Run, but narrate each step + command first (follow along).
         #[arg(long)]
         explain: bool,
+
+        /// Suppress tool output, showing it only when a step fails.
+        #[arg(short, long, conflicts_with = "explain")]
+        quiet: bool,
     },
 
     /// Watch a branch's GitLab CI pipeline via glab.
@@ -120,8 +124,13 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             nowait,
             dry_run,
             explain,
+            quiet,
         } => {
-            let ui = Ui { explain, dry_run };
+            let ui = Ui {
+                explain,
+                dry_run,
+                quiet,
+            };
             let stages = rebuild::parse_stages(&stage)?;
             let opts = Options {
                 branches,
@@ -136,7 +145,11 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             dry_run,
             explain,
         } => {
-            let ui = Ui { explain, dry_run };
+            let ui = Ui {
+                explain,
+                dry_run,
+                quiet: false,
+            };
             rebuild::watch_ci(&ui, &repo, branch)
         }
     }

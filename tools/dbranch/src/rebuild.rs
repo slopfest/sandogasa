@@ -610,9 +610,11 @@ fn lint_stage(
     }
     let n = debs.len();
     let (code, output) = ui.run_capture(&plan::lintian_argv(&debs), repo)?;
-    // lintian is silent when clean — echo its output, then always
-    // print a summary so a clean run is visibly confirmed.
-    print!("{output}");
+    // lintian is silent when clean — echo its tags (unless --quiet),
+    // then always print a summary so a clean run is visibly confirmed.
+    if !ui.quiet {
+        print!("{output}");
+    }
     println!("lintian: {} ({n} .deb(s))", summarize_lintian(&output));
     // Use lintian's own exit convention (non-zero on error-level tags)
     // and propagate it.
@@ -821,6 +823,7 @@ mod tests {
         Ui {
             explain: false,
             dry_run: true,
+            quiet: false,
         }
     }
 
@@ -923,6 +926,7 @@ mod tests {
         let ui = Ui {
             explain: false,
             dry_run: false,
+            quiet: false,
         };
         let transform = |t: &str| Some(gbpconf::set_debian_branch(t, "noble"));
         assert!(edit_file(&ui, p, "debian/gbp.conf", transform).unwrap());
