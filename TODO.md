@@ -2,8 +2,26 @@
 
 ## dbranch
 
-- (2026-06-19) Target-type / version-scheme abstraction — the remaining
-  big piece. Live-test it when updating `archlinux-keyring`'s
+- (2026-06-20) **Debian-branch update flow** (first concrete piece of
+  target-type; do this next). Support updating the Debian branch
+  (`master`/`main`/`debian/unstable`) to a new upstream:
+  - `merge` stage → `gbp import-orig --uscan --pristine-tar`, then a
+    changelog entry for the new version (dch). No `~codename+N` suffix.
+    Everything else (build/lint/push/upload/tag) keeps its shape.
+  - Build suite decoupled from the changelog distribution: build
+    against **testing** by default (less broken), with a choice of
+    **unstable** (deps removed from testing force it). Ubuntu branches
+    still build against the codename. `pbuilder-dist <build-suite>`;
+    overridable (e.g. `--build-suite`).
+  - Upload auto-detects the Debian branch: `dput` with no target works
+    (no `--ppa`/`--upload-target` required); `--upload-target mentors`
+    still allowed.
+  - Out of scope: Debian's new PPA-like repo (try by hand first).
+  - Open: target-type-aware `rebuild` (auto-detect from branch) vs a
+    separate subcommand. Full design in the dbranch-roadmap notes.
+
+- (2026-06-19) Target-type / version-scheme abstraction — the rest of
+  the big piece. Live-test it when updating `archlinux-keyring`'s
   `debian/trixie`. A per-target notion driving `changelog::
   rebuild_version` + `normalize_top_stanza`: Ubuntu PPA `~<codename>+N`;
   Debian backports `~bpoN+M`; proposed-updates `+debNuM`;
@@ -14,6 +32,8 @@
   `debian/trixie`) → special, kept current in stable. Also rename the
   `codename` value → `distribution` (what pbuilder/gbp/changelog call
   it), keeping "codename" only for the `~<codename>` version suffix.
+  The build-suite decoupling means a target has both a changelog
+  *distribution* and a *build suite*, on top of the version scheme.
 
 Note (2026-06-19): bulk is deliberately **local-branch only** — a local
 branch *is* the opt-in. To include a release, check it out once; to
