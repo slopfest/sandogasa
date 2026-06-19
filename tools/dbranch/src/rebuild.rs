@@ -47,10 +47,13 @@ pub enum ChrootRefresh {
     Never,
 }
 
-/// Which workflow stages to run.
+/// Which workflow stages to run. The head stage differs by command —
+/// `rebuild` uses `merge`, `update` uses `import` — and both share the
+/// `build`/`lint`/`push`/`upload`/`tag` tail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Stages {
     pub merge: bool,
+    pub import: bool,
     pub build: bool,
     pub lint: bool,
     pub push: bool,
@@ -60,7 +63,12 @@ pub struct Stages {
 
 impl Stages {
     fn any(&self) -> bool {
-        self.merge || self.build || self.lint || self.push || self.upload || self.tag
+        self.merge || self.import || self.build || self.lint || self.push || self.upload || self.tag
+    }
+
+    /// The build/lint/push/upload/tag tail — true if any is selected.
+    fn any_tail(&self) -> bool {
+        self.build || self.lint || self.push || self.upload || self.tag
     }
 }
 
@@ -104,6 +112,45 @@ pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
     Ok(s)
 }
 
+/// Parse the `update --stage` selector. Like [`parse_stages`] but the
+/// head stage is `import` (new upstream) instead of `merge`. Empty
+/// defaults to **import** only; `all` is import + build + lint + push.
+pub fn parse_update_stages(tokens: &[String]) -> Result<Stages, String> {
+    if tokens.is_empty() {
+        return Ok(Stages {
+            import: true,
+            ..Stages::default()
+        });
+    }
+    let mut s = Stages::default();
+    for token in tokens {
+        match token.trim() {
+            "import" => s.import = true,
+            "build" => s.build = true,
+            "lint" => s.lint = true,
+            "push" => s.push = true,
+            "upload" => s.upload = true,
+            "tag" => s.tag = true,
+            "all" => {
+                s.import = true;
+                s.build = true;
+                s.lint = true;
+                s.push = true;
+            }
+            other => {
+                return Err(format!(
+                    "unknown stage '{other}' \
+                     (valid: import, build, lint, push, upload, tag, all)"
+                ));
+            }
+        }
+    }
+    if !s.any() {
+        return Err("no stages selected".to_string());
+    }
+    Ok(s)
+}
+
 /// Inputs for a `rebuild` run.
 pub struct Options {
     /// Explicit target branches; empty means all existing PPA
@@ -128,6 +175,25 @@ pub struct Options {
     /// Bulk (no-argument) run: include EOL Ubuntu releases (default
     /// skips them).
     pub include_eol: bool,
+}
+
+/// Inputs for an `update` run (new-upstream import of the Debian
+/// branch).
+pub struct UpdateOptions {
+    /// Debian branch to update; `None` uses the checked-out branch.
+    pub branch: Option<String>,
+    /// Stages to run (`import` head, then the shared tail).
+    pub stages: Stages,
+    /// `pbuilder-dist` distribution to build against (default
+    /// `testing`; `unstable` when testing is too broken).
+    pub build_suite: String,
+    /// In the push stage, push but don't wait for / watch CI.
+    pub nowait: bool,
+    /// dput target; `None` uploads to dput's default (the Debian
+    /// archive), `Some("mentors")` etc. for a vetted upload.
+    pub upload_target: Option<String>,
+    /// Build stage: whether to refresh the pbuilder base chroot first.
+    pub chroot_refresh: ChrootRefresh,
 }
 
 /// Run the rebuild workflow over the selected branches.
@@ -164,6 +230,7 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             need_glab,
             opts.stages.upload,
             opts.stages.tag,
+            false, // rebuild never imports
         )?;
         // glab keeps a token per host; check the one this repo lives on.
         if let Some(host) = need_glab
@@ -255,7 +322,7 @@ pub fn watch_ci(
     branch: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !ui.dry_run {
-        git::ensure_tools(false, false, false, true, false, false)?;
+        git::ensure_tools(false, false, false, true, false, false, false)?;
         if let Some(host) = git::remote_host(repo, "origin") {
             git::ensure_glab_auth(repo, &host)?;
         }
@@ -313,6 +380,85 @@ pub fn fixup(
         }
     }
     Ok(())
+}
+
+/// Update the Debian branch to a new upstream release: import it
+/// (`gbp import-orig --uscan --pristine-tar`) and write the new-version
+/// changelog entry (`gbp dch -c -R`), then run the shared
+/// build/lint/push/upload/tag tail. Unlike `rebuild`, the version is a
+/// plain new-upstream Debian version (no `~codename+N` suffix) and the
+/// build suite (testing/unstable) is decoupled from the changelog
+/// distribution.
+pub fn update(
+    ui: &Ui,
+    repo: &Path,
+    opts: &UpdateOptions,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !ui.dry_run {
+        // gbp drives import-orig, dch, and tag; uscan + pristine-tar are
+        // the import-orig backends.
+        let need_glab = opts.stages.push && !opts.nowait;
+        git::ensure_tools(
+            opts.stages.import || opts.stages.tag,
+            opts.stages.build,
+            opts.stages.lint,
+            need_glab,
+            opts.stages.upload,
+            opts.stages.tag,
+            opts.stages.import,
+        )?;
+        if let Some(host) = need_glab
+            .then(|| git::remote_host(repo, "origin"))
+            .flatten()
+        {
+            git::ensure_glab_auth(repo, &host)?;
+        }
+    }
+
+    let branch = match &opts.branch {
+        Some(b) => b.clone(),
+        None => git::current_branch(repo)?,
+    };
+
+    if opts.stages.import {
+        import_stage(ui, repo, &branch)?;
+    } else if opts.stages.any_tail() {
+        ensure_on_branch(ui, repo, &branch)?;
+    }
+
+    build_pipeline(
+        ui,
+        repo,
+        &branch,
+        &opts.build_suite,
+        None,
+        opts.stages,
+        opts.nowait,
+        opts.upload_target.as_deref(),
+        opts.chroot_refresh,
+    )
+}
+
+/// The import stage: get onto the Debian branch, pull and import the
+/// new upstream (`gbp import-orig --uscan --pristine-tar`), and write
+/// the new-version changelog entry (`gbp dch -c -R`).
+fn import_stage(ui: &Ui, repo: &Path, branch: &str) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_on_branch(ui, repo, branch)?;
+    ui.step(&format!("Import the new upstream release onto {branch}"));
+    ui.run_required(&plan::gbp_import_orig_argv(), repo)?;
+    ui.step("Generate the new-version changelog entry");
+    ui.run_required(&plan::gbp_dch_release_argv(), repo)
+}
+
+/// Check out `branch` unless it's already current (a no-op checkout
+/// just prints "Already on …" and pauses pointlessly under --explain).
+fn ensure_on_branch(ui: &Ui, repo: &Path, branch: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if git::current_branch(repo)? == branch {
+        ui.step(&format!("Already on {branch}"));
+        Ok(())
+    } else {
+        ui.run_required(&plan::checkout_argv(branch), repo)
+    }
 }
 
 /// Resolve the branch set for a no-argument (bulk) run: the local PPA
@@ -448,7 +594,7 @@ fn rebuild_one(
             &codename,
             &mut rebuilt_version,
         )?;
-    } else if stages.build || stages.lint || stages.push || stages.upload || stages.tag {
+    } else if stages.any_tail() {
         // Not merging: still need to be on the target.
         if location == TargetLocation::New {
             return Err(format!(
@@ -459,8 +605,40 @@ fn rebuild_one(
         checkout_existing(ui, repo, target, location)?;
     }
 
+    // Ubuntu PPA builds run in the codename's own chroot.
+    build_pipeline(
+        ui,
+        repo,
+        target,
+        &codename,
+        rebuilt_version,
+        stages,
+        nowait,
+        upload_target,
+        chroot_refresh,
+    )
+}
+
+/// The shared `build → lint → push → upload → tag` tail, driven by both
+/// `rebuild` and `update`. The caller has already done the head stage
+/// (merge or import) and is on `target`. `build_suite` is the
+/// `pbuilder-dist` distribution (the codename for Ubuntu, testing/
+/// unstable for Debian); `rebuilt_version` is the version the merge
+/// stage produced, else the changelog top is read.
+#[allow(clippy::too_many_arguments)]
+fn build_pipeline(
+    ui: &Ui,
+    repo: &Path,
+    target: &str,
+    build_suite: &str,
+    rebuilt_version: Option<String>,
+    stages: Stages,
+    nowait: bool,
+    upload_target: Option<&str>,
+    chroot_refresh: ChrootRefresh,
+) -> Result<(), Box<dyn std::error::Error>> {
     // The package/version are needed by build, lint, and upload; compute
-    // them once (preferring the version the merge stage just produced).
+    // them once (preferring the version the head stage just produced).
     let pkg_ver = if stages.build || stages.lint || stages.upload {
         let (package, top_version) = top_package_version(repo)?;
         Some((package, rebuilt_version.unwrap_or(top_version)))
@@ -468,28 +646,24 @@ fn rebuild_one(
         None
     };
 
-    // Stages run in pipeline order: build, lint, push, upload, tag.
     if stages.build {
         let (package, version) = pkg_ver.as_ref().unwrap();
-        build_stage(ui, repo, &codename, package, version, chroot_refresh)?;
+        build_stage(ui, repo, build_suite, package, version, chroot_refresh)?;
     }
     if stages.lint {
         let (_, version) = pkg_ver.as_ref().unwrap();
-        lint_stage(ui, repo, &codename, version)?;
+        lint_stage(ui, repo, build_suite, version)?;
     }
     if stages.push {
         push_stage(ui, repo, target, nowait)?;
     }
     if stages.upload {
         let (package, version) = pkg_ver.as_ref().unwrap();
-        let target =
-            upload_target.ok_or("the upload stage needs a target (--ppa / --upload-target)")?;
-        upload_stage(ui, repo, package, version, target)?;
+        upload_stage(ui, repo, package, version, upload_target)?;
     }
     if stages.tag {
         tag_stage(ui, repo)?;
     }
-
     Ok(())
 }
 
@@ -504,14 +678,17 @@ fn tag_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// The upload stage: `dput` the source `.changes` to its archive.
+/// `target` is the PPA / dput host, or `None` for dput's configured
+/// default (the Debian archive — used by `update`).
 fn upload_stage(
     ui: &Ui,
     repo: &Path,
     package: &str,
     version: &str,
-    target: &str,
+    target: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    ui.step(&format!("Upload {package} {version} to {target}"));
+    let dest = target.unwrap_or("the default dput target");
+    ui.step(&format!("Upload {package} {version} to {dest}"));
     let changes = format!("../{}", plan::changes_filename(package, version));
     ui.run_required(&plan::dput_argv(target, &changes), repo)
 }
@@ -1091,6 +1268,7 @@ mod tests {
 
     const MERGE: Stages = Stages {
         merge: true,
+        import: false,
         build: false,
         lint: false,
         push: false,
@@ -1099,6 +1277,7 @@ mod tests {
     };
     const BUILD: Stages = Stages {
         merge: false,
+        import: false,
         build: true,
         lint: false,
         push: false,
@@ -1113,6 +1292,7 @@ mod tests {
             parse_stages(&["all".to_string()]).unwrap(),
             Stages {
                 merge: true,
+                import: false,
                 build: true,
                 lint: true,
                 push: true,
@@ -1153,12 +1333,58 @@ mod tests {
         assert!(parse_stages(&["bogus".to_string()]).is_err());
     }
 
+    #[test]
+    fn parse_update_stages_defaults_and_values() {
+        // Defaults to import; `all` is import + build + lint + push.
+        assert_eq!(
+            parse_update_stages(&[]).unwrap(),
+            Stages {
+                import: true,
+                ..Stages::default()
+            }
+        );
+        assert_eq!(
+            parse_update_stages(&["all".to_string()]).unwrap(),
+            Stages {
+                import: true,
+                build: true,
+                lint: true,
+                push: true,
+                ..Stages::default()
+            }
+        );
+        assert_eq!(
+            parse_update_stages(&["build".to_string()]).unwrap(),
+            Stages {
+                build: true,
+                ..Stages::default()
+            }
+        );
+        // `merge` is a rebuild-only stage; not valid for update.
+        assert!(parse_update_stages(&["merge".to_string()]).is_err());
+        assert!(parse_update_stages(&["bogus".to_string()]).is_err());
+    }
+
     fn ui_dry() -> Ui {
         Ui {
             explain: false,
             dry_run: true,
             quiet: false,
         }
+    }
+
+    #[test]
+    fn update_dry_run_imports_on_current_branch() {
+        let dir = setup(); // on debian/unstable
+        let opts = UpdateOptions {
+            branch: None,
+            stages: parse_update_stages(&[]).unwrap(), // import
+            build_suite: "testing".to_string(),
+            nowait: false,
+            upload_target: None,
+            chroot_refresh: ChrootRefresh::Auto,
+        };
+        update(&ui_dry(), dir.path(), &opts).unwrap();
     }
 
     #[test]

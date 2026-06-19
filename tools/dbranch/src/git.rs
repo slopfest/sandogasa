@@ -176,6 +176,7 @@ pub fn ensure_glab_auth(repo: &Path, host: &str) -> Result<(), Box<dyn std::erro
 /// Verify the external tools the selected stages need are installed,
 /// with an actionable message naming the providing package when one
 /// is missing. `git` is always required; the rest are per-stage.
+#[allow(clippy::too_many_arguments)]
 pub fn ensure_tools(
     need_gbp: bool,
     need_build: bool,
@@ -183,6 +184,7 @@ pub fn ensure_tools(
     need_glab: bool,
     need_upload: bool,
     need_tag: bool,
+    need_import: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // (executable, providing package, version/help probe). Most tools
     // answer `--version`; pbuilder-dist doesn't, but `--help` exits 0.
@@ -210,6 +212,11 @@ pub fn ensure_tools(
         // version flag (neither `--version` nor `--help` exits 0).
         required.push(("dh", "debhelper", None));
     }
+    if need_import {
+        // `gbp import-orig --uscan --pristine-tar` needs both.
+        required.push(("uscan", "devscripts", Some("--version")));
+        required.push(("pristine-tar", "pristine-tar", None));
+    }
     sandogasa_cli::require_tools(&required).map_err(Into::into)
 }
 
@@ -220,7 +227,7 @@ mod tests {
     #[test]
     fn ensure_tools_ok_for_present_basics() {
         // git is present in dev/CI; with no extra stages this passes.
-        assert!(ensure_tools(false, false, false, false, false, false).is_ok());
+        assert!(ensure_tools(false, false, false, false, false, false, false).is_ok());
     }
 
     #[test]

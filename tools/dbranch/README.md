@@ -48,6 +48,10 @@ dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
     [--ppa <name> | --upload-target <host>]
     [--yes] [--include-eol]
     [--dry-run] [--explain] [--quiet]
+dbranch update [<branch>] [--stage <list>] [-C <dir>]
+    [--build-suite <suite>] [--nowait] [--upload-target <host>]
+    [--refresh-chroot | --no-refresh-chroot]
+    [--dry-run] [--explain] [--quiet]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
 ```
 
@@ -57,7 +61,21 @@ the PPA-branch packaging adjustments — gbp.conf's `debian-branch` /
 stage makes for a new branch — to **existing** branches, to repair
 ones set up before (or outside) dbranch. It checks each branch out,
 adjusts, and commits what changed (idempotent; defaults to the current
-branch). `watch-ci` is described under the `push` stage.
+branch).
+
+`update [<branch>]` updates the **Debian** branch (`master`/`main`/
+`debian/unstable`, default the current branch) to a new upstream:
+`gbp import-orig --uscan --pristine-tar` then `gbp dch -c -R -D
+unstable`, then the same `build → lint → push → upload → tag` tail as
+`rebuild`. Unlike a rebuild the changelog is left as gbp writes it (a
+real new-upstream entry — your other commits since the last release
+show up as bullets, nothing is normalized away); the distribution is
+pinned to `unstable` so dch's release heuristic can't substitute the
+host's own (e.g. an Ubuntu devel codename). It builds against **testing** by default
+(`--build-suite unstable` to switch — sometimes deps removed from
+testing force it); upload goes to dput's default target (the Debian
+archive) with no flag, or `--upload-target mentors` for a vetted
+upload. `watch-ci` is described under the `push` stage.
 
 Run it from the package's git working tree **with the Debian branch
 checked out** (e.g. `master` or `debian/unstable`) — that branch is

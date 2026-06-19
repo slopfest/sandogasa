@@ -2,27 +2,6 @@
 
 ## dbranch
 
-- (2026-06-20) **`update` subcommand** — update the Debian branch
-  (`master`/`main`/`debian/unstable`) to a new upstream. A separate
-  subcommand (not a `rebuild` mode — "rebuild" reads wrong for a
-  new-upstream import) that **shares the build/lint/push/upload/tag
-  pipeline**. Do this next; testable when updating a package by hand.
-  - Instead of merge: `gbp import-orig --uscan --pristine-tar`, then
-    `gbp dch -c -R` for the new-version entry (auto-commits + releases;
-    **not** normalized — it's a real new-upstream entry, not a rebuild,
-    so no `~codename+N` suffix / synthesized body).
-  - Build suite decoupled from the changelog distribution: build
-    against **testing** by default (less broken), with a choice of
-    **unstable** (deps removed from testing force it). Ubuntu rebuilds
-    still build against the codename. `pbuilder-dist <build-suite>`;
-    overridable (e.g. `--build-suite`).
-  - Upload: on the Debian branch, `dput` with no target works (no
-    `--ppa`/`--upload-target` required); `--upload-target mentors` still
-    allowed.
-  - Out of scope: Debian's new PPA-like repo (try by hand first).
-  - Refactor needed: extract the shared post-first-stage pipeline so
-    both `rebuild` and `update` drive build→lint→push→upload→tag.
-
 - (2026-06-19) Target-type / version-scheme abstraction — the rest of
   the big piece. Live-test it when updating `archlinux-keyring`'s
   `debian/trixie`. A per-target notion driving `changelog::
@@ -47,9 +26,11 @@ Done (shipped): the `push`/`upload`/`tag` stages, per-job CI watch
 progress, `git push -u`→plain-push simplification, `--quiet` mode, the
 `--source` merge-source override, the `fixup` subcommand, stale-chroot
 auto-refresh (`--refresh-chroot`/`--no-refresh-chroot`), grouped
-`--help` sections, and the safer bulk run (Ubuntu-codename selection
+`--help` sections, the safer bulk run (Ubuntu-codename selection
 via `ubuntu-distro-info`, EOL skip + `--include-eol`, newest-first
-order, confirmation + `--yes`).
+order, confirmation + `--yes`), and the `update` subcommand
+(new-upstream import of the Debian branch, sharing the build→…→tag
+pipeline; `--build-suite`, dput-default upload).
 
 ## ebranch
 

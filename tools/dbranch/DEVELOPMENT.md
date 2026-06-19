@@ -94,6 +94,20 @@ release) is the not-EOL set; the complement within `--all` is EOL.
 
 ## Design decisions
 
+- **`rebuild` vs `update`.** Both share the `build → lint → push →
+  upload → tag` tail (`build_pipeline`); only the head differs.
+  `rebuild` (Ubuntu PPA) merges the Debian branch and **normalizes** the
+  changelog (synthesized body). `update` (Debian branch) imports a new
+  upstream (`gbp import-orig --uscan --pristine-tar`) and runs
+  `gbp dch -c -R -D unstable`, leaving the changelog **as gbp writes
+  it** — a real new-upstream entry, so post-release commits (e.g. a
+  fixup) show up as bullets and nothing is normalized away. The
+  distribution is pinned with `-D unstable` because dch's release
+  heuristic otherwise fills in the *host's* distribution (an Ubuntu
+  devel codename like `resolute`), which fails Debian CI. `update` also
+  decouples the
+  build suite (`--build-suite`, default `testing`) from the changelog
+  distribution, and uploads to dput's default target (no `--ppa`).
 - **Idempotency / resume.** The packaging adjustments (`fixup` and the
   in-merge adjust), `push` (`git push -u` then plain `git push`), chroot
   create/refresh, and host-key trust are all idempotent. The **`merge`

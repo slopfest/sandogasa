@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### dbranch: `update` subcommand — new-upstream update of the Debian branch
+
+`dbranch update [<branch>]` updates the Debian branch
+(`master`/`main`/`debian/unstable`, default the current branch) to a
+new upstream: `gbp import-orig --uscan --pristine-tar` then
+`gbp dch -c -R`, then the shared `build → lint → push → upload → tag`
+tail. Differences from `rebuild`:
+
+- The changelog is **not** normalized — `gbp dch -c -R`'s entry stands
+  (a genuine new-upstream version, no `~codename+N` suffix), so commits
+  since the last release show up as bullets.
+- The build suite is decoupled from the changelog distribution: builds
+  against **testing** by default, `--build-suite unstable` to switch.
+- Upload defaults to dput's own target (the Debian archive) with no
+  flag; `--upload-target mentors` for a vetted upload (no `--ppa`).
+
+Stages: `import` (head) + `build`/`lint`/`push`/`upload`/`tag`; default
+`import`, `all` = `import,build,lint,push`. Needs `devscripts` (uscan)
+and `pristine-tar` for the import. Internally the
+`build → … → tag` pipeline is now shared between `rebuild` and
+`update`.
+
 ### dbranch: synthesize the rebuild changelog body (list adjusted files)
 
 The rebuild changelog entry no longer flattens to just `* Rebuild for

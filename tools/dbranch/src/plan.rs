@@ -129,6 +129,32 @@ pub fn gbp_dch_argv(codename: &str) -> Vec<String> {
     ])
 }
 
+/// `gbp import-orig --uscan --pristine-tar` — pull the new upstream
+/// release via uscan and import it onto the Debian branch, recording
+/// the tarball with pristine-tar. The head of the `update` flow.
+pub fn gbp_import_orig_argv() -> Vec<String> {
+    argv(&["gbp", "import-orig", "--uscan", "--pristine-tar"])
+}
+
+/// `gbp dch -c -R -D unstable --spawn-editor=never` — generate,
+/// finalize, and commit the new-upstream changelog entry on the Debian
+/// branch (`-c`/`--commit` commits it, `-R`/`--release` finalizes the
+/// date). The distribution is pinned to `unstable`: without `-D`, dch's
+/// release heuristic fills in the *host's* distribution (e.g. an Ubuntu
+/// devel codename), which fails Debian CI. Not normalized — unlike a
+/// rebuild, this is a genuine new-upstream entry.
+pub fn gbp_dch_release_argv() -> Vec<String> {
+    argv(&[
+        "gbp",
+        "dch",
+        "-c",
+        "-R",
+        "-D",
+        "unstable",
+        "--spawn-editor=never",
+    ])
+}
+
 /// `debuild -S -sa -d` — build the source package.
 pub fn debuild_argv() -> Vec<String> {
     argv(&["debuild", "-S", "-sa", "-d"])
@@ -197,11 +223,16 @@ pub fn push_set_upstream_argv(remote: &str, branch: &str) -> Vec<String> {
     argv(&["git", "push", "-u", remote, branch])
 }
 
-/// `dput <target> <changes>` — upload a `.changes` to its archive.
-/// `target` is a dput host (e.g. `mentors`, `ftp-master`) or a PPA
-/// (`ppa:<user>/<name>`, see [`ppa_target`]).
-pub fn dput_argv(target: &str, changes: &str) -> Vec<String> {
-    argv(&["dput", target, changes])
+/// `dput [<target>] <changes>` — upload a `.changes` to its archive.
+/// `Some(target)` is a dput host (e.g. `mentors`, `ftp-master`) or a
+/// PPA (`ppa:<user>/<name>`, see [`ppa_target`]); `None` omits the
+/// target so dput uses its configured default (the Debian archive) —
+/// used by the Debian-branch `update` flow.
+pub fn dput_argv(target: Option<&str>, changes: &str) -> Vec<String> {
+    match target {
+        Some(t) => argv(&["dput", t, changes]),
+        None => argv(&["dput", changes]),
+    }
 }
 
 /// `glab ci list --sha <sha> -F json` — list the CI pipeline(s) for an
@@ -395,8 +426,13 @@ mod tests {
         // A leading `ppa:` is tolerated, not doubled.
         assert_eq!(ppa_target("ppa:michel/sugarjar"), "ppa:michel/sugarjar");
         assert_eq!(
-            dput_argv("ppa:michel/sugarjar", "../damo_1_source.changes"),
+            dput_argv(Some("ppa:michel/sugarjar"), "../damo_1_source.changes"),
             ["dput", "ppa:michel/sugarjar", "../damo_1_source.changes"]
+        );
+        // No target → dput's configured default (Debian archive).
+        assert_eq!(
+            dput_argv(None, "../damo_1_source.changes"),
+            ["dput", "../damo_1_source.changes"]
         );
     }
 
@@ -431,6 +467,22 @@ mod tests {
         assert_eq!(debuild_argv(), ["debuild", "-S", "-sa", "-d"]);
         assert_eq!(dh_clean_argv(), ["dh", "clean"]);
         assert_eq!(gbp_tag_argv(), ["gbp", "tag"]);
+        assert_eq!(
+            gbp_import_orig_argv(),
+            ["gbp", "import-orig", "--uscan", "--pristine-tar"]
+        );
+        assert_eq!(
+            gbp_dch_release_argv(),
+            [
+                "gbp",
+                "dch",
+                "-c",
+                "-R",
+                "-D",
+                "unstable",
+                "--spawn-editor=never"
+            ]
+        );
         assert_eq!(
             pbuilder_argv("questing", "../damo_3.2.8-1~questing+1.dsc"),
             [

@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use dbranch::plan;
-use dbranch::rebuild::{self, ChrootRefresh, Options};
+use dbranch::rebuild::{self, ChrootRefresh, Options, UpdateOptions};
 use dbranch::ui::Ui;
 
 #[derive(Parser)]
@@ -140,6 +140,73 @@ Defaults to `merge` (the others are opt-in for now)."
         quiet: bool,
     },
 
+    /// Update the Debian branch to a new upstream release.
+    Update {
+        /// Debian branch to update (defaults to the current branch).
+        #[arg(value_name = "BRANCH")]
+        branch: Option<String>,
+
+        /// Run in this package working directory.
+        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        repo: PathBuf,
+
+        /// Stages to run (repeatable or CSV).
+        #[arg(
+            long,
+            value_delimiter = ',',
+            value_name = "STAGE",
+            help_heading = "Stages",
+            long_help = "\
+Stages to run, repeatable or comma-separated:
+  import  gbp import-orig --uscan + gbp dch -c -R
+  build   debuild + pbuilder-dist
+  lint    lintian on the built source package
+  push    git push the branch, then watch its CI
+  upload  dput the built package
+  tag     dh clean + gbp tag the release
+  all     import + build + lint + push
+Defaults to `import`."
+        )]
+        stage: Vec<String>,
+
+        /// Debian suite to build against (e.g. `unstable`).
+        #[arg(
+            long,
+            value_name = "SUITE",
+            default_value = "testing",
+            help_heading = "Stages"
+        )]
+        build_suite: String,
+
+        /// In the push stage, push but don't wait for / watch CI.
+        #[arg(long, help_heading = "Stages")]
+        nowait: bool,
+
+        /// Build stage: force-refresh the pbuilder chroot first.
+        #[arg(long, help_heading = "Stages", conflicts_with = "no_refresh_chroot")]
+        refresh_chroot: bool,
+
+        /// Build stage: never auto-refresh the pbuilder chroot.
+        #[arg(long, help_heading = "Stages")]
+        no_refresh_chroot: bool,
+
+        /// Upload stage: dput target (default: dput's own; e.g. mentors).
+        #[arg(long, value_name = "TARGET", help_heading = "Upload")]
+        upload_target: Option<String>,
+
+        /// Print the commands without running anything (a tutorial).
+        #[arg(long, help_heading = "Output")]
+        dry_run: bool,
+
+        /// Run, but narrate each step + command first (follow along).
+        #[arg(long, help_heading = "Output")]
+        explain: bool,
+
+        /// Suppress tool output, showing it only when a step fails.
+        #[arg(short, long, help_heading = "Output", conflicts_with = "explain")]
+        quiet: bool,
+    },
+
     /// Watch a branch's GitLab CI pipeline via glab.
     WatchCi {
         /// Branch to watch (defaults to the current branch).
@@ -235,6 +302,42 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 include_eol,
             };
             rebuild::run(&ui, &repo, &opts)
+        }
+        Command::Update {
+            branch,
+            repo,
+            stage,
+            build_suite,
+            nowait,
+            refresh_chroot,
+            no_refresh_chroot,
+            upload_target,
+            dry_run,
+            explain,
+            quiet,
+        } => {
+            let ui = Ui {
+                explain,
+                dry_run,
+                quiet,
+            };
+            let stages = rebuild::parse_update_stages(&stage)?;
+            let chroot_refresh = if refresh_chroot {
+                ChrootRefresh::Force
+            } else if no_refresh_chroot {
+                ChrootRefresh::Never
+            } else {
+                ChrootRefresh::Auto
+            };
+            let opts = UpdateOptions {
+                branch,
+                stages,
+                build_suite,
+                nowait,
+                upload_target,
+                chroot_refresh,
+            };
+            rebuild::update(&ui, &repo, &opts)
         }
         Command::WatchCi {
             branch,
