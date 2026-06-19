@@ -113,11 +113,12 @@ pub fn commit_file_argv(message: &str, file: &str) -> Vec<String> {
     argv(&["git", "commit", "-s", "-m", message, file])
 }
 
-/// `gbp dch --bpo -R -D <codename> --spawn-editor=never` — create the
-/// finalized rebuild stanza (with the correct date/maintainer
-/// footer). `-R`/`--release` would otherwise spawn an editor by
-/// default; dbranch normalizes the entry afterward, so suppress it.
-pub fn gbp_dch_argv(codename: &str) -> Vec<String> {
+/// `gbp dch --bpo -R -D <codename> -U <urgency> --spawn-editor=never` —
+/// create the finalized rebuild stanza (with the correct date/maintainer
+/// footer). `-R`/`--release` would otherwise spawn an editor by default;
+/// dbranch normalizes the entry afterward (preserving the `-U` urgency in
+/// the header), so suppress it. `urgency` is usually `medium`.
+pub fn gbp_dch_argv(codename: &str, urgency: &str) -> Vec<String> {
     argv(&[
         "gbp",
         "dch",
@@ -125,6 +126,8 @@ pub fn gbp_dch_argv(codename: &str) -> Vec<String> {
         "-R",
         "-D",
         codename,
+        "-U",
+        urgency,
         "--spawn-editor=never",
     ])
 }
@@ -161,14 +164,16 @@ pub fn import_already_done(output: &str) -> bool {
     lower.contains("upstream tag") && lower.contains("already exists")
 }
 
-/// `gbp dch -c -R -D unstable --spawn-editor=never` — generate,
-/// finalize, and commit the new-upstream changelog entry on the Debian
-/// branch (`-c`/`--commit` commits it, `-R`/`--release` finalizes the
-/// date). The distribution is pinned to `unstable`: without `-D`, dch's
-/// release heuristic fills in the *host's* distribution (e.g. an Ubuntu
-/// devel codename), which fails Debian CI. Not normalized — unlike a
-/// rebuild, this is a genuine new-upstream entry.
-pub fn gbp_dch_release_argv() -> Vec<String> {
+/// `gbp dch -c -R -D unstable -U <urgency> --spawn-editor=never` —
+/// generate, finalize, and commit the new-upstream changelog entry on
+/// the Debian branch (`-c`/`--commit` commits it, `-R`/`--release`
+/// finalizes the date). The distribution is pinned to `unstable`:
+/// without `-D`, dch's release heuristic fills in the *host's*
+/// distribution (e.g. an Ubuntu devel codename), which fails Debian CI.
+/// `urgency` is usually `medium`, raised (e.g. `high`) for a security
+/// upload. Not normalized — unlike a rebuild, this is a genuine
+/// new-upstream entry.
+pub fn gbp_dch_release_argv(urgency: &str) -> Vec<String> {
     argv(&[
         "gbp",
         "dch",
@@ -176,6 +181,8 @@ pub fn gbp_dch_release_argv() -> Vec<String> {
         "-R",
         "-D",
         "unstable",
+        "-U",
+        urgency,
         "--spawn-editor=never",
     ])
 }
@@ -498,7 +505,7 @@ mod tests {
             ["git", "commit", "-s", "--no-edit", "--cleanup=strip"]
         );
         assert_eq!(
-            gbp_dch_argv("questing"),
+            gbp_dch_argv("questing", "medium"),
             [
                 "gbp",
                 "dch",
@@ -506,6 +513,8 @@ mod tests {
                 "-R",
                 "-D",
                 "questing",
+                "-U",
+                "medium",
                 "--spawn-editor=never"
             ]
         );
@@ -523,7 +532,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            gbp_dch_release_argv(),
+            gbp_dch_release_argv("high"),
             [
                 "gbp",
                 "dch",
@@ -531,6 +540,8 @@ mod tests {
                 "-R",
                 "-D",
                 "unstable",
+                "-U",
+                "high",
                 "--spawn-editor=never"
             ]
         );

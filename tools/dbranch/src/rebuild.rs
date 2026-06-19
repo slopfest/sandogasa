@@ -175,6 +175,8 @@ pub struct Options {
     /// Bulk (no-argument) run: include EOL Ubuntu releases (default
     /// skips them).
     pub include_eol: bool,
+    /// Changelog urgency for the rebuild entry (default `medium`).
+    pub urgency: String,
 }
 
 /// Inputs for an `update` run (new-upstream import of the Debian
@@ -194,6 +196,9 @@ pub struct UpdateOptions {
     pub upload_target: Option<String>,
     /// Build stage: whether to refresh the pbuilder base chroot first.
     pub chroot_refresh: ChrootRefresh,
+    /// Changelog urgency for the new-upstream entry (default `medium`,
+    /// e.g. `high` for a security upload).
+    pub urgency: String,
 }
 
 /// Run the rebuild workflow over the selected branches.
@@ -281,6 +286,7 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             opts.nowait,
             opts.upload_target.as_deref(),
             opts.chroot_refresh,
+            &opts.urgency,
         )?;
     }
     Ok(())
@@ -421,7 +427,7 @@ pub fn update(
     };
 
     if opts.stages.import {
-        import_stage(ui, repo, &branch)?;
+        import_stage(ui, repo, &branch, &opts.urgency)?;
     } else if opts.stages.any_tail() {
         ensure_on_branch(ui, repo, &branch)?;
     }
@@ -442,12 +448,17 @@ pub fn update(
 /// The import stage: get onto the Debian branch, pull and import the
 /// new upstream (`gbp import-orig --uscan --pristine-tar`), and write
 /// the new-version changelog entry (`gbp dch -c -R`).
-fn import_stage(ui: &Ui, repo: &Path, branch: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn import_stage(
+    ui: &Ui,
+    repo: &Path,
+    branch: &str,
+    urgency: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     ensure_on_branch(ui, repo, branch)?;
     ui.step(&format!("Import the new upstream release onto {branch}"));
     import_orig(ui, repo)?;
     ui.step("Generate the new-version changelog entry");
-    ui.run_required(&plan::gbp_dch_release_argv(), repo)
+    ui.run_required(&plan::gbp_dch_release_argv(urgency), repo)
 }
 
 /// Run `gbp import-orig --uscan --pristine-tar`, self-healing the
@@ -609,6 +620,7 @@ fn rebuild_one(
     nowait: bool,
     upload_target: Option<&str>,
     chroot_refresh: ChrootRefresh,
+    urgency: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let codename = target_codename(target);
     ui.step(&format!("{target} (codename: {codename})"));
@@ -624,6 +636,7 @@ fn rebuild_one(
             target,
             location,
             &codename,
+            urgency,
             &mut rebuilt_version,
         )?;
     } else if stages.any_tail() {
@@ -899,6 +912,7 @@ fn checkout_existing(
 /// The merge stage: get onto the target branch (create if needed),
 /// merge the Debian branch, resolve the changelog conflict, and write
 /// the normalized rebuild entry.
+#[allow(clippy::too_many_arguments)]
 fn merge_stage(
     ui: &Ui,
     repo: &Path,
@@ -906,6 +920,7 @@ fn merge_stage(
     target: &str,
     location: TargetLocation,
     codename: &str,
+    urgency: &str,
     out_version: &mut Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if location == TargetLocation::New {
@@ -944,7 +959,7 @@ fn merge_stage(
     };
 
     ui.step("Generate the rebuild changelog entry");
-    ui.run_required(&plan::gbp_dch_argv(codename), repo)?;
+    ui.run_required(&plan::gbp_dch_argv(codename, urgency), repo)?;
 
     ui.step(&format!(
         "Normalize the entry to {version} / \"Rebuild for {codename}\""
@@ -1415,6 +1430,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
         };
         update(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1429,6 +1445,7 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1445,6 +1462,7 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1462,6 +1480,7 @@ mod tests {
             upload_target: None,
             source: Some("noble".to_string()),
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1478,6 +1497,7 @@ mod tests {
             upload_target: None,
             source: Some("does-not-exist".to_string()),
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1522,6 +1542,7 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1552,6 +1573,7 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1664,6 +1686,7 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1680,6 +1703,7 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1700,6 +1724,7 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1719,6 +1744,7 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1738,6 +1764,7 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1757,6 +1784,7 @@ mod tests {
             upload_target: Some("ppa:michel/sugarjar".to_string()),
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1776,6 +1804,7 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1795,6 +1824,7 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1871,6 +1901,7 @@ E: damo: an-error\n";
             upload_target: Some("ppa:me/x".to_string()),
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: true,
             include_eol: true,
         };
@@ -1927,6 +1958,7 @@ E: damo: an-error\n";
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };
@@ -1945,6 +1977,7 @@ E: damo: an-error\n";
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
             assume_yes: false,
             include_eol: false,
         };

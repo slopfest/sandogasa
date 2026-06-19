@@ -44,13 +44,13 @@ stages you run need:
 dbranch fixup [<branch>...] [-C <dir>] [--dry-run] [--explain] [--quiet]
 dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
     [--source <branch>] [--nowait]
-    [--refresh-chroot | --no-refresh-chroot]
+    [--refresh-chroot | --no-refresh-chroot] [--urgency <level>]
     [--ppa <name> | --upload-target <host>]
     [--yes] [--include-eol]
     [--dry-run] [--explain] [--quiet]
 dbranch update [<branch>] [--stage <list>] [-C <dir>]
     [--build-suite <suite>] [--nowait] [--upload-target <host>]
-    [--refresh-chroot | --no-refresh-chroot]
+    [--refresh-chroot | --no-refresh-chroot] [--urgency <level>]
     [--dry-run] [--explain] [--quiet]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
 ```
@@ -76,6 +76,10 @@ host's own (e.g. an Ubuntu devel codename). It builds against **testing** by def
 testing force it); upload goes to dput's default target (the Debian
 archive) with no flag, or `--upload-target mentors` for a vetted
 upload. `watch-ci` is described under the `push` stage.
+
+Both `rebuild` and `update` write the changelog entry at `medium`
+urgency; pass `--urgency <level>` (e.g. `--urgency high`) to override —
+useful for a security upload.
 
 Run it from the package's git working tree **with the Debian branch
 checked out** (e.g. `master` or `debian/unstable`) — that branch is

@@ -106,6 +106,15 @@ Defaults to `merge` (the others are opt-in for now)."
         #[arg(long, help_heading = "Stages")]
         no_refresh_chroot: bool,
 
+        /// Changelog urgency (default medium; e.g. high for security).
+        #[arg(
+            long,
+            value_name = "LEVEL",
+            default_value = "medium",
+            help_heading = "Stages"
+        )]
+        urgency: String,
+
         /// Bulk run: skip the branch-set confirmation prompt.
         #[arg(short = 'y', long, help_heading = "Bulk (no branches given)")]
         yes: bool,
@@ -190,6 +199,15 @@ Defaults to `import`."
         #[arg(long, help_heading = "Stages")]
         no_refresh_chroot: bool,
 
+        /// Changelog urgency (default medium; e.g. high for security).
+        #[arg(
+            long,
+            value_name = "LEVEL",
+            default_value = "medium",
+            help_heading = "Stages"
+        )]
+        urgency: String,
+
         /// Upload stage: dput target (default: dput's own; e.g. mentors).
         #[arg(long, value_name = "TARGET", help_heading = "Upload")]
         upload_target: Option<String>,
@@ -268,6 +286,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             nowait,
             refresh_chroot,
             no_refresh_chroot,
+            urgency,
             yes,
             include_eol,
             ppa,
@@ -300,6 +319,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 chroot_refresh,
                 assume_yes: yes,
                 include_eol,
+                urgency,
             };
             rebuild::run(&ui, &repo, &opts)
         }
@@ -311,6 +331,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             nowait,
             refresh_chroot,
             no_refresh_chroot,
+            urgency,
             upload_target,
             dry_run,
             explain,
@@ -336,6 +357,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 nowait,
                 upload_target,
                 chroot_refresh,
+                urgency,
             };
             rebuild::update(&ui, &repo, &opts)
         }

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### dbranch: `--urgency` to override the changelog urgency
+
+`dbranch rebuild` and `dbranch update` now take `--urgency <level>`
+(default `medium`), passed to `gbp dch` as `-U`. Use `--urgency high`
+(or `critical`) for a security upload. The value is passed through to
+`dch`, which validates it.
+
 ### dbranch: `update` subcommand — new-upstream update of the Debian branch
 
 `dbranch update [<branch>]` updates the Debian branch
