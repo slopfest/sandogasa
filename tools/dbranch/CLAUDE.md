@@ -53,3 +53,9 @@ dbranch shells out to `git`, `gbp`, `debuild`, and `pbuilder-dist`.
 Per the workspace rule, check each is available before first use and
 fail with a clear, actionable message (which package provides it) when
 it is missing, rather than producing a confusing downstream error.
+
+Many of these tools have non-obvious behaviour (probe flags that don't
+exit 0, `gbp dch` requiring the right branch, glab's interactive CI
+watch, dput-ng sftp host keys, salsa-ci building against Debian). The
+landmines and the design decisions are written up in `DEVELOPMENT.md` —
+read and update it when touching this area.

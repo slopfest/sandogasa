@@ -7,7 +7,10 @@
 //! file's other entries and comments.
 
 /// `RELEASE` goes first under `variables:` — salsa-ci builds the PPA
-/// packages against Debian unstable, not the Ubuntu codename.
+/// packages against Debian unstable, not the Ubuntu codename (salsa-ci
+/// doesn't speak Ubuntu). Only added when absent: a maintainer may pin
+/// `RELEASE` to an older Debian suite for an old Ubuntu LTS (better
+/// signal), and that must not be overwritten.
 const RELEASE_LINE: &str = r#"RELEASE: "unstable""#;
 
 /// The backports-style relaxations appended after the existing
@@ -22,9 +25,10 @@ const BACKPORTS_BLOCK: &[&str] = &[
 
 /// Inject the PPA-rebuild preset into a salsa-ci.yml's `variables:`
 /// block, preserving existing entries and comments. Idempotent: a
-/// preset already present (matched by key) is not added again. Returns
-/// the new text, or `None` if the file has no `variables:` block to
-/// extend (the caller warns and leaves it alone).
+/// preset key already present is not added again — in particular an
+/// existing `RELEASE` (e.g. pinned to an older Debian suite) is left
+/// untouched. Returns the new text, or `None` if the file has no
+/// `variables:` block to extend (the caller warns and leaves it alone).
 pub fn adjust_salsa_ci(text: &str) -> Option<String> {
     let lines: Vec<&str> = text.lines().collect();
     let var_idx = lines.iter().position(|l| l.trim() == "variables:")?;
@@ -121,6 +125,22 @@ variables:
     #[test]
     fn none_without_variables_block() {
         assert_eq!(adjust_salsa_ci("---\ninclude:\n  - x\n"), None);
+    }
+
+    #[test]
+    fn preserves_an_existing_release() {
+        // A maintainer may pin RELEASE to an older Debian suite for an
+        // old Ubuntu LTS; don't overwrite it (but still add backports).
+        let text = "\
+variables:
+  RELEASE: \"bookworm\"
+  SALSA_CI_DISABLE_BUILD_PACKAGE_ANY: '1'
+";
+        let out = adjust_salsa_ci(text).unwrap();
+        assert!(out.contains("RELEASE: \"bookworm\""));
+        assert!(!out.contains("RELEASE: \"unstable\""));
+        // The backports relaxations are still appended.
+        assert!(out.contains("SALSA_CI_DISABLE_PIUPARTS: 1"));
     }
 
     #[test]
