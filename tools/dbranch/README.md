@@ -133,6 +133,24 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   (e.g. `mentors`, `ftp-master`); the two are mutually exclusive and
   one is required. Runs after `push` so CI can pass before publishing.
   **Opt-in** — not part of `all`.
+
+  > **dput over sftp:** with a `"method": "sftp"` dput profile,
+  > dput-ng uploads via paramiko, which prompts to trust the host's SSH
+  > key. It **reads** `~/.ssh/known_hosts` but does **not** save keys
+  > you accept at the prompt, so you get re-prompted on *every* run
+  > (and it ignores `~/.ssh/config`'s `StrictHostKeyChecking`, so
+  > `accept-new` there won't help). Under `--quiet` the prompt can't be
+  > answered — the captured `dput` has no stdin — so the stage fails.
+  > Fix it once by seeding the host key into `~/.ssh/known_hosts`
+  > yourself; paramiko then finds it and never prompts:
+  >
+  > ```
+  > ssh-keyscan ppa.launchpad.net >> ~/.ssh/known_hosts
+  > ```
+  >
+  > If the prompt names several hosts, `ssh-keyscan` each. Don't
+  > disable host-key checking — it removes the MITM protection on the
+  > upload.
 - **`tag`** — tag the release: `dh clean` (so `gbp tag` sees a clean
   tree — `debuild -S` leaves a `debian/files`) then `gbp tag`, which
   derives the version from `debian/changelog` and gbp's `debian-tag`
