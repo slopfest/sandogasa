@@ -22,11 +22,6 @@
   (RELEASE=codename, no backports), and the whole-run **Debian-host
   gate** are done (in rebuild, auto-detected for `debian/<codename>`).
   Still to do:
-  - Wire the `dput`-to-stable upload for a proposed-update target:
-    upload to the dput default (Debian archive, no `--ppa`/target
-    needed) and relax rebuild's "upload needs a target" precondition for
-    proposed-update targets. The Debian-host requirement is already
-    covered by the whole-run gate.
   - The analogous **`update` (to-unstable) upload guard**: hard-fail on
     a non-Debian host when uploading to the default target; exempt an
     explicit `--upload-target`. (`update`'s changelog gen works on

@@ -27,6 +27,10 @@ switches from the Ubuntu PPA scheme to a proposed-update:
   <codename>`
 - **salsa-ci.yml** gets `RELEASE: "<codename>"` and **none** of the
   backports relaxations (it's a real stable build)
+- **upload** goes to `dput`'s default target (the Debian archive) — no
+  `--ppa`/`--upload-target` needed (an explicit `--upload-target` is
+  still honored); the PPA "upload needs a target" rule applies only to
+  PPA branches
 
 Needs `debian-distro-info` (from `distro-info`) — consulted only for
 `debian/`-namespaced branches, so plain PPA rebuilds are unaffected.
@@ -34,8 +38,7 @@ Needs `debian-distro-info` (from `distro-info`) — consulted only for
 A proposed-update run **requires a Debian host** and hard-fails early
 otherwise (`gbp dch --stable` needs a newer gbp, and the stable build
 chroot and `dput`-to-stable are Debian-only). A `--dry-run` is exempt
-(it executes nothing). The actual `dput`-to-stable upload is not wired
-up yet.
+(it executes nothing).
 
 ### dbranch: `--urgency` to override the changelog urgency
 

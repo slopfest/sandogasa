@@ -203,8 +203,12 @@ pub struct UpdateOptions {
 
 /// Run the rebuild workflow over the selected branches.
 pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::error::Error>> {
-    // Validate cheap preconditions before any work.
-    if opts.stages.upload && opts.upload_target.is_none() {
+    // Validate cheap preconditions before any work. A bulk run only
+    // selects Ubuntu PPA targets, which need an explicit upload target;
+    // check it before resolving (and prompting for) the bulk set.
+    // Explicit branches are checked per-target below, where a
+    // proposed-update (which uploads to the dput default) is exempt.
+    if opts.branches.is_empty() && opts.stages.upload && opts.upload_target.is_none() {
         return Err(
             "the upload stage needs a target: pass --ppa <name> or --upload-target <host>".into(),
         );
@@ -264,26 +268,35 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
         return Err("no target branches to rebuild".into());
     }
 
-    // A Debian proposed-update (debian/<codename>) must be built on a
-    // Debian host: `gbp dch --stable` (a newer gbp), the stable build
-    // chroot, and dput-to-stable all need it. Fail fast before any work.
-    // A dry-run is a no-execution tutorial, so it's exempt.
-    if !ui.dry_run {
-        for target in &targets {
-            let codename = target_codename(target);
-            if matches!(
-                classify_target_type(target, &codename)?,
-                TargetType::Proposed { .. }
-            ) && !host::is_debian()
-            {
-                let host = host::os_release_id().unwrap_or_else(|| "unknown".to_string());
-                return Err(format!(
-                    "{target} is a Debian proposed-update, which must be built on a \
-                     Debian host (gbp dch --stable, the stable build chroot, and \
-                     dput to the Debian archive need it); this host is '{host}'. \
-                     Run it from a Debian environment."
-                )
-                .into());
+    // Per-target preconditions, by target type (cheap, fail fast).
+    // `debian-distro-info` is consulted only for `debian/` branches.
+    for target in &targets {
+        let codename = target_codename(target);
+        match classify_target_type(target, &codename)? {
+            // A PPA upload needs an explicit target (PPA or dput host).
+            TargetType::Ppa => {
+                if opts.stages.upload && opts.upload_target.is_none() {
+                    return Err("the upload stage needs a target: pass --ppa <name> \
+                                or --upload-target <host>"
+                        .into());
+                }
+            }
+            // A proposed-update uploads to the dput default (no target
+            // needed), but the whole flow needs a Debian host:
+            // `gbp dch --stable` (a newer gbp), the stable build chroot,
+            // and dput-to-stable all need it. A dry-run is a
+            // no-execution tutorial, so it's exempt from the host check.
+            TargetType::Proposed { .. } => {
+                if !ui.dry_run && !host::is_debian() {
+                    let host = host::os_release_id().unwrap_or_else(|| "unknown".to_string());
+                    return Err(format!(
+                        "{target} is a Debian proposed-update, which must be built on a \
+                         Debian host (gbp dch --stable, the stable build chroot, and \
+                         dput to the Debian archive need it); this host is '{host}'. \
+                         Run it from a Debian environment."
+                    )
+                    .into());
+                }
             }
         }
     }

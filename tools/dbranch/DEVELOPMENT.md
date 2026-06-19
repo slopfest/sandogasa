@@ -176,8 +176,11 @@ release) is the not-EOL set; the complement within `--all` is EOL.
   anywhere. This supersedes the upload-only host gate *for
   proposed-updates* — the whole flow needs Debian, not just the upload.
   Note dbranch shows and runs `gbp dch --stable` honestly rather than
-  faking a portable command, per the transparency contract. The actual
-  `dput`-to-stable upload isn't wired yet.
+  faking a portable command, per the transparency contract. The upload
+  stage goes to `dput`'s default target (the Debian archive) for a
+  proposed-update — the "upload needs a target" precondition is enforced
+  per-target and applies only to PPA branches; an explicit
+  `--upload-target` is still honored.
 - **Idempotency / resume.** The packaging adjustments (`fixup` and the
   in-merge adjust), `push` (`git push -u` then plain `git push`), chroot
   create/refresh, and host-key trust are all idempotent. The **`merge`

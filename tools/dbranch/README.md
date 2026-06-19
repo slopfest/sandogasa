@@ -149,10 +149,13 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   <codename>`). The one-time `salsa-ci.yml` tweak sets
   `RELEASE: "<codename>"` with **no** backports relaxations (it's a real
   stable build). This needs `debian-distro-info` (from `distro-info`),
-  consulted only for `debian/`-namespaced branches. A proposed-update
-  must be run on a **Debian host** (`gbp dch --stable` needs a newer
-  gbp, and the stable chroot / archive upload are Debian-only); dbranch
-  hard-fails early otherwise, except under `--dry-run`.
+  consulted only for `debian/`-namespaced branches. The `upload` stage
+  goes to `dput`'s default target (the Debian archive) — no
+  `--ppa`/`--upload-target` needed (only PPA branches require one). A
+  proposed-update must be run on a **Debian host** (`gbp dch --stable`
+  needs a newer gbp, and the stable chroot / archive upload are
+  Debian-only); dbranch hard-fails early otherwise, except under
+  `--dry-run`.
 - **`build`** — `debuild -S -sa -d` then
   `pbuilder-dist <codename> ../<dsc>`.
 - **`lint`** — `lintian -I` on the built **`.deb`s** in
