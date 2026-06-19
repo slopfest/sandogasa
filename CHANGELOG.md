@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### dbranch: bulk no longer hides the checked-out PPA branch
+
+A bulk `rebuild` excluded the merge source from the target set. Since
+the Debian branch isn't a Ubuntu codename it was already excluded by the
+codename filter, so that exclusion only ever bit when you were checked
+out **on a PPA branch** — silently dropping it from the rebuild set (and
+treating it as the merge source). Bulk now selects every live Ubuntu PPA
+branch regardless of what's checked out. A bulk **merge** still needs the
+Debian branch as its source, so it now refuses early with a remedy if
+the source is a PPA branch (check out the Debian branch or pass
+`--source`); non-merge bulk stages (e.g. `--stage upload`) run from any
+branch.
+
 ### dbranch: `update` upload to the archive requires a Debian host
 
 `dbranch update`'s upload stage `dput`s to the Debian archive

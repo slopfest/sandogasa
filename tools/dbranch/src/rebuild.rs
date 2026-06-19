@@ -260,7 +260,14 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
     let all = git::local_branches(repo)?;
 
     let targets = if opts.branches.is_empty() {
-        resolve_bulk_targets(ui, &source, &all, opts.include_eol, opts.assume_yes)?
+        resolve_bulk_targets(
+            ui,
+            &source,
+            &all,
+            opts.stages.merge,
+            opts.include_eol,
+            opts.assume_yes,
+        )?
     } else {
         opts.branches.clone()
     };
@@ -570,13 +577,34 @@ fn resolve_bulk_targets(
     ui: &Ui,
     source: &str,
     all: &[String],
+    merge: bool,
     include_eol: bool,
     assume_yes: bool,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let release_order = distroinfo::all_codenames()?;
     let supported = distroinfo::supported_codenames()?;
+
+    // The merge stage merges the source into each PPA branch, so the
+    // source must be the Debian branch — not a PPA branch (which would
+    // merge a PPA into its siblings, and the checked-out one can't be
+    // merged into itself). If checked out on a PPA branch, refuse with a
+    // remedy rather than silently using it. (Non-merge stages don't use
+    // the source, so they're fine from any branch.)
+    if merge
+        && release_order
+            .iter()
+            .any(|c| c == plan::codename_from_branch(source))
+    {
+        return Err(format!(
+            "the merge source is {source}, which is a PPA branch — a bulk merge needs \
+             the Debian branch as its source. Check out the Debian branch, or pass \
+             --source <branch>."
+        )
+        .into());
+    }
+
     // (branch, is_eol), newest release first.
-    let selected = select_ppa_branches(all, source, &release_order, &supported);
+    let selected = select_ppa_branches(all, &release_order, &supported);
 
     let eol_count = selected.iter().filter(|(_, eol)| *eol).count();
     let targets: Vec<String> = selected
@@ -635,12 +663,16 @@ fn resolve_bulk_targets(
 /// The Ubuntu PPA targets among the local branches — those whose
 /// codename ([`plan::codename_from_branch`]) is a real Ubuntu release —
 /// as `(branch, is_eol)` ordered **newest release first** (by position
-/// in `release_order`, which is oldest-first). `source` and any
-/// non-Ubuntu branch (Debian suites, `master`/`main`, plumbing) are
-/// excluded; `is_eol` is true when the codename is no longer supported.
+/// in `release_order`, which is oldest-first). Non-Ubuntu branches
+/// (Debian suites, `master`/`main`, plumbing) are excluded by the
+/// codename filter; `is_eol` is true when the codename is no longer
+/// supported. The merge source is **not** filtered out here — the Debian
+/// branch isn't a Ubuntu codename so it never appears anyway, and a PPA
+/// branch that happens to be checked out must still be rebuilt (it was
+/// previously dropped from the set). `resolve_bulk_targets` separately
+/// refuses a PPA branch as the merge source.
 fn select_ppa_branches(
     all: &[String],
-    source: &str,
     release_order: &[String],
     supported: &HashSet<String>,
 ) -> Vec<(String, bool)> {
@@ -651,7 +683,6 @@ fn select_ppa_branches(
         .collect();
     let mut selected: Vec<(usize, String, bool)> = all
         .iter()
-        .filter(|b| *b != source)
         .filter_map(|b| {
             let codename = plan::codename_from_branch(b);
             position
@@ -2059,9 +2090,11 @@ E: damo: an-error\n";
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let selected = select_ppa_branches(&all, "debian/unstable", &order, &supported);
+        let selected = select_ppa_branches(&all, &order, &supported);
         // Only Ubuntu-codename branches, newest release first, with EOL
-        // flags; Debian / plumbing / source excluded.
+        // flags; Debian suites / plumbing excluded by the codename filter.
+        // A checked-out PPA branch is NOT dropped here (that's the bug
+        // fix): the merge-source refusal lives in resolve_bulk_targets.
         assert_eq!(
             selected,
             vec![
