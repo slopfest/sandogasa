@@ -132,6 +132,26 @@ pub fn gbp_dch_argv(codename: &str, urgency: &str) -> Vec<String> {
     ])
 }
 
+/// `gbp dch --stable -R -U <urgency> --spawn-editor=never` — the
+/// proposed-update analogue of [`gbp_dch_argv`] for a Debian stable
+/// branch (`debian/<codename>`). `--stable` produces a `+deb<N>u<M>`
+/// stable entry; dbranch then normalizes it — rewriting the version to
+/// the `~deb<N>u<M>` form (so it sorts *older* than the plain build) and
+/// synthesizing the body — so the exact distribution/number gbp picks
+/// doesn't matter, and no `-D` is needed (`--stable` targets the stable
+/// suite itself).
+pub fn gbp_dch_stable_argv(urgency: &str) -> Vec<String> {
+    argv(&[
+        "gbp",
+        "dch",
+        "--stable",
+        "-R",
+        "-U",
+        urgency,
+        "--spawn-editor=never",
+    ])
+}
+
 /// `gbp import-orig --uscan --pristine-tar --no-interactive` — pull the
 /// new upstream release via uscan and import it onto the Debian branch,
 /// recording the tarball with pristine-tar. The head of the `update`
@@ -515,6 +535,18 @@ mod tests {
                 "questing",
                 "-U",
                 "medium",
+                "--spawn-editor=never"
+            ]
+        );
+        assert_eq!(
+            gbp_dch_stable_argv("high"),
+            [
+                "gbp",
+                "dch",
+                "--stable",
+                "-R",
+                "-U",
+                "high",
                 "--spawn-editor=never"
             ]
         );

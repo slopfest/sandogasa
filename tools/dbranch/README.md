@@ -133,7 +133,26 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   and `debian/salsa-ci.yml` gets the PPA-rebuild `variables` preset
   (`RELEASE: "unstable"` plus the backports-style relaxations). A
   branch that already exists locally or only on `origin` is checked
-  out and merged into instead — no recreation, no packaging tweaks.
+  out and merged into instead (no recreation). The packaging tweaks are
+  re-checked on **every** merge, not just at creation — they're
+  idempotent, so an already-correct branch is left untouched, but an
+  unadjusted or externally-created one is self-healed (and the files it
+  changed are listed in the entry).
+
+  **Debian proposed-updates:** when the target is a `debian/<codename>`
+  branch whose codename is a real Debian release (e.g. `debian/trixie`,
+  via `debian-distro-info`), the merge stage instead produces a
+  proposed-update: version `<debver>~deb<N>u<M>` (the `~` makes it sort
+  *older* than the plain build, so it never shadows testing/unstable),
+  the changelog distribution is the codename, and the command run is
+  `gbp dch --stable` (still normalized to the `~` form + `* Rebuild for
+  <codename>`). The one-time `salsa-ci.yml` tweak sets
+  `RELEASE: "<codename>"` with **no** backports relaxations (it's a real
+  stable build). This needs `debian-distro-info` (from `distro-info`),
+  consulted only for `debian/`-namespaced branches. A proposed-update
+  must be run on a **Debian host** (`gbp dch --stable` needs a newer
+  gbp, and the stable chroot / archive upload are Debian-only); dbranch
+  hard-fails early otherwise, except under `--dry-run`.
 - **`build`** — `debuild -S -sa -d` then
   `pbuilder-dist <codename> ../<dsc>`.
 - **`lint`** — `lintian -I` on the built **`.deb`s** in

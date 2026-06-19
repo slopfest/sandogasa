@@ -12,6 +12,31 @@ now normalizes the junction to exactly one blank line. Observed on a
 proposed-update merge; the same shared code path can in principle hit
 it on a PPA rebuild merge, though that hasn't been seen in practice.
 
+### dbranch: rebuild auto-detects Debian proposed-updates
+
+`dbranch rebuild debian/<codename>` now recognises a Debian stable
+branch (codename via `debian-distro-info`, e.g. `trixie` → 13) and
+switches from the Ubuntu PPA scheme to a proposed-update:
+
+- **version** `<base>~deb<N>u<M>` (tilde, so it sorts *older* than the
+  plain build and never shadows testing/unstable on upgrade), `M`
+  incrementing from the changelog like the PPA `+N` counter
+- **changelog distribution** the codename (`trixie`)
+- the changelog command shown/run is `gbp dch --stable` (not `--bpo`);
+  the entry is still normalized to the `~` form + `* Rebuild for
+  <codename>`
+- **salsa-ci.yml** gets `RELEASE: "<codename>"` and **none** of the
+  backports relaxations (it's a real stable build)
+
+Needs `debian-distro-info` (from `distro-info`) — consulted only for
+`debian/`-namespaced branches, so plain PPA rebuilds are unaffected.
+
+A proposed-update run **requires a Debian host** and hard-fails early
+otherwise (`gbp dch --stable` needs a newer gbp, and the stable build
+chroot and `dput`-to-stable are Debian-only). A `--dry-run` is exempt
+(it executes nothing). The actual `dput`-to-stable upload is not wired
+up yet.
+
 ### dbranch: `--urgency` to override the changelog urgency
 
 `dbranch rebuild` and `dbranch update` now take `--urgency <level>`

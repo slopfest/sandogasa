@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::git;
 use crate::plan::{self, changelog_commit_message};
 use crate::ui::{StageFailure, Ui};
-use crate::{changelog, distroinfo, gbpconf, salsaci};
+use crate::{changelog, distroinfo, gbpconf, host, salsaci};
 
 /// How often to re-poll `glab ci status` while a pipeline runs.
 const POLL_INTERVAL: Duration = Duration::from_secs(8);
@@ -264,6 +264,30 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
         return Err("no target branches to rebuild".into());
     }
 
+    // A Debian proposed-update (debian/<codename>) must be built on a
+    // Debian host: `gbp dch --stable` (a newer gbp), the stable build
+    // chroot, and dput-to-stable all need it. Fail fast before any work.
+    // A dry-run is a no-execution tutorial, so it's exempt.
+    if !ui.dry_run {
+        for target in &targets {
+            let codename = target_codename(target);
+            if matches!(
+                classify_target_type(target, &codename)?,
+                TargetType::Proposed { .. }
+            ) && !host::is_debian()
+            {
+                let host = host::os_release_id().unwrap_or_else(|| "unknown".to_string());
+                return Err(format!(
+                    "{target} is a Debian proposed-update, which must be built on a \
+                     Debian host (gbp dch --stable, the stable build chroot, and \
+                     dput to the Debian archive need it); this host is '{host}'. \
+                     Run it from a Debian environment."
+                )
+                .into());
+            }
+        }
+    }
+
     for target in &targets {
         // Only the merge stage can't target the current branch (a
         // branch can't be merged into itself); building the branch
@@ -381,7 +405,8 @@ pub fn fixup(
             location => {
                 ui.step(&format!("Fix up {target}"));
                 checkout_existing(ui, repo, target, location)?;
-                adjust_branch_packaging(ui, repo, target)?;
+                let target_type = classify_target_type(target, &target_codename(target))?;
+                adjust_branch_packaging(ui, repo, target, target_type)?;
             }
         }
     }
@@ -623,7 +648,12 @@ fn rebuild_one(
     urgency: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let codename = target_codename(target);
-    ui.step(&format!("{target} (codename: {codename})"));
+    let target_type = classify_target_type(target, &codename)?;
+    let kind = match target_type {
+        TargetType::Ppa => "PPA".to_string(),
+        TargetType::Proposed { major } => format!("Debian {major} proposed-update"),
+    };
+    ui.step(&format!("{target} (codename: {codename}, {kind})"));
 
     // The version the merge stage produced, reused by build/lint/upload.
     let mut rebuilt_version: Option<String> = None;
@@ -636,6 +666,7 @@ fn rebuild_one(
             target,
             location,
             &codename,
+            target_type,
             urgency,
             &mut rebuilt_version,
         )?;
@@ -920,6 +951,7 @@ fn merge_stage(
     target: &str,
     location: TargetLocation,
     codename: &str,
+    target_type: TargetType,
     urgency: &str,
     out_version: &mut Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -950,16 +982,24 @@ fn merge_stage(
     // is a no-op on an already-adjusted branch, and self-heals one
     // created outside dbranch. The files it changed are listed in the
     // rebuild changelog entry.
-    let adjusted = adjust_branch_packaging(ui, repo, target)?;
+    let adjusted = adjust_branch_packaging(ui, repo, target, target_type)?;
 
     let version = {
         let text = std::fs::read_to_string(repo.join("debian/changelog"))?;
-        changelog::rebuild_version(&text, codename)
+        target_type
+            .version(&text, codename)
             .ok_or("could not determine the Debian version from debian/changelog")?
     };
 
     ui.step("Generate the rebuild changelog entry");
-    ui.run_required(&plan::gbp_dch_argv(codename, urgency), repo)?;
+    // PPA uses `--bpo`; a proposed-update uses `--stable` (the honest
+    // command). Either way the entry is normalized afterward, so gbp's
+    // exact version/body is provisional.
+    let dch = match target_type {
+        TargetType::Ppa => plan::gbp_dch_argv(codename, urgency),
+        TargetType::Proposed { .. } => plan::gbp_dch_stable_argv(urgency),
+    };
+    ui.run_required(&dch, repo)?;
 
     ui.step(&format!(
         "Normalize the entry to {version} / \"Rebuild for {codename}\""
@@ -992,7 +1032,16 @@ fn adjust_branch_packaging(
     ui: &Ui,
     repo: &Path,
     target: &str,
+    target_type: TargetType,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    // salsa-ci RELEASE + whether the backports relaxations apply depend
+    // on the target type: a PPA builds against unstable with relaxations,
+    // a proposed-update against its stable codename with none.
+    let codename = target_codename(target);
+    let (release, add_backports) = match target_type {
+        TargetType::Ppa => ("unstable".to_string(), true),
+        TargetType::Proposed { .. } => (codename, false),
+    };
     let mut adjusted = Vec::new();
     if repo.join("debian/gbp.conf").exists() {
         ui.step(&format!(
@@ -1023,7 +1072,9 @@ fn adjust_branch_packaging(
     }
     if repo.join("debian/salsa-ci.yml").exists() {
         ui.step(&format!("Adjust salsa-ci.yml for {target}"));
-        let changed = edit_file(ui, repo, "debian/salsa-ci.yml", salsaci::adjust_salsa_ci)?;
+        let changed = edit_file(ui, repo, "debian/salsa-ci.yml", |text| {
+            salsaci::adjust_salsa_ci(text, &release, add_backports)
+        })?;
         if changed {
             ui.explain_diff(repo, &["debian/salsa-ci.yml"]);
             ui.run_required(
@@ -1229,6 +1280,49 @@ fn matching_debs(dir: &Path, version_no_epoch: &str) -> Vec<String> {
 /// still pointing at the Debian branch.
 fn target_codename(target: &str) -> String {
     plan::codename_from_branch(target).to_string()
+}
+
+/// What kind of rebuild target a branch is — drives the version scheme
+/// (the changelog distribution is the codename in both cases).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetType {
+    /// Ubuntu PPA branch: version `<base>~<codename>+<N>`.
+    Ppa,
+    /// Debian stable proposed-update branch (`debian/<codename>`):
+    /// version `<base>~deb<major>u<M>`.
+    Proposed { major: u32 },
+}
+
+impl TargetType {
+    /// The fresh version for this target, given the merged changelog and
+    /// the codename — `changelog::rebuild_version` for a PPA, or
+    /// `changelog::proposed_version` for a proposed-update.
+    fn version(self, changelog: &str, codename: &str) -> Option<String> {
+        match self {
+            TargetType::Ppa => changelog::rebuild_version(changelog, codename),
+            TargetType::Proposed { major } => changelog::proposed_version(changelog, major),
+        }
+    }
+}
+
+/// Classify a target branch. A `debian/<codename>` branch whose codename
+/// is a numbered Debian release (via `debian-distro-info`) is a
+/// proposed-update; everything else is a PPA. `debian-distro-info` is
+/// only consulted for `debian/`-namespaced branches, so a plain Ubuntu
+/// PPA rebuild never needs it.
+fn classify_target_type(
+    target: &str,
+    codename: &str,
+) -> Result<TargetType, Box<dyn std::error::Error>> {
+    // The rolling suites are never proposed-update targets; skip the
+    // tool call (so a plain run never needs debian-distro-info for them).
+    if target.starts_with("debian/")
+        && !matches!(codename, "unstable" | "sid" | "experimental" | "rc-buggy")
+        && let Some(major) = distroinfo::debian_major(codename)?
+    {
+        return Ok(TargetType::Proposed { major });
+    }
+    Ok(TargetType::Ppa)
 }
 
 /// Resolve a conflicted `debian/changelog` in place, refusing to

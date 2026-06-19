@@ -113,17 +113,30 @@ pub fn resolve_conflict(text: &str) -> Option<String> {
 }
 
 /// The Debian base of a (possibly already rebuilt) version: strips a
-/// trailing `~<codename>+<N>` rebuild suffix. A Debian version may
-/// itself contain `~` (e.g. `1.0~rc1-1`), so only a trailing
-/// `~<seg>+<digits>` is removed — `1.0~rc1-1` is left intact, while
-/// `3.2.8-1~questing+1` becomes `3.2.8-1`.
+/// trailing rebuild/stable suffix — either a PPA `~<codename>+<N>` or a
+/// proposed-update `~deb<N>u<M>`. A Debian version may itself contain
+/// `~` (e.g. `1.0~rc1-1`), so only those specific trailing shapes are
+/// removed: `3.2.8-1~questing+1` → `3.2.8-1` and
+/// `0~20260420-1~deb13u1` → `0~20260420-1`, while `1.0~rc1-1` is left
+/// intact.
 pub fn debian_base(version: &str) -> &str {
     if let Some(idx) = version.rfind('~') {
         let tail = &version[idx + 1..];
+        // PPA rebuild suffix: ~<codename>+<digits>
         if let Some((name, n)) = tail.rsplit_once('+')
             && !name.is_empty()
             && !n.is_empty()
             && n.bytes().all(|b| b.is_ascii_digit())
+        {
+            return &version[..idx];
+        }
+        // Proposed-update suffix: ~deb<digits>u<digits>
+        if let Some(rest) = tail.strip_prefix("deb")
+            && let Some((maj, m)) = rest.split_once('u')
+            && !maj.is_empty()
+            && maj.bytes().all(|b| b.is_ascii_digit())
+            && !m.is_empty()
+            && m.bytes().all(|b| b.is_ascii_digit())
         {
             return &version[..idx];
         }
@@ -150,6 +163,31 @@ pub fn rebuild_version(changelog: &str, codename: &str) -> Option<String> {
         .max()
         .unwrap_or(0);
     Some(format!("{prefix}{}", max_n + 1))
+}
+
+/// Compute the fresh proposed-update version `<debver>~deb<major>u<M>`
+/// for a Debian stable branch (e.g. `debian/trixie`, `major` = 13).
+///
+/// The shape mirrors [`rebuild_version`], only the suffix differs:
+/// `debver` is the Debian base of the newest stanza (any rebuild/stable
+/// suffix stripped, so the unstable base shows through after a merge),
+/// and `M` is one past the highest existing `~deb<major>u<M>` for that
+/// exact base — so a new upstream resets to `u1` while a stable-only
+/// re-release of the same base bumps the counter. The `~` (not `+`)
+/// makes the stable version sort *older* than the plain build, so it
+/// never shadows testing/unstable on upgrade. Returns `None` for an
+/// empty/unparseable changelog.
+pub fn proposed_version(changelog: &str, major: u32) -> Option<String> {
+    let headers = stanza_headers(changelog);
+    let debver = debian_base(&headers.first()?.version);
+    let prefix = format!("{debver}~deb{major}u");
+    let max_m = headers
+        .iter()
+        .filter_map(|h| h.version.strip_prefix(&prefix))
+        .filter_map(|m| m.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+    Some(format!("{prefix}{}", max_m + 1))
 }
 
 /// Rewrite the top stanza into a clean rebuild entry, replacing
@@ -336,14 +374,54 @@ archlinux-keyring (0~20260420-1) unstable; urgency=medium
     fn debian_base_strips_rebuild_suffix_only() {
         assert_eq!(debian_base("3.2.8-1~questing+1"), "3.2.8-1");
         assert_eq!(debian_base("1.0~bpo12+1"), "1.0");
+        // Proposed-update (stable) suffix is stripped too.
+        assert_eq!(debian_base("0~20260420-1~deb13u1"), "0~20260420-1");
+        assert_eq!(debian_base("1.2.3-4~deb12u2"), "1.2.3-4");
         // A plain Debian version is unchanged...
         assert_eq!(debian_base("3.2.8-1"), "3.2.8-1");
         // ...including one that legitimately contains `~`.
         assert_eq!(debian_base("1.0~rc1-1"), "1.0~rc1-1");
+        // ...and one whose `~` segment only looks deb-ish.
+        assert_eq!(debian_base("1.0~debug-1"), "1.0~debug-1");
         // Stacked suffix: only the last is stripped.
         assert_eq!(
             debian_base("3.2.8-1~questing+1~noble+2"),
             "3.2.8-1~questing+1"
+        );
+    }
+
+    #[test]
+    fn proposed_version_fresh_and_increment() {
+        // After merging the Debian branch in, the top stanza is the
+        // unstable version — a fresh stable build is ~deb13u1.
+        let fresh = "\
+archlinux-keyring (0~20260612-1) unstable; urgency=medium
+
+  * New upstream version 0~20260612
+
+ -- M <m@x>  Fri, 12 Jun 2026 10:00:00 +0100
+";
+        assert_eq!(
+            proposed_version(fresh, 13).as_deref(),
+            Some("0~20260612-1~deb13u1")
+        );
+        // A stable-only re-release (top already ~deb13u1, same base)
+        // bumps to u2; debian_base sees through the existing suffix.
+        let again = "\
+archlinux-keyring (0~20260612-1~deb13u1) trixie; urgency=medium
+
+  * Rebuild for trixie
+
+ -- M <m@x>  Fri, 12 Jun 2026 12:00:00 +0100
+";
+        assert_eq!(
+            proposed_version(again, 13).as_deref(),
+            Some("0~20260612-1~deb13u2")
+        );
+        // A different Debian major starts fresh at u1.
+        assert_eq!(
+            proposed_version(again, 12).as_deref(),
+            Some("0~20260612-1~deb12u1")
         );
     }
 

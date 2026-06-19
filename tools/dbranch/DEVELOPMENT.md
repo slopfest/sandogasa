@@ -101,11 +101,11 @@ the captured dput has no stdin, so an un-seeded host fails the stage
 (unstable). This works **only on a Debian host** — Ubuntu's `dput` does
 not understand the `unstable`/Debian-archive target — so the upload
 stage must be run from a Debian environment (import/build/lint are fine
-on Ubuntu). A precondition guard for this is planned (hard-fail early on
-a non-Debian host when uploading to the default target; exempt an
-explicit `--upload-target`), to be built together with the
-proposed-updates-from-stable-branch upload flow, which is likely
-Debian-host-only too. See TODO.md.
+on Ubuntu). The host check (`host::is_debian`) already gates the whole
+proposed-update flow (see the rebuild target-type note above). The
+analogous guard for `update`'s upload — hard-fail on a non-Debian host
+when uploading to the default target, exempting an explicit
+`--upload-target` — is **not wired yet**. See TODO.md.
 
 ### Launchpad / EOL
 
@@ -143,6 +143,41 @@ release) is the not-EOL set; the complement within `--all` is EOL.
   decouples the
   build suite (`--build-suite`, default `testing`) from the changelog
   distribution, and uploads to dput's default target (no `--ppa`).
+- **Rebuild target type (PPA vs proposed-update).** `rebuild`'s merge
+  flow serves two target types, chosen by `classify_target_type` from
+  the branch name: a `debian/<codename>` branch whose codename is a
+  numbered Debian release (`debian-distro-info`, consulted only for
+  `debian/` branches so plain PPA runs don't need it) is a Debian
+  **proposed-update**; everything else is an Ubuntu **PPA**. The type
+  drives three things, all still funnelled through the same merge →
+  normalize → build machinery:
+  - *version* — `changelog::rebuild_version` (`~<codename>+<N>`) vs
+    `changelog::proposed_version` (`~deb<N>u<M>`). Both take the base
+    from the merged changelog and bump a counter; `debian_base` strips
+    *both* suffix shapes. The proposed-update suffix uses `~` (not the
+    `+deb<N>u<M>` that `gbp dch --stable` emits) so it sorts *older*
+    than the plain build — the stable package must never shadow
+    testing/unstable on upgrade. dbranch normalizes gbp's `+` to `~`.
+  - *changelog command* — `gbp dch --bpo` (PPA) vs `gbp dch --stable`
+    (proposed-update). gbp's output is provisional either way:
+    `normalize_top_stanza` rewrites the version and synthesizes the body
+    (`* Rebuild for <codename>`), so the merge delta gbp lists is
+    discarded. `--stable` needs no `-D` (it targets the stable suite
+    itself) and may require a newer gbp than older Ubuntu ships.
+  - *salsa-ci preset* — `adjust_salsa_ci(text, release, add_backports)`:
+    PPA gets `RELEASE: "unstable"` + the backports relaxations;
+    proposed-update gets `RELEASE: "<codename>"` and **no** relaxations
+    (it's a real stable build facing the normal checks).
+  A proposed-update run is gated on a **Debian host** (`host::is_debian`
+  via `/etc/os-release`): `gbp dch --stable` needs a newer gbp than older
+  Ubuntu ships, and the stable build chroot + `dput`-to-stable are
+  Debian-only. The check hard-fails early (before any work) for a real
+  run; `--dry-run` is exempt so the flow can still be shown as a tutorial
+  anywhere. This supersedes the upload-only host gate *for
+  proposed-updates* — the whole flow needs Debian, not just the upload.
+  Note dbranch shows and runs `gbp dch --stable` honestly rather than
+  faking a portable command, per the transparency contract. The actual
+  `dput`-to-stable upload isn't wired yet.
 - **Idempotency / resume.** The packaging adjustments (`fixup` and the
   in-merge adjust), `push` (`git push -u` then plain `git push`), chroot
   create/refresh, and host-key trust are all idempotent. The **`merge`

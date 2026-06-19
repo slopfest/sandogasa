@@ -17,19 +17,27 @@
   The build-suite decoupling means a target has both a changelog
   *distribution* and a *build suite*, on top of the version scheme.
 
-- (2026-06-19) Proposed-updates upload for stable branches + a
-  Debian-host upload guard (bundle these two). Support uploading
-  proposed-updates from a `debian/<codename>` stable branch (e.g.
-  `debian/trixie`), version scheme `+debNuM` — this almost certainly
-  only works from a Debian host too. So design the **upload-host guard**
-  alongside it: at `update`'s cheap-precondition phase, if the `upload`
-  stage is selected with the **default** Debian target (no
-  `--upload-target`) on a non-Debian host (`/etc/os-release`
-  `ID != debian`), **hard-fail early** with a remedy ("run upload from a
-  Debian environment"); an explicit `--upload-target` is exempt. Fits
-  the import/build/lint-on-Ubuntu → upload/tag-on-Debian flow. (Agreed
-  shape; deferred so the proposed-updates path is covered by the same
-  host check.) See also DEVELOPMENT.md.
+- (2026-06-19) Proposed-updates: remaining bits. The changelog/version
+  (`~debNuM`, tilde — sorts older), `gbp dch --stable`, salsa-ci preset
+  (RELEASE=codename, no backports), and the whole-run **Debian-host
+  gate** are done (in rebuild, auto-detected for `debian/<codename>`).
+  Still to do:
+  - Wire the `dput`-to-stable upload for a proposed-update target:
+    upload to the dput default (Debian archive, no `--ppa`/target
+    needed) and relax rebuild's "upload needs a target" precondition for
+    proposed-update targets. The Debian-host requirement is already
+    covered by the whole-run gate.
+  - The analogous **`update` (to-unstable) upload guard**: hard-fail on
+    a non-Debian host when uploading to the default target; exempt an
+    explicit `--upload-target`. (`update`'s changelog gen works on
+    Ubuntu, so gate only the upload — unlike proposed-updates.) Reuse
+    `host::is_debian`. See DEVELOPMENT.md.
+  - (low priority) Optional per-package waiving of a specific salsa-ci
+    job (e.g. `test-uscan` fails on trixie when the watch file uses a
+    uscan standard newer than trixie's uscan). Not blocking: `push`
+    (CI watch) is separate from `upload`/`tag`, so a red job doesn't
+    stop an upload. Keep it a targeted job-skip, not a blanket
+    relaxation (proposed-updates should face the normal checks).
 
 Note (2026-06-19): bulk is deliberately **local-branch only** — a local
 branch *is* the opt-in. To include a release, check it out once; to

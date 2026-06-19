@@ -9,6 +9,7 @@ pub mod changelog;
 pub mod distroinfo;
 pub mod gbpconf;
 pub mod git;
+pub mod host;
 pub mod plan;
 pub mod rebuild;
 pub mod salsaci;
