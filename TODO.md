@@ -2,23 +2,26 @@
 
 ## dbranch
 
-- (2026-06-20) **Debian-branch update flow** (first concrete piece of
-  target-type; do this next). Support updating the Debian branch
-  (`master`/`main`/`debian/unstable`) to a new upstream:
-  - `merge` stage → `gbp import-orig --uscan --pristine-tar`, then a
-    changelog entry for the new version (dch). No `~codename+N` suffix.
-    Everything else (build/lint/push/upload/tag) keeps its shape.
+- (2026-06-20) **`update` subcommand** — update the Debian branch
+  (`master`/`main`/`debian/unstable`) to a new upstream. A separate
+  subcommand (not a `rebuild` mode — "rebuild" reads wrong for a
+  new-upstream import) that **shares the build/lint/push/upload/tag
+  pipeline**. Do this next; testable when updating a package by hand.
+  - Instead of merge: `gbp import-orig --uscan --pristine-tar`, then
+    `gbp dch -c -R` for the new-version entry (auto-commits + releases;
+    **not** normalized — it's a real new-upstream entry, not a rebuild,
+    so no `~codename+N` suffix / synthesized body).
   - Build suite decoupled from the changelog distribution: build
     against **testing** by default (less broken), with a choice of
-    **unstable** (deps removed from testing force it). Ubuntu branches
+    **unstable** (deps removed from testing force it). Ubuntu rebuilds
     still build against the codename. `pbuilder-dist <build-suite>`;
     overridable (e.g. `--build-suite`).
-  - Upload auto-detects the Debian branch: `dput` with no target works
-    (no `--ppa`/`--upload-target` required); `--upload-target mentors`
-    still allowed.
+  - Upload: on the Debian branch, `dput` with no target works (no
+    `--ppa`/`--upload-target` required); `--upload-target mentors` still
+    allowed.
   - Out of scope: Debian's new PPA-like repo (try by hand first).
-  - Open: target-type-aware `rebuild` (auto-detect from branch) vs a
-    separate subcommand. Full design in the dbranch-roadmap notes.
+  - Refactor needed: extract the shared post-first-stage pipeline so
+    both `rebuild` and `update` drive build→lint→push→upload→tag.
 
 - (2026-06-19) Target-type / version-scheme abstraction — the rest of
   the big piece. Live-test it when updating `archlinux-keyring`'s
