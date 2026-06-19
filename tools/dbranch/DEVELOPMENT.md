@@ -24,6 +24,16 @@ tool answers `--version`/`--help` with exit 0:
 | `dh` | `None` (PATH only) | `--version` *and* `--help` exit non-zero |
 | `dput` | `None` (PATH only) | `--version` support varies (dput vs dput-ng) |
 | `ubuntu-distro-info` | n/a | called directly; errors with an install hint |
+| `debian-distro-info` | n/a | `--series=<c> -r` → Debian major; for `debian/` targets only |
+
+### pbuilder-dist + sudo under `--quiet`
+
+`pbuilder-dist` (the `build` stage) runs `sudo` to manage/enter the
+chroot. `--quiet` captures the command's I/O via `Command::output()`
+(null stdin), so a `sudo` password prompt can't be answered and the
+build hangs/fails. Document it (README): `--stage build --quiet` needs
+passwordless `sudo` for `pbuilder-dist`, or a pre-authenticated `sudo`
+timestamp in the same session.
 
 ### glab (CI watch + auth)
 
@@ -199,7 +209,13 @@ release) is the not-EOL set; the complement within `--all` is EOL.
 - **Bulk selection by codename.** A branch is a PPA target iff its
   codename is a real Ubuntu release (`ubuntu-distro-info`); this excludes
   the Debian branch, `master`/`main`, Debian suites, and gbp plumbing
-  without an exclude-list.
+  without an exclude-list. `select_ppa_branches` does **not** also
+  exclude the merge source — the Debian branch already fails the codename
+  filter, so excluding the source only ever dropped a *PPA* branch that
+  happened to be checked out (it silently vanished from the set). Instead
+  `resolve_bulk_targets` refuses a PPA-branch source up front **for the
+  merge stage** (you can't merge a PPA into its siblings / itself); other
+  stages don't use the source and run from any branch.
 - **Branch taxonomy → target type** (drives the planned target-type /
   version-scheme work): `master`/`main`/`debian/unstable` → Debian
   unstable (`dput` default, or mentors for a new pkg / proposed NMU);

@@ -16,7 +16,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 ## Tools
 
 - **[cpu-sig-tracker](tools/cpu-sig-tracker/)** — CentOS Proposed Updates SIG package-state tracker across Koji, GitLab, and JIRA
-- **[dbranch](tools/dbranch/)** — propagate a Debian package across its Ubuntu/PPA branches in `rpmbuild`-style stages (merge + changelog rebuild entry; optional pbuilder build, lintian, and push + GitLab CI watch via `glab`); doubles as a learning tool via `--explain`
+- **[dbranch](tools/dbranch/)** — propagate a Debian package across its downstream branches in `rpmbuild`-style stages: rebuild Ubuntu PPA and Debian stable proposed-update (`debian/<codename>`) branches, and update the Debian branch to a new upstream (merge/import + changelog entry; optional pbuilder build, lintian, push + GitLab CI watch via `glab`, dput upload, and tag); doubles as a learning tool via `--explain`
 - **[ebranch](tools/ebranch/)** — cross-branch porting helper: build-order resolution, branch requests, and update checking with Bodhi karma
 - **[fedora-cve-triage](tools/fedora-cve-triage/)** — triage CVEs reported against Fedora components in Red Hat Bugzilla
 - **[hs-intake](tools/hs-intake/)** — Hyperscale package intake analysis

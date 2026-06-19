@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.15.0
 
 ### dbranch: bulk no longer hides the checked-out PPA branch
 

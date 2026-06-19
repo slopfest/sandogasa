@@ -398,19 +398,19 @@ mod tests {
                 _ => Ok(vec![]),
             }
         };
-        let fetch_files =
-            |ids: &[i64]| -> Result<Vec<(i64, Vec<RpmFile>)>, Box<dyn std::error::Error>> {
-                Ok(ids
-                    .iter()
-                    .map(|id| {
-                        let files = match id {
-                            1 | 2 => vec![file("/usr/bin/ynl")], // collide
-                            _ => vec![file("/usr/bin/foo")],
-                        };
-                        (*id, files)
-                    })
-                    .collect())
-            };
+        type FilesResult = Result<Vec<(i64, Vec<RpmFile>)>, Box<dyn std::error::Error>>;
+        let fetch_files = |ids: &[i64]| -> FilesResult {
+            Ok(ids
+                .iter()
+                .map(|id| {
+                    let files = match id {
+                        1 | 2 => vec![file("/usr/bin/ynl")], // collide
+                        _ => vec![file("/usr/bin/foo")],
+                    };
+                    (*id, files)
+                })
+                .collect())
+        };
         let results = scan(None, EL_TOKENS, fetch_rpms, fetch_files, false);
         // Only EL10s has a conflict (main+kernel share /usr/bin/ynl).
         assert_eq!(results.len(), 1);

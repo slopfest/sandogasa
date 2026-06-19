@@ -17,6 +17,13 @@
   The build-suite decoupling means a target has both a changelog
   *distribution* and a *build suite*, on top of the version scheme.
 
+- (2026-06-19) Upload safety: before a PPA upload, check whether the
+  package already exists in the target PPA (Launchpad API) — if it does
+  **not**, the `--ppa` was likely a typo/wrong PPA, so require
+  confirmation before uploading (default no; skip in `--json`/non-tty or
+  with `--yes`). Catches an accidental wrong-PPA upload. (Launchpad-only;
+  the Debian-archive default target has no equivalent pre-check.)
+
 - (2026-06-19, low priority) Optional per-package waiving of a specific
   salsa-ci job (e.g. `test-uscan` fails on trixie when the watch file
   uses a uscan standard newer than trixie's uscan). Not blocking: `push`

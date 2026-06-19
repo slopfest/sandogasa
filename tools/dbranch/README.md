@@ -2,17 +2,24 @@
 
 # dbranch
 
-Propagate a Debian package across its Ubuntu/PPA branches.
+Propagate a Debian package across its downstream branches — Ubuntu PPAs,
+Debian unstable, and Debian stable proposed-updates.
 
 A common Debian/Ubuntu packaging layout (managed with
 [git-buildpackage](https://honk.sigxcpu.org/piki/projects/git-buildpackage/))
-keeps the Debian packaging on one branch (e.g. `master`) and a branch
-per Ubuntu release for PPA uploads (`noble`, `oracular`,
-`ubuntu/questing`, …). When the Debian branch gets a new version, each
-PPA branch has to be brought up to date: merge the Debian branch, fix
-the (always identically-shaped) `debian/changelog` merge conflict, add
-a `~<codename>+<N>` rebuild entry, and do a local scratch build.
-`dbranch rebuild` automates that loop.
+keeps the Debian packaging on one branch (e.g. `master` or
+`debian/unstable`) and further branches per downstream target. dbranch
+automates the repetitive loops across them:
+
+- **`rebuild`** — bring an **Ubuntu PPA** branch (`noble`, `oracular`,
+  `ubuntu/questing`, …) up to date with the Debian branch: merge it, fix
+  the (always identically-shaped) `debian/changelog` merge conflict, add
+  a `~<codename>+<N>` rebuild entry, and scratch-build. The same command
+  also handles a **Debian stable proposed-update** when the target is a
+  `debian/<codename>` branch (e.g. `debian/trixie`) — a
+  `~deb<N>u<M>` entry via `gbp dch --stable`, built on a Debian host.
+- **`update`** — update the Debian branch itself to a **new upstream**
+  release (`gbp import-orig --uscan`), then build/lint/push/upload/tag.
 
 It is also a **learning tool**: `--explain` runs the workflow while
 narrating each step and the exact command it uses, so you can follow
@@ -251,7 +258,11 @@ a PPA branch (a `~<codename>+<N>` suffix is stripped first).
 - `--quiet` (`-q`) is the opposite end: it suppresses the tools'
   output, leaving only dbranch's step headings, and replays a
   command's output only if it fails. Mutually exclusive with
-  `--explain`.
+  `--explain`. **Caveat for `--stage build --quiet`:** `pbuilder-dist`
+  runs under `sudo`, and `--quiet` captures the command's I/O — so a
+  `sudo` password prompt can't be answered and the build hangs/fails.
+  Set up passwordless `sudo` for `pbuilder-dist` (or pre-authenticate
+  `sudo` in the same session) before a quiet build.
 
 ```
 $ dbranch rebuild noble --dry-run        # on debian/unstable, damo 3.2.8-1
