@@ -83,8 +83,23 @@ pub fn resolve_conflict(text: &str) -> Option<String> {
                 }
                 theirs.push(l);
             }
-            // Incoming Debian entries on top, then the local rebuild.
+            // Incoming Debian entries on top, then the local rebuild,
+            // separated by exactly one blank line. Depending on where
+            // git drew the hunk boundary, the stanza-separating blank may
+            // be missing from (or duplicated across) the two sides — so
+            // trim the junction and re-insert a single blank, or the two
+            // stanzas would run together (footer line immediately
+            // followed by the next header).
+            while theirs.last().is_some_and(|l| l.trim().is_empty()) {
+                theirs.pop();
+            }
+            while ours.first().is_some_and(|l| l.trim().is_empty()) {
+                ours.remove(0);
+            }
             out.extend_from_slice(&theirs);
+            if !theirs.is_empty() && !ours.is_empty() {
+                out.push("");
+            }
             out.extend_from_slice(&ours);
         } else {
             out.push(line);
@@ -272,6 +287,49 @@ damo (3.2.7-1) unstable; urgency=medium
     #[test]
     fn resolve_conflict_none_when_clean() {
         assert!(resolve_conflict("damo (3.2.8-1) unstable; urgency=medium\n").is_none());
+    }
+
+    #[test]
+    fn resolve_conflict_inserts_blank_between_stanzas() {
+        // Git can draw the hunk so the incoming side ends on its footer
+        // with no trailing blank and the local side starts on its
+        // header — the two stanzas must not run together.
+        let conflicted = "\
+<<<<<<< HEAD
+archlinux-keyring (0~20260420-1~deb13u1) trixie; urgency=medium
+
+  * gbp.conf: set branch to debian/trixie
+
+ -- M <m@x>  Mon, 08 Jun 2026 16:50:42 +0100
+=======
+archlinux-keyring (0~20260612-1) unstable; urgency=medium
+
+  * New upstream version 0~20260612
+
+ -- M <m@x>  Fri, 19 Jun 2026 15:55:25 +0100
+>>>>>>> main
+
+archlinux-keyring (0~20260420-1) unstable; urgency=medium
+
+  * older
+
+ -- M <m@x>  Thu, 01 Jan 2026 00:00:00 +0100
+";
+        let resolved = resolve_conflict(conflicted).unwrap();
+        // Incoming on top, then local, then common.
+        let versions: Vec<String> = stanza_headers(&resolved)
+            .iter()
+            .map(|h| h.version.clone())
+            .collect();
+        assert_eq!(
+            versions,
+            ["0~20260612-1", "0~20260420-1~deb13u1", "0~20260420-1"]
+        );
+        // A blank line separates the incoming footer from the local
+        // header (the bug was a missing newline here).
+        assert!(resolved.contains("15:55:25 +0100\n\narchlinux-keyring (0~20260420-1~deb13u1)"));
+        // No doubled blank lines at that junction.
+        assert!(!resolved.contains("15:55:25 +0100\n\n\narchlinux-keyring"));
     }
 
     #[test]

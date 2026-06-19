@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### dbranch: fix a missing blank line in changelog conflict resolution
+
+When resolving a `debian/changelog` merge conflict, the incoming Debian
+stanza and the local rebuild stanza could run together (footer line
+immediately followed by the next header) when git drew the hunk
+boundary without a trailing blank on the incoming side. The resolver
+now normalizes the junction to exactly one blank line. Observed on a
+proposed-update merge; the same shared code path can in principle hit
+it on a PPA rebuild merge, though that hasn't been seen in practice.
+
 ### dbranch: `--urgency` to override the changelog urgency
 
 `dbranch rebuild` and `dbranch update` now take `--urgency <level>`
