@@ -95,6 +95,18 @@ once with `ssh-keyscan <host> >> ~/.ssh/known_hosts`. Under `--quiet`
 the captured dput has no stdin, so an un-seeded host fails the stage
 (rather than hanging). dbranch does not auto-accept host keys.
 
+### dput to unstable needs a Debian host
+
+`update`'s upload stage `dput`s to the Debian archive's default target
+(unstable). This works **only on a Debian host** — Ubuntu's `dput` does
+not understand the `unstable`/Debian-archive target — so the upload
+stage must be run from a Debian environment (import/build/lint are fine
+on Ubuntu). A precondition guard for this is planned (hard-fail early on
+a non-Debian host when uploading to the default target; exempt an
+explicit `--upload-target`), to be built together with the
+proposed-updates-from-stable-branch upload flow, which is likely
+Debian-host-only too. See TODO.md.
+
 ### Launchpad / EOL
 
 Launchpad rejects uploads to an **EOL series' PPA**, so bulk
