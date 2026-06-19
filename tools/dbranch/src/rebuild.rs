@@ -15,7 +15,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::git;
 use crate::plan::{self, changelog_commit_message};
@@ -29,6 +29,23 @@ const POLL_INTERVAL: Duration = Duration::from_secs(8);
 const CREATE_TIMEOUT: Duration = Duration::from_secs(180);
 /// Overall safety cap on a single watch so it can't poll forever.
 const WATCH_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+/// In `ChrootRefresh::Auto`, refresh a pbuilder base chroot older than
+/// this before building.
+const CHROOT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Whether the build stage refreshes the pbuilder base chroot before
+/// building.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChrootRefresh {
+    /// Refresh only when the base tarball is older than [`CHROOT_MAX_AGE`].
+    #[default]
+    Auto,
+    /// Always refresh, regardless of age (`--refresh-chroot`).
+    Force,
+    /// Never auto-refresh; build against the chroot as-is
+    /// (`--no-refresh-chroot`).
+    Never,
+}
 
 /// Which workflow stages to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -104,6 +121,8 @@ pub struct Options {
     /// branch. Lets dbranch run without first checking out the Debian
     /// branch.
     pub source: Option<String>,
+    /// Build stage: whether to refresh the pbuilder base chroot first.
+    pub chroot_refresh: ChrootRefresh,
 }
 
 /// Run the rebuild workflow over the selected branches.
@@ -182,6 +201,7 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             opts.stages,
             opts.nowait,
             opts.upload_target.as_deref(),
+            opts.chroot_refresh,
         )?;
     }
     Ok(())
@@ -308,6 +328,7 @@ fn rebuild_one(
     stages: Stages,
     nowait: bool,
     upload_target: Option<&str>,
+    chroot_refresh: ChrootRefresh,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let codename = target_codename(repo, target, location);
     ui.step(&format!("{target} (codename: {codename})"));
@@ -348,7 +369,7 @@ fn rebuild_one(
     // Stages run in pipeline order: build, lint, push, upload, tag.
     if stages.build {
         let (package, version) = pkg_ver.as_ref().unwrap();
-        build_stage(ui, repo, &codename, package, version)?;
+        build_stage(ui, repo, &codename, package, version, chroot_refresh)?;
     }
     if stages.lint {
         let (_, version) = pkg_ver.as_ref().unwrap();
@@ -713,23 +734,49 @@ fn build_stage(
     codename: &str,
     package: &str,
     version: &str,
+    chroot_refresh: ChrootRefresh,
 ) -> Result<(), Box<dyn std::error::Error>> {
     ui.step("Build the source package");
     ui.run_required(&plan::debuild_argv(), repo)?;
 
-    // First-time chroot setup: pbuilder-dist needs the base tarball.
-    let needs_create = plan::pbuilder_base_tgz(codename).is_none_or(|p| !p.exists());
-    if needs_create {
+    // The chroot's base tarball: create it the first time, otherwise
+    // refresh it (per the policy) so the build isn't against stale
+    // packages. A missing/locatable check first ($HOME may be unset).
+    let base = plan::pbuilder_base_tgz(codename);
+    if base.as_ref().is_none_or(|p| !p.exists()) {
         ui.step(&format!(
             "Create the {codename} pbuilder chroot (no base tarball yet)"
         ));
         ui.run_required(&plan::pbuilder_create_argv(codename), repo)?;
+    } else {
+        let stale = base
+            .as_deref()
+            .is_some_and(|p| chroot_is_stale(p, CHROOT_MAX_AGE));
+        let refresh = match chroot_refresh {
+            ChrootRefresh::Force => true,
+            ChrootRefresh::Never => false,
+            ChrootRefresh::Auto => stale,
+        };
+        if refresh {
+            ui.step(&format!("Refresh the {codename} pbuilder chroot"));
+            ui.run_required(&plan::pbuilder_update_argv(codename), repo)?;
+        }
     }
 
     let dsc = format!("../{}", plan::dsc_filename(package, version));
     ui.step(&format!("Scratch-build in the {codename} chroot"));
     ui.run_required(&plan::pbuilder_argv(codename, &dsc), repo)?;
     Ok(())
+}
+
+/// Whether a file's mtime is older than `max_age`. `false` when the
+/// mtime can't be read (don't force a refresh on uncertainty).
+fn chroot_is_stale(path: &Path, max_age: Duration) -> bool {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|mtime| SystemTime::now().duration_since(mtime).ok())
+        .is_some_and(|age| age > max_age)
 }
 
 /// The lint stage: run `lintian` on the **`.deb`s** the build
@@ -1017,6 +1064,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1030,6 +1078,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1044,6 +1093,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: Some("noble".to_string()),
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1057,6 +1107,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: Some("does-not-exist".to_string()),
+            chroot_refresh: ChrootRefresh::Auto,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1098,6 +1149,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -1125,6 +1177,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -1147,6 +1200,26 @@ mod tests {
         git(p, &["commit", "-qm", "add packaging"]);
         // noble exists locally in setup().
         fixup(&ui_dry(), p, vec!["noble".to_string()]).unwrap();
+    }
+
+    #[test]
+    fn chroot_is_stale_by_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("base.tgz");
+        std::fs::write(&p, "x").unwrap();
+        // A just-written file is fresh; a missing one is "not stale".
+        assert!(!chroot_is_stale(&p, Duration::from_secs(3600)));
+        assert!(!chroot_is_stale(
+            &dir.path().join("nope"),
+            Duration::from_secs(3600)
+        ));
+        // Backdate the mtime → stale.
+        Command::new("touch")
+            .args(["-d", "2000-01-01"])
+            .arg(&p)
+            .status()
+            .unwrap();
+        assert!(chroot_is_stale(&p, Duration::from_secs(3600)));
     }
 
     #[test]
@@ -1214,6 +1287,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1227,6 +1301,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1244,6 +1319,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -1260,6 +1336,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1276,6 +1353,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1292,6 +1370,7 @@ mod tests {
             nowait: false,
             upload_target: Some("ppa:michel/sugarjar".to_string()),
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1308,6 +1387,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1324,6 +1404,7 @@ mod tests {
             nowait: true,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1408,6 +1489,7 @@ E: damo: an-error\n";
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1423,6 +1505,7 @@ E: damo: an-error\n";
             nowait: false,
             upload_target: None,
             source: None,
+            chroot_refresh: ChrootRefresh::Auto,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }

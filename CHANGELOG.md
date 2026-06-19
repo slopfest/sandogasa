@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### dbranch: refresh the pbuilder chroot before building; group `--help`
+
+The build stage now refreshes the codename's pbuilder base chroot
+(`pbuilder-dist <codename> update`) before building when it exists but
+is older than a day, so builds aren't against stale packages. Control
+it with the mutually-exclusive `--refresh-chroot` (force, regardless of
+age) and `--no-refresh-chroot` (skip; build against the chroot as-is);
+the default auto-refreshes only when stale. A brand-new chroot is still
+created (`… create`) as before.
+
+`dbranch rebuild --help` now groups flags into **Stages**, **Upload**,
+and **Output** sections for readability.
+
 ### dbranch: `fixup` subcommand for existing branches
 
 `dbranch fixup [<branch>...]` applies the PPA-branch packaging

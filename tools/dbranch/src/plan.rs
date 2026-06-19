@@ -159,6 +159,12 @@ pub fn pbuilder_create_argv(codename: &str) -> Vec<String> {
     argv(&["pbuilder-dist", codename, "create"])
 }
 
+/// `pbuilder-dist <codename> update` — refresh an existing base chroot
+/// so the build isn't against stale packages.
+pub fn pbuilder_update_argv(codename: &str) -> Vec<String> {
+    argv(&["pbuilder-dist", codename, "update"])
+}
+
 /// Path to a codename's pbuilder base tarball
 /// (`~/pbuilder/<codename>-base.tgz`); `None` if `$HOME` is unset.
 pub fn pbuilder_base_tgz(codename: &str) -> Option<std::path::PathBuf> {
@@ -436,6 +442,10 @@ mod tests {
         assert_eq!(
             pbuilder_create_argv("questing"),
             ["pbuilder-dist", "questing", "create"]
+        );
+        assert_eq!(
+            pbuilder_update_argv("questing"),
+            ["pbuilder-dist", "questing", "update"]
         );
         assert_eq!(
             lintian_argv(&["/r/damo_3.2.8-1~questing+1_arm64.deb".to_string()]),

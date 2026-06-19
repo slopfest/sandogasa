@@ -44,6 +44,7 @@ stages you run need:
 dbranch fixup [<branch>...] [-C <dir>] [--dry-run] [--explain] [--quiet]
 dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
     [--source <branch>] [--nowait]
+    [--refresh-chroot | --no-refresh-chroot]
     [--ppa <name> | --upload-target <host>]
     [--dry-run] [--explain] [--quiet]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
@@ -191,7 +192,10 @@ $ dbranch rebuild noble --dry-run        # on debian/unstable, damo 3.2.8-1
 The build stage (`--stage build` / `all`) creates the codename's
 pbuilder chroot automatically the first time (when
 `~/pbuilder/<codename>-base.tgz` is absent) with `pbuilder-dist
-<codename> create` before building.
+<codename> create` before building. When the chroot already exists but
+is older than a day it is refreshed (`pbuilder-dist <codename> update`)
+so the build isn't against stale packages; `--refresh-chroot` forces a
+refresh regardless of age and `--no-refresh-chroot` skips it.
 
 Commands are color-coded on a terminal; color is dropped automatically
 when output is piped or `NO_COLOR` is set.

@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use dbranch::plan;
-use dbranch::rebuild::{self, Options};
+use dbranch::rebuild::{self, ChrootRefresh, Options};
 use dbranch::ui::Ui;
 
 #[derive(Parser)]
@@ -71,6 +71,7 @@ upstream / pristine-tar branches are rebuilt."
             long,
             value_delimiter = ',',
             value_name = "STAGE",
+            help_heading = "Stages",
             long_help = "\
 Stages to run, repeatable or comma-separated:
   merge   merge the Debian branch + write the rebuild
@@ -90,31 +91,44 @@ Defaults to `merge` (the others are opt-in for now)."
         stage: Vec<String>,
 
         /// Merge source branch (default: the checked-out branch).
-        #[arg(long, value_name = "BRANCH")]
+        #[arg(long, value_name = "BRANCH", help_heading = "Stages")]
         source: Option<String>,
 
         /// In the push stage, push but don't wait for / watch CI.
-        #[arg(long)]
+        #[arg(long, help_heading = "Stages")]
         nowait: bool,
 
+        /// Build stage: force-refresh the pbuilder chroot first.
+        #[arg(long, help_heading = "Stages", conflicts_with = "no_refresh_chroot")]
+        refresh_chroot: bool,
+
+        /// Build stage: never auto-refresh the pbuilder chroot.
+        #[arg(long, help_heading = "Stages")]
+        no_refresh_chroot: bool,
+
         /// Upload stage: target PPA (e.g. `user/name`; `ppa:` optional).
-        #[arg(long, value_name = "PPA", conflicts_with = "upload_target")]
+        #[arg(
+            long,
+            value_name = "PPA",
+            help_heading = "Upload",
+            conflicts_with = "upload_target"
+        )]
         ppa: Option<String>,
 
         /// Upload stage: dput target host (e.g. `mentors`, `ftp-master`).
-        #[arg(long, value_name = "TARGET")]
+        #[arg(long, value_name = "TARGET", help_heading = "Upload")]
         upload_target: Option<String>,
 
         /// Print the commands without running anything (a tutorial).
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         dry_run: bool,
 
         /// Run, but narrate each step + command first (follow along).
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         explain: bool,
 
         /// Suppress tool output, showing it only when a step fails.
-        #[arg(short, long, conflicts_with = "explain")]
+        #[arg(short, long, help_heading = "Output", conflicts_with = "explain")]
         quiet: bool,
     },
 
@@ -177,6 +191,8 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             stage,
             source,
             nowait,
+            refresh_chroot,
+            no_refresh_chroot,
             ppa,
             upload_target,
             dry_run,
@@ -191,12 +207,20 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             let stages = rebuild::parse_stages(&stage)?;
             // --ppa is sugar for a `ppa:<name>` dput target.
             let upload_target = ppa.map(|p| plan::ppa_target(&p)).or(upload_target);
+            let chroot_refresh = if refresh_chroot {
+                ChrootRefresh::Force
+            } else if no_refresh_chroot {
+                ChrootRefresh::Never
+            } else {
+                ChrootRefresh::Auto
+            };
             let opts = Options {
                 branches,
                 stages,
                 nowait,
                 upload_target,
                 source,
+                chroot_refresh,
             };
             rebuild::run(&ui, &repo, &opts)
         }
