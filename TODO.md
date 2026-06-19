@@ -17,6 +17,14 @@
   The build-suite decoupling means a target has both a changelog
   *distribution* and a *build suite*, on top of the version scheme.
 
+- (2026-06-19) Make the dbranch tests runnable **without Internet
+  access** (and without external tools), for distro packaging builds
+  that test in a network-less sandbox. Audit the suite for any test that
+  reaches the network or shells out to `git`/`ubuntu-distro-info`/
+  `debian-distro-info`/etc.; mock or feature-gate those (the pure
+  helpers and dry-run tests should already be offline-safe — confirm and
+  keep it that way). Document the expectation so it doesn't regress.
+
 - (2026-06-19) Upload safety: before a PPA upload, check whether the
   package already exists in the target PPA (Launchpad API) — if it does
   **not**, the `--ppa` was likely a typo/wrong PPA, so require
