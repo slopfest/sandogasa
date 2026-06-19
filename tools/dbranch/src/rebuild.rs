@@ -432,7 +432,7 @@ fn rebuild_one(
     upload_target: Option<&str>,
     chroot_refresh: ChrootRefresh,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let codename = target_codename(repo, target, location);
+    let codename = target_codename(target);
     ui.step(&format!("{target} (codename: {codename})"));
 
     // The version the merge stage produced, reused by build/lint/upload.
@@ -704,7 +704,6 @@ fn merge_stage(
         // the new packaging) — no merge needed.
         ui.step(&format!("Create {target} from {source}"));
         ui.run_required(&plan::checkout_new_argv(target, source), repo)?;
-        adjust_branch_packaging(ui, repo, target)?;
     } else {
         checkout_existing(ui, repo, target, location)?;
         // The changelog conflict is expected and resolved
@@ -720,6 +719,13 @@ fn merge_stage(
             ui.run_required(&plan::commit_merge_argv(), repo)?;
         }
     }
+
+    // Ensure the branch's packaging is adjusted before `gbp dch` runs:
+    // gbp.conf's debian-branch must point at this branch (not the
+    // Debian branch), or gbp dch refuses ("not on branch <x>"). This
+    // is a no-op on an already-adjusted branch, and self-heals one
+    // created outside dbranch.
+    adjust_branch_packaging(ui, repo, target)?;
 
     let version = {
         let text = std::fs::read_to_string(repo.join("debian/changelog"))?;
@@ -986,24 +992,12 @@ fn matching_debs(dir: &Path, version_no_epoch: &str) -> Vec<String> {
     out
 }
 
-/// The codename for a target: for an existing branch, the basename of
-/// its `debian/gbp.conf` `debian-branch` (read without checking it
-/// out); otherwise the branch name's basename (`ubuntu/<rel>` →
-/// `<rel>`).
-fn target_codename(repo: &Path, target: &str, location: TargetLocation) -> String {
-    // Read the branch's own gbp.conf where it lives: a local branch by
-    // name, a remote-only one via its origin/<branch> ref.
-    let config_ref = match location {
-        TargetLocation::Local => Some(target.to_string()),
-        TargetLocation::Remote => Some(format!("origin/{target}")),
-        TargetLocation::New => None,
-    };
-    if let Some(config_ref) = config_ref
-        && let Some(text) = git::show_file(repo, &config_ref, "debian/gbp.conf")
-        && let Some(db) = gbpconf::parse(&text).debian_branch
-    {
-        return plan::codename_from_branch(&db).to_string();
-    }
+/// The codename for a target branch — the branch name's basename
+/// (`ubuntu/<rel>` → `<rel>`, `noble` → `noble`). For a properly set-up
+/// PPA branch this also equals gbp.conf's `debian-branch`; deriving it
+/// from the branch name avoids being misled by an unadjusted gbp.conf
+/// still pointing at the Debian branch.
+fn target_codename(target: &str) -> String {
     plan::codename_from_branch(target).to_string()
 }
 

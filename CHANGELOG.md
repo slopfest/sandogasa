@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### dbranch: rebuild self-heals an unadjusted existing PPA branch
+
+Rebuilding an existing PPA branch whose `debian/gbp.conf` still pointed
+`debian-branch` at the Debian branch — e.g. one branched by hand from
+`main`/`debian/unstable` without dbranch — failed: `gbp dch` refused
+("you are not on branch '<x>'") and the codename was wrongly taken from
+gbp.conf (`-D main`). Now the codename is derived from the branch name,
+and the merge stage applies the gbp.conf (`debian-branch` /
+`debian-tag`) and salsa-ci.yml adjustments before `gbp dch` for
+**existing** branches too (idempotent — a no-op on already-adjusted
+branches), so such a branch is fixed up automatically on first rebuild.
+
 ### dbranch: safer bulk run — codename selection, EOL check, confirmation
 
 A no-argument `dbranch rebuild` (bulk mode) is now both safer and more
