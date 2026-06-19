@@ -137,15 +137,20 @@ pub fn rebuild_version(changelog: &str, codename: &str) -> Option<String> {
     Some(format!("{prefix}{}", max_n + 1))
 }
 
-/// Rewrite the top stanza into a clean rebuild entry: header
-/// `<package> (<version>) <codename>; <metadata>`, a single body line
-/// `  * Rebuild for <codename>`, and the stanza's original footer
-/// (the date/maintainer line `gbp dch` finalized). Lower stanzas are
-/// left untouched.
+/// Rewrite the top stanza into a clean rebuild entry, replacing
+/// whatever `gbp dch` generated as the body (which would otherwise be
+/// the whole merge delta) with a synthesized one: header
+/// `<package> (<version>) <codename>; <metadata>`, a `* Rebuild for
+/// <codename>` line, and — when dbranch adjusted packaging files this
+/// run — a single `* Adjust <files> for <codename>` line naming them.
+/// The stanza's original footer (the date/maintainer line `gbp dch`
+/// finalized) is kept; lower stanzas are left untouched. Discarding the
+/// gbp dch body also drops any `UNRELEASED` it may have added.
 pub fn normalize_top_stanza(
     changelog: &str,
     version: &str,
     codename: &str,
+    adjusted: &[String],
 ) -> Result<String, String> {
     let lines: Vec<&str> = changelog.lines().collect();
     let mut i = 0;
@@ -176,14 +181,33 @@ pub fn normalize_top_stanza(
         out.push('\n');
     }
     out.push_str(&format!(
-        "{} ({}) {}; {}\n\n  * Rebuild for {}\n\n{}\n",
-        header.package, version, codename, header.metadata, codename, lines[j]
+        "{} ({}) {}; {}\n\n  * Rebuild for {codename}\n",
+        header.package, version, codename, header.metadata
     ));
+    if !adjusted.is_empty() {
+        out.push_str(&format!(
+            "  * Adjust {} for {codename}\n",
+            join_and(adjusted)
+        ));
+    }
+    out.push('\n');
+    out.push_str(lines[j]);
+    out.push('\n');
     for l in &lines[j + 1..] {
         out.push_str(l);
         out.push('\n');
     }
     Ok(out)
+}
+
+/// Join items in plain English: `a`, `a and b`, `a, b, and c`.
+fn join_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [a] => a.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+    }
 }
 
 #[cfg(test)]
@@ -323,11 +347,14 @@ damo (3.2.8-1~questing+1) questing; urgency=medium
 
     #[test]
     fn normalize_top_stanza_rewrites_version_dist_and_body() {
-        // Simulate the messy entry gbp dch --bpo leaves on top.
+        // Simulate the messy entry gbp dch --bpo leaves on top — body
+        // includes the merged Debian commits, which must be discarded.
         let after_gbp = "\
 damo (3.2.8-1~bpo13+1) questing; urgency=medium
 
-  * Rebuild for stable.
+  [ T ]
+  * Rebuild for trixie-backports.
+  * Debian change one
 
  -- Michel Lind <m@x>  Wed, 17 Jun 2026 18:22:19 +0100
 
@@ -337,7 +364,7 @@ damo (3.2.8-1) unstable; urgency=medium
 
  -- Michel Lind <m@x>  Wed, 17 Jun 2026 17:28:43 +0100
 ";
-        let out = normalize_top_stanza(after_gbp, "3.2.8-1~questing+1", "questing").unwrap();
+        let out = normalize_top_stanza(after_gbp, "3.2.8-1~questing+1", "questing", &[]).unwrap();
         let top: Vec<&str> = out.lines().take(5).collect();
         assert_eq!(top[0], "damo (3.2.8-1~questing+1) questing; urgency=medium");
         assert_eq!(top[1], "");
@@ -348,8 +375,41 @@ damo (3.2.8-1) unstable; urgency=medium
             top[4],
             " -- Michel Lind <m@x>  Wed, 17 Jun 2026 18:22:19 +0100"
         );
+        // The merged Debian commit from the gbp body is gone.
+        assert!(!out.contains("Debian change one"));
+        assert!(!out.contains("trixie-backports"));
         // The Debian stanza below is untouched.
         assert!(out.contains("damo (3.2.8-1) unstable; urgency=medium"));
         assert!(out.contains("  * New upstream version 3.2.8"));
+    }
+
+    #[test]
+    fn normalize_top_stanza_lists_adjusted_files() {
+        let after_gbp = "\
+damo (3.2.8-1~bpo13+1) questing; urgency=medium
+
+  * Rebuild for trixie-backports.
+
+ -- M <m@x>  Wed, 17 Jun 2026 18:22:19 +0100
+";
+        let adjusted = vec!["gbp.conf".to_string(), "salsa-ci.yml".to_string()];
+        let out =
+            normalize_top_stanza(after_gbp, "3.2.8-1~questing+1", "questing", &adjusted).unwrap();
+        let top: Vec<&str> = out.lines().take(5).collect();
+        assert_eq!(top[0], "damo (3.2.8-1~questing+1) questing; urgency=medium");
+        assert_eq!(top[1], "");
+        assert_eq!(top[2], "  * Rebuild for questing");
+        assert_eq!(top[3], "  * Adjust gbp.conf and salsa-ci.yml for questing");
+        assert_eq!(top[4], "");
+    }
+
+    #[test]
+    fn join_and_is_plain_english() {
+        assert_eq!(join_and(&["a".to_string()]), "a");
+        assert_eq!(join_and(&["a".to_string(), "b".to_string()]), "a and b");
+        assert_eq!(
+            join_and(&["a".to_string(), "b".to_string(), "c".to_string()]),
+            "a, b, and c"
+        );
     }
 }

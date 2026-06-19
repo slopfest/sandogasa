@@ -48,6 +48,14 @@ tool answers `--version`/`--help` with exit 0:
   **before** `gbp dch`, for existing branches too — not just new ones.
   We pass `--spawn-editor=never` and normalize the generated stanza
   deterministically afterward (don't depend on gbp's exact output).
+- **`gbp dch`'s body is discarded, not used.** After a merge it lists
+  the *entire merged Debian delta* (every commit), and `--since` can't
+  cleanly scope to "PPA-side changes since the last rebuild" (it either
+  includes the delta or accumulates old rebuild commits). So
+  `normalize_top_stanza` **synthesizes** the body: `* Rebuild for
+  <codename>` plus, when `adjust_branch_packaging` changed packaging
+  files this run, a single `* Adjust <files> for <codename>` line.
+  Discarding gbp's body also drops any `UNRELEASED` it added.
 - **`gbp tag` refuses a dirty tree**, and `debuild -S` leaves a
   generated `debian/files`, so the `tag` stage runs `dh clean` first.
 - The codename is taken from the **branch name** (`codename_from_branch`),

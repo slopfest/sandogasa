@@ -724,8 +724,9 @@ fn merge_stage(
     // gbp.conf's debian-branch must point at this branch (not the
     // Debian branch), or gbp dch refuses ("not on branch <x>"). This
     // is a no-op on an already-adjusted branch, and self-heals one
-    // created outside dbranch.
-    adjust_branch_packaging(ui, repo, target)?;
+    // created outside dbranch. The files it changed are listed in the
+    // rebuild changelog entry.
+    let adjusted = adjust_branch_packaging(ui, repo, target)?;
 
     let version = {
         let text = std::fs::read_to_string(repo.join("debian/changelog"))?;
@@ -741,7 +742,7 @@ fn merge_stage(
     ));
     if !ui.dry_run {
         let text = std::fs::read_to_string(repo.join("debian/changelog"))?;
-        let normalized = changelog::normalize_top_stanza(&text, &version, codename)?;
+        let normalized = changelog::normalize_top_stanza(&text, &version, codename, &adjusted)?;
         std::fs::write(repo.join("debian/changelog"), normalized)?;
     }
     ui.explain_diff(repo, &["debian/changelog"]);
@@ -760,12 +761,15 @@ fn merge_stage(
 /// under `ubuntu/` instead of the default `debian/`), and inject the
 /// salsa-ci.yml PPA-rebuild preset. Idempotent and skipped when a file
 /// is absent — run both when creating a new branch and to fix up an
-/// existing one.
+/// existing one. Returns the display names of the files actually
+/// changed (e.g. `["gbp.conf", "salsa-ci.yml"]`), which the merge stage
+/// lists in the rebuild changelog entry.
 fn adjust_branch_packaging(
     ui: &Ui,
     repo: &Path,
     target: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut adjusted = Vec::new();
     if repo.join("debian/gbp.conf").exists() {
         ui.step(&format!(
             "Adjust gbp.conf (debian-branch, debian-tag) for {target}"
@@ -790,6 +794,7 @@ fn adjust_branch_packaging(
                 ),
                 repo,
             )?;
+            adjusted.push("gbp.conf".to_string());
         }
     }
     if repo.join("debian/salsa-ci.yml").exists() {
@@ -804,9 +809,10 @@ fn adjust_branch_packaging(
                 ),
                 repo,
             )?;
+            adjusted.push("salsa-ci.yml".to_string());
         }
     }
-    Ok(())
+    Ok(adjusted)
 }
 
 /// Apply an in-place text transform to a repo file, returning whether

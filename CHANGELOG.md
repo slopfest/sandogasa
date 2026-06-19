@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### dbranch: synthesize the rebuild changelog body (list adjusted files)
+
+The rebuild changelog entry no longer flattens to just `* Rebuild for
+<codename>` *or* dumps `gbp dch`'s body (which, after merging the
+Debian branch, lists the entire merged Debian delta). `normalize_top_
+stanza` now discards gbp's body and synthesizes a clean one: `* Rebuild
+for <codename>` plus, when dbranch adjusted packaging files this run, a
+single `* Adjust <files> for <codename>` line (e.g. `* Adjust gbp.conf
+and salsa-ci.yml for questing`). So the first rebuild of a branch
+records the gbp.conf/salsa-ci.yml setup; later rebuilds (nothing to
+adjust) just say `* Rebuild for <codename>`. Discarding gbp's body also
+drops any stray `UNRELEASED`.
+
 ### dbranch: rebuild self-heals an unadjusted existing PPA branch
 
 Rebuilding an existing PPA branch whose `debian/gbp.conf` still pointed

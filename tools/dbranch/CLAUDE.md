@@ -47,6 +47,17 @@ version/message), prefer to **normalize the result deterministically**
 afterward rather than depend on the exact upstream output — but still
 show the real upstream command in the narration.
 
+The rebuild changelog entry body is **synthesized, not taken from
+`gbp dch`**: after merging the Debian branch, `gbp dch` lists the
+entire merged Debian delta (every commit), which must not land in the
+rebuild entry. `normalize_top_stanza` discards gbp's body (which also
+drops any `UNRELEASED` it added) and writes `* Rebuild for <codename>`
+plus — only when dbranch changed packaging files this run — a single
+`* Adjust <files> for <codename>` line naming them
+(`adjust_branch_packaging` reports which). It is fine for this to
+differ between the first rebuild of a branch (files adjusted) and
+later ones (nothing to adjust).
+
 ## External tools
 
 dbranch shells out to `git`, `gbp`, `debuild`, and `pbuilder-dist`.
