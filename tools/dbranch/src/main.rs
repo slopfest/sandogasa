@@ -106,6 +106,14 @@ Defaults to `merge` (the others are opt-in for now)."
         #[arg(long, help_heading = "Stages")]
         no_refresh_chroot: bool,
 
+        /// Bulk run: skip the branch-set confirmation prompt.
+        #[arg(short = 'y', long, help_heading = "Bulk (no branches given)")]
+        yes: bool,
+
+        /// Bulk run: include EOL Ubuntu releases (default skips them).
+        #[arg(long, help_heading = "Bulk (no branches given)")]
+        include_eol: bool,
+
         /// Upload stage: target PPA (e.g. `user/name`; `ppa:` optional).
         #[arg(
             long,
@@ -193,6 +201,8 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             nowait,
             refresh_chroot,
             no_refresh_chroot,
+            yes,
+            include_eol,
             ppa,
             upload_target,
             dry_run,
@@ -221,6 +231,8 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 upload_target,
                 source,
                 chroot_refresh,
+                assume_yes: yes,
+                include_eol,
             };
             rebuild::run(&ui, &repo, &opts)
         }

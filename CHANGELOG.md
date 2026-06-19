@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### dbranch: safer bulk run — codename selection, EOL check, confirmation
+
+A no-argument `dbranch rebuild` (bulk mode) is now both safer and more
+deliberate:
+
+- **Selection by Ubuntu codename.** It picks only branches whose
+  codename is a real Ubuntu release (via `ubuntu-distro-info --all`) —
+  `noble`, `ubuntu/questing`, etc. — so it no longer sweeps up the
+  Debian branch, `master`/`main`, Debian suites (`debian/trixie`,
+  `bookworm-backports`), or gbp plumbing. (Replaces the old
+  "every local branch except a few" heuristic.) Bulk mode now requires
+  `ubuntu-distro-info` (from the `distro-info` package).
+- **EOL releases skipped by default.** A codename no longer in
+  `--supported` is end-of-life; those are skipped (with a note).
+  `--include-eol` rebuilds them too — but only locally: it can't be
+  combined with the `upload` stage, since Launchpad rejects uploads to
+  an EOL series' PPA.
+- **Newest release first.** Bulk branches are processed in release
+  order, newest first (oldest last), using `ubuntu-distro-info`'s
+  ordering. A failed stage still aborts the whole run (unchanged), so
+  the newest releases are attempted first.
+- **Confirmation before work.** The resolved branch set is printed and
+  confirmed (`[Y/n]`, default yes) before anything runs. `--yes`/`-y`
+  skips the prompt for scripted runs; `--dry-run` just prints the set;
+  a non-terminal stdin without `--yes` is refused with a remedy rather
+  than run unconfirmed.
+
+`rebuild --help` gains a **Bulk** section for `--yes`/`--include-eol`.
+
 ### dbranch: `--explain` shows a diff of each hand-edit
 
 Under `--explain`, after dbranch edits a file itself — resolving the

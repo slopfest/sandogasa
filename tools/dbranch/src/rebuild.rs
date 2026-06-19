@@ -12,7 +12,7 @@
 //! dbranch is run from the Debian branch (whatever is checked out —
 //! `master`, `debian/unstable`, …); that branch is the merge source.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::git;
 use crate::plan::{self, changelog_commit_message};
 use crate::ui::Ui;
-use crate::{changelog, gbpconf, salsaci};
+use crate::{changelog, distroinfo, gbpconf, salsaci};
 
 /// How often to re-poll `glab ci status` while a pipeline runs.
 const POLL_INTERVAL: Duration = Duration::from_secs(8);
@@ -123,6 +123,11 @@ pub struct Options {
     pub source: Option<String>,
     /// Build stage: whether to refresh the pbuilder base chroot first.
     pub chroot_refresh: ChrootRefresh,
+    /// Bulk (no-argument) run: skip the confirmation prompt.
+    pub assume_yes: bool,
+    /// Bulk (no-argument) run: include EOL Ubuntu releases (default
+    /// skips them).
+    pub include_eol: bool,
 }
 
 /// Run the rebuild workflow over the selected branches.
@@ -131,6 +136,15 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
     if opts.stages.upload && opts.upload_target.is_none() {
         return Err(
             "the upload stage needs a target: pass --ppa <name> or --upload-target <host>".into(),
+        );
+    }
+    // A bulk --include-eol run is for local rebuilds: Launchpad rejects
+    // uploads to an EOL series' PPA, so the two can't combine.
+    if opts.branches.is_empty() && opts.include_eol && opts.stages.upload {
+        return Err(
+            "--include-eol can't be combined with the upload stage: EOL Ubuntu \
+             releases can't be uploaded to a PPA — rebuild them locally instead"
+                .into(),
         );
     }
     if let Some(s) = &opts.source
@@ -170,9 +184,7 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
     let all = git::local_branches(repo)?;
 
     let targets = if opts.branches.is_empty() {
-        // Repo config overrides home config.
-        let cfg = gbpconf::read_repo(repo).or(gbpconf::read_home());
-        bulk_targets(&source, &all, &cfg)
+        resolve_bulk_targets(ui, &source, &all, opts.include_eol, opts.assume_yes)?
     } else {
         opts.branches.clone()
     };
@@ -303,19 +315,109 @@ pub fn fixup(
     Ok(())
 }
 
-/// All existing PPA branches: everything except the Debian branch and
-/// gbp's plumbing branches (`upstream-branch` and the pristine-tar
-/// branch). Pure — `cfg` is the effective gbp config.
-fn bulk_targets(source: &str, all: &[String], cfg: &gbpconf::GbpConfig) -> Vec<String> {
-    let upstream = cfg
-        .upstream_branch
-        .clone()
-        .unwrap_or_else(|| "upstream".to_string());
-    let mut exclude = vec![source.to_string(), upstream];
-    if cfg.pristine_tar.unwrap_or(false) {
-        exclude.push("pristine-tar".to_string());
+/// Resolve the branch set for a no-argument (bulk) run: the local PPA
+/// branches (codename is a real Ubuntu release), with EOL releases
+/// skipped unless `include_eol`. Prints the resolved list (marking
+/// EOL) and, on an interactive real run, asks for confirmation before
+/// returning. `--dry-run` and `--yes` skip the prompt; a non-terminal
+/// stdin without `--yes` is refused with a remedy rather than run
+/// unconfirmed.
+fn resolve_bulk_targets(
+    ui: &Ui,
+    source: &str,
+    all: &[String],
+    include_eol: bool,
+    assume_yes: bool,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let release_order = distroinfo::all_codenames()?;
+    let supported = distroinfo::supported_codenames()?;
+    // (branch, is_eol), newest release first.
+    let selected = select_ppa_branches(all, source, &release_order, &supported);
+
+    let eol_count = selected.iter().filter(|(_, eol)| *eol).count();
+    let targets: Vec<String> = selected
+        .iter()
+        .filter(|(_, eol)| include_eol || !*eol)
+        .map(|(b, _)| b.clone())
+        .collect();
+
+    if targets.is_empty() {
+        if eol_count > 0 && !include_eol {
+            return Err(format!(
+                "all {eol_count} candidate PPA branch(es) are EOL; pass --include-eol to rebuild them"
+            )
+            .into());
+        }
+        return Err("no PPA branches found to rebuild".into());
     }
-    plan::ppa_branches(all, &exclude)
+
+    // Show the resolved set, newest release first, marking EOL ones.
+    eprintln!("Bulk rebuild — {} branch(es), newest first:", targets.len());
+    for (b, eol) in &selected {
+        if !include_eol && *eol {
+            continue;
+        }
+        eprintln!("  {b}{}", if *eol { "  (EOL)" } else { "" });
+    }
+    if !include_eol && eol_count > 0 {
+        let skipped: Vec<&str> = selected
+            .iter()
+            .filter(|(_, eol)| *eol)
+            .map(|(b, _)| b.as_str())
+            .collect();
+        eprintln!(
+            "Skipping {eol_count} EOL release(s): {} (use --include-eol)",
+            skipped.join(", ")
+        );
+    }
+
+    // Confirm before doing real work. Dry-run and --yes proceed
+    // silently; a non-terminal stdin is refused rather than hung on.
+    if ui.dry_run || assume_yes {
+        return Ok(targets);
+    }
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err(
+            "refusing to bulk-rebuild without confirmation; pass --yes (stdin is not a terminal)"
+                .into(),
+        );
+    }
+    if !ui.confirm(&format!("Rebuild these {} branch(es)?", targets.len())) {
+        return Err("aborted".into());
+    }
+    Ok(targets)
+}
+
+/// The Ubuntu PPA targets among the local branches — those whose
+/// codename ([`plan::codename_from_branch`]) is a real Ubuntu release —
+/// as `(branch, is_eol)` ordered **newest release first** (by position
+/// in `release_order`, which is oldest-first). `source` and any
+/// non-Ubuntu branch (Debian suites, `master`/`main`, plumbing) are
+/// excluded; `is_eol` is true when the codename is no longer supported.
+fn select_ppa_branches(
+    all: &[String],
+    source: &str,
+    release_order: &[String],
+    supported: &HashSet<String>,
+) -> Vec<(String, bool)> {
+    let position: HashMap<&str, usize> = release_order
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.as_str(), i))
+        .collect();
+    let mut selected: Vec<(usize, String, bool)> = all
+        .iter()
+        .filter(|b| *b != source)
+        .filter_map(|b| {
+            let codename = plan::codename_from_branch(b);
+            position
+                .get(codename)
+                .map(|&pos| (pos, b.clone(), !supported.contains(codename)))
+        })
+        .collect();
+    // Newest release first; ties (two branches, same codename) by name.
+    selected.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    selected.into_iter().map(|(_, b, eol)| (b, eol)).collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1069,6 +1171,8 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1083,6 +1187,8 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1098,6 +1204,8 @@ mod tests {
             upload_target: None,
             source: Some("noble".to_string()),
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1112,6 +1220,8 @@ mod tests {
             upload_target: None,
             source: Some("does-not-exist".to_string()),
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1154,6 +1264,8 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -1182,6 +1294,8 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -1292,6 +1406,8 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1306,6 +1422,8 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1324,6 +1442,8 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), p, &opts).unwrap();
     }
@@ -1341,6 +1461,8 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1358,6 +1480,8 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1375,6 +1499,8 @@ mod tests {
             upload_target: Some("ppa:michel/sugarjar".to_string()),
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1392,6 +1518,8 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1409,6 +1537,8 @@ mod tests {
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -1471,17 +1601,62 @@ E: damo: an-error\n";
     }
 
     #[test]
-    fn bulk_targets_excludes_source_and_plumbing() {
-        let all: Vec<String> = ["debian/unstable", "upstream", "pristine-tar", "noble"]
+    fn bulk_include_eol_rejects_upload_stage() {
+        let dir = setup();
+        let opts = Options {
+            branches: vec![], // bulk
+            stages: Stages {
+                upload: true,
+                ..Stages::default()
+            },
+            nowait: false,
+            upload_target: Some("ppa:me/x".to_string()),
+            source: None,
+            chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: true,
+            include_eol: true,
+        };
+        assert!(run(&ui_dry(), dir.path(), &opts).is_err());
+    }
+
+    #[test]
+    fn select_ppa_branches_picks_ubuntu_codenames_newest_first() {
+        // A mix like archlinux-keyring: Ubuntu codenames (bare and
+        // namespaced), Debian suites, plumbing, and the source.
+        let all: Vec<String> = [
+            "debian/unstable",
+            "master",
+            "upstream",
+            "pristine-tar",
+            "debian/trixie",
+            "bookworm-backports",
+            "jammy",           // Ubuntu LTS, supported
+            "oracular",        // Ubuntu, EOL
+            "ubuntu/questing", // Ubuntu, supported (namespaced)
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        // release order, oldest first (as `ubuntu-distro-info --all` gives).
+        let order: Vec<String> = ["jammy", "noble", "oracular", "questing"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let cfg = gbpconf::GbpConfig {
-            debian_branch: None,
-            upstream_branch: Some("upstream".to_string()),
-            pristine_tar: Some(true),
-        };
-        assert_eq!(bulk_targets("debian/unstable", &all, &cfg), vec!["noble"]);
+        let supported = ["jammy", "noble", "questing"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let selected = select_ppa_branches(&all, "debian/unstable", &order, &supported);
+        // Only Ubuntu-codename branches, newest release first, with EOL
+        // flags; Debian / plumbing / source excluded.
+        assert_eq!(
+            selected,
+            vec![
+                ("ubuntu/questing".to_string(), false),
+                ("oracular".to_string(), true),
+                ("jammy".to_string(), false),
+            ]
+        );
     }
 
     #[test]
@@ -1494,6 +1669,8 @@ E: damo: an-error\n";
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
     }
@@ -1510,6 +1687,8 @@ E: damo: an-error\n";
             upload_target: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
+            assume_yes: false,
+            include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
     }

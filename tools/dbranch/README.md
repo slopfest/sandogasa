@@ -46,6 +46,7 @@ dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
     [--source <branch>] [--nowait]
     [--refresh-chroot | --no-refresh-chroot]
     [--ppa <name> | --upload-target <host>]
+    [--yes] [--include-eol]
     [--dry-run] [--explain] [--quiet]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
 ```
@@ -63,14 +64,25 @@ checked out** (e.g. `master` or `debian/unstable`) — that branch is
 the merge source. (Use `--source <branch>` to merge from a specific
 branch instead, so you needn't check it out first.) Name the PPA
 branch(es) to rebuild; a branch that doesn't exist yet is created from
-the Debian branch. With no branches given it rebuilds every local
-branch except the current one and gbp's `upstream` / pristine-tar
-branches.
+the Debian branch.
+
+With **no branches given** (bulk mode), it rebuilds every local branch
+whose codename is a real Ubuntu release — `noble`, `ubuntu/questing`,
+etc. (looked up via `ubuntu-distro-info`) — so the Debian branch,
+`master`/`main`, Debian suites (`debian/trixie`, `bookworm-backports`),
+and gbp plumbing are left out. End-of-life releases are **skipped** by
+default (use `--include-eol` to rebuild them locally — it can't be
+combined with `upload`, since EOL PPAs reject uploads). Before doing
+anything it prints the resolved set and asks for confirmation
+(`[Y/n]`); `--yes`/`-y` skips the prompt, and a non-interactive run
+without `--yes` is refused rather than run blind. (Bulk mode needs the
+`distro-info` package.)
 
 ```
 $ dbranch rebuild noble ubuntu/questing
 $ dbranch rebuild noble,oracular        # repeatable or comma-separated
-$ dbranch rebuild                        # all existing PPA branches
+$ dbranch rebuild                        # all live Ubuntu PPA branches
+$ dbranch rebuild --include-eol --stage build  # local rebuild incl. EOL
 ```
 
 The codename is taken from an existing branch's `debian/gbp.conf`

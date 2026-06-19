@@ -6,6 +6,7 @@
 //! scratch-build.
 
 pub mod changelog;
+pub mod distroinfo;
 pub mod gbpconf;
 pub mod git;
 pub mod plan;
