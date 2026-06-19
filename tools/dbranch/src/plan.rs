@@ -129,11 +129,36 @@ pub fn gbp_dch_argv(codename: &str) -> Vec<String> {
     ])
 }
 
-/// `gbp import-orig --uscan --pristine-tar` — pull the new upstream
-/// release via uscan and import it onto the Debian branch, recording
-/// the tarball with pristine-tar. The head of the `update` flow.
+/// `gbp import-orig --uscan --pristine-tar --no-interactive` — pull the
+/// new upstream release via uscan and import it onto the Debian branch,
+/// recording the tarball with pristine-tar. The head of the `update`
+/// flow. `--no-interactive` is essential: dbranch runs gbp with a null
+/// stdin, so its "What is the upstream version?" prompt (raised when the
+/// tarball version is ambiguous, e.g. a `0~`-mangled date version) would
+/// otherwise hit `EOFError` and abort. With it, gbp uses its own guessed
+/// version (taken from the uscan tarball name) without asking.
 pub fn gbp_import_orig_argv() -> Vec<String> {
-    argv(&["gbp", "import-orig", "--uscan", "--pristine-tar"])
+    argv(&[
+        "gbp",
+        "import-orig",
+        "--uscan",
+        "--pristine-tar",
+        "--no-interactive",
+    ])
+}
+
+/// Whether `gbp import-orig` failed only because the upstream is already
+/// present — gbp aborts with `Upstream tag '<tag>' already exists` when
+/// the version's tag is in the repo. Matching this (case-insensitive)
+/// lets the `update` flow self-heal a run that imported the upstream but
+/// died before writing the changelog: skip the import, regenerate the
+/// changelog, rather than dead-ending. The match is deliberately scoped
+/// to the *tag* message and **not** bare `already exists`, because a
+/// failed download also reports `Failed to download …: … already exists`
+/// — that is a real error we must not paper over.
+pub fn import_already_done(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    lower.contains("upstream tag") && lower.contains("already exists")
 }
 
 /// `gbp dch -c -R -D unstable --spawn-editor=never` — generate,
@@ -376,6 +401,26 @@ mod tests {
     }
 
     #[test]
+    fn import_already_done_matches_only_the_tag_message() {
+        // The upstream-tag-exists abort: recoverable.
+        assert!(import_already_done(
+            "gbp:error: Upstream tag 'upstream/0_20260612' already exists"
+        ));
+        // Case-insensitive.
+        assert!(import_already_done("UPSTREAM TAG 'x' ALREADY EXISTS\n"));
+        // A failed download also says "already exists" but is a real
+        // error — must NOT be treated as already-imported.
+        assert!(!import_already_done(
+            "gbp:error: Failed to download https://e/x.tar.gz: ../x.tar.gz already exists"
+        ));
+        // Other unrelated failures.
+        assert!(!import_already_done(
+            "gbp:error: uscan failed: no watch file"
+        ));
+        assert!(!import_already_done(""));
+    }
+
+    #[test]
     fn debian_tag_format_uses_branch_namespace() {
         assert_eq!(debian_tag_format("ubuntu/questing"), "ubuntu/%(version)s");
         // No namespace → default to `ubuntu`.
@@ -469,7 +514,13 @@ mod tests {
         assert_eq!(gbp_tag_argv(), ["gbp", "tag"]);
         assert_eq!(
             gbp_import_orig_argv(),
-            ["gbp", "import-orig", "--uscan", "--pristine-tar"]
+            [
+                "gbp",
+                "import-orig",
+                "--uscan",
+                "--pristine-tar",
+                "--no-interactive"
+            ]
         );
         assert_eq!(
             gbp_dch_release_argv(),

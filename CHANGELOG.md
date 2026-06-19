@@ -6,17 +6,24 @@
 
 `dbranch update [<branch>]` updates the Debian branch
 (`master`/`main`/`debian/unstable`, default the current branch) to a
-new upstream: `gbp import-orig --uscan --pristine-tar` then
-`gbp dch -c -R`, then the shared `build → lint → push → upload → tag`
-tail. Differences from `rebuild`:
+new upstream: `gbp import-orig --uscan --pristine-tar --no-interactive`
+then `gbp dch -c -R -D unstable`, then the shared
+`build → lint → push → upload → tag` tail. Differences from `rebuild`:
 
-- The changelog is **not** normalized — `gbp dch -c -R`'s entry stands
-  (a genuine new-upstream version, no `~codename+N` suffix), so commits
-  since the last release show up as bullets.
+- The changelog is **not** normalized — `gbp dch`'s entry stands (a
+  genuine new-upstream version, no `~codename+N` suffix), so commits
+  since the last release show up as bullets. The distribution is pinned
+  to `unstable` (`-D`) so dch's release heuristic can't substitute the
+  host's own (e.g. an Ubuntu devel codename), which would fail Debian CI.
 - The build suite is decoupled from the changelog distribution: builds
   against **testing** by default, `--build-suite unstable` to switch.
 - Upload defaults to dput's own target (the Debian archive) with no
   flag; `--upload-target mentors` for a vetted upload (no `--ppa`).
+- Self-heals a partial run: if a previous `update` imported the upstream
+  but failed before writing the changelog, `gbp import-orig` refuses to
+  re-import — the import stage now treats that one refusal as success and
+  continues to `gbp dch`, so a plain re-run recovers. Other failures
+  still propagate.
 
 Stages: `import` (head) + `build`/`lint`/`push`/`upload`/`tag`; default
 `import`, `all` = `import,build,lint,push`. Needs `devscripts` (uscan)

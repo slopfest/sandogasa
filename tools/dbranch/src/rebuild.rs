@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::git;
 use crate::plan::{self, changelog_commit_message};
-use crate::ui::Ui;
+use crate::ui::{StageFailure, Ui};
 use crate::{changelog, distroinfo, gbpconf, salsaci};
 
 /// How often to re-poll `glab ci status` while a pipeline runs.
@@ -445,9 +445,41 @@ pub fn update(
 fn import_stage(ui: &Ui, repo: &Path, branch: &str) -> Result<(), Box<dyn std::error::Error>> {
     ensure_on_branch(ui, repo, branch)?;
     ui.step(&format!("Import the new upstream release onto {branch}"));
-    ui.run_required(&plan::gbp_import_orig_argv(), repo)?;
+    import_orig(ui, repo)?;
     ui.step("Generate the new-version changelog entry");
     ui.run_required(&plan::gbp_dch_release_argv(), repo)
+}
+
+/// Run `gbp import-orig --uscan --pristine-tar`, self-healing the
+/// "upstream already imported" case. If an earlier `update` run imported
+/// the new upstream but failed before the changelog was written (e.g. a
+/// bad `gbp dch` that got reverted), gbp refuses to re-import. Rather
+/// than dead-end, treat that one refusal as success and let the run fall
+/// through to the changelog step. Any other failure still propagates.
+fn import_orig(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let argv = plan::gbp_import_orig_argv();
+    let (code, output) = ui.run_capture(&argv, repo)?;
+    if code == 0 {
+        // run_capture buffers the tool's chatter; replay it so the
+        // import stays transparent (nothing to show under --dry-run).
+        if !ui.quiet {
+            print!("{output}");
+        }
+        return Ok(());
+    }
+    // A real failure: always surface what gbp said before deciding.
+    print!("{output}");
+    if plan::import_already_done(&output) {
+        eprintln!(
+            "note: upstream already imported — keeping the existing \
+             import and regenerating the changelog"
+        );
+        return Ok(());
+    }
+    Err(Box::new(StageFailure {
+        command: argv.join(" "),
+        code,
+    }))
 }
 
 /// Check out `branch` unless it's already current (a no-op checkout

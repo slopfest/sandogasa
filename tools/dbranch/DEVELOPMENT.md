@@ -56,6 +56,29 @@ tool answers `--version`/`--help` with exit 0:
   <codename>` plus, when `adjust_branch_packaging` changed packaging
   files this run, a single `* Adjust <files> for <codename>` line.
   Discarding gbp's body also drops any `UNRELEASED` it added.
+- **`gbp import-orig` prompts for the upstream version** when it can't
+  be sure of it (e.g. a `0~`-mangled date version like `0~20260612`,
+  where the upstream tag is the bare date) — `What is the upstream
+  version? [<guess>]`. dbranch runs gbp with a **null stdin** (via
+  `Command::output()`), so that prompt hits `EOFError` and aborts the
+  whole import. The fix is **`--no-interactive`**: gbp then uses its own
+  guessed version (from the uscan tarball name, which is correct) without
+  asking. Same flag also stops it prompting for the package name.
+- **`gbp import-orig` refuses to re-import** an already-imported
+  upstream: with `--no-interactive` it reaches the tag check and aborts
+  with `Upstream tag 'upstream/<v>' already exists`.
+  `plan::import_already_done` matches that message specifically — **not**
+  bare `already exists`, because a failed download also reports `Failed
+  to download …: … already exists`, which is a real error we must not
+  paper over. The `update` flow self-heals the tag case: it captures
+  import-orig's output and, if `plan::import_already_done` matches the
+  `already imported` phrase, treats the refusal as success and falls
+  through to `gbp dch` — so a run that imported the upstream but died
+  before writing the changelog (e.g. a bad `gbp dch` that got reverted)
+  recovers on a plain re-run instead of dead-ending. The phrase match is
+  the version-dependent bit; it's a deliberate exception to the
+  "normalize, don't parse output" rule because gbp offers no
+  machine-readable signal, and any other failure still propagates.
 - **`gbp tag` refuses a dirty tree**, and `debuild -S` leaves a
   generated `debian/files`, so the `tag` stage runs `dh clean` first.
 - The codename is taken from the **branch name** (`codename_from_branch`),
@@ -112,8 +135,12 @@ release) is the not-EOL set; the complement within `--all` is EOL.
   in-merge adjust), `push` (`git push -u` then plain `git push`), chroot
   create/refresh, and host-key trust are all idempotent. The **`merge`
   stage is not** — it generates a changelog entry, so re-running it from
-  the top can add a duplicate. Resume a failed run at the stage that
-  stopped via `--stage`, not from the top.
+  the top can add a duplicate. The **`import` stage** (update) is *partly*
+  self-healing: `gbp import-orig` won't re-import (see above), so a
+  re-run picks up at the changelog step — but `gbp dch` itself isn't
+  idempotent, so a re-run *after* a fully-successful import can still add
+  a stray stanza. Resume a failed run at the stage that stopped via
+  `--stage`, not from the top.
 - **Bulk is local-branch only, by design.** A local branch *is* the
   opt-in: check one out to include it in bulk, delete it to drop it.
   Remote-inclusive bulk was considered and rejected.
