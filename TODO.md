@@ -2,13 +2,23 @@
 
 ## dbranch
 
-- (2026-06-19) Remote-inclusive bulk mode. Bulk `rebuild` (no args)
-  currently considers only *local* branches. A variant that also
-  surfaces PPA branches present only on `origin` (reuse the remote-only
-  handling from explicit targets + the codename selection) would make
-  the confirm + EOL check cover every PPA branch, not just checked-out
-  ones. Decide the flag/default (e.g. include remote by default, or an
-  opt-in).
+- (2026-06-19) Target-type / version-scheme abstraction — the remaining
+  big piece. Live-test it when updating `archlinux-keyring`'s
+  `debian/trixie`. A per-target notion driving `changelog::
+  rebuild_version` + `normalize_top_stanza`: Ubuntu PPA `~<codename>+N`;
+  Debian backports `~bpoN+M`; proposed-updates `+debNuM`;
+  unstable/testing = no suffix. Branch taxonomy → target: `master`/
+  `main`/`debian/unstable` → Debian unstable (`dput` default, or
+  mentors for a new pkg / proposed NMU); `ubuntu/*` or an Ubuntu-release
+  codename → PPA; `debian/<codename>` (e.g. archlinux-keyring's
+  `debian/trixie`) → special, kept current in stable. Also rename the
+  `codename` value → `distribution` (what pbuilder/gbp/changelog call
+  it), keeping "codename" only for the `~<codename>` version suffix.
+
+Note (2026-06-19): bulk is deliberately **local-branch only** — a local
+branch *is* the opt-in. To include a release, check it out once; to
+drop it, delete the local branch. (Remote-inclusive bulk was
+considered and rejected.)
 
 Done (shipped): the `push`/`upload`/`tag` stages, per-job CI watch
 progress, `git push -u`→plain-push simplification, `--quiet` mode, the

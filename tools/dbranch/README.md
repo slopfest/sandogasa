@@ -78,6 +78,11 @@ anything it prints the resolved set and asks for confirmation
 without `--yes` is refused rather than run blind. (Bulk mode needs the
 `distro-info` package.)
 
+Bulk considers only **local** branches — a local branch is the opt-in.
+To include a release in bulk runs, check it out once; to drop it,
+delete the local branch (it stays on `origin`). Name it explicitly to
+rebuild it without checking it out.
+
 ```
 $ dbranch rebuild noble ubuntu/questing
 $ dbranch rebuild noble,oracular        # repeatable or comma-separated
