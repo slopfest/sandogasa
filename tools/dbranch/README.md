@@ -164,7 +164,10 @@ a PPA branch (a `~<codename>+<N>` suffix is stripped first).
   tutorial.
 - `--explain` **runs** the workflow but narrates each command and
   pauses for Enter before running it (Ctrl-C aborts), so you can step
-  through, learn it, or sanity-check a real run.
+  through, learn it, or sanity-check a real run. After a step dbranch
+  edits a file itself (the changelog conflict/normalization, the
+  gbp.conf / salsa-ci.yml tweaks) it shows `git diff` of the change
+  and pauses, so you see what it did before it's committed.
 - `--explain --dry-run` together is a pure walkthrough.
 - `--quiet` (`-q`) is the opposite end: it suppresses the tools'
   output, leaving only dbranch's step headings, and replays a

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### dbranch: `--explain` shows a diff of each hand-edit
+
+Under `--explain`, after dbranch edits a file itself — resolving the
+`debian/changelog` conflict, normalizing the rebuild entry, or the
+gbp.conf / salsa-ci.yml tweaks — it now runs `git diff` on that file
+and pauses, so you see exactly what changed before it's committed
+(`git diff` being a real command you could run yourself). No effect
+outside `--explain` or under `--dry-run` (nothing is edited there).
+
 ### dbranch: refresh the pbuilder chroot before building; group `--help`
 
 The build stage now refreshes the codename's pbuilder base chroot

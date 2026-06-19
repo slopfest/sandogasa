@@ -613,6 +613,7 @@ fn merge_stage(
             if !ui.dry_run {
                 resolve_changelog(repo)?;
             }
+            ui.explain_diff(repo, &["debian/changelog"]);
             ui.run_required(&plan::add_changelog_argv(), repo)?;
             ui.run_required(&plan::commit_merge_argv(), repo)?;
         }
@@ -635,6 +636,7 @@ fn merge_stage(
         let normalized = changelog::normalize_top_stanza(&text, &version, codename)?;
         std::fs::write(repo.join("debian/changelog"), normalized)?;
     }
+    ui.explain_diff(repo, &["debian/changelog"]);
     ui.run_required(
         &plan::commit_changelog_argv(&changelog_commit_message(&version)),
         repo,
@@ -672,6 +674,7 @@ fn adjust_branch_packaging(
             ))
         })?;
         if changed {
+            ui.explain_diff(repo, &["debian/gbp.conf"]);
             ui.run_required(
                 &plan::commit_file_argv(
                     &format!("Adjust gbp.conf for {target}"),
@@ -685,6 +688,7 @@ fn adjust_branch_packaging(
         ui.step(&format!("Adjust salsa-ci.yml for {target}"));
         let changed = edit_file(ui, repo, "debian/salsa-ci.yml", salsaci::adjust_salsa_ci)?;
         if changed {
+            ui.explain_diff(repo, &["debian/salsa-ci.yml"]);
             ui.run_required(
                 &plan::commit_file_argv(
                     &format!("Adjust salsa-ci.yml for {target}"),

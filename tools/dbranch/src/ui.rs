@@ -83,13 +83,38 @@ impl Ui {
         }
     }
 
+    /// In `--explain` (real runs only), show `git diff` for the paths
+    /// dbranch just edited by hand — resolving the changelog conflict,
+    /// normalizing the entry, the gbp.conf / salsa-ci.yml tweaks — and
+    /// pause, so the user sees the change before it's committed. `git
+    /// diff` is itself a real command they can run to see the same
+    /// thing. No-op outside `--explain` and under `--dry-run` (nothing
+    /// was edited).
+    pub fn explain_diff(&self, repo: &Path, paths: &[&str]) {
+        if !self.explain || self.dry_run {
+            return;
+        }
+        let _ = Command::new("git")
+            .args(["--no-pager", "diff", "--"])
+            .args(paths)
+            .current_dir(repo)
+            .status();
+        self.pause_with("[Enter to continue]");
+    }
+
     /// In `--explain`, wait for the user to press Enter before
     /// running the command just shown (a step-through walkthrough).
     /// A non-interactive stdin (EOF) continues without blocking.
     fn pause(&self) {
+        self.pause_with("[Enter to run, Ctrl-C to abort]");
+    }
+
+    /// Print `prompt` to stderr and wait for a line on stdin (EOF
+    /// continues without blocking).
+    fn pause_with(&self, prompt: &str) {
         use std::io::Write;
         let mut err = std::io::stderr();
-        let _ = write!(err, "    [Enter to run, Ctrl-C to abort] ");
+        let _ = write!(err, "    {prompt} ");
         let _ = err.flush();
         let mut line = String::new();
         let _ = std::io::stdin().read_line(&mut line);
