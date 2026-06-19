@@ -438,6 +438,23 @@ pub fn update(
     repo: &Path,
     opts: &UpdateOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Uploading to the dput default (the Debian archive) needs a Debian
+    // host — Ubuntu's dput doesn't understand the unstable/archive
+    // target. The import/build/lint stages are fine on Ubuntu, so gate
+    // only the default-target upload; an explicit `--upload-target`
+    // (e.g. mentors) is the user's call and exempt. A dry-run executes
+    // nothing, so it's exempt too.
+    if !ui.dry_run && opts.stages.upload && opts.upload_target.is_none() && !host::is_debian() {
+        let host = host::os_release_id().unwrap_or_else(|| "unknown".to_string());
+        return Err(format!(
+            "uploading to the default dput target (the Debian archive) needs a \
+             Debian host — Ubuntu's dput doesn't understand it; this host is \
+             '{host}'. Run the upload stage from a Debian environment, or pass \
+             --upload-target <host> for a different destination."
+        )
+        .into());
+    }
+
     if !ui.dry_run {
         // gbp drives import-orig, dch, and tag; uscan + pristine-tar are
         // the import-orig backends.

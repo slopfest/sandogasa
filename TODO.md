@@ -17,22 +17,16 @@
   The build-suite decoupling means a target has both a changelog
   *distribution* and a *build suite*, on top of the version scheme.
 
-- (2026-06-19) Proposed-updates: remaining bits. The changelog/version
-  (`~debNuM`, tilde — sorts older), `gbp dch --stable`, salsa-ci preset
-  (RELEASE=codename, no backports), and the whole-run **Debian-host
-  gate** are done (in rebuild, auto-detected for `debian/<codename>`).
-  Still to do:
-  - The analogous **`update` (to-unstable) upload guard**: hard-fail on
-    a non-Debian host when uploading to the default target; exempt an
-    explicit `--upload-target`. (`update`'s changelog gen works on
-    Ubuntu, so gate only the upload — unlike proposed-updates.) Reuse
-    `host::is_debian`. See DEVELOPMENT.md.
-  - (low priority) Optional per-package waiving of a specific salsa-ci
-    job (e.g. `test-uscan` fails on trixie when the watch file uses a
-    uscan standard newer than trixie's uscan). Not blocking: `push`
-    (CI watch) is separate from `upload`/`tag`, so a red job doesn't
-    stop an upload. Keep it a targeted job-skip, not a blanket
-    relaxation (proposed-updates should face the normal checks).
+- (2026-06-19, low priority) Optional per-package waiving of a specific
+  salsa-ci job (e.g. `test-uscan` fails on trixie when the watch file
+  uses a uscan standard newer than trixie's uscan). Not blocking: `push`
+  (CI watch) is separate from `upload`/`tag`, so a red job doesn't stop
+  an upload. Keep it a targeted job-skip, not a blanket relaxation
+  (proposed-updates should face the normal checks).
+
+  (Proposed-updates themselves — `~debNuM` version, `gbp dch --stable`,
+  salsa-ci preset, Debian-host gate, dput-default upload — and the
+  `update` default-target upload guard are all done.)
 
 Note (2026-06-19): bulk is deliberately **local-branch only** — a local
 branch *is* the opt-in. To include a release, check it out once; to

@@ -101,11 +101,13 @@ the captured dput has no stdin, so an un-seeded host fails the stage
 (unstable). This works **only on a Debian host** — Ubuntu's `dput` does
 not understand the `unstable`/Debian-archive target — so the upload
 stage must be run from a Debian environment (import/build/lint are fine
-on Ubuntu). The host check (`host::is_debian`) already gates the whole
-proposed-update flow (see the rebuild target-type note above). The
-analogous guard for `update`'s upload — hard-fail on a non-Debian host
-when uploading to the default target, exempting an explicit
-`--upload-target` — is **not wired yet**. See TODO.md.
+on Ubuntu). The host check (`host::is_debian`) gates the whole proposed-update flow
+(see the rebuild target-type note above) and, for `update`, the
+default-target upload: `update` hard-fails early on a non-Debian host
+when the `upload` stage is selected with no `--upload-target`.
+`import`/`build`/`lint` run fine on Ubuntu (only the upload is gated,
+unlike proposed-updates where the whole flow is), an explicit
+`--upload-target` is exempt, and a `--dry-run` is exempt.
 
 ### Launchpad / EOL
 

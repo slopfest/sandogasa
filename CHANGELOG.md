@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### dbranch: `update` upload to the archive requires a Debian host
+
+`dbranch update`'s upload stage `dput`s to the Debian archive
+(unstable), which only works on a Debian host — Ubuntu's `dput` doesn't
+understand that target. It now hard-fails early on a non-Debian host
+when uploading to the **default** target. `import`/`build`/`lint` are
+unaffected (they run fine on Ubuntu), an explicit `--upload-target`
+(e.g. `mentors`) is exempt, and a `--dry-run` is exempt.
+
 ### dbranch: fix a missing blank line in changelog conflict resolution
 
 When resolving a `debian/changelog` merge conflict, the incoming Debian
