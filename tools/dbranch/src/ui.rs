@@ -117,6 +117,23 @@ impl Ui {
         !matches!(line.trim().to_ascii_lowercase().as_str(), "n" | "no")
     }
 
+    /// Ask a yes/no question defaulting to **no** (`[y/N]`) — for a
+    /// safety prompt where the cautious choice is *not* to proceed (e.g.
+    /// "the package isn't in this PPA — upload anyway?"). Only `y`/`yes`
+    /// is a yes; empty input / EOF → no. The caller is responsible for
+    /// only prompting when interactive.
+    pub fn confirm_default_no(&self, question: &str) -> bool {
+        use std::io::Write;
+        let mut err = std::io::stderr();
+        let _ = write!(err, "{question} [y/N] ");
+        let _ = err.flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return false;
+        }
+        matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+    }
+
     /// In `--explain`, wait for the user to press Enter before
     /// running the command just shown (a step-through walkthrough).
     /// A non-interactive stdin (EOF) continues without blocking.

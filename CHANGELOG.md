@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### dbranch: pre-flight PPA uploads against Launchpad
+
+Before a PPA upload (`--ppa`/`ppa:` target), dbranch now checks via the
+Launchpad API (`curl … getPublishedSources`) whether the package is
+already published in that PPA. If it isn't — or the PPA can't be
+verified (a typo'd name 404s) — it asks to confirm before uploading
+(default **no**), catching an accidental wrong-PPA upload. A genuine
+first upload hits this once and is confirmed, like trusting a new SSH
+host. The prompt fires only on an interactive run; `--yes` or a non-tty
+warns and proceeds, and `--dry-run`/`--explain` just narrate the `curl`.
+A missing `curl` skips the check rather than blocking the upload. Only
+PPA targets are checked — the Debian-archive default and explicit
+`--upload-target` hosts have no equivalent pre-check.
+
 ### Workspace: update URL
 The repo was renamed from `fedora-cve-triage` to `sandogasa`, with
 `fedora-cve-triage` now only one of the many tools and library crates.

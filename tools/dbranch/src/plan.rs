@@ -58,6 +58,14 @@ pub fn ppa_target(ppa: &str) -> String {
     format!("ppa:{}", ppa.strip_prefix("ppa:").unwrap_or(ppa))
 }
 
+/// Split a dput target into a Launchpad `(owner, ppa_name)` when it's a
+/// PPA target (`ppa:owner/name` → `("owner", "name")`); `None` for a
+/// plain dput host (`mentors`, …) or the default target, which have no
+/// Launchpad PPA to pre-check.
+pub fn ppa_owner_name(target: &str) -> Option<(&str, &str)> {
+    target.strip_prefix("ppa:")?.split_once('/')
+}
+
 /// pbuilder-dist's result directory for a codename
 /// (`~/pbuilder/<codename>_result`); `None` if `$HOME` is unset.
 pub fn pbuilder_result_dir(codename: &str) -> Option<std::path::PathBuf> {
@@ -287,6 +295,37 @@ pub fn dput_argv(target: Option<&str>, changes: &str) -> Vec<String> {
     }
 }
 
+/// `curl -sfG <launchpad-archive> --data-urlencode …` — query the
+/// Launchpad API for published source packages named `source` in
+/// `ppa:<owner>/<ppa>`. `-f` makes a missing PPA (HTTP 404) a non-zero
+/// exit (no body), distinct from a real `{"total_size": 0}` answer. Used
+/// to pre-flight a PPA upload: catch a wrong/typo'd `--ppa` before dput.
+pub fn launchpad_sources_argv(owner: &str, ppa: &str, source: &str) -> Vec<String> {
+    argv(&[
+        "curl",
+        "-sfG",
+        &format!("https://api.launchpad.net/1.0/~{owner}/+archive/ubuntu/{ppa}"),
+        "--data-urlencode",
+        "ws.op=getPublishedSources",
+        "--data-urlencode",
+        "exact_match=true",
+        "--data-urlencode",
+        &format!("source_name={source}"),
+    ])
+}
+
+/// The `total_size` from a Launchpad `getPublishedSources` JSON response
+/// — the number of published source-package entries matching the query.
+/// `None` when the body isn't the expected JSON (e.g. curl failed, or a
+/// 404 "no such PPA" page), which the caller treats as "couldn't
+/// verify" rather than "zero".
+pub fn published_source_count(json: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()?
+        .get("total_size")?
+        .as_u64()
+}
+
 /// `glab ci list --sha <sha> -F json` — list the CI pipeline(s) for an
 /// exact commit, as JSON. dbranch polls this (see [`crate::rebuild`])
 /// to watch the pipeline for the commit it just pushed: targeting the
@@ -506,6 +545,51 @@ mod tests {
             dput_argv(None, "../damo_1_source.changes"),
             ["dput", "../damo_1_source.changes"]
         );
+    }
+
+    #[test]
+    fn ppa_owner_name_splits_only_ppa_targets() {
+        assert_eq!(
+            ppa_owner_name("ppa:michel/sugarjar"),
+            Some(("michel", "sugarjar"))
+        );
+        // A plain dput host is not a PPA.
+        assert_eq!(ppa_owner_name("mentors"), None);
+        // A `ppa:` with no `/` is malformed → None.
+        assert_eq!(ppa_owner_name("ppa:michel"), None);
+    }
+
+    #[test]
+    fn launchpad_sources_argv_builds_the_query() {
+        assert_eq!(
+            launchpad_sources_argv("michel-slm", "kernel-utils", "sugarjar"),
+            [
+                "curl",
+                "-sfG",
+                "https://api.launchpad.net/1.0/~michel-slm/+archive/ubuntu/kernel-utils",
+                "--data-urlencode",
+                "ws.op=getPublishedSources",
+                "--data-urlencode",
+                "exact_match=true",
+                "--data-urlencode",
+                "source_name=sugarjar",
+            ]
+        );
+    }
+
+    #[test]
+    fn published_source_count_reads_total_size() {
+        assert_eq!(
+            published_source_count(r#"{"start": 0, "total_size": 3, "entries": []}"#),
+            Some(3)
+        );
+        assert_eq!(
+            published_source_count(r#"{"total_size": 0, "entries": []}"#),
+            Some(0)
+        );
+        // Not the expected JSON (e.g. a 404 page / curl failure) → None.
+        assert_eq!(published_source_count("<html>404</html>"), None);
+        assert_eq!(published_source_count(""), None);
     }
 
     #[test]

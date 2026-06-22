@@ -202,6 +202,14 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   one is required. Runs after `push` so CI can pass before publishing.
   **Opt-in** — not part of `all`.
 
+  For a **PPA** target, dbranch first checks via the Launchpad API
+  (`curl … getPublishedSources`) whether the package is already in that
+  PPA. If not — or the PPA name can't be verified — it asks to confirm
+  before uploading (default **no**), to catch a wrong/typo'd `--ppa`. A
+  genuine first upload is confirmed once (like trusting a new SSH host).
+  `--yes` or a non-interactive run warns and proceeds instead of
+  prompting; a missing `curl` skips the check.
+
   > **dput over sftp:** with a `"method": "sftp"` dput profile,
   > dput-ng uploads via paramiko, which prompts to trust the host's SSH
   > key. It **reads** `~/.ssh/known_hosts` but does **not** save keys

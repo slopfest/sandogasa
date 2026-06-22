@@ -125,6 +125,22 @@ Launchpad rejects uploads to an **EOL series' PPA**, so bulk
 `--include-eol` is local-only and is rejected together with the
 `upload` stage.
 
+### Launchpad PPA pre-flight (upload safety)
+
+Before a PPA upload, `ppa_preflight` queries the Launchpad API via
+`curl -sfG …getPublishedSources&source_name=<pkg>&exact_match=true` and
+reads `total_size` (`plan::published_source_count`). `> 0` → already in
+the PPA, proceed; `0` → not there yet; a non-zero curl exit / unparseable
+body (a typo'd PPA name 404s, and `-f` makes that a clean failure) →
+can't verify. The last two confirm before uploading (`confirm_default_no`)
+— catching a wrong `--ppa`, SSH-known-hosts style; a real first upload is
+confirmed once. Only `ppa:` targets are checked (`plan::ppa_owner_name`
+returns `None` for a dput host or the default target). The prompt is
+interactive-only: `--yes`/non-tty warns and proceeds, `--dry-run` narrates
+the `curl`. A missing `curl` (`tool_exists`) skips the check rather than
+blocking — it's a safety nicety, not essential to the upload, so it isn't
+in `ensure_tools`.
+
 ### salsa-ci
 
 salsa-ci builds against **Debian** (`RELEASE`), not Ubuntu (it doesn't

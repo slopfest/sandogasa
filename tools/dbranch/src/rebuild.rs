@@ -331,6 +331,7 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             opts.upload_target.as_deref(),
             opts.chroot_refresh,
             &opts.urgency,
+            opts.assume_yes,
         )?;
     }
     Ok(())
@@ -504,6 +505,9 @@ pub fn update(
         opts.nowait,
         opts.upload_target.as_deref(),
         opts.chroot_refresh,
+        // `update` never uploads to a PPA, so the PPA pre-check (the only
+        // consumer of this flag) can't fire; value is irrelevant.
+        false,
     )
 }
 
@@ -707,6 +711,7 @@ fn rebuild_one(
     upload_target: Option<&str>,
     chroot_refresh: ChrootRefresh,
     urgency: &str,
+    assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let codename = target_codename(target);
     let target_type = classify_target_type(target, &codename)?;
@@ -753,6 +758,7 @@ fn rebuild_one(
         nowait,
         upload_target,
         chroot_refresh,
+        assume_yes,
     )
 }
 
@@ -773,6 +779,7 @@ fn build_pipeline(
     nowait: bool,
     upload_target: Option<&str>,
     chroot_refresh: ChrootRefresh,
+    assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // The package/version are needed by build, lint, and upload; compute
     // them once (preferring the version the head stage just produced).
@@ -796,7 +803,7 @@ fn build_pipeline(
     }
     if stages.upload {
         let (package, version) = pkg_ver.as_ref().unwrap();
-        upload_stage(ui, repo, package, version, upload_target)?;
+        upload_stage(ui, repo, package, version, upload_target, assume_yes)?;
     }
     if stages.tag {
         tag_stage(ui, repo)?;
@@ -823,11 +830,70 @@ fn upload_stage(
     package: &str,
     version: &str,
     target: Option<&str>,
+    assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // For a PPA target, pre-flight that the package is already there;
+    // if not, the --ppa was likely wrong, so confirm before uploading.
+    if let Some((owner, ppa)) = target.and_then(plan::ppa_owner_name) {
+        ppa_preflight(ui, repo, owner, ppa, package, assume_yes)?;
+    }
     let dest = target.unwrap_or("the default dput target");
     ui.step(&format!("Upload {package} {version} to {dest}"));
     let changes = format!("../{}", plan::changes_filename(package, version));
     ui.run_required(&plan::dput_argv(target, &changes), repo)
+}
+
+/// Pre-flight a PPA upload: query Launchpad for `package` in
+/// `ppa:<owner>/<ppa>`. If it isn't already published there (or the PPA
+/// can't be verified — e.g. a typo'd name 404s), the `--ppa` was likely
+/// wrong, so confirm before uploading (like trusting a new SSH host the
+/// first time). A genuine first upload legitimately hits this and is
+/// confirmed once. The prompt fires only on an interactive real run;
+/// `--yes` or a non-tty warns and proceeds (don't block automation),
+/// and `--dry-run`/`--explain` just narrate the `curl`. A missing `curl`
+/// skips the check rather than blocking the upload.
+fn ppa_preflight(
+    ui: &Ui,
+    repo: &Path,
+    owner: &str,
+    ppa: &str,
+    package: &str,
+    assume_yes: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !ui.dry_run && !sandogasa_cli::tool_exists("curl") {
+        eprintln!("note: curl not found; skipping the ppa:{owner}/{ppa} membership check");
+        return Ok(());
+    }
+    ui.step(&format!(
+        "Check whether {package} is already in ppa:{owner}/{ppa}"
+    ));
+    let (code, out) = ui.run_capture(&plan::launchpad_sources_argv(owner, ppa, package), repo)?;
+    if ui.dry_run {
+        return Ok(()); // narrated only; nothing executed
+    }
+
+    // total_size > 0 → already published there, proceed silently.
+    let count = (code == 0)
+        .then(|| plan::published_source_count(&out))
+        .flatten();
+    if count.is_some_and(|n| n > 0) {
+        return Ok(());
+    }
+    let reason = match count {
+        Some(_) => format!("{package} is not published in ppa:{owner}/{ppa} yet"),
+        None => format!("could not verify ppa:{owner}/{ppa} exists (is the name right?)"),
+    };
+
+    // Non-interactive / --yes: warn and proceed rather than block.
+    if assume_yes || !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!("warning: {reason}; uploading anyway");
+        return Ok(());
+    }
+    if ui.confirm_default_no(&format!("{reason} — upload anyway?")) {
+        Ok(())
+    } else {
+        Err("aborted".into())
+    }
 }
 
 /// The push stage: publish the branch, then (unless `nowait`) attach
