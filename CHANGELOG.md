@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Workspace: update URL
+The repo was renamed from `fedora-cve-triage` to `sandogasa`, with
+`fedora-cve-triage` now only one of the many tools and library crates.
+
+But the URL in the root `Cargo.toml` was never updated, so while users
+clicking through from `crates.io` will get redirected to the correct
+repo, this is both slightly confusing and inefficient.
+
 ## v0.15.0
 
 ### dbranch: bulk no longer hides the checked-out PPA branch
