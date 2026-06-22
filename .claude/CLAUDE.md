@@ -77,5 +77,9 @@
 
 ## Testing
 - Always write corresponding tests when adding or modifying features
+- **Tests must not reach the external network.** `cargo test` has to pass in a distro packaging sandbox (Koji, Debian buildds) where *external* network is blocked but **loopback is up**. So a test that calls a real remote service makes the crate unpackageable, but **localhost is fine**. Two established patterns here, both packaging-safe:
+  - HTTP-client crates: stand up a **`wiremock` mock server on `127.0.0.1`** and point the client at it (see `cpu-sig-tracker`'s `*_end_to_end` tests). It's loopback-only — no external call.
+  - Pure logic: keep parsing/decision code in injectable functions (a fetcher closure, a trait, canned fixtures) and unit-test those against recorded data.
+  Shelling out to **`git`** for a local fixture repo is acceptable (dbranch does this) — git is present in build sandboxes. Do **not** depend on a *remote* service or on domain tools that may be absent there (`ubuntu-distro-info`/`debian-distro-info`, `gbp`, `dput`, `koji`, `fedrq`, `curl`, …); dbranch keeps those out of its tests via pure helpers + `--dry-run`. If a test genuinely needs a live remote endpoint, gate it behind `#[ignore]` so the default `cargo test` stays offline. (To verify locally, loopback must be up: `unshare -rn sh -c 'ip link set lo up && cargo test --workspace'` — a bare `unshare -rn` leaves loopback down and gives false wiremock failures.)
 - Per commit, run `cargo fmt` and `cargo clippy --workspace`; `cargo test` is recommended for code you touched. Fast prototyping commits don't need full coverage checks
 - Run `cargo cov` at stability points — before release tagging, and when catching a feature up for its README/CHANGELOG entry. Coverage must stay at or above 80% line coverage at those gates (binary `src/main.rs` files are excluded from the measurement; see `.cargo/config.toml`)

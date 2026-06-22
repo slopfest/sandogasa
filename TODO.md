@@ -17,14 +17,6 @@
   The build-suite decoupling means a target has both a changelog
   *distribution* and a *build suite*, on top of the version scheme.
 
-- (2026-06-19) Make the dbranch tests runnable **without Internet
-  access** (and without external tools), for distro packaging builds
-  that test in a network-less sandbox. Audit the suite for any test that
-  reaches the network or shells out to `git`/`ubuntu-distro-info`/
-  `debian-distro-info`/etc.; mock or feature-gate those (the pure
-  helpers and dry-run tests should already be offline-safe — confirm and
-  keep it that way). Document the expectation so it doesn't regress.
-
 - (2026-06-19, low priority) Optional per-package waiving of a specific
   salsa-ci job (e.g. `test-uscan` fails on trixie when the watch file
   uses a uscan standard newer than trixie's uscan). Not blocking: `push`
