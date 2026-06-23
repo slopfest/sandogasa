@@ -114,20 +114,33 @@ fn rust_checklist(r: &Review, crate_latest: Option<&str>) -> Vec<Item> {
     items
 }
 
-/// Builds and installs: a binary RPM landed in `results/`. fedora-review
-/// already runs the installability check itself (a failure would surface
-/// as an issue we list), so we don't re-test installation here.
+/// Builds and installs. The build is ok when a binary RPM landed in
+/// `results/`; installation is fedora-review's own check, which we read
+/// from its issues (a `CheckPackageInstalls` failure) rather than
+/// re-testing. Either failing → Fail.
 fn builds_item(r: &Review) -> Item {
     let label = "package builds and installs without errors on rawhide";
-    if r.build_ok {
-        Item::new(label, Mark::Pass, None)
-    } else {
+    if !r.build_ok {
         Item::new(
             label,
             Mark::Fail,
             Some("no binary RPM in results/ — check build.log"),
         )
+    } else if install_failed(r) {
+        Item::new(
+            label,
+            Mark::Fail,
+            Some("installation failed — see fedora-review attachment"),
+        )
+    } else {
+        Item::new(label, Mark::Pass, None)
     }
+}
+
+/// Whether fedora-review's installability check (`CheckPackageInstalls`)
+/// failed — surfaced as an issue in the review.
+fn install_failed(r: &Review) -> bool {
+    r.issues.iter().any(|i| i.name == "CheckPackageInstalls")
 }
 
 /// Tests fully run (`%cargo_test`, no `--skip`) → pass; some skipped or
@@ -497,6 +510,25 @@ mod tests {
         assert!(!approved(&items, &r.issues));
         let block = render_review(r.spec.generator, &items, &r.issues);
         assert!(block.contains("Package not yet approved"));
+    }
+
+    #[test]
+    fn install_failure_fails_the_builds_item() {
+        // The build produced an RPM, but fedora-review's install check
+        // failed — the "builds and installs" item must default to Fail.
+        let issue = Issue {
+            name: "CheckPackageInstalls".to_string(),
+            text: "Package installs properly.".to_string(),
+            note: Some("Installation errors (see attachment)".to_string()),
+        };
+        let r = review(true, true, true, vec![issue]);
+        let items = infer(&r, Some("1.0"));
+        assert_eq!(items[1].mark, Mark::Fail);
+        assert_eq!(
+            items[1].note.as_deref(),
+            Some("installation failed — see fedora-review attachment")
+        );
+        assert!(!approved(&items, &r.issues));
     }
 
     #[test]
