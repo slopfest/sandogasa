@@ -120,8 +120,10 @@ already decides is read from its output, never re-run.
   (`%{_bindir}`), an extra item checks that its statically linked
   dependencies' licenses are folded into `License:`.
 - **issues** — `fedora-review`'s MUST failures are listed and hold
-  approval, except the benign "license file listed twice" that every
-  rust2rpm package trips.
+  approval, except the benign "File listed twice" that every rust2rpm
+  package trips: a file under the crate instdir
+  (`…/usr/share/cargo/registry/<crate>/`) that's also `%doc`/`%license`
+  (LICENSE, README, …) is listed twice by design.
 
 A package is **APPROVED** when nothing failed and there are no
 outstanding issues; caveats (🫤) don't block.

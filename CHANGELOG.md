@@ -16,7 +16,8 @@ Marks are inferred and then confirmed interactively (`+1/0/-1` per item,
 evidence shown inline, `-y` to accept). It computes what `fedora-review`
 doesn't decide for a generated spec — crates.io latest version, the
 spec↔`Cargo.toml` license cross-check — and applies rust2rpm-aware
-handling: suppress the benign "license file listed twice", note a
+handling: suppress the benign "File listed twice" for crate-instdir
+files that are also `%doc`/`%license`, note a
 manually-added license (`included manually[, fix submitted to
 upstream]`), distinguish skipped vs disabled tests, and add a
 static-linked-deps check for crates that ship a binary. rust2rpm only

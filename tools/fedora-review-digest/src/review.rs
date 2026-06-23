@@ -113,11 +113,11 @@ impl Review {
             .as_deref()
             .map(parse_issues)
             .unwrap_or_default();
-        // A license file listed twice (shipped via %license *and* present
-        // in the crate's registry sources) is standard for rust2rpm
-        // packages, not a real problem — drop it.
+        // A file listed twice because it lives in the crate instdir *and*
+        // is labeled %doc/%license (LICENSE, README, …) is standard for
+        // rust2rpm packages, not a real problem — drop it.
         if spec.generator == Generator::Rust2Rpm {
-            issues.retain(|i| !is_benign_license_dup(i));
+            issues.retain(|i| !is_benign_instdir_dup(i));
         }
 
         Ok(Review {
@@ -385,15 +385,19 @@ pub fn parse_issues(json: &str) -> Vec<Issue> {
         .unwrap_or_default()
 }
 
-/// Whether an issue is the benign "license file listed twice" that
-/// rust2rpm packages always trip (the file is shipped with `%license`
-/// and is also in the registry sources) — not a real defect.
-pub fn is_benign_license_dup(issue: &Issue) -> bool {
+/// Whether an issue is a benign "File listed twice" that rust2rpm
+/// packages always trip — not a real defect. The crate sources are
+/// installed verbatim under the crate instdir
+/// (`…/usr/share/cargo/registry/<crate>/`), and any file there that's
+/// *also* labeled `%doc` or `%license` (LICENSE, README, …) gets listed
+/// twice. A duplicate whose path is under that instdir is therefore
+/// expected; one elsewhere is a genuine packaging mistake.
+pub fn is_benign_instdir_dup(issue: &Issue) -> bool {
     if issue.name != "CheckFileDuplicates" {
         return false;
     }
-    let note = issue.note.as_deref().unwrap_or("").to_lowercase();
-    note.contains("license") || note.contains("licence") || note.contains("copying")
+    let note = issue.note.as_deref().unwrap_or("");
+    note.contains("/usr/share/cargo/registry/")
 }
 
 /// Strip the `rust-`/`python-` package prefix to get the upstream name.
@@ -553,26 +557,42 @@ Source2:        https://github.com/rust-lang/mdBook/raw/refs/tags/v0.5.3/LICENSE
     }
 
     #[test]
-    fn benign_license_dup_is_recognized() {
+    fn benign_instdir_dup_is_recognized() {
+        // A license file in the crate instdir, also %license'd.
         let lic = Issue {
             name: "CheckFileDuplicates".to_string(),
             text: "no dupes".to_string(),
-            note: Some("warning: File listed twice: /usr/.../LICENSE.txt".to_string()),
+            note: Some(
+                "warning: File listed twice: \
+                 /usr/share/cargo/registry/foo-1.0/LICENSE.txt"
+                    .to_string(),
+            ),
         };
-        assert!(is_benign_license_dup(&lic));
-        // A non-license duplicate is a real issue.
+        assert!(is_benign_instdir_dup(&lic));
+        // Any other instdir file (README, …) %doc'd is equally benign.
+        let readme = Issue {
+            name: "CheckFileDuplicates".to_string(),
+            text: "no dupes".to_string(),
+            note: Some(
+                "warning: File listed twice: \
+                 /usr/share/cargo/registry/oncemutex-0.1.1/README.md"
+                    .to_string(),
+            ),
+        };
+        assert!(is_benign_instdir_dup(&readme));
+        // A duplicate outside the crate instdir is a real issue.
         let other = Issue {
             name: "CheckFileDuplicates".to_string(),
             text: "no dupes".to_string(),
             note: Some("warning: File listed twice: /usr/bin/foo".to_string()),
         };
-        assert!(!is_benign_license_dup(&other));
+        assert!(!is_benign_instdir_dup(&other));
         // A different check is never suppressed.
         let unrelated = Issue {
             name: "CheckSomethingElse".to_string(),
             text: "x".to_string(),
-            note: Some("license".to_string()),
+            note: Some("/usr/share/cargo/registry/foo-1.0/LICENSE.txt".to_string()),
         };
-        assert!(!is_benign_license_dup(&unrelated));
+        assert!(!is_benign_instdir_dup(&unrelated));
     }
 }
