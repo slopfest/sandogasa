@@ -180,6 +180,14 @@ fn license_item(r: &Review) -> Item {
             mark: Mark::Pass,
             note: Some(format!("spec & Cargo.toml: {spec}")),
         },
+        // Cargo's deprecated `/` separator means OR, which rust2rpm
+        // rewrites to SPDX — so `MIT/Apache-2.0` and `MIT OR Apache-2.0`
+        // are the same license, not a mismatch.
+        Some(c) if normalize_license(c) == normalize_license(spec) => Item {
+            label: label.into(),
+            mark: Mark::Pass,
+            note: Some(format!("spec: {spec}; Cargo.toml: {c} (equivalent)")),
+        },
         Some(c) => Item {
             label: label.into(),
             mark: Mark::Caveat,
@@ -191,6 +199,16 @@ fn license_item(r: &Review) -> Item {
             note: Some(format!("spec: {spec}; Cargo.toml: not found")),
         },
     }
+}
+
+/// Normalize a license expression for comparison: Cargo's deprecated `/`
+/// (meaning OR) becomes ` OR `, and whitespace is collapsed — so a
+/// Cargo `MIT/Apache-2.0` compares equal to a spec `MIT OR Apache-2.0`.
+fn normalize_license(s: &str) -> String {
+    s.replace('/', " OR ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// License file shipped by the crate and `%license`'d → pass; added
@@ -437,6 +455,20 @@ mod tests {
         assert_eq!(
             lic.note.as_deref(),
             Some("spec: MIT; Cargo.toml: MIT OR Apache-2.0 — reconcile")
+        );
+    }
+
+    #[test]
+    fn cargo_slash_license_matches_spdx_or() {
+        let mut r = review(true, true, true, vec![]);
+        r.spec.license = "MIT OR Apache-2.0".to_string();
+        r.cargo_license = Some("MIT/Apache-2.0".to_string()); // deprecated Cargo form
+        let items = infer(&r, Some("1.0"));
+        let lic = &items[4];
+        assert_eq!(lic.mark, Mark::Pass);
+        assert_eq!(
+            lic.note.as_deref(),
+            Some("spec: MIT OR Apache-2.0; Cargo.toml: MIT/Apache-2.0 (equivalent)")
         );
     }
 
