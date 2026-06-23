@@ -25,6 +25,13 @@ for now; pyp2spec and running fedora-review itself are planned. Needs
 `fedora-review` (to produce the dir) and `curl` (crates.io check;
 `--no-net` to skip).
 
+`--post` writes the result back to the review bug (after confirmation):
+on approval, the digest comment + `fedora-review+` + status POST; when
+not approved, the digest comment + `fedora-review?` (unless already set).
+Uses a Bugzilla API key from `$BUGZILLA_API_KEY` or
+`~/.config/fedora-review-digest/config.toml` (a `config` subcommand sets
+it up and verifies it).
+
 ### dbranch: pre-flight PPA uploads against Launchpad
 
 Before a PPA upload (`--ppa`/`ppa:` target), dbranch now checks via the

@@ -32,11 +32,17 @@ External tools:
 - `curl` — for the crates.io latest-version check; skip it with
   `--no-net`.
 
+For `--post` (writing the review back to Bugzilla) you also need a
+Bugzilla API key: set `BUGZILLA_API_KEY`, run `fedora-review-digest
+config` to set it up and verify it, or let `--post` prompt and save it
+to `~/.config/fedora-review-digest/config.toml` (`[bugzilla] api_key`)
+on first use.
+
 ## Usage
 
 ```
 fedora-review-digest <DIR-OR-BUGID> [--comment <TEXT>] [-y]
-    [--reviews-dir <DIR>] [--no-net]
+    [--reviews-dir <DIR>] [--no-net] [--post]
 ```
 
 Point it at a finished review — either the directory `fedora-review`
@@ -62,9 +68,31 @@ asked for an optional free-form comment for the top.
   a terminal.
 - `--no-net` skips the crates.io check.
 - `--reviews-dir <DIR>` is where a bare bug id is resolved.
+- `--post` writes the result back to the bug (see below).
 
 The finished comment is written to **stdout**, ready to paste into
 Bugzilla.
+
+## Posting to Bugzilla
+
+`--post` writes the review back to the review bug (its id is taken from
+the directory name or the bug-id argument) instead of leaving you to
+paste it. It fetches the bug, shows what it will change, and asks to
+confirm (`-y` skips the prompt):
+
+- **approved** → adds the digest as a comment, sets `fedora-review` to
+  `+`, and moves the bug to **POST**.
+- **not approved** → adds the digest as a comment and, unless the flag
+  is already `?`, sets `fedora-review` to `?` (review in progress); the
+  status is left alone.
+
+`--post` still prints the digest to stdout as well.
+
+Set up (and verify) the API key ahead of time with:
+
+```
+fedora-review-digest config
+```
 
 ## What it generates
 

@@ -541,7 +541,11 @@ name = "fedora-review-digest"
 version = "0.15.0"
 dependencies = [
  "clap",
+ "sandogasa-bugzilla",
+ "sandogasa-config",
+ "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

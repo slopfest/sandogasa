@@ -4,24 +4,45 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
+use sandogasa_config::ConfigFile;
 
 use fedora_review_digest::checklist::{self, Item, Mark};
-use fedora_review_digest::cratesio;
 use fedora_review_digest::review::{Generator, Review};
+use fedora_review_digest::{bugzilla, config, cratesio};
+use sandogasa_bugzilla::BzClient;
+
+const BUGZILLA_URL: &str = "https://bugzilla.redhat.com";
 
 #[derive(Parser)]
 #[command(
     version,
     about,
     long_about = None,
-    before_help = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"))
+    before_help = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")),
+    args_conflicts_with_subcommands = true,
 )]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    /// Digest a review (the default action when no subcommand is given).
+    #[command(flatten)]
+    digest: DigestArgs,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Set up or verify the Bugzilla API key used by `--post`.
+    Config,
+}
+
+#[derive(Args)]
+struct DigestArgs {
     /// A `fedora-review` result directory, or a review-request bug id
     /// (resolved to `<id>-*` under --reviews-dir).
     #[arg(value_name = "DIR-OR-BUGID")]
-    input: String,
+    input: Option<String>,
 
     /// Free-form reviewer note placed above the review (e.g. "Looks
     /// good to me!"). Without it, you're prompted (unless --yes).
@@ -39,15 +60,22 @@ struct Cli {
     /// Skip the crates.io latest-version check (offline / faster).
     #[arg(long)]
     no_net: bool,
+
+    /// Post the review to the Bugzilla bug: a comment, the fedora-review
+    /// flag (`+` if approved, else `?`), and status POST on approval.
+    /// Asks to confirm first.
+    #[arg(long)]
+    post: bool,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match run(&cli) {
-        Ok(text) => {
-            print!("{text}");
-            ExitCode::SUCCESS
-        }
+    let result = match cli.command {
+        Some(Command::Config) => cmd_config(),
+        None => run(&cli.digest).map(|text| print!("{text}")),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("fedora-review-digest: {e}");
             ExitCode::FAILURE
@@ -55,8 +83,50 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: &Cli) -> Result<String, String> {
-    let dir = resolve_input(&cli.input, &cli.reviews_dir)?;
+/// Set up / verify the Bugzilla API key (and email, for validation)
+/// stored at `~/.config/fedora-review-digest/config.toml`.
+fn cmd_config() -> Result<(), String> {
+    let cf = ConfigFile::for_tool("fedora-review-digest");
+    let mut cfg: config::Config = cf.load().unwrap_or_default();
+    if cfg.bugzilla.api_key.trim().is_empty() {
+        eprintln!(
+            "Create an API key at \
+             https://bugzilla.redhat.com/userprefs.cgi?tab=apikey"
+        );
+        cfg.bugzilla.api_key = sandogasa_config::prompt_field("Bugzilla", "API key", true, None)
+            .map_err(|e| e.to_string())?;
+    }
+    if cfg.bugzilla.email.trim().is_empty() {
+        cfg.bugzilla.email = sandogasa_config::prompt_field(
+            "Bugzilla",
+            "email",
+            false,
+            Some(&sandogasa_config::validate_email),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    cf.save(&cfg).map_err(|e| e.to_string())?;
+    eprintln!("Saved to {}", cf.path().display());
+
+    let client = BzClient::new(BUGZILLA_URL)
+        .with_api_key(cfg.bugzilla.api_key.clone())
+        .map_err(|e| e.to_string())?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    eprint!("Validating API key… ");
+    match rt.block_on(client.valid_login(&cfg.bugzilla.email)) {
+        Ok(true) => eprintln!("valid."),
+        Ok(false) => eprintln!("login not recognized (check the email/key)."),
+        Err(e) => eprintln!("could not validate: {e}"),
+    }
+    Ok(())
+}
+
+fn run(cli: &DigestArgs) -> Result<String, String> {
+    let input = cli
+        .input
+        .as_deref()
+        .ok_or("provide a fedora-review result directory or a bug id")?;
+    let dir = resolve_input(input, &cli.reviews_dir)?;
     let review = Review::from_dir(&dir)?;
     match review.spec.generator {
         Generator::Rust2Rpm => {}
@@ -120,11 +190,83 @@ fn run(cli: &Cli) -> Result<String, String> {
     };
 
     let review_block = checklist::render_review(review.spec.generator, &items, &review.issues);
-    let post = checklist::render_post_import(review.spec.generator, &review.upstream_name);
-    Ok(checklist::assemble(
-        comment.as_deref(),
-        &review_block,
-        &post,
+    let post_block = checklist::render_post_import(review.spec.generator, &review.upstream_name);
+    let text = checklist::assemble(comment.as_deref(), &review_block, &post_block);
+
+    if cli.post {
+        let approved = checklist::approved(&items, &review.issues);
+        post_to_bugzilla(input, &dir, &text, approved, cli.yes)?;
+    }
+    Ok(text)
+}
+
+/// Post the assembled review to its Bugzilla review bug: a comment plus
+/// the `fedora-review` flag (and, on approval, status POST). Fetches the
+/// bug first (to validate it and read the current flag), shows what will
+/// change, and confirms before the write.
+fn post_to_bugzilla(
+    input: &str,
+    dir: &Path,
+    digest: &str,
+    approved: bool,
+    yes: bool,
+) -> Result<(), String> {
+    let bug_id = bug_id(input, dir)
+        .ok_or("couldn't determine the bug id from the input or dir name; pass the bug id")?;
+    let key = config::api_key().map_err(|e| e.to_string())?;
+    let client = BzClient::new(BUGZILLA_URL)
+        .with_api_key(key)
+        .map_err(|e| e.to_string())?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+
+    let bug = rt
+        .block_on(client.bug(bug_id))
+        .map_err(|e| format!("fetching bug {bug_id}: {e}"))?;
+    let current_flag = bugzilla::current_review_flag(&bug);
+
+    eprintln!("\nBug {bug_id}: {}", bug.summary);
+    eprintln!("Will {}.", bugzilla::action_summary(approved, current_flag));
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            return Err("not a terminal; pass -y to post to Bugzilla".into());
+        }
+        if !confirm_yes("Post to Bugzilla?")? {
+            return Err("aborted".into());
+        }
+    }
+
+    let body = bugzilla::update_body(digest, approved, current_flag);
+    rt.block_on(client.update(bug_id, &body))
+        .map_err(|e| format!("posting to bug {bug_id}: {e}"))?;
+    eprintln!("Posted to bug {bug_id}.");
+    Ok(())
+}
+
+/// The review-request bug id: a numeric input, else the leading digits
+/// of the directory name (`2489102-rust-foo` → 2489102).
+fn bug_id(input: &str, dir: &Path) -> Option<u64> {
+    if let Ok(n) = input.parse::<u64>() {
+        return Some(n);
+    }
+    bug_id_from_dirname(dir.file_name()?.to_str()?)
+}
+
+fn bug_id_from_dirname(name: &str) -> Option<u64> {
+    name.chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .ok()
+}
+
+/// Yes/no confirmation defaulting to yes (the `--post` intent).
+fn confirm_yes(question: &str) -> Result<bool, String> {
+    eprint!("{question} [Y/n] ");
+    let _ = std::io::stderr().flush();
+    let line = read_line()?;
+    Ok(!matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "n" | "no"
     ))
 }
 
@@ -292,5 +434,15 @@ mod tests {
         assert!(!looks_like_bug_id("2489102-rust-foo"));
         assert!(!looks_like_bug_id("rust-foo"));
         assert!(!looks_like_bug_id(""));
+    }
+
+    #[test]
+    fn bug_id_from_dirname_takes_leading_digits() {
+        assert_eq!(
+            bug_id_from_dirname("2489102-rust-trustfall_core"),
+            Some(2489102)
+        );
+        assert_eq!(bug_id_from_dirname("rust-foo"), None);
+        assert_eq!(bug_id_from_dirname(""), None);
     }
 }

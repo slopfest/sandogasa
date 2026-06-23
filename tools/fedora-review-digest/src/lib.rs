@@ -7,6 +7,8 @@
 //! noise of a full fedora-review template is dropped because, for a
 //! generated spec, most of it isn't decision-relevant.
 
+pub mod bugzilla;
 pub mod checklist;
+pub mod config;
 pub mod cratesio;
 pub mod review;
