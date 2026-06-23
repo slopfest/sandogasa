@@ -43,6 +43,18 @@ order, confirmation + `--yes`), and the `update` subcommand
 (new-upstream import of the Debian branch, sharing the build→…→tag
 pipeline; `--build-suite`, dput-default upload).
 
+## fedora-review-digest
+
+- (2026-06-23) Confirm the static-linked-deps checklist item on a real
+  **binary-shipping** crate review (the `%{_bindir}` case) — it's only
+  unit-tested so far.
+- (2026-06-23) pyp2spec support: a Python checklist + post-import
+  boilerplate (terminology: "Python package (from PyPI)", not module).
+  Generator detection is already wired; `infer`/`render_post_import`
+  just need the Python branch.
+- (2026-06-23, later) Run `fedora-review -b <id>` ourselves instead of
+  only pointing at an existing result dir.
+
 ## ebranch
 
 - Second-level branch-request escalation: when a `needinfo?` ping

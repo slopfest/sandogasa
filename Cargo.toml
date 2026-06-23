@@ -25,6 +25,7 @@ members = [
     "tools/dbranch",
     "tools/ebranch",
     "tools/fedora-cve-triage",
+    "tools/fedora-review-digest",
     "tools/hs-intake",
     "tools/hs-meetings",
     "tools/koji-diff",

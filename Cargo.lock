@@ -537,6 +537,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fedora-review-digest"
+version = "0.15.0"
+dependencies = [
+ "clap",
+ "serde_json",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

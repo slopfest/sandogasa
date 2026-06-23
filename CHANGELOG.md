@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### fedora-review-digest: new tool
+
+Condense a `fedora-review` run of an auto-generated spec into a short
+rust-sig-style Bugzilla review comment, dropping the template noise that
+isn't decision-relevant for a generated package. Reads a finished
+`fedora-review -b` result directory (or a bug id resolved to `<id>-*`)
+and emits the three `===`-separated blocks: an optional reviewer note, a
+checklist with a per-item ✅/🫤/❌ verdict and the MUST issues that need
+attention, and the post-import rust-sig task boilerplate.
+
+Marks are inferred and then confirmed interactively (`+1/0/-1` per item,
+evidence shown inline, `-y` to accept). It computes what `fedora-review`
+doesn't decide for a generated spec — crates.io latest version, the
+spec↔`Cargo.toml` license cross-check — and applies rust2rpm-aware
+handling: suppress the benign "license file listed twice", note a
+manually-added license (`included manually[, fix submitted to
+upstream]`), distinguish skipped vs disabled tests, and add a
+static-linked-deps check for crates that ship a binary. rust2rpm only
+for now; pyp2spec and running fedora-review itself are planned. Needs
+`fedora-review` (to produce the dir) and `curl` (crates.io check;
+`--no-net` to skip).
+
 ### dbranch: pre-flight PPA uploads against Launchpad
 
 Before a PPA upload (`--ppa`/`ppa:` target), dbranch now checks via the
