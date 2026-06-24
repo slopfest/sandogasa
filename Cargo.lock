@@ -304,7 +304,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cpu-sig-tracker"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "clap",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "dbranch"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "anstream 0.6.21",
  "anstyle",
@@ -453,7 +453,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "ebranch"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "clap",
@@ -516,7 +516,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "fedora-cve-triage"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "clap",
@@ -538,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "fedora-review-digest"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "clap",
  "sandogasa-bugzilla",
@@ -753,7 +753,7 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "hs-intake"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "clap",
  "sandogasa-cli",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "hs-meetings"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "clap",
@@ -778,7 +778,7 @@ dependencies = [
 
 [[package]]
 name = "hs-relmon"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "clap",
  "mockito",
@@ -1135,7 +1135,7 @@ dependencies = [
 
 [[package]]
 name = "koji-diff"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "clap",
  "quick-xml",
@@ -1370,7 +1370,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "poi-tracker"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "clap",
  "sandogasa-bodhi",
@@ -1783,7 +1783,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-bodhi"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -1798,7 +1798,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-bugclass"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "sandogasa-bugzilla",
@@ -1806,7 +1806,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-bugzilla"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "reqwest",
@@ -1819,7 +1819,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-cli"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "rustls",
@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-config"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "dirs",
  "rpassword",
@@ -1839,11 +1839,11 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-depfilter"
-version = "0.15.0"
+version = "0.15.1"
 
 [[package]]
 name = "sandogasa-discourse"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "reqwest",
@@ -1856,7 +1856,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-distgit"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "reqwest",
  "sandogasa-cli",
@@ -1868,7 +1868,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-fasjson"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "sandogasa-cli",
  "serde",
@@ -1878,11 +1878,11 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-fedrq"
-version = "0.15.0"
+version = "0.15.1"
 
 [[package]]
 name = "sandogasa-github"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "mockito",
@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-gitlab"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "mockito",
@@ -1906,7 +1906,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-hattrack"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1928,7 +1928,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-inventory"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "schemars",
  "serde",
@@ -1940,7 +1940,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-jira"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "reqwest",
@@ -1953,14 +1953,14 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-koji"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
 name = "sandogasa-mailman"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "reqwest",
  "sandogasa-cli",
@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-meetbot"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "reqwest",
@@ -1985,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-nvd"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "reqwest",
  "sandogasa-cli",
@@ -1997,7 +1997,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-pkg-acl"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "clap",
  "sandogasa-cli",
@@ -2013,7 +2013,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-pkg-health"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "clap",
@@ -2036,7 +2036,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-repology"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "reqwest",
  "sandogasa-cli",
@@ -2047,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-report"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "clap",
@@ -2072,7 +2072,7 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-rpmvercmp"
-version = "0.15.0"
+version = "0.15.1"
 
 [[package]]
 name = "scc"
