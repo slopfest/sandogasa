@@ -28,9 +28,11 @@ for now; pyp2spec and running fedora-review itself are planned. Needs
 `--post` writes the result back to the review bug (after confirmation):
 on approval, the digest comment + `fedora-review+` + status POST; when
 not approved, the digest comment + `fedora-review?` (unless already set).
-Uses a Bugzilla API key from `$BUGZILLA_API_KEY` or
+In both cases it claims the bug, assigning it to the reviewer unless
+it's already theirs. Uses a Bugzilla API key from `$BUGZILLA_API_KEY` and
+email from `$BUGZILLA_EMAIL`, each falling back to
 `~/.config/fedora-review-digest/config.toml` (a `config` subcommand sets
-it up and verifies it).
+them up and verifies them).
 
 ### dbranch: pre-flight PPA uploads against Launchpad
 

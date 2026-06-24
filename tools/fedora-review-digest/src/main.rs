@@ -62,8 +62,8 @@ struct DigestArgs {
     no_net: bool,
 
     /// Post the review to the Bugzilla bug: a comment, the fedora-review
-    /// flag (`+` if approved, else `?`), and status POST on approval.
-    /// Asks to confirm first.
+    /// flag (`+` if approved, else `?`), status POST on approval, and
+    /// claim the bug for you. Asks to confirm first.
     #[arg(long)]
     post: bool,
 }
@@ -200,10 +200,11 @@ fn run(cli: &DigestArgs) -> Result<String, String> {
     Ok(text)
 }
 
-/// Post the assembled review to its Bugzilla review bug: a comment plus
-/// the `fedora-review` flag (and, on approval, status POST). Fetches the
-/// bug first (to validate it and read the current flag), shows what will
-/// change, and confirms before the write.
+/// Post the assembled review to its Bugzilla review bug: a comment, the
+/// `fedora-review` flag (and, on approval, status POST), and claiming the
+/// bug for the reviewer. Fetches the bug first (to validate it, read the
+/// current flag, and see who it's assigned to), shows what will change,
+/// and confirms before the write.
 fn post_to_bugzilla(
     input: &str,
     dir: &Path,
@@ -213,9 +214,9 @@ fn post_to_bugzilla(
 ) -> Result<(), String> {
     let bug_id = bug_id(input, dir)
         .ok_or("couldn't determine the bug id from the input or dir name; pass the bug id")?;
-    let key = config::api_key().map_err(|e| e.to_string())?;
+    let creds = config::credentials().map_err(|e| e.to_string())?;
     let client = BzClient::new(BUGZILLA_URL)
-        .with_api_key(key)
+        .with_api_key(creds.api_key)
         .map_err(|e| e.to_string())?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
 
@@ -223,9 +224,16 @@ fn post_to_bugzilla(
         .block_on(client.bug(bug_id))
         .map_err(|e| format!("fetching bug {bug_id}: {e}"))?;
     let current_flag = bugzilla::current_review_flag(&bug);
+    // Claim the bug by assigning it to the reviewer — unless it's already
+    // theirs, in which case there's nothing to change.
+    let claim =
+        (!bug.assigned_to.eq_ignore_ascii_case(&creds.email)).then_some(creds.email.as_str());
 
     eprintln!("\nBug {bug_id}: {}", bug.summary);
-    eprintln!("Will {}.", bugzilla::action_summary(approved, current_flag));
+    eprintln!(
+        "Will {}.",
+        bugzilla::action_summary(approved, current_flag, claim.is_some())
+    );
     if !yes {
         if !std::io::stdin().is_terminal() {
             return Err("not a terminal; pass -y to post to Bugzilla".into());
@@ -235,7 +243,7 @@ fn post_to_bugzilla(
         }
     }
 
-    let body = bugzilla::update_body(digest, approved, current_flag);
+    let body = bugzilla::update_body(digest, approved, current_flag, claim);
     rt.block_on(client.update(bug_id, &body))
         .map_err(|e| format!("posting to bug {bug_id}: {e}"))?;
     eprintln!("Posted to bug {bug_id}.");

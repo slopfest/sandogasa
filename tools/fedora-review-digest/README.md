@@ -33,10 +33,11 @@ External tools:
   `--no-net`.
 
 For `--post` (writing the review back to Bugzilla) you also need a
-Bugzilla API key: set `BUGZILLA_API_KEY`, run `fedora-review-digest
-config` to set it up and verify it, or let `--post` prompt and save it
-to `~/.config/fedora-review-digest/config.toml` (`[bugzilla] api_key`)
-on first use.
+Bugzilla API key and your Bugzilla email (the login the bug is claimed
+for): set `BUGZILLA_API_KEY` / `BUGZILLA_EMAIL`, run `fedora-review-digest
+config` to set them up and verify them, or let `--post` prompt and save
+them to `~/.config/fedora-review-digest/config.toml` (`[bugzilla]
+api_key`, `email`) on first use.
 
 ## Usage
 
@@ -86,9 +87,12 @@ confirm (`-y` skips the prompt):
   is already `?`, sets `fedora-review` to `?` (review in progress); the
   status is left alone.
 
+In both cases it **claims the bug** — assigns it to you (your Bugzilla
+email) — unless it's already assigned to you.
+
 `--post` still prints the digest to stdout as well.
 
-Set up (and verify) the API key ahead of time with:
+Set up (and verify) the API key and email ahead of time with:
 
 ```
 fedora-review-digest config
