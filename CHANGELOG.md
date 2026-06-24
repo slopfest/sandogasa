@@ -19,9 +19,17 @@ spec↔`Cargo.toml` license cross-check — and applies rust2rpm-aware
 handling: suppress the benign "File listed twice" for crate-instdir
 files that are also `%doc`/`%license`, note a
 manually-added license (`included manually[, fix submitted to
-upstream]`), distinguish skipped vs disabled tests, and add a
-static-linked-deps check for crates that ship a binary. rust2rpm only
-for now; pyp2spec and running fedora-review itself are planned. Needs
+upstream]`), distinguish skipped vs disabled tests, and fail the
+builds-and-installs item when `fedora-review`'s install check did. For a
+crate that ships a binary it verifies the statically-linked dependency
+licenses: it reads the `LICENSE SUMMARY` `rust2rpm` writes to the build
+log, checks each is folded into the binary subpackage's `License:`
+(naming any that are missing), and prints the full breakdown for the
+reviewer to inspect. Remaining `fedora-review` MUST issues are resolved
+interactively — keep (blocks), explain (accepted with a justification,
+kept on record), or remove (false positive) — and the verdict flips to
+APPROVED once all are addressed with no `-1`. rust2rpm only for now;
+pyp2spec and running fedora-review itself are planned. Needs
 `fedora-review` (to produce the dir) and `curl` (crates.io check;
 `--no-net` to skip).
 

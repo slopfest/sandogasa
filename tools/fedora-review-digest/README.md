@@ -60,8 +60,20 @@ By default it walks the checklist interactively: it prints the full
 inferred review first, then asks you to confirm each item — `+1` pass /
 `0` caveat / `-1` fail, with the evidence shown inline and Enter
 accepting the inferred mark. A caveat/fail prompts for the parenthetical
-note (Enter keeps the suggested wording, or type your own). You're then
-asked for an optional free-form comment for the top.
+note (Enter keeps the suggested wording, or type your own).
+
+If `fedora-review` flagged any MUST issues, you then resolve each one:
+
+- **keep** (`k`, the default) — leave it as a blocker; the package stays
+  *not yet approved*.
+- **explain** (`e`) — accept it with a written justification. The issue
+  stays visible in the comment under *"Issues addressed by the
+  reviewer"* (so the reasoning is on record) but no longer blocks.
+- **remove** (`r`) — drop it entirely as a false positive.
+
+Once every issue is addressed (explained or removed) and no checklist
+item is `-1`, the verdict flips to **APPROVED**. You're finally asked for
+an optional free-form comment for the top.
 
 - `--comment <TEXT>` supplies that top comment non-interactively.
 - `-y`/`--yes` accepts every inferred mark without prompting (and skips
@@ -149,16 +161,24 @@ already decides is read from its output, never re-run.
   a `Source` (the "fix submitted" part only when a `…/pull/…` comment
   precedes that `Source`); 🫤 when no `%license` at all.
 - **statically linked deps** — for a crate that ships a binary
-  (`%{_bindir}`), an extra item checks that its statically linked
-  dependencies' licenses are folded into `License:`.
+  (`%{_bindir}`), an extra item verifies the bundled dependencies'
+  licenses are folded into the binary subpackage's `License:`. It reads
+  the `LICENSE SUMMARY` block `rust2rpm` writes to `results/build.log`
+  and checks each license appears in the `# <expr>` comment block above
+  the folded `License:` line in the spec: ✅ `all N bundled-dep licenses
+  present` when they all match, 🫤 naming any that are missing. The full
+  breakdown (the `# <expr>` block through the `License:` line) is printed
+  to the terminal so you can eyeball it — it's evidence, kept out of the
+  pasted comment.
 - **issues** — `fedora-review`'s MUST failures are listed and hold
   approval, except the benign "File listed twice" that every rust2rpm
   package trips: a file under the crate instdir
   (`…/usr/share/cargo/registry/<crate>/`) that's also `%doc`/`%license`
-  (LICENSE, README, …) is listed twice by design.
+  (LICENSE, README, …) is listed twice by design. Remaining issues are
+  resolved interactively — keep, explain, or remove (see Usage).
 
-A package is **APPROVED** when nothing failed and there are no
-outstanding issues; caveats (🫤) don't block.
+A package is **APPROVED** when no checklist item is `-1` and every issue
+is addressed (explained or removed); caveats (🫤) don't block.
 
 ## Scope
 

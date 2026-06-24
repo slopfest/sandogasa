@@ -99,11 +99,7 @@ fn rust_checklist(r: &Review, crate_latest: Option<&str>) -> Vec<Item> {
     // A shipped binary statically links its dependencies, so its
     // License: must fold in all of their licenses — an extra check.
     if r.spec.ships_binary {
-        items.push(Item::new(
-            "licenses of statically linked dependencies are correctly taken into account",
-            Mark::Pass,
-            None,
-        ));
+        items.push(static_deps_item(r));
     }
     items.push(license_file_item(r));
     items.push(Item::new(
@@ -224,6 +220,47 @@ fn normalize_license(s: &str) -> String {
         .join(" ")
 }
 
+/// The statically-linked-deps item for a binary crate. With evidence,
+/// it cross-checks the build log's LICENSE SUMMARY against the spec's
+/// folded `License:` and notes whether all are present (✅) or some are
+/// missing (🫤). The full breakdown is shown to the reviewer separately
+/// (see `main`). Without evidence it stays a plain ✅ to confirm manually.
+fn static_deps_item(r: &Review) -> Item {
+    let label = "licenses of statically linked dependencies are correctly taken into account";
+    let Some(sd) = &r.static_deps else {
+        return Item::new(label, Mark::Pass, None);
+    };
+    if sd.summary.is_empty() {
+        // No build-log summary to compare against — fall back to a manual
+        // check, pointing at the breakdown shown below.
+        return Item::new(
+            label,
+            Mark::Pass,
+            Some("inspect the license breakdown below (no build-log summary found)"),
+        );
+    }
+    let missing = sd.missing();
+    if missing.is_empty() {
+        Item::new(
+            label,
+            Mark::Pass,
+            Some(&format!(
+                "all {} bundled-dep licenses present in the spec License:",
+                sd.summary.len()
+            )),
+        )
+    } else {
+        Item {
+            label: label.into(),
+            mark: Mark::Caveat,
+            note: Some(format!(
+                "missing from the spec License:: {}",
+                missing.join(", ")
+            )),
+        }
+    }
+}
+
 /// License file shipped by the crate and `%license`'d → pass; added
 /// manually as a Source (upstream's crate lacks it) → caveat, noting an
 /// in-flight upstream fix when a PR comment precedes the Source; no
@@ -245,28 +282,84 @@ fn license_file_item(r: &Review) -> Item {
     }
 }
 
-/// Whether the package can be approved: no failed item and no
-/// outstanding fedora-review MUST issue.
-pub fn approved(items: &[Item], issues: &[Issue]) -> bool {
-    issues.is_empty() && !items.iter().any(|i| i.mark == Mark::Fail)
+/// How the reviewer resolved a fedora-review issue (a third option,
+/// removing it as a false positive, is represented by dropping it from
+/// the list entirely).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// Not addressed — blocks approval, listed as needing attention.
+    Open,
+    /// Accepted with a written justification — no longer blocks, but
+    /// stays visible in the comment so the reasoning is on record.
+    Explained(String),
+}
+
+/// A fedora-review issue paired with the reviewer's resolution.
+#[derive(Debug, Clone)]
+pub struct ReviewedIssue {
+    pub issue: Issue,
+    pub resolution: Resolution,
+}
+
+impl ReviewedIssue {
+    /// Wrap a freshly-parsed issue as unaddressed.
+    pub fn open(issue: Issue) -> ReviewedIssue {
+        ReviewedIssue {
+            issue,
+            resolution: Resolution::Open,
+        }
+    }
+
+    /// The concrete finding to show — the note fedora-review attached,
+    /// falling back to the criterion text.
+    pub fn finding(&self) -> &str {
+        self.issue.note.as_deref().unwrap_or(&self.issue.text)
+    }
+}
+
+/// Wrap parsed issues as unaddressed, ready for the reviewer to resolve.
+pub fn reviewed(issues: &[Issue]) -> Vec<ReviewedIssue> {
+    issues.iter().cloned().map(ReviewedIssue::open).collect()
+}
+
+/// Whether the package can be approved: no failed checklist item and no
+/// issue still open (explained or removed issues don't block).
+pub fn approved(items: &[Item], issues: &[ReviewedIssue]) -> bool {
+    !items.iter().any(|i| i.mark == Mark::Fail)
+        && !issues.iter().any(|i| i.resolution == Resolution::Open)
 }
 
 /// Render the condensed-review block (the part between the first and
-/// second `===`): intro line, any MUST issues to address, the marked
+/// second `===`): intro line, any open MUST issues to address, any issues
+/// the reviewer addressed (with their justification), the marked
 /// checklist, and the verdict.
-pub fn render_review(generator: Generator, items: &[Item], issues: &[Issue]) -> String {
+pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIssue]) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "Package was generated with {}, simplifying the review.\n\n",
         generator_name(generator)
     ));
 
-    if !issues.is_empty() {
+    let open: Vec<&ReviewedIssue> = issues
+        .iter()
+        .filter(|i| i.resolution == Resolution::Open)
+        .collect();
+    if !open.is_empty() {
         out.push_str("Issues to address before approval:\n");
-        for it in issues {
-            // Prefer the concrete finding (note) over the criterion text,
-            // which reads oddly when negated.
-            out.push_str(&format!("- {}\n", it.note.as_deref().unwrap_or(&it.text)));
+        for it in &open {
+            out.push_str(&format!("- {}\n", it.finding()));
+        }
+        out.push('\n');
+    }
+
+    let mut explained = issues.iter().filter_map(|i| match &i.resolution {
+        Resolution::Explained(why) => Some((i.finding(), why.as_str())),
+        Resolution::Open => None,
+    });
+    if let Some(first) = explained.next() {
+        out.push_str("Issues addressed by the reviewer:\n");
+        for (finding, why) in std::iter::once(first).chain(explained) {
+            out.push_str(&format!("- {finding} — {why}\n"));
         }
         out.push('\n');
     }
@@ -345,7 +438,7 @@ pub fn assemble(comment: Option<&str>, review_block: &str, post_import: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::review::{Generator, Issue, Review, SpecInfo};
+    use crate::review::{Generator, Issue, Review, SpecInfo, StaticDeps};
 
     fn review(
         tests_enabled: bool,
@@ -371,6 +464,7 @@ mod tests {
             build_ok,
             rpmlint_clean: true,
             issues,
+            static_deps: None,
         }
     }
 
@@ -380,8 +474,8 @@ mod tests {
         let items = infer(&r, Some("1.0"));
         assert_eq!(items.len(), 7);
         assert!(items.iter().all(|i| i.mark == Mark::Pass));
-        assert!(approved(&items, &r.issues));
-        let block = render_review(r.spec.generator, &items, &r.issues);
+        assert!(approved(&items, &reviewed(&r.issues)));
+        let block = render_review(r.spec.generator, &items, &reviewed(&r.issues));
         assert!(block.contains("generated with rust2rpm"));
         assert!(block.contains("✅ package complies with Rust Packaging Guidelines"));
         // Evidence notes on the version + license items.
@@ -402,8 +496,8 @@ mod tests {
         let lic = &items[5];
         assert_eq!(lic.mark, Mark::Caveat);
         // Caveats alone still approve.
-        assert!(approved(&items, &r.issues));
-        let block = render_review(r.spec.generator, &items, &r.issues);
+        assert!(approved(&items, &reviewed(&r.issues)));
+        let block = render_review(r.spec.generator, &items, &reviewed(&r.issues));
         assert!(
             block.contains("🫤 test suite is run and all unit tests pass (disabled — justify)")
         );
@@ -420,7 +514,7 @@ mod tests {
             Some("spec: 1.0; crates.io: 2.0 — update")
         );
         // Not blocking — caveats still approve.
-        assert!(approved(&items, &r.issues));
+        assert!(approved(&items, &reviewed(&r.issues)));
         // No crates.io check → evidence says so.
         let items = infer(&r, None);
         assert_eq!(
@@ -503,12 +597,39 @@ mod tests {
     }
 
     #[test]
+    fn static_deps_evidence_passes_when_all_present_and_flags_missing() {
+        let mut r = review(true, true, true, vec![]);
+        r.spec.ships_binary = true;
+        // All summary licenses are listed in the spec → ✅ with a count.
+        r.static_deps = Some(StaticDeps {
+            summary: vec!["MIT".into(), "Apache-2.0 OR MIT".into()],
+            spec_listed: vec!["MIT".into(), "Apache-2.0 OR MIT".into()],
+            spec_section: "# MIT\n# Apache-2.0 OR MIT\nLicense: MIT AND (Apache-2.0 OR MIT)".into(),
+        });
+        let item = &infer(&r, Some("1.0"))[5];
+        assert_eq!(item.mark, Mark::Pass);
+        assert_eq!(
+            item.note.as_deref(),
+            Some("all 2 bundled-dep licenses present in the spec License:")
+        );
+        // A summary license absent from the spec → 🫤 naming it.
+        r.static_deps = Some(StaticDeps {
+            summary: vec!["MIT".into(), "MPL-2.0".into()],
+            spec_listed: vec!["MIT".into()],
+            spec_section: "# MIT\nLicense: MIT".into(),
+        });
+        let item = &infer(&r, Some("1.0"))[5];
+        assert_eq!(item.mark, Mark::Caveat);
+        assert!(item.note.as_deref().unwrap().contains("MPL-2.0"));
+    }
+
+    #[test]
     fn build_failure_fails_and_blocks_approval() {
         let r = review(true, true, false, vec![]);
         let items = infer(&r, Some("1.0"));
         assert_eq!(items[1].mark, Mark::Fail);
-        assert!(!approved(&items, &r.issues));
-        let block = render_review(r.spec.generator, &items, &r.issues);
+        assert!(!approved(&items, &reviewed(&r.issues)));
+        let block = render_review(r.spec.generator, &items, &reviewed(&r.issues));
         assert!(block.contains("Package not yet approved"));
     }
 
@@ -528,7 +649,7 @@ mod tests {
             items[1].note.as_deref(),
             Some("installation failed — see fedora-review attachment")
         );
-        assert!(!approved(&items, &r.issues));
+        assert!(!approved(&items, &reviewed(&r.issues)));
     }
 
     #[test]
@@ -540,11 +661,47 @@ mod tests {
         };
         let r = review(true, true, true, vec![issue]);
         let items = infer(&r, Some("1.0"));
-        assert!(!approved(&items, &r.issues));
-        let block = render_review(r.spec.generator, &items, &r.issues);
+        assert!(!approved(&items, &reviewed(&r.issues)));
+        let block = render_review(r.spec.generator, &items, &reviewed(&r.issues));
         assert!(block.contains("Issues to address before approval:"));
         // The concrete finding (note), not the criterion text.
         assert!(block.contains("- warning: File listed twice"));
+    }
+
+    #[test]
+    fn explained_issue_unblocks_and_is_listed_separately() {
+        let issue = Issue {
+            name: "CheckPackageName".to_string(),
+            text: "Package name conforms.".to_string(),
+            note: Some("A package with this name already exists.".to_string()),
+        };
+        let reviewed = vec![ReviewedIssue {
+            issue,
+            resolution: Resolution::Explained("re-review of the retired package".to_string()),
+        }];
+        let r = review(true, true, true, vec![]);
+        let items = infer(&r, Some("1.0"));
+        // An explained issue no longer blocks (no failing item either).
+        assert!(approved(&items, &reviewed));
+        let block = render_review(r.spec.generator, &items, &reviewed);
+        assert!(!block.contains("Issues to address before approval:"));
+        assert!(block.contains("Issues addressed by the reviewer:"));
+        assert!(block.contains(
+            "- A package with this name already exists. — re-review of the retired package"
+        ));
+        assert!(block.trim_end().ends_with("Package APPROVED."));
+    }
+
+    #[test]
+    fn removed_issue_is_just_absent() {
+        // "Remove" is modeled as dropping the issue from the list, so an
+        // empty list approves and shows no issues section.
+        let r = review(true, true, true, vec![]);
+        let items = infer(&r, Some("1.0"));
+        let block = render_review(r.spec.generator, &items, &[]);
+        assert!(approved(&items, &[]));
+        assert!(!block.contains("Issues to address"));
+        assert!(!block.contains("Issues addressed"));
     }
 
     #[test]

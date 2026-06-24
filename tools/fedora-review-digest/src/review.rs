@@ -82,6 +82,41 @@ pub struct Review {
     pub rpmlint_clean: bool,
     /// fedora-review MUST failures.
     pub issues: Vec<Issue>,
+    /// For a binary crate, the statically-linked dependency license
+    /// evidence (build-log summary vs the spec's folded `License:`);
+    /// `None` for a library crate or when the section can't be found.
+    pub static_deps: Option<StaticDeps>,
+}
+
+/// Statically-linked dependency license evidence for a binary crate: the
+/// license summary rust2rpm wrote to the build log, and the matching
+/// `# <expr>` block above the binary subpackage's folded `License:` line
+/// in the spec.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticDeps {
+    /// License expressions from the build log's `LICENSE SUMMARY` block
+    /// (empty if the build log wasn't found).
+    pub summary: Vec<String>,
+    /// License expressions listed as `# <expr>` comments above the
+    /// binary subpackage's `License:` line in the spec.
+    pub spec_listed: Vec<String>,
+    /// The raw spec section (the `# <expr>` block plus the `License:`
+    /// line, and a trailing `LICENSE.dependencies` note if any), for the
+    /// reviewer to inspect.
+    pub spec_section: String,
+}
+
+impl StaticDeps {
+    /// Build-log summary licenses not found in the spec's `# <expr>`
+    /// listing — i.e. licenses that should be folded into `License:` but
+    /// aren't. Empty when the build log wasn't read (nothing to compare).
+    pub fn missing(&self) -> Vec<&str> {
+        self.summary
+            .iter()
+            .filter(|s| !self.spec_listed.iter().any(|l| l == *s))
+            .map(String::as_str)
+            .collect()
+    }
 }
 
 impl Review {
@@ -120,6 +155,26 @@ impl Review {
             issues.retain(|i| !is_benign_instdir_dup(i));
         }
 
+        // For a binary crate, gather the static-dep license evidence: the
+        // spec's folded-License section, checked against the build log's
+        // LICENSE SUMMARY.
+        let static_deps = if spec.ships_binary {
+            parse_spec_license_section(&spec_text).map(|(spec_listed, spec_section)| {
+                let summary = std::fs::read_to_string(dir.join("results/build.log"))
+                    .ok()
+                    .as_deref()
+                    .map(parse_license_summary)
+                    .unwrap_or_default();
+                StaticDeps {
+                    summary,
+                    spec_listed,
+                    spec_section,
+                }
+            })
+        } else {
+            None
+        };
+
         Ok(Review {
             spec,
             upstream_name,
@@ -127,6 +182,7 @@ impl Review {
             build_ok,
             rpmlint_clean,
             issues,
+            static_deps,
         })
     }
 }
@@ -326,6 +382,77 @@ pub fn parse_cargo_license(cargo_toml: &str) -> Option<String> {
     })
 }
 
+/// License expressions from a build log's `### BEGIN LICENSE SUMMARY ###`
+/// … `###  END LICENSE SUMMARY  ###` block — each a `# <expr>` line that
+/// rust2rpm emits listing the bundled dependencies' licenses. Empty if
+/// the block isn't present.
+pub fn parse_license_summary(build_log: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_summary = false;
+    for line in build_log.lines() {
+        let t = line.trim();
+        if t.contains("BEGIN LICENSE SUMMARY") {
+            in_summary = true;
+            continue;
+        }
+        if t.contains("END LICENSE SUMMARY") {
+            break;
+        }
+        if in_summary && let Some(expr) = t.strip_prefix('#') {
+            let expr = expr.trim();
+            if !expr.is_empty() {
+                out.push(expr.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// The binary subpackage's static-dep license section in a spec: the
+/// contiguous `# <expr>` comment block immediately above a `License:`
+/// line (the folded license for a bundled binary). Returns the listed
+/// license expressions (a `LICENSE.dependencies` note is excluded from
+/// the list but kept in the raw text) and the raw section — the comment
+/// block, the `License:` line, and a trailing `LICENSE.dependencies` note
+/// if present — for the reviewer to inspect. `None` when no `License:`
+/// line has such a comment block above it (e.g. a library crate).
+pub fn parse_spec_license_section(spec: &str) -> Option<(Vec<String>, String)> {
+    let lines: Vec<&str> = spec.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        if !line.trim_start().starts_with("License:") {
+            continue;
+        }
+        // Walk upward over the contiguous comment block above it.
+        let mut start = i;
+        while start > 0 && lines[start - 1].trim_start().starts_with('#') {
+            start -= 1;
+        }
+        if start == i {
+            continue; // no comment block — not the folded-license section
+        }
+        let listed: Vec<String> = lines[start..i]
+            .iter()
+            .map(|l| l.trim_start().trim_start_matches('#').trim())
+            .filter(|c| !c.is_empty() && !c.contains("LICENSE.dependencies"))
+            .map(str::to_string)
+            .collect();
+        if listed.is_empty() {
+            continue; // comments weren't license expressions
+        }
+        // Extend the section past the License: line to a trailing
+        // `LICENSE.dependencies` note, if one follows.
+        let mut end = i;
+        if let Some(next) = lines.get(i + 1)
+            && next.trim_start().starts_with('#')
+            && next.contains("LICENSE.dependencies")
+        {
+            end = i + 1;
+        }
+        return Some((listed, lines[start..=end].join("\n")));
+    }
+    None
+}
+
 /// Whether the spec builds/runs its test suite. rust2rpm gates it with
 /// `%bcond check <0|1>`; otherwise infer from a `%check` section.
 pub fn tests_enabled(spec: &str) -> bool {
@@ -474,6 +601,58 @@ Name: rust-foo
         assert!(!s.license_manual); // ships its own license
         // A library crate ships no binary.
         assert!(!s.ships_binary);
+    }
+
+    #[test]
+    fn license_summary_parsed_from_build_log() {
+        let log = "\
+some build output
+### BEGIN LICENSE SUMMARY ###
+# Apache-2.0 OR MIT
+# BSD-3-Clause
+# MIT
+###  END LICENSE SUMMARY  ###
+more output
+";
+        assert_eq!(
+            parse_license_summary(log),
+            vec!["Apache-2.0 OR MIT", "BSD-3-Clause", "MIT"]
+        );
+        assert!(parse_license_summary("no summary here").is_empty());
+    }
+
+    #[test]
+    fn spec_license_section_found_above_folded_license() {
+        let spec = "\
+License:        BSD-3-Clause
+URL:            https://example.com
+
+%package     -n %{crate}
+Summary:        %{summary}
+
+# Apache-2.0 OR MIT
+# BSD-3-Clause
+# MIT
+License: (Apache-2.0 OR MIT) AND BSD-3-Clause AND MIT
+";
+        let (listed, section) = parse_spec_license_section(spec).unwrap();
+        // The first License: (no comment block above it) is skipped; the
+        // folded subpackage License: with its # block is the match.
+        assert_eq!(listed, vec!["Apache-2.0 OR MIT", "BSD-3-Clause", "MIT"]);
+        assert!(section.starts_with("# Apache-2.0 OR MIT"));
+        assert!(section.trim_end().ends_with("AND MIT"));
+        // A library spec (no # block above License:) yields nothing.
+        assert!(parse_spec_license_section("License: MIT\n").is_none());
+    }
+
+    #[test]
+    fn static_deps_missing_reports_the_gap() {
+        let sd = StaticDeps {
+            summary: vec!["MIT".into(), "MPL-2.0".into(), "BSD-3-Clause".into()],
+            spec_listed: vec!["MIT".into(), "BSD-3-Clause".into()],
+            spec_section: String::new(),
+        };
+        assert_eq!(sd.missing(), vec!["MPL-2.0"]);
     }
 
     #[test]

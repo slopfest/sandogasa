@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 use sandogasa_config::ConfigFile;
 
-use fedora_review_digest::checklist::{self, Item, Mark};
+use fedora_review_digest::checklist::{self, Item, Mark, Resolution, ReviewedIssue};
 use fedora_review_digest::review::{Generator, Review};
 use fedora_review_digest::{bugzilla, config, cratesio};
 use sandogasa_bugzilla::BzClient;
@@ -157,6 +157,7 @@ fn run(cli: &DigestArgs) -> Result<String, String> {
     };
 
     let mut items = checklist::infer(&review, crate_latest.as_deref());
+    let mut issues = checklist::reviewed(&review.issues);
 
     // Finalize the marks: interactively by default, or accept the
     // inferred ones with --yes. A non-tty without --yes can't prompt, so
@@ -177,10 +178,12 @@ fn run(cli: &DigestArgs) -> Result<String, String> {
         );
         eprint!(
             "{}",
-            checklist::render_review(review.spec.generator, &items, &review.issues)
+            checklist::render_review(review.spec.generator, &items, &issues)
         );
+        show_static_deps(&review);
         eprintln!("\n── confirm each item ──");
         finalize(&mut items)?;
+        finalize_issues(&mut issues)?;
     }
 
     let comment = match &cli.comment {
@@ -189,12 +192,12 @@ fn run(cli: &DigestArgs) -> Result<String, String> {
         None => None,
     };
 
-    let review_block = checklist::render_review(review.spec.generator, &items, &review.issues);
+    let review_block = checklist::render_review(review.spec.generator, &items, &issues);
     let post_block = checklist::render_post_import(review.spec.generator, &review.upstream_name);
     let text = checklist::assemble(comment.as_deref(), &review_block, &post_block);
 
     if cli.post {
-        let approved = checklist::approved(&items, &review.issues);
+        let approved = checklist::approved(&items, &issues);
         post_to_bugzilla(input, &dir, &text, approved, cli.yes)?;
     }
     Ok(text)
@@ -327,6 +330,33 @@ fn find_review_dir(base: &Path, bug_id: &str) -> Result<PathBuf, String> {
     }
 }
 
+/// For a binary crate, print the statically-linked dependency license
+/// breakdown — the build log's LICENSE SUMMARY reconciled against the
+/// spec's folded `License:` — for the reviewer to inspect. Goes to
+/// stderr (it's evidence, not part of the pasted comment).
+fn show_static_deps(review: &Review) {
+    let Some(sd) = &review.static_deps else {
+        return;
+    };
+    eprintln!("\n── statically linked dependency licenses ──");
+    eprintln!("the spec's folded License: section (verify every dep license is folded in):\n");
+    eprintln!("{}", sd.spec_section);
+    let missing = sd.missing();
+    if sd.summary.is_empty() {
+        eprintln!("\n(no LICENSE SUMMARY in the build log to cross-check against)");
+    } else if missing.is_empty() {
+        eprintln!(
+            "\nall {} licenses from the build-log LICENSE SUMMARY are present above.",
+            sd.summary.len()
+        );
+    } else {
+        eprintln!(
+            "\n⚠ in the build-log summary but NOT the spec License:: {}",
+            missing.join(", ")
+        );
+    }
+}
+
 /// Walk the checklist, prompting +1 / 0 / -1 per item (Enter accepts the
 /// inferred default); for a caveat/fail, also prompt for the note.
 fn finalize(items: &mut [Item]) -> Result<(), String> {
@@ -351,6 +381,70 @@ fn finalize(items: &mut [Item]) -> Result<(), String> {
     }
     eprintln!();
     Ok(())
+}
+
+/// Walk the fedora-review issues, letting the reviewer keep each one
+/// (still blocks approval), explain it away (kept on record but
+/// non-blocking), or remove it (a false positive — dropped). With all
+/// issues addressed and no failing checklist item, the verdict flips to
+/// APPROVED.
+fn finalize_issues(issues: &mut Vec<ReviewedIssue>) -> Result<(), String> {
+    if issues.is_empty() {
+        return Ok(());
+    }
+    eprintln!("── address issues ──");
+    eprintln!("(k)eep blocks approval / (e)xplain accepts it / (r)emove drops it\n");
+    let total = issues.len();
+    let mut kept: Vec<ReviewedIssue> = Vec::with_capacity(total);
+    for (i, ri) in std::mem::take(issues).into_iter().enumerate() {
+        match prompt_issue(i + 1, total, ri.finding())? {
+            IssueAction::Keep => kept.push(ReviewedIssue {
+                resolution: Resolution::Open,
+                ..ri
+            }),
+            IssueAction::Explain(why) => kept.push(ReviewedIssue {
+                resolution: Resolution::Explained(why),
+                ..ri
+            }),
+            IssueAction::Remove => {} // dropped
+        }
+    }
+    *issues = kept;
+    eprintln!();
+    Ok(())
+}
+
+/// What the reviewer chose to do with one issue.
+enum IssueAction {
+    Keep,
+    Explain(String),
+    Remove,
+}
+
+/// Prompt for one issue's disposition (Enter keeps it — the safe default
+/// that doesn't silently approve).
+fn prompt_issue(idx: usize, total: usize, finding: &str) -> Result<IssueAction, String> {
+    loop {
+        eprintln!("[{idx}/{total}] {finding}");
+        eprint!("  (k)eep / (e)xplain / (r)emove [k]: ");
+        let _ = std::io::stderr().flush();
+        let line = read_line()?;
+        match line.trim().to_ascii_lowercase().as_str() {
+            "" | "k" | "keep" => return Ok(IssueAction::Keep),
+            "r" | "remove" => return Ok(IssueAction::Remove),
+            "e" | "explain" => {
+                eprint!("    explanation: ");
+                let _ = std::io::stderr().flush();
+                let why = read_line()?.trim().to_string();
+                if why.is_empty() {
+                    eprintln!("  an explanation is required (or pick k/r)");
+                    continue;
+                }
+                return Ok(IssueAction::Explain(why));
+            }
+            _ => eprintln!("  enter k, e, or r"),
+        }
+    }
 }
 
 /// Prompt for one item's vote, defaulting to its inferred mark.
