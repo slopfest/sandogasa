@@ -45,15 +45,20 @@ pipeline; `--build-suite`, dput-default upload).
 
 ## fedora-review-digest
 
-- (2026-06-23) Confirm the static-linked-deps checklist item on a real
-  **binary-shipping** crate review (the `%{_bindir}` case) — it's only
-  unit-tested so far.
 - (2026-06-23) pyp2spec support: a Python checklist + post-import
   boilerplate (terminology: "Python package (from PyPI)", not module).
   Generator detection is already wired; `infer`/`render_post_import`
   just need the Python branch.
 - (2026-06-23, later) Run `fedora-review -b <id>` ourselves instead of
   only pointing at an existing result dir.
+
+Done (shipped): the core digest + interactive `+1/0/-1` finalization,
+`--post` (comment + `fedora-review` flag + status POST + bug claim) and
+the `config` subcommand, rust2rpm spec/license fixes, the
+builds-and-installs item reading fedora-review's install verdict,
+interactive issue resolution (keep/explain/remove → APPROVED flip), and
+the statically-linked-deps license verification (build-log LICENSE
+SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
 
 ## ebranch
 
