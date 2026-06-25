@@ -16,10 +16,10 @@ Mirrors `sandogasa-github` / `sandogasa-gitlab` in shape.
 ### sandogasa-report: Forgejo PR-merge accounting
 
 Domains can now include a `[domains.<name>.forgejo]` block (`instance`,
-optional `owner` filter) to report pull requests opened and merged on a
-Forgejo / Gitea instance — Codeberg, a Fedora Forgejo, etc. The query is
-token-scoped (`created=true`), so it captures contributions to *any*
-repo, not just the user's own namespace. The opened list annotates each
+optional `owner` filter) to report pull requests opened and merged — and
+issues opened and closed — on a Forgejo / Gitea instance — Codeberg, a
+Fedora Forgejo, etc. The query is token-scoped (`created=true`), so it
+captures contributions to *any* repo, not just the user's own namespace. The opened list annotates each
 PR's fate — `(merged)`, `(closed)`, or `(applied)` for a closed-unmerged
 PR whose commit nonetheless landed on the target branch (a maintainer
 cherry-picked/fast-forwarded it rather than clicking merge; detected by

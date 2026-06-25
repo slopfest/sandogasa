@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
-use sandogasa_forgejo::{Client, PullRequest};
+use sandogasa_forgejo::{Client, Issue, PullRequest};
 use serde::Serialize;
 
 use crate::config::ForgejoConfig;
@@ -36,6 +36,23 @@ pub struct ForgejoReport {
     pub opened_prs: Vec<PrRef>,
     /// PRs by the user that were merged in the window.
     pub merged_prs: Vec<PrRef>,
+    /// Issues opened by the user in the window.
+    pub opened_issues: Vec<IssueRef>,
+    /// Issues by the user that were closed in the window.
+    pub closed_issues: Vec<IssueRef>,
+}
+
+/// Pointer to an issue for the report's summary lists.
+#[derive(Debug, Clone, Serialize)]
+pub struct IssueRef {
+    /// `owner/name` slug.
+    pub repo: String,
+    /// Issue number.
+    pub number: u64,
+    /// Issue title.
+    pub title: String,
+    /// Issue URL.
+    pub url: String,
 }
 
 /// Pointer to a pull request for the report's summary lists.
@@ -131,6 +148,29 @@ pub fn forgejo_report(
             report.merged_prs.push(into_pr_ref(&pr));
         }
     }
+
+    if verbose {
+        eprintln!("[forgejo] {base}: searching issues created by the token owner");
+    }
+    let issues = client
+        .my_issues("all", cfg.owner.as_deref())
+        .map_err(|e| format!("Forgejo issue search on {base}: {e}"))?;
+    for issue in issues {
+        if issue
+            .created_at
+            .as_deref()
+            .is_some_and(|d| date_in_range(d, since, until))
+        {
+            report.opened_issues.push(into_issue_ref(&issue));
+        }
+        if issue.state == "closed"
+            && issue
+                .closed_at()
+                .is_some_and(|d| date_in_range(d, since, until))
+        {
+            report.closed_issues.push(into_issue_ref(&issue));
+        }
+    }
     Ok(report)
 }
 
@@ -175,7 +215,11 @@ pub fn format_markdown(report: &ForgejoReport, detail: u8) -> String {
     let detailed = detail >= 1;
     let heading = "### Forgejo\n\n".to_string();
 
-    if report.opened_prs.is_empty() && report.merged_prs.is_empty() {
+    if report.opened_prs.is_empty()
+        && report.merged_prs.is_empty()
+        && report.opened_issues.is_empty()
+        && report.closed_issues.is_empty()
+    {
         let mut out = heading;
         out.push_str("No Forgejo activity.\n\n");
         return out;
@@ -183,9 +227,14 @@ pub fn format_markdown(report: &ForgejoReport, detail: u8) -> String {
 
     let mut out = heading;
     out.push_str(&format!("- **PRs opened:** {}\n", report.opened_prs.len()));
+    out.push_str(&format!("- **PRs merged:** {}\n", report.merged_prs.len()));
     out.push_str(&format!(
-        "- **PRs merged:** {}\n\n",
-        report.merged_prs.len()
+        "- **Issues opened:** {}\n",
+        report.opened_issues.len()
+    ));
+    out.push_str(&format!(
+        "- **Issues closed:** {}\n\n",
+        report.closed_issues.len()
     ));
 
     if !detailed {
@@ -193,12 +242,20 @@ pub fn format_markdown(report: &ForgejoReport, detail: u8) -> String {
     }
 
     if !report.opened_prs.is_empty() {
-        out.push_str("#### Opened\n\n");
+        out.push_str("#### PRs opened\n\n");
         write_pr_list(&mut out, &report.opened_prs, true);
     }
     if !report.merged_prs.is_empty() {
-        out.push_str("#### Merged\n\n");
+        out.push_str("#### PRs merged\n\n");
         write_pr_list(&mut out, &report.merged_prs, false);
+    }
+    if !report.opened_issues.is_empty() {
+        out.push_str("#### Issues opened\n\n");
+        write_issue_list(&mut out, &report.opened_issues);
+    }
+    if !report.closed_issues.is_empty() {
+        out.push_str("#### Issues closed\n\n");
+        write_issue_list(&mut out, &report.closed_issues);
     }
     out
 }
@@ -213,6 +270,25 @@ fn into_pr_ref(pr: &PullRequest) -> PrRef {
         merged: pr.is_merged(),
         applied: false,
     }
+}
+
+fn into_issue_ref(issue: &Issue) -> IssueRef {
+    IssueRef {
+        repo: issue.repo_slug().unwrap_or_default().to_string(),
+        number: issue.number,
+        title: issue.title.clone(),
+        url: issue.html_url.clone(),
+    }
+}
+
+fn write_issue_list(out: &mut String, issues: &[IssueRef]) {
+    for it in issues {
+        out.push_str(&format!(
+            "- [{}#{}]({}) {}\n",
+            it.repo, it.number, it.url, it.title,
+        ));
+    }
+    out.push('\n');
 }
 
 /// Render a PR list. `with_status` appends a `(merged)`/`(closed)`
@@ -369,7 +445,7 @@ mod tests {
         let md = format_markdown(&report, 1);
         assert!(md.contains("### Forgejo\n"));
         assert!(md.contains("**PRs merged:** 1"));
-        assert!(md.contains("#### Merged"));
+        assert!(md.contains("#### PRs merged"));
         assert!(md.contains("ptesarik/libkdumpfile#92"));
         assert!(md.contains("Drop removed bfd macros"));
         // The merged list isn't annotated with a redundant marker.
@@ -420,6 +496,42 @@ mod tests {
         assert!(
             md.contains("#8](https://codeberg.org/o/r/pulls/8) taken via cherry-pick (applied)")
         );
+    }
+
+    #[test]
+    fn issues_render_opened_and_closed() {
+        let mut report = ForgejoReport {
+            instance: "https://codeberg.org".into(),
+            user: "michelin".into(),
+            ..Default::default()
+        };
+        report.opened_issues.push(IssueRef {
+            repo: "ptesarik/libkdumpfile".into(),
+            number: 91,
+            title: "build fails with binutils 2.46".into(),
+            url: "https://codeberg.org/ptesarik/libkdumpfile/issues/91".into(),
+        });
+        let md = format_markdown(&report, 1);
+        assert!(md.contains("- **Issues opened:** 1"));
+        assert!(md.contains("- **Issues closed:** 0"));
+        assert!(md.contains("#### Issues opened"));
+        assert!(md.contains(
+            "[ptesarik/libkdumpfile#91](https://codeberg.org/ptesarik/libkdumpfile/issues/91) build fails with binutils 2.46"
+        ));
+    }
+
+    #[test]
+    fn into_issue_ref_pulls_slug_and_url() {
+        let issue: Issue = serde_json::from_str(
+            r#"{"number":91,"title":"build fails","state":"closed",
+                "html_url":"https://codeberg.org/o/r/issues/91",
+                "repository":{"full_name":"o/r","name":"r","owner":"o"}}"#,
+        )
+        .unwrap();
+        let r = into_issue_ref(&issue);
+        assert_eq!(r.repo, "o/r");
+        assert_eq!(r.number, 91);
+        assert_eq!(r.url, "https://codeberg.org/o/r/issues/91");
     }
 
     #[test]

@@ -24,10 +24,11 @@ packaging activity across multiple systems:
   organisation. See `TODO.md` for why GitHub ships only the
   authored count today (mirror-pusher detection deferred).
 - **Forgejo / Gitea** (e.g. codeberg.org, a Fedora Forgejo):
-  PRs opened / merged in the window, across every repo you
-  contribute to. Sourced from the token owner's pull-request
-  search, so it captures contributions to other people's repos,
-  not just your own namespace. Optionally scoped by repo-owner.
+  PRs opened / merged and issues opened / closed in the window,
+  across every repo you contribute to. Sourced from the token
+  owner's issue/pull search, so it captures contributions to
+  other people's repos, not just your own namespace. Optionally
+  scoped by repo-owner.
   The opened list flags each PR's fate — `(merged)`, `(closed)`,
   or `(applied)` when a closed-unmerged PR's commit still landed
   on the target branch (a maintainer cherry-picked or

@@ -21,8 +21,8 @@ at your own instance token.
 
 Forgejo tokens are scoped by category (read/write). Per operation:
 
-- `my_pull_requests` — `read:repository` + `read:issue` (the search
-  lives under the `/repos` group and is an issue endpoint).
+- `my_pull_requests` / `my_issues` — `read:repository` + `read:issue`
+  (the search lives under the `/repos` group and is an issue endpoint).
 - `validate_token` — `read:user` (it calls `/api/v1/user`).
 - `create_issue` / `search_issues` — `write:issue` (create) /
   `read:issue` (search), plus `read:repository`.

@@ -78,16 +78,37 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
 - Debug CVE/security bug reporting: the query may be too narrow or
   the keyword filter may not match Bugzilla's actual keyword values.
   Test with known CVE bugs and compare against manual Bugzilla search.
+- (2026-06-24) Apply the Forgejo "(applied)" detection (closed-unmerged
+  PR whose commit landed out-of-band) to GitHub and GitLab too. The
+  approach is identical — each forge has a compare endpoint
+  (GitHub `/compare/{base}...{head}` → `status`/`ahead_by`; GitLab
+  `/repository/compare?from=&to=` → empty `commits`) — but it's a
+  per-crate implementation: add `pull_request`/`merge_request` detail +
+  a `commit_contained` method to `sandogasa-github` and
+  `sandogasa-gitlab` (neither has them). GitHub slots in cheaply (its
+  reporter is search-based like Forgejo, so annotate the opened list the
+  same way); GitLab needs more (its reporter is *event*-based and
+  doesn't currently enumerate closed-unmerged MRs to annotate).
 - (2026-06-24) Forgejo: detect a closed PR whose work landed via a
   *reworded/rebased* commit (different SHA, so the `head.sha`-on-
-  default-branch check used for the "applied" state misses it). Idea:
-  go PR → linked issue (the PR body's `Fixes #N`) → the issue's
-  timeline cross-references, and look for a default-branch commit
-  authored by the user that references the same issue; mark it
-  "applied" too. Fuzzier than the SHA check (a different person could
-  reference the same issue) and costs extra API calls per closed PR,
-  so gate it and confirm author identity. Only worth it if the plain
-  SHA check proves to miss real cases.
+  default-branch check used for the "applied" state misses it). Run it
+  as a FALLBACK only when the SHA check (#1) is negative, to keep that
+  path precise (zero false positives). Mechanics (verified against
+  rhbz-style codeberg data):
+  - The PR's `Fixes #N` link is FREE — the pulls search result already
+    includes `body` (and `state`/`closed_at`), so no fetch to find the
+    linked issue.
+  - `GET /repos/{o}/{r}/issues/{N}/timeline` is ONE call and yields
+    both a `pull_ref` (the PR) and a `commit_ref` (the landing commit
+    SHA) directly — exactly the join we want.
+  - Trusting the `commit_ref` alone is 1 call but fuzzy: it means "a
+    commit referenced the issue," not "your PR's commit is on the
+    default branch" — so a different person fixing the same issue would
+    falsely credit a declined PR. To stay safe, confirm the commit's
+    author is the user and/or that it's on the default branch
+    (`commit_contained`), which costs ~1 more call (back to ~2, same as
+    #1 but with reworded coverage). Gate on the PR carrying a
+    `Fixes #N` so we only spend calls where there's something to find.
 - (2026-06-24) Document the required GitLab and GitHub token
   permissions/scopes in the README, the way the Forgejo
   authentication section now does (exact scopes per operation, and

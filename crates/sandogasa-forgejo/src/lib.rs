@@ -138,8 +138,10 @@ impl PullRequest {
     }
 }
 
-/// An issue as returned by the per-repo issue endpoints — the fields
-/// the releng-ticket workflow needs.
+/// An issue — from either the per-repo issue endpoints (create/search)
+/// or the global issue search. The richer fields (`created_at`,
+/// `closed_at`, `repository`) are populated by the search; the per-repo
+/// endpoints leave them at their defaults.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Issue {
     pub number: u64,
@@ -150,6 +152,29 @@ pub struct Issue {
     pub html_url: String,
     #[serde(default)]
     pub body: Option<String>,
+    /// RFC 3339 timestamp the issue was opened at.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    /// RFC 3339 timestamp the issue was closed at, if closed.
+    #[serde(default)]
+    pub closed_at: Option<String>,
+    #[serde(default)]
+    pub repository: Option<RepositoryRef>,
+}
+
+impl Issue {
+    /// The `owner/repo` slug the issue belongs to (search results only).
+    pub fn repo_slug(&self) -> Option<&str> {
+        self.repository
+            .as_ref()
+            .map(|r| r.full_name.as_str())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// The close timestamp (RFC 3339), if closed.
+    pub fn closed_at(&self) -> Option<&str> {
+        self.closed_at.as_deref()
+    }
 }
 
 /// A git ref (branch or commit) as embedded in a pull request's
@@ -212,14 +237,41 @@ impl Client {
         state: &str,
         owner: Option<&str>,
     ) -> Result<Vec<PullRequest>, Box<dyn std::error::Error>> {
+        self.search_created("pulls", state, owner)
+    }
+
+    /// The issues the token owner created, paginated across all repos
+    /// they can see. `state` is `open` / `closed` / `all`; `owner`
+    /// optionally scopes to a single repo-owner. Pull requests are
+    /// excluded (`type=issues`).
+    ///
+    /// The caller filters by `created_at` (opened in window) and, for
+    /// `closed` issues, [`Issue::closed_at`] (closed in window).
+    pub fn my_issues(
+        &self,
+        state: &str,
+        owner: Option<&str>,
+    ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
+        self.search_created("issues", state, owner)
+    }
+
+    /// Paginate the global issue/pull search for items the token owner
+    /// created (`created=true`). `kind` is `pulls` or `issues`; the
+    /// result is deserialized into the caller's chosen type.
+    fn search_created<T: serde::de::DeserializeOwned>(
+        &self,
+        kind: &str,
+        state: &str,
+        owner: Option<&str>,
+    ) -> Result<Vec<T>, Box<dyn std::error::Error>> {
         let url = format!("{}/api/v1/repos/issues/search", self.base_url);
         let limit = PAGE_LIMIT.to_string();
-        let mut out: Vec<PullRequest> = Vec::new();
+        let mut out: Vec<T> = Vec::new();
         let mut page = 1u32;
         loop {
             let page_str = page.to_string();
             let mut query: Vec<(&str, &str)> = vec![
-                ("type", "pulls"),
+                ("type", kind),
                 ("state", state),
                 ("created", "true"),
                 ("limit", &limit),
@@ -232,9 +284,9 @@ impl Client {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text()?;
-                return Err(format!("Forgejo pull search failed: {status}: {text}").into());
+                return Err(format!("Forgejo {kind} search failed: {status}: {text}").into());
             }
-            let batch: Vec<PullRequest> = resp.json()?;
+            let batch: Vec<T> = resp.json()?;
             let n = batch.len() as u32;
             out.extend(batch);
             if n < PAGE_LIMIT {
@@ -432,6 +484,33 @@ mod tests {
         assert_eq!(merged[0].repo_slug(), Some("o2/r2"));
         assert_eq!(merged[0].merged_at(), Some("2026-06-25T11:22:09+02:00"));
         assert_eq!(merged[0].author(), Some("michelin"));
+    }
+
+    #[test]
+    fn my_issues_searches_issues_not_pulls() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v1/repos/issues/search")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("type".into(), "issues".into()),
+                mockito::Matcher::UrlEncoded("created".into(), "true".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"[{"number":91,"title":"build fails","state":"closed",
+                     "html_url":"https://codeberg.org/o/r/issues/91",
+                     "created_at":"2026-06-19T22:16:28+02:00",
+                     "closed_at":"2026-06-24T11:41:33+02:00",
+                     "repository":{"full_name":"o/r","name":"r","owner":"o"}}]"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let issues = client.my_issues("all", None).unwrap();
+        mock.assert();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].number, 91);
+        assert_eq!(issues[0].repo_slug(), Some("o/r"));
+        assert_eq!(issues[0].closed_at(), Some("2026-06-24T11:41:33+02:00"));
     }
 
     #[test]
