@@ -1,0 +1,17 @@
+[package]
+name = "sandogasa-forgejo"
+description = "Forgejo / Gitea REST API client for user activity reporting and issue filing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+reqwest = { workspace = true }
+sandogasa-cli = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+mockito = { workspace = true }

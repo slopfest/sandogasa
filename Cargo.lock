@@ -1881,6 +1881,18 @@ name = "sandogasa-fedrq"
 version = "0.15.1"
 
 [[package]]
+name = "sandogasa-forgejo"
+version = "0.15.1"
+dependencies = [
+ "chrono",
+ "mockito",
+ "reqwest",
+ "sandogasa-cli",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "sandogasa-github"
 version = "0.15.1"
 dependencies = [
@@ -2059,6 +2071,7 @@ dependencies = [
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-fasjson",
+ "sandogasa-forgejo",
  "sandogasa-github",
  "sandogasa-gitlab",
  "sandogasa-koji",

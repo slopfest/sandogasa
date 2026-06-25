@@ -11,6 +11,7 @@ members = [
     "crates/sandogasa-distgit",
     "crates/sandogasa-fasjson",
     "crates/sandogasa-fedrq",
+    "crates/sandogasa-forgejo",
     "crates/sandogasa-github",
     "crates/sandogasa-gitlab",
     "crates/sandogasa-inventory",
@@ -72,6 +73,7 @@ sandogasa-discourse = { version = "0.15", path = "crates/sandogasa-discourse" }
 sandogasa-distgit = { version = "0.15", path = "crates/sandogasa-distgit" }
 sandogasa-fasjson = { version = "0.15", path = "crates/sandogasa-fasjson" }
 sandogasa-fedrq = { version = "0.15", path = "crates/sandogasa-fedrq" }
+sandogasa-forgejo = { version = "0.15", path = "crates/sandogasa-forgejo" }
 sandogasa-github = { version = "0.15", path = "crates/sandogasa-github" }
 sandogasa-gitlab = { version = "0.15", path = "crates/sandogasa-gitlab" }
 sandogasa-inventory = { version = "0.15", path = "crates/sandogasa-inventory" }
