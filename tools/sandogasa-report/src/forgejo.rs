@@ -225,9 +225,15 @@ pub fn format_markdown(report: &ForgejoReport, detail: u8) -> String {
         return out;
     }
 
+    let applied = report.opened_prs.iter().filter(|p| p.applied).count();
     let mut out = heading;
     out.push_str(&format!("- **PRs opened:** {}\n", report.opened_prs.len()));
     out.push_str(&format!("- **PRs merged:** {}\n", report.merged_prs.len()));
+    // A closed PR whose commit landed out-of-band — counted separately
+    // since the forge reports it as neither merged nor open.
+    if applied > 0 {
+        out.push_str(&format!("- **PRs applied (landed unmerged):** {applied}\n"));
+    }
     out.push_str(&format!(
         "- **Issues opened:** {}\n",
         report.opened_issues.len()
@@ -496,6 +502,28 @@ mod tests {
         assert!(
             md.contains("#8](https://codeberg.org/o/r/pulls/8) taken via cherry-pick (applied)")
         );
+        // The summary surfaces the applied count (one of the three).
+        assert!(md.contains("- **PRs applied (landed unmerged):** 1"));
+    }
+
+    #[test]
+    fn applied_count_omitted_when_zero() {
+        let mut report = ForgejoReport {
+            instance: "https://codeberg.org".into(),
+            user: "michelin".into(),
+            ..Default::default()
+        };
+        report.opened_prs.push(PrRef {
+            repo: "o/r".into(),
+            number: 1,
+            title: "x".into(),
+            url: "https://codeberg.org/o/r/pulls/1".into(),
+            state: "open".into(),
+            merged: false,
+            applied: false,
+        });
+        let md = format_markdown(&report, 0);
+        assert!(!md.contains("PRs applied"));
     }
 
     #[test]
