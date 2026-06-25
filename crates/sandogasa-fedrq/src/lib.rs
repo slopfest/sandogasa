@@ -45,15 +45,28 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Return the fedrq smartcache directory (`$XDG_CACHE_HOME/fedrq`).
-pub fn cache_dir() -> PathBuf {
-    let base = std::env::var("XDG_CACHE_HOME")
+/// The XDG cache base (`$XDG_CACHE_HOME`, default `~/.cache`).
+fn cache_base() -> PathBuf {
+    std::env::var("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME").expect("HOME not set");
             PathBuf::from(home).join(".cache")
-        });
-    base.join("fedrq")
+        })
+}
+
+/// Return the fedrq smartcache directory (`$XDG_CACHE_HOME/fedrq`).
+pub fn cache_dir() -> PathBuf {
+    cache_base().join("fedrq")
+}
+
+/// Return the libdnf5 metadata cache directory
+/// (`$XDG_CACHE_HOME/libdnf5`). This is the system dnf/libdnf5 cache,
+/// distinct from fedrq's smartcache: queries for the *host's own*
+/// Fedora release reuse it, so it can serve stale metadata for the
+/// native branch even after the smartcache is cleared.
+pub fn libdnf5_cache_dir() -> PathBuf {
+    cache_base().join("libdnf5")
 }
 
 /// Check whether the fedrq smartcache for `branch` is populated.
@@ -78,9 +91,19 @@ pub fn cache_fresh(branch: &str) -> bool {
 /// Remove the fedrq smartcache directory so the next query fetches
 /// fresh repository metadata.
 pub fn clear_cache() -> std::io::Result<()> {
-    let dir = cache_dir();
+    remove_if_present(&cache_dir())
+}
+
+/// Remove the libdnf5 metadata cache so the next query for the host's
+/// native branch refetches fresh metadata (the smartcache clear alone
+/// doesn't cover the native branch — see [`libdnf5_cache_dir`]).
+pub fn clear_libdnf5_cache() -> std::io::Result<()> {
+    remove_if_present(&libdnf5_cache_dir())
+}
+
+fn remove_if_present(dir: &std::path::Path) -> std::io::Result<()> {
     if dir.exists() {
-        std::fs::remove_dir_all(&dir)?;
+        std::fs::remove_dir_all(dir)?;
     }
     Ok(())
 }
@@ -322,6 +345,17 @@ mod tests {
         // Verify the struct starts with no options set.
         assert!(fq.branch.is_none());
         assert!(fq.repo.is_none());
+    }
+
+    #[test]
+    fn cache_dirs_are_siblings_under_one_base() {
+        // The fedrq smartcache and the libdnf5 cache live side by side
+        // under the same XDG cache base (so `--refresh` clears both).
+        let fedrq = cache_dir();
+        let libdnf5 = libdnf5_cache_dir();
+        assert_eq!(fedrq.file_name().unwrap(), "fedrq");
+        assert_eq!(libdnf5.file_name().unwrap(), "libdnf5");
+        assert_eq!(fedrq.parent(), libdnf5.parent());
     }
 
     #[test]

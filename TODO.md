@@ -64,14 +64,50 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
 
 - Second-level branch-request escalation: when a `needinfo?` ping
   (the level-1 escalation `escalate` already does) goes unanswered
-  for another N days, file a releng ticket. Blocked on a Forgejo
-  client — releng's tracker moved from Pagure to Forgejo, which
-  sandogasa has no client for yet. Also needs the report's
-  per-request escalation state to grow from `pinged: bool` to a
-  level (none → needinfo'd → releng-filed) so `escalate` knows
-  which step each request is on. Plan: add a `sandogasa-forgejo`
-  crate (issue create/search), extend `BranchRequest`, and add the
-  releng-filing branch to `escalate`.
+  for another N days, file a releng ticket on Forgejo (releng's
+  tracker moved from Pagure to Forgejo). The `sandogasa-forgejo`
+  crate now exists (added 2026-06-25) with `create_issue` /
+  `search_issues`, so this is unblocked on the client side. Still
+  needs: the releng Forgejo repo coordinates, growing the report's
+  per-request escalation state from `pinged: bool` to a level
+  (none → needinfo'd → releng-filed) so `escalate` knows which step
+  each request is on, and the releng-filing branch in `escalate`.
+- (2026-06-25, EXPLORATORY — may not be worth it) check-update: source
+  a Bodhi update's Provides from koji instead of fedrq `@testing`, to
+  dodge mirror-propagation flakiness. NOT decided — the current
+  `@testing` approach may be good enough if we just accept up to ~1 day
+  of mirror lag (the note already explains the transient case). Capture
+  before deciding:
+  - The obvious "reuse the side-tag path" does NOT work: `@koji:<tag>`
+    404s for `updates-testing` (koji serves on-demand repos for side
+    tags, not for updates-testing — it's composed into the public mirror
+    repo instead). Verified.
+  - What DOES work, fully mirror-immune: `koji call getRPMDeps <rpmID>
+    1` returns a binary RPM's Provides straight from koji's DB (proven
+    on build 3022363). Path: `getBuild <nvr>` → `listRPMs <buildID>` →
+    `getRPMDeps` per binary RPM. Needs a new `sandogasa-koji` method.
+  - If we do it, use getRPMDeps on BOTH sides — ask koji for the stable
+    (old) build's Provides too, not just the new one — so old vs new are
+    apples-to-apples from the same source (don't mix koji-new with
+    fedrq-stable; formats/arch handling would differ).
+  - Real risk to validate first: `compare_provides` is old-driven and
+    string-exact (an old provide is "unchanged" only if its exact string
+    is in the new set). koji returns `{name, version, flags}`, so the
+    strings must be formatted byte-identically (sense-flag operators,
+    epochs, bare file/soname provides) and arch-selected consistently,
+    or every provide shows as "updated". Validate the diff is clean on a
+    real package before trusting it.
+  - Evidence from the debugging session (f43 iptstate, 2.3.0-1 in
+    testing): `subpkgs -S` returned EMPTY against `@testing` while
+    `pkgs --src`/`pkgs` returned 2.3.0; `subpkgs` works on stable and
+    for bash/python-setuptools — and the author believes the disagreement
+    was transient mirror-propagation skew (different queries hitting
+    differently-synced mirrors; he, on better US mirrors, saw them
+    agree). So this is propagation, not a deterministic `subpkgs` bug.
+  - DONE already this session: the accurate `skip_reason` note, and
+    `--refresh` now also clears `~/.cache/libdnf5` (the libdnf5 system
+    cache was a separate culprit — it made the *native* branch return
+    stale data; `fedrq make-cache` only touches `~/.cache/fedrq`).
 
 ## sandogasa-report
 

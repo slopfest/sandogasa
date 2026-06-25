@@ -561,6 +561,7 @@ mod tests {
             } else {
                 vec![]
             },
+            skip_reason: None,
             reverse_deps,
         }
     }

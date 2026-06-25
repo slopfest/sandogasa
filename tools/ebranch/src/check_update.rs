@@ -118,7 +118,30 @@ pub struct CheckUpdateReport {
     /// reverse-dep analysis is incomplete.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub stale_side_tag: Vec<StaleSideTag>,
+    /// Why the full Provides analysis was skipped, when it was
+    /// (`full_analysis == false`). Drives a precise note instead of a
+    /// generic "no side tag" message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_reason: Option<SkipReason>,
     pub reverse_deps: BTreeMap<String, RevDepResult>,
+}
+
+/// Why a full Provides comparison couldn't be run, so the report can
+/// explain the *actual* gap rather than always blaming a missing side
+/// tag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SkipReason {
+    /// Bodhi has the update in testing (and koji has it tagged), but the
+    /// `@testing` repodata fedrq reads doesn't carry the new NVR(s) yet
+    /// — propagation/compose lag, or fedrq serving stale metadata.
+    TestingLag { expected: Vec<String> },
+    /// EPEL 10+ `@testing` isn't queryable by fedrq yet; a side tag is
+    /// needed to compare Provides.
+    Epel10TestingUnsupported,
+    /// No comparison source at all: not in `@testing` and no side tag.
+    /// `bodhi_status` is the update's status when known.
+    NoSource { bodhi_status: Option<String> },
 }
 
 // ---- Public functions ----
@@ -232,6 +255,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             changed_provides: vec![],
             installability_issues: vec![],
             stale_side_tag: vec![],
+            skip_reason: None,
             reverse_deps: BTreeMap::new(),
         });
     }
@@ -388,12 +412,24 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         );
     }
 
-    // No side tag and not in @testing: just list reverse deps.
+    // No side tag and not usable via @testing: just list reverse deps.
+    // Pin down *why* so the report can say something accurate.
+    let skip_reason = if branch.starts_with("epel10") {
+        // fedrq can't query EPEL 10+ @testing yet (no metalink); the
+        // only way to compare Provides is a side tag.
+        SkipReason::Epel10TestingUnsupported
+    } else if bodhi_status.as_deref() == Some("testing") {
+        // Bodhi pushed it, but @testing (as fedrq sees it) lacks the NVR.
+        SkipReason::TestingLag {
+            expected: nvrs.clone(),
+        }
+    } else {
+        SkipReason::NoSource {
+            bodhi_status: bodhi_status.clone(),
+        }
+    };
     if opts.verbose {
-        eprintln!(
-            "[check-update] no side tag or @testing available; \
-             listing reverse deps only"
-        );
+        eprintln!("[check-update] skipping provides analysis: {skip_reason:?}");
     }
 
     let rev_dep_sources = filter_none(
@@ -432,8 +468,80 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         changed_provides: vec![],
         installability_issues: vec![],
         stale_side_tag: vec![],
+        skip_reason: Some(skip_reason),
         reverse_deps,
     })
+}
+
+/// Word-wrap `text` to `width` columns and prefix every line with
+/// `prefix` (e.g. `"> "` for a Markdown blockquote). Collapses runs of
+/// whitespace; never splits a word. Keeps notes readable both in the
+/// terminal and as a wrapped blockquote in a Bodhi comment.
+fn wrap_prefixed(text: &str, prefix: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && prefix.len() + line.len() + 1 + word.len() > width {
+            out.push_str(prefix);
+            out.push_str(&line);
+            out.push('\n');
+            line.clear();
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        out.push_str(prefix);
+        out.push_str(&line);
+    }
+    out
+}
+
+/// The "> **Note:** …" block shown when a full Provides comparison
+/// couldn't run, tailored to [`SkipReason`] so it explains the actual
+/// gap rather than always blaming a missing side tag. The body is plain
+/// prose; [`wrap_prefixed`] handles the blockquote prefix and wrapping.
+fn skip_note(report: &CheckUpdateReport) -> String {
+    let body = match &report.skip_reason {
+        Some(SkipReason::TestingLag { expected }) => {
+            let what = if expected.is_empty() {
+                "the update".to_string()
+            } else {
+                format!("`{}`", expected.join("`, `"))
+            };
+            format!(
+                "**Note:** Provides weren't compared — the `@testing` \
+                 metadata didn't return {what} (likely transient mirror \
+                 propagation, or a stale local metadata cache). Retry \
+                 shortly, or pass `--refresh`. Reverse dependencies are \
+                 listed below for manual review."
+            )
+        }
+        Some(SkipReason::Epel10TestingUnsupported) => format!(
+            "**Note:** fedrq can't query the EPEL 10 `@testing` repo yet, \
+             so Provides can't be compared from the update alone — build a \
+             side tag and pass it (`-b {} <side-tag>`). Reverse \
+             dependencies are listed below for manual review.",
+            report.branch
+        ),
+        Some(SkipReason::NoSource { bodhi_status }) => {
+            let status = match bodhi_status.as_deref() {
+                Some(s) => format!(" (Bodhi status: {s})"),
+                None => String::new(),
+            };
+            format!(
+                "**Note:** no side tag, and the update isn't in \
+                 `@testing`{status}, so Provides can't be compared. \
+                 Reverse dependencies are listed below for manual review."
+            )
+        }
+        None => "**Note:** cannot compare Provides. Reverse dependencies \
+                 are listed below for manual review."
+            .to_string(),
+    };
+    wrap_prefixed(&body, "> ", 76)
 }
 
 /// Print a human-readable report to stdout.
@@ -490,13 +598,8 @@ pub fn render_report(report: &CheckUpdateReport) -> String {
     }
 
     if !report.full_analysis {
-        // No side tag available — informational mode.
-        let _ = writeln!(
-            o,
-            "> **Note:** no side tag available; cannot compare \
-             Provides. Listing reverse dependencies for manual \
-             review.\n"
-        );
+        // Provides couldn't be compared — explain the actual reason.
+        let _ = writeln!(o, "{}\n", skip_note(report));
         if report.reverse_deps.is_empty() {
             let _ = writeln!(o, "No reverse dependencies found.");
         } else {
@@ -985,6 +1088,7 @@ fn run_provides_analysis(
             changed_provides: vec![],
             installability_issues,
             stale_side_tag,
+            skip_reason: None,
             reverse_deps: BTreeMap::new(),
         });
     }
@@ -1061,6 +1165,7 @@ fn run_provides_analysis(
         changed_provides,
         installability_issues,
         stale_side_tag,
+        skip_reason: None,
         reverse_deps,
     })
 }
@@ -1241,6 +1346,83 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- skip_note / render_report skipped-analysis cases ---
+
+    fn skip_report(branch: &str, skip: SkipReason) -> CheckUpdateReport {
+        CheckUpdateReport {
+            input: "FEDORA-2026-test".to_string(),
+            branch: branch.to_string(),
+            repo: None,
+            updated_packages: vec!["iptstate".to_string()],
+            full_analysis: false,
+            changed_provides: vec![],
+            installability_issues: vec![],
+            stale_side_tag: vec![],
+            skip_reason: Some(skip),
+            reverse_deps: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn skip_note_testing_lag_explains_repodata_not_side_tag() {
+        let r = skip_report(
+            "f43",
+            SkipReason::TestingLag {
+                expected: vec!["iptstate-2.3.0-1.fc43".to_string()],
+            },
+        );
+        // Flatten the wrapped blockquote so substring checks don't trip
+        // on a line break landing mid-phrase.
+        let md = unquote(&render_report(&r));
+        assert!(md.contains("Provides weren't compared"));
+        assert!(md.contains("`@testing`"));
+        assert!(md.contains("iptstate-2.3.0-1.fc43"));
+        assert!(md.contains("mirror propagation"));
+        // The old, misleading wording must be gone.
+        assert!(!md.contains("no side tag available"));
+        // No raw line should exceed the wrap width.
+        assert!(render_report(&r).lines().all(|l| l.chars().count() <= 76));
+    }
+
+    #[test]
+    fn skip_note_epel10_points_at_side_tag() {
+        let r = skip_report("epel10.0", SkipReason::Epel10TestingUnsupported);
+        let md = unquote(&render_report(&r));
+        assert!(md.contains("EPEL 10"));
+        assert!(md.contains("side tag"));
+    }
+
+    #[test]
+    fn skip_note_no_source_reports_bodhi_status() {
+        let r = skip_report(
+            "f43",
+            SkipReason::NoSource {
+                bodhi_status: Some("pending".to_string()),
+            },
+        );
+        let md = unquote(&render_report(&r));
+        assert!(md.contains("isn't in"));
+        assert!(md.contains("pending"));
+    }
+
+    /// Collapse a wrapped Markdown blockquote back to one line for
+    /// substring assertions (drop `> ` prefixes and newlines).
+    fn unquote(md: &str) -> String {
+        md.replace("\n> ", " ").replace("> ", "").replace('\n', " ")
+    }
+
+    #[test]
+    fn wrap_prefixed_wraps_and_prefixes() {
+        let text = "alpha beta gamma delta epsilon zeta eta theta iota";
+        let wrapped = wrap_prefixed(text, "> ", 20);
+        // Every line is prefixed and within width.
+        assert!(wrapped.lines().all(|l| l.starts_with("> ")));
+        assert!(wrapped.lines().all(|l| l.chars().count() <= 20));
+        // It actually wrapped (more than one line) and lost no words.
+        assert!(wrapped.lines().count() > 1);
+        assert_eq!(unquote(&wrapped).split_whitespace().count(), 9);
+    }
 
     // --- parse_confirm ---
 

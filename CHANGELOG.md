@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### ebranch: accurate check-update note when Provides can't be compared
+
+`check-update` printed "no side tag available; cannot compare Provides"
+whenever it fell back to reverse-deps-only — misleading for a Fedora /
+EPEL 9 update, where the real reason is usually that the `@testing`
+metadata fedrq reads doesn't show the update's NVR yet (transient mirror
+propagation after a push, or a stale local cache). The note now names
+the actual reason via a `skip_reason`: `@testing` not showing the NVR
+(with the expected NVRs and a retry / `--refresh` hint), the EPEL 10
+`@testing` limitation (suggesting a side tag), or a genuine no-source
+case (with the Bodhi status). The reason is also exposed as
+`skip_reason` in `--json`, and notes are word-wrapped to 76 columns.
+
+`--refresh` now also clears the libdnf5 metadata cache
+(`~/.cache/libdnf5`), not just fedrq's smartcache (`~/.cache/fedrq`).
+The libdnf5 cache is what queries for the host's *own* Fedora release
+reuse, so it could serve stale metadata for the native branch even
+after a smartcache clear. (`sandogasa-fedrq` gains `libdnf5_cache_dir`
+and `clear_libdnf5_cache`.)
+
 ### sandogasa-forgejo: new library crate
 
 A Forgejo / Gitea REST API (`/api/v1`) client, scoped to what the

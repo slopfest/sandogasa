@@ -150,7 +150,7 @@ are excluded automatically."
     #[arg(short = 'j', long, default_value = "0")]
     jobs: usize,
 
-    /// Clear fedrq repo metadata cache before querying.
+    /// Clear fedrq + libdnf5 repo metadata caches before querying.
     #[arg(long)]
     refresh: bool,
 }
@@ -192,7 +192,7 @@ Otherwise defaults to --branch."
     #[arg(short, long)]
     verbose: bool,
 
-    /// Clear fedrq repo metadata cache before querying.
+    /// Clear fedrq + libdnf5 repo metadata caches before querying.
     #[arg(long)]
     refresh: bool,
 
@@ -311,7 +311,7 @@ to copr build-package."
     #[arg(long, value_name = "PATH", requires = "transitive")]
     toml: Option<String>,
 
-    /// Clear fedrq repo metadata cache before querying.
+    /// Clear fedrq + libdnf5 repo metadata caches before querying.
     #[arg(long)]
     refresh: bool,
 
@@ -490,15 +490,22 @@ fn handle_branch_request_command(cmd: &Command) -> Option<ExitCode> {
     })
 }
 
-/// Clear the fedrq repo metadata cache if `--refresh` was passed.
+/// Clear the fedrq + libdnf5 repo metadata caches if `--refresh` was passed.
 fn handle_refresh(refresh: bool, verbose: bool) -> Result<(), ExitCode> {
     if refresh {
         if let Err(e) = sandogasa_fedrq::clear_cache() {
             eprintln!("error: failed to clear fedrq cache: {e}");
             return Err(ExitCode::FAILURE);
         }
+        // Also drop the libdnf5 cache: the smartcache clear above misses
+        // the host's *native* branch, which reuses ~/.cache/libdnf5 and
+        // can otherwise serve stale metadata.
+        if let Err(e) = sandogasa_fedrq::clear_libdnf5_cache() {
+            eprintln!("error: failed to clear libdnf5 cache: {e}");
+            return Err(ExitCode::FAILURE);
+        }
         if verbose {
-            eprintln!("cleared fedrq cache");
+            eprintln!("cleared fedrq + libdnf5 caches");
         }
     }
     Ok(())
