@@ -28,6 +28,10 @@ packaging activity across multiple systems:
   contribute to. Sourced from the token owner's pull-request
   search, so it captures contributions to other people's repos,
   not just your own namespace. Optionally scoped by repo-owner.
+  The opened list flags each PR's fate — `(merged)`, `(closed)`,
+  or `(applied)` when a closed-unmerged PR's commit still landed
+  on the target branch (a maintainer cherry-picked or
+  fast-forwarded it instead of clicking merge).
 
 ## Installation
 

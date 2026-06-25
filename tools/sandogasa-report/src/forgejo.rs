@@ -55,6 +55,11 @@ pub struct PrRef {
     pub state: String,
     /// Whether the PR was merged (vs. closed without merging).
     pub merged: bool,
+    /// Whether a closed-but-unmerged PR's commit nonetheless landed on
+    /// the target branch (a maintainer applied it out-of-band rather
+    /// than clicking merge). Determined by a follow-up API check.
+    #[serde(default)]
+    pub applied: bool,
 }
 
 impl PrRef {
@@ -64,6 +69,8 @@ impl PrRef {
     fn status_marker(&self) -> &'static str {
         if self.merged {
             " (merged)"
+        } else if self.applied {
+            " (applied)"
         } else if self.state == "closed" {
             " (closed)"
         } else {
@@ -107,7 +114,14 @@ pub fn forgejo_report(
             .as_deref()
             .is_some_and(|d| date_in_range(d, since, until))
         {
-            report.opened_prs.push(into_pr_ref(&pr));
+            let mut r = into_pr_ref(&pr);
+            // A PR opened in the window but now closed-without-merging
+            // may still have landed (commit applied out-of-band). Check
+            // whether its head commit is on the target branch.
+            if r.state == "closed" && !r.merged {
+                r.applied = applied_out_of_band(&client, &r, verbose);
+            }
+            report.opened_prs.push(r);
         }
         if pr.is_merged()
             && pr
@@ -118,6 +132,42 @@ pub fn forgejo_report(
         }
     }
     Ok(report)
+}
+
+/// Whether a closed-unmerged PR's commit nonetheless landed on its
+/// target branch. Fetches the PR's head/base refs (the search result
+/// omits them), then asks whether the head commit is contained in the
+/// base branch. Any lookup failure is treated as "not applied" (a
+/// warning under `--verbose`) — we only ever *upgrade* the label when
+/// we're certain, never falsely claim a contribution landed.
+fn applied_out_of_band(client: &Client, pr: &PrRef, verbose: bool) -> bool {
+    let Some((owner, repo)) = pr.repo.split_once('/') else {
+        return false;
+    };
+    let detail = match client.pull_request(owner, repo, pr.number) {
+        Ok(d) => d,
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "[forgejo] applied-check: fetch {}#{} failed: {e}",
+                    pr.repo, pr.number
+                );
+            }
+            return false;
+        }
+    };
+    match client.commit_contained(owner, repo, &detail.base.ref_name, &detail.head.sha) {
+        Ok(contained) => contained,
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "[forgejo] applied-check: compare for {}#{} failed: {e}",
+                    pr.repo, pr.number
+                );
+            }
+            false
+        }
+    }
 }
 
 /// Format the Forgejo section as Markdown.
@@ -161,6 +211,7 @@ fn into_pr_ref(pr: &PullRequest) -> PrRef {
         url: pr.html_url.clone(),
         state: pr.state.clone(),
         merged: pr.is_merged(),
+        applied: false,
     }
 }
 
@@ -313,6 +364,7 @@ mod tests {
             url: "https://codeberg.org/ptesarik/libkdumpfile/pulls/92".into(),
             state: "closed".into(),
             merged: true,
+            applied: false,
         });
         let md = format_markdown(&report, 1);
         assert!(md.contains("### Forgejo\n"));
@@ -331,7 +383,7 @@ mod tests {
             user: "michelin".into(),
             ..Default::default()
         };
-        // Opened then declined (closed, not merged) → "(closed)".
+        // Opened then declined (closed, not merged, not applied) → "(closed)".
         report.opened_prs.push(PrRef {
             repo: "ptesarik/libkdumpfile".into(),
             number: 92,
@@ -339,6 +391,7 @@ mod tests {
             url: "https://codeberg.org/ptesarik/libkdumpfile/pulls/92".into(),
             state: "closed".into(),
             merged: false,
+            applied: false,
         });
         // Opened and still open → no marker.
         report.opened_prs.push(PrRef {
@@ -348,11 +401,25 @@ mod tests {
             url: "https://codeberg.org/o/r/pulls/7".into(),
             state: "open".into(),
             merged: false,
+            applied: false,
+        });
+        // Closed without merging, but the commit landed out-of-band → "(applied)".
+        report.opened_prs.push(PrRef {
+            repo: "o/r".into(),
+            number: 8,
+            title: "taken via cherry-pick".into(),
+            url: "https://codeberg.org/o/r/pulls/8".into(),
+            state: "closed".into(),
+            merged: false,
+            applied: true,
         });
         let md = format_markdown(&report, 1);
         assert!(md.contains("#92](https://codeberg.org/ptesarik/libkdumpfile/pulls/92) Drop removed bfd macros (closed)"));
         assert!(md.contains("#7](https://codeberg.org/o/r/pulls/7) still going\n"));
         assert!(!md.contains("still going ("));
+        assert!(
+            md.contains("#8](https://codeberg.org/o/r/pulls/8) taken via cherry-pick (applied)")
+        );
     }
 
     #[test]

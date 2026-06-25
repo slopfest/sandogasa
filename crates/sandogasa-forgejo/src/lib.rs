@@ -152,6 +152,35 @@ pub struct Issue {
     pub body: Option<String>,
 }
 
+/// A git ref (branch or commit) as embedded in a pull request's
+/// `head` / `base`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GitRef {
+    pub sha: String,
+    #[serde(rename = "ref")]
+    pub ref_name: String,
+}
+
+/// The fuller pull-request object (`/pulls/{n}`) — the head/base refs
+/// the issue/pull *search* result omits. Needed to tell whether a
+/// closed-but-unmerged PR's commit nonetheless landed on the target
+/// branch (applied out-of-band).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PullDetail {
+    pub number: u64,
+    #[serde(default)]
+    pub merged: bool,
+    pub head: GitRef,
+    pub base: GitRef,
+}
+
+/// The relevant slice of a `/compare/{base}...{head}` response.
+#[derive(Debug, Clone, Deserialize)]
+struct CompareResult {
+    #[serde(default)]
+    total_commits: u64,
+}
+
 /// A Forgejo / Gitea API client bound to one instance.
 pub struct Client {
     http: reqwest::blocking::Client,
@@ -214,6 +243,60 @@ impl Client {
             page += 1;
         }
         Ok(out)
+    }
+
+    /// Fetch the fuller pull-request object for `owner/repo#number` —
+    /// in particular its `head` and `base` refs, which the search
+    /// result omits.
+    pub fn pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<PullDetail, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/v1/repos/{owner}/{repo}/pulls/{number}",
+            self.base_url
+        );
+        let resp = self.http.get(&url).send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!(
+                "Forgejo get pull {owner}/{repo}#{number} failed: {status}: {text}"
+            )
+            .into());
+        }
+        Ok(resp.json()?)
+    }
+
+    /// Whether `sha` is already contained in `branch` — i.e. an
+    /// ancestor of (or equal to) the branch tip. Asks the compare
+    /// endpoint how many commits `branch` is behind `sha`; zero means
+    /// `sha` adds nothing, so it's already on the branch. Used to spot
+    /// a closed-but-unmerged PR whose commit landed out-of-band (a
+    /// maintainer cherry-picked or fast-forwarded it).
+    pub fn commit_contained(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        sha: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/v1/repos/{owner}/{repo}/compare/{branch}...{sha}",
+            self.base_url
+        );
+        let resp = self.http.get(&url).send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(
+                format!("Forgejo compare {branch}...{sha} failed: {status}: {text}").into(),
+            );
+        }
+        let cmp: CompareResult = resp.json()?;
+        Ok(cmp.total_commits == 0)
     }
 
     /// File a new issue on `owner/repo` and return it.
@@ -367,6 +450,50 @@ mod tests {
         let prs = client.my_pull_requests("closed", Some("ptesarik")).unwrap();
         mock.assert();
         assert!(prs.is_empty());
+    }
+
+    #[test]
+    fn pull_request_returns_head_and_base() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v1/repos/o/r/pulls/92")
+            .with_status(200)
+            .with_body(
+                r#"{"number":92,"merged":false,
+                    "head":{"sha":"8b8aa8b","ref":"fix-branch"},
+                    "base":{"sha":"deadbeef","ref":"tip"}}"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let pr = client.pull_request("o", "r", 92).unwrap();
+        mock.assert();
+        assert_eq!(pr.head.sha, "8b8aa8b");
+        assert_eq!(pr.base.ref_name, "tip");
+        assert!(!pr.merged);
+    }
+
+    #[test]
+    fn commit_contained_reads_compare_total() {
+        // total_commits == 0 → the sha is already on the branch.
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v1/repos/o/r/compare/tip...8b8aa8b")
+            .with_status(200)
+            .with_body(r#"{"total_commits":0}"#)
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        assert!(client.commit_contained("o", "r", "tip", "8b8aa8b").unwrap());
+        mock.assert();
+
+        // Non-zero → not contained (the branch is ahead of the sha).
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v1/repos/o/r/compare/tip...other")
+            .with_status(200)
+            .with_body(r#"{"total_commits":3}"#)
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        assert!(!client.commit_contained("o", "r", "tip", "other").unwrap());
     }
 
     #[test]
