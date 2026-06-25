@@ -78,6 +78,13 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   `@testing` approach may be good enough if we just accept up to ~1 day
   of mirror lag (the note already explains the transient case). Capture
   before deciding:
+  - Decided NOT to switch the presence check to `fedrq pkgs --src`:
+    `subpkgs` reads the *binary* repo and `pkgs --src` the *source* repo
+    (separate repos that sync independently), so mixing them could have
+    the presence gate pass off the source repo while the binary side
+    still lags — more inconsistency, not less. Stay on `subpkgs`
+    throughout (one repo); the only switch worth making is the wholesale
+    move to koji below, which is consistent AND mirror-immune.
   - The obvious "reuse the side-tag path" does NOT work: `@koji:<tag>`
     404s for `updates-testing` (koji serves on-demand repos for side
     tags, not for updates-testing — it's composed into the public mirror
