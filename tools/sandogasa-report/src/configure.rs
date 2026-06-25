@@ -53,6 +53,11 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
         .values()
         .filter_map(|d| d.github.as_ref().map(|g| g.instance.clone()))
         .collect();
+    let forgejo_instances: BTreeSet<String> = merged
+        .domains
+        .values()
+        .filter_map(|d| d.forgejo.as_ref().map(|f| f.instance.clone()))
+        .collect();
 
     // Load the raw overlay toml::Value so hand-authored keys are
     // preserved across the round trip.
@@ -60,7 +65,7 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
     let overlay_path = overlay_cf.path().to_path_buf();
     let mut overlay = if overlay_path.exists() {
         let text = std::fs::read_to_string(&overlay_path)?;
-        text.parse::<toml::Value>()?
+        parse_overlay(&text)?
     } else {
         toml::Value::Table(Default::default())
     };
@@ -94,6 +99,7 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
         existing_profile.as_ref(),
         &gitlab_instances,
         &github_instances,
+        &forgejo_instances,
     )?;
 
     // Token section: one prompt per unique instance, per forge.
@@ -127,6 +133,20 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
             TokenChoice::KeepExisting | TokenChoice::Skipped => {}
         }
     }
+    if !forgejo_instances.is_empty() {
+        eprintln!("\nForgejo API tokens (per instance):");
+    }
+    for instance in &forgejo_instances {
+        let host = crate::forgejo::instance_host(instance);
+        let existing = overlay_get_str(&overlay, &["forgejo_tokens", &host]);
+        match prompt_forgejo_token(instance, existing.as_deref())? {
+            TokenChoice::Saved(t) => {
+                overlay_set_str(&mut overlay, &["forgejo_tokens", &host], &t);
+                changed = true;
+            }
+            TokenChoice::KeepExisting | TokenChoice::Skipped => {}
+        }
+    }
 
     if !changed {
         eprintln!("\nNo changes.");
@@ -146,6 +166,7 @@ fn prompt_profile(
     existing: Option<&config::User>,
     gitlab_instances: &BTreeSet<String>,
     github_instances: &BTreeSet<String>,
+    forgejo_instances: &BTreeSet<String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut changed = false;
     let fas_default = existing
@@ -190,6 +211,18 @@ fn prompt_profile(
         "github",
         |u, host| u.github.get(host),
         crate::github::instance_host,
+    )? {
+        changed = true;
+    }
+    if prompt_per_instance_usernames(
+        overlay,
+        profile_key,
+        existing,
+        forgejo_instances,
+        "Forgejo",
+        "forgejo",
+        |u, host| u.forgejo.get(host),
+        crate::forgejo::instance_host,
     )? {
         changed = true;
     }
@@ -323,6 +356,56 @@ fn prompt_github_token(
     }
 }
 
+/// Same flow as `prompt_github_token` but for Forgejo / Gitea.
+/// Treats an unreachable API (`Err`) as "keep the existing token"
+/// so a transient outage doesn't force re-entry.
+fn prompt_forgejo_token(
+    instance: &str,
+    existing: Option<&str>,
+) -> Result<TokenChoice, Box<dyn std::error::Error>> {
+    if let Some(tok) = existing {
+        eprint!("  Validating existing {instance} token... ");
+        match sandogasa_forgejo::validate_token(instance, tok) {
+            Ok(true) => {
+                eprintln!("valid.");
+                return Ok(TokenChoice::KeepExisting);
+            }
+            Ok(false) => eprintln!("invalid — re-prompting."),
+            Err(e) => {
+                eprintln!("check failed ({e}); keeping existing token.");
+                return Ok(TokenChoice::KeepExisting);
+            }
+        }
+    }
+    let token = rpassword::prompt_password(format!(
+        "  Paste a personal access token for {instance} \
+         (enter to skip): "
+    ))?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Ok(TokenChoice::Skipped);
+    }
+    eprint!("  Validating... ");
+    match sandogasa_forgejo::validate_token(instance, &token) {
+        Ok(true) => {
+            eprintln!("valid.");
+            Ok(TokenChoice::Saved(token))
+        }
+        Ok(false) => Err(format!("token rejected by {instance}").into()),
+        Err(e) => Err(format!("validation failed for {instance}: {e}").into()),
+    }
+}
+
+/// Parse an overlay file's text as a TOML *document*. Deliberately uses
+/// `toml::from_str`, not `str::parse::<toml::Value>()`: in toml 1.x the
+/// `FromStr` impl parses a value *expression*, so a real config that
+/// opens with a `[table]` header is misread as an array literal and
+/// fails right after the `]`. `from_str` parses it as a document, the
+/// same way the report loader does.
+fn parse_overlay(text: &str) -> Result<toml::Value, Box<dyn std::error::Error>> {
+    Ok(toml::from_str::<toml::Value>(text)?)
+}
+
 fn read_line(prompt: &str) -> io::Result<String> {
     eprint!("{prompt}");
     io::stderr().flush()?;
@@ -382,6 +465,16 @@ fn overlay_set_str(value: &mut toml::Value, path: &[&str], v: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_overlay_reads_document_with_leading_table_header() {
+        // Regression: a real overlay opens with a `[table]` header.
+        // `str::parse::<toml::Value>()` misreads that as an array in
+        // toml 1.x; `parse_overlay` must treat it as a document.
+        let text = "[github_tokens]\n\"api.github.com\" = \"ghp\"\n";
+        let v = parse_overlay(text).unwrap();
+        assert_eq!(v["github_tokens"]["api.github.com"].as_str(), Some("ghp"));
+    }
 
     #[test]
     fn overlay_set_creates_nested_tables() {

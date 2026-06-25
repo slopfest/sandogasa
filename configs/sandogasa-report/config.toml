@@ -58,9 +58,26 @@ group = "CentOS/proposed_updates"
 instance = "https://salsa.debian.org"
 # No group filter — all user activity on salsa counts.
 
-# --- GitHub ---
+# --- Upstream forges (GitHub + Forgejo) ---
 
+# All your github.com PR / commit / review activity, any owner.
+# Add `org = "..."` to scope to one organisation.
 [domains.upstream.github]
+
+# Forgejo / Gitea (here, codeberg.org): PRs you opened and merged.
+# The forge type is the table key (`forgejo`) — the specific host is
+# the `instance` value, mirroring how `gitlab` works. So it's
+# `domains.upstream.forgejo` with `instance = "https://codeberg.org"`,
+# not `domains.upstream.codeberg`.
+#
+# The query is token-scoped (it reports the token owner's PRs), so it
+# captures contributions across *every* repo you touch, not just your
+# own namespace. Add `owner = "..."` to restrict to one repo-owner.
+#
+# A domain targets a single Forgejo instance; for another instance
+# (e.g. a Fedora Forgejo) add it under a different domain.
+[domains.upstream.forgejo]
+instance = "https://codeberg.org"
 
 # --- Package groups for categorical reporting ---
 # Each group has an optional description and a list of packages.

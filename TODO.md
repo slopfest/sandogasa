@@ -78,4 +78,25 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
 - Debug CVE/security bug reporting: the query may be too narrow or
   the keyword filter may not match Bugzilla's actual keyword values.
   Test with known CVE bugs and compare against manual Bugzilla search.
+- (2026-06-24) Forgejo: detect a closed PR whose work landed via a
+  *reworded/rebased* commit (different SHA, so the `head.sha`-on-
+  default-branch check used for the "applied" state misses it). Idea:
+  go PR → linked issue (the PR body's `Fixes #N`) → the issue's
+  timeline cross-references, and look for a default-branch commit
+  authored by the user that references the same issue; mark it
+  "applied" too. Fuzzier than the SHA check (a different person could
+  reference the same issue) and costs extra API calls per closed PR,
+  so gate it and confirm author identity. Only worth it if the plain
+  SHA check proves to miss real cases.
+- (2026-06-24) Document the required GitLab and GitHub token
+  permissions/scopes in the README, the way the Forgejo
+  authentication section now does (exact scopes per operation, and
+  which are only needed by `config`'s token validation). Determine
+  the *minimum* fine-grained scopes — currently the GitHub side is
+  being used with a legacy/coarse-grained classic PAT, so figure out
+  the least-privilege fine-grained-PAT permission set (Contents,
+  Pull requests, Metadata, etc.) and the GitLab equivalent (`read_api`
+  vs `api`, and whether `read_user` is needed for the username
+  lookup). Cross-check against `validate_token` and the actual
+  endpoints each `*_report` calls.
 

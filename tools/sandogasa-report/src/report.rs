@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::Serialize;
 
-use crate::{bodhi, bugzilla, github, gitlab, koji};
+use crate::{bodhi, bugzilla, forgejo, github, gitlab, koji};
 
 /// Full activity report.
 ///
@@ -58,6 +58,9 @@ pub struct DomainReport {
     /// GitHub section for this domain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub github: Option<github::GithubReport>,
+    /// Forgejo section for this domain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forgejo: Option<forgejo::ForgejoReport>,
 }
 
 impl DomainReport {
@@ -68,6 +71,7 @@ impl DomainReport {
             || self.koji.is_some()
             || self.gitlab.is_some()
             || self.github.is_some()
+            || self.forgejo.is_some()
     }
 }
 
@@ -113,6 +117,16 @@ pub fn format_markdown(
                 gitlab_aliases
                     .entry(host)
                     .or_insert_with(|| gh.user.clone());
+            }
+        }
+    }
+    for dr in &report.domains {
+        if let Some(ref fj) = dr.forgejo {
+            let host = crate::forgejo::instance_host(&fj.instance);
+            if Some(fj.user.as_str()) != fas_user {
+                gitlab_aliases
+                    .entry(host)
+                    .or_insert_with(|| fj.user.clone());
             }
         }
     }
@@ -188,6 +202,9 @@ fn format_domain(
     if let Some(ref gh_report) = dr.github {
         body.push_str(&github::format_markdown(gh_report, detail));
     }
+    if let Some(ref fj_report) = dr.forgejo {
+        body.push_str(&forgejo::format_markdown(fj_report, detail));
+    }
     if body.is_empty() {
         return String::new();
     }
@@ -218,6 +235,7 @@ mod tests {
             koji: None,
             gitlab: None,
             github: None,
+            forgejo: None,
         }
     }
 

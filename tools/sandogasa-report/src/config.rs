@@ -38,6 +38,12 @@ pub struct ReportConfig {
     /// take precedence.
     #[serde(default)]
     pub github_tokens: BTreeMap<String, String>,
+
+    /// Per-instance Forgejo / Gitea API tokens, keyed by hostname
+    /// (e.g. `"codeberg.org"`). Env vars (`FORGEJO_TOKEN_<HOSTNAME>`
+    /// or generic `FORGEJO_TOKEN`) take precedence.
+    #[serde(default)]
+    pub forgejo_tokens: BTreeMap<String, String>,
 }
 
 /// A person's identity across multiple services. The profile key
@@ -72,6 +78,13 @@ pub struct User {
     /// logins on the two forges.
     #[serde(default)]
     pub github: BTreeMap<String, String>,
+
+    /// Per-instance Forgejo usernames, keyed by hostname (e.g.
+    /// `"codeberg.org" = "michelin"`). Same lookup model as the
+    /// other forges. Mostly informational — the Forgejo report
+    /// queries by token owner, not by name.
+    #[serde(default)]
+    pub forgejo: BTreeMap<String, String>,
 }
 
 impl User {
@@ -91,6 +104,12 @@ impl User {
     /// `"github.com"`), if the profile has one configured.
     pub fn github_username(&self, instance_host: &str) -> Option<&str> {
         self.github.get(instance_host).map(String::as_str)
+    }
+
+    /// Forgejo username on a specific instance host (e.g.
+    /// `"codeberg.org"`), if the profile has one configured.
+    pub fn forgejo_username(&self, instance_host: &str) -> Option<&str> {
+        self.forgejo.get(instance_host).map(String::as_str)
     }
 }
 
@@ -139,6 +158,10 @@ pub struct DomainConfig {
     /// Include GitHub activity (PRs authored/merged/reviewed, commits).
     #[serde(default)]
     pub github: Option<GithubConfig>,
+
+    /// Include Forgejo / Gitea activity (PRs opened/merged).
+    #[serde(default)]
+    pub forgejo: Option<ForgejoConfig>,
 }
 
 /// Per-domain GitLab settings. If `group` is set, activity events
@@ -180,6 +203,23 @@ pub struct GithubConfig {
 
 fn default_github_instance() -> String {
     "https://api.github.com".to_string()
+}
+
+/// Per-domain Forgejo / Gitea settings. Parallels `GithubConfig`:
+/// `instance` is the deployment root (e.g. `https://codeberg.org`);
+/// `owner` narrows results to a single repo-owner (user or org),
+/// matching GitHub's `org`. With no `owner`, every repo the token
+/// owner contributed to counts — the usual case for tracking
+/// upstream contributions across arbitrary projects.
+#[derive(Debug, Default, Deserialize)]
+pub struct ForgejoConfig {
+    /// Forgejo instance root URL (e.g. `https://codeberg.org`).
+    pub instance: String,
+
+    /// Repo-owner (user or org) to scope to. Omit to count
+    /// contributions across all repos.
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 /// Load config with a per-user overlay.

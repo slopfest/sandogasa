@@ -23,6 +23,11 @@ packaging activity across multiple systems:
   GitHub Releases published. Optionally scoped by
   organisation. See `TODO.md` for why GitHub ships only the
   authored count today (mirror-pusher detection deferred).
+- **Forgejo / Gitea** (e.g. codeberg.org, a Fedora Forgejo):
+  PRs opened / merged in the window, across every repo you
+  contribute to. Sourced from the token owner's pull-request
+  search, so it captures contributions to other people's repos,
+  not just your own namespace. Optionally scoped by repo-owner.
 
 ## Installation
 
@@ -93,7 +98,7 @@ sandogasa-report report -c config.toml -d fedora \
 - `--json` — output as JSON instead of Markdown
 - `-o, --output <PATH>` — write output to file
 - `--no-bugzilla` / `--no-bodhi` / `--no-koji` / `--no-gitlab` /
-  `--no-github` — skip data sources
+  `--no-github` / `--no-forgejo` — skip data sources
 - `-v, --verbose` — print progress to stderr
 
 ## Configuration
@@ -145,6 +150,10 @@ instance = "https://salsa.debian.org"
 # No group filter → all user activity on this instance counts.
 user = "michel"  # salsa username often differs from FAS login
 
+[domains.upstream.forgejo]
+instance = "https://codeberg.org"
+# No owner filter → PRs across every repo you contribute to.
+
 # Package groups for categorical reporting.
 # Group keys are prettified for headings (e.g. "developer-tools"
 # becomes "Developer Tools"). Optional description appears below.
@@ -176,6 +185,9 @@ bugzilla_email = "michel@example.com" # optional; FASJSON fallback otherwise
 [users.michel.github]
 "api.github.com" = "michel-slm"
 
+[users.michel.forgejo]
+"codeberg.org" = "michelin"
+
 # Persisted API tokens — populated by `sandogasa-report config`.
 # Env vars still win if set.
 [gitlab_tokens]
@@ -184,6 +196,9 @@ bugzilla_email = "michel@example.com" # optional; FASJSON fallback otherwise
 
 [github_tokens]
 "api.github.com" = "ghp_..."
+
+[forgejo_tokens]
+"codeberg.org" = "..."
 ```
 
 ### GitHub domain shorthand
@@ -205,6 +220,26 @@ org = "slopfest"
 [domains.work.github]
 instance = "https://github.enterprise.example/api/v3"
 org = "platform-team"
+```
+
+### Forgejo domain shorthand
+
+`[domains.X.forgejo]` takes the instance root URL and an optional
+`owner` (repo-owner filter, the Forgejo analogue of GitHub's
+`org`). The report queries the **token owner's** pull requests, so
+it captures contributions to anyone's repo — the usual case for
+upstream work on codeberg.org. The per-domain `user` is only for
+display; the actual scoping comes from the token.
+
+```toml
+# Every repo you've opened/merged PRs in on codeberg.org.
+[domains.upstream.forgejo]
+instance = "https://codeberg.org"
+
+# Scoped to one repo-owner (user or org).
+[domains.kernel.forgejo]
+instance = "https://codeberg.org"
+owner = "ptesarik"
 ```
 
 ### Koji tag patterns
@@ -261,6 +296,36 @@ this; the direct URLs are easier:
   Token starts with `ghp_…`. Both PAT types work identically
   against the API; fine-grained is preferable because revoking
   one org's access doesn't affect the others.
+
+### Forgejo authentication
+
+Same lookup shape as the other forges. The instance-specific env
+var is `FORGEJO_TOKEN_<HOSTNAME>` (for `codeberg.org` →
+`FORGEJO_TOKEN_CODEBERG_ORG`); the generic `FORGEJO_TOKEN` is the
+fallback; the overlay's `[forgejo_tokens]` table is the third.
+
+Because the report queries "PRs *I* created", the token's owner is
+who the report is about — use your own token. Create one at your
+instance's `Settings → Applications → Access Tokens` (on codeberg,
+<https://codeberg.org/user/settings/applications>).
+
+Forgejo tokens are **scoped by category** (activitypub, issue, misc,
+notification, organization, package, repository, user — each
+read/write). Grant, at read level:
+
+- **`read:repository`** — the PR search lives under the `/repos` API
+  group.
+- **`read:issue`** — pull requests are issues; the search is an issue
+  endpoint.
+- **`read:user`** — *only* needed for `sandogasa-report config`, which
+  validates the token by calling `/api/v1/user`. A plain `report` run
+  works with just `read:repository` + `read:issue`; add `read:user` if
+  you want `config` to verify the token for you.
+
+(Forgejo reports a missing category as `token does not have at least
+one of required scope(s)` — e.g. granting only issue + repository and
+running `config` complains it needs `user`, because of the `/user`
+validation call.)
 
 ### FTBFS/FTI tracking
 

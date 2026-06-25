@@ -10,6 +10,7 @@ mod brace;
 mod bugzilla;
 mod config;
 mod configure;
+mod forgejo;
 mod github;
 mod gitlab;
 mod koji;
@@ -83,6 +84,10 @@ struct ReportArgs {
     /// Skip GitHub queries.
     #[arg(long)]
     no_github: bool,
+
+    /// Skip Forgejo queries.
+    #[arg(long)]
+    no_forgejo: bool,
 
     /// Include per-item details. Repeat for deeper detail —
     /// level 1 (`--detailed`) lists each Bodhi update but
@@ -223,6 +228,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             koji: None,
             gitlab: None,
             github: None,
+            forgejo: None,
         };
 
         // Bodhi (per-domain).
@@ -318,6 +324,30 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                      set --user, or add [users.<name>.github.\"{host}\"] \
                      to the config, skipping"
                 ),
+            }
+        }
+
+        // Forgejo (per-domain). The search is token-scoped, so the
+        // username is only for display; resolution mirrors the others
+        // (profile.forgejo[<host>] → profile.fas → raw --user) and a
+        // domain with no resolvable name still reports (it labels the
+        // section with whatever name we have, or the token owner).
+        if let Some(fj) = domain.forgejo.as_ref()
+            && !cli.no_forgejo
+        {
+            let host = forgejo::instance_host(&fj.instance);
+            let user = profile
+                .and_then(|p| p.forgejo_username(&host))
+                .map(String::from)
+                .or_else(|| fas_user.clone())
+                .unwrap_or_default();
+            match forgejo::forgejo_report(fj, &user, since, until, &cfg.forgejo_tokens, cli.verbose)
+            {
+                Ok(fj_report) => dr.forgejo = Some(fj_report),
+                Err(e) => {
+                    eprintln!("error: forgejo ({name}): {e}");
+                    return ExitCode::FAILURE;
+                }
             }
         }
 
@@ -420,6 +450,7 @@ mod tests {
             no_koji: false,
             no_gitlab: false,
             no_github: false,
+            no_forgejo: false,
             detailed: 0,
             json: false,
             output: None,
@@ -442,6 +473,7 @@ mod tests {
             no_koji: false,
             no_gitlab: false,
             no_github: false,
+            no_forgejo: false,
             detailed: 0,
             json: false,
             output: None,

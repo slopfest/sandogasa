@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### sandogasa-forgejo: new library crate
+
+A Forgejo / Gitea REST API (`/api/v1`) client, scoped to what the
+sandogasa tools need: the token owner's pull requests across every repo
+they contribute to (`my_pull_requests`, via the global issue/pull search
+with `created=true`), issue create/search (`create_issue` /
+`search_issues`, for filing release-engineering tickets), and
+`validate_token`. Works against any instance — codeberg.org, a Fedora
+Forgejo, a self-hosted Gitea — by taking the instance root URL in full.
+Mirrors `sandogasa-github` / `sandogasa-gitlab` in shape.
+
+### sandogasa-report: Forgejo PR-merge accounting
+
+Domains can now include a `[domains.<name>.forgejo]` block (`instance`,
+optional `owner` filter) to report pull requests opened and merged on a
+Forgejo / Gitea instance — Codeberg, a Fedora Forgejo, etc. The query is
+token-scoped (`created=true`), so it captures contributions to *any*
+repo, not just the user's own namespace. Per-instance usernames live
+under `[users.<key>.forgejo]` and tokens under `[forgejo_tokens]`
+(env overrides `FORGEJO_TOKEN_<HOST>` / `FORGEJO_TOKEN`); the `config`
+subcommand prompts for them, and `--no-forgejo` skips the source.
+
+Fixed: the `config` subcommand failed with a spurious "TOML parse error
+… unexpected content" on any existing overlay. It parsed the file with
+`str::parse::<toml::Value>()`, which in the toml 1.x crate parses a value
+*expression* and misreads a leading `[table]` header as an array. It now
+uses `toml::from_str` (document parsing), matching the report loader.
+
 ## v0.15.1
 
 ### fedora-review-digest: new tool
