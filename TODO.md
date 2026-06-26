@@ -3,9 +3,9 @@
 ## hs-relmon
 
 - (2026-06-26) check-latest tar --file-issue and check-manifest both
-  do not close the issue even though it's up to date. maybe do this
-  here? we can also do it in the review command but that might be
-  too soon
+  do not close the issue even though it's up to date. 
+  This is likely because it is not built for hs.el10 but that's because
+  CentOS 10 is already up to date. Figure out how to handle it
 - no --version command. We should make this standard for all commands
 
 ## dbranch
