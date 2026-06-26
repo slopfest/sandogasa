@@ -1,5 +1,13 @@
 # TODO
 
+## hs-relmon
+
+- (2026-06-26) check-latest tar --file-issue and check-manifest both
+  do not close the issue even though it's up to date. maybe do this
+  here? we can also do it in the review command but that might be
+  too soon
+- no --version command. We should make this standard for all commands
+
 ## dbranch
 
 - (2026-06-19) Target-type / version-scheme abstraction — the rest of
