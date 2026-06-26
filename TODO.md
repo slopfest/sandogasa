@@ -2,6 +2,8 @@
 
 ## ebranch
 
+- (2026-06-26) check-update should cache lookups, or large updates are very slow to check even with fedrq already hitting caches
+  e.g. provides lookups for libstdc++, libQt6Core.so.6
 - (2026-06-26) check-update has a weird issue with FEDORA-2026-2b36efabf2 - why is it expecting the old version
   and complain the sidetag is stale because it sees newer version
 ```
