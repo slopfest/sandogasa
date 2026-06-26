@@ -155,6 +155,7 @@ name = "qemu"
 
 [[package]]
 name = "rasdaemon"
+track = "upstream"
 
 [[package]]
 name = "redhat-rpm-config-hyperscale"
