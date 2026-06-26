@@ -1,5 +1,18 @@
 # TODO
 
+## ebranch
+
+- (2026-06-26) check-update has a weird issue with FEDORA-2026-2b36efabf2 - why is it expecting the old version
+  and complain the sidetag is stale because it sees newer version
+```
+[check-update] Bodhi status is 'pending', not 'testing'; skipping @testing
+[check-update] comparing provides via koji + side tag
+warning: aurorae: side tag repodata is stale (expected 6.7.0-1.fc43 from aurorae-6.7.0-1.fc43, found 6.7.1-1.fc43); run 'koji regen-repo' on the side tag, then rerun with --refresh
+warning: bluedevil: side tag repodata is stale (expected 6.7.0-1.fc43 from bluedevil-6.7.0-1.fc43, found 6.7.1-1.fc43); run 'koji regen-repo' on the side tag, then re
+run with --refresh
+warning: breeze-gtk: side tag repodata is stale (expected 6.7.0-1.fc43 from breeze-gtk-6.7.0-1.fc43, found 6.7.1-1.fc43); run 'koji regen-repo' on the side tag, then rerun with --refresh
+```
+
 ## hs-relmon
 
 - (2026-06-26) add retire command to archive repo and untag builds. Test with sqlite
