@@ -196,6 +196,19 @@ For new provides, ebranch checks these sources in order:
    `--refresh` (which clears fedrq's smartcache).
 3. **Reverse deps only** — lists affected packages for manual review
 
+`-b`/`--branch` and `-r`/`--repo` are override-only. The branch is
+inferred from the input: the Bodhi release for an update alias, or the
+name of a **Fedora** side tag (`f43-build-side-*` uses `f43`). `--repo`
+defaults to the branch's stable base repos (the correct comparison
+baseline).
+
+**EPEL side tags are not inferred.** The `epelN` branch alone can't
+resolve base-OS dependencies, so an `epel*-build-side-*` input without
+`--branch` errors out: pass a RHEL-compatible base branch plus the EPEL
+repo, e.g. `-b al9 -r @epel` (epel9) or `-b c10s -r @epel` (epel10).
+The choice of base distribution (AlmaLinux, CentOS Stream, …) is yours,
+which is why it isn't guessed.
+
 For EPEL side tags, the testing branch is auto-detected from the
 side tag name (e.g. `epel9-build-side-*` uses `epel9`). Use
 `--testing-branch` to override if needed.

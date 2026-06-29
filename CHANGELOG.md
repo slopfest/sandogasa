@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### ebranch: check-update infers the branch from Fedora side tags
+
+`check-update` now infers the branch for a Fedora side tag from its name
+(the prefix before `-build-side-`: `f43-build-side-*` → `f43`), matching
+the existing Bodhi-alias inference, so a bare Fedora side tag no longer
+requires `-b`. EPEL side tags are *not* inferred: the `epelN` branch
+alone can't resolve base-OS dependencies, so an `epel*-build-side-*`
+input without `--branch` now fails with an actionable hint to pass a
+RHEL-compatible base branch plus the EPEL repo (e.g. `-b al9 -r @epel`
+for epel9, `-b c10s -r @epel` for epel10) rather than silently producing
+misleading installability results. `--branch`/`--repo` remain
+override-only; `--repo` defaults to the branch's stable base repos (the
+correct comparison baseline).
+
 ### ebranch: check-update summarizes large updates
 
 `check-update` now leads with counts instead of dumping every list, so a

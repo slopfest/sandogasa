@@ -161,11 +161,35 @@ struct CheckUpdateArgs {
     input: String,
 
     /// Branch to check against (e.g. epel9).
-    #[arg(short = 'b', long)]
+    #[arg(
+        short = 'b',
+        long,
+        long_help = "\
+Branch to check against (e.g. epel9).
+
+Auto-detected from the input: the Bodhi
+release for an update alias, or the name of a
+Fedora side tag (f43-build-side-* uses f43).
+EPEL side tags are not inferred: pass a base
+branch plus the EPEL repo, e.g. -b al9 -r
+@epel (epel9) or -b c10s -r @epel (epel10)."
+    )]
     branch: Option<String>,
 
     /// Repository class for the branch (fedrq -r).
-    #[arg(short = 'r', long, value_name = "REPO")]
+    #[arg(
+        short = 'r',
+        long,
+        value_name = "REPO",
+        long_help = "\
+Repository class for the branch (fedrq -r).
+
+Defaults to the branch's stable base repos,
+which is the correct comparison baseline.
+Override only for special cases, e.g. -r @epel
+for EPEL side tags (paired with a base branch
+like -b al9)."
+    )]
     repo: Option<String>,
 
     /// Override branch for @testing queries.
@@ -188,9 +212,14 @@ Otherwise defaults to --branch."
     #[arg(long)]
     json: bool,
 
-    /// Show full lists (every package, Provide, and reverse dep)
-    /// instead of counts plus the actionable problems.
-    #[arg(long)]
+    /// Show full lists instead of counts.
+    #[arg(
+        long,
+        long_help = "\
+Show full lists (every package, Provide, and
+reverse dep) instead of counts plus the
+actionable problems."
+    )]
     detailed: bool,
 
     /// Print progress to stderr.

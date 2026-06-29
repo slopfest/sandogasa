@@ -223,10 +223,16 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
     // and Bodhi update status (None for side-tag input).
     let (side_tag, nvrs, branch, bodhi_branch, bodhi_status) = match detect_input_type(input) {
         InputKind::SideTag(tag) => {
-            let branch = opts
-                .branch
-                .clone()
-                .ok_or("--branch is required for side tag input")?;
+            let branch = match opts.branch.clone() {
+                Some(b) => b,
+                None => {
+                    let b = infer_branch_for_side_tag(&tag)?;
+                    if opts.verbose {
+                        eprintln!("[check-update] inferred branch {b} from side tag {tag}");
+                    }
+                    b
+                }
+            };
             let nvrs = koji_list_tagged(&tag, opts.koji_profile.as_deref())?;
             (Some(tag), nvrs, branch, None, None)
         }
@@ -1166,6 +1172,44 @@ where
 ///
 /// E.g. "epel9-build-side-133287" → "epel9",
 ///      "epel10.0-build-side-12345" → "epel10.0"
+/// True for a Fedora release branch name (`fNN`, e.g. `f43`).
+fn is_fedora_branch(b: &str) -> bool {
+    b.strip_prefix('f')
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|c| c.is_ascii_digit()))
+}
+
+/// The prefix of a Koji side-tag name before `-build-side-` (e.g.
+/// `f43-build-side-12345` ⇒ `f43`, `epel9-build-side-1` ⇒ `epel9`).
+/// Returns None when the tag doesn't match that shape.
+fn branch_from_side_tag(tag: &str) -> Option<String> {
+    let end = tag.find("-build-side-")?;
+    let prefix = &tag[..end];
+    (!prefix.is_empty()).then(|| prefix.to_string())
+}
+
+/// Infer the fedrq branch for a side tag when `--branch` is omitted.
+///
+/// Only Fedora side tags (`fNN-build-side-*`) map cleanly to their own
+/// branch. EPEL side tags are rejected with an actionable error: the
+/// `epelN` branch alone can't resolve base-OS dependencies, so a
+/// RHEL-compatible base branch plus `-r @epel` is required (the choice
+/// of base — AlmaLinux, CentOS Stream, … — is the user's). Any other
+/// shape can't be inferred either.
+fn infer_branch_for_side_tag(tag: &str) -> Result<String, String> {
+    match branch_from_side_tag(tag) {
+        Some(b) if is_fedora_branch(&b) => Ok(b),
+        Some(b) if b.starts_with("epel") => Err(format!(
+            "cannot infer a usable branch from {b} side tag: the epel \
+             branch alone can't resolve base-OS dependencies. Pass a base \
+             branch plus the EPEL repo, e.g. -b al9 -r @epel (epel9) or \
+             -b c10s -r @epel (epel10)"
+        )),
+        _ => Err(format!(
+            "could not infer branch from side tag {tag}; pass --branch"
+        )),
+    }
+}
+
 fn testing_branch_from_side_tag(tag: Option<&str>) -> Option<String> {
     let tag = tag?;
     let rest = tag.strip_prefix("epel")?;
@@ -2291,6 +2335,70 @@ mod tests {
         );
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].package, "rust-mimalloc");
+    }
+
+    // --- branch_from_side_tag ---
+
+    #[test]
+    fn branch_from_side_tag_fedora() {
+        assert_eq!(
+            branch_from_side_tag("f43-build-side-12345"),
+            Some("f43".to_string())
+        );
+    }
+
+    #[test]
+    fn branch_from_side_tag_epel() {
+        assert_eq!(
+            branch_from_side_tag("epel9-build-side-134436"),
+            Some("epel9".to_string())
+        );
+        assert_eq!(
+            branch_from_side_tag("epel10.0-build-side-1"),
+            Some("epel10.0".to_string())
+        );
+    }
+
+    #[test]
+    fn branch_from_side_tag_rejects_non_side_tag() {
+        assert_eq!(branch_from_side_tag("f43-updates"), None);
+        assert_eq!(branch_from_side_tag("rawhide"), None);
+        // Empty prefix isn't a usable branch.
+        assert_eq!(branch_from_side_tag("-build-side-1"), None);
+    }
+
+    #[test]
+    fn is_fedora_branch_matches_fnn_only() {
+        assert!(is_fedora_branch("f43"));
+        assert!(is_fedora_branch("f9"));
+        assert!(!is_fedora_branch("epel9"));
+        assert!(!is_fedora_branch("f")); // no digits
+        assert!(!is_fedora_branch("fc43")); // letters after f
+        assert!(!is_fedora_branch("rawhide"));
+    }
+
+    #[test]
+    fn infer_branch_for_side_tag_fedora() {
+        assert_eq!(
+            infer_branch_for_side_tag("f44-build-side-142334"),
+            Ok("f44".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_branch_for_side_tag_epel_errors_with_hint() {
+        let err = infer_branch_for_side_tag("epel9-build-side-134436").unwrap_err();
+        // Names the offending branch and tells the user what to pass.
+        assert!(err.contains("epel9"));
+        assert!(err.contains("-b al9 -r @epel"));
+        // epel8 is rejected too (not auto-mapped).
+        assert!(infer_branch_for_side_tag("epel8-build-side-1").is_err());
+    }
+
+    #[test]
+    fn infer_branch_for_side_tag_unrecognized_errors() {
+        let err = infer_branch_for_side_tag("not-a-side-tag").unwrap_err();
+        assert!(err.contains("--branch"));
     }
 
     // --- testing_branch_from_side_tag ---
