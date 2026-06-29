@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.15.2
 
 ### fedora-cve-triage: curate false positives before closing bugs
 
