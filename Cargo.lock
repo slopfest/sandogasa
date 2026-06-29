@@ -528,6 +528,7 @@ dependencies = [
  "sandogasa-config",
  "sandogasa-distgit",
  "sandogasa-nvd",
+ "sandogasa-review",
  "serde",
  "serde_json",
  "tempfile",

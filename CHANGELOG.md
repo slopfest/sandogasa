@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### fedora-cve-triage: curate false positives before closing bugs
+
+The false-positive detectors (`interpreter-fps`, `js-fps`,
+`cross-ecosystem`, `unshipped-tools`) no longer close every detected bug
+behind a single bulk `[y/N]`. With `--close-bugs` on a TTY, each detected
+false positive is now reviewed individually via the shared
+`sandogasa-review` keep/explain/remove flow: **keep** closes it as
+NOTABUG with the configured reason, **explain** closes it with the reason
+plus a written justification recorded on the bug, and **remove** leaves
+it open (the detector was wrong — possibly a real CVE). The reassign and
+final go/no-go prompts come after the per-bug review.
+Piped/non-interactively the behavior is unchanged (every detected FP is
+closed with the reason).
+
 ### New crate: sandogasa-review (shared keep/explain/remove)
 
 `sandogasa-review` is a small library with the interactive

@@ -12,6 +12,20 @@
   - Optionally curate stale-side-tag via keep/explain/remove too (it
     keeps its own regen flow for now).
 
+## sandogasa-review adoption
+
+- (2026-06-29) Surveyed the workspace for other tools that could adopt the
+  keep/explain/remove resolver. Possible future fits (per-item interactive
+  loops, but their decisions are *actions* not finding-validity, so adoption
+  would reshape semantics — lower priority):
+  - hs-relmon `prune-archived` / `review` — add an "explain" reason when
+    keeping an ahead-of-stock build / skipping a karma vote.
+  - poi-tracker `triage-updates` AskClose — per-bug explain instead of one
+    batch y/N.
+  - hs-intake `safe-to-backport` — only if it grows an interactive mode that
+    breaks the aggregated "concerns" into per-item findings.
+  Not applicable: sandogasa-pkg-health, koji-diff, cpu-sig-tracker, dbranch.
+
 Done (2026-06-29):
 - Unified review-issue handling: new `sandogasa-review` crate provides the
   keep/explain/remove resolver; `fedora-review-digest` refactored onto it
@@ -19,6 +33,10 @@ Done (2026-06-29):
   blocking findings (installability + reverse-dep breaks grouped by Provide)
   before deriving karma and posting — explained/removed findings don't
   downvote; explanations go in an "addressed by the reviewer" section.
+- fedora-cve-triage adopted `sandogasa-review`: the false-positive detectors
+  (interpreter-fps, js-fps, cross-ecosystem, unshipped-tools) now review each
+  detected bug keep/explain/remove before closing as NOTABUG (explain appends
+  a justification to the close comment), instead of one bulk y/N.
 - check-update condenses large updates: counts by default, updated
   packages grouped by `old → new` version transition, new packages
   listed separately, actionable findings still shown in full, bulky
