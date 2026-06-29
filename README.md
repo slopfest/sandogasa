@@ -55,6 +55,8 @@ library crates:
 - **sandogasa-meetbot** — meetbot.fedoraproject.org meeting search client
 - **sandogasa-nvd** — NVD (National Vulnerability Database) API client
 - **sandogasa-repology** — Repology package version tracking API client
+- **sandogasa-review** — shared keep/explain/remove resolution for
+  reviewer-curated findings
 - **sandogasa-rpmvercmp** — RPM version comparison algorithm
 
 ## Installation

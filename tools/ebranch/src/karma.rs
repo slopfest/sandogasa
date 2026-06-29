@@ -589,6 +589,23 @@ mod tests {
     }
 
     #[test]
+    fn derive_karma_after_curation_lifts_explained_installability() {
+        use crate::check_update::{apply_resolutions, blocking_findings};
+        use sandogasa_review::Resolution;
+        // Raw: one installability issue → -1.
+        let raw = report(true, false, true, false);
+        assert_eq!(derive_karma(&raw).0, -1);
+        // Reviewer explains it away → curated report derives +1.
+        let decisions = blocking_findings(&raw)
+            .into_iter()
+            .map(|f| (f, Resolution::Explained("satisfied at runtime".to_string())))
+            .collect();
+        let (curated, addressed) = apply_resolutions(raw, decisions);
+        assert_eq!(addressed.len(), 1);
+        assert_eq!(derive_karma(&curated).0, 1);
+    }
+
+    #[test]
     fn derive_karma_incomplete_analysis_neutral() {
         // No side tag / @testing: reverse deps listed only.
         assert_eq!(derive_karma(&report(false, false, false, false)).0, 0);

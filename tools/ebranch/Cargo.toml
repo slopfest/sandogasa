@@ -20,6 +20,7 @@ sandogasa-cli = { workspace = true }
 sandogasa-depfilter = { workspace = true }
 sandogasa-fedrq = { workspace = true }
 sandogasa-koji = { workspace = true }
+sandogasa-review = { workspace = true }
 sandogasa-rpmvercmp = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }

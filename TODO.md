@@ -2,15 +2,23 @@
 
 ## ebranch
 
-- (2026-06-26) Unify review-issue handling between check-update and
-  fedora-review-digest — port the latter's keep/explain/remove
-  resolution so a reviewer can curate which findings (changed provides,
-  installability, stale side tag) make it into the posted comment.
-  Likely a shared module/crate. Note: for a 330-issue megaupdate,
-  per-issue prompting is impractical, so pair it with the condensing
-  above (e.g. resolve by group, or only prompt on the blocking subset).
+- (2026-06-29) Follow-ups to the review-issue unification (deferred from
+  the first cut):
+  - Bulk/group-of-groups curation actions (e.g. "remove all
+    installability") if per-finding-grouped prompting is still tedious on
+    a 330-finding run.
+  - Persist/resume curation decisions across runs (neither tool persists
+    today).
+  - Optionally curate stale-side-tag via keep/explain/remove too (it
+    keeps its own regen flow for now).
 
 Done (2026-06-29):
+- Unified review-issue handling: new `sandogasa-review` crate provides the
+  keep/explain/remove resolver; `fedora-review-digest` refactored onto it
+  (behavior-preserving) and `ebranch check-update --give-karma` now curates
+  blocking findings (installability + reverse-dep breaks grouped by Provide)
+  before deriving karma and posting — explained/removed findings don't
+  downvote; explanations go in an "addressed by the reviewer" section.
 - check-update condenses large updates: counts by default, updated
   packages grouped by `old → new` version transition, new packages
   listed separately, actionable findings still shown in full, bulky

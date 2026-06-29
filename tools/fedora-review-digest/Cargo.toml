@@ -10,6 +10,7 @@ repository.workspace = true
 clap = { workspace = true }
 sandogasa-bugzilla = { workspace = true }
 sandogasa-config = { workspace = true }
+sandogasa-review = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

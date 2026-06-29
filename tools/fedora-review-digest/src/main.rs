@@ -11,6 +11,7 @@ use fedora_review_digest::checklist::{self, Item, Mark, Resolution, ReviewedIssu
 use fedora_review_digest::review::{Generator, Review};
 use fedora_review_digest::{bugzilla, config, cratesio};
 use sandogasa_bugzilla::BzClient;
+use sandogasa_review::resolve_interactive;
 
 const BUGZILLA_URL: &str = "https://bugzilla.redhat.com";
 
@@ -394,57 +395,20 @@ fn finalize_issues(issues: &mut Vec<ReviewedIssue>) -> Result<(), String> {
     }
     eprintln!("── address issues ──");
     eprintln!("(k)eep blocks approval / (e)xplain accepts it / (r)emove drops it\n");
-    let total = issues.len();
-    let mut kept: Vec<ReviewedIssue> = Vec::with_capacity(total);
-    for (i, ri) in std::mem::take(issues).into_iter().enumerate() {
-        match prompt_issue(i + 1, total, ri.finding())? {
-            IssueAction::Keep => kept.push(ReviewedIssue {
-                resolution: Resolution::Open,
+    let decisions = resolve_interactive(std::mem::take(issues), |ri| ri.finding().to_string())?;
+    // Removed issues are dropped; keep/explain carry the new resolution.
+    *issues = decisions
+        .into_iter()
+        .filter_map(|(ri, resolution)| match resolution {
+            Resolution::Removed => None,
+            res => Some(ReviewedIssue {
+                resolution: res,
                 ..ri
             }),
-            IssueAction::Explain(why) => kept.push(ReviewedIssue {
-                resolution: Resolution::Explained(why),
-                ..ri
-            }),
-            IssueAction::Remove => {} // dropped
-        }
-    }
-    *issues = kept;
+        })
+        .collect();
     eprintln!();
     Ok(())
-}
-
-/// What the reviewer chose to do with one issue.
-enum IssueAction {
-    Keep,
-    Explain(String),
-    Remove,
-}
-
-/// Prompt for one issue's disposition (Enter keeps it — the safe default
-/// that doesn't silently approve).
-fn prompt_issue(idx: usize, total: usize, finding: &str) -> Result<IssueAction, String> {
-    loop {
-        eprintln!("[{idx}/{total}] {finding}");
-        eprint!("  (k)eep / (e)xplain / (r)emove [k]: ");
-        let _ = std::io::stderr().flush();
-        let line = read_line()?;
-        match line.trim().to_ascii_lowercase().as_str() {
-            "" | "k" | "keep" => return Ok(IssueAction::Keep),
-            "r" | "remove" => return Ok(IssueAction::Remove),
-            "e" | "explain" => {
-                eprint!("    explanation: ");
-                let _ = std::io::stderr().flush();
-                let why = read_line()?.trim().to_string();
-                if why.is_empty() {
-                    eprintln!("  an explanation is required (or pick k/r)");
-                    continue;
-                }
-                return Ok(IssueAction::Explain(why));
-            }
-            _ => eprintln!("  enter k, e, or r"),
-        }
-    }
 }
 
 /// Prompt for one item's vote, defaulting to its inferred mark.

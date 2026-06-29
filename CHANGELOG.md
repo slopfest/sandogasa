@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### New crate: sandogasa-review (shared keep/explain/remove)
+
+`sandogasa-review` is a small library with the interactive
+keep/explain/remove resolution mechanism (`Resolution` +
+`resolve_interactive`) for reviewer-curated findings. It was extracted
+from `fedora-review-digest` so the same flow can be shared across tools.
+`fedora-review-digest` now uses it (behavior unchanged).
+
+### ebranch: check-update lets the reviewer curate findings before karma
+
+When casting karma interactively (`check-update --give-karma`, on a TTY,
+without `-y`), check-update now walks the blocking findings — installability
+issues and reverse-dependency breakage (grouped by the changed Provide that
+causes it) — and lets the reviewer **(k)eep** each (real, still counts),
+**(e)xplain** it (real but acceptable, with a written justification), or
+**(r)emove** it (a false positive). The decisions feed *both* the posted
+comment (an "Issues addressed by the reviewer" section records the
+explanations; removed findings are dropped) and the derived karma: removing
+or explaining the only blocking finding lets a −1 rise to 0/+1, instead of
+forcing a manual karma override with no rationale on record. Under `-y` or
+non-interactively, every finding is kept (unchanged behavior).
+
 ### ebranch: fix check-update side-tag staleness false positives
 
 The side-tag staleness check was guessing a build's binary names from

@@ -21,6 +21,7 @@ members = [
     "crates/sandogasa-meetbot",
     "crates/sandogasa-nvd",
     "crates/sandogasa-repology",
+    "crates/sandogasa-review",
     "crates/sandogasa-rpmvercmp",
     "tools/cpu-sig-tracker",
     "tools/dbranch",
@@ -83,6 +84,7 @@ sandogasa-mailman = { version = "0.15", path = "crates/sandogasa-mailman" }
 sandogasa-meetbot = { version = "0.15", path = "crates/sandogasa-meetbot" }
 sandogasa-nvd = { version = "0.15", path = "crates/sandogasa-nvd" }
 sandogasa-repology = { version = "0.15", path = "crates/sandogasa-repology" }
+sandogasa-review = { version = "0.15", path = "crates/sandogasa-review" }
 sandogasa-rpmvercmp = { version = "0.15", path = "crates/sandogasa-rpmvercmp" }
 semver = "1"
 serde = { version = "1.0", features = ["derive"] }

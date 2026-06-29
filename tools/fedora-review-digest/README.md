@@ -71,6 +71,10 @@ If `fedora-review` flagged any MUST issues, you then resolve each one:
   reviewer"* (so the reasoning is on record) but no longer blocks.
 - **remove** (`r`) — drop it entirely as a false positive.
 
+(This keep/explain/remove mechanism lives in the shared `sandogasa-review`
+crate, so other tools — e.g. `ebranch check-update` — curate findings the
+same way.)
+
 Once every issue is addressed (explained or removed) and no checklist
 item is `-1`, the verdict flips to **APPROVED**. You're finally asked for
 an optional free-form comment for the top.

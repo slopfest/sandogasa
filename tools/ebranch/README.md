@@ -218,11 +218,24 @@ For EPEL side tags, the testing branch is auto-detected from the
 side tag name (e.g. `epel9-build-side-*` uses `epel9`). Use
 `--testing-branch` to override if needed.
 
-After the check, `--give-karma` casts karma on the update. The
-check result suggests the value — `+1` when no issues are found,
-`-1` when reverse deps break or the updated packages have
-unsatisfied deps, `0` when the analysis was incomplete — and you
-are prompted with that suggestion as the default (Enter accepts,
+After the check, `--give-karma` casts karma on the update.
+
+Interactively (a TTY, without `--yes`), you first **curate the blocking
+findings** — installability issues and reverse-dependency breakage
+(grouped by the changed Provide that causes it). For each, choose
+**(k)eep** (real, still counts against the update), **(e)xplain** (real
+but acceptable — you record a one-line justification), or **(r)emove** (a
+false positive). The decisions feed both the suggested karma and the
+posted comment: explained findings move to an "Issues addressed by the
+reviewer" section (with your reasons) and removed ones are dropped, so
+explaining or removing the only blocking finding lets the suggested karma
+rise from `-1` to `0`/`+1` — no silent override needed. Under `--yes` or
+non-interactively, every finding is kept (the prior behavior).
+
+The (possibly curated) check result then suggests the karma value — `+1`
+when no issues remain, `-1` when reverse deps break or the updated
+packages have unsatisfied deps, `0` when the analysis was incomplete —
+and you are prompted with that suggestion as the default (Enter accepts,
 or override with `+1`/`-1`/`0`). Listed bugs get per-bug
 feedback like the Bodhi web UI: update-request bugs
 (`<pkg>-<version> is available`) are auto-voted `+1` when the

@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Mutex;
 
 use rayon::prelude::*;
+use sandogasa_review::Resolution;
 use serde::Serialize;
 
 // ---- Public types ----
@@ -74,7 +75,7 @@ pub struct BrokenRequires {
 }
 
 /// An unsatisfied Requires in an updated package's subpackages.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UnsatisfiedDep {
     /// The source package.
     pub package: String,
@@ -164,6 +165,45 @@ pub enum SkipReason {
     /// No comparison source at all: not in `@testing` and no side tag.
     /// `bodhi_status` is the update's status when known.
     NoSource { bodhi_status: Option<String> },
+}
+
+/// A blocking finding the reviewer can curate (keep / explain / remove)
+/// before karma is cast. These are exactly the findings that drive a
+/// downvote: installability problems and reverse-dependency breakage
+/// (the latter grouped by the changed Provide that causes it, so one
+/// decision covers every package broken by that Provide).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Finding {
+    /// An unsatisfied Requires in an updated package's subpackages.
+    Installability(UnsatisfiedDep),
+    /// Reverse-dep breakage grouped by the changed Provide behind it.
+    ReverseDepBreak {
+        provide: String,
+        packages: Vec<String>,
+    },
+}
+
+impl Finding {
+    /// One-line summary shown at the keep/explain/remove prompt and in
+    /// the "addressed by the reviewer" section.
+    pub fn summary(&self) -> String {
+        match self {
+            Finding::Installability(d) if d.unresolved.is_empty() => {
+                format!("{}: unsatisfied dep `{}`", d.package, d.dep)
+            }
+            Finding::Installability(d) => format!(
+                "{}: unsatisfied dep `{}` [unresolved: {}]",
+                d.package,
+                d.dep,
+                d.unresolved.join(", ")
+            ),
+            Finding::ReverseDepBreak { provide, packages } => format!(
+                "`{provide}` — breaks {} package(s): {}",
+                packages.len(),
+                packages.join(", ")
+            ),
+        }
+    }
 }
 
 // ---- Public functions ----
@@ -614,6 +654,94 @@ fn skip_note(report: &CheckUpdateReport) -> String {
 /// In non-detailed output, how many list items to show before
 /// collapsing the rest into "… and N more".
 const LIST_CAP: usize = 15;
+
+/// Extract the blocking findings a reviewer curates before karma is cast:
+/// every installability issue, plus reverse-dependency breakage grouped by
+/// the changed Provide that causes it (one finding per Provide, listing the
+/// packages it breaks). Informational findings are not included.
+pub fn blocking_findings(report: &CheckUpdateReport) -> Vec<Finding> {
+    let mut findings: Vec<Finding> = report
+        .installability_issues
+        .iter()
+        .cloned()
+        .map(Finding::Installability)
+        .collect();
+
+    let mut by_provide: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (pkg, result) in &report.reverse_deps {
+        if result.status != "broken" {
+            continue;
+        }
+        for issue in &result.issues {
+            by_provide
+                .entry(issue.changed_provide.clone())
+                .or_default()
+                .push(pkg.clone());
+        }
+    }
+    for (provide, mut packages) in by_provide {
+        packages.sort();
+        packages.dedup();
+        findings.push(Finding::ReverseDepBreak { provide, packages });
+    }
+    findings
+}
+
+/// Apply the reviewer's keep/explain/remove decisions to a report.
+///
+/// `Removed` and `Explained` findings are stripped from the curated
+/// report's counts (so neither downvotes when `derive_karma` runs on it):
+/// installability issues are dropped, and reverse-dep breakages from the
+/// resolved Provide are cleared (a package left with no remaining breakage
+/// flips back to `ok`). `Explained` findings are also returned with their
+/// justification for the "addressed by the reviewer" comment section.
+/// `Keep` leaves the finding in place.
+pub fn apply_resolutions(
+    mut report: CheckUpdateReport,
+    decisions: Vec<(Finding, Resolution)>,
+) -> (CheckUpdateReport, Vec<(Finding, String)>) {
+    let mut addressed = Vec::new();
+    for (finding, resolution) in decisions {
+        match resolution {
+            Resolution::Keep => continue,
+            Resolution::Explained(why) => addressed.push((finding.clone(), why)),
+            Resolution::Removed => {}
+        }
+        match finding {
+            Finding::Installability(d) => {
+                report
+                    .installability_issues
+                    .retain(|x| !(x.package == d.package && x.dep == d.dep));
+            }
+            Finding::ReverseDepBreak { provide, .. } => {
+                for result in report.reverse_deps.values_mut() {
+                    if result.status != "broken" {
+                        continue;
+                    }
+                    result.issues.retain(|i| i.changed_provide != provide);
+                    if result.issues.is_empty() {
+                        result.status = "ok".to_string();
+                    }
+                }
+            }
+        }
+    }
+    (report, addressed)
+}
+
+/// Render the "Issues addressed by the reviewer" section appended to the
+/// posted comment, listing each explained finding with its justification.
+/// Empty string when nothing was explained.
+pub fn render_addressed(addressed: &[(Finding, String)]) -> String {
+    if addressed.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n## Issues addressed by the reviewer\n\n");
+    for (finding, why) in addressed {
+        out.push_str(&format!("- {} — {why}\n", finding.summary()));
+    }
+    out
+}
 
 /// Print a human-readable report to stdout.
 pub fn print_report(report: &CheckUpdateReport, detailed: bool) {
@@ -1843,6 +1971,157 @@ mod tests {
         let md = unquote(&render_report(&r, false));
         assert!(md.contains("isn't in"));
         assert!(md.contains("pending"));
+    }
+
+    // --- blocking_findings / apply_resolutions / render_addressed ---
+
+    fn dep(package: &str, dep: &str) -> UnsatisfiedDep {
+        UnsatisfiedDep {
+            package: package.to_string(),
+            dep: dep.to_string(),
+            unresolved: vec![],
+        }
+    }
+
+    fn broken(provide: &str) -> RevDepResult {
+        RevDepResult {
+            status: "broken".to_string(),
+            issues: vec![BrokenRequires {
+                dep: "needs".to_string(),
+                changed_provide: provide.to_string(),
+            }],
+        }
+    }
+
+    fn report_with(
+        installability: Vec<UnsatisfiedDep>,
+        reverse_deps: Vec<(&str, RevDepResult)>,
+    ) -> CheckUpdateReport {
+        CheckUpdateReport {
+            input: "FEDORA-2026-test".to_string(),
+            branch: "f44".to_string(),
+            repo: None,
+            updated_packages: vec![],
+            changes: vec![],
+            full_analysis: true,
+            changed_provides: vec![],
+            installability_issues: installability,
+            stale_side_tag: vec![],
+            skip_reason: None,
+            reverse_deps: reverse_deps
+                .into_iter()
+                .map(|(n, r)| (n.to_string(), r))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn blocking_findings_groups_reverse_deps_by_provide() {
+        let report = report_with(
+            vec![dep("plasma-settings", "(a if b)")],
+            vec![
+                ("kpat", broken("libfoo.so.1")),
+                ("kwin", broken("libfoo.so.1")),
+                ("kde-cli", broken("libbar.so.2")),
+            ],
+        );
+        let findings = blocking_findings(&report);
+        // one installability + two provide groups (not three packages)
+        assert_eq!(findings.len(), 3);
+        let libfoo = findings
+            .iter()
+            .find_map(|f| match f {
+                Finding::ReverseDepBreak { provide, packages } if provide == "libfoo.so.1" => {
+                    Some(packages.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(libfoo, vec!["kpat".to_string(), "kwin".to_string()]);
+    }
+
+    #[test]
+    fn apply_resolutions_removed_installability_drops() {
+        let report = report_with(vec![dep("plasma-settings", "(a if b)")], vec![]);
+        let findings = blocking_findings(&report);
+        let decisions = findings
+            .into_iter()
+            .map(|f| (f, Resolution::Removed))
+            .collect();
+        let (curated, addressed) = apply_resolutions(report, decisions);
+        assert!(curated.installability_issues.is_empty());
+        assert!(addressed.is_empty());
+    }
+
+    #[test]
+    fn apply_resolutions_explained_reverse_dep_flips_to_ok_and_records() {
+        let report = report_with(
+            vec![],
+            vec![
+                ("kpat", broken("libfoo.so.1")),
+                ("kwin", broken("libfoo.so.1")),
+            ],
+        );
+        let findings = blocking_findings(&report);
+        let decisions = findings
+            .into_iter()
+            .map(|f| (f, Resolution::Explained("rebuilt downstream".to_string())))
+            .collect();
+        let (curated, addressed) = apply_resolutions(report, decisions);
+        assert!(curated.reverse_deps.values().all(|r| r.status == "ok"));
+        assert_eq!(addressed.len(), 1);
+        assert!(addressed[0].1.contains("rebuilt downstream"));
+    }
+
+    #[test]
+    fn apply_resolutions_keep_leaves_breakage() {
+        let report = report_with(vec![], vec![("kpat", broken("libfoo.so.1"))]);
+        let findings = blocking_findings(&report);
+        let decisions = findings
+            .into_iter()
+            .map(|f| (f, Resolution::Keep))
+            .collect();
+        let (curated, addressed) = apply_resolutions(report, decisions);
+        assert_eq!(curated.reverse_deps["kpat"].status, "broken");
+        assert!(addressed.is_empty());
+    }
+
+    #[test]
+    fn apply_resolutions_partial_break_stays_broken() {
+        // kpat broken by two Provides; removing one leaves it broken.
+        let mut two = broken("libfoo.so.1");
+        two.issues.push(BrokenRequires {
+            dep: "needs2".to_string(),
+            changed_provide: "libbar.so.2".to_string(),
+        });
+        let report = report_with(vec![], vec![("kpat", two)]);
+        let decisions = vec![(
+            Finding::ReverseDepBreak {
+                provide: "libfoo.so.1".to_string(),
+                packages: vec!["kpat".to_string()],
+            },
+            Resolution::Removed,
+        )];
+        let (curated, _) = apply_resolutions(report, decisions);
+        assert_eq!(curated.reverse_deps["kpat"].status, "broken");
+        assert_eq!(curated.reverse_deps["kpat"].issues.len(), 1);
+        assert_eq!(
+            curated.reverse_deps["kpat"].issues[0].changed_provide,
+            "libbar.so.2"
+        );
+    }
+
+    #[test]
+    fn render_addressed_lists_explained_findings() {
+        let addressed = vec![(
+            Finding::Installability(dep("plasma-settings", "(a if b)")),
+            "satisfied at runtime".to_string(),
+        )];
+        let md = render_addressed(&addressed);
+        assert!(md.contains("Issues addressed by the reviewer"));
+        assert!(md.contains("plasma-settings"));
+        assert!(md.contains("satisfied at runtime"));
+        assert!(render_addressed(&[]).is_empty());
     }
 
     /// Collapse a wrapped Markdown blockquote back to one line for

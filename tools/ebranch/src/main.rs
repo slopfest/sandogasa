@@ -712,15 +712,46 @@ fn main() -> ExitCode {
                 } else {
                     check_update::print_report(&report, a.detailed);
                 }
+                let mut report = report;
                 if a.give_karma
                     && let Some(alias) = &vote_alias
                 {
+                    // Let the reviewer curate the blocking findings
+                    // (keep/explain/remove) before karma is derived and
+                    // the comment is posted. Skipped under --yes or
+                    // non-interactively, where every finding is kept
+                    // (today's behavior). The curated report drives both
+                    // the karma and the posted comment.
+                    let mut addressed = Vec::new();
+                    if !a.yes && opts.interactive {
+                        let findings = check_update::blocking_findings(&report);
+                        if !findings.is_empty() {
+                            eprintln!("── address findings ──");
+                            eprintln!(
+                                "(k)eep counts against the update / \
+                                 (e)xplain accepts it / (r)emove drops it\n"
+                            );
+                            match sandogasa_review::resolve_interactive(findings, |f| f.summary()) {
+                                Ok(decisions) => {
+                                    let (curated, expl) =
+                                        check_update::apply_resolutions(report, decisions);
+                                    report = curated;
+                                    addressed = expl;
+                                }
+                                Err(e) => {
+                                    eprintln!("error: {e}");
+                                    return ExitCode::FAILURE;
+                                }
+                            }
+                        }
+                    }
                     let (karma, reason) = karma::derive_karma(&report);
-                    // The posted comment is the full Markdown
-                    // report; --comment adds reviewer notes near
-                    // the top (prompted for interactively when
-                    // absent).
-                    let report_md = check_update::render_report(&report, a.detailed);
+                    // The posted comment is the full Markdown report plus
+                    // an "addressed by the reviewer" section; --comment
+                    // adds reviewer notes near the top (prompted for
+                    // interactively when absent).
+                    let mut report_md = check_update::render_report(&report, a.detailed);
+                    report_md.push_str(&check_update::render_addressed(&addressed));
                     if let Err(e) =
                         karma::run(alias, karma, &reason, &report_md, a.comment.clone(), a.yes)
                     {

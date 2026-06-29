@@ -6,6 +6,7 @@
 //! finalized by the user (see `main`); all rendering is pure.
 
 use crate::review::{Generator, Issue, Review};
+pub use sandogasa_review::Resolution;
 
 /// A checklist verdict for one item — maps to +1 / 0 / -1 at the prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,18 +283,6 @@ fn license_file_item(r: &Review) -> Item {
     }
 }
 
-/// How the reviewer resolved a fedora-review issue (a third option,
-/// removing it as a false positive, is represented by dropping it from
-/// the list entirely).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Resolution {
-    /// Not addressed — blocks approval, listed as needing attention.
-    Open,
-    /// Accepted with a written justification — no longer blocks, but
-    /// stays visible in the comment so the reasoning is on record.
-    Explained(String),
-}
-
 /// A fedora-review issue paired with the reviewer's resolution.
 #[derive(Debug, Clone)]
 pub struct ReviewedIssue {
@@ -306,7 +295,7 @@ impl ReviewedIssue {
     pub fn open(issue: Issue) -> ReviewedIssue {
         ReviewedIssue {
             issue,
-            resolution: Resolution::Open,
+            resolution: Resolution::Keep,
         }
     }
 
@@ -326,7 +315,7 @@ pub fn reviewed(issues: &[Issue]) -> Vec<ReviewedIssue> {
 /// issue still open (explained or removed issues don't block).
 pub fn approved(items: &[Item], issues: &[ReviewedIssue]) -> bool {
     !items.iter().any(|i| i.mark == Mark::Fail)
-        && !issues.iter().any(|i| i.resolution == Resolution::Open)
+        && !issues.iter().any(|i| i.resolution == Resolution::Keep)
 }
 
 /// Render the condensed-review block (the part between the first and
@@ -342,7 +331,7 @@ pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIss
 
     let open: Vec<&ReviewedIssue> = issues
         .iter()
-        .filter(|i| i.resolution == Resolution::Open)
+        .filter(|i| i.resolution == Resolution::Keep)
         .collect();
     if !open.is_empty() {
         out.push_str("Issues to address before approval:\n");
@@ -354,7 +343,7 @@ pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIss
 
     let mut explained = issues.iter().filter_map(|i| match &i.resolution {
         Resolution::Explained(why) => Some((i.finding(), why.as_str())),
-        Resolution::Open => None,
+        Resolution::Keep | Resolution::Removed => None,
     });
     if let Some(first) = explained.next() {
         out.push_str("Issues addressed by the reviewer:\n");

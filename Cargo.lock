@@ -468,6 +468,7 @@ dependencies = [
  "sandogasa-depfilter",
  "sandogasa-fedrq",
  "sandogasa-koji",
+ "sandogasa-review",
  "sandogasa-rpmvercmp",
  "semver",
  "serde",
@@ -543,6 +544,7 @@ dependencies = [
  "clap",
  "sandogasa-bugzilla",
  "sandogasa-config",
+ "sandogasa-review",
  "serde",
  "serde_json",
  "tokio",
@@ -2082,6 +2084,10 @@ dependencies = [
  "toml",
  "wiremock",
 ]
+
+[[package]]
+name = "sandogasa-review"
+version = "0.15.1"
 
 [[package]]
 name = "sandogasa-rpmvercmp"
