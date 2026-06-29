@@ -542,6 +542,7 @@ mod tests {
             branch: "f44".to_string(),
             repo: None,
             updated_packages: vec!["fish".to_string()],
+            changes: vec![],
             full_analysis,
             changed_provides: vec![],
             installability_issues: if installability {

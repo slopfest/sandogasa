@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### ebranch: check-update summarizes large updates
+
+`check-update` now leads with counts instead of dumping every list, so a
+330-package update stays readable. The package summary groups updated
+packages by their `old → new` version transition (biggest groups first,
+e.g. "75 packages: 6.7.0-1.fc43 → 6.7.1-1.fc43") and lists newly
+introduced packages separately; an Analysis block gives Changed-Provides
+/ installability / reverse-dep counts. The actionable findings (removed
+Provides, installability issues, reverse deps that would break) are still
+shown in full; the bulky non-actionable lists (every updated Provide, the
+full package list, OK reverse deps) collapse to counts. `--detailed`
+restores the complete lists, and long lists otherwise cap at 15 with a
+"… and N more" footer. (`--json` is unchanged and carries the new
+per-package `changes`.)
+
 ### ebranch: check-update fixes for large side-tag updates
 
 Three fixes found checking a 330-build KDE megaupdate

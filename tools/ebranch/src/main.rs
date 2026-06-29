@@ -188,6 +188,11 @@ Otherwise defaults to --branch."
     #[arg(long)]
     json: bool,
 
+    /// Show full lists (every package, Provide, and reverse dep)
+    /// instead of counts plus the actionable problems.
+    #[arg(long)]
+    detailed: bool,
+
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
@@ -680,7 +685,7 @@ fn main() -> ExitCode {
                 if a.json {
                     print_json(&report);
                 } else {
-                    check_update::print_report(&report);
+                    check_update::print_report(&report, a.detailed);
                 }
                 if a.give_karma
                     && let Some(alias) = &vote_alias
@@ -690,7 +695,7 @@ fn main() -> ExitCode {
                     // report; --comment adds reviewer notes near
                     // the top (prompted for interactively when
                     // absent).
-                    let report_md = check_update::render_report(&report);
+                    let report_md = check_update::render_report(&report, a.detailed);
                     if let Err(e) =
                         karma::run(alias, karma, &reason, &report_md, a.comment.clone(), a.yes)
                     {

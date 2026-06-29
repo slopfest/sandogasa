@@ -2,10 +2,6 @@
 
 ## ebranch
 
-- (2026-06-26) check-update output is too long for a large update (330
-  builds). Condense: counts by default, full lists behind `--detailed`,
-  and/or cap long lists with "… and N more". Related to the
-  review-issue unification below.
 - (2026-06-26) Unify review-issue handling between check-update and
   fedora-review-digest — port the latter's keep/explain/remove
   resolution so a reviewer can curate which findings (changed provides,
@@ -15,6 +11,10 @@
   above (e.g. resolve by group, or only prompt on the blocking subset).
 
 Done (2026-06-29):
+- check-update condenses large updates: counts by default, updated
+  packages grouped by `old → new` version transition, new packages
+  listed separately, actionable findings still shown in full, bulky
+  lists behind `--detailed` (and capped at 15 otherwise).
 - check-update memoizes stable-repo capability resolution
   (`provides_of_provider`) per capability, so libstdc++ / libQt6Core.so.6
   resolve once per run instead of once per requiring package. (A general
