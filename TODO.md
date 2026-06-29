@@ -2,18 +2,34 @@
 
 ## ebranch
 
-- (2026-06-26) check-update should cache lookups, or large updates are very slow to check even with fedrq already hitting caches
-  e.g. provides lookups for libstdc++, libQt6Core.so.6
-- (2026-06-26) check-update has a weird issue with FEDORA-2026-2b36efabf2 - why is it expecting the old version
-  and complain the sidetag is stale because it sees newer version
-```
-[check-update] Bodhi status is 'pending', not 'testing'; skipping @testing
-[check-update] comparing provides via koji + side tag
-warning: aurorae: side tag repodata is stale (expected 6.7.0-1.fc43 from aurorae-6.7.0-1.fc43, found 6.7.1-1.fc43); run 'koji regen-repo' on the side tag, then rerun with --refresh
-warning: bluedevil: side tag repodata is stale (expected 6.7.0-1.fc43 from bluedevil-6.7.0-1.fc43, found 6.7.1-1.fc43); run 'koji regen-repo' on the side tag, then re
-run with --refresh
-warning: breeze-gtk: side tag repodata is stale (expected 6.7.0-1.fc43 from breeze-gtk-6.7.0-1.fc43, found 6.7.1-1.fc43); run 'koji regen-repo' on the side tag, then rerun with --refresh
-```
+- (2026-06-26) check-update output is too long for a large update (330
+  builds). Condense: counts by default, full lists behind `--detailed`,
+  and/or cap long lists with "… and N more". Related to the
+  review-issue unification below.
+- (2026-06-26) Unify review-issue handling between check-update and
+  fedora-review-digest — port the latter's keep/explain/remove
+  resolution so a reviewer can curate which findings (changed provides,
+  installability, stale side tag) make it into the posted comment.
+  Likely a shared module/crate. Note: for a 330-issue megaupdate,
+  per-issue prompting is impractical, so pair it with the condensing
+  above (e.g. resolve by group, or only prompt on the blocking subset).
+
+Done (2026-06-29):
+- check-update memoizes stable-repo capability resolution
+  (`provides_of_provider`) per capability, so libstdc++ / libQt6Core.so.6
+  resolve once per run instead of once per requiring package. (A general
+  fedrq-layer cache across all query methods is still possible if more
+  memoization is needed — would touch ~20 `Fedrq {}` literals.)
+- check-update side-tag NVRs now use `koji list-tagged --latest`, and
+  the staleness check only flags repodata that's *older* than expected
+  (rpmvercmp) — so a side tag that moved 6.7.0 → 6.7.1 no longer
+  false-flags as stale.
+- check-update now evaluates boolean/rich deps in the installability
+  check with real semantics (`A if B` requires A only when B resolves,
+  `unless`/`or`/`and`/`with`/`without` likewise) instead of requiring
+  every capability — plus fixed the extraction bug that left a stray
+  `)` on inner-group caps. Fixed the bogus plasma-settings issue; a
+  flagged boolean dep now reports which capabilities failed.
 
 ## hs-relmon
 

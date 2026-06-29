@@ -548,6 +548,7 @@ mod tests {
                 vec![UnsatisfiedDep {
                     package: "fish".to_string(),
                     dep: "libfoo".to_string(),
+                    unresolved: vec![],
                 }]
             } else {
                 vec![]

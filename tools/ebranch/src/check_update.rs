@@ -6,7 +6,8 @@
 //! compares old vs new subpackage Provides to detect removed capabilities,
 //! then finds reverse dependencies in the stable repo that would break.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Mutex;
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -68,6 +69,11 @@ pub struct UnsatisfiedDep {
     pub package: String,
     /// The unsatisfied Requires string.
     pub dep: String,
+    /// For a boolean/rich dep, the specific capabilities that didn't
+    /// resolve (so the reader can see *which* part is the problem).
+    /// Empty for a plain dep (where `dep` is itself the capability).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unresolved: Vec<String>,
 }
 
 /// A side tag repo whose metadata still serves a stale V-R for
@@ -176,7 +182,15 @@ pub fn parse_nvr(nvr: &str) -> Option<&str> {
 
 /// List NVRs in a Koji tag via `koji list-tagged --quiet`.
 pub fn koji_list_tagged(tag: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
-    sandogasa_koji::list_tagged_nvrs(tag, profile)
+    // `--latest` (via `list_tagged`) so a side tag that accumulated
+    // superseded builds — e.g. 6.7.0 then 6.7.1 of the same package —
+    // yields only the current NVR, not the old one. Otherwise the
+    // stale-side-tag check would compare the superseded 6.7.0 against
+    // the repodata's 6.7.1 and wrongly flag it.
+    Ok(sandogasa_koji::list_tagged(tag, profile, None)?
+        .into_iter()
+        .map(|b| b.nvr)
+        .collect())
 }
 
 /// List binary RPM names for a build via `koji buildinfo`.
@@ -670,7 +684,17 @@ pub fn render_report(report: &CheckUpdateReport) -> String {
             report.installability_issues.len()
         );
         for issue in &report.installability_issues {
-            let _ = writeln!(o, "- **{}**: `{}`", issue.package, issue.dep);
+            if issue.unresolved.is_empty() {
+                let _ = writeln!(o, "- **{}**: `{}`", issue.package, issue.dep);
+            } else {
+                let _ = writeln!(
+                    o,
+                    "- **{}**: `{}` (unresolved: {})",
+                    issue.package,
+                    issue.dep,
+                    issue.unresolved.join(", "),
+                );
+            }
         }
     }
 
@@ -727,38 +751,158 @@ fn filter_none(items: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-/// Extract bare capability names from an RPM dependency string.
-///
-/// Handles rich deps like `(crate(foo) >= 1.0 with crate(foo) < 2.0~)`
-/// by splitting on `with`/`or`/`and`/`if`/`unless` and stripping
-/// version constraints and parentheses.
-fn extract_capability_names(dep: &str) -> Vec<String> {
-    // Strip wrapping parens ONLY when the entire dep is a
-    // rich/boolean expression — i.e. it starts with `(` and ends
-    // with `)`. Plain caps like `libc.so.6(GLIBC_2.34)(64bit)`
-    // or `rtld(GNU_HASH)` end in `)` but the `)` is part of the
-    // name; trimming it unconditionally produces a broken
-    // capability that fedrq won't resolve, which then surfaces
-    // as a bogus "installability issue" for every system lib.
+/// Strip "grouping" parens from a token's ends while keeping parens
+/// that belong to a capability name. A trailing `)` is dropped only
+/// when the token has more `)` than `(` (so it closes an outer rich-dep
+/// group), and likewise a leading `(`; thus `sound-theme-freedesktop)`
+/// → `sound-theme-freedesktop`, but `crate(foo)` and
+/// `libc.so.6(GLIBC_2.34)(64bit)` are left intact.
+fn strip_grouping_parens(token: &str) -> &str {
+    let mut s = token;
+    loop {
+        let opens = s.matches('(').count();
+        let closes = s.matches(')').count();
+        if closes > opens && s.ends_with(')') {
+            s = &s[..s.len() - 1];
+        } else if opens > closes && s.starts_with('(') {
+            s = &s[1..];
+        } else {
+            break;
+        }
+    }
+    s
+}
+
+/// The bare capability name of a leaf term: its first whitespace token
+/// (dropping any version constraint like `foo >= 1.0`) with grouping
+/// parens stripped.
+fn leaf_cap(term: &str) -> &str {
+    strip_grouping_parens(term.split_whitespace().next().unwrap_or(""))
+}
+
+/// Byte range of the boolean operator `op` (a standalone whitespace-
+/// delimited token) at paren depth 0 in `expr`, if any.
+fn find_top_op(expr: &str, op: &str) -> Option<(usize, usize)> {
+    let bytes = expr.as_bytes();
+    let mut depth = 0i32;
+    for (idx, &c) in bytes.iter().enumerate() {
+        match c {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b' ' if depth == 0 => {
+                let ws = idx + 1;
+                let we = expr[ws..].find(' ').map(|p| ws + p).unwrap_or(expr.len());
+                if &expr[ws..we] == op {
+                    return Some((ws, we));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Split `expr` on the first top-level `op` token into `(before, after)`.
+fn split_top<'a>(expr: &'a str, op: &str) -> Option<(&'a str, &'a str)> {
+    find_top_op(expr, op).map(|(s, e)| (expr[..s].trim(), expr[e..].trim()))
+}
+
+/// Split `expr` on every top-level `op` token (≥2 parts means the
+/// operator is present at the top level).
+fn split_all_top<'a>(expr: &'a str, op: &str) -> Vec<&'a str> {
+    let mut parts = Vec::new();
+    let mut rest = expr;
+    while let Some((before, after)) = split_top(rest, op) {
+        parts.push(before);
+        rest = after;
+    }
+    parts.push(rest.trim());
+    parts
+}
+
+/// Whether an RPM dependency is satisfiable, given `resolves(cap)` for
+/// a bare capability name. Evaluates boolean/rich deps with their real
+/// semantics (a depsolver-free approximation): `A if B` requires A only
+/// when B resolves; `A unless B` requires A only when B does *not*;
+/// `or` needs any term; `and`/`with` need all; `without` ignores the
+/// excluded term. A plain term is satisfiable when its capability
+/// resolves.
+fn dep_satisfiable(dep: &str, resolves: &impl Fn(&str) -> bool) -> bool {
     let dep = dep.trim();
-    let dep = if dep.starts_with('(') && dep.ends_with(')') {
-        &dep[1..dep.len() - 1]
-    } else {
-        dep
+    match dep.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+        // Boolean/rich dep (fully parenthesized): evaluate the inside.
+        Some(inner) => eval_boolean(inner.trim(), resolves),
+        None => {
+            let cap = leaf_cap(dep);
+            cap.is_empty() || resolves(cap)
+        }
+    }
+}
+
+fn eval_boolean(expr: &str, resolves: &impl Fn(&str) -> bool) -> bool {
+    // `A if B [else C]` — conditional.
+    if let Some((cons, rest)) = split_top(expr, "if") {
+        if let Some((cond, alt)) = split_top(rest, "else") {
+            return if eval_boolean(cond, resolves) {
+                eval_boolean(cons, resolves)
+            } else {
+                eval_boolean(alt, resolves)
+            };
+        }
+        // No `else`: the requirement applies only when the condition holds.
+        return !eval_boolean(rest, resolves) || eval_boolean(cons, resolves);
+    }
+    // `A unless B` — inverse conditional.
+    if let Some((cons, cond)) = split_top(expr, "unless") {
+        return eval_boolean(cond, resolves) || eval_boolean(cons, resolves);
+    }
+    // `A or B …` — any term.
+    let ors = split_all_top(expr, "or");
+    if ors.len() > 1 {
+        return ors.iter().any(|t| eval_boolean(t, resolves));
+    }
+    // `A and B …` / `A with B …` — all terms.
+    for op in ["and", "with"] {
+        let terms = split_all_top(expr, op);
+        if terms.len() > 1 {
+            return terms.iter().all(|t| eval_boolean(t, resolves));
+        }
+    }
+    // `A without B` — only A matters.
+    if let Some((a, _b)) = split_top(expr, "without") {
+        return eval_boolean(a, resolves);
+    }
+    // Nested group or a plain leaf.
+    let expr = expr.trim();
+    match expr.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+        Some(inner) => eval_boolean(inner.trim(), resolves),
+        None => {
+            let cap = leaf_cap(expr);
+            cap.is_empty() || resolves(cap)
+        }
+    }
+}
+
+/// Extract the bare capability names referenced by a dependency string
+/// (for reporting which parts of a flagged dep didn't resolve). Strips
+/// version constraints, boolean operators, and grouping parens — while
+/// keeping parens that are part of a name (`crate(foo)`,
+/// `libc.so.6(GLIBC_2.34)(64bit)`).
+fn extract_capability_names(dep: &str) -> Vec<String> {
+    let dep = dep.trim();
+    let dep = match dep.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+        Some(inner) => inner,
+        None => dep,
     };
     dep.split_whitespace()
         .filter(|token| {
-            // Skip version operators and boolean operators.
             !matches!(
                 *token,
                 ">=" | "<=" | ">" | "<" | "=" | "with" | "or" | "and" | "if" | "unless" | "else"
             ) && !token.starts_with(|c: char| c.is_ascii_digit())
                 && !token.ends_with('~')
         })
-        // Only strip leading '(' from tokens (nested rich dep grouping).
-        // Do NOT strip trailing ')' — it's part of capability names
-        // like crate(foo), config(bar), pkgconfig(baz).
-        .map(|s| s.trim_start_matches('(').to_string())
+        .map(|s| strip_grouping_parens(s).to_string())
         .filter(|s| !s.is_empty())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -1011,6 +1155,29 @@ fn check_update_installability(
         );
     }
 
+    // Memoize stable-repo capability resolution: a single capability
+    // like `libstdc++.so.6` or `libQt6Core.so.6` is required by many of
+    // the update's binaries, and each lookup shells out to fedrq. Cache
+    // the satisfied/unsatisfied verdict per capability so we resolve it
+    // once per run instead of once per requiring package.
+    let cap_satisfied: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
+    let resolves_in_stable = |cap: &str| -> bool {
+        if let Some(&hit) = cap_satisfied.lock().unwrap().get(cap) {
+            return hit;
+        }
+        let resolved = stable_fedrq.provides_of_provider(cap).unwrap_or_default();
+        let satisfied = resolved.iter().any(|s| !s.is_empty() && s != "(none)");
+        cap_satisfied
+            .lock()
+            .unwrap()
+            .insert(cap.to_string(), satisfied);
+        satisfied
+    };
+
+    // A capability resolves if another package in the update provides
+    // it, or it's available in the stable repo (memoized).
+    let resolves = |cap: &str| new_provides.contains(cap) || resolves_in_stable(cap);
+
     binary_names
         .par_iter()
         .flat_map_iter(|name| {
@@ -1018,28 +1185,32 @@ fn check_update_installability(
             let src = bin_to_src.get(name.as_str()).copied().unwrap_or(name);
             requires
                 .into_iter()
-                .filter(|dep| {
+                .filter_map(|dep| {
                     let dep = dep.trim();
                     if dep.is_empty() || sandogasa_depfilter::is_rpm_internal_dep(dep) {
-                        return false;
+                        return None;
                     }
-                    // Extract bare capability names (stripping version
-                    // constraints and rich dep syntax).
-                    let caps = extract_capability_names(dep);
-                    // Satisfied by other packages in the update?
-                    if caps.iter().all(|cap| new_provides.contains(cap.as_str())) {
-                        return false;
+                    // Evaluate boolean/rich deps with real semantics
+                    // (`A if B` only requires A when B resolves, etc.).
+                    if dep_satisfiable(dep, &resolves) {
+                        return None;
                     }
-                    // Satisfied by the stable repo?
-                    let satisfied = caps.iter().all(|cap| {
-                        let resolved = stable_fedrq.provides_of_provider(cap).unwrap_or_default();
-                        resolved.iter().any(|s| !s.is_empty() && s != "(none)")
-                    });
-                    !satisfied
-                })
-                .map(|dep| UnsatisfiedDep {
-                    package: src.to_string(),
-                    dep: dep.trim().to_string(),
+                    // For a boolean dep, name the capabilities that
+                    // actually failed so the reader sees which part is
+                    // the problem; for a plain dep the dep is the cap.
+                    let unresolved = if dep.starts_with('(') {
+                        extract_capability_names(dep)
+                            .into_iter()
+                            .filter(|c| !resolves(c))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    Some(UnsatisfiedDep {
+                        package: src.to_string(),
+                        dep: dep.to_string(),
+                        unresolved,
+                    })
                 })
                 .collect::<Vec<_>>()
         })
@@ -1197,6 +1368,7 @@ where
         let Some((name, exp_v, exp_r)) = sandogasa_koji::parse_nvr(nvr) else {
             continue;
         };
+        let expected_vr = format!("{exp_v}-{exp_r}");
 
         let matching_bins: Vec<&String> = binary_names
             .iter()
@@ -1206,47 +1378,58 @@ where
             continue;
         }
 
-        let mut expected_found = false;
-        let mut actual_vr: Option<String> = None;
+        // Every V-R the repodata serves for this package's binaries.
+        let mut vrs: Vec<String> = Vec::new();
         for bin in &matching_bins {
-            let rows = lookup(bin);
-            for (_, v, r) in &rows {
-                if v == exp_v && r == exp_r {
-                    expected_found = true;
-                    break;
-                }
-                if actual_vr.is_none() {
-                    actual_vr = Some(format!("{v}-{r}"));
-                }
-            }
-            if expected_found {
-                break;
+            for (_, v, r) in lookup(bin) {
+                vrs.push(format!("{v}-{r}"));
             }
         }
 
-        if !expected_found {
-            let warning = StaleSideTag {
+        // The expected build is present → repodata is fresh.
+        if vrs.contains(&expected_vr) {
+            continue;
+        }
+
+        // No binaries at all → repodata hasn't picked up the build.
+        if vrs.is_empty() {
+            if verbose {
+                eprintln!(
+                    "warning: {name}: side tag has no binary RPMs in \
+                     repodata for expected {expected_vr} from {nvr}; run \
+                     'koji regen-repo' on the side tag, then rerun with \
+                     --refresh"
+                );
+            }
+            warnings.push(StaleSideTag {
                 package: name.to_string(),
                 expected_nvr: nvr.clone(),
-                actual_vr: actual_vr.clone(),
-            };
+                actual_vr: None,
+            });
+            continue;
+        }
+
+        // Only *older* repodata is stale. A newer V-R than expected
+        // (e.g. the side tag moved 6.7.0 → 6.7.1 while our NVR list
+        // still named 6.7.0) is not a staleness problem — skip it.
+        let latest = vrs
+            .iter()
+            .max_by(|a, b| sandogasa_rpmvercmp::compare_evr(a, b))
+            .cloned()
+            .unwrap_or_default();
+        if sandogasa_rpmvercmp::compare_evr(&latest, &expected_vr) == std::cmp::Ordering::Less {
             if verbose {
-                match &warning.actual_vr {
-                    Some(actual) => eprintln!(
-                        "warning: {name}: side tag repodata is stale \
-                         (expected {exp_v}-{exp_r} from {nvr}, found \
-                         {actual}); run 'koji regen-repo' on the side \
-                         tag, then rerun with --refresh"
-                    ),
-                    None => eprintln!(
-                        "warning: {name}: side tag has no binary RPMs \
-                         in repodata for expected {exp_v}-{exp_r} from \
-                         {nvr}; run 'koji regen-repo' on the side tag, \
-                         then rerun with --refresh"
-                    ),
-                }
+                eprintln!(
+                    "warning: {name}: side tag repodata is stale (expected \
+                     {expected_vr} from {nvr}, found {latest}); run 'koji \
+                     regen-repo' on the side tag, then rerun with --refresh"
+                );
             }
-            warnings.push(warning);
+            warnings.push(StaleSideTag {
+                package: name.to_string(),
+                expected_nvr: nvr.clone(),
+                actual_vr: Some(latest),
+            });
         }
     }
     warnings
@@ -1508,7 +1691,74 @@ mod tests {
         );
     }
 
+    // --- dep_satisfiable (rich/boolean deps) ---
+
+    #[test]
+    fn dep_satisfiable_if_condition_present_checks_consequent() {
+        // The plasma-settings case: pulseaudio IS available, so the
+        // consequent (both modules) is required — and both are present.
+        let dep = "((pulseaudio-module-gsettings and sound-theme-freedesktop) if pulseaudio)";
+        let all = |_: &str| true;
+        assert!(dep_satisfiable(dep, &all));
+        // pulseaudio present, but a consequent capability missing → broken.
+        let missing_module = |c: &str| c != "sound-theme-freedesktop";
+        assert!(!dep_satisfiable(dep, &missing_module));
+        // pulseaudio absent → the requirement doesn't apply → satisfied,
+        // even though the modules aren't available.
+        let only_modules_absent = |c: &str| c == "irrelevant";
+        assert!(dep_satisfiable(dep, &only_modules_absent));
+    }
+
+    #[test]
+    fn dep_satisfiable_or_needs_any() {
+        let dep = "(foo or bar)";
+        assert!(dep_satisfiable(dep, &|c: &str| c == "bar")); // one is enough
+        assert!(!dep_satisfiable(dep, &|_: &str| false)); // neither
+    }
+
+    #[test]
+    fn dep_satisfiable_and_needs_all() {
+        let dep = "(foo and bar)";
+        assert!(dep_satisfiable(dep, &|_: &str| true));
+        assert!(!dep_satisfiable(dep, &|c: &str| c == "foo")); // bar missing
+    }
+
+    #[test]
+    fn dep_satisfiable_unless_waives_when_condition_present() {
+        let dep = "(foo unless bar)";
+        // bar present → foo not required → satisfied even if foo absent.
+        assert!(dep_satisfiable(dep, &|c: &str| c == "bar"));
+        // bar absent → foo required.
+        assert!(!dep_satisfiable(dep, &|_: &str| false));
+        assert!(dep_satisfiable(dep, &|c: &str| c == "foo"));
+    }
+
+    #[test]
+    fn dep_satisfiable_plain_dep_checks_capability() {
+        assert!(dep_satisfiable("bash >= 5.0", &|c: &str| c == "bash"));
+        assert!(!dep_satisfiable("missing-cap", &|_: &str| false));
+        // A plain lib cap with parens in the name resolves as one cap.
+        assert!(dep_satisfiable(
+            "libc.so.6(GLIBC_2.34)(64bit)",
+            &|c: &str| c == "libc.so.6(GLIBC_2.34)(64bit)"
+        ));
+    }
+
     // --- extract_capability_names ---
+
+    #[test]
+    fn extract_capability_names_strips_inner_group_close_paren() {
+        // Regression: the close paren of an inner rich-dep group must
+        // not stick to the capability name (the plasma-settings bug —
+        // `sound-theme-freedesktop)` never resolved).
+        let caps = extract_capability_names(
+            "((pulseaudio-module-gsettings and sound-theme-freedesktop) if pulseaudio)",
+        );
+        assert!(caps.contains(&"pulseaudio-module-gsettings".to_string()));
+        assert!(caps.contains(&"sound-theme-freedesktop".to_string()));
+        assert!(caps.contains(&"pulseaudio".to_string()));
+        assert!(!caps.iter().any(|c| c.ends_with(')') && !c.contains('(')));
+    }
 
     #[test]
     fn extract_capability_names_keeps_paren_in_lib_caps() {
@@ -1695,6 +1945,22 @@ mod tests {
         assert_eq!(warnings[0].package, "rust-mimalloc");
         assert_eq!(warnings[0].expected_nvr, "rust-mimalloc-0.1.50-1.fc44");
         assert_eq!(warnings[0].actual_vr.as_deref(), Some("0.1.48-2.fc44"));
+    }
+
+    #[test]
+    fn check_side_tag_staleness_newer_in_repodata_is_not_stale() {
+        // The FEDORA-2026-2b36efabf2 case: the NVR list named 6.7.0
+        // (a superseded build still tagged), but the side tag repodata
+        // serves the newer 6.7.1. Newer is not stale — no warning.
+        let nvrs = vec!["aurorae-6.7.0-1.fc43".to_string()];
+        let bins = vec!["aurorae".to_string()];
+        let warnings = check_side_tag_staleness(
+            &nvrs,
+            &bins,
+            |_| vec![nvr_row("aurorae", "6.7.1", "1.fc43")],
+            false,
+        );
+        assert!(warnings.is_empty());
     }
 
     #[test]

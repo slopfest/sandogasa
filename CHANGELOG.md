@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### ebranch: check-update fixes for large side-tag updates
+
+Three fixes found checking a 330-build KDE megaupdate
+(FEDORA-2026-2b36efabf2):
+
+- **Stale side-tag false positives.** Side-tag NVRs now come from
+  `koji list-tagged --latest`, so a side tag that accumulated superseded
+  builds (e.g. 6.7.0 then 6.7.1 of a package) no longer leaks the old
+  NVR. The staleness check also only flags repodata that's *older* than
+  expected (via rpmvercmp) — a newer build than expected isn't stale.
+- **Bogus installability issues from boolean deps.** Two fixes:
+  capability extraction left the close-paren of an inner rich-dep group
+  stuck to the name (`sound-theme-freedesktop)`), which never resolved;
+  and the check now *evaluates* boolean/rich deps with their real
+  semantics instead of requiring every referenced capability — `A if B`
+  needs A only when B resolves, `A unless B` only when it doesn't, `or`
+  needs any, `and`/`with` need all, `without` ignores the excluded term.
+  So `((pulseaudio-module-gsettings and sound-theme-freedesktop) if
+  pulseaudio)` is correctly satisfied. A flagged boolean dep also now
+  reports *which* capabilities failed.
+- **Performance.** Stable-repo capability resolution
+  (`provides_of_provider`) is memoized per capability, so a shared dep
+  like `libstdc++.so.6` resolves once per run instead of once per
+  requiring package.
+
 ### ebranch: accurate check-update note when Provides can't be compared
 
 `check-update` printed "no side tag available; cannot compare Provides"
