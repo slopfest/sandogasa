@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### ebranch: fix check-update side-tag staleness false positives
+
+The side-tag staleness check was guessing a build's binary names from
+its *source* name with `bin.starts_with(source)`, which both missed
+real binaries on a rename (`python-jiter` ships `python3-jiter`) and
+matched `-debugsource`/`-debuginfo` packages — which live in a separate
+debug repo, not the side tag's main repodata, so the lookup came back
+empty and reported a fresh build as "stale". It now runs a single
+batched `fedrq -F line:source,version,release` query, groups the
+results by the authoritative `source` field, and judges a build fresh
+if any of its binaries resolves to the expected version-release
+(release included, so a `0.15.0-1` → `0.15.0-3` bump is detected).
+Debug subpackages are excluded. New
+`sandogasa_fedrq::pkgs_source_vr()`.
+
+The interactive `koji regen-repo` offer also now drops *both* caches
+(fedrq smartcache + libdnf5) before re-checking — previously it cleared
+only the smartcache, so libdnf5 kept serving the pre-regen metadata and
+the re-check re-warned despite a successful regen. New
+`sandogasa_fedrq::clear_all_caches()`; `--refresh` uses it too.
+
 ### ebranch: check-update infers the branch from Fedora side tags
 
 `check-update` now infers the branch for a Fedora side tag from its name

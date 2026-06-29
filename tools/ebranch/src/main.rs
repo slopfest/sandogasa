@@ -527,15 +527,11 @@ fn handle_branch_request_command(cmd: &Command) -> Option<ExitCode> {
 /// Clear the fedrq + libdnf5 repo metadata caches if `--refresh` was passed.
 fn handle_refresh(refresh: bool, verbose: bool) -> Result<(), ExitCode> {
     if refresh {
-        if let Err(e) = sandogasa_fedrq::clear_cache() {
-            eprintln!("error: failed to clear fedrq cache: {e}");
-            return Err(ExitCode::FAILURE);
-        }
-        // Also drop the libdnf5 cache: the smartcache clear above misses
-        // the host's *native* branch, which reuses ~/.cache/libdnf5 and
-        // can otherwise serve stale metadata.
-        if let Err(e) = sandogasa_fedrq::clear_libdnf5_cache() {
-            eprintln!("error: failed to clear libdnf5 cache: {e}");
+        // Drop both the smartcache and libdnf5: the smartcache clear
+        // alone misses the host's *native* branch, which reuses
+        // ~/.cache/libdnf5 and can otherwise serve stale metadata.
+        if let Err(e) = sandogasa_fedrq::clear_all_caches() {
+            eprintln!("error: failed to clear metadata caches: {e}");
             return Err(ExitCode::FAILURE);
         }
         if verbose {

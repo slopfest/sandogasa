@@ -101,6 +101,16 @@ pub fn clear_libdnf5_cache() -> std::io::Result<()> {
     remove_if_present(&libdnf5_cache_dir())
 }
 
+/// Remove both the fedrq smartcache and the libdnf5 metadata cache so
+/// the next query refetches fresh metadata for every branch (native or
+/// not). Use after an action that changes repo contents server-side
+/// (e.g. `koji regen-repo`): clearing only the smartcache leaves
+/// libdnf5 serving the pre-regen metadata for the host's native branch.
+pub fn clear_all_caches() -> std::io::Result<()> {
+    clear_cache()?;
+    clear_libdnf5_cache()
+}
+
 fn remove_if_present(dir: &std::path::Path) -> std::io::Result<()> {
     if dir.exists() {
         std::fs::remove_dir_all(dir)?;
@@ -245,6 +255,41 @@ impl Fedrq {
                 continue;
             }
             out.push((n.to_string(), v.to_string(), r.to_string()));
+        }
+        Ok(out)
+    }
+
+    /// Map binary package names to their source and version-release in
+    /// a single query (`-F line:source,version,release`).
+    ///
+    /// Returns `(source_name, "version-release")` for each of `names`
+    /// found. Querying `version` and `release` as separate fields keeps
+    /// the release (which `nev` drops) and sidesteps `nevr`'s habit of
+    /// omitting the `0:` epoch — so a stale repo differing only by
+    /// release (e.g. `0.15.0-1` vs `0.15.0-3`) is still caught. Grouping
+    /// by the returned source lets a caller check a whole build's
+    /// binaries without guessing names from the source.
+    pub fn pkgs_source_vr(&self, names: &[&str]) -> Result<Vec<(String, String)>, Error> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["pkgs", "-F", "line:source,version,release"]);
+        self.apply_opts(&mut cmd);
+        cmd.arg("--");
+        cmd.args(names);
+        let raw = Self::run(&mut cmd)?;
+        let mut out = Vec::new();
+        for line in raw {
+            let parts: Vec<&str> = line.split(" : ").collect();
+            if parts.len() != 3 {
+                continue;
+            }
+            let (source, version, release) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
+            if source.is_empty() || source == "(none)" || version.is_empty() || release.is_empty() {
+                continue;
+            }
+            out.push((source.to_string(), format!("{version}-{release}")));
         }
         Ok(out)
     }

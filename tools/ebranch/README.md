@@ -182,18 +182,23 @@ For new provides, ebranch checks these sources in order:
    - `@testing` must report at least one subpackage whose
      `(version, release)` matches one of the input NVRs.
 2. **Side tag** — via `koji buildinfo` + `fedrq pkg_provides`.
-   Cross-checks each koji NVR against the V-R the side-tag
-   repodata actually serves; if they disagree (typically
+   Cross-checks each build against the V-R the side-tag repodata
+   actually serves: one batched
+   `fedrq -F line:source,version,release` query maps every
+   (non-debug) binary back to its source, and
+   a build is fresh if any of its binaries resolves to the
+   expected version-release. If they disagree (typically
    because `koji regen-repo` hasn't run yet), ebranch offers to
    run `koji regen-repo --wait <side-tag>` on your behalf
-   (default yes), clears fedrq's smartcache, and re-checks
-   before continuing. Declining the regen prompts whether to
-   continue with stale data (default no — the check aborts).
-   In `--json` mode or when stdin isn't a terminal there are no
-   prompts; the report opens with a banner listing the stale
-   sources instead, and the remedy is a manual
-   `koji regen-repo <side-tag>` followed by a rerun with
-   `--refresh` (which clears fedrq's smartcache).
+   (default yes), clears both the fedrq smartcache and the
+   libdnf5 metadata cache so the re-check sees the regenerated
+   repodata, and re-checks before continuing. Declining the
+   regen prompts whether to continue with stale data (default
+   no — the check aborts). In `--json` mode or when stdin isn't
+   a terminal there are no prompts; the report opens with a
+   banner listing the stale sources instead, and the remedy is
+   a manual `koji regen-repo <side-tag>` followed by a rerun
+   with `--refresh` (which clears both caches).
 3. **Reverse deps only** — lists affected packages for manual review
 
 `-b`/`--branch` and `-r`/`--repo` are override-only. The branch is

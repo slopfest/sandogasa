@@ -420,7 +420,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         if opts.verbose {
             eprintln!("[check-update] comparing provides via koji + side tag");
         }
-        // Get binary RPM names from koji for installability checking.
+        // Binary RPM names from koji (for installability checking).
         let koji_bins: Vec<String> = nvrs
             .iter()
             .flat_map(|nvr| koji_build_rpms(nvr, opts.koji_profile.as_deref()).unwrap_or_default())
@@ -428,24 +428,29 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             .into_iter()
             .collect();
 
-        // Detect side-tag repodata that lags koji (V-R mismatch)
-        // before the expensive provides comparison, so a regen can
-        // fix the data the comparison runs on.
-        let mut stale_side_tag = check_side_tag_staleness(
-            &nvrs,
-            &koji_bins,
-            |bin| side_fq.pkg_nvrs(bin).unwrap_or_default(),
-            opts.verbose,
-        );
+        // Detect side-tag repodata that lags koji (V-R mismatch) before
+        // the expensive provides comparison, so a regen can fix the data
+        // the comparison runs on. One batched fedrq query maps each
+        // (non-debug) binary back to its source and the V-R the repodata
+        // serves; we then compare against the V-R koji expects per build.
+        // -debuginfo/-debugsource live in a separate debug repo, so
+        // exclude them — they'd always look missing and false-flag.
+        let real_bins: Vec<&str> = koji_bins
+            .iter()
+            .filter(|b| !is_debug_rpm(b))
+            .map(String::as_str)
+            .collect();
+        let side_repo_vrs =
+            || source_vr_map(side_fq.pkgs_source_vr(&real_bins).unwrap_or_default());
+
+        let mut stale_side_tag = check_side_tag_staleness(&nvrs, &side_repo_vrs(), opts.verbose);
 
         if !stale_side_tag.is_empty() && opts.interactive {
             stale_side_tag = resolve_stale_side_tag(
                 stale_side_tag,
                 tag,
                 opts.koji_profile.as_deref(),
-                &nvrs,
-                &koji_bins,
-                |bin| side_fq.pkg_nvrs(bin).unwrap_or_default(),
+                || check_side_tag_staleness(&nvrs, &side_repo_vrs(), opts.verbose),
                 opts.verbose,
             )?;
         }
@@ -1579,6 +1584,23 @@ fn run_provides_analysis(
     })
 }
 
+/// True for koji debug subpackages (`-debuginfo`/`-debugsource`),
+/// which land in a separate debug repo, not the main side-tag repodata.
+fn is_debug_rpm(name: &str) -> bool {
+    name.ends_with("-debuginfo") || name.ends_with("-debugsource")
+}
+
+/// Group `(source, version-release)` pairs (from
+/// [`Fedrq::pkgs_source_vr`]) into a `source → [V-R]` map, so a build's
+/// freshness can be judged from any of its binaries.
+fn source_vr_map(pairs: Vec<(String, String)>) -> BTreeMap<String, Vec<String>> {
+    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (source, vr) in pairs {
+        map.entry(source).or_default().push(vr);
+    }
+    map
+}
+
 /// Detect side-tag repos whose metadata still serves a stale V-R
 /// for a build that koji has at a newer NVR.
 ///
@@ -1589,18 +1611,16 @@ fn run_provides_analysis(
 /// compares stable's provides against the same old V-R, finds no
 /// diff, and silently drops affected reverse deps.
 ///
-/// For each koji NVR we look up the binary RPMs' V-R in the side
-/// tag and flag any source where none of the binaries match the
-/// expected `(version, release)`.
-fn check_side_tag_staleness<F>(
+/// `side_repo_vrs` maps each updated source to the V-Rs its binaries
+/// actually resolve to in the side tag (built from a batched
+/// `source,nevr` query). A build is fresh if any of its binaries is at
+/// the expected `(version, release)`; absent ⇒ the repodata hasn't
+/// picked it up; only an *older* V-R is flagged stale.
+fn check_side_tag_staleness(
     nvrs: &[String],
-    binary_names: &[String],
-    lookup: F,
+    side_repo_vrs: &BTreeMap<String, Vec<String>>,
     verbose: bool,
-) -> Vec<StaleSideTag>
-where
-    F: Fn(&str) -> Vec<(String, String, String)>,
-{
+) -> Vec<StaleSideTag> {
     let mut warnings = Vec::new();
     for nvr in nvrs {
         let Some((name, exp_v, exp_r)) = sandogasa_koji::parse_nvr(nvr) else {
@@ -1608,21 +1628,9 @@ where
         };
         let expected_vr = format!("{exp_v}-{exp_r}");
 
-        let matching_bins: Vec<&String> = binary_names
-            .iter()
-            .filter(|bin| bin.starts_with(name))
-            .collect();
-        if matching_bins.is_empty() {
-            continue;
-        }
-
-        // Every V-R the repodata serves for this package's binaries.
-        let mut vrs: Vec<String> = Vec::new();
-        for bin in &matching_bins {
-            for (_, v, r) in lookup(bin) {
-                vrs.push(format!("{v}-{r}"));
-            }
-        }
+        // Every V-R the repodata serves for this source's binaries.
+        let empty = Vec::new();
+        let vrs = side_repo_vrs.get(name).unwrap_or(&empty);
 
         // The expected build is present → repodata is fresh.
         if vrs.contains(&expected_vr) {
@@ -1707,13 +1715,11 @@ fn resolve_stale_side_tag<F>(
     stale: Vec<StaleSideTag>,
     tag: &str,
     profile: Option<&str>,
-    nvrs: &[String],
-    koji_bins: &[String],
-    lookup: F,
+    recheck: F,
     verbose: bool,
 ) -> Result<Vec<StaleSideTag>, String>
 where
-    F: Fn(&str) -> Vec<(String, String, String)>,
+    F: Fn() -> Vec<StaleSideTag>,
 {
     eprintln!(
         "side tag repodata is stale for {} source package(s):",
@@ -1739,9 +1745,16 @@ where
     )? {
         eprintln!("waiting for koji to regenerate the {tag} repo...");
         sandogasa_koji::regen_repo(tag, profile)?;
-        sandogasa_fedrq::clear_cache()
-            .map_err(|e| format!("failed to clear fedrq metadata cache: {e}"))?;
-        let still_stale = check_side_tag_staleness(nvrs, koji_bins, lookup, verbose);
+        // Drop *both* caches: clearing only the fedrq smartcache leaves
+        // libdnf5 serving the pre-regen side-tag metadata, so the
+        // re-check below (and the rest of the analysis) would still see
+        // stale repodata and re-warn despite the successful regen.
+        sandogasa_fedrq::clear_all_caches()
+            .map_err(|e| format!("failed to clear metadata caches: {e}"))?;
+        if verbose {
+            eprintln!("cleared fedrq + libdnf5 caches after regen");
+        }
+        let still_stale = recheck();
         if !still_stale.is_empty() {
             eprintln!(
                 "side tag repodata is still stale for {} source \
@@ -2231,19 +2244,58 @@ mod tests {
         assert!(!found);
     }
 
-    // --- check_side_tag_staleness ---
+    // --- source_vr_map / check_side_tag_staleness ---
+
+    fn vr_map(pairs: &[(&str, &str)]) -> BTreeMap<String, Vec<String>> {
+        source_vr_map(
+            pairs
+                .iter()
+                .map(|(s, vr)| (s.to_string(), vr.to_string()))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn source_vr_map_groups_by_source() {
+        let map = vr_map(&[
+            ("rust-mimalloc", "0.1.50-1.fc44"),
+            ("rust-mimalloc", "0.1.48-2.fc44"),
+            ("python-jiter", "0.15.0-3.fc44"),
+        ]);
+        assert_eq!(map["rust-mimalloc"].len(), 2);
+        assert_eq!(map["python-jiter"], vec!["0.15.0-3.fc44".to_string()]);
+    }
 
     #[test]
     fn check_side_tag_staleness_matching_vr_no_warning() {
         let nvrs = vec!["rust-mimalloc-0.1.50-1.fc44".to_string()];
-        let bins = vec!["rust-mimalloc-devel".to_string()];
-        let warnings = check_side_tag_staleness(
-            &nvrs,
-            &bins,
-            |_| vec![nvr_row("rust-mimalloc-devel", "0.1.50", "1.fc44")],
-            false,
-        );
-        assert!(warnings.is_empty());
+        let map = vr_map(&[("rust-mimalloc", "0.1.50-1.fc44")]);
+        assert!(check_side_tag_staleness(&nvrs, &map, false).is_empty());
+    }
+
+    #[test]
+    fn check_side_tag_staleness_one_matching_binary_is_fresh() {
+        // Only one of the build's binaries needs to be at the expected
+        // V-R for it to count as fresh.
+        let nvrs = vec!["rust-mimalloc-0.1.50-1.fc44".to_string()];
+        let map = vr_map(&[
+            ("rust-mimalloc", "0.1.48-2.fc44"),
+            ("rust-mimalloc", "0.1.50-1.fc44"),
+        ]);
+        assert!(check_side_tag_staleness(&nvrs, &map, false).is_empty());
+    }
+
+    #[test]
+    fn check_side_tag_staleness_python_rename_and_debug_excluded() {
+        // The python-jiter case: source python-jiter ships python3-jiter
+        // (a rename). The batched source query attributes python3-jiter
+        // to python-jiter at the expected V-R, so it's fresh — even
+        // though the old source-name prefix match would have missed it
+        // and false-flagged on python-jiter-debugsource (which never
+        // reaches the side tag's main repodata and so isn't in the map).
+        let nvrs = vec!["python-jiter-0.15.0-3.fc44".to_string()];
+        let map = vr_map(&[("python-jiter", "0.15.0-3.fc44")]);
+        assert!(check_side_tag_staleness(&nvrs, &map, false).is_empty());
     }
 
     #[test]
@@ -2252,13 +2304,8 @@ mod tests {
         // koji says rust-mimalloc-0.1.50-1.fc44 but the side tag repo
         // still serves 0.1.48-2.fc44.
         let nvrs = vec!["rust-mimalloc-0.1.50-1.fc44".to_string()];
-        let bins = vec!["rust-mimalloc-devel".to_string()];
-        let warnings = check_side_tag_staleness(
-            &nvrs,
-            &bins,
-            |_| vec![nvr_row("rust-mimalloc-devel", "0.1.48", "2.fc44")],
-            false,
-        );
+        let map = vr_map(&[("rust-mimalloc", "0.1.48-2.fc44")]);
+        let warnings = check_side_tag_staleness(&nvrs, &map, false);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].package, "rust-mimalloc");
         assert_eq!(warnings[0].expected_nvr, "rust-mimalloc-0.1.50-1.fc44");
@@ -2271,40 +2318,19 @@ mod tests {
         // (a superseded build still tagged), but the side tag repodata
         // serves the newer 6.7.1. Newer is not stale — no warning.
         let nvrs = vec!["aurorae-6.7.0-1.fc43".to_string()];
-        let bins = vec!["aurorae".to_string()];
-        let warnings = check_side_tag_staleness(
-            &nvrs,
-            &bins,
-            |_| vec![nvr_row("aurorae", "6.7.1", "1.fc43")],
-            false,
-        );
-        assert!(warnings.is_empty());
+        let map = vr_map(&[("aurorae", "6.7.1-1.fc43")]);
+        assert!(check_side_tag_staleness(&nvrs, &map, false).is_empty());
     }
 
     #[test]
     fn check_side_tag_staleness_detects_missing_binaries() {
+        // Source absent from the side-tag map entirely.
         let nvrs = vec!["rust-mimalloc-0.1.50-1.fc44".to_string()];
-        let bins = vec!["rust-mimalloc-devel".to_string()];
-        let warnings = check_side_tag_staleness(&nvrs, &bins, |_| vec![], false);
+        let map = BTreeMap::new();
+        let warnings = check_side_tag_staleness(&nvrs, &map, false);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].package, "rust-mimalloc");
         assert!(warnings[0].actual_vr.is_none());
-    }
-
-    #[test]
-    fn check_side_tag_staleness_skips_unmatched_source() {
-        // No binary RPMs match this NVR's source name → nothing to check,
-        // no warning (avoids false positives when koji buildinfo and
-        // koji list-tagged are out of sync for some other reason).
-        let nvrs = vec!["rust-mimalloc-0.1.50-1.fc44".to_string()];
-        let bins = vec!["unrelated-pkg-devel".to_string()];
-        let warnings = check_side_tag_staleness(
-            &nvrs,
-            &bins,
-            |_| vec![nvr_row("unrelated-pkg-devel", "1", "1.fc44")],
-            false,
-        );
-        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -2315,24 +2341,11 @@ mod tests {
             "rust-libmimalloc-sys-0.1.47-1.fc44".to_string(),
             "rust-mimalloc-0.1.50-1.fc44".to_string(),
         ];
-        let bins = vec![
-            "rust-libmimalloc-sys-devel".to_string(),
-            "rust-mimalloc-devel".to_string(),
-        ];
-        let warnings = check_side_tag_staleness(
-            &nvrs,
-            &bins,
-            |bin| match bin {
-                "rust-libmimalloc-sys-devel" => {
-                    vec![nvr_row("rust-libmimalloc-sys-devel", "0.1.47", "1.fc44")]
-                }
-                "rust-mimalloc-devel" => {
-                    vec![nvr_row("rust-mimalloc-devel", "0.1.48", "2.fc44")]
-                }
-                _ => vec![],
-            },
-            false,
-        );
+        let map = vr_map(&[
+            ("rust-libmimalloc-sys", "0.1.47-1.fc44"),
+            ("rust-mimalloc", "0.1.48-2.fc44"),
+        ]);
+        let warnings = check_side_tag_staleness(&nvrs, &map, false);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].package, "rust-mimalloc");
     }
