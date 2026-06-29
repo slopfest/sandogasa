@@ -279,13 +279,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         InputKind::BodhiAlias(alias) => {
             let info = fetch_bodhi_update(&alias)?;
 
-            let branch = opts.branch.clone().or_else(|| {
-                info.release_name
-                    .as_ref()
-                    .map(|r| r.to_lowercase().replace('-', ""))
-            });
-            let branch =
-                branch.ok_or("could not determine branch from Bodhi release; use --branch")?;
+            let branch = resolve_bodhi_branch(opts.branch.clone(), info.release_name.as_deref())?;
 
             // If backed by a side tag, use koji to get the full list.
             let (side_tag, nvrs) = if let Some(tag) = info.side_tag {
@@ -1301,14 +1295,22 @@ where
         .any(|(src, (exp_v, exp_r))| lookup(src).iter().any(|(_, v, r)| v == exp_v && r == exp_r))
 }
 
-/// Extract a testing branch from a side tag name.
-///
-/// E.g. "epel9-build-side-133287" → "epel9",
-///      "epel10.0-build-side-12345" → "epel10.0"
 /// True for a Fedora release branch name (`fNN`, e.g. `f43`).
 fn is_fedora_branch(b: &str) -> bool {
     b.strip_prefix('f')
         .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|c| c.is_ascii_digit()))
+}
+
+/// Actionable error for an auto-detected EPEL branch: the `epelN` branch
+/// alone can't resolve base-OS dependencies, so the reviewer must pass a
+/// RHEL-compatible base branch plus the EPEL repo (the choice of base —
+/// AlmaLinux, CentOS Stream, … — is theirs).
+fn epel_guard_error(branch: &str) -> String {
+    format!(
+        "{branch} can't resolve base-OS dependencies on its own; pass a \
+         base branch plus the EPEL repo, e.g. -b al9 -r @epel (epel9) or \
+         -b c10s -r @epel (epel10)"
+    )
 }
 
 /// The prefix of a Koji side-tag name before `-build-side-` (e.g.
@@ -1331,18 +1333,39 @@ fn branch_from_side_tag(tag: &str) -> Option<String> {
 fn infer_branch_for_side_tag(tag: &str) -> Result<String, String> {
     match branch_from_side_tag(tag) {
         Some(b) if is_fedora_branch(&b) => Ok(b),
-        Some(b) if b.starts_with("epel") => Err(format!(
-            "cannot infer a usable branch from {b} side tag: the epel \
-             branch alone can't resolve base-OS dependencies. Pass a base \
-             branch plus the EPEL repo, e.g. -b al9 -r @epel (epel9) or \
-             -b c10s -r @epel (epel10)"
-        )),
+        Some(b) if b.starts_with("epel") => Err(epel_guard_error(&b)),
         _ => Err(format!(
             "could not infer branch from side tag {tag}; pass --branch"
         )),
     }
 }
 
+/// Resolve the branch for a Bodhi update: an explicit `--branch` wins;
+/// otherwise it's derived from the release name (e.g. "EPEL-9" → "epel9",
+/// "F44" → "f44"). A *derived* EPEL branch is rejected with
+/// [`epel_guard_error`] — `epelN` alone can't resolve base-OS deps — so
+/// the reviewer must pass a base branch + `-r @epel`. An explicit
+/// `--branch` bypasses that guard.
+fn resolve_bodhi_branch(
+    user: Option<String>,
+    release_name: Option<&str>,
+) -> Result<String, String> {
+    if let Some(b) = user {
+        return Ok(b);
+    }
+    let derived = release_name
+        .map(|r| r.to_lowercase().replace('-', ""))
+        .ok_or("could not determine branch from Bodhi release; use --branch")?;
+    if derived.starts_with("epel") {
+        return Err(epel_guard_error(&derived));
+    }
+    Ok(derived)
+}
+
+/// Extract a testing branch from a side tag name.
+///
+/// E.g. "epel9-build-side-133287" → "epel9",
+///      "epel10.0-build-side-12345" → "epel10.0"
 fn testing_branch_from_side_tag(tag: Option<&str>) -> Option<String> {
     let tag = tag?;
     let rest = tag.strip_prefix("epel")?;
@@ -2691,6 +2714,37 @@ mod tests {
     fn infer_branch_for_side_tag_unrecognized_errors() {
         let err = infer_branch_for_side_tag("not-a-side-tag").unwrap_err();
         assert!(err.contains("--branch"));
+    }
+
+    #[test]
+    fn resolve_bodhi_branch_explicit_wins() {
+        // An explicit --branch is honored even for an EPEL release.
+        assert_eq!(
+            resolve_bodhi_branch(Some("al9".to_string()), Some("EPEL-9")),
+            Ok("al9".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_bodhi_branch_fedora_derived() {
+        assert_eq!(
+            resolve_bodhi_branch(None, Some("F44")),
+            Ok("f44".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_bodhi_branch_epel_derived_is_rejected() {
+        // The bug: an EPEL Bodhi update must not silently run against the
+        // bare epelN branch (can't resolve base-OS deps).
+        let err = resolve_bodhi_branch(None, Some("EPEL-9")).unwrap_err();
+        assert!(err.contains("epel9"));
+        assert!(err.contains("-b al9 -r @epel"));
+    }
+
+    #[test]
+    fn resolve_bodhi_branch_missing_release_errors() {
+        assert!(resolve_bodhi_branch(None, None).is_err());
     }
 
     // --- testing_branch_from_side_tag ---

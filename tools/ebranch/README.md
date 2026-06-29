@@ -207,12 +207,13 @@ name of a **Fedora** side tag (`f43-build-side-*` uses `f43`). `--repo`
 defaults to the branch's stable base repos (the correct comparison
 baseline).
 
-**EPEL side tags are not inferred.** The `epelN` branch alone can't
-resolve base-OS dependencies, so an `epel*-build-side-*` input without
-`--branch` errors out: pass a RHEL-compatible base branch plus the EPEL
-repo, e.g. `-b al9 -r @epel` (epel9) or `-b c10s -r @epel` (epel10).
-The choice of base distribution (AlmaLinux, CentOS Stream, …) is yours,
-which is why it isn't guessed.
+**EPEL is not auto-resolved.** The `epelN` branch alone can't resolve
+base-OS dependencies, so an EPEL input without `--branch` errors out —
+both an `epel*-build-side-*` side tag and a Bodhi EPEL update (whose
+release derives to `epelN`). Pass a RHEL-compatible base branch plus the
+EPEL repo, e.g. `-b al9 -r @epel` (epel9) or `-b c10s -r @epel`
+(epel10). The choice of base distribution (AlmaLinux, CentOS Stream, …)
+is yours, which is why it isn't guessed.
 
 For EPEL side tags, the testing branch is auto-detected from the
 side tag name (e.g. `epel9-build-side-*` uses `epel9`). Use

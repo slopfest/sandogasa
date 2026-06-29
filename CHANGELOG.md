@@ -50,12 +50,13 @@ the re-check re-warned despite a successful regen. New
 `check-update` now infers the branch for a Fedora side tag from its name
 (the prefix before `-build-side-`: `f43-build-side-*` → `f43`), matching
 the existing Bodhi-alias inference, so a bare Fedora side tag no longer
-requires `-b`. EPEL side tags are *not* inferred: the `epelN` branch
-alone can't resolve base-OS dependencies, so an `epel*-build-side-*`
-input without `--branch` now fails with an actionable hint to pass a
-RHEL-compatible base branch plus the EPEL repo (e.g. `-b al9 -r @epel`
-for epel9, `-b c10s -r @epel` for epel10) rather than silently producing
-misleading installability results. `--branch`/`--repo` remain
+requires `-b`. EPEL is *not* auto-resolved: the `epelN` branch alone
+can't resolve base-OS dependencies, so an EPEL input without `--branch`
+— whether an `epel*-build-side-*` side tag **or a Bodhi EPEL update**
+(whose release derives to `epelN`) — now fails with an actionable hint to
+pass a RHEL-compatible base branch plus the EPEL repo (e.g. `-b al9 -r
+@epel` for epel9, `-b c10s -r @epel` for epel10) rather than silently
+producing misleading installability results. `--branch`/`--repo` remain
 override-only; `--repo` defaults to the branch's stable base repos (the
 correct comparison baseline).
 
