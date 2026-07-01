@@ -58,6 +58,18 @@ timestamp in the same session.
   **before** `gbp dch`, for existing branches too — not just new ones.
   We pass `--spawn-editor=never` and normalize the generated stanza
   deterministically afterward (don't depend on gbp's exact output).
+- **No `debian/gbp.conf` at all? Create one on the rebuild branch.** When
+  the rebuilder isn't the maintainer, the Debian branch is often kept
+  clean (no `debian/gbp.conf`) so it can be contributed upstream. With no
+  gbp.conf, `gbp dch` defaults `debian-branch` to the Debian branch and
+  refuses on the PPA branch. `adjust_branch_packaging` now *creates* a
+  minimal `debian/gbp.conf` (`debian-branch` = this branch, `debian-tag` =
+  the branch-namespace format) when absent, committed on the rebuild
+  branch only — the Debian branch stays clean. Kept minimal on purpose:
+  plumbing keys (`upstream-branch`, `pristine-tar`) are left to gbp's
+  defaults / `~/.gbp.conf`, not guessed. A brand-new file needs
+  `git add` before `git commit <file>` sees it, so the create path stages
+  first and shows the staged diff (`explain_diff_cached`).
 - **`gbp dch`'s body is discarded, not used.** After a merge it lists
   the *entire merged Debian delta* (every commit), and `--since` can't
   cleanly scope to "PPA-side changes since the last rebuild" (it either
@@ -148,6 +160,13 @@ speak Ubuntu). The new-branch adjustment sets `RELEASE: "unstable"` plus
 backports-style relaxations — but only when absent: a maintainer may pin
 `RELEASE` to an older Debian suite for an old Ubuntu LTS (better signal),
 and that is left untouched.
+
+- **No `variables:` block? Create one.** The current upstream template is
+  just an `include:` of `recipes/debian.yml` (a single line — it replaced
+  the older two-line `salsa-ci.yml` + `pipeline-jobs.yml` include) with no
+  `variables:` block at all. `adjust_salsa_ci` used to bail ("unexpected
+  format") in that case; it now appends a fresh `variables:` block instead
+  of only extending an existing one.
 
 ### ubuntu-distro-info
 

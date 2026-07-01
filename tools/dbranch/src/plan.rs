@@ -121,6 +121,13 @@ pub fn commit_file_argv(message: &str, file: &str) -> Vec<String> {
     argv(&["git", "commit", "-s", "-m", message, file])
 }
 
+/// `git add <file>` — stage a newly created file so it can be shown with
+/// `git diff --cached` and committed (a brand-new file isn't picked up by
+/// a bare `git commit <file>`).
+pub fn git_add_argv(file: &str) -> Vec<String> {
+    argv(&["git", "add", file])
+}
+
 /// `gbp dch --bpo -R -D <codename> -U <urgency> --spawn-editor=never` —
 /// create the finalized rebuild stanza (with the correct date/maintainer
 /// footer). `-R`/`--release` would otherwise spawn an editor by default;

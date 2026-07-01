@@ -1170,11 +1170,11 @@ fn adjust_branch_packaging(
         TargetType::Proposed { .. } => (codename, false),
     };
     let mut adjusted = Vec::new();
+    let tag_format = plan::debian_tag_format(target);
     if repo.join("debian/gbp.conf").exists() {
         ui.step(&format!(
             "Adjust gbp.conf (debian-branch, debian-tag) for {target}"
         ));
-        let tag_format = plan::debian_tag_format(target);
         let changed = edit_file(ui, repo, "debian/gbp.conf", |text| {
             let text = gbpconf::set_key(text, "debian-branch", target, None);
             // Keep debian-tag right under debian-branch.
@@ -1196,6 +1196,30 @@ fn adjust_branch_packaging(
             )?;
             adjusted.push("gbp.conf".to_string());
         }
+    } else {
+        // No gbp.conf on the source branch — common when the rebuilder
+        // isn't the maintainer and keeps the Debian branch clean. Create
+        // one on *this* branch so `gbp dch` / `gbp tag` target it (they'd
+        // otherwise default `debian-branch` to the Debian branch and
+        // refuse: "not on branch <x>").
+        ui.step(&format!(
+            "Create gbp.conf (debian-branch, debian-tag) for {target}"
+        ));
+        if !ui.dry_run {
+            std::fs::write(
+                repo.join("debian/gbp.conf"),
+                gbpconf::new_config(target, &tag_format),
+            )?;
+        }
+        // A new file isn't picked up by `git commit <file>`; stage it,
+        // show the staged diff, then commit.
+        ui.run_required(&plan::git_add_argv("debian/gbp.conf"), repo)?;
+        ui.explain_diff_cached(repo, &["debian/gbp.conf"]);
+        ui.run_required(
+            &plan::commit_file_argv(&format!("Create gbp.conf for {target}"), "debian/gbp.conf"),
+            repo,
+        )?;
+        adjusted.push("gbp.conf".to_string());
     }
     if repo.join("debian/salsa-ci.yml").exists() {
         ui.step(&format!("Adjust salsa-ci.yml for {target}"));
@@ -1799,6 +1823,41 @@ mod tests {
             include_eol: false,
         };
         run(&ui_dry(), p, &opts).unwrap();
+    }
+
+    #[test]
+    fn creates_gbp_conf_when_source_branch_has_none() {
+        // The reported case: the maintainer keeps the Debian branch clean
+        // (no debian/gbp.conf), so a rebuild branch must get one created —
+        // otherwise `gbp dch` defaults debian-branch to the Debian branch
+        // and refuses. setup() has no gbp.conf.
+        let dir = setup();
+        let p = dir.path();
+        // Repo-local identity so the real commit works without depending
+        // on the developer's / sandbox's global git config.
+        git(p, &["config", "user.email", "t@x"]);
+        git(p, &["config", "user.name", "T"]);
+        git(p, &["config", "commit.gpgsign", "false"]);
+        git(p, &["checkout", "-qb", "ubuntu/resolute"]);
+
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: true,
+        };
+        let adjusted = adjust_branch_packaging(&ui, p, "ubuntu/resolute", TargetType::Ppa).unwrap();
+
+        assert!(adjusted.contains(&"gbp.conf".to_string()));
+        let text = std::fs::read_to_string(p.join("debian/gbp.conf")).unwrap();
+        assert!(text.contains("debian-branch = ubuntu/resolute"), "{text}");
+        assert!(text.contains("debian-tag = ubuntu/%(version)s"), "{text}");
+        // The created file was committed (nothing left uncommitted).
+        let status = Command::new("git")
+            .args(["status", "--porcelain", "debian/gbp.conf"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        assert!(status.stdout.is_empty(), "gbp.conf not committed");
     }
 
     #[test]

@@ -25,12 +25,17 @@ const BACKPORTS_BLOCK: &[&str] = &[
 /// for a PPA, the codename for a proposed-update); `add_backports`
 /// appends [`BACKPORTS_BLOCK`] (PPA only). Idempotent: a key already
 /// present is not added again — in particular an existing `RELEASE`
-/// (e.g. pinned to an older Debian suite) is left untouched. Returns the
-/// new text, or `None` if the file has no `variables:` block to extend
-/// (the caller warns and leaves it alone).
+/// (e.g. pinned to an older Debian suite) is left untouched.
+///
+/// When the file has no `variables:` block at all — the shape of the
+/// current upstream template, which is just an `include:` of
+/// `recipes/debian.yml` — a fresh block is appended. Returns the new
+/// text (always `Some` for any real salsa-ci.yml).
 pub fn adjust_salsa_ci(text: &str, release: &str, add_backports: bool) -> Option<String> {
     let lines: Vec<&str> = text.lines().collect();
-    let var_idx = lines.iter().position(|l| l.trim() == "variables:")?;
+    let Some(var_idx) = lines.iter().position(|l| l.trim() == "variables:") else {
+        return Some(append_variables_block(text, release, add_backports));
+    };
 
     // Find the block's extent and its entries' indentation. A line
     // belongs to the block while it is blank or indented under
@@ -80,6 +85,27 @@ pub fn adjust_salsa_ci(text: &str, release: &str, add_backports: bool) -> Option
         result.push('\n');
     }
     Some(result)
+}
+
+/// Append a fresh `variables:` block (2-space indent) to a salsa-ci.yml
+/// that has none — the modern upstream template only carries an
+/// `include:`. Adds `RELEASE` and, for a PPA, the [`BACKPORTS_BLOCK`],
+/// separated from the existing content by a blank line.
+fn append_variables_block(text: &str, release: &str, add_backports: bool) -> String {
+    let mut block = vec![
+        "variables:".to_string(),
+        format!(r#"  RELEASE: "{release}""#),
+    ];
+    if add_backports {
+        block.extend(BACKPORTS_BLOCK.iter().map(|entry| format!("  {entry}")));
+    }
+    let block = block.join("\n");
+
+    let trimmed = text.trim_end_matches('\n');
+    if trimmed.is_empty() {
+        return format!("{block}\n");
+    }
+    format!("{trimmed}\n\n{block}\n")
 }
 
 #[cfg(test)]
@@ -160,12 +186,37 @@ variables:
         );
     }
 
+    /// The modern upstream template: a single `include:` of
+    /// `recipes/debian.yml` and no `variables:` block. dbranch appends a
+    /// fresh block rather than bailing.
+    const RECIPE_ONLY: &str = "\
+---
+include:
+  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/recipes/debian.yml
+";
+
     #[test]
-    fn none_without_variables_block() {
+    fn appends_variables_block_when_absent_ppa() {
+        let out = adjust_salsa_ci(RECIPE_ONLY, "unstable", true).unwrap();
+        // Original content is preserved, a variables block is appended.
+        assert!(out.contains("recipes/debian.yml"));
+        assert!(out.contains("variables:\n  RELEASE: \"unstable\""));
+        assert!(out.contains("  SALSA_CI_DISABLE_PIUPARTS: 1"));
+        assert!(out.contains("# adjust for backports"));
+        assert!(out.ends_with('\n') && !out.ends_with("\n\n"));
+        // Re-running is idempotent (the block now exists and is complete).
         assert_eq!(
-            adjust_salsa_ci("---\ninclude:\n  - x\n", "unstable", true),
-            None
+            adjust_salsa_ci(&out, "unstable", true).as_deref(),
+            Some(out.as_str())
         );
+    }
+
+    #[test]
+    fn appends_variables_block_when_absent_proposed() {
+        let out = adjust_salsa_ci(RECIPE_ONLY, "trixie", false).unwrap();
+        assert!(out.contains("variables:\n  RELEASE: \"trixie\""));
+        assert!(!out.contains("SALSA_CI_DISABLE_PIUPARTS"));
+        assert!(!out.contains("adjust for backports"));
     }
 
     #[test]

@@ -102,6 +102,22 @@ impl Ui {
         self.pause_with("[Enter to continue]");
     }
 
+    /// Like [`explain_diff`](Self::explain_diff) but shows *staged*
+    /// changes (`git diff --cached`) — for a freshly created file, which
+    /// must be `git add`ed first and so isn't visible in the unstaged
+    /// diff.
+    pub fn explain_diff_cached(&self, repo: &Path, paths: &[&str]) {
+        if !self.explain || self.dry_run {
+            return;
+        }
+        let _ = Command::new("git")
+            .args(["--no-pager", "diff", "--cached", "--"])
+            .args(paths)
+            .current_dir(repo)
+            .status();
+        self.pause_with("[Enter to continue]");
+    }
+
     /// Ask a yes/no question (default **yes**) and return the answer.
     /// Empty input / EOF → yes; only `n`/`no` is a no. The caller is
     /// responsible for only prompting when interactive.

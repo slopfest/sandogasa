@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### dbranch: rebuild handles maintainer-clean packaging
+
+Two fixes for rebuilding a package you don't maintain, where the Debian
+branch is kept minimal:
+
+- **Create `debian/gbp.conf` when the source branch has none.** A clean
+  Debian branch often ships no `gbp.conf`, so `gbp dch` defaulted
+  `debian-branch` to the Debian branch and refused to run on the rebuild
+  branch ("not on branch …"). `rebuild` now creates a minimal `gbp.conf`
+  (`debian-branch` = the rebuild branch, `debian-tag` = the branch's
+  namespace format) on the rebuild branch — the Debian branch stays clean
+  for upstreaming. Previously it only *adjusted* an existing one.
+- **Handle the modern single-line `salsa-ci.yml`.** The current upstream
+  template is just an `include:` of `recipes/debian.yml` with no
+  `variables:` block; `rebuild` used to warn "unexpected format; left
+  unchanged" and skip it. It now appends a fresh `variables:` block
+  (`RELEASE` + backports relaxations) when none exists.
+
 ## v0.15.2
 
 ### fedora-cve-triage: curate false positives before closing bugs

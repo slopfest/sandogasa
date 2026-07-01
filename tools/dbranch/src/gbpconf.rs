@@ -117,6 +117,20 @@ pub fn set_key(text: &str, key: &str, value: &str, after: Option<&str>) -> Strin
     result
 }
 
+/// Build a fresh `debian/gbp.conf` for a rebuild branch that has none.
+///
+/// A package whose maintainer isn't the person doing the rebuild often
+/// has no `debian/gbp.conf` on its Debian branch (kept clean so it can be
+/// contributed upstream). The rebuild branch still needs one so `gbp dch`
+/// / `gbp tag` operate on *this* branch: `debian-branch` points at the
+/// branch itself and `debian-tag` uses the branch's namespace format
+/// (e.g. `ubuntu/%(version)s`). Kept minimal on purpose — plumbing
+/// branches (`upstream-branch`, `pristine-tar`) are left to gbp's
+/// defaults / `~/.gbp.conf` rather than guessed here.
+pub fn new_config(debian_branch: &str, debian_tag: &str) -> String {
+    format!("[DEFAULT]\ndebian-branch = {debian_branch}\ndebian-tag = {debian_tag}\n")
+}
+
 /// ConfigParser booleans: `1/yes/true/on` are true.
 fn is_truthy(val: &str) -> bool {
     matches!(
@@ -228,6 +242,20 @@ upstream-branch = upstream
             ),
             out
         );
+    }
+
+    #[test]
+    fn new_config_is_minimal_and_parses_back() {
+        let text = new_config("ubuntu/resolute", "ubuntu/%(version)s");
+        assert_eq!(
+            text,
+            "[DEFAULT]\ndebian-branch = ubuntu/resolute\ndebian-tag = ubuntu/%(version)s\n"
+        );
+        let cfg = parse(&text);
+        assert_eq!(cfg.debian_branch.as_deref(), Some("ubuntu/resolute"));
+        // Plumbing keys are intentionally left to gbp's defaults.
+        assert_eq!(cfg.upstream_branch, None);
+        assert_eq!(cfg.pristine_tar, None);
     }
 
     #[test]
