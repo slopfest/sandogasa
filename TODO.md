@@ -57,6 +57,15 @@ Done (2026-06-29):
   `)` on inner-group caps. Fixed the bogus plasma-settings issue; a
   flagged boolean dep now reports which capabilities failed.
 
+## Dependencies / Fedora packaging
+
+- (2026-07-02) **rust-quick-xml 0.41 is not in Fedora yet** (0.40.1
+  everywhere: rawhide, f44, f43, epel10, epel9; no Bodhi update pending
+  as of today). We bumped to 0.41.0 for RUSTSEC-2026-0194/-0195 (two
+  high-severity DoS issues fixed in 0.41), so packaging sandogasa's
+  koji-diff / hs-relmon for Fedora is blocked until rust-quick-xml is
+  updated there — that packaging work should happen first.
+
 ## hs-relmon
 
 - (2026-06-26) add retire command to archive repo and untag builds. Test with sqlite

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Security: quick-xml 0.40 → 0.41
+
+Addresses RUSTSEC-2026-0194 and RUSTSEC-2026-0195 (two high-severity
+denial-of-service issues in quick-xml's XML parsing, fixed in 0.41.0).
+Affects koji-diff and hs-relmon, which parse Koji XML-RPC responses. No
+API changes were needed. Note: rust-quick-xml 0.41 is not packaged in
+Fedora yet (tracked in TODO.md).
+
 ### HTTP request timeouts everywhere
 
 Every HTTP client in the workspace now sets a 120-second request
