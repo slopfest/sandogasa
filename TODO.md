@@ -128,6 +128,43 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
 
 ## ebranch
 
+- (2026-07-02) check-crate: feature-aware dependency resolution. Optional
+  deps are all-or-nothing today — `should_expand` skips `optional=true`
+  deps unless `--include-optional`, which then pulls in *every* crate's
+  optional deps. But an optional dep enabled by a feature the root crate
+  activates is effectively required, e.g. routinator → rpki `^0.19.3` →
+  quick-xml `^0.39.4` (optional, behind rpki's `rrdp` feature that
+  routinator turns on). Fedora rawhide has quick-xml 0.40.1 + compat
+  0.31/0.36/0.37/0.38 — no 0.39.x — so it's genuinely unmet, but
+  check-crate never checks it (default) or over-reports it (with
+  `--include-optional`). Proper fix: resolve the enabled feature set from
+  the root down and follow only the optional deps those features
+  activate — needs each crate's `features` map, per-dep
+  `features`/`default-features`, and the root's enabled features (the
+  Cargo feature-unification problem).
+- (2026-07-02) check-crate: flip `--include-unmet` and `--include-optional`
+  to on by default (rename to `--exclude-unmet` / `--exclude-optional`) —
+  they're easy to forget and omitting them silently under-reports. This is
+  a breaking CLI change → changelog heading `(breaking CLI)` + migration
+  hint (the old `--include-*` behavior is now the default; use
+  `--exclude-*` to restore). Sequencing: `--include-unmet` on by default
+  is unambiguously good, but `--include-optional` on by default is NOISY
+  until the feature-aware resolution above lands (it includes optional
+  deps the root doesn't enable) — so ideally do that first, or flip only
+  `--include-unmet` now and defer the optional flip.
+- (2026-07-02) check-crate: let the machine output (`--koji` / `--copr` /
+  `--dot` / `--toml`) coexist with the human report. Today they're
+  mutually exclusive (`main.rs`: a machine flag prints the script to
+  stdout and `print_report` is never called), so you can't see what needs
+  building — names *and versions* — while generating pipeable output.
+  Proposed: keep machine output on STDOUT and emit the human summary on
+  STDERR (unless `--quiet`) — the idiomatic data-on-stdout /
+  diagnostics-on-stderr split, so `check-crate --koji > build.sh` shows
+  the report in the terminal while build.sh stays clean and `--koji | sh`
+  still works. Optionally annotate the machine output with needed-version
+  comments (e.g. `# quick-xml: need ^0.39.4, Fedora has 0.40.1`), which
+  stay pipe-safe as shell/TOML comments.
+
 - Second-level branch-request escalation: when a `needinfo?` ping
   (the level-1 escalation `escalate` already does) goes unanswered
   for another N days, file a releng ticket on Forgejo (releng's
