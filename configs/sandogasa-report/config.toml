@@ -12,10 +12,17 @@
 #   [users.michel]
 #   fas = "salimma"
 #   bugzilla_email = "michel@example.com"
+#   # Git author emails that are you, for Sourcehut commit attribution
+#   # (owner vs third-party). List any beyond your sr.ht account's
+#   # primary email; ["*"] counts every commit in your repos as yours.
+#   git_emails = ["salimma@fedoraproject.org"]
 #
 #   [users.michel.gitlab]
 #   "gitlab.com" = "michel-slm"
 #   "salsa.debian.org" = "michel"
+#
+#   [users.michel.sourcehut]
+#   "sr.ht" = "michel-slm"
 
 # --- Fedora domains ---
 

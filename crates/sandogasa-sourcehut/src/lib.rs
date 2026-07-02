@@ -107,6 +107,9 @@ pub struct Repo {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Commit {
     pub id: String,
+    /// Full commit message (the caller takes the first line as a subject).
+    #[serde(default)]
+    pub message: String,
     pub author: Signature,
     pub committer: Signature,
 }
@@ -264,6 +267,7 @@ query($username: String!, $repo: String!, $cursor: Cursor) {
       log(cursor: $cursor) {
         results {
           id
+          message
           author { name email time }
           committer { name email time }
         }

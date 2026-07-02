@@ -1,15 +1,5 @@
 # TODO
 
-## sandogasa-report
-
-- (2026-07-02) Normalize commit detail levels across all forge backends
-  (github / gitlab / forgejo / sourcehut) — likely just a presentation
-  issue. Concretely: a commit hash with no subject line isn't useful
-  except at `--detailed --detailed`; and reporting only "N repos" at the
-  no-detail level is too vague. Decide a consistent policy for what each
-  of the three levels (summary / `--detailed` / `--detailed --detailed`)
-  shows for commits, and apply it uniformly.
-
 ## ebranch
 
 - (2026-06-29) Follow-ups to the review-issue unification (deferred from

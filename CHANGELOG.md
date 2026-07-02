@@ -19,7 +19,11 @@ reference (refresh with `scripts/update-srht-schemas.sh`).
 `[users.<key>.sourcehut]`, token via `sandogasa-report config` /
 `SOURCEHUT_TOKEN[_<HOST>]`). The section reports patches sent/applied,
 tickets opened/closed, and commits in your own repos (split into yours
-vs third-party), with `--no-sourcehut` to skip it. Because sr.ht exposes
+vs third-party), with `--no-sourcehut` to skip it. Commit depth follows a
+consistent policy across forges: a total + repo count in the summary,
+per-repo counts at `--detailed`, and individual commits with subject at
+`--detailed --detailed` (the latter where per-commit data exists —
+Sourcehut; github/gitlab stay at per-repo counts). Because sr.ht exposes
 only the account's *primary* email, commit ownership is matched against
 that plus a per-profile `git_emails` list (or `["*"]` for all), prompted
 for by `sandogasa-report config`. Ticket metrics come from the

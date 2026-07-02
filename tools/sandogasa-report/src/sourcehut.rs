@@ -8,8 +8,8 @@
 //! - **todo.sr.ht** — tickets the user opened / closed, derived from the
 //!   authenticated user's event feed (so it only populates when reporting
 //!   on the token owner — see `sandogasa_sourcehut`'s notes).
-//! - **git.sr.ht** — commits landed in the user's own repos (no
-//!   author-email filter — see `collect_commits`).
+//! - **git.sr.ht** — commits landed in the user's own repos, split into
+//!   yours vs third-party by author email (see `collect_commits`).
 //!
 //! Each service is independent: a failure in one is warned about and its
 //! section left empty, rather than sinking the whole domain.
@@ -72,6 +72,8 @@ pub struct CommitItem {
     pub repo: String,
     /// Commit hash.
     pub id: String,
+    /// Commit subject (first line of the message).
+    pub subject: String,
     /// Commit author's display name.
     pub author: String,
     /// Whether it's attributed to the reported user (author email is one
@@ -207,9 +209,11 @@ fn collect_commits(
         };
         for c in commits {
             if date_in_range(&c.author.time, since, until) {
+                let subject = c.message.lines().next().unwrap_or_default().to_string();
                 out.push(CommitItem {
                     repo: repo.name.clone(),
                     id: c.id,
+                    subject,
                     author: c.author.name.clone(),
                     owner: wildcard || owned.contains(&c.author.email.to_ascii_lowercase()),
                 });
@@ -333,7 +337,7 @@ pub fn format_markdown(report: &SourcehutReport, detail: u8) -> String {
     let own: Vec<&CommitItem> = report.commits.iter().filter(|c| c.owner).collect();
     let others: Vec<&CommitItem> = report.commits.iter().filter(|c| !c.owner).collect();
     out.push_str(&format!(
-        "- **Commits by you:** {} (in {repos} repo(s))\n",
+        "- **Commits by you:** {} across {repos} repo(s)\n",
         own.len()
     ));
     // Third-party commits landed in your repos (e.g. patches you applied
@@ -365,26 +369,72 @@ pub fn format_markdown(report: &SourcehutReport, detail: u8) -> String {
         out.push_str("#### Tickets closed\n\n");
         write_tickets(&mut out, &report.closed_tickets);
     }
-    if !own.is_empty() {
-        out.push_str("#### Commits\n\n");
-        for c in &own {
-            out.push_str(&format!("- {} {}\n", c.repo, short_id(&c.id)));
-        }
-        out.push('\n');
-    }
-    if !others.is_empty() {
-        out.push_str("#### Commits by others (in your repos)\n\n");
-        for c in &others {
-            out.push_str(&format!(
-                "- {} {} — {}\n",
-                c.repo,
-                short_id(&c.id),
-                c.author
-            ));
-        }
-        out.push('\n');
-    }
+    // Commits: at `--detailed`, per-repo counts (like the other forges);
+    // at `--detailed --detailed`, the individual commits with subjects.
+    write_commits(&mut out, &own, &others, detail >= 2);
     out
+}
+
+/// Render the commit section for the detail levels. `deep` (level ≥ 2)
+/// lists individual commits with their subject; otherwise it's a per-repo
+/// count breakdown, matching the github/gitlab presentation.
+fn write_commits(out: &mut String, own: &[&CommitItem], others: &[&CommitItem], deep: bool) {
+    if own.is_empty() && others.is_empty() {
+        return;
+    }
+    if deep {
+        if !own.is_empty() {
+            out.push_str("#### Commits\n\n");
+            for c in own {
+                out.push_str(&format!(
+                    "- `{}` {} {}\n",
+                    c.repo,
+                    short_id(&c.id),
+                    c.subject
+                ));
+            }
+            out.push('\n');
+        }
+        if !others.is_empty() {
+            out.push_str("#### Commits by others (in your repos)\n\n");
+            for c in others {
+                out.push_str(&format!(
+                    "- `{}` {} {} — {}\n",
+                    c.repo,
+                    short_id(&c.id),
+                    c.subject,
+                    c.author
+                ));
+            }
+            out.push('\n');
+        }
+        return;
+    }
+    // Per-repo counts (own, with a "+N by others" annotation when any).
+    out.push_str("#### Commits by repo\n\n");
+    let mut own_by_repo: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut other_by_repo: BTreeMap<&str, usize> = BTreeMap::new();
+    for c in own {
+        *own_by_repo.entry(c.repo.as_str()).or_default() += 1;
+    }
+    for c in others {
+        *other_by_repo.entry(c.repo.as_str()).or_default() += 1;
+    }
+    let repos: std::collections::BTreeSet<&str> = own_by_repo
+        .keys()
+        .chain(other_by_repo.keys())
+        .copied()
+        .collect();
+    for repo in repos {
+        let mine = own_by_repo.get(repo).copied().unwrap_or(0);
+        let theirs = other_by_repo.get(repo).copied().unwrap_or(0);
+        if theirs > 0 {
+            out.push_str(&format!("- `{repo}`: {mine} (+{theirs} by others)\n"));
+        } else {
+            out.push_str(&format!("- `{repo}`: {mine}\n"));
+        }
+    }
+    out.push('\n');
 }
 
 /// First 8 chars of a commit hash.
@@ -577,29 +627,41 @@ mod tests {
                 CommitItem {
                     repo: "dotfiles".into(),
                     id: "abcdef1234".into(),
+                    subject: "Add foo".into(),
                     author: "Michel".into(),
                     owner: true,
                 },
                 CommitItem {
                     repo: "dotfiles".into(),
                     id: "99887766aa".into(),
+                    subject: "Fix bar".into(),
                     author: "Contributor".into(),
                     owner: false,
                 },
             ],
             ..Default::default()
         };
+
+        // --detailed (level 1): counts + per-repo commit breakdown.
         let md = format_markdown(&report, 1);
         assert!(md.contains("- **Patches sent:** 1"));
         assert!(md.contains("- **Patches applied:** 1"));
         assert!(md.contains("- **Tickets opened:** 1"));
-        assert!(md.contains("- **Commits by you:** 1 (in 1 repo(s))"));
+        assert!(md.contains("- **Commits by you:** 1 across 1 repo(s)"));
         assert!(md.contains("- **Commits by others (in your repos):** 1"));
         assert!(md.contains("#### Patches sent"));
         assert!(md.contains("[PATCH] x → devel (APPLIED)"));
-        assert!(md.contains("dotfiles abcdef12"));
-        // Third-party commit lists the author.
-        assert!(md.contains("dotfiles 99887766 — Contributor"));
+        // Per-repo counts, not individual hashes, at level 1.
+        assert!(md.contains("#### Commits by repo"));
+        assert!(md.contains("`dotfiles`: 1 (+1 by others)"));
+        assert!(!md.contains("abcdef12"));
+
+        // --detailed --detailed (level 2): individual commits + subjects.
+        let deep = format_markdown(&report, 2);
+        assert!(deep.contains("#### Commits\n"));
+        assert!(deep.contains("`dotfiles` abcdef12 Add foo"));
+        assert!(deep.contains("#### Commits by others (in your repos)"));
+        assert!(deep.contains("`dotfiles` 99887766 Fix bar — Contributor"));
     }
 
     #[test]

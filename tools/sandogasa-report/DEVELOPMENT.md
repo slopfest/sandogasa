@@ -117,6 +117,21 @@ sr.ht is unlike the GitHub-ish forges and its quirks shape the
   fetcher** — sr.ht UA-blocks some of them (see the crate's notes and
   `scripts/update-srht-schemas.sh`).
 
+## Commit detail levels
+
+The forge sections show commits at three depths, kept consistent across
+backends (`--detailed` is level 1, `--detailed --detailed` is level 2):
+
+- **summary (no flag):** a total plus repo count — e.g. "Commits: N
+  across K repo(s)".
+- **level 1 (`--detailed`):** a per-repo count breakdown ("Commits by
+  repo"). GitHub and GitLab only ever fetch counts, so this is their
+  deepest commit view (they collapse levels 1 and 2).
+- **level 2 (`--detailed --detailed`):** individual commits with hash +
+  subject, for backends that have per-commit data (currently Sourcehut).
+  A bare hash without a subject is never shown — if there's no subject to
+  pair it with, the level stays at counts.
+
 ## Future work
 
 ### Resumable / cacheable report generation
