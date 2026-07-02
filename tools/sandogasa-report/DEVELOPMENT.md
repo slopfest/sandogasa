@@ -156,7 +156,7 @@ up where the previous one failed. Sketch:
 - Consider whether "fresh enough" means "same period, same
   user, within N minutes" or something stricter.
 
-Also related: add a sensible request timeout to the shared
-HTTP clients (Bodhi, Bugzilla, GitLab, …) so a hung connection
-fails loudly at ~120s instead of blocking forever. Today the
-default `reqwest::Client::new()` has no request timeout.
+(Done 2026-07-02: every shared HTTP client — Bugzilla, GitLab,
+distgit, mailman, NVD, … — now sets a 120s request timeout, so a
+hung connection fails loudly instead of blocking forever; fasjson's
+curl shell-out got `--max-time 120` for parity.)

@@ -268,7 +268,7 @@ fn confirm_plan(
 pub fn ensure_session() -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async {
-        let http = reqwest::Client::new();
+        let http = http_client();
         let cache = auth::cli_cache_path();
         let first_err = match auth::cli_session_token(&http, &cache, auth::FEDORA_IDP).await {
             Ok(_) => return Ok(()),
@@ -371,7 +371,7 @@ async fn run_async(
     // already spent minutes of analysis on — Bodhi enforces the
     // own-update rule server-side regardless (we'd just echo its
     // caveat instead of pre-empting it).
-    let http = reqwest::Client::new();
+    let http = http_client();
     let session_user = session_username_with_retry(&http).await;
     let own_update = match (&session_user, &update.user) {
         (Some(session), Some(submitter)) => *session == submitter.name,
@@ -500,6 +500,19 @@ async fn run_async(
         alias, resp.comment.id
     );
     Ok(())
+}
+
+/// Upper bound on any single Bodhi HTTP request — a hang-catcher rather
+/// than a latency cap (reqwest's default client has no timeout).
+const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Build the karma flow's HTTP client with the standard request
+/// timeout. Panics only where `Client::new()` would too.
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()
+        .expect("build reqwest client")
 }
 
 #[cfg(test)]

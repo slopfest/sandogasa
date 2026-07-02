@@ -142,6 +142,7 @@ impl Client {
     pub fn with_hub_url(hub_url: &str) -> Self {
         sandogasa_cli::install_crypto_provider();
         let http = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
             .user_agent("hs-relmon/0.1.0")
             .build()
             .expect("failed to build HTTP client");

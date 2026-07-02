@@ -139,7 +139,7 @@ impl DistGitClient {
 
         Self {
             base_url: DISTGIT_BASE.to_string(),
-            client: Client::new(),
+            client: build_http_client(),
             api_token: None,
         }
     }
@@ -149,7 +149,7 @@ impl DistGitClient {
 
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
-            client: Client::new(),
+            client: build_http_client(),
             api_token: None,
         }
     }
@@ -635,6 +635,20 @@ impl DistGitClient {
             req
         }
     }
+}
+
+/// Upper bound on any single HTTP request — a hang-catcher rather than
+/// a latency cap. reqwest's default client has *no* timeout, so a hung
+/// connection would otherwise block forever.
+const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Build the crate's HTTP client with the standard request timeout.
+/// Panics only where `Client::new()` would too (TLS backend init).
+fn build_http_client() -> Client {
+    Client::builder()
+        .timeout(DEFAULT_TIMEOUT)
+        .build()
+        .expect("build reqwest client")
 }
 
 #[cfg(test)]

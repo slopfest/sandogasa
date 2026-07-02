@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### HTTP request timeouts everywhere
+
+Every HTTP client in the workspace now sets a 120-second request
+timeout, so a hung connection fails loudly instead of blocking a run
+forever (reqwest's default client has no timeout at all). Covers the
+library crates (bugzilla, discourse, distgit, gitlab, jira, mailman,
+meetbot, nvd, repology — bodhi, github, forgejo, and sourcehut already
+had one) and the tools' own clients (ebranch's crates.io and Bodhi
+session calls, fedora-cve-triage's GitHub lookups, hs-relmon's CBS
+client, koji-diff's XML-RPC client). fasjson's Kerberos `curl`
+shell-out gets `--max-time 120` for parity.
+
 ### --version works on every tool
 
 `hs-relmon` and `hs-intake` were missing the standard clap header; all

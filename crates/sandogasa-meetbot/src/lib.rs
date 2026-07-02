@@ -75,6 +75,7 @@ impl Meetbot {
     pub fn with_base_url(base_url: &str) -> Self {
         sandogasa_cli::install_crypto_provider();
         let http = reqwest::blocking::Client::builder()
+            .timeout(DEFAULT_TIMEOUT)
             .user_agent(concat!("sandogasa-meetbot/", env!("CARGO_PKG_VERSION"),))
             .build()
             .expect("build reqwest client");
@@ -221,6 +222,11 @@ fn rewrite_artefact_url(url: &str, base: &str) -> String {
     };
     format!("{}{}", base, &rest[slash..])
 }
+
+/// Upper bound on any single HTTP request — a hang-catcher rather than
+/// a latency cap. reqwest's default client has *no* timeout, so a hung
+/// connection would otherwise block forever.
+const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 #[cfg(test)]
 mod tests {

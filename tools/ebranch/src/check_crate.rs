@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::dag;
 
+/// Upper bound on any single crates.io request — a hang-catcher rather
+/// than a latency cap (reqwest's default client has no timeout).
+const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 // ---- Public types ----
 
 /// Options for the check-crate command.
@@ -744,6 +748,7 @@ struct VersionInfo {
 async fn fetch_versions(name: &str) -> Result<Vec<String>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}");
     let client = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
         .user_agent("sandogasa-ebranch")
         .build()
         .map_err(|e| format!("failed to create HTTP client: {e}"))?;
@@ -878,6 +883,7 @@ async fn fetch_features(
 ) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}");
     let client = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
         .user_agent("sandogasa-ebranch")
         .build()
         .map_err(|e| format!("failed to create HTTP client: {e}"))?;
@@ -934,6 +940,7 @@ async fn resolve_matching_version(name: &str, version_req: &str) -> Result<Strin
 async fn fetch_dependencies(name: &str, version: &str) -> Result<Vec<CrateDep>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}/dependencies");
     let client = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
         .user_agent("sandogasa-ebranch")
         .build()
         .map_err(|e| format!("failed to create HTTP client: {e}"))?;

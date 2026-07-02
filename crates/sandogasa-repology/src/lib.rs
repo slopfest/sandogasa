@@ -74,6 +74,7 @@ impl Client {
     pub fn with_base_url(base_url: &str) -> Self {
         sandogasa_cli::install_crypto_provider();
         let http = reqwest::blocking::Client::builder()
+            .timeout(DEFAULT_TIMEOUT)
             .user_agent("sandogasa-repology/0.6.2")
             .build()
             .expect("failed to build HTTP client");
@@ -195,6 +196,11 @@ fn centos_stream_release_number(package: &Package) -> Option<u32> {
         .strip_prefix("centos_stream_")
         .and_then(|s| s.parse::<u32>().ok())
 }
+
+/// Upper bound on any single HTTP request — a hang-catcher rather than
+/// a latency cap. reqwest's default client has *no* timeout, so a hung
+/// connection would otherwise block forever.
+const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 #[cfg(test)]
 mod tests {

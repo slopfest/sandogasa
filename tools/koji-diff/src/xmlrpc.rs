@@ -126,7 +126,10 @@ impl Client {
     pub fn new(hub_url: &str) -> Self {
         sandogasa_cli::install_crypto_provider();
         Self {
-            http: reqwest::blocking::Client::new(),
+            http: reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("build reqwest client"),
             hub_url: hub_url.to_string(),
         }
     }

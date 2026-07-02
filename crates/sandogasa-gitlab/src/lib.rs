@@ -112,6 +112,7 @@ fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn s
     );
     sandogasa_cli::install_crypto_provider();
     Ok(reqwest::blocking::Client::builder()
+        .timeout(DEFAULT_TIMEOUT)
         .user_agent("sandogasa-gitlab/0.6.2")
         .default_headers(headers)
         .build()?)
@@ -684,6 +685,7 @@ pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::
     );
     sandogasa_cli::install_crypto_provider();
     let client = reqwest::blocking::Client::builder()
+        .timeout(DEFAULT_TIMEOUT)
         .user_agent("sandogasa-gitlab/0.6.2")
         .default_headers(headers)
         .build()?;
@@ -733,6 +735,7 @@ fn list_group_projects_query(
     let encoded = group_path.replace('/', "%2F");
     sandogasa_cli::install_crypto_provider();
     let client = reqwest::blocking::Client::builder()
+        .timeout(DEFAULT_TIMEOUT)
         .user_agent("sandogasa-gitlab")
         .build()?;
     let mut all = Vec::new();
@@ -1252,6 +1255,11 @@ pub fn project_releases(
     }
     Ok(out)
 }
+
+/// Upper bound on any single HTTP request — a hang-catcher rather than
+/// a latency cap. reqwest's default client has *no* timeout, so a hung
+/// connection would otherwise block forever.
+const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 #[cfg(test)]
 mod tests {
