@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### New crate: sandogasa-sourcehut (sr.ht GraphQL client)
+
+`sandogasa-sourcehut` is a client for the Sourcehut (sr.ht) GraphQL API,
+covering the activity `sandogasa-report` summarizes: patchsets submitted
+(lists.sr.ht), ticket activity (todo.sr.ht), and commits authored
+(git.sr.ht). sr.ht has no unified PR model — each service is a separate
+GraphQL endpoint (`https://<service>.<host>/query`, Bearer PAT, cursor
+pagination). The service schemas are vendored under `schema/` for
+reference (refresh with `scripts/update-srht-schemas.sh`).
+
+### sandogasa-report: Sourcehut support
+
+`sandogasa-report` can now include Sourcehut activity for a domain
+(`[domains.<d>.sourcehut] instance = "sr.ht"`, per-user login under
+`[users.<key>.sourcehut]`, token via `sandogasa-report config` /
+`SOURCEHUT_TOKEN[_<HOST>]`). The section reports patches sent/applied,
+tickets opened/closed, and commits in your own repos (split into yours
+vs third-party), with `--no-sourcehut` to skip it. Because sr.ht exposes
+only the account's *primary* email, commit ownership is matched against
+that plus a per-profile `git_emails` list (or `["*"]` for all), prompted
+for by `sandogasa-report config`. Ticket metrics come from the
+authenticated user's event feed, so they populate only when reporting on
+the token owner.
+
 ### dbranch: rebuild handles maintainer-clean packaging
 
 Two fixes for rebuilding a package you don't maintain, where the Debian

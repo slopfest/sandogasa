@@ -79,6 +79,44 @@ The `config` subcommand edits the overlay as a raw
 `toml::Value` rather than round-tripping through `ReportConfig`
 so unknown keys the user authored by hand survive the write.
 
+## Sourcehut (sr.ht)
+
+sr.ht is unlike the GitHub-ish forges and its quirks shape the
+`sourcehut` module (client details live in `sandogasa-sourcehut`'s own
+`DEVELOPMENT.md`):
+
+- **No unified PR model; per-service GraphQL.** Each service
+  (`git`/`todo`/`lists`) is a separate GraphQL endpoint. The three are
+  queried independently and each is **warn-and-skip** on failure — one
+  service being down or a missing token scope leaves that section empty
+  rather than failing the domain. (Contrast the other forges, whose
+  single call is fatal on error.)
+- **Ticket metrics are token-owner-only.** Opened/closed tickets come
+  from `Query.events` (the *authenticated* user's feed), because a
+  `User` only exposes their own trackers — which would miss tickets filed
+  elsewhere. So tickets populate only when the reported user is the token
+  owner; a report on someone else gets patches + commits but no tickets.
+  Events must be filtered to changes the user themselves authored
+  (`Created.author` / `StatusChange.editor` == `~user`).
+- **Commits are split into yours vs third-party, not dropped.** sr.ht's
+  `user.repositories` returns only the user's *own* repos, and meta.sr.ht
+  exposes only the account's *primary* email (no secondary-emails list).
+  The first version filtered commits to `author.email == primary` and so
+  showed *nothing* for a real user whose commits are authored under a
+  Fedora address. Instead we now count **every** commit that landed in the
+  user's own repos within the window and tag each: "yours" if the author
+  email is in the owned set (the account primary email ∪ the profile's
+  `git_emails`, or everything when `git_emails` contains `"*"`), else
+  "by others (in your repos)" — e.g. a patch you applied that preserves
+  the submitter as author. Both tallies are reported. Paging a repo log
+  stops once a commit's committer time predates the window; an empty repo
+  (no default branch) reports "reference not found" and is skipped.
+- **Patchset `status`** gives the sent-vs-applied split (`APPLIED` ≈
+  merged), the closest analog to opened-vs-merged PRs.
+- **Fetching sr.ht by hand: use `curl`, not a browser-simulating
+  fetcher** — sr.ht UA-blocks some of them (see the crate's notes and
+  `scripts/update-srht-schemas.sh`).
+
 ## Future work
 
 ### Resumable / cacheable report generation

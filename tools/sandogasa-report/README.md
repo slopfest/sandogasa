@@ -33,6 +33,18 @@ packaging activity across multiple systems:
   or `(applied)` when a closed-unmerged PR's commit still landed
   on the target branch (a maintainer cherry-picked or
   fast-forwarded it instead of clicking merge).
+- **Sourcehut** (sr.ht): patches sent / applied (lists.sr.ht — the
+  patch-based PR analog), tickets opened / closed (todo.sr.ht), and
+  commits in your own repos (git.sr.ht), split into yours vs third-party.
+  sr.ht exposes only your account's *primary* email, so list any other
+  addresses you commit under in your profile's `git_emails` (or `["*"]`
+  to count all) — see the config comments. Set up with
+  `[domains.<d>.sourcehut] instance = "sr.ht"` and a per-user login
+  under `[users.<key>.sourcehut]`; the token is a personal access token
+  from meta.sr.ht/oauth2/personal-token. Because sr.ht has no unified
+  PR model, each service is queried separately — and ticket metrics come
+  from the *authenticated user's* activity feed, so they populate only
+  when reporting on the token owner.
 
 ## Installation
 

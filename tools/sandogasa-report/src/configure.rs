@@ -58,6 +58,11 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
         .values()
         .filter_map(|d| d.forgejo.as_ref().map(|f| f.instance.clone()))
         .collect();
+    let sourcehut_instances: BTreeSet<String> = merged
+        .domains
+        .values()
+        .filter_map(|d| d.sourcehut.as_ref().map(|s| s.instance.clone()))
+        .collect();
 
     // Load the raw overlay toml::Value so hand-authored keys are
     // preserved across the round trip.
@@ -100,6 +105,7 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
         &gitlab_instances,
         &github_instances,
         &forgejo_instances,
+        &sourcehut_instances,
     )?;
 
     // Token section: one prompt per unique instance, per forge.
@@ -147,6 +153,20 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
             TokenChoice::KeepExisting | TokenChoice::Skipped => {}
         }
     }
+    if !sourcehut_instances.is_empty() {
+        eprintln!("\nSourcehut personal access tokens (per instance):");
+    }
+    for instance in &sourcehut_instances {
+        let host = crate::sourcehut::instance_host(instance);
+        let existing = overlay_get_str(&overlay, &["sourcehut_tokens", &host]);
+        match prompt_sourcehut_token(instance, existing.as_deref())? {
+            TokenChoice::Saved(t) => {
+                overlay_set_str(&mut overlay, &["sourcehut_tokens", &host], &t);
+                changed = true;
+            }
+            TokenChoice::KeepExisting | TokenChoice::Skipped => {}
+        }
+    }
 
     if !changed {
         eprintln!("\nNo changes.");
@@ -167,6 +187,7 @@ fn prompt_profile(
     gitlab_instances: &BTreeSet<String>,
     github_instances: &BTreeSet<String>,
     forgejo_instances: &BTreeSet<String>,
+    sourcehut_instances: &BTreeSet<String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut changed = false;
     let fas_default = existing
@@ -188,6 +209,29 @@ fn prompt_profile(
     if !bz.is_empty() && existing.and_then(|p| p.bugzilla_email.as_deref()) != Some(&bz) {
         overlay_set_str(overlay, &["users", profile_key, "bugzilla_email"], &bz);
         changed = true;
+    }
+
+    // Git author emails for Sourcehut commit attribution — only relevant
+    // when a domain enables Sourcehut.
+    if !sourcehut_instances.is_empty() {
+        let existing_emails = existing.map(|p| p.git_emails.clone()).unwrap_or_default();
+        let emails_default = existing_emails.join(", ");
+        let answer = prompt_default(
+            &format!(
+                "  Git emails for Sourcehut commit attribution \
+                 (comma-separated, * for all) [{emails_default}]: "
+            ),
+            &emails_default,
+        )?;
+        let emails: Vec<String> = answer
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if emails != existing_emails {
+            overlay_set_array(overlay, &["users", profile_key, "git_emails"], &emails);
+            changed = true;
+        }
     }
 
     if prompt_per_instance_usernames(
@@ -223,6 +267,18 @@ fn prompt_profile(
         "forgejo",
         |u, host| u.forgejo.get(host),
         crate::forgejo::instance_host,
+    )? {
+        changed = true;
+    }
+    if prompt_per_instance_usernames(
+        overlay,
+        profile_key,
+        existing,
+        sourcehut_instances,
+        "Sourcehut",
+        "sourcehut",
+        |u, host| u.sourcehut.get(host),
+        crate::sourcehut::instance_host,
     )? {
         changed = true;
     }
@@ -396,6 +452,46 @@ fn prompt_forgejo_token(
     }
 }
 
+/// Same flow as `prompt_forgejo_token` but for Sourcehut. The token is a
+/// personal access token from meta.sr.ht/oauth2/personal-token (which
+/// grants read access across services by default).
+fn prompt_sourcehut_token(
+    instance: &str,
+    existing: Option<&str>,
+) -> Result<TokenChoice, Box<dyn std::error::Error>> {
+    if let Some(tok) = existing {
+        eprint!("  Validating existing {instance} token... ");
+        match sandogasa_sourcehut::validate_token(instance, tok) {
+            Ok(true) => {
+                eprintln!("valid.");
+                return Ok(TokenChoice::KeepExisting);
+            }
+            Ok(false) => eprintln!("invalid — re-prompting."),
+            Err(e) => {
+                eprintln!("check failed ({e}); keeping existing token.");
+                return Ok(TokenChoice::KeepExisting);
+            }
+        }
+    }
+    let token = rpassword::prompt_password(format!(
+        "  Paste a personal access token for {instance} \
+         (from meta.sr.ht/oauth2/personal-token; enter to skip): "
+    ))?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Ok(TokenChoice::Skipped);
+    }
+    eprint!("  Validating... ");
+    match sandogasa_sourcehut::validate_token(instance, &token) {
+        Ok(true) => {
+            eprintln!("valid.");
+            Ok(TokenChoice::Saved(token))
+        }
+        Ok(false) => Err(format!("token rejected by {instance}").into()),
+        Err(e) => Err(format!("validation failed for {instance}: {e}").into()),
+    }
+}
+
 /// Parse an overlay file's text as a TOML *document*. Deliberately uses
 /// `toml::from_str`, not `str::parse::<toml::Value>()`: in toml 1.x the
 /// `FromStr` impl parses a value *expression*, so a real config that
@@ -429,6 +525,33 @@ fn prompt_default(prompt: &str, default: &str) -> io::Result<String> {
 /// Read a string leaf at `path` from a `toml::Value`. Returns
 /// `None` if any intermediate key is missing or the leaf isn't a
 /// string.
+/// Set a path to an array of strings, creating intermediate tables like
+/// [`overlay_set_str`].
+fn overlay_set_array(value: &mut toml::Value, path: &[&str], items: &[String]) {
+    assert!(!path.is_empty(), "path must be non-empty");
+    let mut cur = value;
+    for segment in &path[..path.len() - 1] {
+        let table = cur
+            .as_table_mut()
+            .expect("overlay structure must be a table");
+        if !table.contains_key(*segment) {
+            table.insert(
+                (*segment).to_string(),
+                toml::Value::Table(Default::default()),
+            );
+        }
+        cur = table.get_mut(*segment).unwrap();
+    }
+    let last = path.last().unwrap();
+    let arr = items
+        .iter()
+        .map(|s| toml::Value::String(s.clone()))
+        .collect();
+    cur.as_table_mut()
+        .expect("overlay parent must be a table")
+        .insert((*last).to_string(), toml::Value::Array(arr));
+}
+
 fn overlay_get_str(value: &toml::Value, path: &[&str]) -> Option<String> {
     let mut cur = value;
     for segment in path {

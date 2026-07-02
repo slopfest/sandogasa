@@ -15,6 +15,7 @@ mod github;
 mod gitlab;
 mod koji;
 mod report;
+mod sourcehut;
 
 #[derive(Parser)]
 #[command(
@@ -88,6 +89,10 @@ struct ReportArgs {
     /// Skip Forgejo queries.
     #[arg(long)]
     no_forgejo: bool,
+
+    /// Skip Sourcehut queries.
+    #[arg(long)]
+    no_sourcehut: bool,
 
     /// Include per-item details. Repeat for deeper detail —
     /// level 1 (`--detailed`) lists each Bodhi update but
@@ -229,6 +234,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             gitlab: None,
             github: None,
             forgejo: None,
+            sourcehut: None,
         };
 
         // Bodhi (per-domain).
@@ -351,6 +357,33 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             }
         }
 
+        if let Some(sh) = domain.sourcehut.as_ref()
+            && !cli.no_sourcehut
+        {
+            let host = sourcehut::instance_host(&sh.instance);
+            let user = profile
+                .and_then(|p| p.sourcehut_username(&host))
+                .map(String::from)
+                .or_else(|| fas_user.clone())
+                .unwrap_or_default();
+            let owner_emails = profile.map(|p| p.git_emails.clone()).unwrap_or_default();
+            match sourcehut::sourcehut_report(
+                sh,
+                &user,
+                since,
+                until,
+                &cfg.sourcehut_tokens,
+                &owner_emails,
+                cli.verbose,
+            ) {
+                Ok(sh_report) => dr.sourcehut = Some(sh_report),
+                Err(e) => {
+                    eprintln!("error: sourcehut ({name}): {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+
         if dr.has_content() {
             domain_reports.push(dr);
             block_cli_idx.push(cli_idx);
@@ -451,6 +484,7 @@ mod tests {
             no_gitlab: false,
             no_github: false,
             no_forgejo: false,
+            no_sourcehut: false,
             detailed: 0,
             json: false,
             output: None,
@@ -474,6 +508,7 @@ mod tests {
             no_gitlab: false,
             no_github: false,
             no_forgejo: false,
+            no_sourcehut: false,
             detailed: 0,
             json: false,
             output: None,

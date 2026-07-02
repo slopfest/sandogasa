@@ -58,6 +58,8 @@ library crates:
 - **sandogasa-review** — shared keep/explain/remove resolution for
   reviewer-curated findings
 - **sandogasa-rpmvercmp** — RPM version comparison algorithm
+- **sandogasa-sourcehut** — Sourcehut (sr.ht) GraphQL API client for user
+  activity reporting
 
 ## Installation
 

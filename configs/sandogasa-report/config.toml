@@ -58,7 +58,7 @@ group = "CentOS/proposed_updates"
 instance = "https://salsa.debian.org"
 # No group filter — all user activity on salsa counts.
 
-# --- Upstream forges (GitHub + Forgejo) ---
+# --- Upstream forges (GitHub + Forgejo + Sourcehut) ---
 
 # All your github.com PR / commit / review activity, any owner.
 # Add `org = "..."` to scope to one organisation.
@@ -78,6 +78,36 @@ instance = "https://salsa.debian.org"
 # (e.g. a Fedora Forgejo) add it under a different domain.
 [domains.upstream.forgejo]
 instance = "https://codeberg.org"
+
+# Sourcehut (sr.ht): patches you sent (lists.sr.ht — the patch-based PR
+# analog, with `APPLIED` as the merged analog), tickets you opened /
+# closed (todo.sr.ht), and commits you authored in your own repos
+# (git.sr.ht). sr.ht has no unified PR model, so each service is queried
+# separately; a service being unreachable just skips that section.
+#
+# `instance` is the sr.ht host (bare, no scheme) — service endpoints
+# (git.<host>, todo.<host>, lists.<host>) are derived from it. Use a
+# self-hosted host here for a private instance; a second instance goes
+# under a different domain.
+#
+# Your per-instance login lives in the overlay under
+# `[users.<key>.sourcehut]` (e.g. `"sr.ht" = "michel"`, the bare login
+# without the leading `~`). The token is a personal access token from
+# meta.sr.ht/oauth2/personal-token (grants read across services by
+# default); set it via `sandogasa-report config` or
+# `SOURCEHUT_TOKEN[_<HOST>]`.
+#
+# Commits are split into yours vs third-party by matching the git author
+# email. sr.ht exposes only your account's *primary* email, so if you
+# commit under other addresses (e.g. a Fedora one) list them in your
+# overlay as `git_emails` on the profile — `[users.<key>] git_emails =
+# ["you@fedoraproject.org"]` — or `["*"]` to count every commit in your
+# repos as yours. `sandogasa-report config` prompts for this.
+#
+# Note: ticket metrics come from the authenticated user's activity feed,
+# so they only populate when the reported user is the token owner.
+[domains.upstream.sourcehut]
+instance = "sr.ht"
 
 # --- Package groups for categorical reporting ---
 # Each group has an optional description and a list of packages.

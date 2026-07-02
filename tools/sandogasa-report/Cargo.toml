@@ -20,6 +20,7 @@ sandogasa-forgejo = { workspace = true }
 sandogasa-github = { workspace = true }
 sandogasa-gitlab = { workspace = true }
 sandogasa-koji = { workspace = true }
+sandogasa-sourcehut = { workspace = true }
 rpassword = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

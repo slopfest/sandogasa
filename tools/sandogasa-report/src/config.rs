@@ -44,6 +44,13 @@ pub struct ReportConfig {
     /// or generic `FORGEJO_TOKEN`) take precedence.
     #[serde(default)]
     pub forgejo_tokens: BTreeMap<String, String>,
+
+    /// Per-instance Sourcehut (sr.ht) personal access tokens, keyed by
+    /// host (e.g. `"sr.ht"`). Env vars (`SOURCEHUT_TOKEN_<HOST>` or
+    /// generic `SOURCEHUT_TOKEN`) take precedence. Generate one at
+    /// meta.sr.ht/oauth2/personal-token.
+    #[serde(default)]
+    pub sourcehut_tokens: BTreeMap<String, String>,
 }
 
 /// A person's identity across multiple services. The profile key
@@ -85,6 +92,20 @@ pub struct User {
     /// queries by token owner, not by name.
     #[serde(default)]
     pub forgejo: BTreeMap<String, String>,
+
+    /// Per-instance Sourcehut usernames, keyed by host (e.g.
+    /// `"sr.ht" = "michel"`). The bare login without the leading `~`.
+    #[serde(default)]
+    pub sourcehut: BTreeMap<String, String>,
+
+    /// Git author emails that identify this person, for Sourcehut commit
+    /// attribution (owner vs third-party). sr.ht exposes only the
+    /// account's *primary* email, so list any others you commit under
+    /// (e.g. a Fedora address) here. A single `"*"` counts every commit
+    /// in your repos as yours. The account's primary email is always
+    /// treated as yours regardless.
+    #[serde(default)]
+    pub git_emails: Vec<String>,
 }
 
 impl User {
@@ -110,6 +131,12 @@ impl User {
     /// `"codeberg.org"`), if the profile has one configured.
     pub fn forgejo_username(&self, instance_host: &str) -> Option<&str> {
         self.forgejo.get(instance_host).map(String::as_str)
+    }
+
+    /// Sourcehut username on a specific instance host (e.g. `"sr.ht"`),
+    /// if the profile has one configured.
+    pub fn sourcehut_username(&self, instance_host: &str) -> Option<&str> {
+        self.sourcehut.get(instance_host).map(String::as_str)
     }
 }
 
@@ -162,6 +189,10 @@ pub struct DomainConfig {
     /// Include Forgejo / Gitea activity (PRs opened/merged).
     #[serde(default)]
     pub forgejo: Option<ForgejoConfig>,
+
+    /// Include Sourcehut (sr.ht) activity (patches, tickets, commits).
+    #[serde(default)]
+    pub sourcehut: Option<SourcehutConfig>,
 }
 
 /// Per-domain GitLab settings. If `group` is set, activity events
@@ -220,6 +251,17 @@ pub struct ForgejoConfig {
     /// contributions across all repos.
     #[serde(default)]
     pub owner: Option<String>,
+}
+
+/// Per-domain Sourcehut (sr.ht) settings. `instance` is the sr.ht host
+/// (`sr.ht`, or a self-hosted host); service endpoints
+/// (`git.<host>`, `todo.<host>`, `lists.<host>`) are derived from it.
+/// There is no owner/org scope — sr.ht activity is user-scoped (the
+/// per-user login lives on the profile at `[users.<key>.sourcehut]`).
+#[derive(Debug, Default, Deserialize)]
+pub struct SourcehutConfig {
+    /// Sourcehut instance host (e.g. `sr.ht`).
+    pub instance: String,
 }
 
 /// Load config with a per-user overlay.

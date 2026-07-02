@@ -2078,6 +2078,7 @@ dependencies = [
  "sandogasa-github",
  "sandogasa-gitlab",
  "sandogasa-koji",
+ "sandogasa-sourcehut",
  "serde",
  "serde_json",
  "tempfile",
@@ -2093,6 +2094,17 @@ version = "0.15.2"
 [[package]]
 name = "sandogasa-rpmvercmp"
 version = "0.15.2"
+
+[[package]]
+name = "sandogasa-sourcehut"
+version = "0.15.2"
+dependencies = [
+ "mockito",
+ "reqwest",
+ "sandogasa-cli",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "scc"
