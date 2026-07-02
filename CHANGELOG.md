@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.15.3
 
 ### Security: quick-xml 0.40 → 0.41
 
