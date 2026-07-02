@@ -59,12 +59,20 @@ Done (2026-06-29):
 
 ## Dependencies / Fedora packaging
 
-- (2026-07-02) **rust-quick-xml 0.41 is not in Fedora yet** (0.40.1
+- (2026-07-02) **Update rust-quick-xml to 0.41 in Fedora** (0.40.1
   everywhere: rawhide, f44, f43, epel10, epel9; no Bodhi update pending
-  as of today). We bumped to 0.41.0 for RUSTSEC-2026-0194/-0195 (two
-  high-severity DoS issues fixed in 0.41), so packaging sandogasa's
-  koji-diff / hs-relmon for Fedora is blocked until rust-quick-xml is
-  updated there — that packaging work should happen first.
+  as of today). 0.41.0 fixes RUSTSEC-2026-0194/-0195, so the update
+  benefits every Fedora consumer of the crate. Our exposure is low (we
+  parse Koji XML-RPC from trusted TLS endpoints with plain `Reader`;
+  the worse advisory is `NsReader`-only), so post-0.15.3 the workspace
+  uses the range `>=0.40, <0.42` per the CLAUDE.md range policy — our
+  lock and crates.io users get 0.41, Fedora builds with 0.40.1 until it
+  updates. Follow-ups: (a) do the rust-quick-xml Fedora update; (b)
+  once it's on all branches, tighten the requirement back to `"0.41"`.
+  Note: the published v0.15.3 carries the strict `"0.41"` requirement —
+  Fedora packaging of that exact version would need a one-line spec
+  patch (no code changes between 0.40/0.41 for us); the next release
+  carries the range.
 
 ## hs-relmon
 

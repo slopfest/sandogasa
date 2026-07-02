@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### quick-xml requirement relaxed to a range
+
+v0.15.3 required quick-xml `"0.41"` strictly (the RUSTSEC-2026-0194 /
+-0195 fix), which Fedora can't satisfy yet (it ships 0.40.1). Since our
+exposure is low — Koji XML-RPC from trusted TLS endpoints, parsed with
+plain `Reader` (the worse advisory is `NsReader`-only) — the requirement
+is now `">=0.40, <0.42"`: our `Cargo.lock` and `cargo install` users
+still get 0.41.0 (the resolver picks the range maximum, and `cargo
+audit` stays clean), while a Fedora build can resolve against its
+packaged 0.40.1 until rust-quick-xml is updated there. The 0.40.1 floor
+is verified (both consumers build and pass tests against it).
+
 ## v0.15.3
 
 ### Security: quick-xml 0.40 → 0.41
