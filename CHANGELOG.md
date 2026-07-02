@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### --version works on every tool
+
+`hs-relmon` and `hs-intake` were missing the standard clap header; all
+14 tools now support `--version` and show the standard
+name/version/description `--help` header.
+
 ### ebranch: base-distro guard for resolve / file-requests
 
 EPEL packages must not replace base-distro (RHEL / CentOS Stream)

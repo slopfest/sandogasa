@@ -64,7 +64,10 @@ Done (2026-06-29):
   do not close the issue even though it's up to date. 
   This is likely because it is not built for hs.el10 but that's because
   CentOS 10 is already up to date. Figure out how to handle it
-- (2026-06-26) no --version command. We should make this standard for all commands
+
+Done (2026-07-02):
+- --version now works on every tool (hs-relmon and hs-intake were
+  missing the standard clap header; audited all 14 tools).
 
 ## dbranch
 
@@ -128,13 +131,17 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
 
 ## ebranch
 
-- (2026-07-02) check-crate: extend the base-distro guard (added to
-  resolve/file-requests for rhbz#2482250) to check-crate's EPEL targets:
-  a crate dep provided by the base distro at a too-old version should be
-  flagged "blocked by base" (alternate package or lower the requirement),
-  not lumped in with `unmet`. Reuse `resolve::epel_base_branch` /
-  `classify_against_base`-style probing; ties into the feature-resolution
-  and flag-defaults items below.
+- (2026-07-02) check-crate: MSRV awareness for EPEL targets. The
+  base-distro guard does NOT apply to check-crate — RHEL/CentOS Stream
+  don't ship crates as RPMs (their Rust binaries vendor dependencies),
+  so a crate dep can never be "in base, too old". The EPEL-specific
+  failure mode is instead the **Rust toolchain**: EPEL 9 builds against
+  a stable RHEL minor whose rustc can lag some crates' MSRV (EPEL 10 /
+  CentOS Stream moves fast enough); nothing to do but wait for the next
+  minor — but check-crate could *say so upfront*: compare each crate's
+  `rust_version` (crates.io exposes it) against the target's rustc and
+  flag chains that are blocked on the toolchain before any branch
+  requests/builds are attempted.
 - (2026-07-02) check-crate: feature-aware dependency resolution. Optional
   deps are all-or-nothing today — `should_expand` skips `optional=true`
   deps unless `--include-optional`, which then pulls in *every* crate's
@@ -159,18 +166,11 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   until the feature-aware resolution above lands (it includes optional
   deps the root doesn't enable) — so ideally do that first, or flip only
   `--include-unmet` now and defer the optional flip.
-- (2026-07-02) check-crate: let the machine output (`--koji` / `--copr` /
-  `--dot` / `--toml`) coexist with the human report. Today they're
-  mutually exclusive (`main.rs`: a machine flag prints the script to
-  stdout and `print_report` is never called), so you can't see what needs
-  building — names *and versions* — while generating pipeable output.
-  Proposed: keep machine output on STDOUT and emit the human summary on
-  STDERR (unless `--quiet`) — the idiomatic data-on-stdout /
-  diagnostics-on-stderr split, so `check-crate --koji > build.sh` shows
-  the report in the terminal while build.sh stays clean and `--koji | sh`
-  still works. Optionally annotate the machine output with needed-version
-  comments (e.g. `# quick-xml: need ^0.39.4, Fedora has 0.40.1`), which
-  stay pipe-safe as shell/TOML comments.
+- (2026-07-02, remaining nicety) check-crate: optionally annotate the
+  `--koji`/`--copr` machine output with needed-version comments (e.g.
+  `# quick-xml: need ^0.39.4, Fedora has 0.40.1`) — pipe-safe as
+  shell/TOML comments. The main ask (human report to stderr alongside
+  machine stdout) shipped 2026-07-02.
 
 - Second-level branch-request escalation: when a `needinfo?` ping
   (the level-1 escalation `escalate` already does) goes unanswered

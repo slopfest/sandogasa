@@ -6,7 +6,12 @@ use hs_intake::{
 };
 
 #[derive(Parser)]
-#[command(about = "Hyperscale package intake tool")]
+#[command(
+    version,
+    about,
+    long_about = None,
+    before_help = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"))
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

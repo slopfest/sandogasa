@@ -20,7 +20,13 @@ use hs_relmon::repology;
 use hs_relmon::review;
 
 #[derive(Parser)]
-#[command(name = "hs-relmon", about = "Hyperscale release monitoring")]
+#[command(
+    name = "hs-relmon",
+    version,
+    about,
+    long_about = None,
+    before_help = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"))
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
