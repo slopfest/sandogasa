@@ -22,6 +22,27 @@ pub struct MissingDep {
     pub provided_by: String,
 }
 
+/// A dependency whose provider exists in the base distro (RHEL /
+/// CentOS Stream / AlmaLinux) at a version that doesn't satisfy the
+/// constraint. EPEL packages must not replace base-distro packages, so
+/// these are pruned from the closure instead of becoming branch
+/// requests — unless the user explicitly overrides (an alternate,
+/// non-conflicting package, which needs a *new package review*, not a
+/// branch request).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockedByBase {
+    /// The raw dep string that failed (e.g. "python3-setuptools >= 77").
+    pub dep: String,
+    /// Version-release the base distro offers.
+    pub base_version: String,
+    /// The base branch probed (e.g. "c10s", "al9").
+    pub base_branch: String,
+    /// Closure packages whose BuildRequires / subpackage Requires
+    /// need this provider.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub required_by: BTreeSet<String>,
+}
+
 /// Resolution result for a single source package.
 #[derive(Debug, Serialize)]
 pub struct ClosureEntry {
@@ -36,6 +57,16 @@ pub struct Closure {
     pub target_branch: String,
     pub requested: Vec<String>,
     pub closure: BTreeMap<String, ClosureEntry>,
+    /// Providers blocked by the base distro (keyed by the source
+    /// package that would otherwise have been requested). Pruned from
+    /// `closure` — see [`BlockedByBase`].
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub blocked_by_base: BTreeMap<String, BlockedByBase>,
+    /// Providers the user chose to treat as alternate EPEL packages
+    /// despite being in the base distro (via `--override` or the
+    /// interactive prompt). These *are* in `closure`.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub overrides: BTreeSet<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
@@ -82,6 +113,15 @@ pub struct ResolveReport {
     /// `file-request`/`file-requests`, consumed by `escalate`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub branch_requests: BTreeMap<String, BranchRequest>,
+    /// Providers blocked by the base distro — never branch-request
+    /// candidates (see [`BlockedByBase`]). Not part of `packages`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub blocked_by_base: BTreeMap<String, BlockedByBase>,
+    /// Providers in `packages` that the user overrode despite being
+    /// in the base distro. `file-requests` refuses these: an alternate
+    /// package needs a new package review, not a branch request.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub overrides: BTreeSet<String>,
 }
 
 /// A filed branch-request bug and whether it's been escalated.
@@ -112,6 +152,8 @@ impl ResolveReport {
             packages,
             edges,
             branch_requests: BTreeMap::new(),
+            blocked_by_base: closure.blocked_by_base.clone(),
+            overrides: closure.overrides.clone(),
         }
     }
 }
@@ -153,6 +195,15 @@ pub trait DepResolver: Send + Sync {
     /// Return the Requires of all subpackages of a source package
     /// (queried on the source branch).
     fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String>;
+
+    /// Resolve a bare capability (no version constraint) to
+    /// `(source, version-release)` pairs on the **base-distro** branch
+    /// (RHEL / CentOS Stream / AlmaLinux). Only called when the
+    /// base-distro guard is active; the default (no base configured)
+    /// reports nothing in base.
+    fn resolve_base_vr(&self, _dep: &str) -> Result<Vec<(String, String)>, String> {
+        Ok(vec![])
+    }
 }
 
 /// Options for controlling the resolution process.
@@ -170,6 +221,17 @@ pub struct ResolveOptions {
     /// When true, auto-exclude default packages (e.g. glibc)
     /// from installability checks.
     pub auto_exclude: bool,
+    /// Base-distro branch behind the target (e.g. `c10s` for epel10).
+    /// `Some` activates the base-distro guard: deps whose provider is
+    /// in the base at an unsatisfying version are blocked instead of
+    /// becoming closure members / branch requests.
+    pub base_branch: Option<String>,
+    /// Providers pre-approved (via `--override`) as alternate EPEL
+    /// packages despite existing in the base distro.
+    pub overrides: BTreeSet<String>,
+    /// Allow prompting on a TTY for override decisions not covered
+    /// by `overrides`. Non-interactive runs treat them as declined.
+    pub interactive: bool,
 }
 
 /// Thread-safe dependency resolution cache.
@@ -180,6 +242,12 @@ pub struct ResolveOptions {
 pub struct ResolveCache {
     target: DashMap<String, Option<String>>,
     source: DashMap<String, Option<String>>,
+    /// Capability → base-distro `(source, V-R)` providers (guard).
+    base_probe: DashMap<String, Vec<(String, String)>>,
+    /// Provider → override decision (approved?). Shared across the
+    /// resolve/installability iterations so each provider is decided
+    /// (and prompted for) at most once per run.
+    override_decisions: Mutex<BTreeMap<String, bool>>,
 }
 
 impl ResolveCache {
@@ -187,6 +255,8 @@ impl ResolveCache {
         Self {
             target: DashMap::new(),
             source: DashMap::new(),
+            base_probe: DashMap::new(),
+            override_decisions: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -215,6 +285,11 @@ pub struct InstallabilityReport {
     pub issues: BTreeMap<String, InstallabilityEntry>,
     /// Source packages that need to be added to the closure.
     pub additional_packages: BTreeSet<String>,
+    /// Runtime deps blocked by the base distro (declined overrides) —
+    /// not added to `additional_packages`; merged into the closure's
+    /// blocked map by [`resolve_with_installability`].
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub blocked_by_base: BTreeMap<String, BlockedByBase>,
 }
 
 /// Real resolver backed by `sandogasa_fedrq::Fedrq`.
@@ -225,6 +300,236 @@ pub struct FedrqResolver {
     /// subpackage Requires queries need `@koji-src:` instead.
     pub source_src: Option<sandogasa_fedrq::Fedrq>,
     pub target: sandogasa_fedrq::Fedrq,
+    /// Base-distro repos behind an EPEL target (the base-distro
+    /// guard's probe). `None` = guard inactive.
+    pub base: Option<sandogasa_fedrq::Fedrq>,
+}
+
+/// The base-distro branch to probe for an EPEL-ish branch name.
+///
+/// - `epel9*` (and `c9s`) → **al9**: fedrq's `c9s` layers epel9 +
+///   epel9-next on top of CentOS Stream 9 ("EPEL 9 is weird"), so
+///   probing it would see EPEL's own packages; AlmaLinux 9 is a clean
+///   RHEL 9 stand-in. UBI is not usable (incomplete package set).
+/// - `epel10*` / `c10s` → **c10s** (clean base).
+/// - anything else (epel8, Fedora branches) → `None` — no safe base
+///   known; the guard stays off unless `--base-branch` is given.
+pub fn epel_base_branch(branch: &str) -> Option<&'static str> {
+    if branch.starts_with("epel10") || branch == "c10s" {
+        Some("c10s")
+    } else if branch.starts_with("epel9") || branch == "c9s" || branch == "al9" {
+        Some("al9")
+    } else {
+        None
+    }
+}
+
+/// Resolve the base-distro branch for the guard, if any.
+///
+/// Order: an explicit `--base-branch` always wins; an `epel*` target
+/// branch uses the built-in mapping; a base-ish target branch paired
+/// with an `@epel` target repo (the CBS pattern, e.g. `-t c10s
+/// --target-repo @epel`) also maps. Anything else — Fedora targets,
+/// unmapped EPEL branches like epel8 — leaves the guard inactive.
+pub fn base_branch_for(
+    base_flag: Option<&str>,
+    target_branch: Option<&str>,
+    target_repo: Option<&str>,
+) -> Option<String> {
+    if let Some(b) = base_flag {
+        return Some(b.to_string());
+    }
+    let branch = target_branch?;
+    if branch.starts_with("epel") {
+        return epel_base_branch(branch).map(String::from);
+    }
+    if target_repo.is_some_and(|r| r.contains("@epel")) {
+        return epel_base_branch(branch).map(String::from);
+    }
+    None
+}
+
+/// Split a plain dep string into its capability and optional version
+/// constraint (`"python3-setuptools >= 77"` → `("python3-setuptools",
+/// Some((">=", "77")))`). Returns `None` for rich (boolean) deps and
+/// anything else that isn't the `name [op version]` shape — those keep
+/// the pre-guard behavior.
+fn parse_versioned_dep(dep: &str) -> Option<(&str, Option<(&str, &str)>)> {
+    let dep = dep.trim();
+    if dep.starts_with('(') {
+        return None;
+    }
+    let parts: Vec<&str> = dep.split_whitespace().collect();
+    match parts.as_slice() {
+        [cap] => Some((cap, None)),
+        [cap, op, ver] if matches!(*op, "<" | ">" | "<=" | ">=" | "=") => {
+            Some((cap, Some((op, ver))))
+        }
+        _ => None,
+    }
+}
+
+/// Whether an available `version-release` satisfies `op required`
+/// under RPM semantics: when the required version carries no release,
+/// the available release is ignored.
+///
+/// Note: the base probe returns V-R without the epoch, so an epoch in
+/// the constraint (rare) compares against epoch 0.
+fn constraint_satisfied(available_vr: &str, op: &str, required: &str) -> bool {
+    use std::cmp::Ordering::*;
+    let available = if required.contains('-') {
+        available_vr
+    } else {
+        available_vr.split('-').next().unwrap_or(available_vr)
+    };
+    let ord = sandogasa_rpmvercmp::compare_evr(available, required);
+    match op {
+        "=" => ord == Equal,
+        ">=" => ord != Less,
+        "<=" => ord != Greater,
+        ">" => ord == Greater,
+        "<" => ord == Less,
+        _ => false,
+    }
+}
+
+/// How a would-be-missing dep relates to the base distro.
+enum BaseClass {
+    /// Not provided by the base at all — a normal missing dep.
+    NotInBase,
+    /// The base offers a version that satisfies the constraint. Can
+    /// happen when the target repos don't include the base (e.g. an
+    /// `@epel`-only target repo) — the dep isn't missing at all.
+    SatisfiedByBase { base_vr: String },
+    /// In the base, but no offered version satisfies the constraint.
+    Blocked { base_vr: String },
+}
+
+/// Classify a dep that failed the target query against the base
+/// distro. Only meaningful when the guard is active
+/// (`options.base_branch` set); the probe is memoized per capability.
+fn classify_against_base(
+    resolver: &dyn DepResolver,
+    cache: &ResolveCache,
+    dep_str: &str,
+) -> BaseClass {
+    let Some((cap, constraint)) = parse_versioned_dep(dep_str) else {
+        return BaseClass::NotInBase;
+    };
+    let providers = cache
+        .base_probe
+        .entry(cap.to_string())
+        .or_insert_with(|| resolver.resolve_base_vr(cap).unwrap_or_default())
+        .clone();
+    // Best (highest) version the base offers for this capability.
+    let Some(base_vr) = providers
+        .into_iter()
+        .map(|(_, vr)| vr)
+        .max_by(|a, b| sandogasa_rpmvercmp::compare_evr(a, b))
+    else {
+        return BaseClass::NotInBase;
+    };
+    match constraint {
+        None => BaseClass::SatisfiedByBase { base_vr },
+        Some((op, ver)) if constraint_satisfied(&base_vr, op, ver) => {
+            BaseClass::SatisfiedByBase { base_vr }
+        }
+        Some(_) => BaseClass::Blocked { base_vr },
+    }
+}
+
+/// Interpret an override-prompt answer (default **no** — EPEL must not
+/// replace base packages, so declining is the safe choice).
+fn parse_yes(line: &str) -> bool {
+    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// A dep classified as blocked, pending an override decision at the
+/// sequential merge point (prompts can't run inside the parallel BFS).
+struct BlockedCandidate {
+    /// Rawhide-side provider (the would-be branch-request package).
+    provider: String,
+    /// The raw dep string that failed.
+    dep: String,
+    /// Best version-release the base distro offers.
+    base_vr: String,
+}
+
+/// Decide whether `provider` may be treated as an alternate EPEL
+/// package: pre-approved via `--override`, previously decided this
+/// run, or (interactively) asked — default no. The decision is cached
+/// so each provider is prompted for at most once per run.
+fn decide_override(
+    options: &ResolveOptions,
+    cache: &ResolveCache,
+    candidate: &BlockedCandidate,
+    parent: &str,
+    base_branch: &str,
+) -> bool {
+    let mut decisions = cache.override_decisions.lock().unwrap();
+    if options.overrides.contains(&candidate.provider) {
+        // Recorded so the closure's final `overrides` set (derived from
+        // the decisions map) includes flag-approved providers too.
+        decisions.insert(candidate.provider.clone(), true);
+        return true;
+    }
+    if let Some(&decided) = decisions.get(&candidate.provider) {
+        return decided;
+    }
+    let approved = options.interactive && prompt_override(candidate, parent, base_branch);
+    decisions.insert(candidate.provider.clone(), approved);
+    approved
+}
+
+/// Ask (on stderr/stdin) whether to descend into a base-distro-blocked
+/// provider as an alternate-package override.
+fn prompt_override(candidate: &BlockedCandidate, parent: &str, base_branch: &str) -> bool {
+    use std::io::{BufRead, Write};
+    eprintln!(
+        "{} is in {base_branch} (base distro; EPEL must not replace it).",
+        candidate.provider
+    );
+    eprintln!(
+        "  needed by {parent}: {} — {base_branch} has {}",
+        candidate.dep, candidate.base_vr
+    );
+    eprint!("Descend as an alternate-package override? [y/N]: ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    if std::io::stdin().lock().read_line(&mut line).is_err() {
+        return false;
+    }
+    parse_yes(&line)
+}
+
+/// Merge one blocked map into another, unioning `required_by` for
+/// providers present in both.
+fn merge_blocked(dst: &mut BTreeMap<String, BlockedByBase>, src: BTreeMap<String, BlockedByBase>) {
+    for (provider, entry) in src {
+        dst.entry(provider)
+            .and_modify(|e| e.required_by.extend(entry.required_by.iter().cloned()))
+            .or_insert(entry);
+    }
+}
+
+/// Fold a blocked candidate into the blocked map (merging
+/// `required_by` when several parents hit the same provider).
+fn record_blocked(
+    blocked: &mut BTreeMap<String, BlockedByBase>,
+    candidate: BlockedCandidate,
+    parent: &str,
+    base_branch: &str,
+) {
+    blocked
+        .entry(candidate.provider)
+        .or_insert_with(|| BlockedByBase {
+            dep: candidate.dep,
+            base_version: candidate.base_vr,
+            base_branch: base_branch.to_string(),
+            required_by: BTreeSet::new(),
+        })
+        .required_by
+        .insert(parent.to_string());
 }
 
 /// Resolve the full transitive closure of missing build dependencies.
@@ -297,6 +602,7 @@ fn resolve_closure_with_cache(
         depth.insert(p.clone(), 1);
     }
     let mut warnings: Vec<String> = Vec::new();
+    let mut blocked_by_base: BTreeMap<String, BlockedByBase> = BTreeMap::new();
 
     // Level-parallel BFS: process all packages at the same depth
     // concurrently, then collect new packages for the next level.
@@ -351,6 +657,7 @@ fn resolve_closure_with_cache(
                                 missing_deps: vec![],
                             },
                             vec![],
+                            vec![],
                             vec![warn],
                             log,
                         );
@@ -360,6 +667,7 @@ fn resolve_closure_with_cache(
                 let mut missing_deps: Vec<MissingDep> = Vec::new();
                 let mut seen_providers: BTreeSet<String> = BTreeSet::new();
                 let mut new_packages: Vec<String> = Vec::new();
+                let mut blocked_candidates: Vec<BlockedCandidate> = Vec::new();
 
                 for raw_dep in &build_reqs {
                     let dep_str = raw_dep.trim();
@@ -402,6 +710,32 @@ fn resolve_closure_with_cache(
                         continue;
                     }
 
+                    // Base-distro guard: a provider that exists in the
+                    // base at an unsatisfying version must not become a
+                    // branch request (EPEL can't replace base packages).
+                    // Decision (override vs prune) happens sequentially.
+                    if options.base_branch.is_some() {
+                        match classify_against_base(resolver, cache, dep_str) {
+                            BaseClass::NotInBase => {}
+                            BaseClass::SatisfiedByBase { base_vr } => {
+                                if options.verbose {
+                                    log.push(format!("  {dep_str}: satisfied by base ({base_vr})"));
+                                }
+                                continue;
+                            }
+                            BaseClass::Blocked { base_vr } => {
+                                if seen_providers.insert(provider.clone()) {
+                                    blocked_candidates.push(BlockedCandidate {
+                                        provider,
+                                        dep: raw_dep.clone(),
+                                        base_vr,
+                                    });
+                                }
+                                continue;
+                            }
+                        }
+                    }
+
                     if seen_providers.insert(provider.clone()) {
                         missing_deps.push(MissingDep {
                             dep: raw_dep.clone(),
@@ -415,15 +749,18 @@ fn resolve_closure_with_cache(
                     pkg.clone(),
                     ClosureEntry { missing_deps },
                     new_packages,
+                    blocked_candidates,
                     vec![],
                     log,
                 )
             })
             .collect();
 
-        // Collect results sequentially: update closure, queue next level.
+        // Collect results sequentially: update closure, queue next
+        // level, and decide blocked candidates (this is the only
+        // place the override prompt may fire).
         let mut next_level: Vec<String> = Vec::new();
-        for (pkg, entry, new_pkgs, warns, log) in results {
+        for (pkg, mut entry, new_pkgs, candidates, warns, log) in results {
             if options.verbose {
                 for line in log {
                     eprintln!("{line}");
@@ -438,6 +775,21 @@ fn resolve_closure_with_cache(
                     next_level.push(new_pkg);
                 }
             }
+            for cand in candidates {
+                let base = options.base_branch.as_deref().unwrap_or_default();
+                if decide_override(options, cache, &cand, &pkg, base) {
+                    if !visited.contains(&cand.provider) {
+                        depth.entry(cand.provider.clone()).or_insert(pkg_depth + 1);
+                        next_level.push(cand.provider.clone());
+                    }
+                    entry.missing_deps.push(MissingDep {
+                        dep: cand.dep,
+                        provided_by: cand.provider,
+                    });
+                } else {
+                    record_blocked(&mut blocked_by_base, cand, &pkg, base);
+                }
+            }
             closure.insert(pkg, entry);
         }
         next_level.sort();
@@ -445,11 +797,25 @@ fn resolve_closure_with_cache(
         current_level = next_level;
     }
 
+    // Providers approved as overrides (flag or prompt) that actually
+    // entered the closure — recorded so the report can refuse to file
+    // branch requests for them (they need a new package review).
+    let overrides: BTreeSet<String> = {
+        let decisions = cache.override_decisions.lock().unwrap();
+        decisions
+            .iter()
+            .filter(|(pkg, approved)| **approved && closure.contains_key(pkg.as_str()))
+            .map(|(pkg, _)| pkg.clone())
+            .collect()
+    };
+
     Ok(Closure {
         source_branch: source_branch.to_string(),
         target_branch: target_branch.to_string(),
         requested: packages.to_vec(),
         closure,
+        blocked_by_base,
+        overrides,
         warnings,
     })
 }
@@ -519,6 +885,7 @@ fn check_installability_with_cache(
             let mut unsatisfied: Vec<UnsatisfiedRequires> = Vec::new();
             let mut seen_providers: BTreeSet<String> = BTreeSet::new();
             let mut additional: Vec<String> = Vec::new();
+            let mut blocked_candidates: Vec<BlockedCandidate> = Vec::new();
 
             for raw_dep in &requires {
                 let dep_str = raw_dep.trim();
@@ -568,6 +935,27 @@ fn check_installability_with_cache(
                         continue;
                     }
                     Some(provider) => {
+                        // Base-distro guard (see the closure BFS): a
+                        // provider in the base at an unsatisfying
+                        // version must not be pulled into the closure.
+                        if options.base_branch.is_some() {
+                            match classify_against_base(resolver, cache, dep_str) {
+                                BaseClass::NotInBase => {}
+                                BaseClass::SatisfiedByBase { .. } => {
+                                    continue;
+                                }
+                                BaseClass::Blocked { base_vr } => {
+                                    if seen_providers.insert(provider.clone()) {
+                                        blocked_candidates.push(BlockedCandidate {
+                                            provider: provider.clone(),
+                                            dep: raw_dep.clone(),
+                                            base_vr,
+                                        });
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
                         if seen_providers.insert(provider.clone()) {
                             unsatisfied.push(UnsatisfiedRequires {
                                 dep: raw_dep.clone(),
@@ -585,10 +973,10 @@ fn check_installability_with_cache(
                 }
             }
 
-            if unsatisfied.is_empty() {
+            if unsatisfied.is_empty() && blocked_candidates.is_empty() {
                 None
             } else {
-                Some((pkg.to_string(), unsatisfied, additional))
+                Some((pkg.to_string(), unsatisfied, additional, blocked_candidates))
             }
         })
         .collect();
@@ -598,17 +986,34 @@ fn check_installability_with_cache(
         eprintln!("{warn}");
     }
 
-    // Merge results.
+    // Merge results; blocked candidates are decided here (the only
+    // place the override prompt may fire).
     let mut issues: BTreeMap<String, InstallabilityEntry> = BTreeMap::new();
     let mut additional_packages: BTreeSet<String> = BTreeSet::new();
-    for (pkg, unsatisfied, additional) in results {
-        issues.insert(pkg, InstallabilityEntry { unsatisfied });
+    let mut blocked_by_base: BTreeMap<String, BlockedByBase> = BTreeMap::new();
+    for (pkg, mut unsatisfied, mut additional, candidates) in results {
+        for cand in candidates {
+            let base = options.base_branch.as_deref().unwrap_or_default();
+            if decide_override(options, cache, &cand, &pkg, base) {
+                additional.push(cand.provider.clone());
+                unsatisfied.push(UnsatisfiedRequires {
+                    dep: cand.dep,
+                    provided_by: Some(cand.provider),
+                });
+            } else {
+                record_blocked(&mut blocked_by_base, cand, &pkg, base);
+            }
+        }
+        if !unsatisfied.is_empty() {
+            issues.insert(pkg, InstallabilityEntry { unsatisfied });
+        }
         additional_packages.extend(additional);
     }
 
     InstallabilityReport {
         issues,
         additional_packages,
+        blocked_by_base,
     }
 }
 
@@ -632,6 +1037,10 @@ pub fn resolve_with_installability(
     let mut passed: BTreeSet<String> = BTreeSet::new();
     // Shared cache across all resolution and installability iterations.
     let cache = ResolveCache::new();
+    // Base-blocked runtime deps, accumulated across rounds (a package
+    // whose only issue was a blocked dep counts as "passed" and isn't
+    // re-checked, so its blocked entries must be kept here).
+    let mut install_blocked: BTreeMap<String, BlockedByBase> = BTreeMap::new();
 
     loop {
         let pkg_list: Vec<String> = all_packages.iter().cloned().collect();
@@ -662,9 +1071,18 @@ pub fn resolve_with_installability(
             }
         }
 
+        // Keep base-blocked runtime deps from every round.
+        for (provider, entry) in &report.blocked_by_base {
+            install_blocked
+                .entry(provider.clone())
+                .and_modify(|e| e.required_by.extend(entry.required_by.iter().cloned()))
+                .or_insert_with(|| entry.clone());
+        }
+
         if report.additional_packages.is_empty() {
             // Fixed point reached. Restore original requested list.
             closure.requested = requested;
+            merge_blocked(&mut closure.blocked_by_base, install_blocked);
             return Ok((closure, report));
         }
 
@@ -676,6 +1094,7 @@ pub fn resolve_with_installability(
             // in the set). This shouldn't happen given the check
             // above, but guard against infinite loops.
             closure.requested = requested;
+            merge_blocked(&mut closure.blocked_by_base, install_blocked);
             return Ok((closure, report));
         }
 
@@ -795,6 +1214,13 @@ impl DepResolver for FedrqResolver {
             .subpkgs_requires(srpm)
             .map_err(|e| e.to_string())
     }
+
+    fn resolve_base_vr(&self, dep: &str) -> Result<Vec<(String, String)>, String> {
+        match &self.base {
+            Some(base) => base.resolve_source_vr(dep).map_err(|e| e.to_string()),
+            None => Ok(vec![]),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -824,6 +1250,8 @@ mod tests {
             target_branch: "epel9".into(),
             requested: vec!["a".into()],
             closure: closure_map,
+            blocked_by_base: BTreeMap::new(),
+            overrides: BTreeSet::new(),
             warnings: vec![],
         };
         let report = ResolveReport::from_closure(&closure);
@@ -855,18 +1283,48 @@ mod tests {
                 pinged: true,
             },
         );
+        let mut blocked = BTreeMap::new();
+        blocked.insert(
+            "python-setuptools".to_string(),
+            BlockedByBase {
+                dep: "python3-setuptools >= 77".into(),
+                base_version: "69.0.3-9.el10".into(),
+                base_branch: "c10s".into(),
+                required_by: BTreeSet::from(["python-django6".to_string()]),
+            },
+        );
         let report = ResolveReport {
             source_branch: "rawhide".into(),
             target_branch: "epel9".into(),
             packages: vec!["a".into(), "b".into()],
             edges,
             branch_requests: requests,
+            blocked_by_base: blocked,
+            overrides: BTreeSet::from(["a".to_string()]),
         };
         let toml = toml::to_string_pretty(&report).unwrap();
         let back: ResolveReport = toml::from_str(&toml).unwrap();
         assert_eq!(back.packages, report.packages);
         assert_eq!(back.branch_requests.get("a").unwrap().rhbz, 42);
         assert!(back.branch_requests.get("a").unwrap().pinged);
+        let b = back.blocked_by_base.get("python-setuptools").unwrap();
+        assert_eq!(b.base_version, "69.0.3-9.el10");
+        assert!(b.required_by.contains("python-django6"));
+        assert!(back.overrides.contains("a"));
+    }
+
+    #[test]
+    fn resolve_report_pre_guard_toml_still_loads() {
+        // A report written before the base-distro guard existed has
+        // none of the new fields — it must still load.
+        let old = r#"
+source_branch = "rawhide"
+target_branch = "epel10"
+packages = ["a"]
+"#;
+        let back: ResolveReport = toml::from_str(old).unwrap();
+        assert!(back.blocked_by_base.is_empty());
+        assert!(back.overrides.is_empty());
     }
 
     struct MockResolver {
@@ -878,6 +1336,8 @@ mod tests {
         target_resolve: BTreeMap<String, String>,
         /// srpm -> subpackage Requires (source branch)
         subpkg_requires: BTreeMap<String, Vec<String>>,
+        /// bare capability -> (source, V-R) on the base-distro branch
+        base_resolve: BTreeMap<String, Vec<(String, String)>>,
     }
 
     impl MockResolver {
@@ -887,6 +1347,7 @@ mod tests {
                 source_resolve: BTreeMap::new(),
                 target_resolve: BTreeMap::new(),
                 subpkg_requires: BTreeMap::new(),
+                base_resolve: BTreeMap::new(),
             }
         }
 
@@ -912,6 +1373,13 @@ mod tests {
                 srpm.to_string(),
                 reqs.iter().map(|s| s.to_string()).collect(),
             );
+        }
+
+        fn add_base_resolve(&mut self, cap: &str, source: &str, vr: &str) {
+            self.base_resolve
+                .entry(cap.to_string())
+                .or_default()
+                .push((source.to_string(), vr.to_string()));
         }
     }
 
@@ -945,6 +1413,10 @@ mod tests {
 
         fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
             Ok(self.subpkg_requires.get(srpm).cloned().unwrap_or_default())
+        }
+
+        fn resolve_base_vr(&self, dep: &str) -> Result<Vec<(String, String)>, String> {
+            Ok(self.base_resolve.get(dep).cloned().unwrap_or_default())
         }
     }
 
@@ -1050,6 +1522,271 @@ mod tests {
             closure.closure["mypkg"].missing_deps[0].provided_by,
             "meson"
         );
+    }
+
+    // --- base-distro guard ---
+
+    fn guard_opts(overrides: &[&str]) -> ResolveOptions {
+        ResolveOptions {
+            base_branch: Some("c10s".to_string()),
+            overrides: overrides.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn epel_base_branch_mapping() {
+        assert_eq!(epel_base_branch("epel10"), Some("c10s"));
+        assert_eq!(epel_base_branch("epel10.3"), Some("c10s"));
+        assert_eq!(epel_base_branch("c10s"), Some("c10s"));
+        // EPEL 9 is weird: c9s layers epel9 + epel9-next, so AlmaLinux
+        // stands in for RHEL 9.
+        assert_eq!(epel_base_branch("epel9"), Some("al9"));
+        assert_eq!(epel_base_branch("c9s"), Some("al9"));
+        assert_eq!(epel_base_branch("al9"), Some("al9"));
+        assert_eq!(epel_base_branch("epel8"), None);
+        assert_eq!(epel_base_branch("rawhide"), None);
+        assert_eq!(epel_base_branch("f45"), None);
+    }
+
+    #[test]
+    fn base_branch_for_resolution_order() {
+        // Explicit flag always wins.
+        assert_eq!(
+            base_branch_for(Some("al9"), Some("epel10"), None),
+            Some("al9".to_string())
+        );
+        // EPEL target branch → mapped.
+        assert_eq!(
+            base_branch_for(None, Some("epel10"), None),
+            Some("c10s".to_string())
+        );
+        assert_eq!(
+            base_branch_for(None, Some("epel9"), None),
+            Some("al9".to_string())
+        );
+        // Unmapped EPEL branch → guard off (caller warns).
+        assert_eq!(base_branch_for(None, Some("epel8"), None), None);
+        // CBS pattern: base-ish branch + @epel repo → the branch's base.
+        assert_eq!(
+            base_branch_for(None, Some("c10s"), Some("@epel")),
+            Some("c10s".to_string())
+        );
+        assert_eq!(
+            base_branch_for(None, Some("c9s"), Some("@epel")),
+            Some("al9".to_string())
+        );
+        // Plain base target without @epel: SIG builds may override base
+        // packages — guard off.
+        assert_eq!(base_branch_for(None, Some("c10s"), None), None);
+        // Fedora target → guard off.
+        assert_eq!(base_branch_for(None, Some("rawhide"), None), None);
+        assert_eq!(base_branch_for(None, None, Some("@koji:f45-build")), None);
+    }
+
+    #[test]
+    fn parse_versioned_dep_shapes() {
+        assert_eq!(
+            parse_versioned_dep("python3-setuptools >= 77"),
+            Some(("python3-setuptools", Some((">=", "77"))))
+        );
+        assert_eq!(
+            parse_versioned_dep("pkgconfig(libsystemd)"),
+            Some(("pkgconfig(libsystemd)", None))
+        );
+        assert_eq!(
+            parse_versioned_dep("foo = 1.2-3"),
+            Some(("foo", Some(("=", "1.2-3"))))
+        );
+        // Rich deps and odd shapes skip the guard.
+        assert_eq!(parse_versioned_dep("(foo if bar)"), None);
+        assert_eq!(parse_versioned_dep("foo bar baz qux"), None);
+    }
+
+    #[test]
+    fn constraint_satisfied_rpm_semantics() {
+        // Release ignored when the constraint has none.
+        assert!(constraint_satisfied("77.0.3-1.el10", ">=", "77"));
+        assert!(!constraint_satisfied("69.0.3-9.el10", ">=", "77"));
+        assert!(constraint_satisfied("69.0.3-9.el10", "<", "77"));
+        assert!(constraint_satisfied("77.0.0-1.el10", "=", "77.0.0"));
+        assert!(!constraint_satisfied("77.0.1-1.el10", "=", "77.0.0"));
+        // Constraint with a release compares the full V-R.
+        assert!(constraint_satisfied("1.2-4.el10", ">=", "1.2-3"));
+        assert!(!constraint_satisfied("1.2-2.el10", ">=", "1.2-3"));
+        assert!(constraint_satisfied("2.0-1.el10", ">", "1.9"));
+        assert!(constraint_satisfied("1.0-1.el10", "<=", "1.0"));
+    }
+
+    #[test]
+    fn parse_yes_defaults_no() {
+        assert!(parse_yes("y"));
+        assert!(parse_yes("Yes"));
+        assert!(!parse_yes(""));
+        assert!(!parse_yes("n"));
+        assert!(!parse_yes("maybe"));
+    }
+
+    #[test]
+    fn guard_blocks_base_too_old() {
+        // The rhbz#2482250 shape: python-django6 needs setuptools >= 77,
+        // c10s has 69 — must be blocked, not a branch-request candidate.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("python-django6", &["python3-setuptools >= 77"]);
+        resolver.add_source_resolve("python3-setuptools >= 77", "python-setuptools");
+        resolver.add_base_resolve("python3-setuptools", "python-setuptools", "69.0.3-9.el10");
+
+        let closure = resolve_closure_with_options(
+            &resolver,
+            &["python-django6".to_string()],
+            "rawhide",
+            "epel10",
+            &guard_opts(&[]),
+        )
+        .unwrap();
+
+        // Pruned: not in the closure, no edges, recorded as blocked.
+        assert_eq!(closure.closure.len(), 1);
+        assert!(closure.closure["python-django6"].missing_deps.is_empty());
+        let blocked = closure.blocked_by_base.get("python-setuptools").unwrap();
+        assert_eq!(blocked.dep, "python3-setuptools >= 77");
+        assert_eq!(blocked.base_version, "69.0.3-9.el10");
+        assert_eq!(blocked.base_branch, "c10s");
+        assert!(blocked.required_by.contains("python-django6"));
+        assert!(closure.overrides.is_empty());
+    }
+
+    #[test]
+    fn guard_override_flag_descends() {
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("python-django6", &["python3-setuptools >= 77"]);
+        resolver.add_source_resolve("python3-setuptools >= 77", "python-setuptools");
+        resolver.add_base_resolve("python3-setuptools", "python-setuptools", "69.0.3-9.el10");
+        resolver.add_buildrequires("python-setuptools", &[]);
+
+        let closure = resolve_closure_with_options(
+            &resolver,
+            &["python-django6".to_string()],
+            "rawhide",
+            "epel10",
+            &guard_opts(&["python-setuptools"]),
+        )
+        .unwrap();
+
+        // Overridden: descended into, marked, not blocked.
+        assert!(closure.closure.contains_key("python-setuptools"));
+        assert_eq!(
+            closure.closure["python-django6"].missing_deps[0].provided_by,
+            "python-setuptools"
+        );
+        assert!(closure.overrides.contains("python-setuptools"));
+        assert!(closure.blocked_by_base.is_empty());
+    }
+
+    #[test]
+    fn guard_base_satisfying_version_skips_dep() {
+        // @epel-only target repos don't see the base, so a dep the base
+        // actually satisfies would otherwise be treated as missing.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &["python3-foo >= 1"]);
+        resolver.add_source_resolve("python3-foo >= 1", "python-foo");
+        resolver.add_base_resolve("python3-foo", "python-foo", "2.0-1.el10");
+
+        let closure = resolve_closure_with_options(
+            &resolver,
+            &["mypkg".to_string()],
+            "rawhide",
+            "epel10",
+            &guard_opts(&[]),
+        )
+        .unwrap();
+
+        assert_eq!(closure.closure.len(), 1);
+        assert!(closure.closure["mypkg"].missing_deps.is_empty());
+        assert!(closure.blocked_by_base.is_empty());
+    }
+
+    #[test]
+    fn guard_unversioned_dep_in_base_is_satisfied() {
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &["python3-foo"]);
+        resolver.add_source_resolve("python3-foo", "python-foo");
+        resolver.add_base_resolve("python3-foo", "python-foo", "1.0-1.el10");
+
+        let closure = resolve_closure_with_options(
+            &resolver,
+            &["mypkg".to_string()],
+            "rawhide",
+            "epel10",
+            &guard_opts(&[]),
+        )
+        .unwrap();
+
+        assert!(closure.closure["mypkg"].missing_deps.is_empty());
+        assert!(closure.blocked_by_base.is_empty());
+    }
+
+    #[test]
+    fn guard_inactive_keeps_missing_behavior() {
+        // Without a base branch the guard is off: even with the
+        // capability in the base map, the dep is a plain missing dep.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &["python3-foo >= 2"]);
+        resolver.add_source_resolve("python3-foo >= 2", "python-foo");
+        resolver.add_base_resolve("python3-foo", "python-foo", "1.0-1.el10");
+        resolver.add_buildrequires("python-foo", &[]);
+
+        let closure =
+            resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
+        assert!(closure.closure.contains_key("python-foo"));
+        assert!(closure.blocked_by_base.is_empty());
+    }
+
+    #[test]
+    fn guard_rich_dep_bypasses_classification() {
+        // Rich deps can't be parsed into cap+constraint; they keep the
+        // pre-guard behavior (missing → descend).
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &["(python3-foo if weird)"]);
+        resolver.add_source_resolve("(python3-foo if weird)", "python-foo");
+        resolver.add_base_resolve("python3-foo", "python-foo", "1.0-1.el10");
+        resolver.add_buildrequires("python-foo", &[]);
+
+        let closure = resolve_closure_with_options(
+            &resolver,
+            &["mypkg".to_string()],
+            "rawhide",
+            "epel10",
+            &guard_opts(&[]),
+        )
+        .unwrap();
+        assert!(closure.closure.contains_key("python-foo"));
+        assert!(closure.blocked_by_base.is_empty());
+    }
+
+    #[test]
+    fn guard_blocks_runtime_dep_in_installability() {
+        // A subpackage Requires hitting a base-blocked provider must
+        // not expand the closure; it lands in blocked_by_base instead.
+        let mut resolver = MockResolver::new();
+        resolver.add_buildrequires("mypkg", &[]);
+        resolver.add_subpkg_requires("mypkg", &["python3-setuptools >= 77"]);
+        resolver.add_source_resolve("python3-setuptools >= 77", "python-setuptools");
+        resolver.add_base_resolve("python3-setuptools", "python-setuptools", "69.0.3-9.el10");
+
+        let (closure, report) = resolve_with_installability(
+            &resolver,
+            &["mypkg".to_string()],
+            "rawhide",
+            "epel10",
+            &guard_opts(&[]),
+        )
+        .unwrap();
+
+        assert_eq!(closure.closure.len(), 1);
+        assert!(report.additional_packages.is_empty());
+        let blocked = closure.blocked_by_base.get("python-setuptools").unwrap();
+        assert!(blocked.required_by.contains("mypkg"));
     }
 
     #[test]

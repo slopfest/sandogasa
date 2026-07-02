@@ -322,6 +322,42 @@ ebranch check-crate arrow 57 -b rawhide -t --copr > build.sh
 Use `--check-install` to verify that every subpackage in the closure
 will be installable after building:
 
+#### Base-distro guard (EPEL targets)
+
+EPEL packages must not replace base-distro (RHEL / CentOS Stream)
+packages. For EPEL targets, `resolve` probes the base distro behind the
+target — `epel10` uses `c10s`; `epel9` uses `al9`, because fedrq's
+`c9s` layers epel9 + epel9-next on top of CentOS Stream 9 and UBI's
+package set is incomplete, so AlmaLinux stands in for RHEL 9 — and a
+dependency whose provider exists there at a version that doesn't
+satisfy the constraint is **blocked**, not treated as missing: the
+closure is pruned at that point and the report explains the situation
+(this is what a branch request like rhbz#2482250 gets closed CANTFIX
+for):
+
+```console
+Blocked by base distro (c10s) — EPEL must not replace these packages:
+  - python-setuptools: needs python3-setuptools >= 77 (python-django6);
+    c10s has 69.0.3-9.el10
+
+Options for blocked packages: introduce an alternate,
+non-conflicting package (rerun with --override <pkg>; an
+alternate needs a NEW package review, not a branch request),
+or lower the depending package's requirement to the
+base-distro version.
+```
+
+On a terminal, `resolve` asks per blocked package whether to descend
+into it as a deliberate override (default no); non-interactively it
+never descends. `--override PKG,...` pre-approves packages you intend
+to ship as alternates — the analysis then continues through them and
+they're annotated `(override — needs new package review)` in the
+output and marked in the report so `file-requests` refuses to file
+branch requests for them. `--base-branch` overrides the inferred base
+(or enables the guard for branches without a mapping, e.g. epel8). A
+dep the base actually *satisfies* is treated as satisfied — useful when
+the target repo is `@epel`-only and doesn't see the base at all.
+
 ### File and escalate EPEL branch requests
 
 Once you know which packages need branching (from
@@ -358,6 +394,15 @@ ebranch file-requests django.toml epel9 --fas alice
 
 Bug IDs and a `pinged` flag are stored in the report under
 `[branch_requests]`, so re-runs skip already-filed packages.
+
+Before filing, both `file-request` and `file-requests` run a
+base-distro pre-flight: packages that exist as source packages in the
+base distro behind the branch (epel10 → c10s, epel9 → al9; override
+with `--base-branch`) are refused/skipped — a branch request for a
+base-distro package is always CANTFIX, and report packages marked as
+overrides are skipped too (an alternate package needs a **new package
+review**, not a branch request). The pre-flight re-checks the base
+itself, so stale or pre-guard reports can't slip one through.
 
 Escalate requests that have sat in NEW for at least a week —
 adds a `needinfo?` ping and marks them so they're not pinged

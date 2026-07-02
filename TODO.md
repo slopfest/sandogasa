@@ -128,6 +128,13 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
 
 ## ebranch
 
+- (2026-07-02) check-crate: extend the base-distro guard (added to
+  resolve/file-requests for rhbz#2482250) to check-crate's EPEL targets:
+  a crate dep provided by the base distro at a too-old version should be
+  flagged "blocked by base" (alternate package or lower the requirement),
+  not lumped in with `unmet`. Reuse `resolve::epel_base_branch` /
+  `classify_against_base`-style probing; ties into the feature-resolution
+  and flag-defaults items below.
 - (2026-07-02) check-crate: feature-aware dependency resolution. Optional
   deps are all-or-nothing today — `should_expand` skips `optional=true`
   deps unless `--include-optional`, which then pulls in *every* crate's

@@ -224,6 +224,23 @@ impl Fedrq {
         Self::run(&mut cmd)
     }
 
+    /// Resolve a dependency to the source package(s) providing it, with
+    /// the provider's version-release.
+    ///
+    /// Like [`resolve_to_source`](Self::resolve_to_source) but formatted
+    /// as `line:source,version,release`, so callers can see *which*
+    /// version a repo offers for a capability — e.g. to distinguish "the
+    /// base distro has this package, just too old" from "absent
+    /// entirely". Pass the bare capability (no version constraint) to
+    /// see every offered version.
+    pub fn resolve_source_vr(&self, dep: &str) -> Result<Vec<(String, String)>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["pkgs", "-P", "-S", "-F", "line:source,version,release"]);
+        self.apply_opts(&mut cmd);
+        cmd.args(["--", dep]);
+        Ok(parse_source_vr_lines(Self::run(&mut cmd)?))
+    }
+
     /// Return the Provides of a binary package (by name).
     pub fn pkg_provides(&self, name: &str) -> Result<Vec<String>, Error> {
         let mut cmd = Command::new("fedrq");
@@ -278,20 +295,7 @@ impl Fedrq {
         self.apply_opts(&mut cmd);
         cmd.arg("--");
         cmd.args(names);
-        let raw = Self::run(&mut cmd)?;
-        let mut out = Vec::new();
-        for line in raw {
-            let parts: Vec<&str> = line.split(" : ").collect();
-            if parts.len() != 3 {
-                continue;
-            }
-            let (source, version, release) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
-            if source.is_empty() || source == "(none)" || version.is_empty() || release.is_empty() {
-                continue;
-            }
-            out.push((source.to_string(), format!("{version}-{release}")));
-        }
-        Ok(out)
+        Ok(parse_source_vr_lines(Self::run(&mut cmd)?))
     }
 
     /// Return the Requires of a binary package by name.
@@ -380,6 +384,26 @@ impl Fedrq {
     }
 }
 
+/// Parse `line:source,version,release` output into
+/// `(source, "version-release")` pairs, dropping `(none)` and malformed
+/// lines. Shared by [`Fedrq::pkgs_source_vr`] and
+/// [`Fedrq::resolve_source_vr`].
+fn parse_source_vr_lines(raw: Vec<String>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in raw {
+        let parts: Vec<&str> = line.split(" : ").collect();
+        if parts.len() != 3 {
+            continue;
+        }
+        let (source, version, release) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
+        if source.is_empty() || source == "(none)" || version.is_empty() || release.is_empty() {
+            continue;
+        }
+        out.push((source.to_string(), format!("{version}-{release}")));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,6 +414,23 @@ mod tests {
         // Verify the struct starts with no options set.
         assert!(fq.branch.is_none());
         assert!(fq.repo.is_none());
+    }
+
+    #[test]
+    fn parse_source_vr_lines_extracts_pairs() {
+        let raw = vec![
+            "python-setuptools : 69.0.3 : 9.el10".to_string(),
+            "(none) : 1 : 1".to_string(),
+            "garbage line".to_string(),
+            "rust-foo : 1.2.3 : 1.fc45".to_string(),
+        ];
+        assert_eq!(
+            parse_source_vr_lines(raw),
+            vec![
+                ("python-setuptools".to_string(), "69.0.3-9.el10".to_string()),
+                ("rust-foo".to_string(), "1.2.3-1.fc45".to_string()),
+            ]
+        );
     }
 
     #[test]

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### ebranch: base-distro guard for resolve / file-requests
+
+EPEL packages must not replace base-distro (RHEL / CentOS Stream)
+packages — but `resolve` treated "present in the base at a too-old
+version" identically to "absent entirely", and `file-requests` happily
+filed a branch request for python-setuptools on epel10 (rhbz#2482250,
+closed CANTFIX: it's in RHEL 10). Now, for EPEL targets, `resolve`
+probes the base distro behind the target (epel10 → c10s; epel9 → al9,
+since fedrq's c9s layers epel9 + epel9-next and UBI is incomplete) and
+such deps are **blocked**: the closure is pruned there and a "Blocked by
+base distro" section presents the two real options — introduce an
+alternate, non-conflicting package (opt in per package with
+`--override PKG,...` or the interactive prompt; alternates need a new
+package review, not a branch request), or lower the depending package's
+requirement to the base version. A dep the base actually satisfies is
+treated as satisfied (matters for `@epel`-only target repos).
+`--base-branch` overrides the mapping on both `resolve` and the
+branch-request subcommands. `file-request`/`file-requests` additionally
+run a base-distro pre-flight of their own, skipping/refusing packages
+present in the base even when a stale or pre-guard report still lists
+them, and skipping report packages marked as overrides. Resolve reports
+gain `blocked_by_base` and `overrides` fields (older reports still
+load). New `sandogasa_fedrq::resolve_source_vr()`.
+
 ### ebranch: check-crate machine output coexists with the human report
 
 `check-crate`'s machine modes (`--koji`, `--copr`, `--dot`) now print the

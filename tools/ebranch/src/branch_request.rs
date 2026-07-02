@@ -39,6 +39,11 @@ pub struct Options {
     pub sig: Option<String>,
     pub dry_run: bool,
     pub verbose: bool,
+    /// Base-distro branch behind `branch` (e.g. `c10s` for epel10).
+    /// When set, packages present there are refused: EPEL must not
+    /// replace base-distro packages, and a branch request for one is
+    /// always CANTFIX (rhbz#2482250).
+    pub base_branch: Option<String>,
 }
 
 // ---- request / ping body templates (ported) ----
@@ -215,6 +220,78 @@ pub async fn resolve_refs(bz: &BzClient, tokens: &[String]) -> Result<Vec<u64>, 
     Ok(ids)
 }
 
+// ---- base-distro pre-flight ----
+
+/// Map batch `src_nvrs` output (`name-version-release` strings) back to
+/// the queried package names: package → `version-release`. Longest
+/// package names are matched first so a package that is a prefix of
+/// another (`python-foo` vs `python-foo-bar`) can't steal its NVR.
+fn match_nvrs_to_packages(nvrs: &[String], packages: &[String]) -> BTreeMap<String, String> {
+    let mut by_len: Vec<&String> = packages.iter().collect();
+    by_len.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    let mut out = BTreeMap::new();
+    for nvr in nvrs {
+        for pkg in &by_len {
+            if let Some(vr) = nvr.strip_prefix(&format!("{pkg}-")) {
+                out.entry((*pkg).clone()).or_insert_with(|| vr.to_string());
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Query which of `packages` exist as source packages on the base
+/// branch, returning package → `version-release`. This is the filing
+/// pre-flight: it re-checks the base itself rather than trusting the
+/// report, so stale or pre-guard reports can't slip a base-distro
+/// package through (the rhbz#2482250 failure mode).
+fn base_src_probe(
+    base_branch: &str,
+    packages: &[String],
+) -> Result<BTreeMap<String, String>, String> {
+    let base = sandogasa_fedrq::Fedrq {
+        branch: Some(base_branch.to_string()),
+        repo: None,
+    };
+    let nvrs = base
+        .src_nvrs(packages)
+        .map_err(|e| format!("base-distro pre-flight ({base_branch}): {e}"))?;
+    Ok(match_nvrs_to_packages(&nvrs, packages))
+}
+
+/// Split the not-yet-filed packages into ones to file and ones to skip
+/// (with the reason to print). Skips: overrides from the report (an
+/// alternate package needs a new package review, not a branch request)
+/// and anything the base-distro pre-flight found in the base.
+fn partition_filable(
+    report: &ResolveReport,
+    candidates: Vec<String>,
+    base_present: &BTreeMap<String, String>,
+    base_label: &str,
+) -> (Vec<String>, Vec<String>) {
+    let mut to_file = Vec::new();
+    let mut skipped = Vec::new();
+    for pkg in candidates {
+        if report.overrides.contains(&pkg) {
+            skipped.push(format!(
+                "skipping {pkg}: marked as a base-distro override — an \
+                 alternate package needs a NEW package review (see \
+                 check-pkg-reviews), not a branch request"
+            ));
+        } else if let Some(vr) = base_present.get(&pkg) {
+            skipped.push(format!(
+                "skipping {pkg}: present in base distro {base_label} \
+                 ({vr}) — EPEL must not replace it (a branch request \
+                 would be CANTFIX)"
+            ));
+        } else {
+            to_file.push(pkg);
+        }
+    }
+    (to_file, skipped)
+}
+
 // ---- batch file-requests with linking ----
 
 /// File requests for every package in `report` that doesn't
@@ -232,12 +309,37 @@ pub async fn file_batch(report: &mut ResolveReport, opts: &Options) -> Result<bo
     }
 
     // Packages without a recorded request yet.
-    let to_file: Vec<String> = report
+    let candidates: Vec<String> = report
         .packages
         .iter()
         .filter(|p| !report.branch_requests.contains_key(*p))
         .cloned()
         .collect();
+
+    // Base-distro pre-flight (defense in depth against stale reports).
+    let base_present = match &opts.base_branch {
+        Some(base) => base_src_probe(base, &candidates)?,
+        None => {
+            eprintln!(
+                "warning: no base-distro mapping for {}; base-distro \
+                 pre-flight disabled (pass --base-branch to enable)",
+                opts.branch
+            );
+            BTreeMap::new()
+        }
+    };
+    let base_label = opts.base_branch.as_deref().unwrap_or("base");
+    let (to_file, skipped) = partition_filable(report, candidates, &base_present, base_label);
+    for msg in &skipped {
+        eprintln!("{msg}");
+    }
+    if !report.blocked_by_base.is_empty() {
+        eprintln!(
+            "note: {} package(s) blocked by the base distro in the \
+             resolve report — see its blocked_by_base section",
+            report.blocked_by_base.len()
+        );
+    }
 
     if opts.dry_run {
         for pkg in &to_file {
@@ -414,6 +516,26 @@ pub fn run_file_request(
     rt.block_on(async {
         // Validate up front (catches SIG-without-FAS) — no network.
         request_description(pkg, &opts.branch, opts.fas.as_deref(), opts.sig.as_deref())?;
+
+        // Base-distro pre-flight: a request for a package that exists
+        // in the base distro is always CANTFIX (rhbz#2482250).
+        match &opts.base_branch {
+            Some(base) => {
+                if let Some(vr) = base_src_probe(base, &[pkg.to_string()])?.get(pkg) {
+                    return Err(format!(
+                        "{pkg} is in the base distro {base} ({vr}); EPEL must \
+                         not replace it — a branch request would be CANTFIX. \
+                         An alternate package needs a NEW package review instead"
+                    ));
+                }
+            }
+            None => eprintln!(
+                "warning: no base-distro mapping for {}; base-distro \
+                 pre-flight disabled (pass --base-branch to enable)",
+                opts.branch
+            ),
+        }
+
         if opts.dry_run {
             println!("would file branch request for {pkg} in {}", opts.branch);
             return Ok(());
@@ -490,6 +612,58 @@ pub fn run_escalate(report_path: &str, opts: &Options) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn match_nvrs_prefers_longest_package_name() {
+        let packages = vec!["python-foo".to_string(), "python-foo-bar".to_string()];
+        let nvrs = vec![
+            "python-foo-1.0-1.el10".to_string(),
+            "python-foo-bar-2.0-1.el10".to_string(),
+        ];
+        let map = match_nvrs_to_packages(&nvrs, &packages);
+        assert_eq!(
+            map.get("python-foo").map(String::as_str),
+            Some("1.0-1.el10")
+        );
+        assert_eq!(
+            map.get("python-foo-bar").map(String::as_str),
+            Some("2.0-1.el10")
+        );
+    }
+
+    #[test]
+    fn partition_filable_skips_overrides_and_base_present() {
+        let report = ResolveReport {
+            source_branch: "rawhide".into(),
+            target_branch: "epel10".into(),
+            packages: vec![
+                "python-setuptools".into(),
+                "rust-newthing".into(),
+                "rust-alt".into(),
+            ],
+            edges: BTreeMap::new(),
+            branch_requests: BTreeMap::new(),
+            blocked_by_base: BTreeMap::new(),
+            overrides: BTreeSet::from(["rust-alt".to_string()]),
+        };
+        // Pre-flight found python-setuptools in the base — even though
+        // the (stale) report lists it as a plain package.
+        let mut base_present = BTreeMap::new();
+        base_present.insert("python-setuptools".to_string(), "69.0.3-9.el10".to_string());
+
+        let candidates = report.packages.clone();
+        let (to_file, skipped) = partition_filable(&report, candidates, &base_present, "c10s");
+        assert_eq!(to_file, vec!["rust-newthing".to_string()]);
+        assert_eq!(skipped.len(), 2);
+        assert!(skipped.iter().any(|m| m.contains("python-setuptools")
+            && m.contains("c10s")
+            && m.contains("CANTFIX")));
+        assert!(
+            skipped
+                .iter()
+                .any(|m| m.contains("rust-alt") && m.contains("package review"))
+        );
+    }
 
     #[test]
     fn description_plain() {

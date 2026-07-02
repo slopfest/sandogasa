@@ -125,6 +125,50 @@ May be passed multiple times."
     )]
     exclude_install: Vec<String>,
 
+    /// Base-distro packages to override with alternate packages.
+    #[arg(
+        long = "override",
+        value_name = "PKG,...",
+        value_delimiter = ',',
+        long_help = "\
+Base-distro packages to treat as deliberate
+overrides (alternate, non-conflicting EPEL
+packages).
+
+Normally a dependency whose provider exists in
+the base distro (RHEL / CentOS Stream) at a
+too-old version is *blocked*: EPEL packages
+must not replace base-distro packages, so the
+closure is pruned there and the report explains
+the options. Listing a package here confirms
+you intend to introduce an alternate package
+instead — the analysis then descends into it.
+Note an alternate package needs a NEW package
+review, not a branch request.
+
+May be passed multiple times."
+    )]
+    overrides: Vec<String>,
+
+    /// Base-distro branch to probe (e.g. c10s).
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        long_help = "\
+Base-distro branch behind the target, probed to
+detect deps whose provider exists in the base
+at a too-old version (EPEL must not replace
+base packages).
+
+Inferred for EPEL targets: epel10 uses c10s,
+epel9 uses al9 (fedrq's c9s layers epel9 +
+epel9-next, and UBI is incomplete, so AlmaLinux
+stands in for RHEL 9). Pass this to override
+the mapping or to enable the guard for targets
+it can't infer (e.g. epel8)."
+    )]
+    base_branch: Option<String>,
+
     /// Disable auto-exclusion from installability checks.
     #[arg(
         long,
@@ -404,6 +448,23 @@ struct BranchRequestCommon {
     #[arg(long)]
     sig: Option<String>,
 
+    /// Base-distro branch to pre-flight against (e.g. c10s).
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        long_help = "\
+Base-distro branch behind the EPEL branch,
+checked before filing: a package present in
+the base distro is skipped (EPEL must not
+replace it; the request would be CANTFIX).
+
+Inferred from the branch: epel10 uses c10s,
+epel9 uses al9. Pass this to override the
+mapping or to enable the check for branches
+it can't infer (e.g. epel8)."
+    )]
+    base_branch: Option<String>,
+
     /// Show what would happen without contacting Bugzilla.
     #[arg(long)]
     dry_run: bool,
@@ -492,6 +553,7 @@ fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Opt
         sig: c.sig.clone(),
         dry_run: c.dry_run,
         verbose: c.verbose,
+        base_branch: resolve::base_branch_for(c.base_branch.as_deref(), Some(&c.branch), None),
     })
 }
 
@@ -818,6 +880,31 @@ fn main() -> ExitCode {
         })
     });
 
+    // Base-distro guard: probe the base behind an EPEL target so deps
+    // whose provider exists there (too old) are blocked instead of
+    // becoming branch requests.
+    let base_branch = resolve::base_branch_for(
+        args.base_branch.as_deref(),
+        args.target.as_deref(),
+        args.target_repo.as_deref(),
+    );
+    if base_branch.is_none()
+        && args
+            .target
+            .as_deref()
+            .is_some_and(|t| t.starts_with("epel"))
+    {
+        eprintln!(
+            "warning: no base-distro mapping for this EPEL target; \
+             base-distro guard disabled (pass --base-branch to enable)"
+        );
+    }
+    if args.verbose
+        && let Some(ref b) = base_branch
+    {
+        eprintln!("[resolve] base-distro guard active (probing {b})");
+    }
+
     let resolver = FedrqResolver {
         source: sandogasa_fedrq::Fedrq {
             branch: args.source.clone(),
@@ -828,6 +915,10 @@ fn main() -> ExitCode {
             branch: args.target.clone(),
             repo: args.target_repo.clone(),
         },
+        base: base_branch.as_ref().map(|b| sandogasa_fedrq::Fedrq {
+            branch: Some(b.clone()),
+            repo: None,
+        }),
     };
     let source_label = match (&args.source, &args.source_repo) {
         (Some(b), Some(r)) => format!("{b} ({r})"),
@@ -847,6 +938,12 @@ fn main() -> ExitCode {
         exclude: args.exclude.iter().cloned().collect(),
         exclude_install: args.exclude_install.iter().cloned().collect(),
         auto_exclude: !args.no_auto_exclude_install,
+        base_branch,
+        overrides: args.overrides.iter().cloned().collect(),
+        interactive: {
+            use std::io::IsTerminal;
+            !args.json && std::io::stdin().is_terminal()
+        },
     };
     let (closure, install_report) = if args.check_install {
         match resolve_with_installability(
@@ -927,8 +1024,12 @@ fn main() -> ExitCode {
             };
 
             if args.copr {
+                // Machine output on stdout; the blocked section (a
+                // human must act on it) goes to stderr.
+                eprint!("{}", render_blocked(&closure));
                 print_copr_script(&phases);
             } else if args.koji {
+                eprint!("{}", render_blocked(&closure));
                 print_koji_chain(&phases);
             } else if args.json {
                 let mut json = serde_json::json!({
@@ -936,6 +1037,8 @@ fn main() -> ExitCode {
                     "target_branch": closure.target_branch,
                     "requested": closure.requested,
                     "closure": closure.closure,
+                    "blocked_by_base": closure.blocked_by_base,
+                    "overrides": closure.overrides,
                     "warnings": closure.warnings,
                     "build_order": phases,
                 });
@@ -956,6 +1059,7 @@ fn main() -> ExitCode {
                 if let Some(report) = &install_report {
                     print_installability(report);
                 }
+                print!("{}", render_blocked(&closure));
             }
             ExitCode::SUCCESS
         }
@@ -1059,6 +1163,55 @@ fn print_json(value: &impl serde::Serialize) {
     );
 }
 
+/// Render the base-distro-blocked section: what was pruned, why, and
+/// the two real options. Empty when nothing is blocked.
+fn render_blocked(closure: &resolve::Closure) -> String {
+    use std::fmt::Write as _;
+    if closure.blocked_by_base.is_empty() {
+        return String::new();
+    }
+    let base = closure
+        .blocked_by_base
+        .values()
+        .next()
+        .map(|b| b.base_branch.as_str())
+        .unwrap_or("base");
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "\nBlocked by base distro ({base}) — EPEL must not replace these packages:"
+    );
+    for (pkg, b) in &closure.blocked_by_base {
+        let needed_by: Vec<&str> = b.required_by.iter().map(String::as_str).collect();
+        let _ = writeln!(
+            out,
+            "  - {pkg}: needs {} ({}); {} has {}",
+            b.dep,
+            needed_by.join(", "),
+            b.base_branch,
+            b.base_version
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\nOptions for blocked packages: introduce an alternate,\n\
+         non-conflicting package (rerun with --override <pkg>; an\n\
+         alternate needs a NEW package review, not a branch request),\n\
+         or lower the depending package's requirement to the\n\
+         base-distro version."
+    );
+    out
+}
+
+/// Annotate an overridden package name in listings.
+fn override_marker(closure: &resolve::Closure, pkg: &str) -> &'static str {
+    if closure.overrides.contains(pkg) {
+        " (override — needs new package review)"
+    } else {
+        ""
+    }
+}
+
 fn print_resolve(closure: &resolve::Closure) {
     println!(
         "Dependency closure from {} to {}:\n",
@@ -1067,10 +1220,11 @@ fn print_resolve(closure: &resolve::Closure) {
 
     let discovered = closure.closure.len() - closure.requested.len();
     for (pkg, entry) in &closure.closure {
+        let marker = override_marker(closure, pkg);
         if entry.missing_deps.is_empty() {
-            println!("  {pkg}: all BuildRequires satisfied");
+            println!("  {pkg}{marker}: all BuildRequires satisfied");
         } else {
-            println!("  {pkg}:");
+            println!("  {pkg}{marker}:");
             for dep in &entry.missing_deps {
                 println!("    - {} (provided by {})", dep.dep, dep.provided_by);
             }
@@ -1094,7 +1248,7 @@ fn print_build_order(phases: &[dag::BuildPhase], closure: &resolve::Closure) {
     for phase in phases {
         println!("  Phase {}:", phase.phase);
         for pkg in &phase.packages {
-            println!("    - {pkg}");
+            println!("    - {pkg}{}", override_marker(closure, pkg));
         }
     }
 
