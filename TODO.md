@@ -184,6 +184,15 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
 
 ## sandogasa-report
 
+- (2026-07-02) Extend the commit detail-level policy to the other
+  sections. Commits now render as: summary = total + repo count;
+  `--detailed` = per-repo counts; `--detailed --detailed` = individual
+  commits with subject (see `DEVELOPMENT.md` "Commit detail levels"). The
+  PR / issue / patch / ticket sections (github/gitlab/forgejo/sourcehut)
+  still list every item at `--detailed` with no level-1-vs-2 distinction.
+  Decide whether they want the same three-tier treatment (e.g. `--detailed`
+  = counts or a compact list, `--detailed --detailed` = full per-item
+  detail) and apply it uniformly. Likely presentation-only.
 - Debug CVE/security bug reporting: the query may be too narrow or
   the keyword filter may not match Bugzilla's actual keyword values.
   Test with known CVE bugs and compare against manual Bugzilla search.
