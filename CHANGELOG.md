@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### ebranch: check-crate machine output coexists with the human report
+
+`check-crate`'s machine modes (`--koji`, `--copr`, `--dot`) now print the
+human-readable report — what needs building, and at which versions — to
+**stderr**, leaving **stdout** to the machine output alone. So
+`check-crate … --koji > build.sh` shows the report in your terminal while
+`build.sh` stays clean and pipeable, and `… --koji | sh` still works.
+`--json` is unchanged (it already carries the full report); `--toml`
+writes its file and, on its own, still prints the human report to stdout.
+
 ### New crate: sandogasa-sourcehut (sr.ht GraphQL client)
 
 `sandogasa-sourcehut` is a client for the Sourcehut (sr.ht) GraphQL API,

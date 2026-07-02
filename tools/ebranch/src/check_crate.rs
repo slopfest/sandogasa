@@ -236,13 +236,30 @@ pub fn check_crate(
     })
 }
 
-/// Print a human-readable report to stdout.
+/// Print the human-readable report to stdout.
 pub fn print_report(report: &CheckCrateReport) {
-    println!(
+    print!("{}", render_report(report));
+}
+
+/// Print the human-readable report to stderr — used alongside a machine
+/// output mode (`--koji`/`--copr`/`--dot`/`--toml`) so the reviewer can
+/// still see what needs building, and at which versions, while the clean
+/// machine output goes to stdout for piping.
+pub fn eprint_report(report: &CheckCrateReport) {
+    eprint!("{}", render_report(report));
+}
+
+/// Render the human-readable report as a string (what needs building,
+/// with versions, and the build order).
+pub fn render_report(report: &CheckCrateReport) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
         "Checking crate: {} {}",
         report.crate_name, report.crate_version
     );
-    println!("Branch: {}\n", report.branch);
+    let _ = writeln!(out, "Branch: {}\n", report.branch);
 
     let normal = report
         .dependencies
@@ -259,7 +276,10 @@ pub fn print_report(report: &CheckCrateReport) {
         .iter()
         .filter(|d| d.dep.kind == "dev")
         .count();
-    println!("Dependencies ({normal} normal, {build} build, {dev} dev):\n");
+    let _ = writeln!(
+        out,
+        "Dependencies ({normal} normal, {build} build, {dev} dev):\n"
+    );
 
     let missing: Vec<&DepResult> = report
         .dependencies
@@ -278,9 +298,10 @@ pub fn print_report(report: &CheckCrateReport) {
         .collect();
 
     if !missing.is_empty() {
-        print_section_header("Missing", &missing);
+        write_section_header(&mut out, "Missing", &missing);
         for d in &missing {
-            println!(
+            let _ = writeln!(
+                out,
                 "  - {} {} ({}{})",
                 d.dep.name,
                 d.dep.version_req,
@@ -288,32 +309,34 @@ pub fn print_report(report: &CheckCrateReport) {
                 opt_label(d)
             );
         }
-        println!();
+        let _ = writeln!(out);
     }
 
     if !unmet.is_empty() {
-        print_section_header("No matching version", &unmet);
+        write_section_header(&mut out, "No matching version", &unmet);
         for d in &unmet {
             if let DepStatus::Unmet { available, need } = &d.status {
-                println!(
+                let _ = writeln!(
+                    out,
                     "  - {} {} ({}{})",
                     d.dep.name,
                     d.dep.version_req,
                     d.dep.kind,
                     opt_label(d)
                 );
-                println!("    available: {}, need: {need}", available.join(", "));
+                let _ = writeln!(out, "    available: {}, need: {need}", available.join(", "));
             }
         }
-        println!();
+        let _ = writeln!(out);
     }
 
     if !satisfied.is_empty() {
-        print_section_header("Satisfied", &satisfied);
+        write_section_header(&mut out, "Satisfied", &satisfied);
         for d in &satisfied {
             if let DepStatus::Satisfied { version, compat } = &d.status {
                 let compat_label = if *compat { " (compat)" } else { "" };
-                println!(
+                let _ = writeln!(
+                    out,
                     "  - {} {} ({}{}) — {version}{compat_label}",
                     d.dep.name,
                     d.dep.version_req,
@@ -322,15 +345,23 @@ pub fn print_report(report: &CheckCrateReport) {
                 );
             }
         }
-        println!();
+        let _ = writeln!(out);
     }
 
     if !report.transitive_missing.is_empty() {
-        println!("Transitive missing ({}):", report.transitive_missing.len());
+        let _ = writeln!(
+            out,
+            "Transitive missing ({}):",
+            report.transitive_missing.len()
+        );
         for d in &report.transitive_missing {
-            println!("  - {} {} (via {})", d.name, d.version_req, d.pulled_by);
+            let _ = writeln!(
+                out,
+                "  - {} {} (via {})",
+                d.name, d.version_req, d.pulled_by
+            );
         }
-        println!();
+        let _ = writeln!(out);
     }
 
     if !report.transitive_build_order.is_empty() {
@@ -351,35 +382,41 @@ pub fn print_report(report: &CheckCrateReport) {
             .collect();
 
         let total: usize = phases.iter().map(|p| p.packages.len()).sum();
-        println!(
+        let _ = writeln!(
+            out,
             "Build order ({total} package(s) in {} phase(s)):",
             phases.len()
         );
         for phase in &phases {
-            println!("\n  Phase {}:", phase.phase);
+            let _ = writeln!(out, "\n  Phase {}:", phase.phase);
             for pkg in &phase.packages {
                 if let Some(ver) = versions.get(pkg.as_str()) {
-                    println!("    - rust-{pkg} {ver}");
+                    let _ = writeln!(out, "    - rust-{pkg} {ver}");
                 } else {
-                    println!("    - rust-{pkg}");
+                    let _ = writeln!(out, "    - rust-{pkg}");
                 }
             }
         }
-        println!();
+        let _ = writeln!(out);
     }
 
     let n_missing = unique_crate_count(&missing);
     let n_unmet = unique_crate_count(&unmet);
     let n_satisfied = unique_crate_count(&satisfied);
     if report.transitive_missing.is_empty() {
-        println!("Summary: {n_missing} missing, {n_unmet} unmet, {n_satisfied} satisfied.");
+        let _ = writeln!(
+            out,
+            "Summary: {n_missing} missing, {n_unmet} unmet, {n_satisfied} satisfied."
+        );
     } else {
-        println!(
+        let _ = writeln!(
+            out,
             "Summary: {n_missing} missing (+ {} transitive), \
              {n_unmet} unmet, {n_satisfied} satisfied.",
             report.transitive_missing.len(),
         );
     }
+    out
 }
 
 /// Print the transitive dependency graph in Graphviz DOT format.
@@ -492,12 +529,13 @@ fn unique_crate_count(deps: &[&DepResult]) -> usize {
 }
 
 /// Print a section header with entry count and unique crate count.
-fn print_section_header(label: &str, deps: &[&DepResult]) {
+fn write_section_header(out: &mut String, label: &str, deps: &[&DepResult]) {
+    use std::fmt::Write as _;
     let unique = unique_crate_count(deps);
     if unique == deps.len() {
-        println!("{label} ({unique}):");
+        let _ = writeln!(out, "{label} ({unique}):");
     } else {
-        println!("{label} ({unique} crate(s), {} entries):", deps.len());
+        let _ = writeln!(out, "{label} ({unique} crate(s), {} entries):", deps.len());
     }
 }
 

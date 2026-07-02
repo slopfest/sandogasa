@@ -635,6 +635,9 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
                 if a.koji || a.copr {
+                    // Machine output on stdout (pipeable); the human report
+                    // on stderr so you can still see what needs building.
+                    check_crate::eprint_report(&report);
                     let rpm_phases = map_phase_packages(&report.full_build_phases(), |name| {
                         format!("rust-{name}")
                     });
@@ -644,6 +647,7 @@ fn main() -> ExitCode {
                         print_koji_chain(&rpm_phases);
                     }
                 } else if a.dot {
+                    check_crate::eprint_report(&report);
                     check_crate::print_dot(&report);
                 } else if a.json {
                     print_json(&report);

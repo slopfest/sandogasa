@@ -114,6 +114,11 @@ deps. The output includes a phased build order showing which
 - `--refresh` — clear fedrq repo metadata cache before querying
 - `--json` — machine-readable JSON output
 
+With `--koji`, `--copr`, or `--dot`, the machine output goes to stdout
+and the human-readable report (what needs building, at which versions)
+goes to stderr — so `ebranch check-crate … --koji > build.sh` writes a
+clean script while you still see the report, and `… --koji | sh` works.
+
 ### Link Bugzilla review requests
 
 Use `check-pkg-reviews` to find and link Bugzilla package review
