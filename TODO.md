@@ -1,5 +1,9 @@
 # TODO
 
+## dbranch
+
+- (2026-07-03) add support for Debusine, and trixie-backports. Test with iptstate
+
 ## ebranch
 
 - (2026-06-29) Follow-ups to the review-issue unification (deferred from
