@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### dbranch: Debian backports targets
+
+`rebuild` now recognizes `debian/<codename>-backports` branches (e.g.
+`debian/trixie-backports`) as a third target type alongside Ubuntu PPAs
+and Debian proposed-updates: version `<debver>~bpo<N>+<M>` (the official
+backports scheme), changelog distribution `<codename>-backports`, entry
+generated with `gbp dch --bpo` and normalized as usual (which also drops
+gbp's trailing period on the `Rebuild for …` line). The branch's
+`gbp.conf` gets only `debian-branch` — gbp's default `debian/%(version)s`
+tag is already right in the `debian/` namespace — preserving any existing
+settings, and `salsa-ci.yml` gets `RELEASE: "<codename>-backports"` (an
+officially supported salsa-ci release whose image enables the backports
+apt repo) with no relaxations — without the pin salsa-ci builds against
+sid. The local build stage scratch-builds in the base release's chroot
+(`pbuilder-dist trixie`, not `trixie-backports`). Backports require a
+Debian host (like proposed-updates) and upload to dput's default target.
+
+Also fixed for all target types: when dbranch *creates* a packaging
+file from scratch (e.g. `gbp.conf` on a branch whose Debian branch has
+none), the changelog entry and per-file commit now say
+`* Create <file> for <target>` instead of `* Adjust …`; when one file is
+created and another edited in the same run, they are listed on separate
+`Create`/`Adjust` lines.
+
 ### quick-xml requirement relaxed to a range
 
 v0.15.3 required quick-xml `"0.41"` strictly (the RUSTSEC-2026-0194 /

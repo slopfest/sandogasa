@@ -2,7 +2,17 @@
 
 ## dbranch
 
-- (2026-07-03) add support for Debusine, and trixie-backports. Test with iptstate
+- (2026-07-03) add support for Debusine
+- (2026-07-03, nice-to-have) the merge phase of proposed-updates and
+  backports could run on non-Debian hosts (only build/upload truly need
+  Debian); kept simple and symmetric for now with a full up-front host
+  guard
+
+Done (2026-07-03):
+- rebuild supports Debian backports targets (`debian/<codename>-backports`
+  → `~bpo<N>+<M>`, gbp.conf debian-branch only, salsa-ci RELEASE pinned to
+  `<codename>-backports` — leaving it untouched built against sid). Tested
+  with iptstate.
 
 ## ebranch
 

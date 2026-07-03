@@ -52,11 +52,13 @@ The rebuild changelog entry body is **synthesized, not taken from
 entire merged Debian delta (every commit), which must not land in the
 rebuild entry. `normalize_top_stanza` discards gbp's body (which also
 drops any `UNRELEASED` it added) and writes `* Rebuild for <codename>`
-plus — only when dbranch changed packaging files this run — a single
-`* Adjust <files> for <codename>` line naming them
-(`adjust_branch_packaging` reports which). It is fine for this to
-differ between the first rebuild of a branch (files adjusted) and
-later ones (nothing to adjust).
+plus — only when dbranch touched packaging files this run — a
+`* Create <files> for <codename>` line for files created from scratch
+and/or a `* Adjust <files> for <codename>` line for files edited,
+matching the wording of the per-file commits
+(`adjust_branch_packaging` reports which, split by kind). It is fine
+for this to differ between the first rebuild of a branch (files
+created/adjusted) and later ones (nothing to touch).
 
 ## External tools
 

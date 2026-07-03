@@ -5,7 +5,9 @@
 //! against) into the inherited `variables:` block, preserving the file's
 //! other entries and comments. An Ubuntu PPA branch also gets a set of
 //! backports-style relaxations; a Debian proposed-update branch builds
-//! straight against the stable suite, so it gets only `RELEASE`.
+//! straight against the stable suite and a Debian backports branch
+//! against `<codename>-backports` (a supported salsa-ci release whose
+//! image enables the backports apt repo), so those get only `RELEASE`.
 
 /// The backports-style relaxations appended after the existing
 /// variables (with their explanatory comment), for a downstream Ubuntu
@@ -22,7 +24,8 @@ const BACKPORTS_BLOCK: &[&str] = &[
 /// Inject the rebuild preset into a salsa-ci.yml's `variables:` block,
 /// preserving existing entries and comments. `release` is the `RELEASE`
 /// value to add (the Debian suite salsa-ci builds against — `unstable`
-/// for a PPA, the codename for a proposed-update); `add_backports`
+/// for a PPA, the codename for a proposed-update,
+/// `<codename>-backports` for a backport); `add_backports`
 /// appends [`BACKPORTS_BLOCK`] (PPA only). Idempotent: a key already
 /// present is not added again — in particular an existing `RELEASE`
 /// (e.g. pinned to an older Debian suite) is left untouched.

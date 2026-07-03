@@ -305,6 +305,22 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
                     .into());
                 }
             }
+            // A backport also uploads to the dput default and needs the
+            // Debian build chroot + dput-to-Debian; kept symmetric with
+            // proposed-updates (the merge stage alone would work
+            // anywhere, but one simple rule beats a per-stage matrix).
+            TargetType::Backports { .. } => {
+                if !ui.dry_run && !host::is_debian() {
+                    let host = host::os_release_id().unwrap_or_else(|| "unknown".to_string());
+                    return Err(format!(
+                        "{target} is a Debian backport, which must be built on a \
+                         Debian host (the backports build chroot and dput to the \
+                         Debian archive need it); this host is '{host}'. \
+                         Run it from a Debian environment."
+                    )
+                    .into());
+                }
+            }
         }
     }
 
@@ -718,6 +734,7 @@ fn rebuild_one(
     let kind = match target_type {
         TargetType::Ppa => "PPA".to_string(),
         TargetType::Proposed { major } => format!("Debian {major} proposed-update"),
+        TargetType::Backports { major } => format!("Debian {major} backport"),
     };
     ui.step(&format!("{target} (codename: {codename}, {kind})"));
 
@@ -747,12 +764,16 @@ fn rebuild_one(
         checkout_existing(ui, repo, target, location)?;
     }
 
-    // Ubuntu PPA builds run in the codename's own chroot.
+    // Ubuntu PPA and proposed-update builds run in the codename's own
+    // chroot; a backport scratch-builds in the base release's chroot
+    // (`trixie`, not `trixie-backports` — the suffix is a changelog
+    // distribution, not a pbuilder dist).
+    let build_suite = build_suite_for(target_type, &codename);
     build_pipeline(
         ui,
         repo,
         target,
-        &codename,
+        &build_suite,
         rebuilt_version,
         stages,
         nowait,
@@ -760,6 +781,16 @@ fn rebuild_one(
         chroot_refresh,
         assume_yes,
     )
+}
+
+/// The `pbuilder-dist` distribution for a target: the codename itself,
+/// except a backport drops the `-backports` suffix and builds against
+/// the base release.
+fn build_suite_for(target_type: TargetType, codename: &str) -> String {
+    match target_type {
+        TargetType::Backports { .. } => backports_base(codename).unwrap_or(codename).to_string(),
+        _ => codename.to_string(),
+    }
 }
 
 /// The shared `build → lint → push → upload → tag` tail, driven by both
@@ -1109,7 +1140,7 @@ fn merge_stage(
     // is a no-op on an already-adjusted branch, and self-heals one
     // created outside dbranch. The files it changed are listed in the
     // rebuild changelog entry.
-    let adjusted = adjust_branch_packaging(ui, repo, target, target_type)?;
+    let changes = adjust_branch_packaging(ui, repo, target, target_type)?;
 
     let version = {
         let text = std::fs::read_to_string(repo.join("debian/changelog"))?;
@@ -1119,11 +1150,14 @@ fn merge_stage(
     };
 
     ui.step("Generate the rebuild changelog entry");
-    // PPA uses `--bpo`; a proposed-update uses `--stable` (the honest
-    // command). Either way the entry is normalized afterward, so gbp's
-    // exact version/body is provisional.
+    // PPA and backports use `--bpo` (for a backport the codename is
+    // already `<release>-backports`, the real distribution); a
+    // proposed-update uses `--stable` (the honest command). Either way
+    // the entry is normalized afterward, so gbp's exact version/body —
+    // including `--bpo`'s trailing period and any merged-delta lines —
+    // is provisional.
     let dch = match target_type {
-        TargetType::Ppa => plan::gbp_dch_argv(codename, urgency),
+        TargetType::Ppa | TargetType::Backports { .. } => plan::gbp_dch_argv(codename, urgency),
         TargetType::Proposed { .. } => plan::gbp_dch_stable_argv(urgency),
     };
     ui.run_required(&dch, repo)?;
@@ -1133,7 +1167,13 @@ fn merge_stage(
     ));
     if !ui.dry_run {
         let text = std::fs::read_to_string(repo.join("debian/changelog"))?;
-        let normalized = changelog::normalize_top_stanza(&text, &version, codename, &adjusted)?;
+        let normalized = changelog::normalize_top_stanza(
+            &text,
+            &version,
+            codename,
+            &changes.created,
+            &changes.adjusted,
+        )?;
         std::fs::write(repo.join("debian/changelog"), normalized)?;
     }
     ui.explain_diff(repo, &["debian/changelog"]);
@@ -1155,35 +1195,60 @@ fn merge_stage(
 /// existing one. Returns the display names of the files actually
 /// changed (e.g. `["gbp.conf", "salsa-ci.yml"]`), which the merge stage
 /// lists in the rebuild changelog entry.
+/// Which packaging files [`adjust_branch_packaging`] touched, split by
+/// whether each was created from scratch or edited — the changelog
+/// entry words the two differently, matching the per-file commits.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PackagingChanges {
+    created: Vec<String>,
+    adjusted: Vec<String>,
+}
+
 fn adjust_branch_packaging(
     ui: &Ui,
     repo: &Path,
     target: &str,
     target_type: TargetType,
-) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    // salsa-ci RELEASE + whether the backports relaxations apply depend
-    // on the target type: a PPA builds against unstable with relaxations,
-    // a proposed-update against its stable codename with none.
+) -> Result<PackagingChanges, Box<dyn std::error::Error>> {
+    // salsa-ci RELEASE + whether the backports-style relaxations apply
+    // depend on the target type: a PPA builds against unstable with
+    // relaxations; a proposed-update against its stable codename and a
+    // backport against `<codename>-backports` (a supported salsa-ci
+    // RELEASE, whose image also enables the backports apt repo), both
+    // with no relaxations — they're legitimate Debian builds. Without
+    // the RELEASE pin salsa-ci defaults to building against sid.
     let codename = target_codename(target);
     let (release, add_backports) = match target_type {
         TargetType::Ppa => ("unstable".to_string(), true),
-        TargetType::Proposed { .. } => (codename, false),
+        // For a backport the codename is already `<release>-backports`.
+        TargetType::Proposed { .. } | TargetType::Backports { .. } => (codename, false),
     };
-    let mut adjusted = Vec::new();
-    let tag_format = plan::debian_tag_format(target);
+    // A backports branch only needs `debian-branch`: it lives in the
+    // `debian/` namespace, so gbp's default `debian/%(version)s` tag is
+    // already right. Everything else also gets `debian-tag`.
+    let tag_format = match target_type {
+        TargetType::Backports { .. } => None,
+        _ => Some(plan::debian_tag_format(target)),
+    };
+    let keys_label = match &tag_format {
+        Some(_) => "debian-branch, debian-tag",
+        None => "debian-branch",
+    };
+    let mut changes = PackagingChanges::default();
     if repo.join("debian/gbp.conf").exists() {
-        ui.step(&format!(
-            "Adjust gbp.conf (debian-branch, debian-tag) for {target}"
-        ));
+        ui.step(&format!("Adjust gbp.conf ({keys_label}) for {target}"));
         let changed = edit_file(ui, repo, "debian/gbp.conf", |text| {
             let text = gbpconf::set_key(text, "debian-branch", target, None);
-            // Keep debian-tag right under debian-branch.
-            Some(gbpconf::set_key(
-                &text,
-                "debian-tag",
-                &tag_format,
-                Some("debian-branch"),
-            ))
+            match &tag_format {
+                // Keep debian-tag right under debian-branch.
+                Some(tag) => Some(gbpconf::set_key(
+                    &text,
+                    "debian-tag",
+                    tag,
+                    Some("debian-branch"),
+                )),
+                None => Some(text),
+            }
         })?;
         if changed {
             ui.explain_diff(repo, &["debian/gbp.conf"]);
@@ -1194,7 +1259,7 @@ fn adjust_branch_packaging(
                 ),
                 repo,
             )?;
-            adjusted.push("gbp.conf".to_string());
+            changes.adjusted.push("gbp.conf".to_string());
         }
     } else {
         // No gbp.conf on the source branch — common when the rebuilder
@@ -1202,13 +1267,11 @@ fn adjust_branch_packaging(
         // one on *this* branch so `gbp dch` / `gbp tag` target it (they'd
         // otherwise default `debian-branch` to the Debian branch and
         // refuse: "not on branch <x>").
-        ui.step(&format!(
-            "Create gbp.conf (debian-branch, debian-tag) for {target}"
-        ));
+        ui.step(&format!("Create gbp.conf ({keys_label}) for {target}"));
         if !ui.dry_run {
             std::fs::write(
                 repo.join("debian/gbp.conf"),
-                gbpconf::new_config(target, &tag_format),
+                gbpconf::new_config(target, tag_format.as_deref()),
             )?;
         }
         // A new file isn't picked up by `git commit <file>`; stage it,
@@ -1219,7 +1282,7 @@ fn adjust_branch_packaging(
             &plan::commit_file_argv(&format!("Create gbp.conf for {target}"), "debian/gbp.conf"),
             repo,
         )?;
-        adjusted.push("gbp.conf".to_string());
+        changes.created.push("gbp.conf".to_string());
     }
     if repo.join("debian/salsa-ci.yml").exists() {
         ui.step(&format!("Adjust salsa-ci.yml for {target}"));
@@ -1235,10 +1298,10 @@ fn adjust_branch_packaging(
                 ),
                 repo,
             )?;
-            adjusted.push("salsa-ci.yml".to_string());
+            changes.adjusted.push("salsa-ci.yml".to_string());
         }
     }
-    Ok(adjusted)
+    Ok(changes)
 }
 
 /// Apply an in-place text transform to a repo file, returning whether
@@ -1442,29 +1505,53 @@ enum TargetType {
     /// Debian stable proposed-update branch (`debian/<codename>`):
     /// version `<base>~deb<major>u<M>`.
     Proposed { major: u32 },
+    /// Debian backports branch (`debian/<codename>-backports`):
+    /// version `<base>~bpo<major>+<M>`.
+    Backports { major: u32 },
 }
 
 impl TargetType {
     /// The fresh version for this target, given the merged changelog and
-    /// the codename — `changelog::rebuild_version` for a PPA, or
-    /// `changelog::proposed_version` for a proposed-update.
+    /// the codename — `changelog::rebuild_version` for a PPA,
+    /// `changelog::proposed_version` for a proposed-update, or
+    /// `changelog::backports_version` for a backport.
     fn version(self, changelog: &str, codename: &str) -> Option<String> {
         match self {
             TargetType::Ppa => changelog::rebuild_version(changelog, codename),
             TargetType::Proposed { major } => changelog::proposed_version(changelog, major),
+            TargetType::Backports { major } => changelog::backports_version(changelog, major),
         }
     }
 }
 
-/// Classify a target branch. A `debian/<codename>` branch whose codename
-/// is a numbered Debian release (via `debian-distro-info`) is a
-/// proposed-update; everything else is a PPA. `debian-distro-info` is
-/// only consulted for `debian/`-namespaced branches, so a plain Ubuntu
-/// PPA rebuild never needs it.
+/// The base release of a backports codename (`trixie-backports` →
+/// `trixie`); `None` when the codename has no `-backports` suffix.
+fn backports_base(codename: &str) -> Option<&str> {
+    codename
+        .strip_suffix("-backports")
+        .filter(|b| !b.is_empty())
+}
+
+/// Classify a target branch. A `debian/<codename>-backports` branch is a
+/// backport; a `debian/<codename>` branch whose codename is a numbered
+/// Debian release (via `debian-distro-info`) is a proposed-update;
+/// everything else is a PPA. `debian-distro-info` is only consulted for
+/// `debian/`-namespaced branches, so a plain Ubuntu PPA rebuild never
+/// needs it.
 fn classify_target_type(
     target: &str,
     codename: &str,
 ) -> Result<TargetType, Box<dyn std::error::Error>> {
+    if target.starts_with("debian/")
+        && let Some(base) = backports_base(codename)
+    {
+        return match distroinfo::debian_major(base)? {
+            Some(major) => Ok(TargetType::Backports { major }),
+            None => {
+                Err(format!("unknown Debian release '{base}' in backports target {target}").into())
+            }
+        };
+    }
     // The rolling suites are never proposed-update targets; skip the
     // tool call (so a plain run never needs debian-distro-info for them).
     if target.starts_with("debian/")
@@ -1826,6 +1913,72 @@ mod tests {
     }
 
     #[test]
+    fn build_suite_drops_backports_suffix() {
+        // A backport scratch-builds against the base release chroot.
+        assert_eq!(
+            build_suite_for(TargetType::Backports { major: 13 }, "trixie-backports"),
+            "trixie"
+        );
+        // PPA and proposed-update build in the codename's own chroot.
+        assert_eq!(build_suite_for(TargetType::Ppa, "resolute"), "resolute");
+        assert_eq!(
+            build_suite_for(TargetType::Proposed { major: 13 }, "trixie"),
+            "trixie"
+        );
+    }
+
+    #[test]
+    fn backports_base_strips_suffix() {
+        assert_eq!(backports_base("trixie-backports"), Some("trixie"));
+        assert_eq!(backports_base("bookworm-backports"), Some("bookworm"));
+        assert_eq!(backports_base("trixie"), None);
+        assert_eq!(backports_base("-backports"), None);
+        assert_eq!(backports_base("noble"), None);
+    }
+
+    #[test]
+    fn backports_gbp_conf_branch_only_and_salsa_release_pin() {
+        // The iptstate debian/trixie-backports spec: a created gbp.conf
+        // carries only debian-branch (gbp's default debian/%(version)s
+        // tag is right for debian/* branches), and salsa-ci.yml gets
+        // RELEASE pinned to `trixie-backports` (without the pin salsa-ci
+        // builds against sid) with no PPA-style relaxations. Also
+        // exercises the mixed created + adjusted split.
+        let dir = setup();
+        let p = dir.path();
+        git(p, &["config", "user.email", "t@x"]);
+        git(p, &["config", "user.name", "T"]);
+        git(p, &["config", "commit.gpgsign", "false"]);
+        let salsa = "---\ninclude:\n  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/recipes/debian.yml\n";
+        std::fs::write(p.join("debian/salsa-ci.yml"), salsa).unwrap();
+        git(p, &["add", "-A"]);
+        git(p, &["commit", "-qm", "add salsa ci"]);
+        git(p, &["checkout", "-qb", "debian/trixie-backports"]);
+
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: true,
+        };
+        let changes = adjust_branch_packaging(
+            &ui,
+            p,
+            "debian/trixie-backports",
+            TargetType::Backports { major: 13 },
+        )
+        .unwrap();
+
+        assert_eq!(changes.created, vec!["gbp.conf".to_string()]);
+        assert_eq!(changes.adjusted, vec!["salsa-ci.yml".to_string()]);
+        let text = std::fs::read_to_string(p.join("debian/gbp.conf")).unwrap();
+        assert_eq!(text, "[DEFAULT]\ndebian-branch = debian/trixie-backports\n");
+        assert!(!text.contains("debian-tag"));
+        let ci = std::fs::read_to_string(p.join("debian/salsa-ci.yml")).unwrap();
+        assert!(ci.contains("RELEASE: \"trixie-backports\""), "{ci}");
+        assert!(!ci.contains("adjust for backports"), "{ci}");
+    }
+
+    #[test]
     fn creates_gbp_conf_when_source_branch_has_none() {
         // The reported case: the maintainer keeps the Debian branch clean
         // (no debian/gbp.conf), so a rebuild branch must get one created —
@@ -1845,9 +1998,9 @@ mod tests {
             dry_run: false,
             quiet: true,
         };
-        let adjusted = adjust_branch_packaging(&ui, p, "ubuntu/resolute", TargetType::Ppa).unwrap();
+        let changes = adjust_branch_packaging(&ui, p, "ubuntu/resolute", TargetType::Ppa).unwrap();
 
-        assert!(adjusted.contains(&"gbp.conf".to_string()));
+        assert!(changes.created.contains(&"gbp.conf".to_string()));
         let text = std::fs::read_to_string(p.join("debian/gbp.conf")).unwrap();
         assert!(text.contains("debian-branch = ubuntu/resolute"), "{text}");
         assert!(text.contains("debian-tag = ubuntu/%(version)s"), "{text}");

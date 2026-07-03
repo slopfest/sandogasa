@@ -3,7 +3,7 @@
 # dbranch
 
 Propagate a Debian package across its downstream branches — Ubuntu PPAs,
-Debian unstable, and Debian stable proposed-updates.
+Debian unstable, Debian stable proposed-updates, and Debian backports.
 
 A common Debian/Ubuntu packaging layout (managed with
 [git-buildpackage](https://honk.sigxcpu.org/piki/projects/git-buildpackage/))
@@ -17,7 +17,9 @@ automates the repetitive loops across them:
   a `~<codename>+<N>` rebuild entry, and scratch-build. The same command
   also handles a **Debian stable proposed-update** when the target is a
   `debian/<codename>` branch (e.g. `debian/trixie`) — a
-  `~deb<N>u<M>` entry via `gbp dch --stable`, built on a Debian host.
+  `~deb<N>u<M>` entry via `gbp dch --stable` — and a **Debian
+  backport** when it is `debian/<codename>-backports` — a `~bpo<N>+<M>`
+  entry via `gbp dch --bpo`; both built on a Debian host.
 - **`update`** — update the Debian branch itself to a **new upstream**
   release (`gbp import-orig --uscan`), then build/lint/push/upload/tag.
 
@@ -163,6 +165,26 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   needs a newer gbp, and the stable chroot / archive upload are
   Debian-only); dbranch hard-fails early otherwise, except under
   `--dry-run`.
+
+  **Debian backports:** when the target is a
+  `debian/<codename>-backports` branch (e.g. `debian/trixie-backports`),
+  the merge stage produces a backport: version `<debver>~bpo<N>+<M>`
+  (the official backports scheme, e.g. `2.3.0-1~bpo13+1` for trixie),
+  the changelog distribution is `<codename>-backports`, and the command
+  run is `gbp dch --bpo` (normalized afterward, which also drops the
+  trailing period gbp puts on its `Rebuild for …` line). `gbp.conf`
+  gets **only** `debian-branch` — the branch lives in the `debian/`
+  namespace, so gbp's default `debian/%(version)s` tag is already right
+  — and any existing settings are preserved. The one-time
+  `salsa-ci.yml` tweak sets `RELEASE: "<codename>-backports"` — an
+  officially supported salsa-ci release whose image also enables the
+  backports apt repo — with **no** relaxations (without the pin
+  salsa-ci builds against sid). The `build` stage
+  scratch-builds in the **base release's** chroot (`pbuilder-dist
+  trixie`, not `trixie-backports` — the suffix is a changelog
+  distribution, not a pbuilder dist). Like a proposed-update, it
+  uploads to `dput`'s default target and requires a **Debian host**
+  (`--dry-run` exempt).
 - **`build`** — `debuild -S -sa -d` then
   `pbuilder-dist <codename> ../<dsc>`.
 - **`lint`** — `lintian -I` on the built **`.deb`s** in

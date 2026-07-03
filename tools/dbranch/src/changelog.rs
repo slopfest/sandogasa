@@ -190,12 +190,37 @@ pub fn proposed_version(changelog: &str, major: u32) -> Option<String> {
     Some(format!("{prefix}{}", max_m + 1))
 }
 
+/// The next backports version for a Debian backports branch:
+/// `<debver>~bpo<major>+<M>` — the official backports scheme (what
+/// `gbp dch --bpo` generates), e.g. `2.3.0-1~bpo13+1` for trixie.
+///
+/// Mirrors [`proposed_version`]: `debver` is the Debian base of the
+/// newest stanza (any rebuild/backports suffix stripped), and `M` is one
+/// past the highest existing `~bpo<major>+<M>` for that exact base — a
+/// new upstream resets to `+1`, a re-backport of the same base bumps
+/// the counter. The `~` makes the backport sort older than the plain
+/// version, so it never shadows the release it came from.
+pub fn backports_version(changelog: &str, major: u32) -> Option<String> {
+    let headers = stanza_headers(changelog);
+    let debver = debian_base(&headers.first()?.version);
+    let prefix = format!("{debver}~bpo{major}+");
+    let max_m = headers
+        .iter()
+        .filter_map(|h| h.version.strip_prefix(&prefix))
+        .filter_map(|m| m.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+    Some(format!("{prefix}{}", max_m + 1))
+}
+
 /// Rewrite the top stanza into a clean rebuild entry, replacing
 /// whatever `gbp dch` generated as the body (which would otherwise be
 /// the whole merge delta) with a synthesized one: header
 /// `<package> (<version>) <codename>; <metadata>`, a `* Rebuild for
-/// <codename>` line, and — when dbranch adjusted packaging files this
-/// run — a single `* Adjust <files> for <codename>` line naming them.
+/// <codename>` line, and — when dbranch touched packaging files this
+/// run — a `* Create <files> for <codename>` line for files it created
+/// from scratch and/or a `* Adjust <files> for <codename>` line for
+/// files it edited (matching the wording of the per-file commits).
 /// The stanza's original footer (the date/maintainer line `gbp dch`
 /// finalized) is kept; lower stanzas are left untouched. Discarding the
 /// gbp dch body also drops any `UNRELEASED` it may have added.
@@ -203,6 +228,7 @@ pub fn normalize_top_stanza(
     changelog: &str,
     version: &str,
     codename: &str,
+    created: &[String],
     adjusted: &[String],
 ) -> Result<String, String> {
     let lines: Vec<&str> = changelog.lines().collect();
@@ -237,6 +263,12 @@ pub fn normalize_top_stanza(
         "{} ({}) {}; {}\n\n  * Rebuild for {codename}\n",
         header.package, version, codename, header.metadata
     ));
+    if !created.is_empty() {
+        out.push_str(&format!(
+            "  * Create {} for {codename}\n",
+            join_and(created)
+        ));
+    }
     if !adjusted.is_empty() {
         out.push_str(&format!(
             "  * Adjust {} for {codename}\n",
@@ -426,6 +458,41 @@ archlinux-keyring (0~20260612-1~deb13u1) trixie; urgency=medium
     }
 
     #[test]
+    fn backports_version_fresh_and_increment() {
+        // The iptstate trixie-backports case: unstable 2.3.0-1 →
+        // 2.3.0-1~bpo13+1.
+        let fresh = "\
+iptstate (2.3.0-1) unstable; urgency=medium
+
+  * New upstream version 2.3.0
+
+ -- M <m@x>  Fri, 03 Jul 2026 10:00:00 +0100
+";
+        assert_eq!(
+            backports_version(fresh, 13).as_deref(),
+            Some("2.3.0-1~bpo13+1")
+        );
+        // A re-backport of the same base bumps the counter; debian_base
+        // sees through the existing ~bpo suffix.
+        let again = "\
+iptstate (2.3.0-1~bpo13+1) trixie-backports; urgency=medium
+
+  * Rebuild for trixie-backports
+
+ -- M <m@x>  Fri, 03 Jul 2026 12:00:00 +0100
+";
+        assert_eq!(
+            backports_version(again, 13).as_deref(),
+            Some("2.3.0-1~bpo13+2")
+        );
+        // A different Debian major starts fresh at +1.
+        assert_eq!(
+            backports_version(again, 12).as_deref(),
+            Some("2.3.0-1~bpo12+1")
+        );
+    }
+
+    #[test]
     fn rebuild_version_from_a_ppa_top_uses_the_debian_base() {
         // Running from a PPA branch whose top is a rebuild entry: the
         // base is still 3.2.8-1, so a noble rebuild is +1 (not a
@@ -500,7 +567,8 @@ damo (3.2.8-1) unstable; urgency=medium
 
  -- Michel Lind <m@x>  Wed, 17 Jun 2026 17:28:43 +0100
 ";
-        let out = normalize_top_stanza(after_gbp, "3.2.8-1~questing+1", "questing", &[]).unwrap();
+        let out =
+            normalize_top_stanza(after_gbp, "3.2.8-1~questing+1", "questing", &[], &[]).unwrap();
         let top: Vec<&str> = out.lines().take(5).collect();
         assert_eq!(top[0], "damo (3.2.8-1~questing+1) questing; urgency=medium");
         assert_eq!(top[1], "");
@@ -520,6 +588,50 @@ damo (3.2.8-1) unstable; urgency=medium
     }
 
     #[test]
+    fn normalize_backports_entry_matches_convention() {
+        // The iptstate trixie-backports case, end to end: gbp dch --bpo
+        // leaves a trailing period on the Rebuild line and lists the
+        // packaging commits; normalization synthesizes the clean entry
+        // (period-less Rebuild line + separate Create/Adjust lines from
+        // the files dbranch actually changed — gbp.conf created from
+        // scratch, salsa-ci.yml edited).
+        let after_gbp = "\
+iptstate (2.3.0-1~bpo13+1) trixie-backports; urgency=medium
+
+  [ Michel Lind ]
+  * Rebuild for trixie-backports.
+  * Create gbp.conf for trixie-backports
+  * Adjust salsa-ci.yml for trixie-backports
+
+ -- Michel Lind <michel@michel-slm.name>  Fri, 03 Jul 2026 21:17:16 +0100
+
+iptstate (2.3.0-1) unstable; urgency=medium
+
+  * New upstream version 2.3.0
+
+ -- Michel Lind <michel@michel-slm.name>  Thu, 02 Jul 2026 10:00:00 +0100
+";
+        let out = normalize_top_stanza(
+            after_gbp,
+            "2.3.0-1~bpo13+1",
+            "trixie-backports",
+            &["gbp.conf".to_string()],
+            &["salsa-ci.yml".to_string()],
+        )
+        .unwrap();
+        let top: Vec<&str> = out.lines().take(6).collect();
+        assert_eq!(
+            top[0],
+            "iptstate (2.3.0-1~bpo13+1) trixie-backports; urgency=medium"
+        );
+        assert_eq!(top[2], "  * Rebuild for trixie-backports");
+        assert_eq!(top[3], "  * Create gbp.conf for trixie-backports");
+        assert_eq!(top[4], "  * Adjust salsa-ci.yml for trixie-backports");
+        // No trailing period anywhere in the synthesized body.
+        assert!(!out.contains("trixie-backports."));
+    }
+
+    #[test]
     fn normalize_top_stanza_lists_adjusted_files() {
         let after_gbp = "\
 damo (3.2.8-1~bpo13+1) questing; urgency=medium
@@ -529,8 +641,8 @@ damo (3.2.8-1~bpo13+1) questing; urgency=medium
  -- M <m@x>  Wed, 17 Jun 2026 18:22:19 +0100
 ";
         let adjusted = vec!["gbp.conf".to_string(), "salsa-ci.yml".to_string()];
-        let out =
-            normalize_top_stanza(after_gbp, "3.2.8-1~questing+1", "questing", &adjusted).unwrap();
+        let out = normalize_top_stanza(after_gbp, "3.2.8-1~questing+1", "questing", &[], &adjusted)
+            .unwrap();
         let top: Vec<&str> = out.lines().take(5).collect();
         assert_eq!(top[0], "damo (3.2.8-1~questing+1) questing; urgency=medium");
         assert_eq!(top[1], "");

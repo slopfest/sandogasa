@@ -123,12 +123,19 @@ pub fn set_key(text: &str, key: &str, value: &str, after: Option<&str>) -> Strin
 /// has no `debian/gbp.conf` on its Debian branch (kept clean so it can be
 /// contributed upstream). The rebuild branch still needs one so `gbp dch`
 /// / `gbp tag` operate on *this* branch: `debian-branch` points at the
-/// branch itself and `debian-tag` uses the branch's namespace format
-/// (e.g. `ubuntu/%(version)s`). Kept minimal on purpose — plumbing
-/// branches (`upstream-branch`, `pristine-tar`) are left to gbp's
-/// defaults / `~/.gbp.conf` rather than guessed here.
-pub fn new_config(debian_branch: &str, debian_tag: &str) -> String {
-    format!("[DEFAULT]\ndebian-branch = {debian_branch}\ndebian-tag = {debian_tag}\n")
+/// branch itself and `debian-tag` (when given) uses the branch's
+/// namespace format (e.g. `ubuntu/%(version)s`) — a `debian/*` branch
+/// (backports) omits it, since gbp's default `debian/%(version)s` is
+/// already right. Kept minimal on purpose — plumbing branches
+/// (`upstream-branch`, `pristine-tar`) are left to gbp's defaults /
+/// `~/.gbp.conf` rather than guessed here.
+pub fn new_config(debian_branch: &str, debian_tag: Option<&str>) -> String {
+    match debian_tag {
+        Some(tag) => {
+            format!("[DEFAULT]\ndebian-branch = {debian_branch}\ndebian-tag = {tag}\n")
+        }
+        None => format!("[DEFAULT]\ndebian-branch = {debian_branch}\n"),
+    }
 }
 
 /// ConfigParser booleans: `1/yes/true/on` are true.
@@ -246,7 +253,7 @@ upstream-branch = upstream
 
     #[test]
     fn new_config_is_minimal_and_parses_back() {
-        let text = new_config("ubuntu/resolute", "ubuntu/%(version)s");
+        let text = new_config("ubuntu/resolute", Some("ubuntu/%(version)s"));
         assert_eq!(
             text,
             "[DEFAULT]\ndebian-branch = ubuntu/resolute\ndebian-tag = ubuntu/%(version)s\n"
@@ -256,6 +263,14 @@ upstream-branch = upstream
         // Plumbing keys are intentionally left to gbp's defaults.
         assert_eq!(cfg.upstream_branch, None);
         assert_eq!(cfg.pristine_tar, None);
+    }
+
+    #[test]
+    fn new_config_without_tag_sets_branch_only() {
+        // A backports branch keeps gbp's default debian/%(version)s tag.
+        let text = new_config("debian/trixie-backports", None);
+        assert_eq!(text, "[DEFAULT]\ndebian-branch = debian/trixie-backports\n");
+        assert!(!text.contains("debian-tag"));
     }
 
     #[test]

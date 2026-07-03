@@ -75,9 +75,20 @@ timestamp in the same session.
   cleanly scope to "PPA-side changes since the last rebuild" (it either
   includes the delta or accumulates old rebuild commits). So
   `normalize_top_stanza` **synthesizes** the body: `* Rebuild for
-  <codename>` plus, when `adjust_branch_packaging` changed packaging
-  files this run, a single `* Adjust <files> for <codename>` line.
-  Discarding gbp's body also drops any `UNRELEASED` it added.
+  <codename>` plus, when `adjust_branch_packaging` touched packaging
+  files this run, a `* Create <files> for <codename>` line for files
+  created from scratch and/or a `* Adjust <files> for <codename>` line
+  for files edited (matching the per-file commit messages). Discarding
+  gbp's body also drops any `UNRELEASED` it added.
+- **`gbp dch --bpo` quirks (backports targets):** it puts a trailing
+  period on its generated `Rebuild for <dist>.` line, and its body
+  content depends on what commits exist since the branch point (a
+  gbp.conf commit shows up as a bullet; with *no* commits it may leave
+  an `UNRELEASED` distribution instead). All of that is provisional —
+  normalization synthesizes the clean period-less entry regardless. A
+  backports branch's gbp.conf only needs `debian-branch` (it lives in
+  the `debian/` namespace, so gbp's default `debian/%(version)s` tag is
+  already correct — don't set `debian-tag`).
 - **`gbp import-orig` prompts for the upstream version** when it can't
   be sure of it (e.g. a `0~`-mangled date version like `0~20260612`,
   where the upstream tag is the bare date) — `What is the upstream
@@ -156,10 +167,14 @@ in `ensure_tools`.
 ### salsa-ci
 
 salsa-ci builds against **Debian** (`RELEASE`), not Ubuntu (it doesn't
-speak Ubuntu). The new-branch adjustment sets `RELEASE: "unstable"` plus
-backports-style relaxations — but only when absent: a maintainer may pin
-`RELEASE` to an older Debian suite for an old Ubuntu LTS (better signal),
-and that is left untouched.
+speak Ubuntu), and **defaults to sid** when `RELEASE` is unset — so
+every rebuild target type needs a pin. The new-branch adjustment sets
+`RELEASE` per type: `"unstable"` plus backports-style relaxations for a
+PPA; the codename for a proposed-update; `"<codename>-backports"` for a
+backport (an officially supported RELEASE whose image also enables the
+backports apt repo) — the latter two with no relaxations. Keys are only
+added when absent: a maintainer may pin `RELEASE` to an older Debian
+suite for an old Ubuntu LTS (better signal), and that is left untouched.
 
 - **No `variables:` block? Create one.** The current upstream template is
   just an `include:` of `recipes/debian.yml` (a single line — it replaced
@@ -190,38 +205,46 @@ release) is the not-EOL set; the complement within `--all` is EOL.
   decouples the
   build suite (`--build-suite`, default `testing`) from the changelog
   distribution, and uploads to dput's default target (no `--ppa`).
-- **Rebuild target type (PPA vs proposed-update).** `rebuild`'s merge
-  flow serves two target types, chosen by `classify_target_type` from
-  the branch name: a `debian/<codename>` branch whose codename is a
-  numbered Debian release (`debian-distro-info`, consulted only for
-  `debian/` branches so plain PPA runs don't need it) is a Debian
-  **proposed-update**; everything else is an Ubuntu **PPA**. The type
+- **Rebuild target type (PPA vs proposed-update vs backports).**
+  `rebuild`'s merge flow serves three target types, chosen by
+  `classify_target_type` from the branch name: a `debian/<codename>`
+  branch whose codename is a numbered Debian release
+  (`debian-distro-info`, consulted only for `debian/` branches so plain
+  PPA runs don't need it) is a Debian **proposed-update**; a
+  `debian/<codename>-backports` branch (numbered release + suffix) is a
+  Debian **backport**; everything else is an Ubuntu **PPA**. The type
   drives three things, all still funnelled through the same merge →
   normalize → build machinery:
   - *version* — `changelog::rebuild_version` (`~<codename>+<N>`) vs
-    `changelog::proposed_version` (`~deb<N>u<M>`). Both take the base
-    from the merged changelog and bump a counter; `debian_base` strips
-    *both* suffix shapes. The proposed-update suffix uses `~` (not the
+    `changelog::proposed_version` (`~deb<N>u<M>`) vs
+    `changelog::backports_version` (`~bpo<N>+<M>`, the official
+    backports scheme). All take the base from the merged changelog and
+    bump a counter; `debian_base` strips
+    all three suffix shapes. The proposed-update suffix uses `~` (not the
     `+deb<N>u<M>` that `gbp dch --stable` emits) so it sorts *older*
     than the plain build — the stable package must never shadow
     testing/unstable on upgrade. dbranch normalizes gbp's `+` to `~`.
-  - *changelog command* — `gbp dch --bpo` (PPA) vs `gbp dch --stable`
-    (proposed-update). gbp's output is provisional either way:
+  - *changelog command* — `gbp dch --bpo -D <distribution>` (PPA and
+    backports) vs `gbp dch --stable` (proposed-update). gbp's output is
+    provisional either way:
     `normalize_top_stanza` rewrites the version and synthesizes the body
     (`* Rebuild for <codename>`), so the merge delta gbp lists is
     discarded. `--stable` needs no `-D` (it targets the stable suite
     itself) and may require a newer gbp than older Ubuntu ships.
   - *salsa-ci preset* — `adjust_salsa_ci(text, release, add_backports)`:
     PPA gets `RELEASE: "unstable"` + the backports relaxations;
-    proposed-update gets `RELEASE: "<codename>"` and **no** relaxations
-    (it's a real stable build facing the normal checks).
-  A proposed-update run is gated on a **Debian host** (`host::is_debian`
+    proposed-update gets `RELEASE: "<codename>"` and backports
+    `RELEASE: "<codename>-backports"`, both with **no** relaxations
+    (they're real Debian builds facing the normal checks). See the
+    salsa-ci landmines section for why the pin is mandatory.
+  A proposed-update or backports run is gated on a **Debian host**
+  (`host::is_debian`
   via `/etc/os-release`): `gbp dch --stable` needs a newer gbp than older
   Ubuntu ships, and the stable build chroot + `dput`-to-stable are
   Debian-only. The check hard-fails early (before any work) for a real
   run; `--dry-run` is exempt so the flow can still be shown as a tutorial
-  anywhere. This supersedes the upload-only host gate *for
-  proposed-updates* — the whole flow needs Debian, not just the upload.
+  anywhere. This supersedes the upload-only host gate *for those
+  targets* — the whole flow needs Debian, not just the upload.
   Note dbranch shows and runs `gbp dch --stable` honestly rather than
   faking a portable command, per the transparency contract. The upload
   stage goes to `dput`'s default target (the Debian archive) for a
