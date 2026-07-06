@@ -3,7 +3,7 @@
 //! HTTP client for the Forgejo / Gitea REST API (v1).
 //!
 //! Forgejo (and the Gitea it forks) expose a GitHub-ish REST API rooted
-//! at `<instance>/api/v1`. This crate covers the surface two sandogasa
+//! at `<instance>/api/v1`. This crate covers the surface the sandogasa
 //! tools need:
 //!
 //! - `sandogasa-report`'s merged-PR accounting — the pull requests the
@@ -12,6 +12,9 @@
 //!   search ([`Client::my_pull_requests`]).
 //! - `ebranch`'s releng-ticket filing — [`Client::create_issue`] and
 //!   [`Client::search_issues`] (the latter to avoid filing duplicates).
+//! - `fesco-chair`'s agenda queries — [`Client::repo_issues`] (a repo's
+//!   issues by state and label names), [`Client::issue`], and
+//!   [`Client::issue_comments`].
 //!
 //! The instance host is always passed in full, so it works against any
 //! deployment — codeberg.org, a Fedora Forgejo, a self-hosted Gitea.
@@ -175,6 +178,20 @@ impl Issue {
     pub fn closed_at(&self) -> Option<&str> {
         self.closed_at.as_deref()
     }
+}
+
+/// An issue comment (`/repos/{owner}/{repo}/issues/{n}/comments`) —
+/// only the fields downstream tools consume.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IssueComment {
+    #[serde(default)]
+    pub body: String,
+    /// Comment author's login.
+    #[serde(default)]
+    pub user: Option<UserRef>,
+    /// RFC 3339 timestamp the comment was posted at.
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 /// A git ref (branch or commit) as embedded in a pull request's
@@ -371,6 +388,110 @@ impl Client {
             return Err(format!("Forgejo create issue failed: {status}: {text}").into());
         }
         Ok(resp.json()?)
+    }
+
+    /// List issues (not pulls) on `owner/repo`, filtered by `state`
+    /// (`open` / `closed` / `all`) and label names — an issue must
+    /// carry *every* listed label to match (Forgejo ANDs the
+    /// comma-joined `labels` filter). Paginates through all pages.
+    pub fn repo_issues(
+        &self,
+        owner: &str,
+        repo: &str,
+        state: &str,
+        labels: &[&str],
+    ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/v1/repos/{owner}/{repo}/issues", self.base_url);
+        let limit = PAGE_LIMIT.to_string();
+        let labels = labels.join(",");
+        let mut out: Vec<Issue> = Vec::new();
+        let mut page = 1u32;
+        loop {
+            let page_str = page.to_string();
+            let mut query: Vec<(&str, &str)> = vec![
+                ("type", "issues"),
+                ("state", state),
+                ("limit", &limit),
+                ("page", &page_str),
+            ];
+            if !labels.is_empty() {
+                query.push(("labels", &labels));
+            }
+            let resp = self.http.get(&url).query(&query).send()?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text()?;
+                return Err(format!("Forgejo issue list failed: {status}: {text}").into());
+            }
+            let batch: Vec<Issue> = resp.json()?;
+            let n = batch.len() as u32;
+            out.extend(batch);
+            if n < PAGE_LIMIT {
+                break;
+            }
+            page += 1;
+        }
+        Ok(out)
+    }
+
+    /// Fetch a single issue by number.
+    pub fn issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Issue, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/v1/repos/{owner}/{repo}/issues/{number}",
+            self.base_url
+        );
+        let resp = self.http.get(&url).send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text()?;
+            return Err(format!("Forgejo issue {owner}/{repo}#{number}: {status}: {text}").into());
+        }
+        Ok(resp.json()?)
+    }
+
+    /// Fetch an issue's comments, oldest first, paginated.
+    pub fn issue_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<IssueComment>, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/v1/repos/{owner}/{repo}/issues/{number}/comments",
+            self.base_url
+        );
+        let limit = PAGE_LIMIT.to_string();
+        let mut out: Vec<IssueComment> = Vec::new();
+        let mut page = 1u32;
+        loop {
+            let page_str = page.to_string();
+            let resp = self
+                .http
+                .get(&url)
+                .query(&[("limit", limit.as_str()), ("page", &page_str)])
+                .send()?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text()?;
+                return Err(format!(
+                    "Forgejo comments for {owner}/{repo}#{number}: {status}: {text}"
+                )
+                .into());
+            }
+            let batch: Vec<IssueComment> = resp.json()?;
+            let n = batch.len() as u32;
+            out.extend(batch);
+            if n < PAGE_LIMIT {
+                break;
+            }
+            page += 1;
+        }
+        Ok(out)
     }
 
     /// Search issues (not pulls) on `owner/repo` matching `query`, across
@@ -625,6 +746,119 @@ mod tests {
         mock.assert();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].number, 7);
+    }
+
+    #[test]
+    fn repo_issues_filters_by_state_and_labels() {
+        let mut server = mockito::Server::new();
+        let body = r#"[
+            {"number": 3620, "title": "Council Engineering Rep", "state": "open",
+             "html_url": "https://forge.example.org/fesco/tickets/issues/3620"},
+            {"number": 3623, "title": "Forgejo distgit migration", "state": "open",
+             "html_url": "https://forge.example.org/fesco/tickets/issues/3623"}
+        ]"#;
+        let mock = server
+            .mock("GET", "/api/v1/repos/fesco/tickets/issues")
+            .match_header("authorization", "token tok")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("type".into(), "issues".into()),
+                mockito::Matcher::UrlEncoded("state".into(), "open".into()),
+                mockito::Matcher::UrlEncoded("labels".into(), "meeting".into()),
+            ]))
+            .with_status(200)
+            .with_body(body)
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let issues = client
+            .repo_issues("fesco", "tickets", "open", &["meeting"])
+            .unwrap();
+        mock.assert();
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[0].number, 3620);
+        assert_eq!(issues[1].title, "Forgejo distgit migration");
+    }
+
+    #[test]
+    fn repo_issues_omits_empty_labels_filter() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v1/repos/fesco/tickets/issues")
+            // Exact query string — proves no `labels` param is sent
+            // when none was requested.
+            .match_query(mockito::Matcher::Exact(
+                "type=issues&state=all&limit=50&page=1".into(),
+            ))
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let issues = client.repo_issues("fesco", "tickets", "all", &[]).unwrap();
+        mock.assert();
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn issue_fetches_by_number_and_surfaces_errors() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v1/repos/fesco/tickets/issues/3620")
+            .match_header("authorization", "token tok")
+            .with_status(200)
+            .with_body(
+                r#"{"number": 3620, "title": "Council Engineering Rep", "state": "open",
+                    "html_url": "https://forge.example.org/fesco/tickets/issues/3620"}"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let issue = client.issue("fesco", "tickets", 3620).unwrap();
+        mock.assert();
+        assert_eq!(issue.number, 3620);
+
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v1/repos/fesco/tickets/issues/9999")
+            .with_status(404)
+            .with_body("not found")
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let err = client
+            .issue("fesco", "tickets", 9999)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("fesco/tickets#9999"), "{err}");
+    }
+
+    #[test]
+    fn issue_comments_fetches_bodies_in_order() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v1/repos/fesco/tickets/issues/3616/comments")
+            .match_header("authorization", "token tok")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("limit".into(), "50".into()),
+                mockito::Matcher::UrlEncoded("page".into(), "1".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"[
+                    {"body": "+1", "user": {"login": "zbyszek"},
+                     "created_at": "2026-06-13T13:26:49Z"},
+                    {"body": "After a week: APPROVED (+3, 0, 0)\n",
+                     "user": {"login": "zbyszek"},
+                     "created_at": "2026-06-21T10:18:51Z"}
+                ]"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let comments = client.issue_comments("fesco", "tickets", 3616).unwrap();
+        mock.assert();
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].body, "+1");
+        assert!(
+            comments[1].body.contains("APPROVED"),
+            "{}",
+            comments[1].body
+        );
     }
 
     #[test]

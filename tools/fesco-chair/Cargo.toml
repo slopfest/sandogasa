@@ -1,0 +1,21 @@
+[package]
+name = "fesco-chair"
+description = "FESCo meeting chair helper — agenda email, day-of script, summary email"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+sandogasa-cli = { workspace = true }
+sandogasa-config = { workspace = true }
+sandogasa-forgejo = { workspace = true }
+sandogasa-meetbot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

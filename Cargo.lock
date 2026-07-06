@@ -553,6 +553,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fesco-chair"
+version = "0.15.3"
+dependencies = [
+ "chrono",
+ "clap",
+ "reqwest",
+ "sandogasa-cli",
+ "sandogasa-config",
+ "sandogasa-forgejo",
+ "sandogasa-meetbot",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

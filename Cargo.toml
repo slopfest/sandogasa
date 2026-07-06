@@ -29,6 +29,7 @@ members = [
     "tools/ebranch",
     "tools/fedora-cve-triage",
     "tools/fedora-review-digest",
+    "tools/fesco-chair",
     "tools/hs-intake",
     "tools/hs-meetings",
     "tools/koji-diff",

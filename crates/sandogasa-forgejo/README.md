@@ -3,8 +3,9 @@
 A small Rust client for the Forgejo / Gitea REST API (`/api/v1`),
 scoped to what sandogasa tools need today: the merged pull requests
 the token owner authored (for `sandogasa-report`'s activity reports),
-issue create/search (for `ebranch`'s releng-ticket filing), and token
-validation.
+issue create/search (for `ebranch`'s releng-ticket filing), per-repo
+issue listing by state and label names plus single-issue fetch (for
+`fesco-chair`'s agenda queries), and token validation.
 
 Works against any instance — codeberg.org, a Fedora Forgejo, or a
 self-hosted Gitea — by taking the instance root URL in full. Designed
@@ -26,6 +27,8 @@ Forgejo tokens are scoped by category (read/write). Per operation:
 - `validate_token` — `read:user` (it calls `/api/v1/user`).
 - `create_issue` / `search_issues` — `write:issue` (create) /
   `read:issue` (search), plus `read:repository`.
+- `repo_issues` / `issue` / `issue_comments` — `read:issue` +
+  `read:repository`.
 
 ## Usage
 

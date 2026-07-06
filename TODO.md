@@ -1,5 +1,13 @@
 # TODO
 
+## fesco-chair
+
+- (2026-07-06) the `script` subcommand emits the
+  `!forge issue fesco tickets NNNN` workaround because the `!fesco NNNN`
+  alias is broken; switch back to `!fesco NNNN` once
+  https://github.com/fedora-infra/maubot-fedora/pull/154 is merged AND
+  deployed to the Fedora maubot
+
 ## ebranch
 
 Done (2026-07-06):

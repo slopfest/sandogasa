@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### New fesco-chair tool
+
+A helper for [FESCo meeting chair
+duties](https://fedoraproject.org/wiki/FESCo_meeting_process) — it
+prepares text to paste, it never sends or posts:
+
+- `agenda` — the announcement email for devel@, built from the FESCo
+  Forgejo tracker: open `pending announcement` tickets under "Discussed
+  and Voted in the Ticket" with their decision parsed from the
+  concluding vote comment (`APPROVED/REJECTED (+X, Y, Z)`), `meeting`
+  tickets split into Followups vs New business by scanning recent
+  meetbot minutes for each ticket's `TOPIC: #NNNN` line, overridable
+  per ticket with `--voted`/`--followup`/`--new`
+- `script` — the day-of checklist (reminder command, quorum, 15-minute
+  topic rule) plus the meetbot command script
+  (`!startmeeting`/`!topic`/`!forge issue`/`!agreed`/…; the broken
+  `!fesco` alias is avoided until maubot-fedora#154 deploys), pipeable
+  to a file
+- `summary` — the post-meeting "Summary/Minutes" reply email: artefact
+  links plus the full plain-text minutes, discovered on meetbot by date
+
+Requires a Forgejo API token — store it with `fesco-chair config`
+(validated against the instance, saved with restricted permissions),
+or set `FORGEJO_TOKEN_FORGE_FEDORAPROJECT_ORG` / `FORGEJO_TOKEN` (the
+sandogasa-report convention, which overrides the stored token). The
+chair workflow will grow ticket updates later. sandogasa-forgejo gains
+`Client::repo_issues` (list issues by state + label names, paginated)
+and `Client::issue` (fetch one issue) to support it (additive).
+
 ### ebranch: check-update `--submit` — pre-flighted Bodhi submission
 
 `check-update <side-tag> --submit` runs the reverse-dependency check
