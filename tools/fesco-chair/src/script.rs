@@ -93,8 +93,9 @@ pub fn render_script(date: NaiveDate, discussion: &[&Ticket]) -> String {
     );
     for t in discussion {
         // The maubot lookup takes owner + repo, so docs items work
-        // too: `!forge issue fesco docs NNNN` (PRs share the issue
-        // number space).
+        // too (`!forge issue fesco docs NNNN`); pull requests have
+        // their own subcommand (`!forge pr`).
+        let kind = if t.pull { "pr" } else { "issue" };
         let repo_args = match &t.repo {
             Some(slug) => slug.replace('/', " "),
             None => "fesco tickets".to_string(),
@@ -102,7 +103,7 @@ pub fn render_script(date: NaiveDate, discussion: &[&Ticket]) -> String {
         let _ = writeln!(
             o,
             "!topic {} {}\n\
-             !forge issue {repo_args} {}\n\
+             !forge {kind} {repo_args} {}\n\
              !agreed DECISION (+X, Y, -Z)",
             t.label(),
             t.title,
@@ -132,6 +133,7 @@ mod tests {
             url: String::new(),
             decision: None,
             repo: None,
+            pull: false,
         };
         let script = render_script(date, &[&followup]);
         let expected = "\
@@ -159,20 +161,25 @@ mod tests {
             url: "https://forge.fedoraproject.org/fesco/docs/pulls/28".to_string(),
             decision: None,
             repo: Some("fesco/docs".to_string()),
+            pull: true,
         };
         let script = render_script(date, &[&docs]);
+        // A docs PR uses the pr subcommand against its own repo.
         assert!(
             script.contains(
                 "!topic fesco/docs#28 Clarify updates policy\n\
-                 !forge issue fesco docs 28\n\
+                 !forge pr fesco docs 28\n\
                  !agreed DECISION (+X, Y, -Z)"
             ),
             "{script}"
         );
-        assert!(
-            !script.contains("!forge issue fesco tickets 28"),
-            "{script}"
-        );
+        assert!(!script.contains("!forge issue"), "{script}");
+
+        // A docs *issue* keeps the issue subcommand.
+        let mut issue = docs.clone();
+        issue.pull = false;
+        let script = render_script(date, &[&issue]);
+        assert!(script.contains("!forge issue fesco docs 28"), "{script}");
     }
 
     #[test]

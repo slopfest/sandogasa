@@ -55,6 +55,10 @@ pub struct Ticket {
     /// `fesco/docs`); `None` for tracker tickets.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// Whether this is a pull request (drives the `!forge pr` vs
+    /// `!forge issue` lookup in the meeting script).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub pull: bool,
 }
 
 impl Ticket {
@@ -86,6 +90,7 @@ impl From<sandogasa_forgejo::Issue> for Ticket {
             url,
             decision: None,
             repo: None,
+            pull: false,
         }
     }
 }
@@ -259,13 +264,17 @@ pub fn fetch_docs_items(
     client: &sandogasa_forgejo::Client,
 ) -> Result<Vec<Ticket>, Box<dyn std::error::Error>> {
     let mut items: Vec<Ticket> = Vec::new();
-    for batch in [
-        client.repo_issues(TRACKER_OWNER, DOCS_REPO, "open", &[])?,
-        client.repo_pulls(TRACKER_OWNER, DOCS_REPO, "open")?,
+    for (pull, batch) in [
+        (
+            false,
+            client.repo_issues(TRACKER_OWNER, DOCS_REPO, "open", &[])?,
+        ),
+        (true, client.repo_pulls(TRACKER_OWNER, DOCS_REPO, "open")?),
     ] {
         for issue in batch {
             let mut ticket = Ticket::from(issue);
             ticket.repo = Some(format!("{TRACKER_OWNER}/{DOCS_REPO}"));
+            ticket.pull = pull;
             items.push(ticket);
         }
     }
@@ -386,6 +395,7 @@ mod tests {
             url: format!("{FORGE_URL}/fesco/tickets/issues/{number}"),
             decision: None,
             repo: None,
+            pull: false,
         }
     }
 
@@ -450,6 +460,7 @@ Meeting summary
             url: format!("{FORGE_URL}/fesco/docs/pulls/{number}"),
             decision: None,
             repo: Some("fesco/docs".to_string()),
+            pull: true,
         }
     }
 

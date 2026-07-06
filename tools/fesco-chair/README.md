@@ -106,10 +106,12 @@ Prints the day-of checklist to stderr (the spam-filter-safe
 `!group members fesco` reminder for #devel:fedoraproject.org, quorum,
 the 15-minute topic rule) and the meetbot command script to stdout:
 `!startmeeting FESCO (date)` through per-ticket
-`!topic`/`!forge issue`/`!agreed` blocks (Followups first, then New
-business; fesco/docs items look up their own repo,
-`!forge issue fesco docs NNNN`) to `!endmeeting`. Copy/paste lines
-as the meeting progresses. Accepts the same flags as `agenda`.
+`!topic`/`!forge`/`!agreed` blocks (Followups first, then New
+business) to `!endmeeting`. Lookups match the item: tracker tickets
+use `!forge issue fesco tickets NNNN`, fesco/docs issues
+`!forge issue fesco docs NNNN`, and fesco/docs pull requests
+`!forge pr fesco docs NNNN`. Copy/paste lines as the meeting
+progresses. Accepts the same flags as `agenda`.
 
 > The ticket lookup is emitted as `!forge issue fesco tickets NNNN`
 > for now: the `!fesco NNNN` alias is broken until

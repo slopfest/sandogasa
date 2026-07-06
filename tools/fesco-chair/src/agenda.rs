@@ -346,6 +346,7 @@ mod tests {
             url: format!("https://forge.fedoraproject.org/fesco/tickets/issues/{number}"),
             decision: None,
             repo: None,
+            pull: false,
         }
     }
 
