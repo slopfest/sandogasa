@@ -5,8 +5,8 @@ use std::time::Duration;
 use reqwest::Client;
 
 use crate::models::{
-    BodhiRelease, BugFeedbackItem, Comment, CommentsResponse, ReleasesResponse,
-    SingleCommentResponse, SingleUpdateResponse, Update, UpdatesResponse,
+    BodhiRelease, BugFeedbackItem, Comment, CommentsResponse, NewUpdateFromTag, NewUpdateResponse,
+    ReleasesResponse, SingleCommentResponse, SingleUpdateResponse, Update, UpdatesResponse,
 };
 
 const BODHI_API_BASE: &str = "https://bodhi.fedoraproject.org";
@@ -353,6 +353,62 @@ impl BodhiClient {
             return Err(format!("posting comment failed (HTTP {status}): {body}").into());
         }
         let resp: SingleCommentResponse = resp.json().await?;
+        Ok(resp)
+    }
+
+    /// Create an update from a Koji side tag (`POST /updates/` with
+    /// `from_tag`), the API behind `bodhi updates new --from-tag`.
+    /// Requires a bearer token ([`Self::with_token`]) whose account
+    /// owns the side tag.
+    ///
+    /// The body is form-encoded like [`Self::comment`]; `bugs` is
+    /// sent as one comma-joined value (Bodhi's schema splits it
+    /// server-side, matching the web UI). Non-2xx responses are
+    /// surfaced with the response body, which carries Bodhi's
+    /// validation errors (e.g. unsigned builds, or a tag that isn't
+    /// a side tag).
+    pub async fn new_update_from_tag(
+        &self,
+        req: &NewUpdateFromTag,
+    ) -> Result<NewUpdateResponse, Box<dyn std::error::Error>> {
+        self.login().await?;
+        let csrf_token = self.csrf().await?;
+        let bool_str = |b: bool| if b { "true" } else { "false" }.to_string();
+        let mut form: Vec<(String, String)> = vec![
+            ("from_tag".to_string(), req.from_tag.clone()),
+            ("notes".to_string(), req.notes.clone()),
+            ("type".to_string(), req.update_type.clone()),
+            ("severity".to_string(), req.severity.clone()),
+            ("close_bugs".to_string(), bool_str(req.close_bugs)),
+            ("autokarma".to_string(), bool_str(req.autokarma)),
+            ("stable_karma".to_string(), req.stable_karma.to_string()),
+            ("unstable_karma".to_string(), req.unstable_karma.to_string()),
+            ("csrf_token".to_string(), csrf_token),
+        ];
+        if !req.bugs.is_empty() {
+            let bugs = req
+                .bugs
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            form.push(("bugs".to_string(), bugs));
+        }
+        // Not auto-retried: a transport error after the server
+        // processed the request would double-create the update.
+        let url = format!("{}/updates/", self.base_url);
+        let resp = self
+            .auth(self.client.post(&url))
+            .header(reqwest::header::ACCEPT, "application/json")
+            .form(&form)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("creating update failed (HTTP {status}): {body}").into());
+        }
+        let resp: NewUpdateResponse = resp.json().await?;
         Ok(resp)
     }
 }
@@ -832,5 +888,154 @@ mod tests {
 
         let comments = client.comments_for_user("nobody", 1).await.unwrap();
         assert!(comments.is_empty());
+    }
+
+    fn from_tag_request() -> crate::models::NewUpdateFromTag {
+        crate::models::NewUpdateFromTag {
+            from_tag: "epel9-build-side-133287".to_string(),
+            notes: "Update uutils to 0.2".to_string(),
+            update_type: "enhancement".to_string(),
+            severity: "unspecified".to_string(),
+            bugs: vec![100, 200],
+            close_bugs: true,
+            autokarma: true,
+            stable_karma: 3,
+            unstable_karma: -3,
+        }
+    }
+
+    #[tokio::test]
+    async fn new_update_from_tag_posts_form_and_parses_single_shape() {
+        use wiremock::matchers::{body_string_contains, header, path};
+
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri())
+            .with_token("tok-123".to_string())
+            .unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/oidc/login-token"))
+            .and(header("authorization", "Bearer tok-123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/csrf"))
+            .and(header("authorization", "Bearer tok-123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "csrf_token": "csrf-abc"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/updates/"))
+            .and(header("authorization", "Bearer tok-123"))
+            .and(header("content-type", "application/x-www-form-urlencoded"))
+            .and(body_string_contains("from_tag=epel9-build-side-133287"))
+            .and(body_string_contains("notes=Update+uutils+to+0.2"))
+            .and(body_string_contains("type=enhancement"))
+            .and(body_string_contains("severity=unspecified"))
+            .and(body_string_contains("close_bugs=true"))
+            .and(body_string_contains("autokarma=true"))
+            .and(body_string_contains("stable_karma=3"))
+            .and(body_string_contains("unstable_karma=-3"))
+            // Comma-joined (URL-encoded), split server-side.
+            .and(body_string_contains("bugs=100%2C200"))
+            .and(body_string_contains("csrf_token=csrf-abc"))
+            // The from_tag single-update response: update fields at
+            // the top level, caveats alongside.
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "alias": "FEDORA-EPEL-2026-f9eaa11e18",
+                "status": "pending",
+                "from_tag": "epel9-build-side-133287",
+                "builds": [{"nvr": "rust-uucore-0.2.0-1.el9"}],
+                "caveats": [
+                    {"description": "Your update is currently being composed."}
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let resp = client
+            .new_update_from_tag(&from_tag_request())
+            .await
+            .unwrap();
+        assert_eq!(resp.aliases(), ["FEDORA-EPEL-2026-f9eaa11e18"]);
+        assert_eq!(resp.caveats.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn new_update_from_tag_parses_multi_update_shape_and_errors() {
+        use wiremock::matchers::path;
+
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri())
+            .with_token("tok-123".to_string())
+            .unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/oidc/login-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/csrf"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "csrf_token": "csrf-abc"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/updates/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": [
+                    {"alias": "FEDORA-2026-aaa", "status": "pending"},
+                    {"alias": "FEDORA-2026-bbb", "status": "pending"}
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let resp = client
+            .new_update_from_tag(&from_tag_request())
+            .await
+            .unwrap();
+        assert_eq!(resp.aliases(), ["FEDORA-2026-aaa", "FEDORA-2026-bbb"]);
+        assert!(resp.caveats.is_empty());
+
+        // A validation failure surfaces Bodhi's error body.
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri())
+            .with_token("tok-123".to_string())
+            .unwrap();
+        Mock::given(method("GET"))
+            .and(path("/oidc/login-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/csrf"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "csrf_token": "csrf-abc"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/updates/"))
+            .respond_with(ResponseTemplate::new(400).set_body_string(
+                r#"{"errors": [{"description": "Cannot find any tag with name: not-a-tag"}]}"#,
+            ))
+            .mount(&server)
+            .await;
+        let err = client
+            .new_update_from_tag(&from_tag_request())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("HTTP 400"), "{err}");
+        assert!(err.contains("Cannot find any tag"), "{err}");
     }
 }

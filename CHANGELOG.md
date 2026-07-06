@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### ebranch: check-update `--submit` — pre-flighted Bodhi submission
+
+`check-update <side-tag> --submit` runs the reverse-dependency check
+first and, only when it passes, creates the Bodhi update from the side
+tag (the API behind `bodhi updates new --from-tag`) — so a subpackage
+update that is accidentally missing a package is caught before anything
+is published. Update notes come from `--notes <text>` inline or
+`--notes-file <path>` for longer descriptions; `--type`, `--severity`,
+`--bug <ID,...>`, and `--stable-karma`/`--unstable-karma`/
+`--disable-autokarma` mirror the bodhi CLI. A non-passing check goes
+through the same keep/explain/remove curation as `--give-karma` and
+then asks whether to submit anyway (default no); non-interactive runs
+and `--yes` never submit a failing update. The submission plan
+(packages, type, bugs, thresholds, notes preview) is confirmed before
+posting, and notes/session/flag validation happens before the analysis
+so mistakes fail in seconds. After submitting, the check report is
+posted on the new update as a review comment via the `--give-karma`
+flow — per-bug feedback records whether each listed bug is addressed
+by the delivered versions (Bodhi zeroes the submitter's overall karma;
+per-bug feedback still counts), and `--comment` adds reviewer notes.
+Bug titles Bodhi hasn't cached yet are backfilled straight from
+Bugzilla — Bodhi syncs titles asynchronously, so a just-created
+update reports `title: null`, which used to blind the per-bug
+auto-vote and show `<no title>` prompts (this also benefits
+`--give-karma` on very fresh updates). Authentication reuses the
+bodhi CLI's OIDC session, like `--give-karma`.
+
+sandogasa-bodhi gains the API this rides on: `NewUpdateFromTag` /
+`NewUpdateResponse` models and `BodhiClient::new_update_from_tag`
+(additive).
+
 ### dbranch: Debusine uploads (`--debusine`)
 
 The `upload` stage of `rebuild` and `update` can now publish to a

@@ -14,7 +14,8 @@ requests (`branch-request`), analyzes crates.io dependencies
 (`check-pkg-reviews`), and checks whether a Koji side tag or
 Bodhi update would break reverse dependencies (`check-update`) —
 optionally casting Bodhi karma with per-bug feedback based on the
-result (`--give-karma`).
+result (`--give-karma`), or submitting a passing side tag to Bodhi
+as a new update (`--submit`).
 
 Shells out to [fedrq](https://src.fedoraproject.org/rpms/fedrq) for
 repository queries.
@@ -265,6 +266,46 @@ are refreshed automatically.
 ```sh
 ebranch check-update FEDORA-2026-94cb04410a --give-karma \
     --comment "no broken reverse deps; works for me"
+```
+
+For a side tag that hasn't been submitted yet, `--submit` turns
+check-update into a pre-flighted `bodhi updates new --from-tag`: the
+check runs first, and only a passing result is submitted — catching a
+subpackage update that is accidentally missing a package *before*
+anything is published. Update notes are required, either inline with
+`--notes <text>` or from a file with `--notes-file <path>` for longer
+descriptions (the two are mutually exclusive). Optional fields mirror
+the bodhi CLI: `--type` (bugfix/enhancement/security/newpackage,
+default bugfix), `--severity` (required for `--type security`),
+`--bug <ID,...>` (repeated or CSV; associated bugs are closed when the
+update goes stable), and `--stable-karma`/`--unstable-karma`/
+`--disable-autokarma` for the autopush thresholds.
+
+The pass gate reuses the karma derivation: a clean `+1` check submits
+after showing the plan (packages, type, bugs, thresholds, notes
+preview) for confirmation. A non-passing check first goes through the
+same interactive keep/explain/remove curation as `--give-karma`; if
+blocking findings remain you are asked whether to submit anyway
+(default **no**). Non-interactive runs and `--yes` never submit a
+failing update. Notes, the bodhi session, and cheap flag validation
+(e.g. `--type security` without a severity) are all checked *before*
+the analysis, so mistakes fail in seconds rather than after minutes of
+fedrq queries. Like voting, submission reuses the `bodhi` CLI's login
+session and prints the new update's URL when Bodhi accepts it.
+
+After submitting, the check report is posted on the new update as a
+review comment via the same flow as `--give-karma`: per-bug feedback
+records whether each listed bug is addressed by the delivered versions
+(Bodhi zeroes the submitter's *overall* karma on their own update, but
+per-bug feedback still counts), `--comment <TEXT>` adds reviewer notes
+near the top, and the comment plan is confirmed before posting (`--yes`
+skips the prompts). So the Bodhi page ends up with both the update and
+its review checklist in one pass.
+
+```sh
+ebranch check-update epel9-build-side-134436 -b al9 -r @epel \
+    --submit --type enhancement --bug 2482250 \
+    --notes "Update uutils to 0.2 and rebuild dependent crates"
 ```
 
 ### Detect dependency cycles

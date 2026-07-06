@@ -12,6 +12,7 @@ mod dag;
 mod karma;
 mod resolve;
 mod review_deps;
+mod submit;
 
 use resolve::{
     FedrqResolver, ResolveOptions, resolve_closure_with_options, resolve_with_installability,
@@ -305,18 +306,113 @@ shown for confirmation before posting."
     /// Reviewer notes added near the top of the report.
     #[arg(
         long,
-        requires = "give_karma",
         long_help = "\
 Reviewer notes added as a section near the top
-of the posted report. Prompted for
-interactively when omitted; --yes skips the
-prompt."
+of the posted report (with --give-karma, or the
+review comment --submit posts after creating
+the update). Prompted for interactively when
+omitted; --yes skips the prompt."
     )]
     comment: Option<String>,
 
-    /// Skip voting confirmation; non-update bugs get 0.
-    #[arg(short = 'y', long, requires = "give_karma")]
+    /// Skip vote/submit confirmations; non-update bugs get 0.
+    #[arg(short = 'y', long)]
     yes: bool,
+
+    /// Submit the side tag to Bodhi if the check passes.
+    #[arg(
+        long,
+        conflicts_with_all = ["give_karma", "json"],
+        long_help = "\
+Submit the side tag as a Bodhi update once the
+check passes: creates the update from the tag
+(the API behind `bodhi updates new --from-tag`)
+after showing the plan — packages, type, bugs,
+karma thresholds, notes — for confirmation, so
+an accidentally missing package is caught
+before anything is published. Requires a Koji
+side tag as input and update notes via --notes
+or --notes-file. Reuses the bodhi CLI's login
+session, starting an interactive login first if
+there is none.
+
+After submitting, the check report is posted on
+the new update as a review comment with per-bug
+feedback (whether each listed bug is addressed
+by the delivered versions) — the --give-karma
+flow; Bodhi zeroes the submitter's own overall
+karma, but per-bug feedback still counts.
+
+When the check does NOT pass cleanly you can
+curate the findings (keep/explain/remove) like
+--give-karma; if findings are kept you are
+asked whether to submit anyway (default no).
+Non-interactive runs and --yes never submit a
+failing update."
+    )]
+    submit: bool,
+
+    /// Update notes/description (inline).
+    #[arg(long, requires = "submit", conflicts_with = "notes_file")]
+    notes: Option<String>,
+
+    /// Read the update notes from a file.
+    #[arg(long, value_name = "PATH", requires = "submit")]
+    notes_file: Option<std::path::PathBuf>,
+
+    /// Type: bugfix, enhancement, security, newpackage.
+    #[arg(
+        long = "type",
+        value_name = "TYPE",
+        default_value = "bugfix",
+        requires = "submit",
+        hide_possible_values = true,
+        value_parser = ["bugfix", "enhancement", "security", "newpackage"]
+    )]
+    update_type: String,
+
+    /// Severity: low, medium, high, urgent.
+    #[arg(
+        long,
+        value_name = "LEVEL",
+        default_value = "unspecified",
+        requires = "submit",
+        hide_possible_values = true,
+        hide_default_value = true,
+        long_help = "\
+Update severity: unspecified (default), low,
+medium, high, or urgent. Bodhi requires a real
+severity for --type security.",
+        value_parser = ["unspecified", "low", "medium", "high", "urgent"]
+    )]
+    severity: String,
+
+    /// Bug ID(s) to associate and close (repeated or CSV).
+    #[arg(
+        long = "bug",
+        value_name = "ID",
+        value_delimiter = ',',
+        requires = "submit"
+    )]
+    bug: Vec<u64>,
+
+    /// Karma needed to push stable (default 3).
+    #[arg(long, value_name = "N", default_value = "3", requires = "submit")]
+    stable_karma: i32,
+
+    /// Negative karma that unpushes (default -3).
+    #[arg(
+        long,
+        value_name = "N",
+        default_value = "-3",
+        allow_hyphen_values = true,
+        requires = "submit"
+    )]
+    unstable_karma: i32,
+
+    /// Don't auto-push at the karma thresholds.
+    #[arg(long, requires = "submit")]
+    disable_autokarma: bool,
 }
 
 #[derive(clap::Args, Clone)]
@@ -733,19 +829,55 @@ fn main() -> ExitCode {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
-        // Voting needs a Bodhi update; fail fast on side-tag input.
-        let vote_alias = match check_update::detect_input_type(&a.input) {
-            check_update::InputKind::BodhiAlias(alias) => Some(alias),
-            check_update::InputKind::SideTag(_) => None,
+        // Voting needs a Bodhi update; submitting needs a side tag
+        // (an alias means the update already exists). Fail fast on
+        // the wrong input kind.
+        let (vote_alias, side_tag) = match check_update::detect_input_type(&a.input) {
+            check_update::InputKind::BodhiAlias(alias) => (Some(alias), None),
+            check_update::InputKind::SideTag(tag) => (None, Some(tag)),
         };
         if a.give_karma && vote_alias.is_none() {
             eprintln!("error: --give-karma requires a Bodhi update alias or URL as input");
             return ExitCode::FAILURE;
         }
+        if a.submit && side_tag.is_none() {
+            eprintln!(
+                "error: --submit requires a Koji side tag as input; this is a Bodhi \
+                 update, so it has already been submitted"
+            );
+            return ExitCode::FAILURE;
+        }
+        if a.yes && !a.give_karma && !a.submit {
+            eprintln!("error: --yes requires --give-karma or --submit");
+            return ExitCode::FAILURE;
+        }
+        if a.comment.is_some() && !a.give_karma && !a.submit {
+            eprintln!("error: --comment requires --give-karma or --submit");
+            return ExitCode::FAILURE;
+        }
+        // Bodhi rejects security updates without a real severity;
+        // catch it before the analysis rather than at POST time.
+        if a.submit && a.update_type == "security" && a.severity == "unspecified" {
+            eprintln!("error: --type security requires --severity (low/medium/high/urgent)");
+            return ExitCode::FAILURE;
+        }
+        // Notes are required for submission; resolve (and read the
+        // file) up front so a typo'd path fails in seconds.
+        let submit_notes = if a.submit {
+            match submit::resolve_notes(a.notes.as_deref(), a.notes_file.as_deref()) {
+                Ok(n) => Some(n),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        } else {
+            None
+        };
         // Validate the bodhi session up front (logging in if
         // needed) so a missing session doesn't surface only after
         // the analysis has run for minutes.
-        if a.give_karma
+        if (a.give_karma || a.submit)
             && let Err(e) = karma::ensure_session()
         {
             eprintln!("error: {e}");
@@ -779,38 +911,38 @@ fn main() -> ExitCode {
                     check_update::print_report(&report, a.detailed);
                 }
                 let mut report = report;
-                if a.give_karma
-                    && let Some(alias) = &vote_alias
-                {
-                    // Let the reviewer curate the blocking findings
-                    // (keep/explain/remove) before karma is derived and
-                    // the comment is posted. Skipped under --yes or
-                    // non-interactively, where every finding is kept
-                    // (today's behavior). The curated report drives both
-                    // the karma and the posted comment.
-                    let mut addressed = Vec::new();
-                    if !a.yes && opts.interactive {
-                        let findings = check_update::blocking_findings(&report);
-                        if !findings.is_empty() {
-                            eprintln!("── address findings ──");
-                            eprintln!(
-                                "(k)eep counts against the update / \
-                                 (e)xplain accepts it / (r)emove drops it\n"
-                            );
-                            match sandogasa_review::resolve_interactive(findings, |f| f.summary()) {
-                                Ok(decisions) => {
-                                    let (curated, expl) =
-                                        check_update::apply_resolutions(report, decisions);
-                                    report = curated;
-                                    addressed = expl;
-                                }
-                                Err(e) => {
-                                    eprintln!("error: {e}");
-                                    return ExitCode::FAILURE;
-                                }
+                // Let the reviewer curate the blocking findings
+                // (keep/explain/remove) before karma is derived / the
+                // pass gate is applied. Skipped under --yes or
+                // non-interactively, where every finding is kept
+                // (today's behavior). The curated report drives the
+                // karma, the posted comment, and the submit gate.
+                let mut addressed = Vec::new();
+                if (a.give_karma || a.submit) && !a.yes && opts.interactive {
+                    let findings = check_update::blocking_findings(&report);
+                    if !findings.is_empty() {
+                        eprintln!("── address findings ──");
+                        eprintln!(
+                            "(k)eep counts against the update / \
+                             (e)xplain accepts it / (r)emove drops it\n"
+                        );
+                        match sandogasa_review::resolve_interactive(findings, |f| f.summary()) {
+                            Ok(decisions) => {
+                                let (curated, expl) =
+                                    check_update::apply_resolutions(report, decisions);
+                                report = curated;
+                                addressed = expl;
+                            }
+                            Err(e) => {
+                                eprintln!("error: {e}");
+                                return ExitCode::FAILURE;
                             }
                         }
                     }
+                }
+                if a.give_karma
+                    && let Some(alias) = &vote_alias
+                {
                     let (karma, reason) = karma::derive_karma(&report);
                     // The posted comment is the full Markdown report plus
                     // an "addressed by the reviewer" section; --comment
@@ -823,6 +955,73 @@ fn main() -> ExitCode {
                     {
                         eprintln!("error: {e}");
                         return ExitCode::FAILURE;
+                    }
+                }
+                if a.submit
+                    && let Some(tag) = &side_tag
+                {
+                    // The pass gate reuses the karma derivation: +1 is
+                    // a clean pass; 0 (incomplete/stale analysis) or -1
+                    // (breakage) needs an explicit interactive override
+                    // — never auto-submitted, not even under --yes.
+                    let (karma, reason) = karma::derive_karma(&report);
+                    if karma < 1 {
+                        eprintln!("check did not pass cleanly: {reason}");
+                        if a.yes || !opts.interactive {
+                            eprintln!(
+                                "not submitting — fix the update, or rerun \
+                                 interactively to override"
+                            );
+                            return ExitCode::FAILURE;
+                        }
+                        match submit::confirm_default_no("submit anyway?") {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                eprintln!("aborted: update not submitted");
+                                return ExitCode::FAILURE;
+                            }
+                            Err(e) => {
+                                eprintln!("error: {e}");
+                                return ExitCode::FAILURE;
+                            }
+                        }
+                    }
+                    let sopts = submit::SubmitOptions {
+                        notes: submit_notes.clone().expect("resolved before the analysis"),
+                        update_type: a.update_type.clone(),
+                        severity: a.severity.clone(),
+                        bugs: a.bug.clone(),
+                        autokarma: !a.disable_autokarma,
+                        stable_karma: a.stable_karma,
+                        unstable_karma: a.unstable_karma,
+                        assume_yes: a.yes,
+                    };
+                    let aliases = match submit::run(tag, &report.updated_packages, &sopts) {
+                        Ok(aliases) => aliases,
+                        Err(e) => {
+                            eprintln!("error: {e}");
+                            return ExitCode::FAILURE;
+                        }
+                    };
+                    // Post the check report as a comment on the new
+                    // update — the same review-checklist flow as
+                    // --give-karma, including per-bug feedback on
+                    // whether the listed bugs are addressed. Bodhi
+                    // zeroes the submitter's overall karma on their
+                    // own update (karma::run detects that); the
+                    // per-bug feedback still counts.
+                    let mut report_md = check_update::render_report(&report, a.detailed);
+                    report_md.push_str(&check_update::render_addressed(&addressed));
+                    for alias in &aliases {
+                        if let Err(e) =
+                            karma::run(alias, karma, &reason, &report_md, a.comment.clone(), a.yes)
+                        {
+                            eprintln!(
+                                "error: the update was submitted, but posting the review \
+                                 comment failed: {e}"
+                            );
+                            return ExitCode::FAILURE;
+                        }
                     }
                 }
                 let has_broken = report.reverse_deps.values().any(|r| r.status == "broken");

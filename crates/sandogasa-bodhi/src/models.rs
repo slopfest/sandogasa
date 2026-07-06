@@ -130,6 +130,60 @@ pub struct SingleCommentResponse {
     pub caveats: Vec<Caveat>,
 }
 
+/// Fields for creating an update from a Koji side tag
+/// (`POST /updates/` with `from_tag` — the API behind
+/// `bodhi updates new --from-tag`).
+#[derive(Debug, Clone)]
+pub struct NewUpdateFromTag {
+    /// The Koji side tag holding the builds.
+    pub from_tag: String,
+    /// Update notes/description (markdown; shown to users).
+    pub notes: String,
+    /// `bugfix` | `enhancement` | `security` | `newpackage`.
+    pub update_type: String,
+    /// `unspecified` | `low` | `medium` | `high` | `urgent`.
+    /// Bodhi requires a real severity for `security` updates.
+    pub severity: String,
+    /// Bug IDs to associate with the update.
+    pub bugs: Vec<u64>,
+    /// Close the associated bugs when the update goes stable.
+    pub close_bugs: bool,
+    /// Push automatically at the karma thresholds.
+    pub autokarma: bool,
+    /// Karma needed to push stable (Bodhi default 3).
+    pub stable_karma: i32,
+    /// Negative karma at which the update is unpushed (default -3).
+    pub unstable_karma: i32,
+}
+
+/// Response from creating an update (`POST /updates/`). Bodhi puts
+/// the update's fields at the *top level* for the single-update case
+/// (which `from_tag` always is) and returns an `updates` list when a
+/// request created several; caveats ride along in both shapes.
+#[derive(Debug, Deserialize)]
+pub struct NewUpdateResponse {
+    /// The new update's alias, in the single-update response shape.
+    #[serde(default)]
+    pub alias: Option<String>,
+    /// The created updates, in the multi-update response shape.
+    #[serde(default)]
+    pub updates: Vec<Update>,
+    /// Server-side adjustment notes.
+    #[serde(default)]
+    pub caveats: Vec<Caveat>,
+}
+
+impl NewUpdateResponse {
+    /// Aliases of every update the request created, whichever
+    /// response shape Bodhi used.
+    pub fn aliases(&self) -> Vec<&str> {
+        match &self.alias {
+            Some(a) => vec![a.as_str()],
+            None => self.updates.iter().map(|u| u.alias.as_str()).collect(),
+        }
+    }
+}
+
 /// A Bodhi release entry from the releases API.
 #[derive(Debug, Deserialize)]
 pub struct BodhiRelease {

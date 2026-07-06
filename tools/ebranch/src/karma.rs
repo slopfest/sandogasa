@@ -331,6 +331,42 @@ async fn session_username_with_retry(http: &reqwest::Client) -> Option<String> {
     None
 }
 
+/// Fill in bug titles Bodhi hasn't cached yet, straight from
+/// Bugzilla (batched). Bodhi populates titles from Bugzilla
+/// *asynchronously*, so an update fetched right after creation —
+/// the `--submit` flow — lists its bugs with `title: null`, which
+/// blinds the release-monitoring auto-vote and degrades the manual
+/// prompt to `<no title>`. Best-effort: on a fetch failure the
+/// affected bugs just keep their missing titles (with a warning).
+async fn backfill_bug_titles(
+    bz: &sandogasa_bugzilla::BzClient,
+    bugs: &mut [sandogasa_bodhi::models::BodhiBug],
+) {
+    let missing: Vec<u64> = bugs
+        .iter()
+        .filter(|b| b.title.is_none())
+        .map(|b| b.bug_id)
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    match bz.bugs(&missing).await {
+        Ok(fetched) => {
+            let by_id: std::collections::HashMap<u64, String> =
+                fetched.into_iter().map(|b| (b.id, b.summary)).collect();
+            for bug in bugs.iter_mut() {
+                if bug.title.is_none() {
+                    bug.title = by_id.get(&bug.bug_id).cloned();
+                }
+            }
+        }
+        Err(e) => eprintln!(
+            "warning: could not fetch bug titles from Bugzilla ({e}); \
+             bugs without a Bodhi-cached title need manual feedback"
+        ),
+    }
+}
+
 /// Cast karma on a Bodhi update with per-bug feedback. `karma`
 /// and `reason` come from [`derive_karma`] on the check report;
 /// `report_md` is the rendered report (the posted comment body)
@@ -359,10 +395,18 @@ async fn run_async(
     assume_yes: bool,
 ) -> Result<(), String> {
     let client = BodhiClient::new();
-    let update = client
+    let mut update = client
         .update_by_alias(alias)
         .await
         .map_err(|e| format!("cannot fetch update {alias}: {e}"))?;
+    // Bodhi's bug tracker is Red Hat Bugzilla (the same instance
+    // the manual prompt links to); public summaries need no auth.
+    backfill_bug_titles(
+        &sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com"),
+        &mut update.bugs,
+    )
+    .await;
+    let update = update;
 
     // Bodhi zeroes overall karma from the submitter on their own
     // updates (per-bug feedback still counts), so don't pretend
@@ -506,9 +550,9 @@ async fn run_async(
 /// than a latency cap (reqwest's default client has no timeout).
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// Build the karma flow's HTTP client with the standard request
-/// timeout. Panics only where `Client::new()` would too.
-fn http_client() -> reqwest::Client {
+/// Build the karma/submit flows' HTTP client with the standard
+/// request timeout. Panics only where `Client::new()` would too.
+pub(crate) fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .build()
@@ -701,5 +745,83 @@ mod tests {
         assert_eq!(fmt_karma(1), "+1");
         assert_eq!(fmt_karma(0), "0");
         assert_eq!(fmt_karma(-1), "-1");
+    }
+
+    fn bodhi_bug(bug_id: u64, title: Option<&str>) -> sandogasa_bodhi::models::BodhiBug {
+        sandogasa_bodhi::models::BodhiBug {
+            bug_id,
+            title: title.map(String::from),
+        }
+    }
+
+    #[tokio::test]
+    async fn backfill_bug_titles_fills_missing_only() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // Only the title-less bug is requested; the cached one is not.
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("id", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{
+                    "id": 100,
+                    "summary": "tree-sitter-fsharp-0.3.1 is available",
+                    "status": "NEW",
+                    "resolution": "",
+                    "product": "Fedora",
+                    "component": ["rust-tree-sitter-fsharp"],
+                    "severity": "unspecified",
+                    "priority": "unspecified",
+                    "assigned_to": "nobody",
+                    "creator": "upstream-release-monitoring",
+                    "creation_time": "2026-07-01T10:00:00Z",
+                    "last_change_time": "2026-07-01T10:00:00Z"
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
+        let mut bugs = vec![bodhi_bug(100, None), bodhi_bug(200, Some("cached title"))];
+        backfill_bug_titles(&bz, &mut bugs).await;
+        assert_eq!(
+            bugs[0].title.as_deref(),
+            Some("tree-sitter-fsharp-0.3.1 is available")
+        );
+        assert_eq!(bugs[1].title.as_deref(), Some("cached title"));
+    }
+
+    #[tokio::test]
+    async fn backfill_bug_titles_survives_fetch_failure_and_skips_when_cached() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Fetch failure: titles stay missing, no panic.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
+        let mut bugs = vec![bodhi_bug(100, None)];
+        backfill_bug_titles(&bz, &mut bugs).await;
+        assert!(bugs[0].title.is_none());
+
+        // All titles cached: no request at all (expect(0)).
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
+        let mut bugs = vec![bodhi_bug(200, Some("cached"))];
+        backfill_bug_titles(&bz, &mut bugs).await;
+        assert_eq!(bugs[0].title.as_deref(), Some("cached"));
     }
 }

@@ -2,8 +2,10 @@
 
 ## ebranch
 
-- (2026-07-06) have a combined `check-update` + publish update command to
-  make sure subpackage updates are not accidentally missing a package
+Done (2026-07-06):
+- check-update `--submit`: check a side tag pre-emptively and submit it
+  to Bodhi only when the check passes (notes via `--notes`/`--notes-file`,
+  plus `--type`/`--severity`/`--bug`/karma-threshold flags)
 
 ## dbranch
 

@@ -8,6 +8,10 @@ used to query Fedora and EPEL updates and releases.
 - Fetch updates for a package on a given release, with status filtering
 - Paginate through all matching updates automatically
 - Query active Fedora and EPEL releases (filtering out Flatpak, Container, ELN, and EPEL-Next)
+- Authenticated writes reusing the bodhi CLI's OIDC session (`auth`):
+  post comments with karma and per-bug feedback, and create updates
+  from a Koji side tag (`new_update_from_tag`, the API behind
+  `bodhi updates new --from-tag`)
 
 ## Usage
 
