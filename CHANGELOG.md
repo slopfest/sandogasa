@@ -14,7 +14,10 @@ prepares text to paste, it never sends or posts:
   concluding vote comment (`APPROVED/REJECTED (+X, Y, Z)`), `meeting`
   tickets split into Followups vs New business by scanning recent
   meetbot minutes for each ticket's `TOPIC: #NNNN` line, overridable
-  per ticket with `--voted`/`--followup`/`--new`
+  per ticket with `--voted`/`--followup`/`--new`. Open fesco/docs
+  issues and PRs are offered onto the agenda (prompted per item on a
+  terminal, `--docs <N,...>` non-interactively; unselected items show
+  up in `--json` as `docs_open`)
 - `script` — the day-of checklist (reminder command, quorum, 15-minute
   topic rule) plus the meetbot command script
   (`!startmeeting`/`!topic`/`!forge issue`/`!agreed`/…; the broken

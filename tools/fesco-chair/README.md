@@ -55,6 +55,7 @@ fesco-chair agenda                     # announcement for the coming Tuesday
 fesco-chair agenda --date 2026-07-14   # explicit meeting date
 fesco-chair agenda --followup 3623     # force #3623 into Followups
 fesco-chair agenda --new 3630 --voted 3610   # force other sections
+fesco-chair agenda --docs 28           # add fesco/docs#28 to the agenda
 fesco-chair agenda --history 20        # scan more past meetings
 fesco-chair agenda --json              # machine-readable
 ```
@@ -73,10 +74,17 @@ agenda's query clean. The
 (repeated or CSV) and win over both the labels and the minutes-based
 inference; a number carrying neither agenda label is fetched
 individually so it can still be placed. If meetbot is unreachable the
-tool warns and lists every meeting ticket under New business. A
+tool warns and lists every meeting ticket under New business.
+
+Open [fesco/docs](https://forge.fedoraproject.org/fesco/docs) issues
+and pull requests (the wiki's pre-meeting step 3) are offered onto
+the agenda: on a terminal each one is prompted for individually
+(default no), `--docs <N,...>` adds them unprompted (issues and PRs
+share one number space), and selected items land under New business
+as `fesco/docs#NN` entries. In `--json` mode nothing is prompted —
+unselected items are reported in a `docs_open` field instead. A
 reminder to comment on each ticket ("This issue will be discussed at
-the next meeting on …") and to check fesco/docs issues/PRs is printed
-to stderr.
+the next meeting on …") is printed to stderr.
 
 ### `config`
 
@@ -99,8 +107,9 @@ Prints the day-of checklist to stderr (the spam-filter-safe
 the 15-minute topic rule) and the meetbot command script to stdout:
 `!startmeeting FESCO (date)` through per-ticket
 `!topic`/`!forge issue`/`!agreed` blocks (Followups first, then New
-business) to `!endmeeting`. Copy/paste lines as the meeting
-progresses. Accepts the same flags as `agenda`.
+business; fesco/docs items look up their own repo,
+`!forge issue fesco docs NNNN`) to `!endmeeting`. Copy/paste lines
+as the meeting progresses. Accepts the same flags as `agenda`.
 
 > The ticket lookup is emitted as `!forge issue fesco tickets NNNN`
 > for now: the `!fesco NNNN` alias is broken until

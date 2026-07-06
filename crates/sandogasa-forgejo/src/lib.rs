@@ -401,6 +401,32 @@ impl Client {
         state: &str,
         labels: &[&str],
     ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
+        self.repo_items("issues", owner, repo, state, labels)
+    }
+
+    /// List pull requests on `owner/repo` by `state`, in the same
+    /// issue shape as [`Self::repo_issues`] (the per-repo issues
+    /// endpoint with `type=pulls`; issues and PRs share one number
+    /// space).
+    pub fn repo_pulls(
+        &self,
+        owner: &str,
+        repo: &str,
+        state: &str,
+    ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
+        self.repo_items("pulls", owner, repo, state, &[])
+    }
+
+    /// Paginate `/repos/{owner}/{repo}/issues` for `kind` (`issues` /
+    /// `pulls`).
+    fn repo_items(
+        &self,
+        kind: &str,
+        owner: &str,
+        repo: &str,
+        state: &str,
+        labels: &[&str],
+    ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
         let url = format!("{}/api/v1/repos/{owner}/{repo}/issues", self.base_url);
         let limit = PAGE_LIMIT.to_string();
         let labels = labels.join(",");
@@ -409,7 +435,7 @@ impl Client {
         loop {
             let page_str = page.to_string();
             let mut query: Vec<(&str, &str)> = vec![
-                ("type", "issues"),
+                ("type", kind),
                 ("state", state),
                 ("limit", &limit),
                 ("page", &page_str),
@@ -421,7 +447,7 @@ impl Client {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text()?;
-                return Err(format!("Forgejo issue list failed: {status}: {text}").into());
+                return Err(format!("Forgejo {kind} list failed: {status}: {text}").into());
             }
             let batch: Vec<Issue> = resp.json()?;
             let n = batch.len() as u32;
@@ -826,6 +852,28 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("fesco/tickets#9999"), "{err}");
+    }
+
+    #[test]
+    fn repo_pulls_queries_type_pulls() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v1/repos/fesco/docs/issues")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("type".into(), "pulls".into()),
+                mockito::Matcher::UrlEncoded("state".into(), "open".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"[{"number": 28, "title": "Clarify updates policy", "state": "open",
+                     "html_url": "https://forge.example.org/fesco/docs/pulls/28"}]"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let pulls = client.repo_pulls("fesco", "docs", "open").unwrap();
+        mock.assert();
+        assert_eq!(pulls.len(), 1);
+        assert_eq!(pulls[0].number, 28);
     }
 
     #[test]

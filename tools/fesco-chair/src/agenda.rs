@@ -34,6 +34,10 @@ pub struct AgendaArgs {
     #[arg(long = "new", value_name = "N", value_delimiter = ',')]
     pub new_business: Vec<u64>,
 
+    /// Add fesco/docs issue/PR(s) to the agenda (repeat/CSV).
+    #[arg(long, value_name = "N", value_delimiter = ',')]
+    pub docs: Vec<u64>,
+
     /// Past meetings scanned for followups (default 12).
     #[arg(
         long,
@@ -58,11 +62,14 @@ struct AgendaJson<'a> {
     to: &'static str,
     subject: String,
     sections: &'a Sections,
+    /// Open fesco/docs items not selected for the agenda (candidates
+    /// for `--docs`).
+    docs_open: &'a [sources::Ticket],
     body: String,
 }
 
 pub fn run(args: &AgendaArgs) -> ExitCode {
-    let (date, sections) = match assemble(args) {
+    let (date, sections, docs_open) = match assemble(args) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
@@ -76,6 +83,7 @@ pub fn run(args: &AgendaArgs) -> ExitCode {
             to: sources::ANNOUNCE_TO,
             subject: subject(date),
             sections: &sections,
+            docs_open: &docs_open,
             body,
         };
         println!("{}", serde_json::to_string_pretty(&out).expect("serialize"));
@@ -87,8 +95,8 @@ pub fn run(args: &AgendaArgs) -> ExitCode {
         );
         eprintln!(
             "\nreminder: comment \"This issue will be discussed at the next \
-             meeting on {date}\" on each meeting ticket, and check \
-             fesco/docs issues and PRs (see the wiki's pre-meeting list)\n\
+             meeting on {date}\" on each meeting ticket (see the wiki's \
+             pre-meeting list)\n\
              after sending: on each announced ticket, comment \
              \"Announced: <archive link>\", untag `pending announcement`, \
              and close it with the matching status"
@@ -102,9 +110,13 @@ pub fn subject(date: NaiveDate) -> String {
     format!("Schedule for Tuesday's FESCo Meeting ({date})")
 }
 
-/// Fetch the ticket pools and split them into sections. Shared with
-/// the `script` subcommand, which runs the same classification.
-pub fn assemble(args: &AgendaArgs) -> Result<(NaiveDate, Sections), Box<dyn std::error::Error>> {
+/// Fetch the ticket pools and split them into sections; also returns
+/// the open fesco/docs items *not* put on the agenda (surfaced so the
+/// chair can reconsider). Shared with the `script` subcommand, which
+/// runs the same classification.
+pub fn assemble(
+    args: &AgendaArgs,
+) -> Result<(NaiveDate, Sections, Vec<sources::Ticket>), Box<dyn std::error::Error>> {
     let today = chrono::Local::now().date_naive();
     let date = args.date.unwrap_or_else(|| sources::next_tuesday(today));
 
@@ -189,6 +201,42 @@ pub fn assemble(args: &AgendaArgs) -> Result<(NaiveDate, Sections), Box<dyn std:
         &args.new_business,
     );
 
+    // Offer the open fesco/docs issues and PRs onto the agenda (the
+    // wiki's pre-meeting step 3): --docs selections go straight in,
+    // the rest are prompted for one by one on a terminal (default
+    // no). Selected items append to New business, after the tracker
+    // tickets. Docs being unreachable only costs this offer.
+    let mut docs_open = Vec::new();
+    match sources::fetch_docs_items(&client) {
+        Ok(items) => {
+            let (selected, rest) = sources::partition_forced(items, &args.docs);
+            let mut selected = selected;
+            let interactive = !args.json && std::io::IsTerminal::is_terminal(&std::io::stdin());
+            for item in rest {
+                let take = interactive
+                    && sources::confirm_default_no(&format!(
+                        "add {} \u{201c}{}\u{201d} to the agenda?",
+                        item.label(),
+                        item.title
+                    ))?;
+                if take {
+                    selected.push(item);
+                } else {
+                    docs_open.push(item);
+                }
+            }
+            if !docs_open.is_empty() && !interactive {
+                eprintln!(
+                    "note: {} open fesco/docs item(s) not on the agenda; \
+                     add with --docs <N,...>",
+                    docs_open.len()
+                );
+            }
+            sections.new_business.extend(selected);
+        }
+        Err(e) => eprintln!("warning: could not fetch fesco/docs items ({e})"),
+    }
+
     // Parse each announced ticket's decision from its comments (the
     // vote concludes with e.g. "After a week: APPROVED (+3, 0, 0)"
     // right before the ticket is tagged). Best-effort: a fetch or
@@ -217,7 +265,7 @@ pub fn assemble(args: &AgendaArgs) -> Result<(NaiveDate, Sections), Box<dyn std:
         }
     }
 
-    Ok((date, sections))
+    Ok((date, sections, docs_open))
 }
 
 /// Render the announcement body (everything below the Subject line),
@@ -250,16 +298,16 @@ pub fn render_body(date: NaiveDate, sections: &Sections) -> String {
             let decision = t.decision.as_deref().unwrap_or("DECISION (+X, Y, -Z)");
             // Entries lead with #NNNN like the other sections (the
             // wiki template omits it here, but consistency wins).
-            let _ = writeln!(o, "\n#{} {}\n{}\n{decision}", t.number, t.title, t.url);
+            let _ = writeln!(o, "\n{} {}\n{}\n{decision}", t.label(), t.title, t.url);
         }
     }
     let _ = writeln!(o, "\n= Followups =");
     for t in &sections.followups {
-        let _ = writeln!(o, "\n#{} {}\n{}", t.number, t.title, t.url);
+        let _ = writeln!(o, "\n{} {}\n{}", t.label(), t.title, t.url);
     }
     let _ = writeln!(o, "\n= New business =");
     for t in &sections.new_business {
-        let _ = writeln!(o, "\n#{} {}\n{}", t.number, t.title, t.url);
+        let _ = writeln!(o, "\n{} {}\n{}", t.label(), t.title, t.url);
     }
     let _ = writeln!(
         o,
@@ -297,7 +345,28 @@ mod tests {
             title: title.to_string(),
             url: format!("https://forge.fedoraproject.org/fesco/tickets/issues/{number}"),
             decision: None,
+            repo: None,
         }
+    }
+
+    #[test]
+    fn render_body_docs_item_carries_repo_prefix() {
+        let mut docs = ticket(28, "Clarify updates policy");
+        docs.repo = Some("fesco/docs".to_string());
+        docs.url = "https://forge.fedoraproject.org/fesco/docs/pulls/28".to_string();
+        let sections = Sections {
+            voted: vec![],
+            followups: vec![],
+            new_business: vec![docs],
+        };
+        let body = render_body(date(), &sections);
+        assert!(
+            body.contains(
+                "fesco/docs#28 Clarify updates policy\n\
+                 https://forge.fedoraproject.org/fesco/docs/pulls/28"
+            ),
+            "{body}"
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ struct ScriptJson<'a> {
 }
 
 pub fn run(args: &ScriptArgs) -> ExitCode {
-    let (date, sections) = match crate::agenda::assemble(&args.agenda) {
+    let (date, sections, _docs_open) = match crate::agenda::assemble(&args.agenda) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
@@ -92,12 +92,21 @@ pub fn render_script(date: NaiveDate, discussion: &[&Ticket]) -> String {
          !topic Init Process"
     );
     for t in discussion {
+        // The maubot lookup takes owner + repo, so docs items work
+        // too: `!forge issue fesco docs NNNN` (PRs share the issue
+        // number space).
+        let repo_args = match &t.repo {
+            Some(slug) => slug.replace('/', " "),
+            None => "fesco tickets".to_string(),
+        };
         let _ = writeln!(
             o,
-            "!topic #{} {}\n\
-             !forge issue fesco tickets {}\n\
+            "!topic {} {}\n\
+             !forge issue {repo_args} {}\n\
              !agreed DECISION (+X, Y, -Z)",
-            t.number, t.title, t.number
+            t.label(),
+            t.title,
+            t.number
         );
     }
     let _ = writeln!(
@@ -122,6 +131,7 @@ mod tests {
             title: "Planning for the Forgejo distgit migration".to_string(),
             url: String::new(),
             decision: None,
+            repo: None,
         };
         let script = render_script(date, &[&followup]);
         let expected = "\
@@ -138,6 +148,31 @@ mod tests {
 !endmeeting
 ";
         assert_eq!(script, expected);
+    }
+
+    #[test]
+    fn render_script_docs_item_looks_up_docs_repo() {
+        let date = NaiveDate::from_ymd_opt(2026, 7, 7).unwrap();
+        let docs = Ticket {
+            number: 28,
+            title: "Clarify updates policy".to_string(),
+            url: "https://forge.fedoraproject.org/fesco/docs/pulls/28".to_string(),
+            decision: None,
+            repo: Some("fesco/docs".to_string()),
+        };
+        let script = render_script(date, &[&docs]);
+        assert!(
+            script.contains(
+                "!topic fesco/docs#28 Clarify updates policy\n\
+                 !forge issue fesco docs 28\n\
+                 !agreed DECISION (+X, Y, -Z)"
+            ),
+            "{script}"
+        );
+        assert!(
+            !script.contains("!forge issue fesco tickets 28"),
+            "{script}"
+        );
     }
 
     #[test]

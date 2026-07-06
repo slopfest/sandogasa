@@ -23,6 +23,9 @@ pub const FORGE_URL: &str = "https://forge.fedoraproject.org";
 pub const TRACKER_OWNER: &str = "fesco";
 /// Tracker repository name.
 pub const TRACKER_REPO: &str = "tickets";
+/// The FESCo docs repository (issues and PRs are offered onto the
+/// agenda — the wiki's pre-meeting step 3).
+pub const DOCS_REPO: &str = "docs";
 /// Label marking a ticket for the meeting agenda.
 pub const MEETING_LABEL: &str = "meeting";
 /// Label on tickets approved/rejected by an in-ticket vote, announced
@@ -48,6 +51,21 @@ pub struct Ticket {
     /// placeholder.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decision: Option<String>,
+    /// The repo slug for items outside the main tracker (e.g.
+    /// `fesco/docs`); `None` for tracker tickets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+
+impl Ticket {
+    /// The number as displayed in agenda entries and topics: `#3623`
+    /// for tracker tickets, `fesco/docs#28` for docs items.
+    pub fn label(&self) -> String {
+        match &self.repo {
+            Some(repo) => format!("{repo}#{}", self.number),
+            None => format!("#{}", self.number),
+        }
+    }
 }
 
 impl From<sandogasa_forgejo::Issue> for Ticket {
@@ -67,6 +85,7 @@ impl From<sandogasa_forgejo::Issue> for Ticket {
             title: issue.title,
             url,
             decision: None,
+            repo: None,
         }
     }
 }
@@ -213,6 +232,48 @@ pub fn extract_ticket_numbers(minutes: &str) -> BTreeSet<u64> {
     out
 }
 
+/// Split the open docs items into those forced onto the agenda by
+/// `--docs` and the rest (offered interactively).
+pub fn partition_forced(items: Vec<Ticket>, forced: &[u64]) -> (Vec<Ticket>, Vec<Ticket>) {
+    items.into_iter().partition(|t| forced.contains(&t.number))
+}
+
+/// Ask a yes/no question on stderr, defaulting to **no**.
+pub fn confirm_default_no(question: &str) -> Result<bool, String> {
+    use std::io::{BufRead, Write};
+    eprint!("{question} [y/N]: ");
+    std::io::stderr().flush().map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
+    let answer = line.trim();
+    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
+}
+
+/// Open fesco/docs issues and pull requests, as agenda candidates
+/// (`repo` set so they render as `fesco/docs#NN`), sorted by number
+/// (issues and PRs share one number space on Forgejo).
+pub fn fetch_docs_items(
+    client: &sandogasa_forgejo::Client,
+) -> Result<Vec<Ticket>, Box<dyn std::error::Error>> {
+    let mut items: Vec<Ticket> = Vec::new();
+    for batch in [
+        client.repo_issues(TRACKER_OWNER, DOCS_REPO, "open", &[])?,
+        client.repo_pulls(TRACKER_OWNER, DOCS_REPO, "open")?,
+    ] {
+        for issue in batch {
+            let mut ticket = Ticket::from(issue);
+            ticket.repo = Some(format!("{TRACKER_OWNER}/{DOCS_REPO}"));
+            items.push(ticket);
+        }
+    }
+    items.sort_by_key(|t| t.number);
+    items.dedup_by_key(|t| t.number);
+    Ok(items)
+}
+
 /// Forgejo API token lookup: the env vars first (matching
 /// sandogasa-report's convention — instance-specific, then generic),
 /// then the token stored by `fesco-chair config`. A token is required —
@@ -324,6 +385,7 @@ mod tests {
             title: format!("Ticket {number}"),
             url: format!("{FORGE_URL}/fesco/tickets/issues/{number}"),
             decision: None,
+            repo: None,
         }
     }
 
@@ -379,6 +441,32 @@ Meeting summary
 ";
         let numbers = extract_ticket_numbers(minutes);
         assert_eq!(numbers, BTreeSet::from([3620, 3623]));
+    }
+
+    fn docs_item(number: u64) -> Ticket {
+        Ticket {
+            number,
+            title: format!("Docs item {number}"),
+            url: format!("{FORGE_URL}/fesco/docs/pulls/{number}"),
+            decision: None,
+            repo: Some("fesco/docs".to_string()),
+        }
+    }
+
+    #[test]
+    fn label_distinguishes_tracker_and_docs() {
+        assert_eq!(ticket(3623).label(), "#3623");
+        assert_eq!(docs_item(28).label(), "fesco/docs#28");
+    }
+
+    #[test]
+    fn partition_forced_splits_by_number() {
+        let (selected, rest) = partition_forced(vec![docs_item(28), docs_item(31)], &[31]);
+        assert_eq!(selected, vec![docs_item(31)]);
+        assert_eq!(rest, vec![docs_item(28)]);
+        let (selected, rest) = partition_forced(vec![docs_item(28)], &[]);
+        assert!(selected.is_empty());
+        assert_eq!(rest.len(), 1);
     }
 
     #[test]
