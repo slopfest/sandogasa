@@ -1,5 +1,10 @@
 # TODO
 
+## ebranch
+
+- (2026-07-06) have a combined `check-update` + publish update command to
+  make sure subpackage updates are not accidentally missing a package
+
 ## dbranch
 
 - (2026-07-03, nice-to-have) the merge phase of proposed-updates and
