@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### dbranch: Debusine uploads (`--debusine`)
+
+The `upload` stage of `rebuild` and `update` can now publish to a
+[Debusine personal repository](https://wiki.debian.org/DebusineDebianNet#Repositories)
+instead of a dput archive: `--debusine <name>` (the `r-<name>-*`
+workspace owner on debusine.debian.net) uploads with
+`dput -O debusine_workspace=r-<name>-<srcpkg>
+-O debusine_workflow=publish-to-<suite>-<srcpkg> debusine.debian.net`,
+where the suite is the target's base release — a trixie backport
+publishes to `trixie` (the official pattern), `update` to `sid`.
+Mutually exclusive with `--ppa`/`--upload-target`; rejected for Ubuntu
+PPA targets and bulk runs (Debusine hosts Debian suites only). The
+debusine-client dput profile and the `debusine setup` token are
+pre-flighted before any expensive work.
+
 ### dbranch: Debian backports targets
 
 `rebuild` now recognizes `debian/<codename>-backports` branches (e.g.

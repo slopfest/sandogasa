@@ -302,6 +302,43 @@ pub fn dput_argv(target: Option<&str>, changes: &str) -> Vec<String> {
     }
 }
 
+/// The dput host for Debusine uploads. Its dput-ng profile ships in
+/// debusine-client (`/usr/share/dput-ng/profiles/debusine.debian.net.json`).
+pub const DEBUSINE_HOST: &str = "debusine.debian.net";
+
+/// A Debusine personal-repository workspace: `r-<name>-<project>`
+/// (wiki.debian.org/DebusineDebianNet#Repositories). `name` is the
+/// repository owner's Debusine name, `project` the source package.
+pub fn debusine_workspace(name: &str, project: &str) -> String {
+    format!("r-{name}-{project}")
+}
+
+/// A personal repository's publish workflow:
+/// `publish-to-<suite>-<project>`. The suite is the *base* release the
+/// repository serves — `sid` for unstable, `trixie` for a trixie
+/// backport (the wiki's `~bpo13+1` example publishes to `trixie`, not
+/// `trixie-backports`).
+pub fn debusine_workflow(suite: &str, project: &str) -> String {
+    format!("publish-to-{suite}-{project}")
+}
+
+/// `dput -O debusine_workspace=<ws> -O debusine_workflow=<wf>
+/// debusine.debian.net <changes>` — upload to a Debusine personal
+/// repository. The `-O` overrides replace the profile's defaults (the
+/// shared `developers` workspace and its distribution-derived
+/// `upload-to-*` workflow) with the personal repository's names.
+pub fn dput_debusine_argv(workspace: &str, workflow: &str, changes: &str) -> Vec<String> {
+    argv(&[
+        "dput",
+        "-O",
+        &format!("debusine_workspace={workspace}"),
+        "-O",
+        &format!("debusine_workflow={workflow}"),
+        DEBUSINE_HOST,
+        changes,
+    ])
+}
+
 /// `curl -sfG <launchpad-archive> --data-urlencode …` — query the
 /// Launchpad API for published source packages named `source` in
 /// `ppa:<owner>/<ppa>`. `-f` makes a missing PPA (HTTP 404) a non-zero
@@ -551,6 +588,40 @@ mod tests {
         assert_eq!(
             dput_argv(None, "../damo_1_source.changes"),
             ["dput", "../damo_1_source.changes"]
+        );
+    }
+
+    #[test]
+    fn debusine_names_and_dput_overrides() {
+        // The wiki's personal-repository pattern, with the user's real
+        // iptstate upload as the reference command.
+        assert_eq!(
+            debusine_workspace("michelin", "iptstate"),
+            "r-michelin-iptstate"
+        );
+        assert_eq!(
+            debusine_workflow("sid", "iptstate"),
+            "publish-to-sid-iptstate"
+        );
+        assert_eq!(
+            debusine_workflow("trixie", "iptstate"),
+            "publish-to-trixie-iptstate"
+        );
+        assert_eq!(
+            dput_debusine_argv(
+                "r-michelin-iptstate",
+                "publish-to-sid-iptstate",
+                "../iptstate_2.3.0-1_source.changes"
+            ),
+            [
+                "dput",
+                "-O",
+                "debusine_workspace=r-michelin-iptstate",
+                "-O",
+                "debusine_workflow=publish-to-sid-iptstate",
+                "debusine.debian.net",
+                "../iptstate_2.3.0-1_source.changes"
+            ]
         );
     }
 

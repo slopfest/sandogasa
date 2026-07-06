@@ -151,6 +151,18 @@ pub fn parse_update_stages(tokens: &[String]) -> Result<Stages, String> {
     Ok(s)
 }
 
+/// Where the upload stage sends the source package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UploadDest {
+    /// `dput [<target>]` — a PPA / dput host, or dput's configured
+    /// default (the Debian archive) when `None`.
+    Dput(Option<String>),
+    /// A Debusine personal repository on debusine.debian.net:
+    /// workspace `r-<name>-<pkg>`, workflow `publish-to-<suite>-<pkg>`
+    /// (the source package name is filled in at upload time).
+    Debusine { name: String, suite: String },
+}
+
 /// Inputs for a `rebuild` run.
 pub struct Options {
     /// Explicit target branches; empty means all existing PPA
@@ -164,6 +176,10 @@ pub struct Options {
     /// dput target for the upload stage (e.g. `ppa:user/name` or a
     /// dput host); `None` when not uploading.
     pub upload_target: Option<String>,
+    /// Upload to a Debusine personal repository instead: the owner
+    /// name (the `r-<name>-*` workspace prefix on debusine.debian.net).
+    /// Mutually exclusive with `upload_target`; Debian targets only.
+    pub debusine: Option<String>,
     /// Explicit merge source branch; `None` uses the checked-out
     /// branch. Lets dbranch run without first checking out the Debian
     /// branch.
@@ -194,6 +210,10 @@ pub struct UpdateOptions {
     /// dput target; `None` uploads to dput's default (the Debian
     /// archive), `Some("mentors")` etc. for a vetted upload.
     pub upload_target: Option<String>,
+    /// Upload to a Debusine personal repository instead: the owner
+    /// name (the `r-<name>-*` workspace prefix on debusine.debian.net).
+    /// The Debian branch targets unstable, so the suite is `sid`.
+    pub debusine: Option<String>,
     /// Build stage: whether to refresh the pbuilder base chroot first.
     pub chroot_refresh: ChrootRefresh,
     /// Changelog urgency for the new-upstream entry (default `medium`,
@@ -208,6 +228,14 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
     // check it before resolving (and prompting for) the bulk set.
     // Explicit branches are checked per-target below, where a
     // proposed-update (which uploads to the dput default) is exempt.
+    if opts.branches.is_empty() && opts.stages.upload && opts.debusine.is_some() {
+        return Err(
+            "--debusine can't be used with a bulk run: bulk selects Ubuntu \
+                    PPA branches, and debusine.debian.net hosts Debian suites only; \
+                    pass --ppa <name> or --upload-target <host>"
+                .into(),
+        );
+    }
     if opts.branches.is_empty() && opts.stages.upload && opts.upload_target.is_none() {
         return Err(
             "the upload stage needs a target: pass --ppa <name> or --upload-target <host>".into(),
@@ -241,6 +269,9 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             opts.stages.tag,
             false, // rebuild never imports
         )?;
+        if opts.stages.upload && opts.debusine.is_some() {
+            ensure_debusine_ready()?;
+        }
         // glab keeps a token per host; check the one this repo lives on.
         if let Some(host) = need_glab
             .then(|| git::remote_host(repo, "origin"))
@@ -280,8 +311,17 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
     for target in &targets {
         let codename = target_codename(target);
         match classify_target_type(target, &codename)? {
-            // A PPA upload needs an explicit target (PPA or dput host).
+            // A PPA upload needs an explicit target (PPA or dput host);
+            // Debusine is out — debusine.debian.net hosts Debian suites.
             TargetType::Ppa => {
+                if opts.stages.upload && opts.debusine.is_some() {
+                    return Err(format!(
+                        "{target} is an Ubuntu PPA target, which can't publish to \
+                         Debusine (debusine.debian.net hosts Debian suites only); \
+                         pass --ppa <name> or --upload-target <host>"
+                    )
+                    .into());
+                }
                 if opts.stages.upload && opts.upload_target.is_none() {
                     return Err("the upload stage needs a target: pass --ppa <name> \
                                 or --upload-target <host>"
@@ -345,6 +385,7 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             opts.stages,
             opts.nowait,
             opts.upload_target.as_deref(),
+            opts.debusine.as_deref(),
             opts.chroot_refresh,
             &opts.urgency,
             opts.assume_yes,
@@ -462,20 +503,29 @@ pub fn update(
     repo: &Path,
     opts: &UpdateOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Uploading to the dput default (the Debian archive) needs a Debian
-    // host — Ubuntu's dput doesn't understand the unstable/archive
-    // target. The import/build/lint stages are fine on Ubuntu, so gate
-    // only the default-target upload; an explicit `--upload-target`
-    // (e.g. mentors) is the user's call and exempt. A dry-run executes
-    // nothing, so it's exempt too.
+    // Uploading to the dput default (the Debian archive) or to Debusine
+    // needs a Debian host — Ubuntu's dput doesn't understand the
+    // unstable/archive target, and the Debusine dput profile ships in
+    // debusine-client (a Debian package). The import/build/lint stages
+    // are fine on Ubuntu, so gate only those uploads; an explicit
+    // `--upload-target` (e.g. mentors) is the user's call and exempt.
+    // A dry-run executes nothing, so it's exempt too.
     if !ui.dry_run && opts.stages.upload && opts.upload_target.is_none() && !host::is_debian() {
         let host = host::os_release_id().unwrap_or_else(|| "unknown".to_string());
-        return Err(format!(
-            "uploading to the default dput target (the Debian archive) needs a \
-             Debian host — Ubuntu's dput doesn't understand it; this host is \
-             '{host}'. Run the upload stage from a Debian environment, or pass \
-             --upload-target <host> for a different destination."
-        )
+        return Err(if opts.debusine.is_some() {
+            format!(
+                "uploading to Debusine needs a Debian host — its dput profile \
+                 and client ship in debusine-client; this host is '{host}'. \
+                 Run the upload stage from a Debian environment."
+            )
+        } else {
+            format!(
+                "uploading to the default dput target (the Debian archive) needs a \
+                 Debian host — Ubuntu's dput doesn't understand it; this host is \
+                 '{host}'. Run the upload stage from a Debian environment, or pass \
+                 --upload-target <host> for a different destination."
+            )
+        }
         .into());
     }
 
@@ -492,6 +542,9 @@ pub fn update(
             opts.stages.tag,
             opts.stages.import,
         )?;
+        if opts.stages.upload && opts.debusine.is_some() {
+            ensure_debusine_ready()?;
+        }
         if let Some(host) = need_glab
             .then(|| git::remote_host(repo, "origin"))
             .flatten()
@@ -511,6 +564,15 @@ pub fn update(
         ensure_on_branch(ui, repo, &branch)?;
     }
 
+    // The Debian branch targets unstable, whose Debusine suite is `sid`
+    // (the wiki's `publish-to-sid-<pkg>` example).
+    let upload = match &opts.debusine {
+        Some(name) => UploadDest::Debusine {
+            name: name.clone(),
+            suite: "sid".to_string(),
+        },
+        None => UploadDest::Dput(opts.upload_target.clone()),
+    };
     build_pipeline(
         ui,
         repo,
@@ -519,7 +581,7 @@ pub fn update(
         None,
         opts.stages,
         opts.nowait,
-        opts.upload_target.as_deref(),
+        &upload,
         opts.chroot_refresh,
         // `update` never uploads to a PPA, so the PPA pre-check (the only
         // consumer of this flag) can't fire; value is irrelevant.
@@ -725,6 +787,7 @@ fn rebuild_one(
     stages: Stages,
     nowait: bool,
     upload_target: Option<&str>,
+    debusine: Option<&str>,
     chroot_refresh: ChrootRefresh,
     urgency: &str,
     assume_yes: bool,
@@ -769,6 +832,7 @@ fn rebuild_one(
     // (`trixie`, not `trixie-backports` — the suffix is a changelog
     // distribution, not a pbuilder dist).
     let build_suite = build_suite_for(target_type, &codename);
+    let upload = upload_dest_for(target_type, &codename, debusine, upload_target);
     build_pipeline(
         ui,
         repo,
@@ -777,7 +841,7 @@ fn rebuild_one(
         rebuilt_version,
         stages,
         nowait,
-        upload_target,
+        &upload,
         chroot_refresh,
         assume_yes,
     )
@@ -791,6 +855,58 @@ fn build_suite_for(target_type: TargetType, codename: &str) -> String {
         TargetType::Backports { .. } => backports_base(codename).unwrap_or(codename).to_string(),
         _ => codename.to_string(),
     }
+}
+
+/// The upload destination for a rebuild target: a Debusine personal
+/// repository when `--debusine` is given, else the dput target (or
+/// dput's default). The Debusine suite is the target's *base* release —
+/// the same value as the pbuilder build suite: a proposed-update
+/// publishes to its codename, a trixie backport to `trixie` (the wiki's
+/// `~bpo13+1` example). PPA targets can't combine with `--debusine`;
+/// `run`'s preconditions reject that before any work.
+fn upload_dest_for(
+    target_type: TargetType,
+    codename: &str,
+    debusine: Option<&str>,
+    upload_target: Option<&str>,
+) -> UploadDest {
+    match debusine {
+        Some(name) => UploadDest::Debusine {
+            name: name.to_string(),
+            suite: build_suite_for(target_type, codename),
+        },
+        None => UploadDest::Dput(upload_target.map(String::from)),
+    }
+}
+
+/// Cheap pre-flight for a Debusine upload, run before any expensive
+/// work: the debusine.debian.net dput profile ships in debusine-client
+/// (dput-ng's `debusine` method), and the upload triggers workflows
+/// through the Debusine API using the client token `debusine setup`
+/// writes. Both are file checks; failing at dput time after a full
+/// build would waste the run.
+fn ensure_debusine_ready() -> Result<(), Box<dyn std::error::Error>> {
+    let profile = "profiles/debusine.debian.net.json";
+    let have_profile = [Path::new("/etc/dput.d"), Path::new("/usr/share/dput-ng")]
+        .iter()
+        .any(|d| d.join(profile).exists());
+    if !have_profile {
+        return Err(
+            "uploading to Debusine needs its dput profile: install debusine-client \
+             (which also provides the dput-ng method it uses)"
+                .into(),
+        );
+    }
+    let config =
+        std::env::var_os("HOME").map(|h| Path::new(&h).join(".config/debusine/client/config.ini"));
+    if !config.is_some_and(|c| c.exists()) {
+        return Err(
+            "uploading to Debusine needs an API token: run `debusine setup` (from \
+             debusine-client) to authenticate against debusine.debian.net"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 /// The shared `build → lint → push → upload → tag` tail, driven by both
@@ -808,7 +924,7 @@ fn build_pipeline(
     rebuilt_version: Option<String>,
     stages: Stages,
     nowait: bool,
-    upload_target: Option<&str>,
+    upload: &UploadDest,
     chroot_refresh: ChrootRefresh,
     assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -834,7 +950,7 @@ fn build_pipeline(
     }
     if stages.upload {
         let (package, version) = pkg_ver.as_ref().unwrap();
-        upload_stage(ui, repo, package, version, upload_target, assume_yes)?;
+        upload_stage(ui, repo, package, version, upload, assume_yes)?;
     }
     if stages.tag {
         tag_stage(ui, repo)?;
@@ -852,26 +968,46 @@ fn tag_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
     ui.run_required(&plan::gbp_tag_argv(), repo)
 }
 
-/// The upload stage: `dput` the source `.changes` to its archive.
-/// `target` is the PPA / dput host, or `None` for dput's configured
-/// default (the Debian archive — used by `update`).
+/// The upload stage: `dput` the source `.changes` to its destination —
+/// a PPA / dput host, dput's configured default (the Debian archive —
+/// used by `update`), or a Debusine personal repository.
 fn upload_stage(
     ui: &Ui,
     repo: &Path,
     package: &str,
     version: &str,
-    target: Option<&str>,
+    dest: &UploadDest,
     assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // For a PPA target, pre-flight that the package is already there;
-    // if not, the --ppa was likely wrong, so confirm before uploading.
-    if let Some((owner, ppa)) = target.and_then(plan::ppa_owner_name) {
-        ppa_preflight(ui, repo, owner, ppa, package, assume_yes)?;
-    }
-    let dest = target.unwrap_or("the default dput target");
-    ui.step(&format!("Upload {package} {version} to {dest}"));
     let changes = format!("../{}", plan::changes_filename(package, version));
-    ui.run_required(&plan::dput_argv(target, &changes), repo)
+    match dest {
+        UploadDest::Dput(target) => {
+            let target = target.as_deref();
+            // For a PPA target, pre-flight that the package is already
+            // there; if not, the --ppa was likely wrong, so confirm
+            // before uploading.
+            if let Some((owner, ppa)) = target.and_then(plan::ppa_owner_name) {
+                ppa_preflight(ui, repo, owner, ppa, package, assume_yes)?;
+            }
+            let dest = target.unwrap_or("the default dput target");
+            ui.step(&format!("Upload {package} {version} to {dest}"));
+            ui.run_required(&plan::dput_argv(target, &changes), repo)
+        }
+        UploadDest::Debusine { name, suite } => {
+            // The workspace/workflow embed the source package name; the
+            // `-O` overrides steer dput's debusine profile at the
+            // personal repository instead of its `developers` default.
+            let workspace = plan::debusine_workspace(name, package);
+            let workflow = plan::debusine_workflow(suite, package);
+            ui.step(&format!(
+                "Upload {package} {version} to Debusine ({workspace}, {workflow})"
+            ));
+            ui.run_required(
+                &plan::dput_debusine_argv(&workspace, &workflow, &changes),
+                repo,
+            )
+        }
+    }
 }
 
 /// Pre-flight a PPA upload: query Launchpad for `package` in
@@ -1761,6 +1897,7 @@ mod tests {
             build_suite: "testing".to_string(),
             nowait: false,
             upload_target: None,
+            debusine: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
         };
@@ -1775,6 +1912,7 @@ mod tests {
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -1792,6 +1930,7 @@ mod tests {
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -1810,6 +1949,7 @@ mod tests {
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: Some("noble".to_string()),
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -1827,6 +1967,7 @@ mod tests {
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: Some("does-not-exist".to_string()),
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -1872,6 +2013,7 @@ mod tests {
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -1903,6 +2045,7 @@ mod tests {
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2117,6 +2260,7 @@ mod tests {
             stages: BUILD,
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2134,6 +2278,7 @@ mod tests {
             stages: BUILD,
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2155,6 +2300,7 @@ mod tests {
             stages: BUILD,
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2175,6 +2321,7 @@ mod tests {
             },
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2195,6 +2342,7 @@ mod tests {
             },
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2202,6 +2350,120 @@ mod tests {
             include_eol: false,
         };
         assert!(run(&ui_dry(), dir.path(), &opts).is_err());
+    }
+
+    #[test]
+    fn upload_dest_debusine_suite_follows_target_type() {
+        // A backport publishes to its base release's suite (the wiki's
+        // ~bpo13+1 example goes to publish-to-trixie-*), a
+        // proposed-update to its codename.
+        assert_eq!(
+            upload_dest_for(
+                TargetType::Backports { major: 13 },
+                "trixie-backports",
+                Some("michelin"),
+                None
+            ),
+            UploadDest::Debusine {
+                name: "michelin".to_string(),
+                suite: "trixie".to_string(),
+            }
+        );
+        assert_eq!(
+            upload_dest_for(
+                TargetType::Proposed { major: 13 },
+                "trixie",
+                Some("michelin"),
+                None
+            ),
+            UploadDest::Debusine {
+                name: "michelin".to_string(),
+                suite: "trixie".to_string(),
+            }
+        );
+        // No --debusine → plain dput target passthrough.
+        assert_eq!(
+            upload_dest_for(TargetType::Ppa, "noble", None, Some("ppa:m/x")),
+            UploadDest::Dput(Some("ppa:m/x".to_string()))
+        );
+        assert_eq!(
+            upload_dest_for(TargetType::Proposed { major: 13 }, "trixie", None, None),
+            UploadDest::Dput(None)
+        );
+    }
+
+    #[test]
+    fn debusine_rejected_for_ppa_targets() {
+        // debusine.debian.net hosts Debian suites; an Ubuntu PPA target
+        // can't publish there.
+        let dir = setup();
+        let opts = Options {
+            branches: vec!["noble".to_string()],
+            stages: Stages {
+                upload: true,
+                ..Stages::default()
+            },
+            nowait: false,
+            upload_target: None,
+            debusine: Some("michelin".to_string()),
+            source: None,
+            chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
+            assume_yes: false,
+            include_eol: false,
+        };
+        let err = run(&ui_dry(), dir.path(), &opts).unwrap_err().to_string();
+        assert!(err.contains("can't publish to Debusine"), "{err}");
+    }
+
+    #[test]
+    fn debusine_rejected_for_bulk_runs() {
+        // Bulk selects Ubuntu PPA branches only, so --debusine can
+        // never apply; fail before resolving the branch set.
+        let dir = setup();
+        let opts = Options {
+            branches: vec![],
+            stages: Stages {
+                upload: true,
+                ..Stages::default()
+            },
+            nowait: false,
+            upload_target: None,
+            debusine: Some("michelin".to_string()),
+            source: None,
+            chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
+            assume_yes: false,
+            include_eol: false,
+        };
+        let err = run(&ui_dry(), dir.path(), &opts).unwrap_err().to_string();
+        assert!(err.contains("bulk"), "{err}");
+    }
+
+    #[test]
+    fn debusine_upload_dry_run_narrates_dput_overrides() {
+        // The full backports + Debusine flow under --dry-run: the
+        // preconditions (Debian host, debusine profile/token) are
+        // dry-run-exempt, so this narrates everywhere.
+        let dir = setup();
+        let p = dir.path();
+        git(p, &["checkout", "-qb", "debian/trixie-backports"]);
+        let opts = Options {
+            branches: vec!["debian/trixie-backports".to_string()],
+            stages: Stages {
+                upload: true,
+                ..Stages::default()
+            },
+            nowait: false,
+            upload_target: None,
+            debusine: Some("michelin".to_string()),
+            source: None,
+            chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
+            assume_yes: false,
+            include_eol: false,
+        };
+        run(&ui_dry(), p, &opts).unwrap();
     }
 
     #[test]
@@ -2215,6 +2477,7 @@ mod tests {
             },
             nowait: false,
             upload_target: Some("ppa:michel/sugarjar".to_string()),
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2235,6 +2498,7 @@ mod tests {
             },
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2255,6 +2519,7 @@ mod tests {
             },
             nowait: true,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2332,6 +2597,7 @@ E: damo: an-error\n";
             },
             nowait: false,
             upload_target: Some("ppa:me/x".to_string()),
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2391,6 +2657,7 @@ E: damo: an-error\n";
             stages: MERGE,
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2410,6 +2677,7 @@ E: damo: an-error\n";
             stages: BUILD,
             nowait: false,
             upload_target: None,
+            debusine: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),

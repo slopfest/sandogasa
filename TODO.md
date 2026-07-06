@@ -2,11 +2,16 @@
 
 ## dbranch
 
-- (2026-07-03) add support for Debusine
 - (2026-07-03, nice-to-have) the merge phase of proposed-updates and
   backports could run on non-Debian hosts (only build/upload truly need
   Debian); kept simple and symmetric for now with a full up-front host
   guard
+
+Done (2026-07-06):
+- upload stage supports Debusine personal repositories (`--debusine
+  <name>` on rebuild + update → `dput -O debusine_workspace=… -O
+  debusine_workflow=publish-to-<base-suite>-<srcpkg>
+  debusine.debian.net`)
 
 Done (2026-07-03):
 - rebuild supports Debian backports targets (`debian/<codename>-backports`

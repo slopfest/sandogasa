@@ -46,6 +46,9 @@ stages you run need:
   Authenticate to the instance the repo lives on first:
   `glab auth login --hostname salsa.debian.org` (glab keeps a separate
   token per host, so a gitlab.com login alone won't do)
+- `debusine-client` — only for `--debusine` uploads; it provides the
+  `debusine.debian.net` dput profile and the `debusine setup`
+  authentication
 
 ## Usage
 
@@ -54,11 +57,12 @@ dbranch fixup [<branch>...] [-C <dir>] [--dry-run] [--explain] [--quiet]
 dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
     [--source <branch>] [--nowait]
     [--refresh-chroot | --no-refresh-chroot] [--urgency <level>]
-    [--ppa <name> | --upload-target <host>]
+    [--ppa <name> | --upload-target <host> | --debusine <name>]
     [--yes] [--include-eol]
     [--dry-run] [--explain] [--quiet]
 dbranch update [<branch>] [--stage <list>] [-C <dir>]
-    [--build-suite <suite>] [--nowait] [--upload-target <host>]
+    [--build-suite <suite>] [--nowait]
+    [--upload-target <host> | --debusine <name>]
     [--refresh-chroot | --no-refresh-chroot] [--urgency <level>]
     [--dry-run] [--explain] [--quiet]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
@@ -83,8 +87,10 @@ pinned to `unstable` so dch's release heuristic can't substitute the
 host's own (e.g. an Ubuntu devel codename). It builds against **testing** by default
 (`--build-suite unstable` to switch — sometimes deps removed from
 testing force it); upload goes to dput's default target (the Debian
-archive) with no flag, or `--upload-target mentors` for a vetted
-upload. `watch-ci` is described under the `push` stage.
+archive) with no flag, `--upload-target mentors` for a vetted upload,
+or `--debusine <name>` for a Debusine personal repository (the suite
+is `sid` — the Debian branch targets unstable). `watch-ci` is
+described under the `push` stage.
 
 Both `rebuild` and `update` write the changelog entry at `medium`
 urgency; pass `--urgency <level>` (e.g. `--urgency high`) to override —
@@ -160,7 +166,8 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   stable build). This needs `debian-distro-info` (from `distro-info`),
   consulted only for `debian/`-namespaced branches. The `upload` stage
   goes to `dput`'s default target (the Debian archive) — no
-  `--ppa`/`--upload-target` needed (only PPA branches require one). A
+  `--ppa`/`--upload-target` needed (only PPA branches require one) —
+  or to a Debusine personal repository with `--debusine <name>`. A
   proposed-update must be run on a **Debian host** (`gbp dch --stable`
   needs a newer gbp, and the stable chroot / archive upload are
   Debian-only); dbranch hard-fails early otherwise, except under
@@ -183,8 +190,10 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   scratch-builds in the **base release's** chroot (`pbuilder-dist
   trixie`, not `trixie-backports` — the suffix is a changelog
   distribution, not a pbuilder dist). Like a proposed-update, it
-  uploads to `dput`'s default target and requires a **Debian host**
-  (`--dry-run` exempt).
+  uploads to `dput`'s default target — or with `--debusine <name>` to
+  a Debusine personal repository, publishing to the **base** release's
+  suite (`publish-to-trixie-<srcpkg>`, the official backports pattern) —
+  and requires a **Debian host** (`--dry-run` exempt).
 - **`build`** — `debuild -S -sa -d` then
   `pbuilder-dist <codename> ../<dsc>`.
 - **`lint`** — `lintian -I` on the built **`.deb`s** in
@@ -223,6 +232,16 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   (e.g. `mentors`, `ftp-master`); the two are mutually exclusive and
   one is required. Runs after `push` so CI can pass before publishing.
   **Opt-in** — not part of `all`.
+
+  For Debian targets, `--debusine <name>` uploads to a [Debusine
+  personal repository](https://wiki.debian.org/DebusineDebianNet#Repositories)
+  instead: `dput -O debusine_workspace=r-<name>-<srcpkg>
+  -O debusine_workflow=publish-to-<suite>-<srcpkg> debusine.debian.net
+  …`, where `<suite>` is the target's **base** release — a trixie
+  backport publishes to `trixie`, `update` publishes to `sid`. Needs
+  `debusine-client` (the dput profile) and a `debusine setup` token;
+  both are pre-flighted before any work. Ubuntu PPA targets can't use
+  it (Debusine hosts Debian suites only).
 
   For a **PPA** target, dbranch first checks via the Launchpad API
   (`curl … getPublishedSources`) whether the package is already in that

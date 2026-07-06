@@ -164,6 +164,49 @@ the `curl`. A missing `curl` (`tool_exists`) skips the check rather than
 blocking — it's a safety nicety, not essential to the upload, so it isn't
 in `ensure_tools`.
 
+### Debusine uploads (`--debusine`)
+
+Uploading to a [Debusine personal
+repository](https://wiki.debian.org/DebusineDebianNet#Repositories) is
+still a `dput` upload, steered by two profile overrides:
+
+```
+dput -O debusine_workspace=r-<name>-<srcpkg> \
+     -O debusine_workflow=publish-to-<suite>-<srcpkg> \
+     debusine.debian.net <pkg>_<ver>_source.changes
+```
+
+Landmines and decisions:
+
+- **The dput profile ships in `debusine-client`, not dput-ng** —
+  `/usr/share/dput-ng/profiles/debusine.debian.net.json` (admin
+  overrides live under `/etc/dput.d/`). Without the package, dput
+  fails with an unknown-host error. Its defaults target the shared
+  `developers` workspace with an `upload-to-{distribution}` workflow
+  derived from the `.changes` distribution; the two `-O` overrides
+  redirect that at the personal repository. The upload triggers
+  workflows through the Debusine API, which needs the token `debusine
+  setup` writes to `~/.config/debusine/client/config.ini`.
+  `ensure_debusine_ready` pre-flights both files before any expensive
+  work.
+- **The workflow suite is the *base* release**, not the changelog
+  distribution: a trixie backport (`~bpo13+1`, distribution
+  `trixie-backports`) publishes via `publish-to-trixie-<srcpkg>` — the
+  wiki's own example — and the Debian branch (unstable) via
+  `publish-to-sid-<srcpkg>`. For rebuild targets this is the same value
+  as the pbuilder build suite (`upload_dest_for` reuses
+  `build_suite_for`).
+- **The workspace/workflow embed the source package name**, composed at
+  upload time from the changelog (`r-<name>-<srcpkg>`); `--debusine`
+  takes only the owner name, so it works across packages (and parsing a
+  full workspace string back apart would be ambiguous — owner names may
+  contain hyphens, e.g. `michel-slm`).
+- **Debian targets only**: debusine.debian.net hosts Debian suites, so
+  `--debusine` is rejected for Ubuntu PPA targets and bulk runs (bulk
+  selects PPA branches). The Debian-host guards are unchanged —
+  debusine-client is a Debian package, and for `update` the `--debusine`
+  upload is gated like the default-target upload.
+
 ### salsa-ci
 
 salsa-ci builds against **Debian** (`RELEASE`), not Ubuntu (it doesn't

@@ -136,6 +136,25 @@ Defaults to `merge` (the others are opt-in for now)."
         #[arg(long, value_name = "TARGET", help_heading = "Upload")]
         upload_target: Option<String>,
 
+        /// Upload stage: Debusine repo owner (uploads to r-NAME-<pkg>).
+        #[arg(
+            long,
+            value_name = "NAME",
+            help_heading = "Upload",
+            conflicts_with_all = ["ppa", "upload_target"],
+            long_help = "\
+Upload stage: publish to a Debusine personal repository instead of a
+dput archive. NAME is the repository owner (the r-NAME-* workspace
+prefix on debusine.debian.net); dbranch uploads with
+  dput -O debusine_workspace=r-NAME-<srcpkg>
+       -O debusine_workflow=publish-to-<suite>-<srcpkg>
+where <suite> is the target's base release (a trixie backport
+publishes to trixie). Debian targets only. Needs debusine-client and
+a `debusine setup` token.
+See wiki.debian.org/DebusineDebianNet#Repositories."
+        )]
+        debusine: Option<String>,
+
         /// Print the commands without running anything (a tutorial).
         #[arg(long, help_heading = "Output")]
         dry_run: bool,
@@ -211,6 +230,24 @@ Defaults to `import`."
         /// Upload stage: dput target (default: dput's own; e.g. mentors).
         #[arg(long, value_name = "TARGET", help_heading = "Upload")]
         upload_target: Option<String>,
+
+        /// Upload stage: Debusine repo owner (uploads to r-NAME-<pkg>).
+        #[arg(
+            long,
+            value_name = "NAME",
+            help_heading = "Upload",
+            conflicts_with = "upload_target",
+            long_help = "\
+Upload stage: publish to a Debusine personal repository instead of a
+dput archive. NAME is the repository owner (the r-NAME-* workspace
+prefix on debusine.debian.net); dbranch uploads with
+  dput -O debusine_workspace=r-NAME-<srcpkg>
+       -O debusine_workflow=publish-to-sid-<srcpkg>
+(the Debian branch targets unstable, whose Debusine suite is sid).
+Needs debusine-client and a `debusine setup` token.
+See wiki.debian.org/DebusineDebianNet#Repositories."
+        )]
+        debusine: Option<String>,
 
         /// Print the commands without running anything (a tutorial).
         #[arg(long, help_heading = "Output")]
@@ -291,6 +328,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             include_eol,
             ppa,
             upload_target,
+            debusine,
             dry_run,
             explain,
             quiet,
@@ -315,6 +353,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 stages,
                 nowait,
                 upload_target,
+                debusine,
                 source,
                 chroot_refresh,
                 assume_yes: yes,
@@ -333,6 +372,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             no_refresh_chroot,
             urgency,
             upload_target,
+            debusine,
             dry_run,
             explain,
             quiet,
@@ -356,6 +396,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 build_suite,
                 nowait,
                 upload_target,
+                debusine,
                 chroot_refresh,
                 urgency,
             };
