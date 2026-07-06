@@ -41,7 +41,7 @@ pub const AGENDA_URL: &str = "https://forge.fedoraproject.org/fesco/tickets/issu
 pub const ANNOUNCE_TO: &str = "devel@lists.fedoraproject.org";
 
 /// A tracker ticket on the agenda.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Ticket {
     pub number: u64,
     pub title: String,
@@ -49,15 +49,15 @@ pub struct Ticket {
     /// The parsed in-ticket decision (voted tickets only), e.g.
     /// `APPROVED (+3, 0, 0)`; `None` falls back to the template
     /// placeholder.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<String>,
     /// The repo slug for items outside the main tracker (e.g.
     /// `fesco/docs`); `None` for tracker tickets.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
     /// Whether this is a pull request (drives the `!forge pr` vs
     /// `!forge issue` lookup in the meeting script).
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pull: bool,
 }
 
@@ -96,7 +96,7 @@ impl From<sandogasa_forgejo::Issue> for Ticket {
 }
 
 /// The announcement's ticket sections.
-#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Sections {
     /// "Discussed and Voted in the Ticket" — announced, not discussed.
     pub voted: Vec<Ticket>,

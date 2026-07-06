@@ -30,12 +30,37 @@ struct ScriptJson<'a> {
 }
 
 pub fn run(args: &ScriptArgs) -> ExitCode {
-    let (date, sections, _docs_open) = match crate::agenda::assemble(&args.agenda) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
+    // Replay the agenda saved by `fesco-chair agenda` when it matches
+    // this meeting date — no refetching, no re-asking about docs
+    // items. Any override flag signals a re-decide, so it reassembles
+    // (and re-saves) instead.
+    let date = crate::agenda::target_date(&args.agenda);
+    let sections = match crate::state::load(date) {
+        Some(state) if !crate::agenda::has_overrides(&args.agenda) => {
+            if let Some(path) = crate::state::state_path() {
+                eprintln!(
+                    "using the agenda saved for {date} ({}); pass an override \
+                     flag or delete the file to regenerate",
+                    path.display()
+                );
+            }
+            state.sections
         }
+        _ => match crate::agenda::assemble(&args.agenda) {
+            Ok((date, sections, docs_open)) => {
+                let state = crate::state::AgendaState {
+                    date,
+                    sections,
+                    docs_open,
+                };
+                crate::state::save(&state);
+                state.sections
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
     };
     let discussion = sections.discussion();
     let script = render_script(date, &discussion);

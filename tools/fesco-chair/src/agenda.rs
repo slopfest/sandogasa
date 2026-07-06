@@ -76,6 +76,19 @@ pub fn run(args: &AgendaArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Persist the assembled agenda so `script` can replay these
+    // decisions on meeting day without re-asking; `summary` clears it.
+    let state = crate::state::AgendaState {
+        date,
+        sections,
+        docs_open,
+    };
+    crate::state::save(&state);
+    let crate::state::AgendaState {
+        date,
+        sections,
+        docs_open,
+    } = state;
     let body = render_body(date, &sections);
     if args.json {
         let out = AgendaJson {
@@ -110,6 +123,23 @@ pub fn subject(date: NaiveDate) -> String {
     format!("Schedule for Tuesday's FESCo Meeting ({date})")
 }
 
+/// The meeting date these args target: `--date`, or the coming
+/// Tuesday.
+pub fn target_date(args: &AgendaArgs) -> NaiveDate {
+    args.date
+        .unwrap_or_else(|| sources::next_tuesday(chrono::Local::now().date_naive()))
+}
+
+/// Whether any per-ticket override flag was given — a signal the user
+/// wants to re-decide, so saved agenda state should not short-circuit
+/// the run.
+pub fn has_overrides(args: &AgendaArgs) -> bool {
+    !(args.voted.is_empty()
+        && args.followup.is_empty()
+        && args.new_business.is_empty()
+        && args.docs.is_empty())
+}
+
 /// Fetch the ticket pools and split them into sections; also returns
 /// the open fesco/docs items *not* put on the agenda (surfaced so the
 /// chair can reconsider). Shared with the `script` subcommand, which
@@ -117,8 +147,7 @@ pub fn subject(date: NaiveDate) -> String {
 pub fn assemble(
     args: &AgendaArgs,
 ) -> Result<(NaiveDate, Sections, Vec<sources::Ticket>), Box<dyn std::error::Error>> {
-    let today = chrono::Local::now().date_naive();
-    let date = args.date.unwrap_or_else(|| sources::next_tuesday(today));
+    let date = target_date(args);
 
     let client = sources::forge_client()?;
     if args.verbose {

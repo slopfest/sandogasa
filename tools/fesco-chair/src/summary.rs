@@ -84,6 +84,10 @@ pub fn run(args: &SummaryArgs) -> ExitCode {
              (same thread), then comment/close the discussed tickets"
         );
     }
+    // The meeting is over; the saved agenda has served its purpose.
+    if crate::state::clear() && args.verbose {
+        eprintln!("[summary] cleared the saved agenda state");
+    }
     ExitCode::SUCCESS
 }
 

@@ -13,6 +13,7 @@ mod agenda;
 mod config;
 mod script;
 mod sources;
+mod state;
 mod summary;
 
 #[derive(Parser)]

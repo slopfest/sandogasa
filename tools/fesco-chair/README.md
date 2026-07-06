@@ -113,6 +113,15 @@ use `!forge issue fesco tickets NNNN`, fesco/docs issues
 `!forge pr fesco docs NNNN`. Copy/paste lines as the meeting
 progresses. Accepts the same flags as `agenda`.
 
+`agenda` saves the assembled result to
+`$XDG_STATE_HOME/fesco-chair/agenda.json` (default
+`~/.local/state/fesco-chair/agenda.json`), and `script` replays it
+when it matches the meeting date — no refetching, and the docs-item
+questions aren't asked again. Passing any override flag
+(`--voted`/`--followup`/`--new`/`--docs`) signals a re-decide:
+`script` then reassembles from the tracker and re-saves. `summary`
+deletes the state once the meeting is over.
+
 > The ticket lookup is emitted as `!forge issue fesco tickets NNNN`
 > for now: the `!fesco NNNN` alias is broken until
 > [maubot-fedora#154](https://github.com/fedora-infra/maubot-fedora/pull/154)

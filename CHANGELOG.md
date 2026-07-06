@@ -20,9 +20,12 @@ prepares text to paste, it never sends or posts:
   up in `--json` as `docs_open`)
 - `script` — the day-of checklist (reminder command, quorum, 15-minute
   topic rule) plus the meetbot command script
-  (`!startmeeting`/`!topic`/`!forge issue`/`!agreed`/…; the broken
-  `!fesco` alias is avoided until maubot-fedora#154 deploys), pipeable
-  to a file
+  (`!startmeeting`/`!topic`/`!forge issue`/`!forge pr`/`!agreed`/…; the
+  broken `!fesco` alias is avoided until maubot-fedora#154 deploys),
+  pipeable to a file. `agenda` saves its assembled result to
+  `$XDG_STATE_HOME/fesco-chair/agenda.json` and `script` replays it for
+  the same meeting date (no refetching or re-prompting; any override
+  flag reassembles instead), and `summary` clears it after the meeting
 - `summary` — the post-meeting "Summary/Minutes" reply email: artefact
   links plus the full plain-text minutes, discovered on meetbot by date
 
