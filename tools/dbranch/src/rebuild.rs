@@ -2442,28 +2442,29 @@ mod tests {
 
     #[test]
     fn debusine_upload_dry_run_narrates_dput_overrides() {
-        // The full backports + Debusine flow under --dry-run: the
+        // The Debusine upload path end to end under --dry-run: the
         // preconditions (Debian host, debusine profile/token) are
-        // dry-run-exempt, so this narrates everywhere.
+        // dry-run-exempt, so this narrates everywhere. Deliberately
+        // driven through `update` rather than a backports rebuild —
+        // classifying a debian/* target shells out to
+        // debian-distro-info, which a packaging sandbox doesn't have
+        // (the backports suite mapping is covered tool-free by
+        // upload_dest_for above).
         let dir = setup();
-        let p = dir.path();
-        git(p, &["checkout", "-qb", "debian/trixie-backports"]);
-        let opts = Options {
-            branches: vec!["debian/trixie-backports".to_string()],
+        let opts = UpdateOptions {
+            branch: None,
             stages: Stages {
                 upload: true,
                 ..Stages::default()
             },
+            build_suite: "testing".to_string(),
             nowait: false,
             upload_target: None,
             debusine: Some("michelin".to_string()),
-            source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
-            assume_yes: false,
-            include_eol: false,
         };
-        run(&ui_dry(), p, &opts).unwrap();
+        update(&ui_dry(), dir.path(), &opts).unwrap();
     }
 
     #[test]
