@@ -443,9 +443,18 @@ struct CheckCrateArgs {
     #[arg(long, requires = "transitive")]
     include_optional: bool,
 
-    /// Include unmet-version deps in transitive expansion.
-    #[arg(long, requires = "transitive")]
-    include_unmet: bool,
+    /// Exclude unmet-version deps from transitive expansion.
+    #[arg(
+        long,
+        requires = "transitive",
+        long_help = "\
+Exclude unmet-version dependencies (packaged,
+but too old for the requirement) from
+transitive expansion. They are included by
+default: omitting them silently under-reports
+what needs (re)building."
+    )]
+    exclude_unmet: bool,
 
     /// Exclude crates from transitive expansion.
     #[arg(
@@ -784,7 +793,7 @@ fn main() -> ExitCode {
             transitive: a.transitive,
             exclude_dev: a.exclude_dev,
             include_optional: a.include_optional,
-            include_too_old: a.include_unmet,
+            include_too_old: !a.exclude_unmet,
             exclude: a.exclude.iter().cloned().collect(),
         };
         return match check_crate::check_crate(&a.name, a.version.as_deref(), &opts) {

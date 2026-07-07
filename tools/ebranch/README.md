@@ -94,7 +94,9 @@ deps. The output includes a phased build order showing which
   (includes phased build order)
 - `--exclude-dev` — exclude dev deps from transitive expansion
 - `--include-optional` — include optional deps in transitive expansion
-- `--include-unmet` — include unmet-version deps in transitive expansion
+- `--exclude-unmet` — exclude unmet-version deps (packaged but too old)
+  from transitive expansion; they are included by default, since
+  omitting them silently under-reports what needs rebuilding
 - `--exclude CRATE,...` — skip specific crates in transitive expansion
 - `--dot` — output dependency graph in Graphviz DOT format
 - `--toml PATH` — save full analysis to a TOML file for reuse

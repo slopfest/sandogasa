@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### ebranch: check-crate includes unmet-version deps by default (breaking CLI)
+
+`check-crate --transitive` now expands unmet-version dependencies
+(packaged but too old for the requirement) by default — omitting them
+silently under-reported what needs rebuilding. What broke: the
+`--include-unmet` flag is **removed**, replaced by `--exclude-unmet`
+to restore the old skip-them behavior. (`--include-optional` is
+unchanged: on-by-default would be noisy until feature-aware resolution
+lands; see TODO.)
+
 ### ebranch: no implicit EPELPackagersSIG tracker (breaking CLI)
 
 The defunct EPEL Packagers SIG's tracker bug is no longer blocked

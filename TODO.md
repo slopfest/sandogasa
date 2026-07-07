@@ -207,16 +207,11 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   activate — needs each crate's `features` map, per-dep
   `features`/`default-features`, and the root's enabled features (the
   Cargo feature-unification problem).
-- (2026-07-02) check-crate: flip `--include-unmet` and `--include-optional`
-  to on by default (rename to `--exclude-unmet` / `--exclude-optional`) —
-  they're easy to forget and omitting them silently under-reports. This is
-  a breaking CLI change → changelog heading `(breaking CLI)` + migration
-  hint (the old `--include-*` behavior is now the default; use
-  `--exclude-*` to restore). Sequencing: `--include-unmet` on by default
-  is unambiguously good, but `--include-optional` on by default is NOISY
-  until the feature-aware resolution above lands (it includes optional
-  deps the root doesn't enable) — so ideally do that first, or flip only
-  `--include-unmet` now and defer the optional flip.
+- (2026-07-02, remaining half) check-crate: flip `--include-optional` to
+  on by default (rename to `--exclude-optional`) once the feature-aware
+  resolution above lands — flipping it earlier is NOISY (it includes
+  optional deps the root doesn't enable). The `--include-unmet` half was
+  flipped to `--exclude-unmet` in v0.16.0.
 - (2026-07-02, remaining nicety) check-crate: optionally annotate the
   `--koji`/`--copr` machine output with needed-version comments (e.g.
   `# quick-xml: need ^0.39.4, Fedora has 0.40.1`) — pipe-safe as
