@@ -57,12 +57,18 @@ pub fn request_description(
     let base = format!("Please branch and build {pkg} in {branch}.\n");
     match (fas, sig) {
         (None, None) => Ok(base),
+        // Each action URL sits alone on its own line so it linkifies
+        // cleanly in Bugzilla — casual packagers often don't know
+        // where users and groups are added, so give them a link to
+        // click: /adduser for a person (--fas), /addgroup for a SIG
+        // (--sig).
         (Some(fas), None) => Ok(format!(
             "{base}\n\
              If you do not wish to maintain {pkg} in {branch},\n\
              or do not think you will be able to do this in a timely manner,\n\
              I would be happy to be a co-maintainer of the package (FAS: {fas});\n\
-             please add me through https://src.fedoraproject.org/rpms/{pkg}/adduser\n"
+             please add me through\n\
+             https://src.fedoraproject.org/rpms/{pkg}/adduser\n"
         )),
         (Some(fas), Some(sig)) => Ok(format!(
             "{base}\n\
@@ -73,8 +79,8 @@ pub fn request_description(
              https://src.fedoraproject.org/rpms/{pkg}/addgroup\n\
              and grant it commit access, or collaborator access on epel* branches.\n\
              \n\
-             Please also add me as a co-maintainer (FAS: {fas})\n\
-             through https://src.fedoraproject.org/rpms/{pkg}/adduser\n"
+             Please also add me as a co-maintainer (FAS: {fas}) through\n\
+             https://src.fedoraproject.org/rpms/{pkg}/adduser\n"
         )),
         (None, Some(_)) => Err("cannot request a SIG be given access to a package without \
              signing up to co-maintain yourself (pass --fas as well)"
