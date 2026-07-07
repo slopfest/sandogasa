@@ -558,6 +558,7 @@ version = "0.15.3"
 dependencies = [
  "chrono",
  "clap",
+ "dirs",
  "reqwest",
  "sandogasa-cli",
  "sandogasa-config",
@@ -1899,6 +1900,9 @@ dependencies = [
 [[package]]
 name = "sandogasa-fedrq"
 version = "0.15.3"
+dependencies = [
+ "dirs",
+]
 
 [[package]]
 name = "sandogasa-forgejo"

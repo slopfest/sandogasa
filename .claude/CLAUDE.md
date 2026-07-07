@@ -30,6 +30,14 @@
 - In each tool's README.md, describe subcommands in the same alphabetical order as the `Command` enum. In the root README.md, list tools alphabetically, then library crates alphabetically
 - Order definitions in source files top-down: module docs and imports, public types (structs/enums/traits), public functions, trait impls (grouped by type), private helpers, `#[cfg(test)] mod tests`. Within each group, define callees before callers so a reader encounters helpers before the functions that use them. Review file order before committing
 
+## Per-user directories (XDG)
+- Our own per-user storage follows the [XDG Base Directory spec](https://specifications.freedesktop.org/basedir/latest/), resolved via the `dirs` crate — never hand-roll `$XDG_*` env reading (the spec requires *ignoring relative values*, which `dirs` implements) and never hardcode `~/.config`/`~/.cache`/`~/.local/state`:
+  - config → `sandogasa_config::ConfigFile::for_tool` (`dirs::config_dir()`, i.e. `$XDG_CONFIG_HOME`, default `~/.config/<tool>/config.toml`, perms 700/600)
+  - cache → `dirs::cache_dir()` (`$XDG_CACHE_HOME`, default `~/.cache/<tool>/`)
+  - state that persists between runs but isn't config (e.g. fesco-chair's saved agenda) → `dirs::state_dir()` (`$XDG_STATE_HOME`, default `~/.local/state/<tool>/`)
+- When no base directory can be determined (neither the `$XDG_*` var nor `$HOME`), fail loudly with a message naming both variables — never fall back to a literal `~/...` path (an unexpanded tilde silently creates `./~/...` in the CWD)
+- Files owned by *external* tools (`~/.gbp.conf`, `~/pbuilder`, `~/.fedora.upn`, bodhi-client's / debusine-client's config) must match wherever that tool actually looks — do not "fix" them to our conventions
+
 ## External tool dependencies
 - When a crate shells out to an external tool (e.g. `fedrq`, `koji`), it must check that the tool is available at startup (or before first use) and produce a clear error message if not found, rather than silently failing with empty results
 

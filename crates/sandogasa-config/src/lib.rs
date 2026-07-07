@@ -23,8 +23,10 @@ impl ConfigFile {
     /// The config path will be `~/.config/{tool_name}/config.toml`.
     /// Permissions are enforced (700 for dir, 600 for file).
     pub fn for_tool(tool_name: &str) -> Self {
+        // A literal "~" fallback would silently create `./~/.config`
+        // in the CWD; with no home at all, failing loudly is better.
         let path = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("~/.config"))
+            .expect("cannot determine the config directory: set XDG_CONFIG_HOME (absolute) or HOME")
             .join(tool_name)
             .join("config.toml");
         Self { path, secure: true }

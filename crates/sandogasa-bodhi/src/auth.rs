@@ -64,10 +64,14 @@ impl OidcTokens {
 }
 
 /// Default location of bodhi-client's token cache
-/// (`~/.config/bodhi/client.json`).
+/// (`$XDG_CONFIG_HOME/bodhi/client.json`, default
+/// `~/.config/bodhi/client.json` — bodhi-client resolves it the same
+/// way via click's `get_app_dir`).
 pub fn cli_cache_path() -> PathBuf {
+    // A literal "~" fallback would silently point at `./~/.config` in
+    // the CWD; with no home at all, failing loudly is better.
     dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
+        .expect("cannot determine the config directory: set XDG_CONFIG_HOME (absolute) or HOME")
         .join("bodhi")
         .join("client.json")
 }

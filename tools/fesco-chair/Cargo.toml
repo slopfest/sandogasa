@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 chrono = { workspace = true }
 clap = { workspace = true }
+dirs = { workspace = true }
 reqwest = { workspace = true }
 sandogasa-cli = { workspace = true }
 sandogasa-config = { workspace = true }

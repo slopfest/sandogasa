@@ -23,12 +23,11 @@ pub struct AgendaState {
 }
 
 /// The state file path: `$XDG_STATE_HOME/fesco-chair/agenda.json`
-/// (default `~/.local/state`).
+/// (default `~/.local/state`), via the `dirs` crate — which also
+/// implements the spec's rule that a *relative* `$XDG_STATE_HOME` is
+/// invalid and must be ignored.
 pub fn state_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/state")))?;
-    Some(base.join("fesco-chair/agenda.json"))
+    Some(dirs::state_dir()?.join("fesco-chair/agenda.json"))
 }
 
 /// Load the saved agenda for `date` from `path`. `None` when the file

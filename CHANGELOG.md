@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### XDG base-directory compliance audit
+
+All of our own per-user storage now resolves through the `dirs` crate,
+which fully implements the XDG Base Directory spec — including the rule
+that a *relative* `$XDG_*` value is invalid and must be ignored:
+
+- sandogasa-fedrq's cache clearing (`--refresh`) previously accepted a
+  relative `$XDG_CACHE_HOME` verbatim; it now falls back correctly, and
+  the no-home panic message names both `XDG_CACHE_HOME` and `HOME`
+- fesco-chair's agenda state likewise accepted a relative
+  `$XDG_STATE_HOME`; it now uses `dirs::state_dir()`
+- sandogasa-config's `ConfigFile::for_tool` and sandogasa-bodhi's
+  `cli_cache_path` used a literal `~/.config` fallback when no home
+  directory could be determined — which would silently resolve to a
+  `./~/.config` path in the current directory; they now fail loudly
+  with a message naming `XDG_CONFIG_HOME`/`HOME`
+
+Everything else was already compliant: tool configs go through
+`sandogasa_config::ConfigFile::for_tool` (`$XDG_CONFIG_HOME`, default
+`~/.config`) and sandogasa-hattrack's holiday cache uses
+`dirs::cache_dir()`. Paths owned by *external* tools (`~/.gbp.conf`,
+`~/pbuilder`, `~/.fedora.upn`, bodhi-client's and debusine-client's
+config files) intentionally follow those tools' own conventions.
+
 ### New fesco-chair tool
 
 A helper for [FESCo meeting chair

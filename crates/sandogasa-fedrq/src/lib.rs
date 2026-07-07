@@ -45,14 +45,12 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// The XDG cache base (`$XDG_CACHE_HOME`, default `~/.cache`).
+/// The XDG cache base (`$XDG_CACHE_HOME`, default `~/.cache`), via
+/// the `dirs` crate — which also implements the spec's rule that a
+/// *relative* `$XDG_CACHE_HOME` is invalid and must be ignored.
 fn cache_base() -> PathBuf {
-    std::env::var("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").expect("HOME not set");
-            PathBuf::from(home).join(".cache")
-        })
+    dirs::cache_dir()
+        .expect("cannot determine the cache directory: set XDG_CACHE_HOME (absolute) or HOME")
 }
 
 /// Return the fedrq smartcache directory (`$XDG_CACHE_HOME/fedrq`).
