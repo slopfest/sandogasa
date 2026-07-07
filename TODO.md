@@ -1,5 +1,12 @@
 # TODO
 
+## sandogasa-report
+
+- (2026-07-07, nice-to-have) readability polish deferred from the H1
+  report review: suppress all-zero stat lines in the non-detailed view
+  (e.g. "Releases published: 0 across 0 project(s)"), and consider an
+  executive-summary block at the top (cross-domain totals)
+
 ## fesco-chair
 
 - (2026-07-06) the `script` subcommand emits the

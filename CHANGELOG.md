@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.16.0
 
 ### ebranch: check-crate includes unmet-version deps by default (breaking CLI)
 
