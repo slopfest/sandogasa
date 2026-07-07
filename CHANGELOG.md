@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### ebranch: no implicit EPELPackagersSIG tracker (breaking CLI)
+
+The defunct EPEL Packagers SIG's tracker bug is no longer blocked
+automatically — a behavior carried over from the Python ebranch. What
+broke:
+
+- `file-request` without `--blocked` used to substitute the
+  `EPELPackagersSIG` alias; it now blocks nothing. Pass
+  `--blocked <bug-or-alias,...>` explicitly to block trackers.
+- `file-requests` (the batch path) always blocked `EPELPackagersSIG`
+  with no way to override; it now blocks nothing by default and gains
+  the same `--blocked` flag, applied to every request it files.
+- The `branch_request::EPEL_SIG_TRACKER` constant is gone, and
+  `run_file_requests`/`file_batch` take a `blocked` parameter.
+
+Migration: add `--blocked <your tracker>` to filing invocations that
+relied on the implicit tracker (`--blocked EPELPackagersSIG` restores
+the literal old behavior, but that tracker is unmaintained). `--sig`
+is unchanged and was always explicit.
+
 ### XDG base-directory compliance audit
 
 All of our own per-user storage now resolves through the `dirs` crate,

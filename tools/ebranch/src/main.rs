@@ -578,8 +578,7 @@ struct FileRequestArgs {
     #[command(flatten)]
     common: BranchRequestCommon,
 
-    /// CSV of bugs/aliases this request blocks (default: the
-    /// EPELPackagersSIG tracker).
+    /// CSV of bugs/aliases this request blocks.
     #[arg(long, value_delimiter = ',')]
     blocked: Vec<String>,
 
@@ -599,6 +598,10 @@ struct FileRequestsArgs {
 
     #[command(flatten)]
     common: BranchRequestCommon,
+
+    /// CSV of bugs/aliases each filed request blocks.
+    #[arg(long, value_delimiter = ',')]
+    blocked: Vec<String>,
 }
 
 #[derive(clap::Args, Clone)]
@@ -668,7 +671,7 @@ fn handle_branch_request_command(cmd: &Command) -> Option<ExitCode> {
             )
         }),
         Command::FileRequests(a) => branch_request_options(&a.common)
-            .and_then(|opts| branch_request::run_file_requests(&a.toml, &opts)),
+            .and_then(|opts| branch_request::run_file_requests(&a.toml, &a.blocked, &opts)),
         Command::Escalate(a) => branch_request_options(&a.common)
             .and_then(|opts| branch_request::run_escalate(&a.toml, &opts)),
         _ => return None,

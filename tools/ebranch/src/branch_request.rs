@@ -23,10 +23,6 @@ use sandogasa_bugzilla::BzClient;
 
 use crate::resolve::{self, BranchRequest, ResolveReport};
 
-/// Tracker bug every branch request blocks, so the EPEL
-/// Packagers SIG can see all outstanding requests at a glance.
-pub const EPEL_SIG_TRACKER: &str = "EPELPackagersSIG";
-
 /// Minimum age (days) before a NEW request is escalated.
 pub const PING_MIN_DAYS: i64 = 7;
 
@@ -203,7 +199,7 @@ pub async fn file_one(
 }
 
 /// Resolve a list of blocker/dependency tokens (numeric IDs or
-/// Bugzilla aliases like `EPELPackagersSIG`) to bug IDs.
+/// Bugzilla aliases) to bug IDs.
 pub async fn resolve_refs(bz: &BzClient, tokens: &[String]) -> Result<Vec<u64>, String> {
     let mut ids = Vec::new();
     for tok in tokens {
@@ -297,8 +293,14 @@ fn partition_filable(
 /// File requests for every package in `report` that doesn't
 /// already have one, recording each in `report.branch_requests`,
 /// then link them: a package's request `depends_on` the requests
-/// for the packages it needs (following `report.edges`).
-pub async fn file_batch(report: &mut ResolveReport, opts: &Options) -> Result<bool, String> {
+/// for the packages it needs (following `report.edges`). Each new
+/// request blocks the bugs/aliases in `blocked` (from `--blocked`);
+/// nothing is blocked implicitly.
+pub async fn file_batch(
+    report: &mut ResolveReport,
+    blocked: &[String],
+    opts: &Options,
+) -> Result<bool, String> {
     let bz = BzClient::new(&opts.bugzilla_url)
         .with_api_key(opts.api_key.clone())
         .map_err(|e| e.to_string())?;
@@ -351,7 +353,7 @@ pub async fn file_batch(report: &mut ResolveReport, opts: &Options) -> Result<bo
         return Ok(false);
     }
 
-    let tracker = resolve_refs(&bz, &[EPEL_SIG_TRACKER.to_string()]).await?;
+    let blocks = resolve_refs(&bz, blocked).await?;
 
     let mut changed = false;
     for pkg in &to_file {
@@ -361,7 +363,7 @@ pub async fn file_batch(report: &mut ResolveReport, opts: &Options) -> Result<bo
             &opts.branch,
             opts.fas.as_deref(),
             opts.sig.as_deref(),
-            &tracker,
+            &blocks,
             &[],
         )
         .await?;
@@ -544,10 +546,10 @@ pub fn run_file_request(
         let bz = BzClient::new(&opts.bugzilla_url)
             .with_api_key(opts.api_key.clone())
             .map_err(|e| e.to_string())?;
-        let mut blocks = resolve_refs(&bz, blocked).await?;
-        if blocks.is_empty() {
-            blocks = resolve_refs(&bz, &[EPEL_SIG_TRACKER.to_string()]).await?;
-        }
+        // No implicit tracker: the request blocks exactly what
+        // --blocked names (the EPEL Packagers SIG, whose tracker every
+        // request used to block by default, is defunct).
+        let blocks = resolve_refs(&bz, blocked).await?;
         let depends_on = resolve_refs(&bz, dependson).await?;
 
         let rhbz = file_one(
@@ -578,12 +580,16 @@ pub fn run_file_request(
 }
 
 /// `file-requests` — batch over a resolve report file.
-pub fn run_file_requests(report_path: &str, opts: &Options) -> Result<(), String> {
+pub fn run_file_requests(
+    report_path: &str,
+    blocked: &[String],
+    opts: &Options,
+) -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| format!("failed to create async runtime: {e}"))?;
     rt.block_on(async {
         let mut report = resolve::load_report(report_path)?;
-        let changed = file_batch(&mut report, opts).await?;
+        let changed = file_batch(&mut report, blocked, opts).await?;
         if changed && !opts.dry_run {
             resolve::write_report(&report, report_path)?;
         }
@@ -681,9 +687,8 @@ mod tests {
 
     #[test]
     fn description_fas_sig_offers_both() {
-        let d =
-            request_description("foo", "epel9", Some("alice"), Some("EPEL Packagers SIG")).unwrap();
-        assert!(d.contains("the EPEL Packagers SIG would be happy"));
+        let d = request_description("foo", "epel9", Some("alice"), Some("rust-sig")).unwrap();
+        assert!(d.contains("the rust-sig would be happy"));
         assert!(d.contains("/rpms/foo/addgroup"));
         assert!(d.contains("Please also add me as a co-maintainer (FAS: alice)"));
     }
@@ -701,8 +706,8 @@ mod tests {
             "Will you be able to branch and build foo in epel9?\n"
         );
         assert!(ping_body("foo", "epel9", Some("alice"), None).contains("FAS: alice"));
-        let both = ping_body("foo", "epel9", Some("alice"), Some("EPEL Packagers SIG"));
-        assert!(both.contains("EPEL Packagers SIG"));
+        let both = ping_body("foo", "epel9", Some("alice"), Some("rust-sig"));
+        assert!(both.contains("rust-sig"));
         assert!(both.contains("FAS: alice"));
     }
 

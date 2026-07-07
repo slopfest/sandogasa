@@ -412,14 +412,16 @@ File a single request:
 # `ebranch config`).
 ebranch file-request foo epel9
 ebranch file-request foo epel9 --fas alice          # offer to co-maintain
-ebranch file-request foo epel9 --fas alice --sig "EPEL Packagers SIG"
+ebranch file-request foo epel9 --fas alice --sig rust-sig
 ```
 
 The request is filed against `Fedora EPEL`/`<branch>`, falling
-back to `Fedora`/`rawhide` when the component isn't in EPEL. By
-default it blocks the `EPELPackagersSIG` tracker; override with
-`--blocked`, and add `--dependson` for prerequisite bugs. Pass
-`--report <file>` to record the new bug ID in a resolve report.
+back to `Fedora`/`rawhide` when the component isn't in EPEL. The
+request blocks nothing by default — pass `--blocked` with tracking
+bugs/aliases to block, and `--dependson` for prerequisite bugs.
+(Earlier versions blocked the `EPELPackagersSIG` tracker
+automatically; that SIG is defunct.) Pass `--report <file>` to
+record the new bug ID in a resolve report.
 
 To file for a whole dependency closure, first capture it with
 `resolve --report`, then file requests for every package and
@@ -431,7 +433,10 @@ ebranch resolve python-django6 --source rawhide \
     --target c10s --target-repo @epel --report django.toml
 ebranch file-requests django.toml epel9 --fas alice --dry-run
 ebranch file-requests django.toml epel9 --fas alice
+ebranch file-requests django.toml epel9 --blocked 2482250   # block a tracker
 ```
+
+`--blocked` applies to every request the batch files.
 
 Bug IDs and a `pinged` flag are stored in the report under
 `[branch_requests]`, so re-runs skip already-filed packages.
