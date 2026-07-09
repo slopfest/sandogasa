@@ -60,7 +60,7 @@ dashmap = "6"
 dirs = "6"
 emojis = "0.8"
 mockito = "1"
-quick-xml = ">=0.40, <0.42"
+quick-xml = "0.41"
 rayon = "1"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "form", "json", "query", "rustls-no-provider", "http2"] }
 rpassword = "7"

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### quick-xml requirement tightened back to "0.41"
+
+rust-quick-xml 0.41 has reached Fedora and EPEL, so the temporary
+`">=0.40, <0.42"` range (which let Fedora builds resolve against its
+packaged 0.40.1 while everyone else got the RUSTSEC-2026-0194/-0195
+fix) is no longer needed. Resolution is unchanged for `Cargo.lock` and
+`cargo install` users — both were already on 0.41.0.
+
 ## v0.16.0
 
 ### ebranch: check-crate includes unmet-version deps by default (breaking CLI)
