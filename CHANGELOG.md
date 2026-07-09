@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ebranch: check-update accepts COPR projects
+
+Big coordinated updates often stage in a COPR before any side tag or
+Bodhi update exists; `check-update` now takes a COPR as its input —
+an `owner/project` spec (`@rust/uutils-and-nushell`) or the project
+URL — alongside side tags and Bodhi aliases. The update contents come
+from COPR's public monitor API (latest succeeded build per package in
+the chroot matching the branch, x86_64 preferred), and the provides
+comparison runs through fedrq's `@copr:` repo class like the
+`@testing` path (COPR repos index source RPMs and maintain their own
+repodata — no koji involvement, and koji is no longer required for
+COPR input). COPR input requires `-b`; `--testing-branch` picks the
+chroot when `-b` is a base branch (`-b al9 -r @epel --testing-branch
+epel9`). `--give-karma`/`--submit` are rejected for COPRs, which
+publish through their own repos.
+
+New sandogasa-copr library crate: the monitor client plus the pure
+branch→chroot and NVR-extraction helpers.
+
 ### quick-xml requirement tightened back to "0.41"
 
 rust-quick-xml 0.41 has reached Fedora and EPEL, so the temporary

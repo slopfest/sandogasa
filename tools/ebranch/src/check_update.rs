@@ -21,6 +21,10 @@ pub enum InputKind {
     SideTag(String),
     /// A Bodhi update alias (e.g. "FEDORA-EPEL-2026-f9eaa11e18").
     BodhiAlias(String),
+    /// A COPR project (e.g. owner `@rust`, project
+    /// `uutils-and-nushell`), from a copr URL or an `owner/project`
+    /// spec.
+    Copr { owner: String, project: String },
 }
 
 /// Options for the check-update command.
@@ -215,6 +219,10 @@ pub fn detect_input_type(input: &str) -> InputKind {
         .strip_prefix("https://")
         .or_else(|| input.strip_prefix("http://"))
     {
+        // A COPR URL names the project in its path.
+        if let Some((owner, project)) = parse_copr_url_path(rest) {
+            return InputKind::Copr { owner, project };
+        }
         // Last path segment is the alias.
         rest.rsplit('/').next().unwrap_or(rest)
     } else {
@@ -224,9 +232,41 @@ pub fn detect_input_type(input: &str) -> InputKind {
     // Bodhi aliases look like FEDORA-2026-abc123 or FEDORA-EPEL-2026-abc123.
     if candidate.starts_with("FEDORA-") && candidate.contains("-20") {
         InputKind::BodhiAlias(candidate.to_string())
+    } else if let Some((owner, project)) = parse_copr_spec(input) {
+        // An owner/project spec (e.g. @rust/uutils-and-nushell) —
+        // side tags and Bodhi aliases never contain '/'.
+        InputKind::Copr { owner, project }
     } else {
         InputKind::SideTag(input.to_string())
     }
+}
+
+/// Parse the path of a COPR URL (scheme already stripped):
+/// `<host>/coprs/g/<group>/<project>[/…]` → (`@group`, project),
+/// `<host>/coprs/<user>/<project>[/…]` → (user, project).
+fn parse_copr_url_path(rest: &str) -> Option<(String, String)> {
+    let mut segments = rest.split('/').filter(|s| !s.is_empty());
+    let _host = segments.next()?;
+    if segments.next()? != "coprs" {
+        return None;
+    }
+    let first = segments.next()?;
+    if first == "g" {
+        let group = segments.next()?;
+        let project = segments.next()?;
+        Some((format!("@{group}"), project.to_string()))
+    } else {
+        let project = segments.next()?;
+        Some((first.to_string(), project.to_string()))
+    }
+}
+
+/// Parse a bare `owner/project` COPR spec (owner may carry the `@`
+/// group prefix). Exactly one `/`, both halves non-empty.
+fn parse_copr_spec(input: &str) -> Option<(String, String)> {
+    let (owner, project) = input.split_once('/')?;
+    (!owner.is_empty() && !project.is_empty() && !project.contains('/'))
+        .then(|| (owner.to_string(), project.to_string()))
 }
 
 /// Extract the source package name from an NVR string.
@@ -259,45 +299,99 @@ pub fn koji_build_rpms(nvr: &str, profile: Option<&str>) -> Result<Vec<String>, 
 
 /// Run the check-update analysis.
 pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdateReport, String> {
-    // Phase 0: Determine side tag, NVRs, branch, Bodhi release branch,
-    // and Bodhi update status (None for side-tag input).
-    let (side_tag, nvrs, branch, bodhi_branch, bodhi_status) = match detect_input_type(input) {
-        InputKind::SideTag(tag) => {
-            let branch = match opts.branch.clone() {
-                Some(b) => b,
-                None => {
-                    let b = infer_branch_for_side_tag(&tag)?;
-                    if opts.verbose {
-                        eprintln!("[check-update] inferred branch {b} from side tag {tag}");
+    // Phase 0: Determine the update source (side tag / COPR spec),
+    // NVRs, branch, Bodhi release branch, and Bodhi update status
+    // (None for side-tag and COPR input).
+    let (side_tag, copr_spec, nvrs, branch, bodhi_branch, bodhi_status) =
+        match detect_input_type(input) {
+            InputKind::SideTag(tag) => {
+                let branch = match opts.branch.clone() {
+                    Some(b) => b,
+                    None => {
+                        let b = infer_branch_for_side_tag(&tag)?;
+                        if opts.verbose {
+                            eprintln!("[check-update] inferred branch {b} from side tag {tag}");
+                        }
+                        b
                     }
-                    b
+                };
+                let nvrs = koji_list_tagged(&tag, opts.koji_profile.as_deref())?;
+                (Some(tag), None, nvrs, branch, None, None)
+            }
+            InputKind::BodhiAlias(alias) => {
+                let info = fetch_bodhi_update(&alias)?;
+
+                let branch =
+                    resolve_bodhi_branch(opts.branch.clone(), info.release_name.as_deref())?;
+
+                // If backed by a side tag, use koji to get the full list.
+                let (side_tag, nvrs) = if let Some(tag) = info.side_tag {
+                    let koji_nvrs = koji_list_tagged(&tag, opts.koji_profile.as_deref())?;
+                    (Some(tag), koji_nvrs)
+                } else {
+                    (None, info.nvrs)
+                };
+
+                (
+                    side_tag,
+                    None,
+                    nvrs,
+                    branch,
+                    info.release_branch,
+                    Some(info.status),
+                )
+            }
+            InputKind::Copr { owner, project } => {
+                // A COPR builds for many chroots, so the comparison
+                // target can't be inferred — require -b like EPEL side
+                // tags. The chroot itself is picked from the
+                // new-provides branch (--testing-branch when -b is a
+                // base branch like al9).
+                let branch = opts.branch.clone().ok_or_else(|| {
+                    "COPR projects build for many chroots; pass -b <branch> to pick \
+                     the comparison target (e.g. -b f44; for EPEL pair the base \
+                     branch with the repo and chroot: -b al9 -r @epel \
+                     --testing-branch epel9)"
+                        .to_string()
+                })?;
+                let copr_branch = opts
+                    .testing_branch
+                    .clone()
+                    .unwrap_or_else(|| branch.clone());
+                let prefix = sandogasa_copr::chroot_prefix(&copr_branch).ok_or_else(|| {
+                    format!(
+                        "cannot map branch '{copr_branch}' to a COPR chroot; pass \
+                         --testing-branch with the branch the COPR builds for \
+                         (e.g. epel9)"
+                    )
+                })?;
+                if opts.verbose {
+                    eprintln!(
+                        "[check-update] querying COPR monitor for {owner}/{project} \
+                         (chroot {prefix}*)"
+                    );
                 }
-            };
-            let nvrs = koji_list_tagged(&tag, opts.koji_profile.as_deref())?;
-            (Some(tag), nvrs, branch, None, None)
-        }
-        InputKind::BodhiAlias(alias) => {
-            let info = fetch_bodhi_update(&alias)?;
-
-            let branch = resolve_bodhi_branch(opts.branch.clone(), info.release_name.as_deref())?;
-
-            // If backed by a side tag, use koji to get the full list.
-            let (side_tag, nvrs) = if let Some(tag) = info.side_tag {
-                let koji_nvrs = koji_list_tagged(&tag, opts.koji_profile.as_deref())?;
-                (Some(tag), koji_nvrs)
-            } else {
-                (None, info.nvrs)
-            };
-
-            (
-                side_tag,
-                nvrs,
-                branch,
-                info.release_branch,
-                Some(info.status),
-            )
-        }
-    };
+                let packages = sandogasa_copr::Copr::new()
+                    .monitor(&owner, &project)
+                    .map_err(|e| e.to_string())?;
+                let nvrs = sandogasa_copr::nvrs_for_chroot(&packages, &prefix);
+                if nvrs.is_empty() {
+                    return Err(format!(
+                        "no succeeded builds in COPR {owner}/{project} for chroot \
+                         {prefix}*; available chroots: {}",
+                        sandogasa_copr::available_chroots(&packages).join(", ")
+                    ));
+                }
+                (
+                    None,
+                    Some(format!("{owner}/{project}")),
+                    nvrs,
+                    branch,
+                    None,
+                    None,
+                )
+            }
+        };
 
     // Extract unique source package names from NVRs.
     let updated_packages: Vec<String> = nvrs
@@ -322,7 +416,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             repo: opts.repo.clone(),
             updated_packages: vec![],
             changes: vec![],
-            full_analysis: side_tag.is_some(),
+            full_analysis: side_tag.is_some() || copr_spec.is_some(),
             changed_provides: vec![],
             installability_issues: vec![],
             stale_side_tag: vec![],
@@ -392,6 +486,13 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         repo: Some(format!("@koji:{tag}")),
     });
 
+    // A COPR is queried like any plain repo class: the branch picks
+    // the chroot (`fedrq -r @copr:owner/project -b epel9`).
+    let copr_fedrq = copr_spec.as_ref().map(|spec| sandogasa_fedrq::Fedrq {
+        branch: Some(new_branch.clone()),
+        repo: Some(format!("@copr:{spec}")),
+    });
+
     // Prefer @testing when the update has been pushed to testing,
     // since it has authoritative repo metadata (no staleness issue).
     let testing_fedrq = sandogasa_fedrq::Fedrq {
@@ -415,7 +516,9 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         }
         None => true,
     };
-    let has_testing = bodhi_in_testing
+    // COPR content never reaches @testing; skip the probe entirely.
+    let has_testing = copr_spec.is_none()
+        && bodhi_in_testing
         && testing_has_update_nvrs(&nvrs, |src| {
             testing_fedrq.subpkgs_nvrs(src).unwrap_or_default()
         });
@@ -443,6 +546,36 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             vec![],
             &stable_fedrq,
             &testing_fedrq,
+            opts,
+        );
+    }
+
+    // The COPR path mirrors the @testing one: the repo indexes source
+    // RPMs (unlike koji side-tag repos), so subpackage queries work
+    // directly, and COPR regenerates repodata itself after each build —
+    // no koji staleness/regen machinery.
+    if let Some(ref copr_fq) = copr_fedrq {
+        if opts.verbose {
+            eprintln!("[check-update] comparing provides via the COPR repo");
+        }
+        let copr_bins: Vec<String> = updated_packages
+            .iter()
+            .flat_map(|pkg| filter_none(copr_fq.subpkgs_names(pkg).unwrap_or_default()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let changed =
+            compute_changed_provides_via_subpkgs(&updated_packages, &stable_fedrq, copr_fq);
+        return run_provides_analysis(
+            input,
+            &branch,
+            &updated_packages,
+            &changes,
+            &copr_bins,
+            changed,
+            vec![],
+            &stable_fedrq,
+            copr_fq,
             opts,
         );
     }
@@ -2830,5 +2963,49 @@ mod tests {
             }
             _ => panic!("expected BodhiAlias"),
         }
+    }
+
+    fn assert_copr(input: &str, want_owner: &str, want_project: &str) {
+        match detect_input_type(input) {
+            InputKind::Copr { owner, project } => {
+                assert_eq!(owner, want_owner, "{input}");
+                assert_eq!(project, want_project, "{input}");
+            }
+            _ => panic!("expected Copr for {input}"),
+        }
+    }
+
+    #[test]
+    fn detect_copr_urls() {
+        // Group project, with and without trailing slash / subpages.
+        assert_copr(
+            "https://copr.fedorainfracloud.org/coprs/g/rust/uutils-and-nushell/",
+            "@rust",
+            "uutils-and-nushell",
+        );
+        assert_copr(
+            "https://copr.fedorainfracloud.org/coprs/g/rust/uutils-and-nushell/builds/",
+            "@rust",
+            "uutils-and-nushell",
+        );
+        // User project.
+        assert_copr(
+            "https://copr.fedorainfracloud.org/coprs/michel/staging",
+            "michel",
+            "staging",
+        );
+    }
+
+    #[test]
+    fn detect_copr_specs() {
+        assert_copr("@rust/uutils-and-nushell", "@rust", "uutils-and-nushell");
+        assert_copr("michel/staging", "michel", "staging");
+        // Two slashes is not a valid spec → falls back to SideTag.
+        assert!(matches!(detect_input_type("a/b/c"), InputKind::SideTag(_)));
+        // Slash-free inputs keep their existing classification.
+        assert!(matches!(
+            detect_input_type("f45-build-side-1"),
+            InputKind::SideTag(_)
+        ));
     }
 }

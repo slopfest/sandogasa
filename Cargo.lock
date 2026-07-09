@@ -465,6 +465,7 @@ dependencies = [
  "sandogasa-bugzilla",
  "sandogasa-cli",
  "sandogasa-config",
+ "sandogasa-copr",
  "sandogasa-depfilter",
  "sandogasa-fedrq",
  "sandogasa-koji",
@@ -1856,6 +1857,17 @@ dependencies = [
  "serde",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "sandogasa-copr"
+version = "0.16.0"
+dependencies = [
+ "mockito",
+ "reqwest",
+ "sandogasa-cli",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

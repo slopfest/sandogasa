@@ -15,8 +15,9 @@ reqwest = { workspace = true }
 sandogasa-bodhi = { workspace = true }
 sandogasa-bugclass = { workspace = true }
 sandogasa-bugzilla = { workspace = true }
-sandogasa-config = { workspace = true }
 sandogasa-cli = { workspace = true }
+sandogasa-config = { workspace = true }
+sandogasa-copr = { workspace = true }
 sandogasa-depfilter = { workspace = true }
 sandogasa-fedrq = { workspace = true }
 sandogasa-koji = { workspace = true }

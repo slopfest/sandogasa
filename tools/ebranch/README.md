@@ -179,6 +179,25 @@ ebranch check-update FEDORA-EPEL-2026-f9eaa11e18 -b c9s -r @epel
 ebranch check-update https://bodhi.fedoraproject.org/updates/FEDORA-EPEL-2026-f9eaa11e18
 ```
 
+…or a **COPR project** — for big coordinated updates staged in a COPR
+before any side tag or Bodhi update exists. Pass an `owner/project`
+spec (`@group` for group projects) or the project URL:
+
+```sh
+ebranch check-update @rust/uutils-and-nushell -b rawhide
+ebranch check-update https://copr.fedorainfracloud.org/coprs/g/rust/uutils-and-nushell/ -b rawhide
+ebranch check-update @rust/uutils-and-nushell -b al9 -r @epel --testing-branch epel9
+```
+
+The update contents come from COPR's monitor API (each package's
+latest **succeeded** build in the chroot matching the branch; x86_64
+preferred) and the new provides from fedrq's `@copr:` repo class —
+COPR repos index source RPMs and regenerate their own repodata, so
+there is no koji or regen-repo involvement. COPR input always
+requires `-b` (a COPR builds for many chroots); when `-b` is a base
+branch like `al9`, add `--testing-branch epel9` to name the chroot.
+`--give-karma` and `--submit` don't apply to COPRs.
+
 For new provides, ebranch checks these sources in order:
 1. **@testing** — preferred when the update has been pushed
    there, since the rendered repodata is authoritative. Two

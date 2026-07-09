@@ -6,6 +6,7 @@ members = [
     "crates/sandogasa-bugzilla",
     "crates/sandogasa-cli",
     "crates/sandogasa-config",
+    "crates/sandogasa-copr",
     "crates/sandogasa-depfilter",
     "crates/sandogasa-discourse",
     "crates/sandogasa-distgit",
@@ -71,6 +72,7 @@ sandogasa-bugclass = { version = "0.16", path = "crates/sandogasa-bugclass" }
 sandogasa-bugzilla = { version = "0.16", path = "crates/sandogasa-bugzilla" }
 sandogasa-cli = { version = "0.16", path = "crates/sandogasa-cli" }
 sandogasa-config = { version = "0.16", path = "crates/sandogasa-config" }
+sandogasa-copr = { version = "0.16", path = "crates/sandogasa-copr" }
 sandogasa-depfilter = { version = "0.16", path = "crates/sandogasa-depfilter" }
 sandogasa-discourse = { version = "0.16", path = "crates/sandogasa-discourse" }
 sandogasa-distgit = { version = "0.16", path = "crates/sandogasa-distgit" }

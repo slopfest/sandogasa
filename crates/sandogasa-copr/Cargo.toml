@@ -1,0 +1,16 @@
+[package]
+name = "sandogasa-copr"
+description = "COPR API client — read-only project monitoring for update checks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+sandogasa-cli = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+mockito = { workspace = true }
+serde_json = { workspace = true }

@@ -202,7 +202,19 @@ are excluded automatically."
 
 #[derive(clap::Args, Clone)]
 struct CheckUpdateArgs {
-    /// Koji side tag, Bodhi update alias, or Bodhi URL.
+    /// Koji side tag, Bodhi update alias/URL, or COPR project.
+    #[arg(
+        long_help = "\
+The update to check, one of:
+- a Koji side tag (f45-build-side-143123)
+- a Bodhi update alias or URL
+  (FEDORA-EPEL-2026-f9eaa11e18)
+- a COPR project: owner/project spec
+  (@rust/uutils-and-nushell) or its URL. COPR
+  input requires -b, and --testing-branch when
+  -b is a base branch like al9 (it picks the
+  COPR chroot, e.g. epel9 → epel-9-*)."
+    )]
     input: String,
 
     /// Branch to check against (e.g. epel9).
@@ -237,11 +249,13 @@ like -b al9)."
     )]
     repo: Option<String>,
 
-    /// Override branch for @testing queries.
+    /// Override branch for @testing / COPR-chroot queries.
     #[arg(
         long,
         long_help = "\
-Override branch for @testing queries.
+Override branch for the new-provides queries:
+@testing for Bodhi updates, and the chroot
+selection for COPR input (epel9 → epel-9-*).
 
 Auto-detected for EPEL side tags
 (e.g. epel9-build-side-* uses epel9).
@@ -834,9 +848,13 @@ fn main() -> ExitCode {
     }
 
     if let Command::CheckUpdate(a) = &cli.command {
-        // check-update also needs koji for side tag queries.
-        if let Err(e) =
-            sandogasa_cli::require_tools(&[("koji", "sudo dnf install koji", Some("version"))])
+        let input_kind = check_update::detect_input_type(&a.input);
+        // check-update needs koji for side tag queries — which Bodhi
+        // input may also trigger (side-tag-backed updates). COPR input
+        // never touches koji.
+        if !matches!(input_kind, check_update::InputKind::Copr { .. })
+            && let Err(e) =
+                sandogasa_cli::require_tools(&[("koji", "sudo dnf install koji", Some("version"))])
         {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
@@ -844,19 +862,25 @@ fn main() -> ExitCode {
         // Voting needs a Bodhi update; submitting needs a side tag
         // (an alias means the update already exists). Fail fast on
         // the wrong input kind.
-        let (vote_alias, side_tag) = match check_update::detect_input_type(&a.input) {
-            check_update::InputKind::BodhiAlias(alias) => (Some(alias), None),
-            check_update::InputKind::SideTag(tag) => (None, Some(tag)),
+        let (vote_alias, side_tag) = match &input_kind {
+            check_update::InputKind::BodhiAlias(alias) => (Some(alias.clone()), None),
+            check_update::InputKind::SideTag(tag) => (None, Some(tag.clone())),
+            // COPRs are published through their own repos: nothing to
+            // vote on or submit.
+            check_update::InputKind::Copr { .. } => (None, None),
         };
         if a.give_karma && vote_alias.is_none() {
             eprintln!("error: --give-karma requires a Bodhi update alias or URL as input");
             return ExitCode::FAILURE;
         }
         if a.submit && side_tag.is_none() {
-            eprintln!(
-                "error: --submit requires a Koji side tag as input; this is a Bodhi \
-                 update, so it has already been submitted"
-            );
+            let why = match &input_kind {
+                check_update::InputKind::BodhiAlias(_) => {
+                    "this is a Bodhi update, so it has already been submitted"
+                }
+                _ => "a COPR is published through its own repos, not Bodhi",
+            };
+            eprintln!("error: --submit requires a Koji side tag as input; {why}");
             return ExitCode::FAILURE;
         }
         if a.yes && !a.give_karma && !a.submit {

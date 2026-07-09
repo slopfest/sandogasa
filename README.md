@@ -41,6 +41,7 @@ library crates:
 - **sandogasa-bugzilla** — Bugzilla REST API client
 - **sandogasa-cli** — shared CLI utilities (external tool availability checks)
 - **sandogasa-config** — shared config file management and interactive prompting
+- **sandogasa-copr** — COPR API client for read-only project monitoring
 - **sandogasa-depfilter** — RPM dependency filtering for cross-branch analysis
 - **sandogasa-discourse** — Discourse forum API client
 - **sandogasa-distgit** — Fedora dist-git client, ACL management, and RPM spec file parser
