@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### sandogasa-report: fix dropped salsa tags and gitlab.com release noise
+
+Two log findings from the H1 report run:
+
+- Old tags on salsa come back with `created_at: null` (2021-era tags
+  predating GitLab's tag-timestamp recording); the non-optional field
+  in sandogasa-gitlab's `Tag` made the whole page fail to decode,
+  silently dropping the *entire project's* tags from the report
+  (michel/distrobox has 86 tags, 5 of them undated). `created_at` is
+  now optional, and the report treats an undatable tag as
+  out-of-window.
+- Projects with the releases feature disabled (gitlab.com dist-git
+  mirrors) answer the releases endpoint with 403 Forbidden;
+  `project_releases` now treats that like 404 — "no releases", not a
+  logged error.
+
+(The third logged warning — sourcehut "reference not found" for an
+empty repo with no default branch — was already handled by design:
+the repo is skipped and the section continues.)
+
 ### ebranch: check-update separates FTI from FTBFS — and catches both
 
 The reverse-dependency check had two defects that compounded into

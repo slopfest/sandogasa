@@ -204,7 +204,14 @@ pub fn gitlab_report(
             }
         };
         for tag in tags {
-            if !in_date_range(&tag.created_at, since, until) {
+            // Old tags can lack a creation timestamp (salsa returns
+            // created_at: null for 2021-era tags); undatable means
+            // out-of-window for a windowed report.
+            let in_window = tag
+                .created_at
+                .as_deref()
+                .is_some_and(|ts| in_date_range(ts, since, until));
+            if !in_window {
                 continue;
             }
             if tags_seen.insert((path.clone(), tag.name.clone())) {

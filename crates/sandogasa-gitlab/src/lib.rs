@@ -1133,8 +1133,12 @@ pub struct Tag {
     /// Tag-ref creation timestamp on GitLab (ISO 8601). This is
     /// when the tag was pushed, *not* when the underlying commit
     /// was authored — so a tag created locally weeks ago and
-    /// pushed today appears here with today's date.
-    pub created_at: String,
+    /// pushed today appears here with today's date. `None` for old
+    /// tags predating GitLab's recording of it (observed on salsa:
+    /// 2021-era tags come back with `created_at: null`, and a
+    /// non-optional field made the whole page fail to decode).
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 /// List tags for a project, paginated. Returns an empty list on
@@ -1237,7 +1241,11 @@ pub fn project_releases(
         let page_str = page.to_string();
         let query: Vec<(&str, &str)> = vec![("per_page", "100"), ("page", &page_str)];
         let resp = http.get(&endpoint).query(&query).send()?;
-        if resp.status().as_u16() == 404 {
+        // 404: project gone. 403: the project's releases feature is
+        // disabled (GitLab forbids the endpoint rather than returning
+        // an empty list — observed on gitlab.com dist-git mirrors).
+        // Both mean "no releases to report", not an error.
+        if matches!(resp.status().as_u16(), 404 | 403) {
             break;
         }
         if !resp.status().is_success() {
@@ -1921,6 +1929,50 @@ mod tests {
         assert_eq!(n, 103);
         mock_p1.assert();
         mock_p2.assert();
+    }
+
+    #[test]
+    fn list_tags_tolerates_null_created_at() {
+        // salsa returns created_at: null for 2021-era tags; one null
+        // must not fail the whole page (it used to drop the entire
+        // project's tags from reports).
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/projects/7/repository/tags")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(
+                r#"[
+                    {"name": "debian/1.2.16-1", "created_at": "2026-06-21T21:50:57.000Z"},
+                    {"name": "debian/1.2.15-1", "created_at": null}
+                ]"#,
+            )
+            .create();
+        let tags = list_tags(&server.url(), "tok", 7).unwrap();
+        mock.assert();
+        assert_eq!(tags.len(), 2);
+        assert_eq!(
+            tags[0].created_at.as_deref(),
+            Some("2026-06-21T21:50:57.000Z")
+        );
+        assert_eq!(tags[1].created_at, None);
+    }
+
+    #[test]
+    fn project_releases_treats_403_as_feature_disabled() {
+        // GitLab forbids the releases endpoint when the project's
+        // releases feature is disabled (observed on gitlab.com
+        // dist-git mirrors) — that's "no releases", not an error.
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/projects/8/releases")
+            .match_query(mockito::Matcher::Any)
+            .with_status(403)
+            .with_body(r#"{"message":"403 Forbidden"}"#)
+            .create();
+        let releases = project_releases(&server.url(), "tok", 8).unwrap();
+        mock.assert();
+        assert!(releases.is_empty());
     }
 
     #[test]
