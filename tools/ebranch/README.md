@@ -172,6 +172,21 @@ No packages depend on the changed Provides. No breakage expected.
 The output is Markdown, so it can be pasted directly into Bodhi
 comments.
 
+Reverse dependencies are checked on two axes, with full rich-dep
+(boolean) semantics and RPM version comparison against the update's
+new Provides:
+
+- **FTI** (fails to install) — a binary subpackage's install-time
+  Requires stops resolving once the update ships
+- **FTBFS** (fails to build from source) — the source package's
+  BuildRequires stops resolving for its next rebuild, e.g. a
+  versioned pin like `(crate(ctor/default) >= 0.6.0 with
+  crate(ctor/default) < 0.7.0~)` when ctor moves to 1.x
+
+The summary counts each kind and every broken requirement is labeled
+`[FTI]`/`[FTBFS]`. (If a touched capability is also provided by an
+unrelated package, the check can over-report — the safe direction.)
+
 The input can also be a Bodhi update alias or URL:
 
 ```sh

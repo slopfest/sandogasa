@@ -203,8 +203,7 @@ are excluded automatically."
 #[derive(clap::Args, Clone)]
 struct CheckUpdateArgs {
     /// Koji side tag, Bodhi update alias/URL, or COPR project.
-    #[arg(
-        long_help = "\
+    #[arg(long_help = "\
 The update to check, one of:
 - a Koji side tag (f45-build-side-143123)
 - a Bodhi update alias or URL
@@ -213,8 +212,7 @@ The update to check, one of:
   (@rust/uutils-and-nushell) or its URL. COPR
   input requires -b, and --testing-branch when
   -b is a base branch like al9 (it picks the
-  COPR chroot, e.g. epel9 → epel-9-*)."
-    )]
+  COPR chroot, e.g. epel9 → epel-9-*).")]
     input: String,
 
     /// Branch to check against (e.g. epel9).

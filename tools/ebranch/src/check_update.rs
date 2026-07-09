@@ -69,13 +69,38 @@ pub struct PackageChange {
     pub new: String,
 }
 
+/// How a reverse dependency breaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BreakKind {
+    /// A binary subpackage's install-time Requires stops resolving —
+    /// the package fails to install (FTI) once the update ships.
+    Fti,
+    /// The source package's BuildRequires stops resolving — the
+    /// package fails to build from source (FTBFS) on its next
+    /// rebuild.
+    Ftbfs,
+}
+
+impl BreakKind {
+    /// The label shown in reports.
+    pub fn label(self) -> &'static str {
+        match self {
+            BreakKind::Fti => "FTI",
+            BreakKind::Ftbfs => "FTBFS",
+        }
+    }
+}
+
 /// A single broken Requires entry.
 #[derive(Debug, Clone, Serialize)]
 pub struct BrokenRequires {
     /// The Requires string that would break.
     pub dep: String,
-    /// The Provide that was removed or updated.
+    /// The changed Provide(s) behind the break.
     pub changed_provide: String,
+    /// Install-time (FTI) or build-time (FTBFS) breakage.
+    pub kind: BreakKind,
 }
 
 /// An unsatisfied Requires in an updated package's subpackages.
@@ -973,9 +998,25 @@ pub fn render_report(report: &CheckUpdateReport, detailed: bool) -> String {
         report.installability_issues.len()
     );
     if !report.reverse_deps.is_empty() {
+        // Split the damage by kind: a package fails to install (FTI)
+        // when a binary Requires breaks, and fails to build (FTBFS)
+        // when a BuildRequires does.
+        let fti = broken
+            .iter()
+            .filter(|(_, r)| r.issues.iter().any(|i| i.kind == BreakKind::Fti))
+            .count();
+        let ftbfs = broken
+            .iter()
+            .filter(|(_, r)| r.issues.iter().any(|i| i.kind == BreakKind::Ftbfs))
+            .count();
+        let breakdown = if broken.is_empty() {
+            String::new()
+        } else {
+            format!(" ({fti} FTI, {ftbfs} FTBFS)")
+        };
         let _ = writeln!(
             o,
-            "- **Reverse dependencies:** {} checked, {} would break",
+            "- **Reverse dependencies:** {} checked, {} would break{breakdown}",
             report.reverse_deps.len(),
             broken.len(),
         );
@@ -1033,8 +1074,10 @@ pub fn render_report(report: &CheckUpdateReport, detailed: bool) -> String {
             for issue in &result.issues {
                 let _ = writeln!(
                     o,
-                    "  - `{}` (changed: `{}`)",
-                    issue.dep, issue.changed_provide
+                    "  - [{}] `{}` (changed: `{}`)",
+                    issue.kind.label(),
+                    issue.dep,
+                    issue.changed_provide
                 );
             }
         }
@@ -1289,10 +1332,11 @@ fn dep_satisfiable(dep: &str, resolves: &impl Fn(&str) -> bool) -> bool {
     match dep.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
         // Boolean/rich dep (fully parenthesized): evaluate the inside.
         Some(inner) => eval_boolean(inner.trim(), resolves),
-        None => {
-            let cap = leaf_cap(dep);
-            cap.is_empty() || resolves(cap)
-        }
+        // Leaf terms reach the resolver whole — version constraint
+        // included — so version-aware resolvers can judge them;
+        // name-level resolvers strip the constraint themselves
+        // (see `leaf_cap`).
+        None => dep.is_empty() || resolves(dep),
     }
 }
 
@@ -1329,14 +1373,12 @@ fn eval_boolean(expr: &str, resolves: &impl Fn(&str) -> bool) -> bool {
     if let Some((a, _b)) = split_top(expr, "without") {
         return eval_boolean(a, resolves);
     }
-    // Nested group or a plain leaf.
+    // Nested group or a plain leaf (passed to the resolver whole,
+    // version constraint included).
     let expr = expr.trim();
     match expr.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
         Some(inner) => eval_boolean(inner.trim(), resolves),
-        None => {
-            let cap = leaf_cap(expr);
-            cap.is_empty() || resolves(cap)
-        }
+        None => expr.is_empty() || resolves(expr),
     }
 }
 
@@ -1364,6 +1406,54 @@ fn extract_capability_names(dep: &str) -> Vec<String> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+/// The version part of a Provide string, if any
+/// (`crate(ctor/default) = 1.0.8` → `1.0.8`).
+fn provide_version(provide: &str) -> Option<&str> {
+    for op in [" = ", " >= ", " <= ", " < ", " > "] {
+        if let Some((_, version)) = provide.split_once(op) {
+            return Some(version.trim());
+        }
+    }
+    None
+}
+
+/// Whether a reverse dependency's requirement still resolves after
+/// the update. Leaf capabilities the update doesn't touch resolve by
+/// definition (they resolved in stable, and the update doesn't change
+/// them); capabilities the update (re)provides must be satisfied by a
+/// NEW provide, with version constraints evaluated under RPM
+/// semantics (an unversioned provide satisfies any constraint). When
+/// some other, non-updated package also provides a touched
+/// capability, this can over-report — the safe direction.
+fn requirement_survives_update(
+    dep: &str,
+    changed_names: &BTreeSet<String>,
+    new_by_name: &BTreeMap<String, Vec<String>>,
+) -> bool {
+    dep_satisfiable(dep, &|term: &str| {
+        let Some((cap, constraint)) = crate::resolve::parse_versioned_dep(term) else {
+            // Unparseable leaf (shouldn't happen once rich-dep parens
+            // are peeled): assume unaffected.
+            return true;
+        };
+        let touched = changed_names.contains(cap) || new_by_name.contains_key(cap);
+        if !touched {
+            return true;
+        }
+        let Some(provides) = new_by_name.get(cap) else {
+            // The capability was removed by the update.
+            return false;
+        };
+        match constraint {
+            None => true,
+            Some((op, ver)) => provides.iter().any(|p| match provide_version(p) {
+                None => true,
+                Some(available) => crate::resolve::constraint_satisfied(available, op, ver),
+            }),
+        }
+    })
 }
 
 /// Extract the name part of a Provide string.
@@ -1632,6 +1722,7 @@ fn compute_changed_provides_via_koji(
 fn check_update_installability(
     updated_packages: &[String],
     binary_names: &[String],
+    new_provides_full: &[String],
     new_fedrq: &sandogasa_fedrq::Fedrq,
     stable_fedrq: &sandogasa_fedrq::Fedrq,
     verbose: bool,
@@ -1643,20 +1734,11 @@ fn check_update_installability(
         );
     }
 
-    // Collect new provides from updated packages (they satisfy each
-    // other's deps). Query per binary package so it works on koji.
-    if verbose {
-        eprintln!("[check-update] collecting provides from updated packages");
-    }
-    let new_provides: BTreeSet<String> = binary_names
-        .par_iter()
-        .flat_map_iter(|name| {
-            new_fedrq
-                .pkg_provides(name)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|p| provide_name(&p).to_string())
-        })
+    // The update's own provides satisfy each other's deps; this check
+    // resolves at the capability-name level.
+    let new_provides: BTreeSet<String> = new_provides_full
+        .iter()
+        .map(|p| provide_name(p).to_string())
         .collect();
 
     // Map binary RPM names back to source packages for reporting.
@@ -1699,8 +1781,13 @@ fn check_update_installability(
     };
 
     // A capability resolves if another package in the update provides
-    // it, or it's available in the stable repo (memoized).
-    let resolves = |cap: &str| new_provides.contains(cap) || resolves_in_stable(cap);
+    // it, or it's available in the stable repo (memoized). Leaf terms
+    // arrive with their version constraint; this check resolves at
+    // the name level, so strip it first.
+    let resolves = |term: &str| {
+        let cap = leaf_cap(term);
+        new_provides.contains(cap) || resolves_in_stable(cap)
+    };
 
     binary_names
         .par_iter()
@@ -1766,9 +1853,28 @@ fn run_provides_analysis(
         );
     }
 
+    // Collect the update's provides once (full strings, versions
+    // included): the installability check resolves names against
+    // them, and the reverse-dep check evaluates version constraints.
+    if opts.verbose {
+        eprintln!("[check-update] collecting provides from updated packages");
+    }
+    let new_provides_full: Vec<String> = binary_names
+        .par_iter()
+        .flat_map_iter(|name| new_fedrq.pkg_provides(name).unwrap_or_default())
+        .collect();
+    let mut new_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for provide in &new_provides_full {
+        new_by_name
+            .entry(provide_name(provide).to_string())
+            .or_default()
+            .push(provide.clone());
+    }
+
     let installability_issues = check_update_installability(
         updated_packages,
         binary_names,
+        &new_provides_full,
         new_fedrq,
         stable_fedrq,
         opts.verbose,
@@ -1792,7 +1898,6 @@ fn run_provides_analysis(
 
     // Use old provide strings for whatrequires lookup.
     let old_provide_strings: Vec<String> = changed_provides.iter().map(|c| c.old.clone()).collect();
-    let old_provide_set: BTreeSet<&str> = old_provide_strings.iter().map(|s| s.as_str()).collect();
 
     if opts.verbose {
         eprintln!("[check-update] finding reverse dependencies");
@@ -1820,23 +1925,54 @@ fn run_provides_analysis(
         );
     }
 
+    let changed_names: BTreeSet<String> = changed_provides
+        .iter()
+        .map(|c| provide_name(&c.old).to_string())
+        .collect();
+
     let results: Vec<(String, RevDepResult)> = rev_deps
         .par_iter()
         .map(|pkg| {
-            let requires = stable_fedrq.subpkgs_requires(pkg).unwrap_or_default();
+            // Install-time Requires of the binaries (FTI when broken)
+            // *and* the source package's BuildRequires (FTBFS when
+            // broken): a version bump can FTBFS a reverse dep without
+            // touching its installed binaries — e.g. a versioned
+            // BuildRequires like `(crate(ctor/default) >= 0.6.0 with
+            // crate(ctor/default) < 0.7.0~)` when ctor moves to 1.x.
+            let mut deps: Vec<(BreakKind, String)> =
+                filter_none(stable_fedrq.subpkgs_requires(pkg).unwrap_or_default())
+                    .into_iter()
+                    .map(|dep| (BreakKind::Fti, dep))
+                    .collect();
+            deps.extend(
+                filter_none(stable_fedrq.src_requires(pkg).unwrap_or_default())
+                    .into_iter()
+                    .map(|dep| (BreakKind::Ftbfs, dep)),
+            );
 
-            let issues: Vec<BrokenRequires> = requires
-                .iter()
-                .filter_map(|dep| {
-                    let dep_str = dep.trim();
-                    if old_provide_set.contains(dep_str) {
-                        Some(BrokenRequires {
-                            dep: dep_str.to_string(),
-                            changed_provide: dep_str.to_string(),
-                        })
-                    } else {
-                        None
+            let mut seen: BTreeSet<(BreakKind, String)> = BTreeSet::new();
+            let issues: Vec<BrokenRequires> = deps
+                .into_iter()
+                .filter_map(|(kind, dep)| {
+                    let dep = dep.trim().to_string();
+                    if dep.is_empty() || sandogasa_depfilter::is_rpm_internal_dep(&dep) {
+                        return None;
                     }
+                    if !seen.insert((kind, dep.clone())) {
+                        return None;
+                    }
+                    if requirement_survives_update(&dep, &changed_names, &new_by_name) {
+                        return None;
+                    }
+                    let changed: Vec<String> = extract_capability_names(&dep)
+                        .into_iter()
+                        .filter(|c| changed_names.contains(c) || new_by_name.contains_key(c))
+                        .collect();
+                    Some(BrokenRequires {
+                        dep,
+                        changed_provide: changed.join(", "),
+                        kind,
+                    })
                 })
                 .collect();
 
@@ -2145,6 +2281,7 @@ mod tests {
             issues: vec![BrokenRequires {
                 dep: "needs".to_string(),
                 changed_provide: provide.to_string(),
+                kind: BreakKind::Fti,
             }],
         }
     }
@@ -2249,6 +2386,7 @@ mod tests {
         two.issues.push(BrokenRequires {
             dep: "needs2".to_string(),
             changed_provide: "libbar.so.2".to_string(),
+            kind: BreakKind::Ftbfs,
         });
         let report = report_with(vec![], vec![("kpat", two)]);
         let decisions = vec![(
@@ -2500,8 +2638,100 @@ mod tests {
     }
 
     #[test]
+    fn requirement_survives_update_version_aware() {
+        // The bear regression: its SRPM BuildRequires pins ctor to
+        // 0.6.x with a rich constraint; the update moves ctor to 1.x.
+        let bear_br = "(crate(ctor/default) >= 0.6.0 with crate(ctor/default) < 0.7.0~)";
+        let changed: BTreeSet<String> = ["crate(ctor/default)".to_string()].into();
+        let mut new_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        new_by_name.insert(
+            "crate(ctor/default)".to_string(),
+            vec!["crate(ctor/default) = 1.0.8".to_string()],
+        );
+        assert!(!requirement_survives_update(
+            bear_br,
+            &changed,
+            &new_by_name
+        ));
+
+        // A compatible bump (0.6.5) still satisfies the pin.
+        new_by_name.insert(
+            "crate(ctor/default)".to_string(),
+            vec!["crate(ctor/default) = 0.6.5".to_string()],
+        );
+        assert!(requirement_survives_update(bear_br, &changed, &new_by_name));
+
+        // A plain versioned require against the new version.
+        assert!(requirement_survives_update(
+            "crate(ctor/default) >= 0.6.0",
+            &changed,
+            &new_by_name
+        ));
+        assert!(!requirement_survives_update(
+            "crate(ctor/default) >= 2.0.0",
+            &changed,
+            &new_by_name
+        ));
+
+        // A removed provide breaks even an unversioned require...
+        let removed: BTreeSet<String> = ["libfoo.so.1()(64bit)".to_string()].into();
+        assert!(!requirement_survives_update(
+            "libfoo.so.1()(64bit)",
+            &removed,
+            &BTreeMap::new()
+        ));
+        // ...while capabilities the update never touches survive.
+        assert!(requirement_survives_update(
+            "libc.so.6(GLIBC_2.34)(64bit)",
+            &changed,
+            &new_by_name
+        ));
+        // An unversioned new provide satisfies any constraint.
+        let mut unversioned: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        unversioned.insert("foo".to_string(), vec!["foo".to_string()]);
+        assert!(requirement_survives_update(
+            "foo >= 99",
+            &changed,
+            &unversioned
+        ));
+    }
+
+    #[test]
+    fn provide_version_extraction() {
+        assert_eq!(
+            provide_version("crate(ctor/default) = 1.0.8"),
+            Some("1.0.8")
+        );
+        assert_eq!(
+            provide_version("tor = 0.4.9.5-1.el9"),
+            Some("0.4.9.5-1.el9")
+        );
+        assert_eq!(provide_version("libthing.so.1()(64bit)"), None);
+    }
+
+    #[test]
+    fn render_report_splits_fti_and_ftbfs() {
+        let mut result = broken("crate(ctor/default)");
+        result.issues[0].kind = BreakKind::Ftbfs;
+        result.issues[0].dep =
+            "(crate(ctor/default) >= 0.6.0 with crate(ctor/default) < 0.7.0~)".to_string();
+        let report = report_with(vec![], vec![("bear", result)]);
+        let out = render_report(&report, false);
+        assert!(out.contains("1 would break (0 FTI, 1 FTBFS)"), "{out}");
+        assert!(
+            out.contains(
+                "[FTBFS] `(crate(ctor/default) >= 0.6.0 with crate(ctor/default) < 0.7.0~)`"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
     fn dep_satisfiable_plain_dep_checks_capability() {
-        assert!(dep_satisfiable("bash >= 5.0", &|c: &str| c == "bash"));
+        // The resolver receives the whole leaf term, version
+        // constraint included; name-level resolvers strip it with
+        // leaf_cap (as check_update_installability does).
+        assert!(dep_satisfiable("bash >= 5.0", &|t: &str| leaf_cap(t) == "bash"));
         assert!(!dep_satisfiable("missing-cap", &|_: &str| false));
         // A plain lib cap with parens in the name resolves as one cap.
         assert!(dep_satisfiable(

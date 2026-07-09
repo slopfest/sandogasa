@@ -209,6 +209,19 @@ impl Fedrq {
         Self::run(&mut cmd)
     }
 
+    /// Return the Requires of a *source* package — its BuildRequires —
+    /// via `fedrq pkgs --src -F requires`. Complements
+    /// [`Self::subpkgs_requires`] (the binary subpackages' install-time
+    /// Requires): an update can break a reverse dependency's next
+    /// rebuild without breaking its installed binaries.
+    pub fn src_requires(&self, srpm: &str) -> Result<Vec<String>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(["pkgs", "--src", "-F", "requires"]);
+        self.apply_opts(&mut cmd);
+        cmd.args(["--", srpm]);
+        Self::run(&mut cmd)
+    }
+
     /// Resolve a dependency name to the source package(s) that provide it.
     ///
     /// Uses `fedrq pkgs -P -S -F source_name <dep>` to find which source

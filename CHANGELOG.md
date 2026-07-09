@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+### ebranch: check-update separates FTI from FTBFS — and catches both
+
+The reverse-dependency check had two defects that compounded into
+false "0 would break" verdicts:
+
+- **Exact string matching (FTI bug):** a reverse dep was flagged only
+  when a binary Requires was *byte-identical* to an old Provide. A
+  Provide reads `crate(sha3/default) = 0.10.8` while a Require reads
+  `crate(sha3/default) >= 0.10.0` (or its rich form), so versioned
+  deps could never match — the old check was effectively a
+  soname-removal detector (unversioned Require vs removed unversioned
+  Provide), blind to every versioned pin.
+- **SRPMs never inspected (FTBFS gap):** only `subpkgs_requires`
+  (binary subpackages) was queried, so BuildRequires like bear's
+  `(crate(ctor/default) >= 0.6.0 with crate(ctor/default) < 0.7.0~)`
+  were structurally invisible across a ctor 0.6→1.0 bump.
+
+The *discovery* step was always right — `fedrq whatrequires` resolves
+versioned and rich reverse deps — which is why affected packages were
+listed as "checked" and then every one silently dropped by the
+confirmation step. The practical consequence: `--give-karma` derived
+**+1** ("no issues found") for updates that break reverse deps.
+
+Reverse deps are now checked on two axes, each evaluated with full
+rich-dep semantics and RPM version comparison against the update's
+*new* provides:
+
+- **FTI** (fails to install) — a binary subpackage's Requires stops
+  resolving once the update ships
+- **FTBFS** (fails to build from source) — the source package's
+  BuildRequires stops resolving for its next rebuild
+
+The report summary shows the split (`11 would break (4 FTI, 10
+FTBFS)`) and each broken requirement is labeled; in `--json`,
+`BrokenRequires` gains a `kind` field (`fti` / `ftbfs`). When a
+touched capability is also provided by an unrelated package the check
+can over-report — the safe direction. Verified against the
+uutils-and-nushell staging COPR, where the old check reported nothing
+and the new one flags all 11 reverse deps, including the not yet
+rebuilt nushell and uutils-coreutils themselves.
+
+sandogasa-fedrq gains `src_requires` (a source package's
+BuildRequires via `fedrq pkgs --src -F requires`, additive).
+
 ### ebranch: check-update accepts COPR projects
 
 Big coordinated updates often stage in a COPR before any side tag or

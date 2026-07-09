@@ -354,7 +354,7 @@ pub fn base_branch_for(
 /// Some((">=", "77")))`). Returns `None` for rich (boolean) deps and
 /// anything else that isn't the `name [op version]` shape — those keep
 /// the pre-guard behavior.
-fn parse_versioned_dep(dep: &str) -> Option<(&str, Option<(&str, &str)>)> {
+pub(crate) fn parse_versioned_dep(dep: &str) -> Option<(&str, Option<(&str, &str)>)> {
     let dep = dep.trim();
     if dep.starts_with('(') {
         return None;
@@ -375,7 +375,7 @@ fn parse_versioned_dep(dep: &str) -> Option<(&str, Option<(&str, &str)>)> {
 ///
 /// Note: the base probe returns V-R without the epoch, so an epoch in
 /// the constraint (rare) compares against epoch 0.
-fn constraint_satisfied(available_vr: &str, op: &str, required: &str) -> bool {
+pub(crate) fn constraint_satisfied(available_vr: &str, op: &str, required: &str) -> bool {
     use std::cmp::Ordering::*;
     let available = if required.contains('-') {
         available_vr
