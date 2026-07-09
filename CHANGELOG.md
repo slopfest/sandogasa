@@ -1,8 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.17.0
 
-### sandogasa-report: fix dropped salsa tags and gitlab.com release noise
+### sandogasa-report: fix dropped salsa tags and gitlab.com release noise (breaking sandogasa-gitlab API)
+
+What broke: sandogasa-gitlab's `Tag.created_at` changed type from
+`String` to `Option<String>` — consumers reading it as a `String`
+must handle the `None` case (undated old tags). `project_releases`'s
+403 handling is behavioral only. (cargo-semver-checks has no lint for
+field type changes, so it reported no bump required; this is a real
+compile break for library consumers.)
 
 Two log findings from the H1 report run:
 
