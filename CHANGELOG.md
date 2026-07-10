@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### sandogasa-report: document the config-before-report setup path
+
+External feedback (from pairing sandogasa-report with hansei): it
+wasn't clear how to make sure all credentials get asked for. The
+README now spells it out — `sandogasa-report config -c config.toml`
+walks every forge instance used by the config's domains and prompts
+for the full credential set (FAS username, Bugzilla email, Sourcehut
+git emails, per-instance usernames and API tokens for
+GitLab/GitHub/Forgejo/Sourcehut), so a single run covers any
+`report -d` combination from that config. Documentation only; no
+behavior change.
+
 ## v0.17.0
 
 ### sandogasa-report: fix dropped salsa tags and gitlab.com release noise (breaking sandogasa-gitlab API)

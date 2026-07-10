@@ -2,6 +2,12 @@
 
 ## sandogasa-report
 
+- (2026-07-10, maybe) `config` could take `report`'s repeatable `-d`
+  flag to scope the credential prompts to a domain subset (default:
+  all, the current behavior). A working implementation was drafted
+  and reverted in favor of documenting the run-config-once path —
+  revisit if configs grow enough domains that full walks get tedious.
+
 - (2026-07-07, nice-to-have) readability polish deferred from the H1
   report review: suppress all-zero stat lines in the non-detailed view
   (e.g. "Releases published: 0 across 0 project(s)"), and consider an

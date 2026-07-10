@@ -62,12 +62,20 @@ Two subcommands:
 - `sandogasa-report report` — generate an activity report. Takes
   the date range, domain list, and output format.
 - `sandogasa-report config` — interactive setup of the per-user
-  overlay (see [Configuration](#configuration)). Walks each
-  GitLab-enabled domain from the main config and prompts for your
-  username on that instance.
+  overlay (see [Configuration](#configuration)). Walks **every**
+  forge instance used by the domains in the main config and prompts
+  for the full credential set a report can need: your FAS username,
+  Bugzilla email, git author emails (for Sourcehut commit
+  attribution), then per-instance usernames and API tokens for
+  GitLab, GitHub, Forgejo, and Sourcehut. Because it covers every
+  domain in the config, one run sets you up for **any** `report -d`
+  combination drawn from that config. Existing values show as
+  defaults on re-runs, so only missing credentials need typing.
+  Token input is hidden and needs a real terminal.
 
 ```sh
-# Interactive overlay setup
+# One-time interactive setup: asks for every credential the
+# config's domains can need, so any later `report -d ...` works
 sandogasa-report config -c config.toml
 
 # Report on Fedora activity for Q1 2026
