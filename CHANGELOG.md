@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### dbranch: `--debusine-project` for shared multi-package workspaces
+
+The Debusine upload path composed the workspace and workflow names
+from the source package (`r-<owner>-<srcpkg>`,
+`publish-to-<suite>-<srcpkg>`), which assumed one workspace per
+package. The new `--debusine-project <project>` flag on `rebuild` and
+`update` (requires `--debusine`) overrides the project part in both
+names, for a shared workspace hosting several packages — Debusine's
+`r-YOURNAME-PROJECTNAME` naming doesn't require the project to be a
+package name. Defaults to the source package as before.
+
 ### sandogasa-report: document the config-before-report setup path
 
 External feedback (from pairing sandogasa-report with hansei): it

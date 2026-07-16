@@ -196,11 +196,16 @@ Landmines and decisions:
   `publish-to-sid-<srcpkg>`. For rebuild targets this is the same value
   as the pbuilder build suite (`upload_dest_for` reuses
   `build_suite_for`).
-- **The workspace/workflow embed the source package name**, composed at
-  upload time from the changelog (`r-<name>-<srcpkg>`); `--debusine`
-  takes only the owner name, so it works across packages (and parsing a
-  full workspace string back apart would be ambiguous — owner names may
-  contain hyphens, e.g. `michel-slm`).
+- **The workspace/workflow embed a project name — by default the
+  source package**, composed at upload time from the changelog
+  (`r-<name>-<srcpkg>`); `--debusine` takes only the owner name, so it
+  works across packages (and parsing a full workspace string back
+  apart would be ambiguous — owner names may contain hyphens, e.g.
+  `michel-slm`). `--debusine-project` overrides the project part for a
+  shared workspace hosting several packages (Debusine's
+  `r-YOURNAME-PROJECTNAME` naming doesn't require one workspace per
+  package); it replaces `<srcpkg>` in **both** the workspace and the
+  `publish-to-<suite>-*` workflow name.
 - **Debian targets only**: debusine.debian.net hosts Debian suites, so
   `--debusine` is rejected for Ubuntu PPA targets and bulk runs (bulk
   selects PPA branches). The Debian-host guards are unchanged —

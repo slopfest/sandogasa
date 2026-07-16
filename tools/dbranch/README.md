@@ -58,11 +58,12 @@ dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
     [--source <branch>] [--nowait]
     [--refresh-chroot | --no-refresh-chroot] [--urgency <level>]
     [--ppa <name> | --upload-target <host> | --debusine <name>]
-    [--yes] [--include-eol]
+    [--debusine-project <project>] [--yes] [--include-eol]
     [--dry-run] [--explain] [--quiet]
 dbranch update [<branch>] [--stage <list>] [-C <dir>]
     [--build-suite <suite>] [--nowait]
     [--upload-target <host> | --debusine <name>]
+    [--debusine-project <project>]
     [--refresh-chroot | --no-refresh-chroot] [--urgency <level>]
     [--dry-run] [--explain] [--quiet]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
@@ -238,7 +239,11 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   instead: `dput -O debusine_workspace=r-<name>-<srcpkg>
   -O debusine_workflow=publish-to-<suite>-<srcpkg> debusine.debian.net
   …`, where `<suite>` is the target's **base** release — a trixie
-  backport publishes to `trixie`, `update` publishes to `sid`. Needs
+  backport publishes to `trixie`, `update` publishes to `sid`. The
+  project part defaults to the source package name, which fits a repo
+  shipping a single package; `--debusine-project <project>` overrides
+  it for a shared workspace hosting several packages (the wiki's
+  `r-YOURNAME-PROJECTNAME` pattern). Needs
   `debusine-client` (the dput profile) and a `debusine setup` token;
   both are pre-flighted before any work. Ubuntu PPA targets can't use
   it (Debusine hosts Debian suites only).

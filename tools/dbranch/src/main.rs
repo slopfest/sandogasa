@@ -148,12 +148,28 @@ dput archive. NAME is the repository owner (the r-NAME-* workspace
 prefix on debusine.debian.net); dbranch uploads with
   dput -O debusine_workspace=r-NAME-<srcpkg>
        -O debusine_workflow=publish-to-<suite>-<srcpkg>
+(--debusine-project replaces <srcpkg> for shared workspaces)
 where <suite> is the target's base release (a trixie backport
 publishes to trixie). Debian targets only. Needs debusine-client and
 a `debusine setup` token.
 See wiki.debian.org/DebusineDebianNet#Repositories."
         )]
         debusine: Option<String>,
+
+        /// Upload stage: Debusine project name (default: source pkg).
+        #[arg(
+            long,
+            value_name = "PROJECT",
+            help_heading = "Upload",
+            requires = "debusine",
+            long_help = "\
+Upload stage: the Debusine project name — the part after the owner
+in the r-NAME-PROJECT workspace and publish-to-<suite>-PROJECT
+workflow. Defaults to the source package name, which fits a repo
+shipping one package; a shared workspace hosting several packages
+names its project here. Requires --debusine."
+        )]
+        debusine_project: Option<String>,
 
         /// Print the commands without running anything (a tutorial).
         #[arg(long, help_heading = "Output")]
@@ -243,11 +259,27 @@ dput archive. NAME is the repository owner (the r-NAME-* workspace
 prefix on debusine.debian.net); dbranch uploads with
   dput -O debusine_workspace=r-NAME-<srcpkg>
        -O debusine_workflow=publish-to-sid-<srcpkg>
-(the Debian branch targets unstable, whose Debusine suite is sid).
+(--debusine-project replaces <srcpkg> for shared workspaces; the
+Debian branch targets unstable, whose Debusine suite is sid).
 Needs debusine-client and a `debusine setup` token.
 See wiki.debian.org/DebusineDebianNet#Repositories."
         )]
         debusine: Option<String>,
+
+        /// Upload stage: Debusine project name (default: source pkg).
+        #[arg(
+            long,
+            value_name = "PROJECT",
+            help_heading = "Upload",
+            requires = "debusine",
+            long_help = "\
+Upload stage: the Debusine project name — the part after the owner
+in the r-NAME-PROJECT workspace and publish-to-sid-PROJECT
+workflow. Defaults to the source package name, which fits a repo
+shipping one package; a shared workspace hosting several packages
+names its project here. Requires --debusine."
+        )]
+        debusine_project: Option<String>,
 
         /// Print the commands without running anything (a tutorial).
         #[arg(long, help_heading = "Output")]
@@ -329,6 +361,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             ppa,
             upload_target,
             debusine,
+            debusine_project,
             dry_run,
             explain,
             quiet,
@@ -354,6 +387,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 nowait,
                 upload_target,
                 debusine,
+                debusine_project,
                 source,
                 chroot_refresh,
                 assume_yes: yes,
@@ -373,6 +407,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             urgency,
             upload_target,
             debusine,
+            debusine_project,
             dry_run,
             explain,
             quiet,
@@ -397,6 +432,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 nowait,
                 upload_target,
                 debusine,
+                debusine_project,
                 chroot_refresh,
                 urgency,
             };

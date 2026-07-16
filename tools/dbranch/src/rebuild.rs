@@ -158,9 +158,15 @@ enum UploadDest {
     /// default (the Debian archive) when `None`.
     Dput(Option<String>),
     /// A Debusine personal repository on debusine.debian.net:
-    /// workspace `r-<name>-<pkg>`, workflow `publish-to-<suite>-<pkg>`
-    /// (the source package name is filled in at upload time).
-    Debusine { name: String, suite: String },
+    /// workspace `r-<name>-<project>`, workflow
+    /// `publish-to-<suite>-<project>`. `project` defaults to the
+    /// source package (filled in at upload time) — a shared workspace
+    /// hosting several packages names it explicitly.
+    Debusine {
+        name: String,
+        suite: String,
+        project: Option<String>,
+    },
 }
 
 /// Inputs for a `rebuild` run.
@@ -180,6 +186,10 @@ pub struct Options {
     /// name (the `r-<name>-*` workspace prefix on debusine.debian.net).
     /// Mutually exclusive with `upload_target`; Debian targets only.
     pub debusine: Option<String>,
+    /// Debusine project name (the part after the owner in
+    /// `r-<name>-<project>`); `None` uses the source package —
+    /// override for a shared workspace hosting several packages.
+    pub debusine_project: Option<String>,
     /// Explicit merge source branch; `None` uses the checked-out
     /// branch. Lets dbranch run without first checking out the Debian
     /// branch.
@@ -214,6 +224,10 @@ pub struct UpdateOptions {
     /// name (the `r-<name>-*` workspace prefix on debusine.debian.net).
     /// The Debian branch targets unstable, so the suite is `sid`.
     pub debusine: Option<String>,
+    /// Debusine project name (the part after the owner in
+    /// `r-<name>-<project>`); `None` uses the source package —
+    /// override for a shared workspace hosting several packages.
+    pub debusine_project: Option<String>,
     /// Build stage: whether to refresh the pbuilder base chroot first.
     pub chroot_refresh: ChrootRefresh,
     /// Changelog urgency for the new-upstream entry (default `medium`,
@@ -386,6 +400,7 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             opts.nowait,
             opts.upload_target.as_deref(),
             opts.debusine.as_deref(),
+            opts.debusine_project.as_deref(),
             opts.chroot_refresh,
             &opts.urgency,
             opts.assume_yes,
@@ -570,6 +585,7 @@ pub fn update(
         Some(name) => UploadDest::Debusine {
             name: name.clone(),
             suite: "sid".to_string(),
+            project: opts.debusine_project.clone(),
         },
         None => UploadDest::Dput(opts.upload_target.clone()),
     };
@@ -788,6 +804,7 @@ fn rebuild_one(
     nowait: bool,
     upload_target: Option<&str>,
     debusine: Option<&str>,
+    debusine_project: Option<&str>,
     chroot_refresh: ChrootRefresh,
     urgency: &str,
     assume_yes: bool,
@@ -832,7 +849,13 @@ fn rebuild_one(
     // (`trixie`, not `trixie-backports` — the suffix is a changelog
     // distribution, not a pbuilder dist).
     let build_suite = build_suite_for(target_type, &codename);
-    let upload = upload_dest_for(target_type, &codename, debusine, upload_target);
+    let upload = upload_dest_for(
+        target_type,
+        &codename,
+        debusine,
+        debusine_project,
+        upload_target,
+    );
     build_pipeline(
         ui,
         repo,
@@ -868,12 +891,14 @@ fn upload_dest_for(
     target_type: TargetType,
     codename: &str,
     debusine: Option<&str>,
+    debusine_project: Option<&str>,
     upload_target: Option<&str>,
 ) -> UploadDest {
     match debusine {
         Some(name) => UploadDest::Debusine {
             name: name.to_string(),
             suite: build_suite_for(target_type, codename),
+            project: debusine_project.map(String::from),
         },
         None => UploadDest::Dput(upload_target.map(String::from)),
     }
@@ -993,12 +1018,19 @@ fn upload_stage(
             ui.step(&format!("Upload {package} {version} to {dest}"));
             ui.run_required(&plan::dput_argv(target, &changes), repo)
         }
-        UploadDest::Debusine { name, suite } => {
-            // The workspace/workflow embed the source package name; the
-            // `-O` overrides steer dput's debusine profile at the
-            // personal repository instead of its `developers` default.
-            let workspace = plan::debusine_workspace(name, package);
-            let workflow = plan::debusine_workflow(suite, package);
+        UploadDest::Debusine {
+            name,
+            suite,
+            project,
+        } => {
+            // The workspace/workflow embed the project name — the
+            // source package unless a shared multi-package workspace
+            // was named via --debusine-project; the `-O` overrides
+            // steer dput's debusine profile at the personal
+            // repository instead of its `developers` default.
+            let project = project.as_deref().unwrap_or(package);
+            let workspace = plan::debusine_workspace(name, project);
+            let workflow = plan::debusine_workflow(suite, project);
             ui.step(&format!(
                 "Upload {package} {version} to Debusine ({workspace}, {workflow})"
             ));
@@ -1898,6 +1930,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
         };
@@ -1913,6 +1946,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -1931,6 +1965,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -1950,6 +1985,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: Some("noble".to_string()),
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -1968,6 +2004,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: Some("does-not-exist".to_string()),
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2014,6 +2051,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2046,6 +2084,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2261,6 +2300,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2279,6 +2319,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2301,6 +2342,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2322,6 +2364,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2343,6 +2386,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2362,11 +2406,13 @@ mod tests {
                 TargetType::Backports { major: 13 },
                 "trixie-backports",
                 Some("michelin"),
+                None,
                 None
             ),
             UploadDest::Debusine {
                 name: "michelin".to_string(),
                 suite: "trixie".to_string(),
+                project: None,
             }
         );
         assert_eq!(
@@ -2374,20 +2420,44 @@ mod tests {
                 TargetType::Proposed { major: 13 },
                 "trixie",
                 Some("michelin"),
+                None,
                 None
             ),
             UploadDest::Debusine {
                 name: "michelin".to_string(),
                 suite: "trixie".to_string(),
+                project: None,
+            }
+        );
+        // --debusine-project is carried through verbatim (a shared
+        // workspace hosting several packages).
+        assert_eq!(
+            upload_dest_for(
+                TargetType::Backports { major: 13 },
+                "trixie-backports",
+                Some("michelin"),
+                Some("mypkgs"),
+                None
+            ),
+            UploadDest::Debusine {
+                name: "michelin".to_string(),
+                suite: "trixie".to_string(),
+                project: Some("mypkgs".to_string()),
             }
         );
         // No --debusine → plain dput target passthrough.
         assert_eq!(
-            upload_dest_for(TargetType::Ppa, "noble", None, Some("ppa:m/x")),
+            upload_dest_for(TargetType::Ppa, "noble", None, None, Some("ppa:m/x")),
             UploadDest::Dput(Some("ppa:m/x".to_string()))
         );
         assert_eq!(
-            upload_dest_for(TargetType::Proposed { major: 13 }, "trixie", None, None),
+            upload_dest_for(
+                TargetType::Proposed { major: 13 },
+                "trixie",
+                None,
+                None,
+                None
+            ),
             UploadDest::Dput(None)
         );
     }
@@ -2406,6 +2476,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: Some("michelin".to_string()),
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2430,6 +2501,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: Some("michelin".to_string()),
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2461,6 +2533,30 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: Some("michelin".to_string()),
+            debusine_project: None,
+            chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
+        };
+        update(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn debusine_project_override_dry_run() {
+        // --debusine-project swaps the source package out of the
+        // workspace/workflow names; the narration path must accept it
+        // end to end (same update-driven shape as above).
+        let dir = setup();
+        let opts = UpdateOptions {
+            branch: None,
+            stages: Stages {
+                upload: true,
+                ..Stages::default()
+            },
+            build_suite: "testing".to_string(),
+            nowait: false,
+            upload_target: None,
+            debusine: Some("michelin".to_string()),
+            debusine_project: Some("mypkgs".to_string()),
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
         };
@@ -2479,6 +2575,7 @@ mod tests {
             nowait: false,
             upload_target: Some("ppa:michel/sugarjar".to_string()),
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2500,6 +2597,7 @@ mod tests {
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2521,6 +2619,7 @@ mod tests {
             nowait: true,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2599,6 +2698,7 @@ E: damo: an-error\n";
             nowait: false,
             upload_target: Some("ppa:me/x".to_string()),
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2659,6 +2759,7 @@ E: damo: an-error\n";
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
@@ -2679,6 +2780,7 @@ E: damo: an-error\n";
             nowait: false,
             upload_target: None,
             debusine: None,
+            debusine_project: None,
             source: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
