@@ -203,6 +203,7 @@ name = "tar"
 
 [[package]]
 name = "tmux"
+track = "fedora-stable"
 
 [[package]]
 name = "tree-sitter"
