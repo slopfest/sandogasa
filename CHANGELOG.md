@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### sandogasa-pkg-acl: don't misreport flaky infra as a missing user
+
+`user_exists`/`group_exists` in sandogasa-distgit treated any non-2xx
+response as "does not exist", so a transient 502/503 from
+src.fedoraproject.org made `pkg-acl set` (and `give`) claim the user
+or group doesn't exist — observed live with `set --user mikelo2`
+failing and the identical rerun succeeding seconds later. Existence
+checks now retry transient server and transport errors with backoff
+(like the other GET paths already did), treat only a 404 as "does not
+exist", and surface anything else as an explicit failure ("could not
+verify user '...' exists on dist-git: ..."). A new root
+`DEVELOPMENT.md` records the general gotcha: Fedora infrastructure is
+flaky; only a 404 means "not found".
+
 ### dbranch: `--debusine-project` for shared multi-package workspaces
 
 The Debusine upload path composed the workspace and workflow names

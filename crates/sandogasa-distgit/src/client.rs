@@ -339,19 +339,23 @@ impl DistGitClient {
     }
 
     /// Check whether a user exists on the Pagure instance.
+    ///
+    /// Only a 404 means "no such user". Transient server errors are
+    /// retried and, if persistent, surfaced as errors — never as a
+    /// missing user.
     pub async fn user_exists(&self, username: &str) -> Result<bool, Box<dyn std::error::Error>> {
         validate_segment(username, "username")?;
         let url = format!("{}/api/0/user/{}", self.base_url, username);
-        let resp = self.client.get(&url).send().await?;
-        Ok(resp.status().is_success())
+        self.exists(&url).await
     }
 
     /// Check whether a group exists on the Pagure instance.
+    ///
+    /// Same 404-vs-error contract as [`Self::user_exists`].
     pub async fn group_exists(&self, group: &str) -> Result<bool, Box<dyn std::error::Error>> {
         validate_segment(group, "group name")?;
         let url = format!("{}/api/0/group/{}", self.base_url, group);
-        let resp = self.client.get(&url).send().await?;
-        Ok(resp.status().is_success())
+        self.exists(&url).await
     }
 
     /// Fetch members of a Pagure group.
@@ -591,8 +595,36 @@ impl DistGitClient {
         Ok(all)
     }
 
-    /// GET with retry on transient server errors (500/502/503/504).
+    /// GET a resource and report whether it exists: 2xx means yes,
+    /// 404 means no, and anything else (after transient-error
+    /// retries) is an error — a Pagure hiccup must not be reported
+    /// as "does not exist".
+    async fn exists(&self, url: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        let resp = self.get_transient_retry(url).await?;
+        let status = resp.status();
+        if status.is_success() {
+            Ok(true)
+        } else if status == reqwest::StatusCode::NOT_FOUND {
+            Ok(false)
+        } else {
+            Err(format!("dist-git GET {url} returned {status}").into())
+        }
+    }
+
+    /// GET with retry on transient failures (see
+    /// [`Self::get_transient_retry`]), treating any remaining
+    /// non-2xx status as an error.
     async fn get_with_retry(
+        &self,
+        url: &str,
+    ) -> Result<reqwest::Response, Box<dyn std::error::Error>> {
+        Ok(self.get_transient_retry(url).await?.error_for_status()?)
+    }
+
+    /// GET with retry on transient server errors (500/502/503/504),
+    /// returning the final response without judging its status —
+    /// callers decide what a non-2xx status means.
+    async fn get_transient_retry(
         &self,
         url: &str,
     ) -> Result<reqwest::Response, Box<dyn std::error::Error>> {
@@ -611,7 +643,7 @@ impl DistGitClient {
                     {
                         format!("{status}")
                     } else {
-                        return Ok(resp.error_for_status()?);
+                        return Ok(resp);
                     }
                 }
                 Err(e) => format!("{e}"),
@@ -1270,6 +1302,129 @@ mod tests {
             .await;
 
         assert!(!client.user_exists("nonexistent").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn user_exists_retries_on_transient_error() {
+        // A 502 from flaky infra must be retried, not reported as
+        // "user does not exist".
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/salimma"))
+            .respond_with(ResponseTemplate::new(502))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/salimma"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "user": {"name": "salimma"}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(client.user_exists("salimma").await.unwrap());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn user_exists_errors_when_server_keeps_failing() {
+        // A persistent 5xx must surface as an error after the
+        // retries are exhausted, never as Ok(false). Paused time
+        // fast-forwards the backoff sleeps.
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/salimma"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        assert!(client.user_exists("salimma").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn user_exists_errors_on_unexpected_status() {
+        // Non-transient, non-404 statuses (here 403) are neither
+        // retried nor treated as a missing user.
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/salimma"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let err = client.user_exists("salimma").await.unwrap_err().to_string();
+        assert!(err.contains("403"), "unexpected error: {err}");
+    }
+
+    // ---- group_exists ----
+
+    #[tokio::test]
+    async fn group_exists_returns_true_for_existing_group() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/group/kde-sig"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "kde-sig",
+                "members": ["ngompa"]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(client.group_exists("kde-sig").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn group_exists_returns_false_for_missing_group() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/group/nonexistent"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(!client.group_exists("nonexistent").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn group_exists_retries_on_transient_error() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/group/kde-sig"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/0/group/kde-sig"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "kde-sig",
+                "members": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(client.group_exists("kde-sig").await.unwrap());
     }
 
     // ---- user_activity_stats ----

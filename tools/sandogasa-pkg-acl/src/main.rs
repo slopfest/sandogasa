@@ -509,7 +509,11 @@ async fn cmd_give(
     let client = DistGitClient::new().with_token(token.to_string());
 
     // Validate the target user exists (once, before any transfers)
-    if !client.user_exists(new_owner).await? {
+    let exists = client
+        .user_exists(new_owner)
+        .await
+        .map_err(|e| format!("could not verify user '{new_owner}' exists on dist-git: {e}"))?;
+    if !exists {
         return Err(format!("user '{new_owner}' does not exist").into());
     }
 
@@ -649,10 +653,11 @@ async fn cmd_set(
 
     if current.is_none() {
         let exists = if user_type == "user" {
-            client.user_exists(name).await?
+            client.user_exists(name).await
         } else {
-            client.group_exists(name).await?
-        };
+            client.group_exists(name).await
+        }
+        .map_err(|e| format!("could not verify {user_type} '{name}' exists on dist-git: {e}"))?;
         if !exists {
             return Err(format!("{user_type} '{name}' does not exist on dist-git").into());
         }
