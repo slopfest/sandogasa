@@ -397,27 +397,20 @@ pub async fn run(
         return Ok(report);
     }
     // Offer to claim ownership before the main confirm so the
-    // user sees one prompt-then-confirm flow. With `--claim`,
-    // skip the prompt. With `-y` and no `--claim`, don't claim.
-    // Without a configured email there's nothing to assign to,
-    // so just skip silently.
-    let want_claim = if claim {
-        claim_email.is_some()
-    } else if yes || claim_email.is_none() {
-        false
-    } else {
-        confirm(&format!(
-            "Also claim ownership (assigned_to = {})?",
-            claim_email.unwrap()
-        ))?
-    };
-    let active_claim_email = if want_claim {
-        let e = claim_email.unwrap();
+    // user sees one prompt-then-confirm flow. The decision
+    // matrix (`--claim` skips the prompt, `-y` alone declines,
+    // no configured email skips silently) lives in
+    // `sandogasa_bugzilla::claim`, shared by every closing tool.
+    let active_claim_email = sandogasa_bugzilla::claim::resolve_claim(
+        claim,
+        yes,
+        claim_email,
+        &sandogasa_bugzilla::claim::close_claim_prompt(all_closes.len(), claim_email.unwrap_or("")),
+        confirm,
+    )?;
+    if let Some(ref e) = active_claim_email {
         eprintln!("claiming ownership as {e}");
-        Some(e.to_string())
-    } else {
-        None
-    };
+    }
 
     if !yes && !confirm(&format!("\nClose {} bug(s) as CANTFIX?", all_closes.len()))? {
         eprintln!("aborted.");
@@ -430,9 +423,7 @@ pub async fn run(
             "resolution": "CANTFIX",
             "comment": { "body": close_comment(&c.component, &c.branch) },
         });
-        if let Some(ref email) = active_claim_email {
-            body["assigned_to"] = serde_json::json!(email);
-        }
+        sandogasa_bugzilla::claim::apply_claim(&mut body, active_claim_email.as_deref());
         match bz.update(c.bug_id, &body).await {
             Ok(()) => {
                 report.closes_applied += 1;

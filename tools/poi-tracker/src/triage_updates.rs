@@ -460,6 +460,8 @@ pub async fn run(
     batch_email: Option<&str>,
     skip_stale: bool,
     close_stale: bool,
+    claim: bool,
+    claim_email: Option<&str>,
     dry_run: bool,
     yes: bool,
     verbose: bool,
@@ -681,6 +683,30 @@ pub async fn run(
     if total == 0 {
         return Ok(report);
     }
+
+    // Offer to claim ownership of the bugs about to be closed
+    // (triaging is a benefit in itself — the person cleaning up
+    // stale bugs may want the credit). MODIFIED transitions keep
+    // their assignee: those bugs stay open and belong to whoever
+    // owns the in-flight update.
+    let active_claim_email = if closing.is_empty() {
+        None
+    } else {
+        sandogasa_bugzilla::claim::resolve_claim(
+            claim,
+            yes,
+            claim_email,
+            &sandogasa_bugzilla::claim::close_claim_prompt(
+                closing.len(),
+                claim_email.unwrap_or(""),
+            ),
+            confirm,
+        )?
+    };
+    if let Some(ref e) = active_claim_email {
+        eprintln!("claiming ownership as {e}");
+    }
+
     if !yes && !confirm(&format!("\nApply {total} update(s)?"))? {
         eprintln!("aborted.");
         return Ok(report);
@@ -719,6 +745,7 @@ pub async fn run(
             StaleAction::CloseErrata | StaleAction::AskClose => {
                 body["status"] = serde_json::json!("CLOSED");
                 body["resolution"] = serde_json::json!("ERRATA");
+                sandogasa_bugzilla::claim::apply_claim(&mut body, active_claim_email.as_deref());
                 "-> CLOSED/ERRATA"
             }
         };
@@ -1378,6 +1405,8 @@ mod tests {
             false,
             false,
             false,
+            None,
+            false,
             true,
             false,
         )
@@ -1438,12 +1467,148 @@ mod tests {
             false,
             false,
             false,
+            None,
+            false,
             true,
             false,
         )
         .await
         .unwrap();
         assert_eq!(report.stale_applied, 1);
+    }
+
+    #[tokio::test]
+    async fn run_claim_assigns_closed_bugs() {
+        let server = MockServer::start().await;
+        mount_common(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F45"))
+            .respond_with(updates_response(serde_json::json!([{
+                "alias": "FEDORA-2026-aaa",
+                "status": "stable",
+                "builds": [{"nvr": "foo-1.2.0-1.fc45"}]
+            }])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F43"))
+            .respond_with(updates_response(serde_json::json!([{
+                "alias": "FEDORA-2026-bbb",
+                "status": "stable",
+                "builds": [{"nvr": "foo-1.2.0-1.fc43"}]
+            }])))
+            .mount(&server)
+            .await;
+        // With --claim (and a configured email), the close body
+        // must also reassign the bug — even under -y.
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/1"))
+            .and(body_partial_json(serde_json::json!({
+                "status": "CLOSED",
+                "resolution": "ERRATA",
+                "assigned_to": "me@example.com"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let inventory = test_inventory(None);
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let bodhi = BodhiClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory,
+            &bz,
+            &dg,
+            &bodhi,
+            &crate::WalkFilterArgs::default(),
+            None,
+            false,
+            false,
+            true,
+            Some("me@example.com"),
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.stale_applied, 1);
+        assert_eq!(report.failures, 0);
+    }
+
+    #[tokio::test]
+    async fn run_claim_leaves_modified_bugs_unassigned() {
+        let server = MockServer::start().await;
+        mount_common(&server).await;
+        // Addressed but still in testing -> MODIFIED, which keeps
+        // its assignee even under --claim (the bug stays open and
+        // belongs to whoever owns the in-flight update).
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F45"))
+            .respond_with(updates_response(serde_json::json!([{
+                "alias": "FEDORA-2026-aaa",
+                "status": "testing",
+                "builds": [{"nvr": "foo-1.2.0-1.fc45"}]
+            }])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F43"))
+            .respond_with(updates_response(serde_json::json!([{
+                "alias": "FEDORA-2026-bbb",
+                "status": "testing",
+                "builds": [{"nvr": "foo-1.2.0-1.fc43"}]
+            }])))
+            .mount(&server)
+            .await;
+        // Mounted first, so a PUT carrying assigned_to would match
+        // here and fail the expect(0) on drop.
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/1"))
+            .and(body_partial_json(
+                serde_json::json!({"assigned_to": "me@example.com"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/1"))
+            .and(body_partial_json(serde_json::json!({"status": "MODIFIED"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let inventory = test_inventory(None);
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let bodhi = BodhiClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory,
+            &bz,
+            &dg,
+            &bodhi,
+            &crate::WalkFilterArgs::default(),
+            None,
+            false,
+            false,
+            true,
+            Some("me@example.com"),
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.stale_applied, 1);
+        assert_eq!(report.failures, 0);
     }
 
     #[tokio::test]
@@ -1491,6 +1656,8 @@ mod tests {
             None,
             false,
             false,
+            false,
+            None,
             false,
             true,
             false,
@@ -1550,6 +1717,8 @@ mod tests {
             None,
             false,
             false,
+            false,
+            None,
             false,
             true,
             true,
@@ -1616,6 +1785,8 @@ mod tests {
             None,
             false,
             false,
+            false,
+            None,
             false,
             true,
             false,
@@ -1695,6 +1866,8 @@ mod tests {
             Some("me@example.com"),
             false,
             false,
+            false,
+            None,
             false,
             true,
             false,

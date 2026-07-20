@@ -1,5 +1,16 @@
 # TODO
 
+## cpu-sig-tracker
+
+- (2026-07-20, follow-up to the claim-on-close rule) `retire` closes
+  GitLab tracking issues but doesn't offer to assign them to the
+  person running the command. The Bugzilla-side mechanics live in
+  `sandogasa_bugzilla::claim`; a GitLab port needs the current user
+  from `GET /api/v4/user` (the token-check endpoint already used for
+  auth validation) and `assignee_ids` on the issue update. Reuse
+  `resolve_claim` for the decision matrix so the semantics stay
+  uniform.
+
 ## sandogasa-report
 
 - (2026-07-10, maybe) `config` could take `report`'s repeatable `-d`

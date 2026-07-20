@@ -196,6 +196,13 @@ struct TriageUpdatesArgs {
     #[arg(long, env = "BUGZILLA_API_KEY")]
     api_key: Option<String>,
 
+    /// Also set `assigned_to` on each closed bug to the
+    /// Bugzilla email set via `poi-tracker config`. Interactive
+    /// mode prompts; with `-y` this flag is the only way to
+    /// claim.
+    #[arg(long)]
+    claim: bool,
+
     /// Preview updates without applying them.
     #[arg(long)]
     dry_run: bool,
@@ -1034,6 +1041,14 @@ fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let claim_email = config::resolve_email();
+    if args.claim && claim_email.is_none() {
+        eprintln!(
+            "error: --claim needs a configured Bugzilla email.\n\
+             Set it with: poi-tracker config"
+        );
+        return ExitCode::FAILURE;
+    }
     let batch_email = match resolve_batch_email(&args.batch) {
         Ok(e) => e,
         Err(e) => {
@@ -1052,6 +1067,8 @@ fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
         batch_email.as_deref(),
         args.skip_stale,
         args.close_stale,
+        args.claim,
+        claim_email.as_deref(),
         args.dry_run,
         args.yes,
         args.verbose,

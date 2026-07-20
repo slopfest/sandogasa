@@ -334,6 +334,14 @@ scope the run. `--batch [EMAIL]` works as in `semver-audit`: one
 Bugzilla query for everything assigned to or CC'ing EMAIL
 (default: the configured email) instead of one query per package.
 
+As in `triage-retired`, interactive runs offer to claim ownership
+of the bugs being closed (set `assigned_to` to your configured
+Bugzilla email). Pass `--claim` to claim without prompting —
+under `-y` this is the only way to opt in. Bugs moved to
+`MODIFIED` keep their assignee: they stay open and belong to
+whoever owns the in-flight update. The email is set via
+`poi-tracker config`.
+
 ### Mark packages no longer shipped anywhere
 
 `prune-retired` finds inventory packages that are no longer

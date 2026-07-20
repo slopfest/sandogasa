@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Bug-closing tools uniformly offer to claim the closed bugs
+
+New project rule: any tool that closes bugs also offers to reassign
+them (`assigned_to`) to the person running the command — triaging is
+a benefit in itself, and the person cleaning up stale bugs may want
+the credit. The mechanics now live in one place, a new
+`sandogasa_bugzilla::claim` module: `resolve_claim` encodes the
+decision matrix (`--claim` claims without prompting, `-y` without
+the flag declines, no configured email skips silently, otherwise
+prompt) and `apply_claim` adds `assigned_to` to an update body.
+
+- **poi-tracker `triage-updates`** gains `--claim` (the previously
+  missing surface): bugs closed as ERRATA by the stale-bug check can
+  now be claimed, with the same flag/prompt semantics as
+  `triage-retired`. Bugs moved to `MODIFIED` keep their assignee —
+  they stay open and belong to whoever owns the in-flight update.
+- **poi-tracker `triage-retired`** ported to the shared module; the
+  prompt now includes the closure count ("Also claim ownership of
+  the N bug(s) being closed …").
+- **fedora-cve-triage**'s reassign prompts route through the shared
+  matrix (behavior unchanged: it prompts whenever an email is
+  configured).
+- **fedora-review-digest** uses `apply_claim` for its review-claim
+  body (behavior unchanged).
+
 ### sandogasa-pkg-acl: don't misreport flaky infra as a missing user
 
 `user_exists`/`group_exists` in sandogasa-distgit treated any non-2xx

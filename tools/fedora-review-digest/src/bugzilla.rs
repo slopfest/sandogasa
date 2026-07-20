@@ -32,10 +32,8 @@ pub fn update_body(
     claim: Option<&str>,
 ) -> Value {
     let mut body = json!({ "comment": { "body": digest } });
+    sandogasa_bugzilla::claim::apply_claim(&mut body, claim);
     let obj = body.as_object_mut().expect("object literal");
-    if let Some(assignee) = claim {
-        obj.insert("assigned_to".into(), json!(assignee));
-    }
     if approved {
         obj.insert("status".into(), json!("POST"));
         obj.insert(

@@ -30,6 +30,16 @@
 - In each tool's README.md, describe subcommands in the same alphabetical order as the `Command` enum. In the root README.md, list tools alphabetically, then library crates alphabetically
 - Order definitions in source files top-down: module docs and imports, public types (structs/enums/traits), public functions, trait impls (grouped by type), private helpers, `#[cfg(test)] mod tests`. Within each group, define callees before callers so a reader encounters helpers before the functions that use them. Review file order before committing
 
+- Any tool that closes bugs must also offer to reassign them
+  (`assigned_to`) to the person running the command — triaging is a
+  benefit in itself, and the person cleaning up stale bugs may want
+  the credit. For Bugzilla tools, use `sandogasa_bugzilla::claim`
+  (`resolve_claim` + `apply_claim`) instead of reimplementing the
+  decision matrix: an explicit `--claim` flag claims without
+  prompting, `-y` without the flag declines (non-interactive runs
+  must not reassign unasked), no configured email skips silently,
+  otherwise prompt interactively
+
 ## Per-user directories (XDG)
 - Our own per-user storage follows the [XDG Base Directory spec](https://specifications.freedesktop.org/basedir/latest/), resolved via the `dirs` crate — never hand-roll `$XDG_*` env reading (the spec requires *ignoring relative values*, which `dirs` implements) and never hardcode `~/.config`/`~/.cache`/`~/.local/state`:
   - config → `sandogasa_config::ConfigFile::for_tool` (`dirs::config_dir()`, i.e. `$XDG_CONFIG_HOME`, default `~/.config/<tool>/config.toml`, perms 700/600)

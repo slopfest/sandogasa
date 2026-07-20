@@ -10,6 +10,12 @@ targeting Red Hat Bugzilla.
 - Fetch comments on a bug
 - Update single or multiple bugs in one request (requires API key)
 - Bearer token authentication
+- Shared "claim ownership" mechanics (`claim` module) for
+  bug-closing tools: one decision matrix (an explicit `--claim`
+  flag claims without prompting, `-y` alone declines, no
+  configured email skips silently, otherwise prompt via a
+  caller-supplied confirm closure) and a helper to add
+  `assigned_to` to an update body
 
 ## Usage
 
