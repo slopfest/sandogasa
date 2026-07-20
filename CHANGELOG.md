@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### poi-tracker: don't call a bug stale when the build is only in a side tag
+
+`semver-audit` classified a bug as "up to date (stale bug)" as soon
+as the rawhide spec's `Version:` matched the bug's advertised
+version, and `triage-updates`' stale check treated the same spec
+match as "shipped" when Bodhi had no update — so a version
+committed to dist-git and built only into a side tag (observed
+with rust-tree-sitter-elm 5.9.4, tagged only into
+`f45-build-side-144259`) read as stale, and triage-updates would
+offer to close its bug as ERRATA prematurely.
+
+Both now verify against Koji instead of trusting the spec: a
+version only counts as shipped when a build carrying it is tagged
+into the release's stable tag chain (`koji list-tagged --latest
+--inherit` on the Bodhi-provided `stable_tag`, so `f43-updates`
+also covers `f43`, and the EPEL equivalents — while side tags and
+`-candidate`/`-testing` tags never match). Bodhi remains the
+primary source (it has the update alias/status); Koji covers what
+Bodhi legitimately can't vouch for — content inherited from an
+older release or answers lost to an outage. `triage-updates`' bug
+comment for such closes now cites the tagged build instead of a
+spec-reconstructed NVR.
+
+- `semver-audit` gains a **"Committed, awaiting release"** category
+  (JSON `bump` value `pending-release`, additive) for
+  spec-matches-but-not-tagged packages; "up to date (stale bug)" is
+  now Koji-verified.
+- The `koji` CLI is now used by `semver-audit` and `triage-updates`
+  (`sudo dnf install koji`); both degrade with a warning when it's
+  missing — unverifiable bugs are left open / reported as up to
+  date, never closed on spec evidence alone.
+- sandogasa-koji: new `latest_tagged(tag, package, profile)`
+  (package-scoped, inheritance-following) and `is_available()`.
+- sandogasa-bodhi: `BodhiRelease` gains `stable_tag` (defaulted, so
+  existing fixtures keep deserializing).
+
 ### Bug-closing tools uniformly offer to claim the closed bugs
 
 New project rule: any tool that closes bugs also offers to reassign

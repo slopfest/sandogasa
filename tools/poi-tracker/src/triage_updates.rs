@@ -22,6 +22,19 @@
 //! releases have the fix (commonly just rawhide, since stable
 //! branches often intentionally stay behind) — offered for
 //! closing interactively (`--close-stale` skips the prompt).
+//!
+//! Bodhi records updates per release, so a release can carry a
+//! build Bodhi has no update for *in that release* — content
+//! inherited at branching (the build's update belongs to an
+//! older release), or answers missing while Bodhi is degraded.
+//! The release's Koji stable tag chain is the authority on what
+//! it actually carries, so builds Bodhi doesn't vouch for are
+//! verified there (`koji list-tagged --latest --inherit
+//! <stable_tag>`, so `f43-updates` also covers `f43`, and the
+//! EPEL equivalents). Only a build actually tagged into the
+//! release counts as shipped — a version merely committed to
+//! dist-git and built into a side tag or `-candidate`/`-testing`
+//! tag stays pending.
 
 use std::collections::BTreeMap;
 
@@ -202,15 +215,24 @@ pub fn group_by_component(updates: &[PriorityUpdate]) -> BTreeMap<String, Vec<&P
 
 // ---- stale-bug handling (Bodhi-backed) ----
 
+/// Signature of the Koji latest-tagged lookup injected by the
+/// caller: `(tag, package)` to the latest NVR in the tag's
+/// inheritance chain (`None` when the package has no build
+/// there). Injectable so tests can stub Koji; callers pass
+/// `None` for the whole lookup when the koji CLI is unavailable,
+/// which fail-safes to "not shipped".
+pub type TagLookup = dyn Fn(&str, &str) -> Result<Option<String>, String>;
+
 /// Where an addressing build was found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildSource {
     /// A Bodhi update (alias + whether it reached stable).
     Bodhi { alias: String, stable: bool },
-    /// No Bodhi record, but the branch's dist-git spec already
-    /// carries the version — the update shipped before the
-    /// active releases existed and was inherited.
-    DistGit,
+    /// No Bodhi update for this release, but the build is tagged
+    /// into the release's Koji stable tag chain — carried over
+    /// from an older release (whose update predates this one),
+    /// or Bodhi's answer was unavailable.
+    Tagged,
 }
 
 /// The best build addressing a bug in one release.
@@ -222,20 +244,20 @@ pub struct AddressingBuild {
 }
 
 impl AddressingBuild {
-    /// Whether the build is shipped (stable update, or already in
-    /// dist-git with no in-flight Bodhi update).
+    /// Whether the build is shipped (stable update, or tagged
+    /// into the release with no in-flight Bodhi update).
     pub fn is_stable(&self) -> bool {
         match &self.source {
             BuildSource::Bodhi { stable, .. } => *stable,
-            BuildSource::DistGit => true,
+            BuildSource::Tagged => true,
         }
     }
 }
 
-/// Cache of branch spec fields: `(package, branch)` to the spec's
-/// `(Version, Release)` (`None` when the spec is unreadable, e.g.
-/// a retired branch).
-type SpecCache = BTreeMap<(String, String), Option<(String, Option<String>)>>;
+/// Cache of Koji tag lookups: `(stable_tag, package)` to the
+/// latest NVR in the tag chain (`None` when there is no build,
+/// or the lookup failed and was fail-safed to "not shipped").
+type TaggedCache = BTreeMap<(String, String), Option<String>>;
 
 /// One release's verdict for a bug: the addressing build, or
 /// `None` when no update in that release carries the version.
@@ -336,8 +358,8 @@ pub fn plan_stale_bug(
     } else {
         StaleAction::AskClose
     };
-    // Dedupe NVRs: dist-git-derived entries with an unexpandable
-    // release field collapse to the same name-version string.
+    // Dedupe NVRs: the same build can address several releases
+    // (e.g. one el10 build mass-tagged into every epel10 minor).
     let mut nvrs: Vec<&str> = Vec::new();
     for b in &addressed {
         if !nvrs.contains(&b.nvr.as_str()) {
@@ -377,9 +399,10 @@ pub fn stale_comment(plan: &StaleBugPlan) -> String {
                     alias,
                     if *stable { "stable" } else { "testing" }
                 )),
-                BuildSource::DistGit => out.push_str(&format!(
-                    "  {}: {} (already in dist-git; shipped before \
-                     this release existed)\n",
+                BuildSource::Tagged => out.push_str(&format!(
+                    "  {}: {} (tagged into the release; no Bodhi \
+                     update in this release — carried over from \
+                     an earlier one)\n",
                     f.release, b.nvr
                 )),
             },
@@ -414,48 +437,21 @@ fn release_rank(name: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// The `%{?dist}` expansion for a Bodhi release (e.g. `.fc43`,
-/// `.el9`).
-fn dist_tag(release: &BodhiRelease) -> String {
-    let n = release_rank(&release.name);
-    if release.id_prefix == "FEDORA-EPEL" {
-        format!(".el{n}")
-    } else {
-        format!(".fc{n}")
-    }
-}
-
-/// Reconstruct an NVR from a branch spec's Version/Release fields.
-/// `%{?dist}` is expanded from the release; a release field with
-/// other unexpandable macros (e.g. rpmautospec's `%autorelease`)
-/// degrades to the bare `name-version`.
-pub fn nvr_from_spec(
-    package: &str,
-    version: &str,
-    release_field: Option<&str>,
-    dist: &str,
-) -> String {
-    if let Some(rel) = release_field {
-        let expanded = rel.replace("%{?dist}", dist).replace("%{dist}", dist);
-        if !expanded.contains('%') {
-            return format!("{package}-{version}-{expanded}");
-        }
-    }
-    format!("{package}-{version}")
-}
-
 /// Run the whole `triage-updates` flow.
 ///
 /// Loads the inventories (already merged by the caller), iterates
 /// every package, queries Bugzilla, plans priority and stale-bug
 /// updates, prints them, optionally prompts, then applies.
 /// `dry_run = true` short-circuits before any PUT.
+/// `latest_tagged` is the Koji lookup backing the tagged-build
+/// fallback; `None` disables it (koji CLI unavailable).
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     inventory: &Inventory,
     client: &BzClient,
     dg: &DistGitClient,
     bodhi: &BodhiClient,
+    latest_tagged: Option<&TagLookup>,
     filter: &crate::WalkFilterArgs,
     batch_email: Option<&str>,
     skip_stale: bool,
@@ -474,9 +470,9 @@ pub async fn run(
     // (package, release-name) -> updates, shared across a
     // package's bugs.
     let mut updates_cache: BTreeMap<(String, String), Vec<Update>> = BTreeMap::new();
-    // (package, branch) -> spec Version/Release fields, for the
-    // dist-git fallback (None = spec unreadable).
-    let mut spec_cache = SpecCache::new();
+    // (stable_tag, package) -> latest tagged NVR, for the
+    // tagged-build fallback.
+    let mut tagged_cache = TaggedCache::new();
 
     // Batch mode: one Bugzilla query up front for every open
     // release-monitoring bug assigned to or CC'ing the email,
@@ -610,9 +606,10 @@ pub async fn run(
             bugs,
             dg,
             bodhi,
+            latest_tagged,
             &mut releases,
             &mut updates_cache,
-            &mut spec_cache,
+            &mut tagged_cache,
             &mut stale_plans,
             verbose,
         )
@@ -776,9 +773,10 @@ async fn plan_stale_for_package(
     bugs: &[Bug],
     dg: &DistGitClient,
     bodhi: &BodhiClient,
+    latest_tagged: Option<&TagLookup>,
     releases: &mut Option<Vec<BodhiRelease>>,
     updates_cache: &mut BTreeMap<(String, String), Vec<Update>>,
-    spec_cache: &mut SpecCache,
+    tagged_cache: &mut TaggedCache,
     out: &mut Vec<StaleBugPlan>,
     verbose: bool,
 ) {
@@ -827,12 +825,12 @@ async fn plan_stale_for_package(
         relevant.sort_by_key(|r| std::cmp::Reverse(release_rank(&r.name)));
 
         // Each release is resolved fully before moving to the
-        // next: Bodhi first, then — because Bodhi has no record
-        // for builds that shipped before the active releases
-        // existed (they're inherited via Koji tag inheritance) —
-        // the branch's dist-git spec, where a version already
-        // committed means the update happened long ago. Releases
-        // are visited newest-first, so rawhide is resolved first.
+        // next: Bodhi first (it has the update alias and status),
+        // then the release's Koji stable tag chain — the
+        // authority on what the release carries — for builds
+        // Bodhi has no update for in this release (inherited at
+        // branching, or Bodhi degraded). Releases are visited
+        // newest-first, so rawhide is resolved first.
         let mut findings = Vec::with_capacity(relevant.len());
         let mut failed = false;
         let mut rawhide_pending = false;
@@ -860,43 +858,49 @@ async fn plan_stale_for_package(
                 }
             }
             let mut build = find_addressing(&updates_cache[&key], package, &version);
-            if build.is_none() {
-                let spec_key = (package.to_string(), rel.branch.clone());
-                if !spec_cache.contains_key(&spec_key) {
+            if build.is_none()
+                && let Some(lookup) = latest_tagged
+                && !rel.stable_tag.is_empty()
+            {
+                let tag_key = (rel.stable_tag.clone(), package.to_string());
+                if !tagged_cache.contains_key(&tag_key) {
                     if verbose {
                         eprintln!(
-                            "[poi-tracker] {package}: checking {} dist-git spec",
-                            rel.branch
+                            "[poi-tracker] {package}: checking Koji tag {}",
+                            rel.stable_tag
                         );
                     }
-                    let parsed = match dg.fetch_spec(package, &rel.branch).await {
-                        Ok(spec) => crate::semver_audit::parse_spec_version(&spec)
-                            .map(|v| (v, crate::semver_audit::parse_spec_field(&spec, "Release"))),
-                        Err(_) => None,
+                    let nvr = match lookup(&rel.stable_tag, package) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            eprintln!(
+                                "warning: {package}: Koji query for {} failed: {e} \
+                                 (treating as not shipped)",
+                                rel.stable_tag
+                            );
+                            None
+                        }
                     };
-                    spec_cache.insert(spec_key.clone(), parsed);
+                    tagged_cache.insert(tag_key.clone(), nvr);
                 }
-                if let Some((spec_version, release_field)) = &spec_cache[&spec_key]
-                    && version_at_least(spec_version, &version)
+                if let Some(nvr) = &tagged_cache[&tag_key]
+                    && let Some((name, tagged_version, _)) = parse_nvr(nvr)
+                    && name == package
+                    && version_at_least(tagged_version, &version)
                 {
                     build = Some(AddressingBuild {
-                        nvr: nvr_from_spec(
-                            package,
-                            spec_version,
-                            release_field.as_deref(),
-                            &dist_tag(rel),
-                        ),
-                        source: BuildSource::DistGit,
+                        nvr: nvr.clone(),
+                        source: BuildSource::Tagged,
                     });
                 }
             }
             // Short-circuit: Fedora updates land in rawhide first
             // (a stable release may never carry a newer version
             // than rawhide), so a version absent from rawhide —
-            // neither in Bodhi nor committed to the spec — can't
-            // be in the stable releases either; skip querying
-            // them. EPEL branches update independently of each
-            // other, so no equivalent shortcut applies there.
+            // neither in Bodhi nor tagged into its Koji tag —
+            // can't be in the stable releases either; skip
+            // querying them. EPEL branches update independently
+            // of each other, so no equivalent shortcut applies.
             if build.is_none() && rel.branch == "rawhide" {
                 rawhide_pending = true;
                 break;
@@ -1141,35 +1145,27 @@ mod tests {
     }
 
     #[test]
-    fn nvr_from_spec_expands_dist() {
-        assert_eq!(
-            nvr_from_spec("foo", "1.2.0", Some("1%{?dist}"), ".fc43"),
-            "foo-1.2.0-1.fc43"
-        );
-        // rpmautospec releases can't be expanded -> name-version.
-        assert_eq!(
-            nvr_from_spec("foo", "1.2.0", Some("%autorelease"), ".fc43"),
-            "foo-1.2.0"
-        );
-        assert_eq!(nvr_from_spec("foo", "1.2.0", None, ".fc43"), "foo-1.2.0");
-    }
-
-    #[test]
     fn plan_stale_dedupes_identical_nvrs() {
-        // Two releases falling back to the same unexpandable
-        // name-version must not repeat it in Fixed In Version.
+        // The same build can address several releases (e.g. one
+        // el10 build mass-tagged into every epel10 minor); it
+        // must not repeat in Fixed In Version.
         let bug = make_bug(1, "unspecified", "foo-1.2.0 is available");
-        let distgit = |rel: &str| ReleaseFinding {
+        let tagged = |rel: &str| ReleaseFinding {
             release: rel.to_string(),
             build: Some(AddressingBuild {
-                nvr: "foo-1.2.0".to_string(),
-                source: BuildSource::DistGit,
+                nvr: "foo-1.2.0-1.el10_2".to_string(),
+                source: BuildSource::Tagged,
             }),
         };
-        let plan =
-            plan_stale_bug(&bug, "foo", "1.2.0", vec![distgit("F45"), distgit("F43")]).unwrap();
+        let plan = plan_stale_bug(
+            &bug,
+            "foo",
+            "1.2.0",
+            vec![tagged("EPEL-10.3"), tagged("EPEL-10.2")],
+        )
+        .unwrap();
         assert_eq!(plan.action, StaleAction::CloseErrata);
-        assert_eq!(plan.fixed_in, "foo-1.2.0");
+        assert_eq!(plan.fixed_in, "foo-1.2.0-1.el10_2");
     }
 
     #[test]
@@ -1324,8 +1320,10 @@ mod tests {
             .and(path("/releases/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "releases": [
-                    {"name": "F45", "branch": "rawhide", "id_prefix": "FEDORA", "state": "pending"},
-                    {"name": "F43", "branch": "f43", "id_prefix": "FEDORA", "state": "current"}
+                    {"name": "F45", "branch": "rawhide", "id_prefix": "FEDORA",
+                     "state": "pending", "stable_tag": "f45"},
+                    {"name": "F43", "branch": "f43", "id_prefix": "FEDORA",
+                     "state": "current", "stable_tag": "f43-updates"}
                 ],
                 "total": 2, "page": 1, "pages": 1
             })))
@@ -1347,11 +1345,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_closes_bug_stable_everywhere_with_distgit_fallback() {
+    async fn run_closes_bug_stable_everywhere_with_tagged_fallback() {
         let server = MockServer::start().await;
         mount_common(&server).await;
-        // F45: stable Bodhi update. F43: nothing in Bodhi, but the
-        // branch spec already carries 1.2.0 (inherited build).
+        // F45: stable Bodhi update. F43: no Bodhi update in this
+        // release, but the build is in the release's Koji tag
+        // chain (carried over from an earlier release).
         Mock::given(method("GET"))
             .and(path("/updates/"))
             .and(query_param("releases", "F45"))
@@ -1368,14 +1367,10 @@ mod tests {
             .respond_with(updates_response(serde_json::json!([])))
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
-            .and(path("/rpms/foo/raw/f43/f/foo.spec"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string("Name: foo\nVersion: 1.2.0\nRelease: 1%{?dist}\n"),
-            )
-            .mount(&server)
-            .await;
+        let lookup = |tag: &str, pkg: &str| -> Result<Option<String>, String> {
+            assert_eq!((tag, pkg), ("f43-updates", "foo"));
+            Ok(Some("foo-1.2.0-1.fc43".to_string()))
+        };
         // The close PUT: ERRATA + Fixed In Version from both
         // releases. The priority bump for the same bug must be
         // dropped (the bug is closing), so this is the only PUT.
@@ -1400,6 +1395,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
+            Some(&lookup),
             &crate::WalkFilterArgs::default(),
             None,
             false,
@@ -1418,6 +1414,103 @@ mod tests {
             "priority bump dropped for closing bug"
         );
         assert_eq!(report.failures, 0);
+    }
+
+    #[tokio::test]
+    async fn run_side_tag_only_build_stays_pending() {
+        // The reported regression scenario: the new version is
+        // committed to rawhide dist-git and built, but the build
+        // is only in a side tag — Bodhi has no update and the
+        // release's tag chain still carries the old version. The
+        // bug must stay open (no PUT at all).
+        let server = MockServer::start().await;
+        mount_common(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F45"))
+            .respond_with(updates_response(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let lookup = |tag: &str, _pkg: &str| -> Result<Option<String>, String> {
+            assert_eq!(tag, "f45", "stable releases must not be queried");
+            Ok(Some("foo-1.1.0-1.fc45".to_string()))
+        };
+
+        let inventory = test_inventory(None);
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let bodhi = BodhiClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory,
+            &bz,
+            &dg,
+            &bodhi,
+            Some(&lookup),
+            &crate::WalkFilterArgs::default(),
+            None,
+            false,
+            false,
+            false,
+            None,
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.stale_planned, 0);
+        assert_eq!(report.stale_applied, 0);
+    }
+
+    #[tokio::test]
+    async fn run_without_koji_lookup_treats_unverified_as_pending() {
+        // With no Koji lookup (koji CLI unavailable), a bug Bodhi
+        // can't vouch for is left open — fail-safe, never closed
+        // on unverified evidence.
+        let server = MockServer::start().await;
+        mount_common(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("releases", "F45"))
+            .respond_with(updates_response(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let inventory = test_inventory(None);
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let bodhi = BodhiClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory,
+            &bz,
+            &dg,
+            &bodhi,
+            None,
+            &crate::WalkFilterArgs::default(),
+            None,
+            false,
+            false,
+            false,
+            None,
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.stale_planned, 0);
     }
 
     #[tokio::test]
@@ -1462,6 +1555,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
+            None,
             &crate::WalkFilterArgs::default(),
             None,
             false,
@@ -1524,6 +1618,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
+            None,
             &crate::WalkFilterArgs::default(),
             None,
             false,
@@ -1595,6 +1690,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
+            None,
             &crate::WalkFilterArgs::default(),
             None,
             false,
@@ -1632,16 +1728,12 @@ mod tests {
             .respond_with(updates_response(serde_json::json!([])))
             .mount(&server)
             .await;
-        // Spec on f43 still behind -> AskClose; under -y without
-        // --close-stale nothing is written.
-        Mock::given(method("GET"))
-            .and(path("/rpms/foo/raw/f43/f/foo.spec"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string("Name: foo\nVersion: 1.1.0\nRelease: 1%{?dist}\n"),
-            )
-            .mount(&server)
-            .await;
+        // F43's tag chain still carries the old build -> AskClose;
+        // under -y without --close-stale nothing is written.
+        let lookup = |tag: &str, _pkg: &str| -> Result<Option<String>, String> {
+            assert_eq!(tag, "f43-updates");
+            Ok(Some("foo-1.1.0-1.fc43".to_string()))
+        };
 
         let inventory = test_inventory(None);
         let bz = BzClient::new(&server.uri());
@@ -1652,6 +1744,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
+            Some(&lookup),
             &crate::WalkFilterArgs::default(),
             None,
             false,
@@ -1672,22 +1765,14 @@ mod tests {
     async fn run_short_circuits_stable_checks_when_rawhide_pending() {
         let server = MockServer::start().await;
         mount_common(&server).await;
-        // Rawhide (F45) has no Bodhi update and its spec still
-        // carries the old version -> the bug is genuinely pending,
-        // and the stable release (F43) must never be queried at
-        // all (neither Bodhi nor dist-git).
+        // Rawhide (F45) has no Bodhi update and its Koji tag
+        // still carries the old version -> the bug is genuinely
+        // pending, and the stable release (F43) must never be
+        // queried at all (neither Bodhi nor Koji).
         Mock::given(method("GET"))
             .and(path("/updates/"))
             .and(query_param("releases", "F45"))
             .respond_with(updates_response(serde_json::json!([])))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/rpms/foo/raw/rawhide/f/foo.spec"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string("Name: foo\nVersion: 1.1.0\nRelease: 1%{?dist}\n"),
-            )
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -1697,12 +1782,10 @@ mod tests {
             .expect(0)
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
-            .and(path("/rpms/foo/raw/f43/f/foo.spec"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(""))
-            .expect(0)
-            .mount(&server)
-            .await;
+        let lookup = |tag: &str, _pkg: &str| -> Result<Option<String>, String> {
+            assert_eq!(tag, "f45", "F43's Koji tag must not be queried");
+            Ok(Some("foo-1.1.0-1.fc45".to_string()))
+        };
 
         let inventory = test_inventory(None);
         let bz = BzClient::new(&server.uri());
@@ -1713,6 +1796,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
+            Some(&lookup),
             &crate::WalkFilterArgs::default(),
             None,
             false,
@@ -1781,6 +1865,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
+            None,
             &crate::WalkFilterArgs::default(),
             None,
             false,
@@ -1821,7 +1906,8 @@ mod tests {
             .and(path("/releases/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "releases": [
-                    {"name": "F45", "branch": "rawhide", "id_prefix": "FEDORA", "state": "pending"}
+                    {"name": "F45", "branch": "rawhide", "id_prefix": "FEDORA",
+                     "state": "pending", "stable_tag": "f45"}
                 ],
                 "total": 1, "page": 1, "pages": 1
             })))
@@ -1862,6 +1948,7 @@ mod tests {
             &bz,
             &dg,
             &bodhi,
+            None,
             &crate::WalkFilterArgs::default(),
             Some("me@example.com"),
             false,

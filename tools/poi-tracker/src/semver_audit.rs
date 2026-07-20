@@ -19,6 +19,14 @@
 //! package retired on rawhide (a `dead.package` marker, the signal
 //! `triage-retired` keys on) is reported as "retired" since its
 //! update request is moot.
+//!
+//! A spec that already carries the "available" version doesn't by
+//! itself mean the bug is stale: the version may be committed and
+//! built but not yet released (a side tag awaiting its Bodhi
+//! update, or gating). When the koji CLI is available, rawhide's
+//! Koji tag chain (the `rawhide` alias tag) decides: carried →
+//! "up to date (stale bug)", not carried → "committed, awaiting
+//! release".
 
 use std::collections::BTreeMap;
 
@@ -44,6 +52,11 @@ pub enum Bump {
     /// — a stale release-monitoring bug, not a pending update.
     /// (Excluded by `--non-breaking`, since there's nothing to push.)
     UpToDate,
+    /// The rawhide spec already carries the new version, but the
+    /// release doesn't: no build with it is tagged into rawhide's
+    /// Koji tag chain (it's in flight — a side tag, gating, or
+    /// just committed). Nothing to close yet.
+    PendingRelease,
     /// Safe under the Cargo compatibility rule (patch, or minor
     /// when the leading component is non-zero).
     NonBreaking,
@@ -64,6 +77,7 @@ impl Bump {
     fn label(self) -> &'static str {
         match self {
             Bump::UpToDate => "Up to date (stale bug)",
+            Bump::PendingRelease => "Committed, awaiting release",
             Bump::NonBreaking => "Non-breaking",
             Bump::Breaking => "Breaking",
             Bump::Retired => "Retired (update request invalid)",
@@ -213,10 +227,15 @@ fn pick_latest(bugs: &[Bug], component: &str) -> Option<(u64, String)> {
 
 /// Run the audit. Returns the entries for packages that have a
 /// pending update (after pattern + non-breaking filtering).
+/// `latest_tagged` is the Koji lookup used to tell a stale bug
+/// from a committed-but-unreleased version; `None` (koji CLI
+/// unavailable) keeps the spec-only classification.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     inventory: &Inventory,
     bz: &BzClient,
     dg: &DistGitClient,
+    latest_tagged: Option<&crate::triage_updates::TagLookup>,
     filter: &crate::WalkFilterArgs,
     non_breaking_only: bool,
     batch_email: Option<&str>,
@@ -330,6 +349,39 @@ pub async fn run(
         if current.as_deref() == Some(new.as_str()) {
             bump = Bump::UpToDate;
         }
+        // A matching spec only means "stale bug" when rawhide
+        // actually carries a build with the version — one that's
+        // only in a side tag (or still gating) is in flight, not
+        // stale. The koji `rawhide` alias tag inherits the
+        // current fNN, so one lookup answers it.
+        if bump == Bump::UpToDate
+            && let Some(lookup) = latest_tagged
+        {
+            if verbose {
+                eprintln!(
+                    "[poi-tracker] {}: verifying against the {CURRENT_BRANCH} Koji tag",
+                    pkg.name
+                );
+            }
+            match lookup(CURRENT_BRANCH, &pkg.name) {
+                Ok(nvr) => {
+                    let shipped = nvr
+                        .as_deref()
+                        .and_then(sandogasa_koji::parse_nvr)
+                        .is_some_and(|(name, v, _)| name == pkg.name && version_at_least(v, &new));
+                    if !shipped {
+                        bump = Bump::PendingRelease;
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warning: {}: Koji {CURRENT_BRANCH} query failed: {e} \
+                         (cannot verify staleness)",
+                        pkg.name
+                    );
+                }
+            }
+        }
         let current_str = match (&current, retired) {
             (Some(cur), _) => cur.clone(),
             (None, true) => "(retired)".to_string(),
@@ -371,6 +423,7 @@ pub fn print_report(entries: &[AuditEntry]) {
     for kind in [
         Bump::NonBreaking,
         Bump::Breaking,
+        Bump::PendingRelease,
         Bump::UpToDate,
         Bump::Retired,
         Bump::NeedsReview,
@@ -387,6 +440,13 @@ pub fn print_report(entries: &[AuditEntry]) {
         }
         if kind == Bump::Retired {
             println!("  (run `poi-tracker triage-retired` to close these)");
+        }
+        if kind == Bump::PendingRelease {
+            println!(
+                "  (built but not yet in rawhide — waiting on a side \
+                 tag merge, gating, or a Bodhi update; nothing to \
+                 close yet)"
+            );
         }
         if kind == Bump::UpToDate {
             println!(
@@ -424,6 +484,7 @@ mod tests {
             &inventory,
             &bz,
             &dg,
+            None,
             &crate::WalkFilterArgs::default(),
             false,
             None,
@@ -481,10 +542,13 @@ mod tests {
         .unwrap();
         let bz = BzClient::new(&server.uri());
         let dg = DistGitClient::with_base_url(&server.uri());
+        // No Koji lookup (koji CLI unavailable): the spec-only
+        // classification stands.
         let entries = run(
             &inventory,
             &bz,
             &dg,
+            None,
             &crate::WalkFilterArgs::default(),
             false,
             Some("me@example.com"),
@@ -497,6 +561,124 @@ mod tests {
         // Packaged version already matches the available one.
         assert_eq!(entries[0].bump, Bump::UpToDate);
         print_report(&entries);
+    }
+
+    /// Shared scaffolding for the Koji-verified stale checks: one
+    /// open bug advertising foo-1.2.0, rawhide spec already at
+    /// 1.2.0. The Koji lookup stub decides the outcome.
+    async fn mount_up_to_date(server: &MockServer) -> sandogasa_inventory::Inventory {
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{
+                    "id": 7,
+                    "summary": "foo-1.2.0 is available",
+                    "status": "NEW",
+                    "resolution": "",
+                    "product": "Fedora",
+                    "component": ["foo"],
+                    "severity": "unspecified",
+                    "priority": "unspecified",
+                    "assigned_to": "me@example.com",
+                    "creator": "upstream-release-monitoring@fedoraproject.org",
+                    "creation_time": "2026-05-01T00:00:00Z",
+                    "last_change_time": "2026-05-01T00:00:00Z",
+                }],
+                "total_matches": 1
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rpms/foo/raw/rawhide/f/foo.spec"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("Name: foo\nVersion: 1.2.0\nRelease: 1%{?dist}\n"),
+            )
+            .mount(server)
+            .await;
+        toml::from_str(
+            "[inventory]\n\
+             name = \"test\"\n\
+             description = \"test\"\n\
+             maintainer = \"tester\"\n\
+             \n\
+             [[package]]\n\
+             name = \"foo\"\n",
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn side_tag_only_version_is_pending_release_not_stale() {
+        // The spec carries 1.2.0 but rawhide's tag chain still
+        // resolves to 1.1.0 (the 1.2.0 build sits in a side tag)
+        // -> committed-awaiting-release, not a stale bug.
+        let server = MockServer::start().await;
+        let inventory = mount_up_to_date(&server).await;
+        let lookup = |tag: &str, pkg: &str| -> Result<Option<String>, String> {
+            assert_eq!((tag, pkg), ("rawhide", "foo"));
+            Ok(Some("foo-1.1.0-1.fc45".to_string()))
+        };
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let entries = run(
+            &inventory,
+            &bz,
+            &dg,
+            Some(&lookup),
+            &crate::WalkFilterArgs::default(),
+            false,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].bump, Bump::PendingRelease);
+        print_report(&entries);
+    }
+
+    #[tokio::test]
+    async fn tagged_version_confirms_stale_bug() {
+        // Rawhide's tag chain already carries 1.2.0 -> genuinely
+        // stale. A Koji error must also keep the spec verdict
+        // (warn, don't reclassify).
+        let server = MockServer::start().await;
+        let inventory = mount_up_to_date(&server).await;
+        let lookup = |_: &str, _: &str| -> Result<Option<String>, String> {
+            Ok(Some("foo-1.2.0-1.fc45".to_string()))
+        };
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let entries = run(
+            &inventory,
+            &bz,
+            &dg,
+            Some(&lookup),
+            &crate::WalkFilterArgs::default(),
+            false,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(entries[0].bump, Bump::UpToDate);
+
+        let failing =
+            |_: &str, _: &str| -> Result<Option<String>, String> { Err("koji down".into()) };
+        let entries = run(
+            &inventory,
+            &bz,
+            &dg,
+            Some(&failing),
+            &crate::WalkFilterArgs::default(),
+            false,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(entries[0].bump, Bump::UpToDate);
     }
 
     #[test]

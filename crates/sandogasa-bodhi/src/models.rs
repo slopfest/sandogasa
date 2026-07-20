@@ -191,6 +191,14 @@ pub struct BodhiRelease {
     pub branch: String,
     pub id_prefix: String,
     pub state: String,
+    /// Koji tag stable updates land in (e.g. `f43-updates`,
+    /// `f45` for rawhide, `epel10.3`). With tag inheritance this
+    /// is the authoritative "what the release carries" tag —
+    /// `f43-updates` inherits `f43`, so one inherited query
+    /// covers GA and updates content. Defaulted so canned
+    /// fixtures without the field keep deserializing.
+    #[serde(default)]
+    pub stable_tag: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -349,7 +357,8 @@ mod tests {
                     "name": "F43",
                     "branch": "f43",
                     "id_prefix": "FEDORA",
-                    "state": "current"
+                    "state": "current",
+                    "stable_tag": "f43-updates"
                 },
                 {
                     "name": "EPEL-9",
@@ -369,6 +378,9 @@ mod tests {
         assert_eq!(resp.releases[0].branch, "f43");
         assert_eq!(resp.releases[0].id_prefix, "FEDORA");
         assert_eq!(resp.releases[0].state, "current");
+        assert_eq!(resp.releases[0].stable_tag, "f43-updates");
+        // Missing stable_tag defaults to empty (older fixtures).
+        assert_eq!(resp.releases[1].stable_tag, "");
         assert_eq!(resp.releases[1].name, "EPEL-9");
         assert_eq!(resp.releases[1].branch, "epel9");
     }

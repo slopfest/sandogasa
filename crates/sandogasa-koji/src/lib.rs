@@ -56,6 +56,19 @@ pub fn parse_nvr(nvr: &str) -> Option<(&str, &str, &str)> {
     }
 }
 
+/// Whether the `koji` CLI is available on PATH. Callers that can
+/// degrade gracefully should probe this once up front and warn,
+/// rather than erroring on every query. Probes with `koji help`:
+/// it's the offline no-op — `--version` doesn't exist (exit 2)
+/// and `koji version` contacts the hub.
+pub fn is_available() -> bool {
+    Command::new("koji")
+        .arg("help")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Run a koji command with optional profile and return stdout.
 fn run_koji(profile: Option<&str>, args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new("koji");
@@ -98,8 +111,34 @@ pub fn list_tagged(
     args.push("--");
     args.push(tag);
     let stdout = run_koji(profile, &args)?;
-    let mut builds = Vec::new();
+    Ok(parse_list_tagged(&stdout))
+}
 
+/// Latest build of `package` in `tag`, following tag inheritance
+/// (`--inherit`), or `None` when the package has no build there.
+///
+/// Inheritance matters for "is this shipped in the release"
+/// checks: a release's compose content is its tag chain (e.g.
+/// `f43-updates` inherits `f43`, and the `rawhide` alias inherits
+/// the current `fNN`), while side tags and `-candidate`/`-testing`
+/// tags are never in the chain — so a build visible here is one
+/// the release actually carries.
+pub fn latest_tagged(
+    tag: &str,
+    package: &str,
+    profile: Option<&str>,
+) -> Result<Option<TaggedBuild>, String> {
+    let stdout = run_koji(
+        profile,
+        &["list-tagged", "--latest", "--inherit", "--", tag, package],
+    )?;
+    Ok(parse_list_tagged(&stdout).into_iter().next())
+}
+
+/// Parse `koji list-tagged` tabular output (header, separator,
+/// then `NVR TAG OWNER` rows) into builds.
+fn parse_list_tagged(stdout: &str) -> Vec<TaggedBuild> {
+    let mut builds = Vec::new();
     for line in stdout.lines().skip(2) {
         let line = line.trim();
         if line.is_empty() || line.starts_with('-') {
@@ -114,8 +153,7 @@ pub fn list_tagged(
             });
         }
     }
-
-    Ok(builds)
+    builds
 }
 
 /// One "tagged into" event from `koji list-history --tag=<tag>`.
@@ -379,6 +417,28 @@ pub fn build_rpms(nvr: &str, profile: Option<&str>) -> Result<Vec<String>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_list_tagged_rows() {
+        let out = "Build                    Tag         Built by\n\
+                   -----------------------  ----------  --------\n\
+                   foo-1.2.0-1.fc45         f45         alice\n\
+                   \n";
+        let builds = parse_list_tagged(out);
+        assert_eq!(builds.len(), 1);
+        assert_eq!(builds[0].nvr, "foo-1.2.0-1.fc45");
+        assert_eq!(builds[0].tag, "f45");
+        assert_eq!(builds[0].owner, "alice");
+    }
+
+    #[test]
+    fn parse_list_tagged_empty_result() {
+        // Headers only — the shape koji prints for a package with
+        // no build in the tag.
+        let out = "Build                    Tag         Built by\n\
+                   -----------------------  ----------  --------\n";
+        assert!(parse_list_tagged(out).is_empty());
+    }
 
     #[test]
     fn parse_nvr_name_standard() {

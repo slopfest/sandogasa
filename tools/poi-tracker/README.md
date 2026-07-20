@@ -17,7 +17,11 @@ Some subcommands shell out to external tools: `prune-retired` and
 [fedrq](https://src.fedoraproject.org/rpms/fedrq)
 (`sudo dnf install fedrq`); `sync-gitlab --mark-unshipped` needs
 `koji` configured with the `cbs` profile (from the
-`centos-packager` package).
+`centos-packager` package); `semver-audit` and `triage-updates`
+use `koji` (`sudo dnf install koji`) to verify that a version is
+actually tagged into a release before calling a bug stale — both
+degrade with a warning when it's missing (unverifiable bugs are
+left open / reported as up to date).
 
 ## Usage
 
@@ -258,9 +262,13 @@ component is **breaking**. So `1.4 → 1.5` is non-breaking, but
 `0.0.3 → 0.0.4` is breaking too. Versions that aren't plain dotted
 integers — pre-releases, dates, git snapshots — are reported as
 **needs review** rather than guessed at. A package whose packaged
-version already equals the "available" version (a stale
-release-monitoring bug, nothing to push) is reported as **up to
-date (stale bug)**. A package that's retired on rawhide (a
+version already equals the "available" version is reported as
+**up to date (stale bug)** — but only after verifying (via
+`koji`) that a build with that version is actually in rawhide's
+tag chain. A version merely committed to dist-git whose build
+sits in a side tag or is still gating is reported as
+**committed, awaiting release** instead: the bug isn't stale,
+the update just hasn't shipped. A package that's retired on rawhide (a
 `dead.package` marker — the same signal `triage-retired` uses) is
 reported as **retired (update request invalid)**, since there's no
 live package to update; run `triage-retired` to close those bugs.
@@ -320,10 +328,16 @@ field, and:
   asking; under `-y` they are skipped unless `--close-stale` is
   given.
 
-Builds that shipped before the current releases existed have no
-Bodhi record (they were inherited at branching); for those the
-branch's dist-git spec is consulted instead, so years-old stale
-bugs close too. Genuinely pending bugs are cheap: rawhide is
+Bodhi records updates per release, so a release can carry a build
+Bodhi has no update for in that release — content inherited at
+branching, or answers missing while Bodhi is degraded. For those,
+the release's Koji tag chain is consulted (via `koji`, checking
+`fXX-updates` + `fXX` and the EPEL equivalents through tag
+inheritance), so years-old stale bugs close too — while a version
+merely committed to dist-git and built into a side tag or
+`-candidate`/`-testing` tag correctly stays pending. Without the
+`koji` CLI this check is skipped (with a warning) and such bugs
+are simply left open. Genuinely pending bugs are cheap: rawhide is
 checked first, and since a stable release may never carry a newer
 version than rawhide, a version absent from rawhide skips the
 stable-release queries entirely (EPEL bugs, whose branches update

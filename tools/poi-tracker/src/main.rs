@@ -586,6 +586,17 @@ fn workloads_from_names(names: &[String]) -> BTreeMap<String, sandogasa_inventor
         .collect()
 }
 
+/// The real Koji tag lookup backing the shipped-build checks in
+/// `triage-updates` and `semver-audit`: latest NVR of a package
+/// in a tag's inheritance chain. `None` when the koji CLI isn't
+/// on PATH — callers warn and degrade (fail-safe: unverifiable
+/// builds count as not shipped / not verified).
+fn koji_tag_lookup() -> Option<impl Fn(&str, &str) -> Result<Option<String>, String>> {
+    sandogasa_koji::is_available().then_some(|tag: &str, package: &str| {
+        sandogasa_koji::latest_tagged(tag, package, None).map(|b| b.map(|tb| tb.nvr))
+    })
+}
+
 /// Collect inventory paths from -i and -I flags.
 /// Resolve a `--batch [EMAIL]` flag: an explicit email wins, a
 /// bare `--batch` falls back to the configured Bugzilla email.
@@ -682,10 +693,23 @@ fn cmd_semver_audit(paths: &[String], args: &SemverAuditArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let koji_lookup = koji_tag_lookup();
+    let latest_tagged = match &koji_lookup {
+        Some(l) => Some(l as &triage_updates::TagLookup),
+        None => {
+            eprintln!(
+                "warning: koji CLI not found; cannot tell stale bugs from \
+                 committed-but-unreleased versions — reporting them all as \
+                 up to date. Install koji to enable the check."
+            );
+            None
+        }
+    };
     match rt.block_on(semver_audit::run(
         &inventory,
         &bz,
         &dg,
+        latest_tagged,
         &args.filter,
         args.non_breaking,
         batch_email.as_deref(),
@@ -1058,11 +1082,25 @@ fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
     };
     let dg = sandogasa_distgit::DistGitClient::new();
     let bodhi = sandogasa_bodhi::BodhiClient::new();
+    let koji_lookup = koji_tag_lookup();
+    let latest_tagged = match (&koji_lookup, args.skip_stale) {
+        (Some(l), false) => Some(l as &triage_updates::TagLookup),
+        (None, false) => {
+            eprintln!(
+                "warning: koji CLI not found; cannot verify builds Bodhi \
+                 has no update for — such bugs will be left open. \
+                 Install koji to enable the check."
+            );
+            None
+        }
+        (_, true) => None,
+    };
     match rt.block_on(triage_updates::run(
         &inventory,
         &client,
         &dg,
         &bodhi,
+        latest_tagged,
         &args.filter,
         batch_email.as_deref(),
         args.skip_stale,
