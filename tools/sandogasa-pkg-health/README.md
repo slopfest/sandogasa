@@ -53,6 +53,17 @@ sandogasa-pkg-health run -i inventory.toml -o health.toml \
     --all --package rust-arrow
 ```
 
+## Checks
+
+- `bug_count` (Medium) — open bugs by category (security, FTBFS,
+  update request, …) per release variant, classified via
+  [sandogasa-bugclass](../../crates/sandogasa-bugclass/)
+- `maintainer_count` (Cheap) — effective committer count from
+  dist-git ACLs with Pagure group expansion. Also flags
+  **orphaned** packages (dist-git owner is the `orphan` sentinel
+  user, which is never counted as a maintainer) — an orphaned
+  package is retired ~6 weeks after orphaning unless adopted
+
 ### Show a previously-generated report
 
 ```sh

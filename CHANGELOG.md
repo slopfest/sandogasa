@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### sandogasa-pkg-health: flag orphaned packages
+
+`maintainer_count` treated the dist-git `orphan` sentinel user as a
+regular maintainer, so an orphaned package (observed with `ccze`,
+whose owner releng moved to `orphan`) inflated its effective count
+by one and gave no signal that it needs adoption. The check now
+reports an `orphaned` boolean, excludes `orphan` from the direct
+and effective counts, and leads the summary line with
+`ORPHANED (adopt or lose it to retirement)`. Reports written by
+older versions render unchanged (the missing field just omits the
+marker).
+
 ### poi-tracker: don't call a bug stale when the build is only in a side tag
 
 `semver-audit` classified a bug as "up to date (stale bug)" as soon
