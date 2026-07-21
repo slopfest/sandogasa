@@ -725,7 +725,7 @@ fn handle_refresh(refresh: bool, verbose: bool) -> Result<(), ExitCode> {
 
 fn main() -> ExitCode {
     sandogasa_cli::init();
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
 
     // config and check-pkg-reviews don't need fedrq.
     if matches!(cli.command, Command::Config) {

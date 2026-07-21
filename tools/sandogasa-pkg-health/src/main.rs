@@ -144,7 +144,7 @@ fn duplicates(xs: &[u32]) -> Vec<u32> {
 
 fn main() -> ExitCode {
     sandogasa_cli::init();
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

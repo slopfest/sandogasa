@@ -279,7 +279,7 @@ struct DiscourseStatus {
 #[tokio::main]
 async fn main() -> ExitCode {
     sandogasa_cli::init();
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     locale::init_source(cli.tz_source);
 
     match run(cli).await {

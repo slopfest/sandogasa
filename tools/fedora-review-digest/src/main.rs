@@ -70,7 +70,7 @@ struct DigestArgs {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     let result = match cli.command {
         Some(Command::Config) => cmd_config(),
         None => run(&cli.digest).map(|text| print!("{text}")),

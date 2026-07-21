@@ -32,3 +32,54 @@ Concretely:
   request may still have taken effect server-side. Surface the error
   and let the user rerun. (Our ACL modifications happen to be
   idempotent, but don't assume that in general.)
+
+## Flag defaults come from the config file — a common pattern
+
+Every tool supports a `[defaults]` table in its per-user config
+(`~/.config/<tool>/config.toml`, the same file that holds
+credentials) to pin flag defaults, so users don't have to retype
+the flags they always pass — e.g. always narrating dbranch runs:
+
+```toml
+[defaults]          # tool-wide: applies wherever the flag exists
+explain = true
+
+[defaults.update]   # for one subcommand only
+quiet = true
+```
+
+Keys are the flag's **long name** as typed on the command line
+(dashes included). A top-level key covers global and top-level
+flags, and also applies to any invoked subcommand that has a flag
+of that name — subcommands without it just ignore the default, so
+one `explain = true` line covers every dbranch subcommand with
+`--explain`. Use a `[defaults.<subcommand>]` table to scope a
+default to a single subcommand. `true` turns a boolean flag on;
+strings and numbers become `--key value`; arrays repeat a
+repeatable flag.
+
+The mechanics live in one place —
+`sandogasa_cli::parse_with_defaults` — and every tool's `main`
+uses it instead of `Cli::parse()`:
+
+```rust
+let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
+```
+
+Guarantees the helper enforces (don't reimplement them per tool):
+
+- **Command line always wins.** A config default never overrides a
+  flag given explicitly (including via a flag's env var).
+- **Conflicts resolve in the user's favor.** A default that
+  `conflicts_with` an explicitly-given flag is skipped, not
+  errored — `dbranch update -q` silently suppresses a configured
+  `explain = true`.
+- **`--no-defaults`** (added to every tool automatically) skips
+  the whole table for one run.
+- **Typos fail loudly.** An unknown flag or subcommand name in
+  `[defaults]` is a hard error naming the config file, never
+  silently ignored.
+
+When adding a new tool, use `parse_with_defaults` from the start;
+when adding flags, nothing extra is needed — any long flag is
+automatically defaultable.

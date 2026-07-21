@@ -522,6 +522,7 @@ version = "0.18.0"
 dependencies = [
  "clap",
  "sandogasa-bugzilla",
+ "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-review",
  "serde",
@@ -1822,7 +1823,10 @@ name = "sandogasa-cli"
 version = "0.18.0"
 dependencies = [
  "chrono",
+ "clap",
  "rustls",
+ "sandogasa-config",
+ "toml",
  "url",
 ]
 

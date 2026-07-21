@@ -25,11 +25,17 @@ impl ConfigFile {
     pub fn for_tool(tool_name: &str) -> Self {
         // A literal "~" fallback would silently create `./~/.config`
         // in the CWD; with no home at all, failing loudly is better.
-        let path = dirs::config_dir()
+        Self::try_for_tool(tool_name)
             .expect("cannot determine the config directory: set XDG_CONFIG_HOME (absolute) or HOME")
-            .join(tool_name)
-            .join("config.toml");
-        Self { path, secure: true }
+    }
+
+    /// Like [`ConfigFile::for_tool`], but returns `None` when no
+    /// config directory can be determined instead of panicking.
+    /// For optional reads (e.g. `[defaults]` lookup) where a
+    /// homeless environment should mean "no config", not a crash.
+    pub fn try_for_tool(tool_name: &str) -> Option<Self> {
+        let path = dirs::config_dir()?.join(tool_name).join("config.toml");
+        Some(Self { path, secure: true })
     }
 
     /// Create a `ConfigFile` with an explicit path.

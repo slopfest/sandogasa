@@ -79,7 +79,7 @@ struct FailureLog {
 
 fn main() -> ExitCode {
     sandogasa_cli::init();
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
 
     // koji uses the `version` subcommand, not `--version` (the latter
     // exits 2), so probe it with `version`.

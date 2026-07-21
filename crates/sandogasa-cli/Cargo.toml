@@ -8,5 +8,8 @@ repository.workspace = true
 
 [dependencies]
 chrono = { workspace = true }
+clap = { workspace = true }
 rustls = { workspace = true }
+sandogasa-config = { workspace = true }
+toml = { workspace = true }
 url = { workspace = true }

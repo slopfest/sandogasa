@@ -69,7 +69,7 @@ enum Command {
 
 fn main() -> ExitCode {
     sandogasa_cli::init();
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     match cli.command {
         Command::Config => configure::run(),
         Command::DumpInventory(args) => dump_inventory::run(&args),

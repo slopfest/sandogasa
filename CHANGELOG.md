@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### All tools: pin flag defaults in the config file
+
+Every tool now honors a `[defaults]` table in its
+`~/.config/<tool>/config.toml`, so flags you always pass can
+become defaults. A top-level key applies tool-wide — to global
+flags and to any invoked subcommand carrying that flag — so
+`[defaults] explain = true` makes every dbranch subcommand with
+`--explain` narrate; `[defaults.<subcommand>]` sub-tables scope a
+default to one subcommand. Keys are the flag's long name;
+booleans turn flags on, strings/numbers become values, arrays
+repeat repeatable flags. Precedence: the command line (and a
+flag's env var) always wins; a default that conflicts with an
+explicitly-given flag is skipped rather than erroring; the new
+`--no-defaults` flag (added to every tool) ignores the table for
+one run; unknown keys are hard errors. The mechanics live in the
+new `sandogasa_cli::defaults` module (`parse_with_defaults`) and
+the pattern is documented in DEVELOPMENT.md. sandogasa-config
+gains `ConfigFile::try_for_tool` (non-panicking variant of
+`for_tool`).
+
 ## v0.18.0
 
 ### API model structs are now `#[non_exhaustive]` (breaking)

@@ -119,7 +119,7 @@ fn parse_acl_level(s: &str) -> Result<String, String> {
 #[tokio::main]
 async fn main() -> ExitCode {
     sandogasa_cli::init();
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
 
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,

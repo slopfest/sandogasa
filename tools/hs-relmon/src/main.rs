@@ -508,7 +508,7 @@ newer than the released build."
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     sandogasa_cli::init();
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
 
     match cli.command {
         Command::CheckLatest {

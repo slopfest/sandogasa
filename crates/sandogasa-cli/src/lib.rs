@@ -3,6 +3,9 @@
 //! Shared CLI utilities for sandogasa tools.
 
 pub mod date;
+pub mod defaults;
+
+pub use defaults::parse_with_defaults;
 
 use std::process::{Command, Stdio};
 

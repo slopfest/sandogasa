@@ -129,7 +129,7 @@ fn resolve_date_range(cli: &ReportArgs) -> Result<(NaiveDate, NaiveDate), String
 
 fn main() -> ExitCode {
     sandogasa_cli::init();
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     match cli.command {
         Command::Config(args) => configure::run(&args),
         Command::Report(args) => run_report(&args),

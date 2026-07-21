@@ -42,7 +42,7 @@ enum Command {
 
 fn main() -> ExitCode {
     sandogasa_cli::init();
-    match Cli::parse().command {
+    match sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME")).command {
         Command::Agenda(args) => agenda::run(&args),
         Command::Config => match config::cmd_config() {
             Ok(()) => ExitCode::SUCCESS,

@@ -106,7 +106,7 @@ fn run_compare(
 
 fn main() {
     sandogasa_cli::init();
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
 
     match cli.command {
         Commands::CompareBuildRequires {

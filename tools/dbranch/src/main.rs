@@ -315,7 +315,7 @@ names its project here. Requires --debusine."
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     match run(cli.command) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

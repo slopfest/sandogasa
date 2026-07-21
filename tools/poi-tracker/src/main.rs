@@ -634,7 +634,7 @@ fn resolve_inventory_paths(cli: &Cli) -> Vec<String> {
 
 fn main() -> ExitCode {
     sandogasa_cli::init();
-    let cli = Cli::parse();
+    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
 
     // Import/sync commands produce new files and don't need existing
     // inventory paths. `Config` doesn't touch inventories at all.
