@@ -42,7 +42,7 @@
 
 ## Per-user directories (XDG)
 - Our own per-user storage follows the [XDG Base Directory spec](https://specifications.freedesktop.org/basedir/latest/), resolved via the `dirs` crate — never hand-roll `$XDG_*` env reading (the spec requires *ignoring relative values*, which `dirs` implements) and never hardcode `~/.config`/`~/.cache`/`~/.local/state`:
-  - config → `sandogasa_config::ConfigFile::for_tool` (`dirs::config_dir()`, i.e. `$XDG_CONFIG_HOME`, default `~/.config/<tool>/config.toml`, perms 700/600)
+  - config → `sandogasa_config::ConfigFile::for_tool` (`dirs::config_dir()`, i.e. `$XDG_CONFIG_HOME`, default `~/.config/<tool>/config.toml`, perms 700/600). Reads are layered: an optional system-wide `/etc/<tool>/config.toml` is merged beneath the user file (user wins per key, recursively; CLI flags override both); `save` only writes the user file
   - cache → `dirs::cache_dir()` (`$XDG_CACHE_HOME`, default `~/.cache/<tool>/`)
   - state that persists between runs but isn't config (e.g. fesco-chair's saved agenda) → `dirs::state_dir()` (`$XDG_STATE_HOME`, default `~/.local/state/<tool>/`)
 - When no base directory can be determined (neither the `$XDG_*` var nor `$HOME`), fail loudly with a message naming both variables — never fall back to a literal `~/...` path (an unexpanded tilde silently creates `./~/...` in the CWD)

@@ -3,8 +3,9 @@
 //! Flag defaults from the tool's config file.
 //!
 //! Every sandogasa tool lets users pin flag defaults in a
-//! `[defaults]` table of its `~/.config/<tool>/config.toml`
-//! (see the root DEVELOPMENT.md for the pattern):
+//! `[defaults]` table of its config — `/etc/<tool>/config.toml`
+//! overridden per key by `~/.config/<tool>/config.toml` (see the
+//! root DEVELOPMENT.md for the pattern):
 //!
 //! ```toml
 //! [defaults]          # tool-wide
@@ -37,7 +38,6 @@
 //!   be silently ignored.
 
 use std::ffi::OsString;
-use std::path::Path;
 
 use clap::parser::ValueSource;
 use clap::{Arg, ArgAction, ArgMatches, Command, Parser};
@@ -46,8 +46,9 @@ use clap::{Arg, ArgAction, ArgMatches, Command, Parser};
 const NO_DEFAULTS: &str = "no-defaults";
 
 /// Parse the command line like `T::parse()`, applying `[defaults]`
-/// from `~/.config/<tool>/config.toml` for flags not given on the
-/// command line. Call with the tool's crate name:
+/// from the tool's config layers (`/etc/<tool>/config.toml`, then
+/// `~/.config/<tool>/config.toml` overriding it per key) for flags
+/// not given on the command line. Call with the tool's crate name:
 /// `parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"))`.
 pub fn parse_with_defaults<T: Parser>(tool: &str) -> T {
     let argv: Vec<OsString> = std::env::args_os().collect();
@@ -64,10 +65,10 @@ pub fn parse_with_defaults<T: Parser>(tool: &str) -> T {
     } else {
         match load_defaults(tool) {
             Ok(None) => matches,
-            Ok(Some((table, path))) => {
+            Ok(Some((table, sources))) => {
                 let extra = match plan_injections(&cmd, &matches, &table) {
                     Ok(extra) => extra,
-                    Err(e) => fail(&path, &e),
+                    Err(e) => fail(&sources, &e),
                 };
                 if extra.is_empty() {
                     matches
@@ -76,7 +77,7 @@ pub fn parse_with_defaults<T: Parser>(tool: &str) -> T {
                     full.extend(extra);
                     match cmd.try_get_matches_from(full) {
                         Ok(m) => m,
-                        Err(e) => fail(&path, &e.to_string()),
+                        Err(e) => fail(&sources, &e.to_string()),
                     }
                 }
             }
@@ -93,10 +94,9 @@ pub fn parse_with_defaults<T: Parser>(tool: &str) -> T {
     }
 }
 
-fn fail(config_path: &Path, msg: &str) -> ! {
+fn fail(sources: &str, msg: &str) -> ! {
     eprintln!(
-        "error: applying [defaults] from {}: {}",
-        config_path.display(),
+        "error: applying [defaults] from {sources}: {}",
         msg.trim_end()
     );
     eprintln!("(pass --no-defaults to skip them for this run)");
@@ -114,26 +114,24 @@ fn augment_command(cmd: Command) -> Command {
     )
 }
 
-/// Load the `[defaults]` table from the tool's config file.
-/// `Ok(None)` when there is no config dir, no file, or no table.
-type DefaultsTable = (toml::Table, std::path::PathBuf);
+/// Load the `[defaults]` table from the tool's config layers
+/// (`/etc/<tool>/config.toml` overridden per key by
+/// `~/.config/<tool>/config.toml`). `Ok(None)` when there is no
+/// config dir, no file, or no table. The second tuple field
+/// describes the sources for error messages.
+type DefaultsTable = (toml::Table, String);
 fn load_defaults(tool: &str) -> Result<Option<DefaultsTable>, String> {
     let Some(cfg) = sandogasa_config::ConfigFile::try_for_tool(tool) else {
         return Ok(None);
     };
-    let path = cfg.path().to_path_buf();
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("could not read {}: {e}", path.display())),
+    let sources = cfg.describe_sources();
+    let Some(table) = cfg.read_merged()? else {
+        return Ok(None);
     };
-    let table: toml::Table = contents
-        .parse()
-        .map_err(|e| format!("could not parse {}: {e}", path.display()))?;
     match table.get("defaults") {
         None => Ok(None),
-        Some(toml::Value::Table(t)) => Ok(Some((t.clone(), path))),
-        Some(_) => Err(format!("{}: [defaults] must be a table", path.display())),
+        Some(toml::Value::Table(t)) => Ok(Some((t.clone(), sources))),
+        Some(_) => Err(format!("{sources}: [defaults] must be a table")),
     }
 }
 

@@ -33,12 +33,24 @@ Concretely:
   and let the user rerun. (Our ACL modifications happen to be
   idempotent, but don't assume that in general.)
 
+## Config files layer: /etc, then ~/.config, then the command line
+
+Every tool's config is read in layers: an optional system-wide
+`/etc/<tool>/config.toml` first, overridden per key (recursively
+for tables) by the per-user `~/.config/<tool>/config.toml`, with
+command-line flags overriding both. `ConfigFile::load` and
+`read_merged` in sandogasa-config implement the merge, so every
+tool gets it without extra code; `save` only ever writes the user
+file. The system layer suits org-wide deployments (a distro
+package or ansible dropping shared settings) while each user
+keeps their own credentials and overrides.
+
 ## Flag defaults come from the config file — a common pattern
 
-Every tool supports a `[defaults]` table in its per-user config
-(`~/.config/<tool>/config.toml`, the same file that holds
-credentials) to pin flag defaults, so users don't have to retype
-the flags they always pass — e.g. always narrating dbranch runs:
+Every tool supports a `[defaults]` table in its config (the same
+layered `/etc` + `~/.config` files that hold credentials — see
+above) to pin flag defaults, so users don't have to retype the
+flags they always pass — e.g. always narrating dbranch runs:
 
 ```toml
 [defaults]          # tool-wide: applies wherever the flag exists

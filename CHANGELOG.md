@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### All tools: system-wide config layer at /etc/<tool>/config.toml
+
+Config reads now layer: an optional `/etc/<tool>/config.toml` is
+read first and overridden per key (recursively for tables) by the
+user's `~/.config/<tool>/config.toml`, with command-line flags
+overriding both. This applies to every tool automatically —
+`ConfigFile::load` does the merging — and to the `[defaults]`
+flag-defaults table below. `save` (interactive `config` flows)
+only ever writes the user file. Previously a missing user file was
+an error even if an admin had provided settings; now the system
+layer alone suffices. sandogasa-config additions:
+`system_config_path`, `merge_tables`, `ConfigFile::read_merged`,
+`with_system_path`, `describe_sources`.
+
 ### All tools: pin flag defaults in the config file
 
 Every tool now honors a `[defaults]` table in its
