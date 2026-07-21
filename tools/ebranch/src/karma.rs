@@ -747,11 +747,9 @@ mod tests {
         assert_eq!(fmt_karma(-1), "-1");
     }
 
+    /// BodhiBug is #[non_exhaustive]; construct via serde.
     fn bodhi_bug(bug_id: u64, title: Option<&str>) -> sandogasa_bodhi::models::BodhiBug {
-        sandogasa_bodhi::models::BodhiBug {
-            bug_id,
-            title: title.map(String::from),
-        }
+        serde_json::from_value(serde_json::json!({"bug_id": bug_id, "title": title})).unwrap()
     }
 
     #[tokio::test]

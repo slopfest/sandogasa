@@ -2,7 +2,48 @@
 
 ## Unreleased
 
-### sandogasa-pkg-health: new pending_update check; shared semver classifier
+### API model structs are now `#[non_exhaustive]` (breaking)
+
+Response-model structs in the client crates are now
+`#[non_exhaustive]`, so future field additions (which happened
+twice this cycle: `BodhiRelease.stable_tag`, pkg-health
+`Context.koji`) stop forcing breaking releases. **What breaks:**
+literal construction (`Struct { .. }`) and exhaustive
+destructuring of these types outside their defining crate no
+longer compile. Affected: sandogasa-bodhi (all response models:
+`Update`, `Build`, `BodhiBug`, `BodhiRelease`, `Comment`,
+`Caveat`, the `*Response` wrappers, …), sandogasa-bugzilla
+(`Bug`, `Flag`, `Comment`, `CommentBucket`, the `*Response`
+wrappers), sandogasa-distgit (`ProjectAcls`, `AccessUsers`,
+`AccessGroups`, `Contributors`, `ContributorLevels`,
+`ProjectInfo`, `PullRequest`, `PullRequestProject`,
+`PullRequestsResponse`), and sandogasa-pkg-health's `Context`.
+Request structs callers must build (`NewUpdateFromTag`,
+`BugFeedbackItem`) and sandogasa-koji's parser products
+(`TaggedBuild`, `TagAddEvent`) stay constructible. **Migration:**
+construct test fixtures via `serde_json::from_value` (the
+pattern the workspace's own tests use), and `Context` via
+`Context::new`.
+
+### anstream 0.6 → 1.0
+
+Major dependency bump, bundled with this breaking release per the
+dependency policy. Only dbranch's terminal UI uses it and its
+macro API is unchanged. rust-anstream 1.0.0 is already in every
+Fedora branch (rawhide through epel9), so Fedora packaging is not
+blocked. clap still pulls in anstream 0.6 transitively; the two
+coexist until clap catches up.
+
+### fesco-chair: meeting script uses the `!fesco` alias again
+
+The `!fesco NNNN` maubot alias is fixed and deployed
+(fedora-infra/maubot-fedora#154), so `script` emits `!fesco NNNN`
+for plain fesco/tickets issues instead of the
+`!forge issue fesco tickets NNNN` workaround. Items on other
+repos (e.g. fesco/docs) and pull requests keep the explicit
+`!forge` lookup — the alias doesn't cover them.
+
+### sandogasa-pkg-health: new pending_update check; shared semver classifier (breaking)
 
 pkg-health gains a `pending_update` check (Medium tier): the
 persisted, aged counterpart of poi-tracker's `semver-audit`. It
@@ -24,6 +65,14 @@ behavior and JSON output are unchanged; it stays as the
 interactive one-shot view per the observe/act seam recorded in
 TODO.md.
 
+**What breaks:** pkg-health's library `Context` gained the pub
+`koji` field (and is now `#[non_exhaustive]`, see above) — code
+constructing `Context` with a struct literal must switch to
+`Context::new`. poi-tracker's `semver_audit` module no longer
+exports `Bump`/`classify`/`version_at_least`/`parse_spec_*`
+(binary-internal, but noted for completeness) — they live in
+`sandogasa_bugclass::semver` and `sandogasa_distgit::spec` now.
+
 ### sandogasa-pkg-health: flag orphaned packages
 
 `maintainer_count` treated the dist-git `orphan` sentinel user as a
@@ -36,7 +85,7 @@ and effective counts, and leads the summary line with
 older versions render unchanged (the missing field just omits the
 marker).
 
-### poi-tracker: don't call a bug stale when the build is only in a side tag
+### poi-tracker: don't call a bug stale when the build is only in a side tag (breaking)
 
 `semver-audit` classified a bug as "up to date (stale bug)" as soon
 as the rawhide spec's `Version:` matched the bug's advertised
@@ -70,7 +119,10 @@ spec-reconstructed NVR.
 - sandogasa-koji: new `latest_tagged(tag, package, profile)`
   (package-scoped, inheritance-following) and `is_available()`.
 - sandogasa-bodhi: `BodhiRelease` gains `stable_tag` (defaulted, so
-  existing fixtures keep deserializing).
+  existing fixtures keep deserializing). **What breaks:** the new
+  pub field breaks struct-literal construction of `BodhiRelease`
+  outside the crate (the struct is now `#[non_exhaustive]`, see
+  above); construct fixtures via serde instead.
 
 ### Bug-closing tools uniformly offer to claim the closed bugs
 

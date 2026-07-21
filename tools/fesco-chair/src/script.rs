@@ -102,10 +102,11 @@ pub fn checklist(date: NaiveDate) -> String {
 /// first, then new business, each with a ticket info lookup and an
 /// `!agreed` placeholder recording the vote tally.
 ///
-/// The lookup is `!forge issue fesco tickets NNNN` — the `!fesco NNNN`
-/// alias is currently broken; switch back once
-/// <https://github.com/fedora-infra/maubot-fedora/pull/154> is merged
-/// and deployed (tracked in TODO.md).
+/// Plain fesco/tickets issues use the `!fesco NNNN` alias (fixed by
+/// <https://github.com/fedora-infra/maubot-fedora/pull/154>, now
+/// deployed); items on other repos (e.g. fesco/docs) and pull
+/// requests still need the explicit `!forge` lookup, which the alias
+/// doesn't cover.
 pub fn render_script(date: NaiveDate, discussion: &[&Ticket]) -> String {
     use std::fmt::Write as _;
     let mut o = String::new();
@@ -117,22 +118,27 @@ pub fn render_script(date: NaiveDate, discussion: &[&Ticket]) -> String {
          !topic Init Process"
     );
     for t in discussion {
-        // The maubot lookup takes owner + repo, so docs items work
-        // too (`!forge issue fesco docs NNNN`); pull requests have
-        // their own subcommand (`!forge pr`).
-        let kind = if t.pull { "pr" } else { "issue" };
-        let repo_args = match &t.repo {
-            Some(slug) => slug.replace('/', " "),
-            None => "fesco tickets".to_string(),
+        // The maubot `!forge` lookup takes owner + repo, so docs
+        // items work too (`!forge issue fesco docs NNNN`); pull
+        // requests have their own subcommand (`!forge pr`).
+        let lookup = match (&t.repo, t.pull) {
+            (None, false) => format!("!fesco {}", t.number),
+            (repo, pull) => {
+                let kind = if pull { "pr" } else { "issue" };
+                let repo_args = match repo {
+                    Some(slug) => slug.replace('/', " "),
+                    None => "fesco tickets".to_string(),
+                };
+                format!("!forge {kind} {repo_args} {}", t.number)
+            }
         };
         let _ = writeln!(
             o,
             "!topic {} {}\n\
-             !forge {kind} {repo_args} {}\n\
+             {lookup}\n\
              !agreed DECISION (+X, Y, -Z)",
             t.label(),
-            t.title,
-            t.number
+            t.title
         );
     }
     let _ = writeln!(
@@ -167,7 +173,7 @@ mod tests {
 !group members fesco
 !topic Init Process
 !topic #3623 Planning for the Forgejo distgit migration
-!forge issue fesco tickets 3623
+!fesco 3623
 !agreed DECISION (+X, Y, -Z)
 !topic Next week's chair
 !action NAME will chair next meeting

@@ -559,20 +559,15 @@ mod tests {
         assert_eq!(derive_summary(&u).as_deref(), Some("Some notes"));
         // With everything empty and a single build, fall back to
         // the NVR so the output isn't just "1 build".
+        // Build is #[non_exhaustive]; construct via serde.
+        let build = |nvr: &str| -> sandogasa_bodhi::models::Build {
+            serde_json::from_value(serde_json::json!({"nvr": nvr})).unwrap()
+        };
         u.notes = None;
-        u.builds = vec![sandogasa_bodhi::models::Build {
-            nvr: "solo-1-1".to_string(),
-        }];
+        u.builds = vec![build("solo-1-1")];
         assert_eq!(derive_summary(&u).as_deref(), Some("solo-1-1"));
         // Multi-build with no display_name/notes → no summary.
-        u.builds = vec![
-            sandogasa_bodhi::models::Build {
-                nvr: "a-1-1".into(),
-            },
-            sandogasa_bodhi::models::Build {
-                nvr: "b-1-1".into(),
-            },
-        ];
+        u.builds = vec![build("a-1-1"), build("b-1-1")];
         assert!(derive_summary(&u).is_none());
     }
 

@@ -11,6 +11,7 @@ use crate::acl::{AccessGroups, AccessLevel, AccessResult, AccessUsers, Contribut
 const DISTGIT_BASE: &str = "https://src.fedoraproject.org";
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct PullRequestsResponse {
     pub requests: Vec<PullRequest>,
     #[serde(default)]
@@ -29,6 +30,7 @@ pub struct Pagination {
 
 /// A Pagure pull request.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct PullRequest {
     pub id: u64,
     pub title: String,
@@ -42,12 +44,14 @@ pub struct PullRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct PullRequestProject {
     pub fullname: String,
 }
 
 /// A project returned by the Pagure projects or group endpoints.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct ProjectInfo {
     pub name: String,
     /// Namespaced path (e.g. `rpms/python-foo`,

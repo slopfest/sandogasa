@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct BugSearchResponse {
     pub bugs: Vec<Bug>,
     pub total_matches: Option<u64>,
@@ -15,6 +16,7 @@ pub struct BugSearchResponse {
 /// the product). Callers inspect this to decide whether to retry
 /// against a different product.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct CreateBugResponse {
     #[serde(default)]
     pub id: Option<u64>,
@@ -27,6 +29,7 @@ pub struct CreateBugResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Bug {
     pub id: u64,
     pub summary: String,
@@ -61,6 +64,7 @@ pub struct Bug {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Flag {
     pub name: String,
     pub status: String,
@@ -71,16 +75,19 @@ pub struct Flag {
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct CommentResponse {
     pub bugs: std::collections::HashMap<String, CommentBucket>,
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct CommentBucket {
     pub comments: Vec<Comment>,
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Comment {
     pub id: u64,
     pub text: String,

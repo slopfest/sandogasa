@@ -25,6 +25,10 @@ pub type KojiLookup = dyn Fn(&str, &str) -> Result<Option<String>, String> + Sen
 ///
 /// The trait is synchronous to stay trait-object friendly; checks
 /// that need async work call `ctx.block_on(future)`.
+///
+/// Non-exhaustive so growing a new client/lookup isn't a breaking
+/// change — construct via [`Context::new`].
+#[non_exhaustive]
 pub struct Context {
     /// Tokio runtime handle for block_on.
     pub runtime: Handle,

@@ -60,12 +60,14 @@ impl AccessResult {
 
 /// ACL levels for a dist-git project.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct ProjectAcls {
     pub access_users: AccessUsers,
     pub access_groups: AccessGroups,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct AccessUsers {
     #[serde(default)]
     pub owner: Vec<String>,
@@ -80,6 +82,7 @@ pub struct AccessUsers {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct AccessGroups {
     #[serde(default)]
     pub admin: Vec<String>,
@@ -176,12 +179,14 @@ impl AccessGroups {
 /// Unlike the project endpoint, this includes branch patterns for
 /// collaborators (e.g. `"epel*"`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct Contributors {
     pub users: ContributorLevels,
     pub groups: ContributorLevels,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct ContributorLevels {
     #[serde(default)]
     pub admin: Vec<String>,

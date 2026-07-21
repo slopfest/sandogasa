@@ -122,30 +122,26 @@ pub async fn lookup_trackers(bz: &BzClient, versions: &[u32], verbose: bool) -> 
 mod tests {
     use super::*;
 
+    /// Construct a `Bug` via serde — `Bug` is `#[non_exhaustive]`,
+    /// so literal construction is reserved to its own crate.
     fn make_bug(summary: &str, component: &str, keywords: &[&str], blocks: &[u64]) -> Bug {
-        Bug {
-            id: 1,
-            summary: summary.to_string(),
-            status: "NEW".to_string(),
-            resolution: String::new(),
-            product: "Fedora".to_string(),
-            component: vec![component.to_string()],
-            severity: String::new(),
-            priority: String::new(),
-            assigned_to: String::new(),
-            creator: String::new(),
-            creation_time: chrono::Utc::now(),
-            last_change_time: chrono::Utc::now(),
-            keywords: keywords.iter().map(|s| s.to_string()).collect(),
-            alias: vec![],
-            depends_on: vec![],
-            blocks: blocks.to_vec(),
-            see_also: vec![],
-            cc: vec![],
-            flags: vec![],
-            version: vec![],
-            cf_fixed_in: String::new(),
-        }
+        serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "summary": summary,
+            "status": "NEW",
+            "resolution": "",
+            "product": "Fedora",
+            "component": [component],
+            "severity": "",
+            "priority": "",
+            "assigned_to": "",
+            "creator": "",
+            "creation_time": "2026-01-01T00:00:00Z",
+            "last_change_time": "2026-01-01T00:00:00Z",
+            "keywords": keywords,
+            "blocks": blocks,
+        }))
+        .unwrap()
     }
 
     #[test]

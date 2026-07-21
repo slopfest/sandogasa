@@ -3,6 +3,7 @@
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct UpdatesResponse {
     pub updates: Vec<Update>,
     pub total: u64,
@@ -12,11 +13,13 @@ pub struct UpdatesResponse {
 
 /// The user who submitted an update.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct BodhiUser {
     pub name: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Update {
     pub alias: String,
     pub status: String,
@@ -55,11 +58,13 @@ pub struct Update {
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Build {
     pub nvr: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct BodhiBug {
     pub bug_id: u64,
     /// Bug summary as cached by Bodhi from Bugzilla. May be
@@ -78,6 +83,7 @@ pub struct BugFeedbackItem {
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Release {
     pub name: String,
     #[serde(default)]
@@ -85,11 +91,13 @@ pub struct Release {
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct SingleUpdateResponse {
     pub update: Update,
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct CommentsResponse {
     pub comments: Vec<Comment>,
     pub total: u64,
@@ -98,6 +106,7 @@ pub struct CommentsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Comment {
     pub id: u64,
     #[serde(default)]
@@ -115,6 +124,7 @@ pub struct Comment {
 /// response (e.g. "You may not give karma to your own updates."
 /// when Bodhi zeroes the karma instead of rejecting the comment).
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Caveat {
     #[serde(default)]
     pub name: Option<String>,
@@ -123,6 +133,7 @@ pub struct Caveat {
 
 /// Response from posting a comment (`POST /comments/`).
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct SingleCommentResponse {
     pub comment: Comment,
     /// Server-side adjustments, e.g. karma zeroed on own update.
@@ -161,6 +172,7 @@ pub struct NewUpdateFromTag {
 /// (which `from_tag` always is) and returns an `updates` list when a
 /// request created several; caveats ride along in both shapes.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct NewUpdateResponse {
     /// The new update's alias, in the single-update response shape.
     #[serde(default)]
@@ -186,6 +198,7 @@ impl NewUpdateResponse {
 
 /// A Bodhi release entry from the releases API.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct BodhiRelease {
     pub name: String,
     pub branch: String,
@@ -202,6 +215,7 @@ pub struct BodhiRelease {
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct ReleasesResponse {
     pub releases: Vec<BodhiRelease>,
     pub total: u64,
