@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### sandogasa-pkg-health: new pending_update check; shared semver classifier
+
+pkg-health gains a `pending_update` check (Medium tier): the
+persisted, aged counterpart of poi-tracker's `semver-audit`. It
+finds the package's open release-monitoring bug, compares the
+advertised version against the rawhide spec, and classifies the
+bump by semver impact — including the Koji-verified stale/pending
+distinction (a version built only into a side tag reports as
+"committed, awaiting release", never as a stale bug). Uses the
+`koji` CLI when available (anonymous queries); degrades to the
+spec-only verdict with a startup warning otherwise.
+
+To keep the two tools classifying identically, the version
+classifier moved from poi-tracker's `semver_audit` module to
+`sandogasa_bugclass::semver` (`Bump`, `classify`,
+`classify_with_status`, `version_at_least`, `numeric_components`),
+and the spec preamble parsers moved to `sandogasa_distgit::spec`
+(`parse_field`, `parse_version`). poi-tracker's `semver-audit`
+behavior and JSON output are unchanged; it stays as the
+interactive one-shot view per the observe/act seam recorded in
+TODO.md.
+
 ### sandogasa-pkg-health: flag orphaned packages
 
 `maintainer_count` treated the dist-git `orphan` sentinel user as a

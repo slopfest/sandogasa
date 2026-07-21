@@ -172,6 +172,7 @@ mod tests {
             Arc::new(BzClient::new(server_uri)),
             Arc::new(DistGitClient::with_base_url(server_uri)),
             trackers,
+            None,
         )
     }
 
@@ -248,6 +249,7 @@ mod tests {
                     Arc::new(BzClient::new("http://unused")),
                     Arc::new(DistGitClient::with_base_url("http://unused")),
                     BTreeMap::new(),
+                    None,
                 );
                 c.fedora_versions = vec![44, 45];
                 c.epel_versions = vec![10];

@@ -17,6 +17,7 @@ sandogasa-config = { workspace = true }
 sandogasa-distgit = { workspace = true }
 sandogasa-fasjson = { workspace = true }
 sandogasa-inventory = { workspace = true }
+sandogasa-koji = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

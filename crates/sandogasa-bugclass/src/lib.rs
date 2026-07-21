@@ -10,6 +10,7 @@
 //! others can be added alongside as new submodules.
 
 pub mod bugzilla;
+pub mod semver;
 
 /// Tracker-agnostic bug category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

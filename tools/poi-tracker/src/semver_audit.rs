@@ -10,15 +10,11 @@
 //! see at a glance which updates are safe minor/patch bumps versus
 //! which are potentially breaking and need review.
 //!
-//! Classification uses Cargo's compatibility rule (the Rust
-//! convention): a change at or before the leftmost non-zero
-//! component of the current version is breaking, so `1.4 -> 1.5`
-//! is non-breaking but `0.4 -> 0.5` is breaking. Versions that
-//! aren't plain dotted integers (pre-releases, dates, snapshots)
-//! are reported as "needs review" rather than guessed at, and a
-//! package retired on rawhide (a `dead.package` marker, the signal
-//! `triage-retired` keys on) is reported as "retired" since its
-//! update request is moot.
+//! Classification lives in `sandogasa_bugclass::semver` (Cargo's
+//! compatibility rule; shared with sandogasa-pkg-health's
+//! `pending_update` check). A package retired on rawhide (a
+//! `dead.package` marker, the signal `triage-retired` keys on) is
+//! reported as "retired" since its update request is moot.
 //!
 //! A spec that already carries the "available" version doesn't by
 //! itself mean the bug is stale: the version may be committed and
@@ -31,9 +27,13 @@
 use std::collections::BTreeMap;
 
 use sandogasa_bugclass::bugzilla::extract_new_version;
+use sandogasa_bugclass::semver::{
+    Bump, classify_with_status, numeric_components, version_at_least,
+};
 use sandogasa_bugzilla::BzClient;
 use sandogasa_bugzilla::models::Bug;
 use sandogasa_distgit::DistGitClient;
+use sandogasa_distgit::spec::parse_version as parse_spec_version;
 use sandogasa_inventory::Inventory;
 use serde::Serialize;
 
@@ -43,48 +43,6 @@ use crate::triage_updates::bug_search_query;
 /// The dist-git branch whose spec gives the "current" version.
 /// Upstream-release-monitoring bugs track the rawhide package.
 const CURRENT_BRANCH: &str = "rawhide";
-
-/// Semver impact of a pending update.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Bump {
-    /// The packaged version already equals the "available" version
-    /// — a stale release-monitoring bug, not a pending update.
-    /// (Excluded by `--non-breaking`, since there's nothing to push.)
-    UpToDate,
-    /// The rawhide spec already carries the new version, but the
-    /// release doesn't: no build with it is tagged into rawhide's
-    /// Koji tag chain (it's in flight — a side tag, gating, or
-    /// just committed). Nothing to close yet.
-    PendingRelease,
-    /// Safe under the Cargo compatibility rule (patch, or minor
-    /// when the leading component is non-zero).
-    NonBreaking,
-    /// Changes the version's significant (leftmost non-zero)
-    /// component.
-    Breaking,
-    /// The package is retired on the branch (a `dead.package`
-    /// marker is present, the same signal `triage-retired` uses),
-    /// so the update request is invalid — there's no live package
-    /// to update.
-    Retired,
-    /// Could not be classified: a non-numeric version, an unknown
-    /// current version, or a downgrade.
-    NeedsReview,
-}
-
-impl Bump {
-    fn label(self) -> &'static str {
-        match self {
-            Bump::UpToDate => "Up to date (stale bug)",
-            Bump::PendingRelease => "Committed, awaiting release",
-            Bump::NonBreaking => "Non-breaking",
-            Bump::Breaking => "Breaking",
-            Bump::Retired => "Retired (update request invalid)",
-            Bump::NeedsReview => "Needs review",
-        }
-    }
-}
 
 /// One package's pending update.
 #[derive(Debug, Clone, Serialize)]
@@ -98,105 +56,6 @@ pub struct AuditEntry {
     pub bump: Bump,
     /// Bugzilla id of the release-monitoring bug.
     pub bug_id: u64,
-}
-
-/// Parse a version into its dot-separated numeric components.
-/// Returns `None` if any component isn't a bare non-negative
-/// integer (pre-release tags, dates with letters, git snapshots,
-/// unexpanded spec macros, ...).
-///
-/// Semver build metadata (a `+suffix`, e.g. libbpf-sys's
-/// `1.7.0+v1.7.0`) must be ignored when determining precedence,
-/// so it is stripped before parsing.
-fn numeric_components(version: &str) -> Option<Vec<u64>> {
-    let v = version.trim();
-    let v = v.split('+').next().unwrap_or(v);
-    if v.is_empty() {
-        return None;
-    }
-    v.split('.').map(|c| c.parse::<u64>().ok()).collect()
-}
-
-/// Whether `candidate` is at least `target`, comparing dotted
-/// numeric components (shorter versions are zero-padded). Used to
-/// decide whether a build addresses a release-monitoring bug.
-/// Non-numeric versions only match on exact string equality.
-pub fn version_at_least(candidate: &str, target: &str) -> bool {
-    match (numeric_components(candidate), numeric_components(target)) {
-        (Some(c), Some(t)) => {
-            let width = c.len().max(t.len());
-            let pad = |v: &[u64]| -> Vec<u64> {
-                (0..width).map(|i| v.get(i).copied().unwrap_or(0)).collect()
-            };
-            pad(&c) >= pad(&t)
-        }
-        _ => candidate == target,
-    }
-}
-
-/// Classify a `current -> new` bump using Cargo's compatibility
-/// rule: a change at or before the leftmost non-zero component of
-/// `current` is breaking.
-pub fn classify(current: &str, new: &str) -> Bump {
-    let (Some(cur), Some(new_c)) = (numeric_components(current), numeric_components(new)) else {
-        return Bump::NeedsReview;
-    };
-    let width = cur.len().max(new_c.len());
-    let cur: Vec<u64> = (0..width)
-        .map(|i| cur.get(i).copied().unwrap_or(0))
-        .collect();
-    let new_c: Vec<u64> = (0..width)
-        .map(|i| new_c.get(i).copied().unwrap_or(0))
-        .collect();
-    if new_c == cur {
-        // Same version — the bug is stale, nothing to update.
-        return Bump::UpToDate;
-    }
-    if new_c < cur {
-        // Downgrade — unexpected for an "is available" bug.
-        return Bump::NeedsReview;
-    }
-    // Index of the leftmost significant (non-zero) component. An
-    // all-zero current version can't anchor the rule.
-    let Some(lead) = cur.iter().position(|&x| x != 0) else {
-        return Bump::NeedsReview;
-    };
-    if (0..=lead).any(|i| cur[i] != new_c[i]) {
-        Bump::Breaking
-    } else {
-        Bump::NonBreaking
-    }
-}
-
-/// Decide a package's bump given a possibly-unreadable current
-/// version. A missing current version is treated as `Retired` when
-/// the branch carries a `dead.package` marker (the update request
-/// is moot), otherwise `NeedsReview`.
-pub fn classify_with_status(current: Option<&str>, new: &str, retired: bool) -> Bump {
-    match current {
-        Some(cur) => classify(cur, new),
-        None if retired => Bump::Retired,
-        None => Bump::NeedsReview,
-    }
-}
-
-/// Read a `Tag:` field (e.g. `Version`, `Release`) from a spec file.
-pub fn parse_spec_field(spec: &str, tag: &str) -> Option<String> {
-    let prefix = format!("{tag}:");
-    for line in spec.lines() {
-        if let Some(rest) = line.trim_start().strip_prefix(&prefix) {
-            let v = rest.trim();
-            if !v.is_empty() {
-                return Some(v.to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Read the `Version:` field from a spec file.
-pub fn parse_spec_version(spec: &str) -> Option<String> {
-    parse_spec_field(spec, "Version")
 }
 
 /// Choose the bug advertising the highest new version among a
@@ -679,95 +538,6 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(entries[0].bump, Bump::UpToDate);
-    }
-
-    #[test]
-    fn classify_minor_and_patch_are_non_breaking() {
-        assert_eq!(classify("1.4.2", "1.5.0"), Bump::NonBreaking);
-        assert_eq!(classify("1.4.2", "1.4.3"), Bump::NonBreaking);
-        assert_eq!(classify("1.4", "1.4.1"), Bump::NonBreaking);
-    }
-
-    #[test]
-    fn classify_major_is_breaking() {
-        assert_eq!(classify("1.4.2", "2.0.0"), Bump::Breaking);
-    }
-
-    #[test]
-    fn classify_same_version_is_up_to_date() {
-        // Stale bug: packaged version already matches "available".
-        assert_eq!(classify("0.6.1", "0.6.1"), Bump::UpToDate);
-        // Equal despite differing component count.
-        assert_eq!(classify("1.4", "1.4.0"), Bump::UpToDate);
-    }
-
-    #[test]
-    fn classify_zero_x_follows_cargo_rule() {
-        // 0.x: the minor is the significant component.
-        assert_eq!(classify("0.4.0", "0.5.0"), Bump::Breaking);
-        assert_eq!(classify("0.4.2", "0.4.3"), Bump::NonBreaking);
-        // 0.0.x: the patch is significant (^0.0.3 is exact).
-        assert_eq!(classify("0.0.3", "0.0.4"), Bump::Breaking);
-    }
-
-    #[test]
-    fn classify_non_numeric_needs_review() {
-        assert_eq!(classify("1.0", "2.0rc1"), Bump::NeedsReview);
-        assert_eq!(classify("5.000a", "5.000b"), Bump::NeedsReview);
-        assert_eq!(classify("1.2.3", "1.2.4.dev-r1"), Bump::NeedsReview);
-    }
-
-    #[test]
-    fn classify_ignores_build_metadata() {
-        // Semver build metadata (`+...`) is ignored for precedence:
-        // rust-libbpf-sys 1.6.2 -> 1.7.0+v1.7.0 is a plain minor bump.
-        assert_eq!(classify("1.6.2", "1.7.0+v1.7.0"), Bump::NonBreaking);
-        assert_eq!(classify("1.6.2+v1.6.2", "2.0.0"), Bump::Breaking);
-        assert_eq!(classify("1.7.0+v1.6.0", "1.7.0+v1.7.0"), Bump::UpToDate);
-        assert!(version_at_least("1.7.0+v1.7.0", "1.7.0"));
-    }
-
-    #[test]
-    fn classify_downgrade_needs_review() {
-        assert_eq!(classify("2.0.0", "1.9.0"), Bump::NeedsReview);
-    }
-
-    #[test]
-    fn version_at_least_compares_numerically() {
-        assert!(version_at_least("1.10.0", "1.9.0"));
-        assert!(version_at_least("0.6.1", "0.6.1"));
-        assert!(version_at_least("1.4", "1.4.0"));
-        assert!(!version_at_least("1.4.0", "1.4.1"));
-        // Non-numeric: exact match only.
-        assert!(version_at_least("2.0rc1", "2.0rc1"));
-        assert!(!version_at_least("2.0rc2", "2.0rc1"));
-    }
-
-    #[test]
-    fn classify_with_status_handles_unreadable_current() {
-        // Spec readable -> normal classification.
-        assert_eq!(
-            classify_with_status(Some("1.4.2"), "1.5.0", false),
-            Bump::NonBreaking
-        );
-        // Unreadable + retired -> the update request is invalid.
-        assert_eq!(classify_with_status(None, "0.9.0", true), Bump::Retired);
-        // Unreadable + not retired -> genuinely unknown.
-        assert_eq!(
-            classify_with_status(None, "0.9.0", false),
-            Bump::NeedsReview
-        );
-    }
-
-    #[test]
-    fn parse_spec_version_reads_version_line() {
-        let spec = "Name: foo\nVersion: 1.2.3\nRelease: 1%{?dist}\n";
-        assert_eq!(parse_spec_version(spec).as_deref(), Some("1.2.3"));
-    }
-
-    #[test]
-    fn parse_spec_version_absent() {
-        assert_eq!(parse_spec_version("Name: foo\nRelease: 1\n"), None);
     }
 
     fn bug(id: u64, summary: &str) -> Bug {

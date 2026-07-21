@@ -116,18 +116,29 @@ fn spec_matches(spec: &str, build_indicators: &[&str], macro_indicators: &[&str]
     false
 }
 
-/// Extract the package name from the `Name:` field in a spec file.
-pub fn extract_package_name(spec: &str) -> Option<String> {
+/// Read a `Tag:` field (e.g. `Name`, `Version`, `Release`) from a
+/// spec file. Returns the first non-empty value.
+pub fn parse_field(spec: &str, tag: &str) -> Option<String> {
+    let prefix = format!("{tag}:");
     for line in spec.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Name:") {
-            let name = rest.trim();
-            if !name.is_empty() {
-                return Some(name.to_string());
+        if let Some(rest) = line.trim_start().strip_prefix(&prefix) {
+            let v = rest.trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
             }
         }
     }
     None
+}
+
+/// Read the `Version:` field from a spec file.
+pub fn parse_version(spec: &str) -> Option<String> {
+    parse_field(spec, "Version")
+}
+
+/// Extract the package name from the `Name:` field in a spec file.
+pub fn extract_package_name(spec: &str) -> Option<String> {
+    parse_field(spec, "Name")
 }
 
 /// Extract shipped binary names from `%{_bindir}` and `%{_libexecdir}` entries
@@ -219,6 +230,23 @@ fn extract_binary(line: &str, package_name: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- parse_field / parse_version ----
+
+    #[test]
+    fn parse_field_reads_first_non_empty_value() {
+        let spec = "Name: foo\nVersion:  1.2.0\nRelease: 1%{?dist}\n";
+        assert_eq!(parse_field(spec, "Version").as_deref(), Some("1.2.0"));
+        assert_eq!(parse_field(spec, "Release").as_deref(), Some("1%{?dist}"));
+        assert_eq!(parse_field(spec, "Epoch"), None);
+        assert_eq!(parse_version(spec).as_deref(), Some("1.2.0"));
+    }
+
+    #[test]
+    fn parse_field_ignores_indentation_and_empty_values() {
+        let spec = "  Version:\nVersion: 2.0\n";
+        assert_eq!(parse_version(spec).as_deref(), Some("2.0"));
+    }
 
     // ---- is_js_package ----
 

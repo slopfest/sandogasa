@@ -70,6 +70,18 @@ sandogasa-pkg-health run -i inventory.toml -o health.toml \
   **orphaned** packages (dist-git owner is the `orphan` sentinel
   user, which is never counted as a maintainer) — an orphaned
   package is retired ~6 weeks after orphaning unless adopted
+- `pending_update` (Medium) — pending upstream update from the
+  open release-monitoring bug, classified by semver impact
+  (breaking / non-breaking, via
+  [sandogasa-bugclass](../../crates/sandogasa-bugclass/)'s shared
+  classifier — the same one poi-tracker's `semver-audit` uses).
+  A spec already matching the advertised version is verified
+  against rawhide's Koji tag chain before being called a stale
+  bug: a build still in a side tag or gating reports as
+  *committed, awaiting release* instead. Uses the `koji` CLI when
+  available (`sudo dnf install koji`; queries are anonymous — no
+  credentials involved) and degrades to the spec-only verdict
+  with a startup warning when it's missing
 
 ### Show a previously-generated report
 
@@ -97,11 +109,11 @@ UPDATE_SCHEMA=1 cargo test -p sandogasa-pkg-health schema_up_to_date
 
 ## Project status
 
-MVP complete — framework, two checks (`maintainer_count`,
-`bug_count`), report persistence with selective update,
-per-package parallelism, human-readable summary, JSON output,
-and `show` subcommand. See [PLAN.md](PLAN.md) for architecture
-and [TODO.md](TODO.md) for post-MVP roadmap.
+MVP complete — framework, three checks (`bug_count`,
+`maintainer_count`, `pending_update`), report persistence with
+selective update, per-package parallelism, human-readable summary,
+JSON output, and `show` subcommand. See [PLAN.md](PLAN.md) for
+architecture and [TODO.md](TODO.md) for post-MVP roadmap.
 
 ## License
 

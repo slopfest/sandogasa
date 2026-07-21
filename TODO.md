@@ -5,17 +5,11 @@
 Decision (2026-07-21): keep both tools — pkg-health **observes**
 (read-only, credential-free, persisted/aged reports), poi-tracker
 **acts** (Bugzilla writes, inventory curation). Documented in both
-READMEs. Follow-ups:
-
-- (2026-07-21) `semver-audit` is the boundary-straddler: read-only
-  classification living in the action tool. Don't move it (it
-  feeds directly into triage-updates and shares its Koji
-  `TagLookup` plumbing); instead, extract the version classifier
-  (`classify`, `version_at_least` in poi-tracker's semver_audit)
-  into a shared crate — `sandogasa-bugclass` or a small
-  `sandogasa-semver` — and give pkg-health a `pending_update`
-  check reusing it. semver-audit stays as the interactive
-  one-shot view; pkg-health gets the persisted/aged variant.
+READMEs. Done (2026-07-21): version classifier extracted to
+`sandogasa_bugclass::semver` (spec parsing to
+`sandogasa_distgit::spec`); pkg-health gained the `pending_update`
+check; semver-audit stays in poi-tracker as the interactive
+one-shot view. Follow-ups:
 
 - (2026-07-21) poi-tracker "adopt" action as the counterpart to
   pkg-health's new orphaned flag (observed with ccze): take

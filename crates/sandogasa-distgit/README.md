@@ -6,7 +6,8 @@ ACL management and RPM spec file parsing utilities.
 ## Features
 
 - Fetch spec files for a package on any dist-git branch
-- Extract the package name from a spec file's `Name:` field
+- Parse spec preamble fields (`spec::parse_field`,
+  `spec::parse_version`, package name extraction)
 - List shipped binaries from `%{_bindir}` and `%{_libexecdir}` entries
   in `%files` sections, with `%{name}` macro expansion
 - View and manage package ACLs via the Pagure API

@@ -53,5 +53,6 @@ pub fn default_registry() -> Registry {
     let mut reg = Registry::new();
     reg.register(Box::new(crate::checks::maintainer_count::MaintainerCount));
     reg.register(Box::new(crate::checks::bug_count::BugCount));
+    reg.register(Box::new(crate::checks::pending_update::PendingUpdate));
     reg
 }

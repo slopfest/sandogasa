@@ -129,6 +129,7 @@ mod tests {
             Arc::new(BzClient::new(server_uri)),
             Arc::new(DistGitClient::with_base_url(server_uri)),
             BTreeMap::new(),
+            None,
         )
     }
 

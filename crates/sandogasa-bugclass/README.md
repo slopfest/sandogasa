@@ -10,6 +10,13 @@ the classification logic for their tracker's specific conventions
 Currently only Bugzilla is supported. GitLab / GitHub / other
 trackers can be added alongside as new submodules.
 
+The `semver` module classifies pending version bumps (from
+release-monitoring "X is available" bugs) by semver impact using
+Cargo's compatibility rule — [`semver::Bump`], [`semver::classify`],
+and the [`semver::version_at_least`] comparison helper. Shared by
+poi-tracker's `semver-audit` and sandogasa-pkg-health's
+`pending_update` check so both classify identically.
+
 ## Usage
 
 ```rust

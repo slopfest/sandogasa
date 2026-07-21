@@ -12,6 +12,14 @@ use tokio::runtime::Handle;
 
 const BUGZILLA_URL: &str = "https://bugzilla.redhat.com";
 
+/// Koji "latest build in tag" lookup: `(tag, package)` to the
+/// latest NVR in the tag's inheritance chain (`None` when the
+/// package has no build there). Injectable so tests can stub Koji
+/// without the CLI; `None` on the Context means the koji CLI is
+/// unavailable and dependent checks degrade (with a warning at
+/// startup, not per package).
+pub type KojiLookup = dyn Fn(&str, &str) -> Result<Option<String>, String> + Send + Sync;
+
 /// Context bundles API clients and a tokio runtime handle so
 /// checks can reuse them across packages without re-initializing.
 ///
@@ -32,6 +40,9 @@ pub struct Context {
     /// FTBFS / FTI tracker bug IDs per version key. Keys are
     /// `"rawhide"`, `"f44"`, `"epel9"`, etc. Populated at startup.
     pub trackers: BTreeMap<String, Arc<TrackerIds>>,
+    /// Koji tag lookup for shipped-build verification, or `None`
+    /// when the koji CLI is unavailable.
+    pub koji: Option<Arc<KojiLookup>>,
 }
 
 impl Context {
@@ -62,6 +73,22 @@ impl Context {
             );
         }
 
+        // The pending_update check verifies "stale" against Koji;
+        // without the CLI it degrades (spec-only classification),
+        // so warn once here rather than per package.
+        let koji: Option<Arc<KojiLookup>> = if sandogasa_koji::is_available() {
+            Some(Arc::new(|tag: &str, package: &str| {
+                sandogasa_koji::latest_tagged(tag, package, None).map(|b| b.map(|tb| tb.nvr))
+            }))
+        } else {
+            eprintln!(
+                "warning: koji CLI not found; pending_update cannot tell \
+                 stale bugs from committed-but-unreleased versions. \
+                 Install koji to enable the check."
+            );
+            None
+        };
+
         Self {
             runtime: Handle::current(),
             distgit: Arc::new(DistGitClient::new()),
@@ -69,17 +96,20 @@ impl Context {
             fedora_versions: fedora_versions.to_vec(),
             epel_versions: epel_versions.to_vec(),
             trackers,
+            koji,
         }
     }
 
     /// Build a Context for testing with explicit clients and
     /// tracker map. Skips the tracker lookup so tests can pre-populate
-    /// what they need.
+    /// what they need. `koji` stubs the tag lookup (`None` =
+    /// koji CLI unavailable).
     #[cfg(test)]
     pub fn for_test(
         bz: Arc<BzClient>,
         distgit: Arc<DistGitClient>,
         trackers: BTreeMap<String, Arc<TrackerIds>>,
+        koji: Option<Arc<KojiLookup>>,
     ) -> Self {
         Self {
             runtime: Handle::current(),
@@ -88,6 +118,7 @@ impl Context {
             fedora_versions: vec![],
             epel_versions: vec![],
             trackers,
+            koji,
         }
     }
 

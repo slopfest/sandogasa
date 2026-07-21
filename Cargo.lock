@@ -1824,6 +1824,8 @@ version = "0.17.0"
 dependencies = [
  "chrono",
  "sandogasa-bugzilla",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2073,6 +2075,7 @@ dependencies = [
  "sandogasa-distgit",
  "sandogasa-fasjson",
  "sandogasa-inventory",
+ "sandogasa-koji",
  "schemars",
  "serde",
  "serde_json",

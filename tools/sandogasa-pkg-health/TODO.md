@@ -66,11 +66,6 @@ tracks when); in-progress items get an `(in progress)` marker.
 - [ ] `dependency_health` (Expensive) — rollup from BuildRequires
       closure
 - [ ] `activity` (Cheap) — commits to dist-git in last N days
-- [ ] `pending_update` (Medium) — persisted/aged variant of
-      poi-tracker's `semver-audit`: pending upstream version and
-      its semver impact. Blocked on extracting the classifier
-      (`classify`, `version_at_least`) into a shared crate — see
-      the seam section in the root TODO.md
 
 ### Features
 - [ ] Configurable thresholds → exit-code gating
