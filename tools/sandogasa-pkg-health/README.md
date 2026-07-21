@@ -7,6 +7,13 @@ open bugs, maintainer coverage, build status, etc. Checks are
 classified by cost tier (cheap / medium / expensive) so you can
 run them on different schedules.
 
+pkg-health is the **observe** side of the inventory tooling:
+read-only, no credentials needed, safe to run from cron. Acting on
+what it finds — triaging and closing bugs, curating the inventory —
+is [poi-tracker](../poi-tracker/)'s job. Rule of thumb: anything
+that produces a report to watch over time belongs here; anything
+that writes (to Bugzilla or the inventory) belongs in poi-tracker.
+
 Reports persist to TOML and update incrementally: re-running a
 single check (or just a subset of packages) preserves the stored
 results of every other (package, check, variant) triple. Results

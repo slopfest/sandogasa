@@ -6,6 +6,16 @@ Manages TOML-based inventories of packages that an organization
 tracks across distributions. Supports exporting to content-resolver
 YAML and hs-relmon manifest formats.
 
+poi-tracker is the **act** side of the inventory tooling: it
+curates the inventory itself (sync, prune, add/remove) and takes
+credentialed actions on Bugzilla (triaging, closing, and claiming
+bugs). Its read-only counterpart is
+[sandogasa-pkg-health](../sandogasa-pkg-health/), which **observes**
+the same inventories — periodic, credential-free health checks with
+persisted, incrementally-refreshed reports. Rule of thumb: anything
+that writes (to Bugzilla or the inventory) belongs here; anything
+that produces a report to watch over time belongs in pkg-health.
+
 ## Installation
 
 ```sh
