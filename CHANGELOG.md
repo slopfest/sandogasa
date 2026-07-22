@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### poi-tracker: adopt orphaned packages
+
+New `adopt` subcommand — the action counterpart to
+sandogasa-pkg-health's orphaned flag: walk the inventory, find
+packages whose dist-git owner is the `orphan` sentinel user, show
+each one's orphaning reason, and take ownership via the dist-git
+plugin's take-orphan endpoint (the API behind the web UI's "Take"
+button). Interactive runs confirm each package individually
+(adoption is a commitment — no batch yes/no); `-y` adopts every
+match, `--dry-run` lists without needing credentials, and
+inventory-marked retired/unshipped packages are skipped (dist-git
+refuses retired packages; those need a releng ticket).
+
+Requires a dist-git API token with the "Modify an existing
+project" ACL: `poi-tracker config` now prompts for it (stored
+under `[dist-git] api_token`, matching sandogasa-pkg-acl), with
+`--api-token` / `PAGURE_API_TOKEN` overrides. sandogasa-distgit
+gains `orphan_info` (orphan state + reason) and `take_orphan`
+(surfacing the server's actionable error detail, e.g. "You must
+be a packager to adopt a package.").
+
 ### All tools: system-wide config layer at /etc/<tool>/config.toml
 
 Config reads now layer: an optional `/etc/<tool>/config.toml` is

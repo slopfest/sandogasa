@@ -11,12 +11,9 @@ READMEs. Done (2026-07-21): version classifier extracted to
 check; semver-audit stays in poi-tracker as the interactive
 one-shot view. Follow-ups:
 
-- (2026-07-21) poi-tracker "adopt" action as the counterpart to
-  pkg-health's new orphaned flag (observed with ccze): take
-  ownership of an orphaned inventory package on dist-git
-  (releng/pagure take-orphan flow), with the usual
-  prompt/`--claim`-style confirmation. Observation lives in
-  pkg-health, the action belongs in poi-tracker.
+- Done (2026-07-22): poi-tracker `adopt` — walks the inventory for
+  orphan-owned packages and takes them via the dist-git
+  take-orphan endpoint, per-package confirmation.
 
 ## cpu-sig-tracker
 

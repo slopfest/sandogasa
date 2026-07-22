@@ -56,6 +56,36 @@ poi-tracker remove systemd -i inventory.toml
 poi-tracker remove systemd -i inventory.toml --rpm systemd-networkd
 ```
 
+### Adopt orphaned packages
+
+The action counterpart to
+[sandogasa-pkg-health](../sandogasa-pkg-health/)'s orphaned flag:
+walk the inventory, find packages whose dist-git owner is the
+`orphan` sentinel user, show each one's orphaning reason, and take
+ownership via the same API as the web UI's "Take" button. An
+orphaned package is retired ~6 weeks after orphaning unless
+someone adopts it.
+
+```sh
+poi-tracker -i inventory.toml adopt --dry-run   # list, no token needed
+poi-tracker -i inventory.toml adopt             # prompt per package
+poi-tracker -i inventory.toml adopt -y          # adopt all matches
+```
+
+Adoption is a per-package commitment, so interactive runs confirm
+each package individually (default no) rather than batching one
+yes/no over the list; `-y` adopts every match. `--pattern <glob>`
+scopes the walk. Packages marked retired or unshipped in the
+inventory are skipped — dist-git refuses to hand out retired
+packages (those need a releng ticket).
+
+Adopting needs a dist-git API token with the
+"Modify an existing project" ACL (you must also be in the
+`packager` group): generate one at
+<https://src.fedoraproject.org/settings/token/new> and store it
+with `poi-tracker config` (or pass `--api-token` / set
+`PAGURE_API_TOKEN`). `--dry-run` works without a token.
+
 ### Export to content-resolver YAML
 
 ```sh

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+mod adopt;
 mod config;
 mod gitlab_unshipped;
 mod prune_retired;
@@ -39,6 +40,8 @@ struct Cli {
 enum Command {
     /// Add a package to the inventory.
     Add(AddArgs),
+    /// Adopt orphaned inventory packages on dist-git.
+    Adopt(AdoptArgs),
     /// Configure poi-tracker (Bugzilla API key, etc.).
     Config,
     /// Export inventory to another format.
@@ -306,6 +309,29 @@ struct AddArgs {
     /// Track branch for hs-relmon (e.g. upstream, fedora-rawhide).
     #[arg(long)]
     track: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct AdoptArgs {
+    #[command(flatten)]
+    filter: WalkFilterArgs,
+
+    /// Dist-git API token with the `modify_project` ACL (or set
+    /// PAGURE_API_TOKEN, or run `poi-tracker config`).
+    #[arg(long, env = "PAGURE_API_TOKEN")]
+    api_token: Option<String>,
+
+    /// Preview orphaned packages without adopting them.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Adopt every orphaned match without per-package prompts.
+    #[arg(short, long)]
+    yes: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[derive(clap::Args)]
@@ -652,6 +678,7 @@ fn main() -> ExitCode {
 
     match &cli.command {
         Command::Add(args) => cmd_add(&paths, args),
+        Command::Adopt(args) => cmd_adopt(&paths, args),
         Command::Config => cmd_config(),
         Command::Export(args) => cmd_export(&paths, args),
         Command::Find(args) => cmd_find(&paths, args),
@@ -1454,6 +1481,84 @@ fn merge_into_package(existing: &mut sandogasa_inventory::Package, args: &AddArg
     }
     if existing.track.is_none() {
         existing.track.clone_from(&args.track);
+    }
+}
+
+fn cmd_adopt(paths: &[String], args: &AdoptArgs) -> ExitCode {
+    let inventory = match sandogasa_inventory::load_and_merge(paths) {
+        Ok(inv) => inv,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Detection is unauthenticated GETs, so --dry-run works
+    // without a token; only actual adoption needs one.
+    let token = if args.dry_run {
+        None
+    } else {
+        match config::resolve_distgit_token(args.api_token.as_deref()) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+    let mut dg = sandogasa_distgit::DistGitClient::new();
+    if let Some(token) = token {
+        dg = dg.with_token(token);
+    }
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: failed to create runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Cheap precondition: a bad token should fail in seconds, not
+    // after walking the whole inventory. Also tells us who the
+    // new point of contact will be.
+    let username = if args.dry_run {
+        String::new()
+    } else {
+        match rt.block_on(dg.verify_token()) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!(
+                    "error: dist-git token validation failed: {e}\n\
+                     The token needs the \"Modify an existing project\" ACL; \
+                     generate one at\n  \
+                     https://src.fedoraproject.org/settings/token/new"
+                );
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+    match rt.block_on(adopt::run(
+        &inventory,
+        &dg,
+        &username,
+        &args.filter,
+        args.dry_run,
+        args.yes,
+        args.verbose,
+    )) {
+        Ok(report) => {
+            eprintln!(
+                "\n{} checked, {} orphaned, {} adopted, {} failed",
+                report.packages_checked, report.orphaned_found, report.adopted, report.failures
+            );
+            if report.failures > 0 {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

@@ -69,7 +69,9 @@ sandogasa-pkg-health run -i inventory.toml -o health.toml \
   dist-git ACLs with Pagure group expansion. Also flags
   **orphaned** packages (dist-git owner is the `orphan` sentinel
   user, which is never counted as a maintainer) — an orphaned
-  package is retired ~6 weeks after orphaning unless adopted
+  package is retired ~6 weeks after orphaning unless adopted;
+  `poi-tracker adopt` is the action counterpart that takes
+  ownership
 - `pending_update` (Medium) — pending upstream update from the
   open release-monitoring bug, classified by semver impact
   (breaking / non-breaking, via

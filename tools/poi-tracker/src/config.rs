@@ -15,6 +15,17 @@ use serde::{Deserialize, Serialize};
 pub struct PoiTrackerConfig {
     #[serde(default)]
     pub bugzilla: BugzillaConfig,
+    #[serde(default, rename = "dist-git")]
+    pub dist_git: DistGitConfig,
+}
+
+/// Dist-git (Pagure) configuration — the `[dist-git]` table,
+/// matching sandogasa-pkg-acl's shape.
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct DistGitConfig {
+    /// API token with the `modify_project` ACL, for `adopt`.
+    #[serde(default)]
+    pub api_token: String,
 }
 
 /// Bugzilla configuration.
@@ -59,6 +70,38 @@ pub fn resolve_api_key(cli_key: Option<&str>) -> Result<String, String> {
     Err("Bugzilla API key not found.\n\
          Set it up with: poi-tracker config\n\
          Or pass --api-key or set BUGZILLA_API_KEY."
+        .to_string())
+}
+
+/// Load the dist-git (Pagure) API token, checking in order:
+/// 1. `--api-token` CLI flag
+/// 2. `PAGURE_API_TOKEN` environment variable (pkg-acl's
+///    convention)
+/// 3. `~/.config/poi-tracker/config.toml` `[dist-git] api_token`
+///
+/// Returns an error with setup instructions when nothing is set.
+pub fn resolve_distgit_token(cli_token: Option<&str>) -> Result<String, String> {
+    if let Some(token) = cli_token
+        && !token.is_empty()
+    {
+        return Ok(token.to_string());
+    }
+    if let Ok(token) = std::env::var("PAGURE_API_TOKEN")
+        && !token.is_empty()
+    {
+        return Ok(token);
+    }
+    if let Ok(config) =
+        sandogasa_config::ConfigFile::for_tool("poi-tracker").load::<PoiTrackerConfig>()
+        && !config.dist_git.api_token.is_empty()
+    {
+        return Ok(config.dist_git.api_token);
+    }
+    Err("dist-git API token not found.\n\
+         Generate one at https://src.fedoraproject.org/settings/token/new\n\
+         with the \"Modify an existing project\" ACL, then set it up\n\
+         with: poi-tracker config\n\
+         Or pass --api-token or set PAGURE_API_TOKEN."
         .to_string())
 }
 
@@ -132,6 +175,28 @@ pub async fn cmd_config() -> Result<(), String> {
     let trimmed = line.trim();
     if !trimmed.is_empty() {
         config.bugzilla.email = trimmed.to_string();
+    }
+
+    // The dist-git token is optional — only `adopt` needs it.
+    // Blank input keeps the current value.
+    if config.dist_git.api_token.is_empty() {
+        println!(
+            "\nOptional: a dist-git API token lets `adopt` take orphaned\n\
+             packages. Generate one at\n  \
+             https://src.fedoraproject.org/settings/token/new\n\
+             with the \"Modify an existing project\" ACL."
+        );
+        print!("dist-git API token (blank to skip): ");
+        std::io::stdout()
+            .flush()
+            .map_err(|e| format!("flush: {e}"))?;
+        let token = rpassword::read_password().map_err(|e| format!("read token: {e}"))?;
+        let token = token.trim();
+        if !token.is_empty() {
+            config.dist_git.api_token = token.to_string();
+        }
+    } else {
+        println!("dist-git API token: (set)");
     }
 
     print!("Validating API key... ");

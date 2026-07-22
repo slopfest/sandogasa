@@ -49,6 +49,21 @@ pub struct PullRequestProject {
     pub fullname: String,
 }
 
+/// A package's orphan state from the dist-git plugin
+/// (`GET /_dg/orphan/rpms/<package>`).
+#[derive(Debug, Deserialize)]
+#[non_exhaustive]
+pub struct OrphanInfo {
+    pub orphan: bool,
+    /// Orphaning reason category (e.g. `Lack of time`); empty
+    /// when not orphaned or no reason was recorded.
+    #[serde(default)]
+    pub reason: String,
+    /// Free-text detail accompanying the reason.
+    #[serde(default)]
+    pub reason_info: String,
+}
+
 /// A project returned by the Pagure projects or group endpoints.
 #[derive(Debug, Deserialize)]
 #[non_exhaustive]
@@ -94,6 +109,28 @@ struct GroupProjectsResponse {
 pub fn dedup_projects(projects: &mut Vec<ProjectInfo>) {
     let mut seen = std::collections::HashSet::new();
     projects.retain(|p| seen.insert(p.name.clone()));
+}
+
+/// Extract the human-actionable detail from a Pagure API error
+/// body: `errors` (the specific message) when it's a non-empty
+/// string, else `error` (the generic category), else the raw body
+/// truncated — never an empty string.
+fn pagure_error_detail(body: &str) -> String {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+        for key in ["errors", "error"] {
+            if let Some(s) = v.get(key).and_then(|e| e.as_str())
+                && !s.is_empty()
+            {
+                return s.to_string();
+            }
+        }
+    }
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        "(empty response body)".to_string()
+    } else {
+        trimmed.chars().take(200).collect()
+    }
 }
 
 /// Reject an identifier that could shape or escape a URL path
@@ -321,6 +358,52 @@ impl DistGitClient {
         }
         let whoami: WhoAmI = resp.json().await?;
         Ok(whoami.username)
+    }
+
+    /// Fetch a package's orphan state and reason from the
+    /// dist-git plugin (`GET /_dg/orphan/rpms/<package>`).
+    pub async fn orphan_info(
+        &self,
+        package: &str,
+    ) -> Result<OrphanInfo, Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
+        let url = format!("{}/_dg/orphan/rpms/{}", self.base_url, package);
+        let resp = self
+            .get_with_retry(&url)
+            .await?
+            .error_for_status()
+            .map_err(|e| format!("orphan info for {package}: {e}"))?;
+        Ok(resp.json().await?)
+    }
+
+    /// Adopt an orphaned package: make the authenticated user its
+    /// point of contact (`POST /_dg/take_orphan/rpms/<package>`,
+    /// the API behind src.fedoraproject.org's "Take" button).
+    ///
+    /// Requires an API token with the `modify_project` ACL and
+    /// membership in the `packager` group; the package must be
+    /// owned by the `orphan` user and not retired (retired
+    /// packages need a releng ticket instead). Returns the new
+    /// point of contact reported by the server. Failures surface
+    /// the server's error body — it carries the actionable detail
+    /// ("You must be a packager to adopt a package.", ...).
+    pub async fn take_orphan(&self, package: &str) -> Result<String, Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
+        let url = format!("{}/_dg/take_orphan/rpms/{}", self.base_url, package);
+        let resp = self.auth(self.client.post(&url)).send().await?;
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            let detail = pagure_error_detail(&body);
+            return Err(format!("take_orphan for {package}: {status}: {detail}").into());
+        }
+        #[derive(serde::Deserialize)]
+        struct TakeOrphanResponse {
+            point_of_contact: String,
+        }
+        let parsed: TakeOrphanResponse = serde_json::from_str(&body)
+            .map_err(|e| format!("take_orphan for {package}: unexpected response: {e}"))?;
+        Ok(parsed.point_of_contact)
     }
 
     /// Transfer ownership of an RPM package to another user.
@@ -1643,6 +1726,92 @@ mod tests {
 
         let result = client.fetch_spec("nonexistent", "rawhide").await;
         assert!(result.is_err());
+    }
+
+    // ---- orphan_info / take_orphan ----
+
+    #[tokio::test]
+    async fn orphan_info_parses_state_and_reason() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/_dg/orphan/rpms/ccze"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "orphan": true,
+                "reason": "Lack of time",
+                "reason_info": ""
+            })))
+            .mount(&server)
+            .await;
+        let info = client.orphan_info("ccze").await.unwrap();
+        assert!(info.orphan);
+        assert_eq!(info.reason, "Lack of time");
+    }
+
+    #[tokio::test]
+    async fn orphan_info_not_orphaned() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/_dg/orphan/rpms/bash"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "orphan": false, "reason": "", "reason_info": ""
+            })))
+            .mount(&server)
+            .await;
+        assert!(!client.orphan_info("bash").await.unwrap().orphan);
+    }
+
+    #[tokio::test]
+    async fn take_orphan_returns_new_point_of_contact() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("tok".to_string());
+        Mock::given(method("POST"))
+            .and(path("/_dg/take_orphan/rpms/ccze"))
+            .and(wiremock::matchers::header("Authorization", "token tok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "point_of_contact": "salimma"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let poc = client.take_orphan("ccze").await.unwrap();
+        assert_eq!(poc, "salimma");
+    }
+
+    #[tokio::test]
+    async fn take_orphan_surfaces_server_error_detail() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("tok".to_string());
+        Mock::given(method("POST"))
+            .and(path("/_dg/take_orphan/rpms/ccze"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "error": "You are not allowed to modify this project",
+                "error_code": "ENOTHIGHENOUGH",
+                "errors": "You must be a packager to adopt a package."
+            })))
+            .mount(&server)
+            .await;
+        let err = client.take_orphan("ccze").await.unwrap_err().to_string();
+        assert!(
+            err.contains("You must be a packager to adopt a package."),
+            "{err}"
+        );
+        assert!(err.contains("403"), "{err}");
+    }
+
+    #[test]
+    fn pagure_error_detail_prefers_errors_then_error_then_body() {
+        assert_eq!(
+            pagure_error_detail(r#"{"error": "generic", "errors": "specific"}"#),
+            "specific"
+        );
+        assert_eq!(pagure_error_detail(r#"{"error": "generic"}"#), "generic");
+        assert_eq!(
+            pagure_error_detail("<html>gateway timeout</html>"),
+            "<html>gateway timeout</html>"
+        );
+        assert_eq!(pagure_error_detail("  "), "(empty response body)");
     }
 
     // ---- is_retired ----
