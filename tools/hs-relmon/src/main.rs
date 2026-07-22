@@ -545,6 +545,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 if let Some(reason) = project_issue_block_reason(&project_url) {
                     eprintln!("{package}: skipping issue filing ({reason})");
+                } else if result.ref_version().is_none() {
+                    // Without a reference version nothing counts as
+                    // outdated, so the issue can never be filed or
+                    // updated — that's a failed check, not "fresh".
+                    return Err(format!(
+                        "{package}: cannot file/update the issue: the \
+                         --track reference version is unresolved (see \
+                         warning above); pass --repology-name if the \
+                         repology project is named differently"
+                    )
+                    .into());
                 } else {
                     if result.is_outdated() {
                         let issue_ref = maybe_file_issue(&package, &result, &project_url)?;
@@ -618,6 +629,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap_or_else(|| default_issue_url(&pkg.name));
                     if let Some(reason) = project_issue_block_reason(&project_url) {
                         eprintln!("{}: skipping issue filing ({reason})", pkg.name);
+                    } else if result.ref_version().is_none() {
+                        // Failed reference resolution, not "fresh" —
+                        // count it and move on (batch keeps going).
+                        eprintln!(
+                            "{}: cannot file/update the issue: the track \
+                             reference version is unresolved (see warning \
+                             above)",
+                            pkg.name
+                        );
+                        errors += 1;
                     } else {
                         if result.is_outdated() && !filtering {
                             match maybe_file_issue(&pkg.name, &result, &project_url) {

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### hs-relmon: unresolvable --track references are loud, not silent
+
+`check-latest --file-issue` silently skipped filing/updating the
+issue when the `--track` reference version couldn't be resolved —
+with no reference nothing counts as outdated, so the run printed a
+correct-looking table and did nothing (observed with `perf`, whose
+repology project is empty; the kernel's perf lives under repology
+project `linux`, and the `--repology-name` override wasn't passed).
+Resolution failure now prints a warning naming the repology project
+and the remedy, and `--file-issue` with an unresolved reference is
+a hard error in single-package mode (counted, non-fatal, in batch
+runs).
+
 ### poi-tracker: adopt orphaned packages
 
 New `adopt` subcommand — the action counterpart to

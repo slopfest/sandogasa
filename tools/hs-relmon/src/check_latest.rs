@@ -96,6 +96,16 @@ impl TrackRef {
         }
     }
 
+    /// The name this reference parses from, for messages.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Upstream => "upstream",
+            Self::FedoraRawhide => "fedora-rawhide",
+            Self::FedoraStable => "fedora-stable",
+            Self::CentosStream => "centos-stream",
+        }
+    }
+
     /// Resolve the reference version from Repology package data.
     fn resolve(&self, packages: &[repology::Package]) -> Option<String> {
         match self {
@@ -373,6 +383,21 @@ pub fn check(
     }
 
     let ref_version = track.resolve(&packages);
+    // An unresolvable reference must be loud: with no reference,
+    // nothing ever counts as outdated, so a --file-issue run would
+    // otherwise silently skip filing/updating (observed with perf,
+    // whose repology project is empty — the kernel's perf lives
+    // under repology project "linux").
+    if ref_version.is_none() {
+        eprintln!(
+            "warning: {package}: cannot resolve the '{}' reference version \
+             (repology project '{repology_name}' has no matching entries); \
+             freshness is unknown. If the project is named differently on \
+             repology, pass --repology-name (or set repology_name in the \
+             manifest).",
+            track.name()
+        );
+    }
     result.ref_version = ref_version.clone();
 
     if distros.needs_cbs() {
