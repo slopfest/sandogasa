@@ -16,8 +16,9 @@ instance + task id, coverage windows coalesce, gaps are reported);
 (median/p90/max), critical-path attribution (which arch finished
 last per build and how far behind the runner-up — the marginal
 delay it cost), and a scratch-vs-official split, with `--json` for
-machine consumption. Datasets are plain JSON with a checked-in
-schema.
+machine consumption. Human tables are padded Markdown pipe tables
+(terminal-readable, pasteable into tickets) with a built-in column
+legend. Datasets are plain JSON with a checked-in schema.
 
 Windows cover whole UTC days and select builds by completion
 time: `--days N` means the last N *complete* days (ending at

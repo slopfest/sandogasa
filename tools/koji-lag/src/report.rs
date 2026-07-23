@@ -292,99 +292,139 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
         output.gated_builds, output.unattributed_tasks
     );
 
-    let render_rows = |o: &mut String, title: &str, rows: &[ArchStats]| {
-        if rows.is_empty() {
-            return;
-        }
-        let _ = writeln!(o, "\n{title}:");
-        let _ = writeln!(
-            o,
-            "  {:<10} {:>7} {:>9} {:>9} {:>7} {:>9} {:>9} {:>7} {:>10} {:>10}",
-            "arch",
-            "queued",
-            "med-wait",
-            "p90-wait",
-            "built",
-            "med-time",
-            "p90-time",
-            "gated",
-            "med-delay",
-            "tot-delay"
-        );
-        for row in rows {
-            let thin = row
-                .queue_wait
-                .as_ref()
-                .map(|s| s.count)
-                .max(row.build_time.as_ref().map(|s| s.count))
-                .unwrap_or(0)
-                < min_samples;
-            if thin {
-                let n = row
-                    .queue_wait
-                    .as_ref()
-                    .map(|s| s.count)
-                    .max(row.build_time.as_ref().map(|s| s.count))
-                    .unwrap_or(0);
-                let _ = writeln!(o, "  {:<10} (n={n}, below --min-samples)", row.arch);
-                continue;
-            }
-            let dist = |d: &Option<DistSummary>| -> (String, String, String) {
-                match d {
-                    Some(s) => (
-                        s.count.to_string(),
-                        fmt_duration(s.median),
-                        fmt_duration(s.p90),
-                    ),
-                    None => ("0".into(), "-".into(), "-".into()),
-                }
-            };
-            let (queued, med_wait, p90_wait) = dist(&row.queue_wait);
-            let (built, med_time, p90_time) = dist(&row.build_time);
-            let _ = writeln!(
-                o,
-                "  {:<10} {:>7} {:>9} {:>9} {:>7} {:>9} {:>9} {:>7} {:>10} {:>10}",
-                row.arch,
-                queued,
-                med_wait,
-                p90_wait,
-                built,
-                med_time,
-                p90_time,
-                row.builds_gated,
-                row.gating_median_delay
-                    .map(fmt_duration)
-                    .unwrap_or_else(|| "-".into()),
-                fmt_duration(row.gating_total_delay),
-            );
-        }
-    };
-
-    render_rows(&mut o, "All builds", &output.arches);
+    render_rows(&mut o, "All builds", &output.arches, min_samples);
     if let Some(official) = &output.official {
-        render_rows(&mut o, "Official builds", official);
+        render_rows(&mut o, "Official builds", official, min_samples);
     }
     if let Some(scratch) = &output.scratch {
-        render_rows(&mut o, "Scratch builds", scratch);
+        render_rows(&mut o, "Scratch builds", scratch, min_samples);
     }
     // These tables get pasted into tickets and threads, so they
-    // must explain themselves.
+    // must explain themselves. Backticked bullets stay readable in
+    // a terminal and render as a list in Markdown (a bare leading
+    // `*` would italicize).
     let _ = writeln!(
         o,
-        "\nColumns: queued/built = tasks counted in the wait/time \
-         stats.\n\
-         *-wait = task creation until a builder picked it up \
-         (median, p90).\n\
-         *-time = builder start until completion (median, p90).\n\
-         gated = builds where this arch finished last, holding up \
-         the build.\n\
-         med-delay / tot-delay = how long after the second-slowest \
-         arch the\n\
-         gating arch finished — the extra wall-clock time it alone \
-         cost those\n\
+        "\nColumn legend:\n\
+         - `queued` / `built` — tasks counted in the wait/time stats.\n\
+         - `med-wait`, `p90-wait` — task creation until a builder \
+         picked it up.\n\
+         - `med-time`, `p90-time` — builder start until completion.\n\
+         - `gated` — builds where this arch finished last, holding \
+         up the build.\n\
+         - `med-delay` / `tot-delay` — how long after the \
+         second-slowest arch the\n  \
+         gating arch finished; the extra wall-clock time it alone \
+         cost those\n  \
          builds (median per build / summed over the window)."
     );
     o
+}
+
+/// Render one per-arch table as a padded Markdown pipe table —
+/// aligned for terminal/plain-text reading, and pasteable into
+/// anything that renders Markdown. Rows below the sample guard
+/// are pulled out into a footnote (Markdown cells can't span).
+fn render_rows(o: &mut String, title: &str, rows: &[ArchStats], min_samples: usize) {
+    use std::fmt::Write as _;
+    if rows.is_empty() {
+        return;
+    }
+    const HEADERS: [&str; 10] = [
+        "arch",
+        "queued",
+        "med-wait",
+        "p90-wait",
+        "built",
+        "med-time",
+        "p90-time",
+        "gated",
+        "med-delay",
+        "tot-delay",
+    ];
+
+    let mut cells: Vec<[String; 10]> = Vec::new();
+    let mut thin: Vec<String> = Vec::new();
+    for row in rows {
+        let samples = row
+            .queue_wait
+            .as_ref()
+            .map(|s| s.count)
+            .max(row.build_time.as_ref().map(|s| s.count))
+            .unwrap_or(0);
+        if samples < min_samples {
+            thin.push(format!("{} (n={samples})", row.arch));
+            continue;
+        }
+        let dist = |d: &Option<DistSummary>| -> (String, String, String) {
+            match d {
+                Some(s) => (
+                    s.count.to_string(),
+                    fmt_duration(s.median),
+                    fmt_duration(s.p90),
+                ),
+                None => ("0".into(), "-".into(), "-".into()),
+            }
+        };
+        let (queued, med_wait, p90_wait) = dist(&row.queue_wait);
+        let (built, med_time, p90_time) = dist(&row.build_time);
+        cells.push([
+            row.arch.clone(),
+            queued,
+            med_wait,
+            p90_wait,
+            built,
+            med_time,
+            p90_time,
+            row.builds_gated.to_string(),
+            row.gating_median_delay
+                .map(fmt_duration)
+                .unwrap_or_else(|| "-".into()),
+            fmt_duration(row.gating_total_delay),
+        ]);
+    }
+
+    let _ = writeln!(o, "\n{title}:\n");
+    if !cells.is_empty() {
+        let widths: Vec<usize> = (0..HEADERS.len())
+            .map(|col| {
+                cells
+                    .iter()
+                    .map(|row| row[col].chars().count())
+                    .chain([HEADERS[col].len()])
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
+        let line = |o: &mut String, row: &[String]| {
+            let mut out = String::from("|");
+            for (col, cell) in row.iter().enumerate() {
+                if col == 0 {
+                    // Arch names left-aligned, numbers right-aligned.
+                    out.push_str(&format!(" {:<width$} |", cell, width = widths[col]));
+                } else {
+                    out.push_str(&format!(" {:>width$} |", cell, width = widths[col]));
+                }
+            }
+            let _ = writeln!(o, "{out}");
+        };
+        line(o, &HEADERS.map(String::from));
+        let mut sep = String::from("|");
+        for (col, width) in widths.iter().enumerate() {
+            if col == 0 {
+                sep.push_str(&format!(":{:-<width$}-|", "", width = width));
+            } else {
+                sep.push_str(&format!("-{:->width$}:|", "", width = width));
+            }
+        }
+        let _ = writeln!(o, "{sep}");
+        for row in &cells {
+            line(o, row);
+        }
+    }
+    if !thin.is_empty() {
+        let _ = writeln!(o, "\nBelow --min-samples: {}.", thin.join(", "));
+    }
 }
 
 #[cfg(test)]
@@ -531,10 +571,15 @@ mod tests {
         let ds = dataset();
         let out = run(&ds, &ReportOpts::default());
         let text = render(&out, 5);
-        assert!(text.contains("below --min-samples"), "{text}");
+        assert!(text.contains("Below --min-samples"), "{text}");
+        // Thin rows never appear inside the table.
+        assert!(!text.contains("| s390x"), "{text}");
         let text = render(&out, 1);
-        assert!(text.contains("s390x"), "{text}");
-        assert!(text.contains("tot-delay"), "{text}");
+        assert!(text.contains("| s390x"), "{text}");
+        assert!(text.contains("| tot-delay |"), "{text}");
+        // A Markdown pipe table: header, alignment row, data rows.
+        assert!(text.contains("|:---"), "{text}");
+        assert!(text.contains("---:|"), "{text}");
         // The legend ships with every report.
         assert!(text.contains("finished last"), "{text}");
         assert!(text.contains("second-slowest"), "{text}");

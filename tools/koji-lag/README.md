@@ -103,8 +103,10 @@ Per architecture, over the selected window:
 - the same stats split **scratch vs official**, quantifying the
   PR-CI pain specifically.
 
-Column glossary (also printed under every report, since the
-tables get pasted into tickets and threads):
+Report tables are padded Markdown pipe tables: aligned for
+terminal and plain-text reading, and pasteable as-is into
+anything that renders Markdown (Pagure, GitLab, Forgejo,
+Discourse). Column glossary (also printed under every report):
 
 | column | meaning |
 |---|---|
