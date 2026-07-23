@@ -25,7 +25,8 @@ use crate::stats::{
 /// Report filters, resolved by the CLI layer.
 #[derive(Debug, Default)]
 pub struct ReportOpts {
-    /// UTC unix bounds on task completion; `None` = unbounded.
+    /// Half-open `[since, until)` UTC unix bounds on task
+    /// completion; `None` = unbounded.
     pub since: Option<f64>,
     pub until: Option<f64>,
     /// Restrict to these arches (empty = all).
@@ -85,7 +86,7 @@ pub struct ReportOutput {
 pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
     let in_window = |task: &TaskRecord| -> bool {
         let ts = task.completion_ts.unwrap_or(task.create_ts);
-        opts.since.is_none_or(|s| ts >= s) && opts.until.is_none_or(|u| ts <= u)
+        opts.since.is_none_or(|s| ts >= s) && opts.until.is_none_or(|u| ts < u)
     };
     let arch_ok = |task: &TaskRecord| -> bool {
         opts.arches.is_empty() || opts.arches.iter().any(|a| a == &task.arch)
@@ -567,6 +568,32 @@ mod tests {
             },
         );
         assert!(out.arches.iter().all(|r| r.arch == "s390x"));
+    }
+
+    #[test]
+    fn window_bounds_are_half_open() {
+        // A task completing exactly at `until` belongs to the NEXT
+        // day's window — adjacent single-day reports must not both
+        // count it. The lower bound stays inclusive.
+        let ds = dataset();
+        // Completions in the fixture: 90, 100, 150, 400 (+50 for
+        // the unattributed task).
+        let out = run(
+            &ds,
+            &ReportOpts {
+                since: Some(100.0),
+                until: Some(150.0),
+                ..Default::default()
+            },
+        );
+        let counted: usize = out
+            .arches
+            .iter()
+            .map(|r| r.queue_wait.as_ref().map(|s| s.count).unwrap_or(0))
+            .sum();
+        // Only the two tasks completing at exactly 100 (inclusive
+        // lower bound); 150 is excluded (exclusive upper bound).
+        assert_eq!(counted, 2);
     }
 
     #[test]

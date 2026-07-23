@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### koji-lag: windows are half-open
+
+Completion windows are now half-open `[start, next-midnight)`
+instead of closed at both ends: a build completing at exactly
+00:00:00.000000 UTC belongs to the day that starts then, never to
+both adjacent days. With microsecond timestamps this boundary was
+a measure-zero edge (and dataset merges already deduped it by task
+id), but single-day *reports* could in principle have counted such
+a build twice — now they can't. `--since`/`--until` still name
+whole inclusive days on the CLI; the dataset schema's
+`FetchWindow.to` is documented as the exclusive bound.
+
 ## v0.18.1
 
 ### New koji-lag tool

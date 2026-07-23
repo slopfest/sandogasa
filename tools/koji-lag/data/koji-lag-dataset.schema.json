@@ -149,7 +149,7 @@
       ]
     },
     "FetchWindow": {
-      "description": "One fetch's coverage: tasks completing in `[from, to]` on\n`instance`.",
+      "description": "One fetch's coverage: tasks completing in the half-open\nwindow `[from, to)` on `instance` — adjacent daily windows\nshare a boundary instant without double-counting it.",
       "type": "object",
       "properties": {
         "fetched": {
@@ -170,7 +170,7 @@
           "type": "string"
         },
         "to": {
-          "description": "UTC unix seconds, inclusive upper bound.",
+          "description": "UTC unix seconds, exclusive upper bound.",
           "type": "number",
           "format": "double"
         }

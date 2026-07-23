@@ -42,8 +42,9 @@ fn utc_day_start(now: f64) -> f64 {
     (now / 86_400.0).floor() * 86_400.0
 }
 
-/// Resolve the CLI window flags to a `[after, before]` completion
-/// window (UTC unix seconds). Windows cover **whole UTC days**
+/// Resolve the CLI window flags to a completion-time
+/// half-open window `[after, before)` (UTC unix seconds).
+/// Windows cover **whole UTC days**
 /// only: `--days N` means the last N *complete* days, and a
 /// dateless upper bound stops at today's 00:00 UTC — never the
 /// partial current day — so periodic "a few days at a time"
@@ -192,7 +193,7 @@ pub fn run(opts: &FetchOpts, out_path: &Path) -> Result<FetchReport, String> {
             .into_iter()
             .filter(|t| {
                 t.completion_ts
-                    .is_some_and(|ts| ts >= opts.after && ts <= opts.before)
+                    .is_some_and(|ts| ts >= opts.after && ts < opts.before)
             })
             .collect::<Vec<_>>(),
         Err(e) => {

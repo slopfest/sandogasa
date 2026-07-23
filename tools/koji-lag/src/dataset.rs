@@ -56,14 +56,15 @@ pub struct DatasetMeta {
     pub windows: Vec<FetchWindow>,
 }
 
-/// One fetch's coverage: tasks completing in `[from, to]` on
-/// `instance`.
+/// One fetch's coverage: tasks completing in the half-open
+/// window `[from, to)` on `instance` — adjacent daily windows
+/// share a boundary instant without double-counting it.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FetchWindow {
     pub instance: String,
     /// UTC unix seconds, inclusive lower bound.
     pub from: f64,
-    /// UTC unix seconds, inclusive upper bound.
+    /// UTC unix seconds, exclusive upper bound.
     pub to: f64,
     pub fetched: DateTime<Utc>,
     /// True when the fetch was scoped (--owner/--package/
