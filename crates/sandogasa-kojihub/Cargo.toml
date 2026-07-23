@@ -1,0 +1,16 @@
+[package]
+name = "sandogasa-kojihub"
+description = "Koji hub XML-RPC client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+quick-xml = { workspace = true }
+reqwest = { workspace = true }
+sandogasa-cli = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = { workspace = true }

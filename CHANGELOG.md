@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### sandogasa-kojihub: shared Koji hub XML-RPC client
+
+koji-diff's hand-rolled XML-RPC layer moved to a new
+sandogasa-kojihub crate (koji-diff re-exports it, so
+`koji_diff::xmlrpc` paths keep compiling — non-breaking), joined
+by a typed `hub` layer: `HubClient` with `listTasks` (single
+pages, a descending-id walk, and a completion-window bisection
+sweep), `getTaskInfo`, `listHosts`, `listChannels`, and an
+Option-tolerant `HubTask` record carrying the UTC unix timestamp
+fields.
+
+The wire client gained hardening that live testing against Fedora
+infrastructure proved necessary (all three failure modes are
+documented in DEVELOPMENT.md): a User-Agent (UA-less heavy
+requests are tarpitted), no connection pooling (heavy queries on
+reused keep-alive connections stall), HTTP/1.1 only, HTTP-level
+failures surfaced as retriable errors, and error messages that
+include the reqwest source chain instead of the opaque "error
+sending request". hs-relmon's separate CBS XML-RPC client is a
+recorded migration TODO.
+
 ### hs-relmon: unresolvable --track references are loud, not silent
 
 `check-latest --file-issue` silently skipped filing/updating the

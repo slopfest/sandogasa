@@ -1,5 +1,23 @@
 # TODO
 
+## hs-relmon
+
+- (2026-07-22) Migrate cbs.rs's hand-rolled XML-RPC client onto
+  sandogasa-kojihub (the crate extracted from koji-diff), so the
+  workspace has one Koji hub client.
+
+## Cross-cutting
+
+- (2026-07-22) Send a User-Agent from every HTTP client crate:
+  Fedora's infrastructure tarpits UA-less requests (see
+  DEVELOPMENT.md; discovered via koji-lag). sandogasa-kojihub,
+  -repology, and -forgejo set one; sandogasa-bugzilla, -bodhi,
+  -distgit, and -fasjson do not — add
+  `user_agent(concat!("<crate>/", env!("CARGO_PKG_VERSION")))` to
+  their client builders. Bugzilla/Bodhi/dist-git responses are
+  small (likely below today's tarpit threshold), but that's
+  incidental protection, not a policy.
+
 ## poi-tracker / sandogasa-pkg-health seam
 
 Decision (2026-07-21): keep both tools — pkg-health **observes**

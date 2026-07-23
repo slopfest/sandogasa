@@ -3,4 +3,6 @@
 pub mod diff;
 pub mod koji;
 pub mod parse;
-pub mod xmlrpc;
+// The XML-RPC layer moved to the shared sandogasa-kojihub crate;
+// the re-export keeps `koji_diff::xmlrpc::*` paths working.
+pub use sandogasa_kojihub::xmlrpc;

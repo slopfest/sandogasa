@@ -66,7 +66,18 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Http(e) => write!(f, "HTTP error: {e}"),
+            Error::Http(e) => {
+                // reqwest's Display hides the cause ("error
+                // sending request"); walk the chain so transport
+                // failures are actually diagnosable.
+                write!(f, "HTTP error: {e}")?;
+                let mut source = std::error::Error::source(e);
+                while let Some(cause) = source {
+                    write!(f, ": {cause}")?;
+                    source = cause.source();
+                }
+                Ok(())
+            }
             Error::Xml(e) => write!(f, "XML error: {e}"),
             Error::Fault { code, message } => {
                 write!(f, "XML-RPC fault {code}: {message}")
@@ -127,7 +138,25 @@ impl Client {
         sandogasa_cli::install_crypto_provider();
         Self {
             http: reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
+                // Fedora's infrastructure TARPITS requests without
+                // a User-Agent: the same heavy listTasks query
+                // completes with one and times out without one
+                // (measured live, 2026-07). reqwest sends none by
+                // default — always identify ourselves.
+                .user_agent(concat!("sandogasa-kojihub/", env!("CARGO_PKG_VERSION")))
+                // Match the koji CLI's HTTP/1.1; h2 to the hub
+                // showed additional hangs during the same testing.
+                .http1_only()
+                // Fedora's proxy stack also stalls heavy queries
+                // sent over a REUSED keep-alive connection
+                // (reproduced with curl --next: fresh connection
+                // ~3-90s, reused connection times out), so don't
+                // pool connections at all — the handshake cost is
+                // noise next to the queries and the polite pacing.
+                .pool_max_idle_per_host(0)
+                // Heavy queries (multi-MB decoded task pages) have
+                // been observed taking 90+ seconds on a loaded hub.
+                .timeout(std::time::Duration::from_secs(180))
                 .build()
                 .expect("build reqwest client"),
             hub_url: hub_url.to_string(),
@@ -143,6 +172,10 @@ impl Client {
             .header("Content-Type", "text/xml")
             .body(body)
             .send()?
+            // Surface HTTP-level failures (proxy 502s and friends)
+            // as retriable Http errors instead of depending on
+            // whatever body shape the error page happens to have.
+            .error_for_status()?
             .text()?;
         parse_response(&resp)
     }

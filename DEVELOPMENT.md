@@ -32,6 +32,25 @@ Concretely:
   request may still have taken effect server-side. Surface the error
   and let the user rerun. (Our ACL modifications happen to be
   idempotent, but don't assume that in general.)
+- **Heavy requests to Fedora infrastructure need three defenses**
+  (all reproduced live with curl against koji.fedoraproject.org's
+  multi-MB `listTasks` XML-RPC responses, 2026-07; encoded in
+  `sandogasa_kojihub::xmlrpc::Client`):
+  1. **Always send a User-Agent** — UA-less heavy requests are
+     tarpitted (>140s, no response) where the identical request
+     with a UA completes. reqwest sends no User-Agent by default;
+     every client crate should set `<crate>/<version>`.
+  2. **Don't reuse keep-alive connections for heavy queries** —
+     the same query succeeds on a fresh connection (3–90s) and
+     times out on a reused one (curl `--next` reproduces it).
+     `pool_max_idle_per_host(0)` forces fresh connections.
+  3. **Prefer HTTP/1.1** (`http1_only`) — h2 negotiation showed
+     additional hangs during the same testing, and it matches the
+     python koji CLI's behavior.
+  Relatedly, print reqwest errors with their source chain (see
+  `sandogasa_kojihub::xmlrpc::Error`) — the top-level Display is
+  just "error sending request", hiding the timeout/reset detail
+  that identifies problems like these.
 
 ## Config files layer: /etc, then ~/.config, then the command line
 

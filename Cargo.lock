@@ -1137,9 +1137,9 @@ name = "koji-diff"
 version = "0.18.0"
 dependencies = [
  "clap",
- "quick-xml",
  "reqwest",
  "sandogasa-cli",
+ "sandogasa-kojihub",
  "serde",
  "serde_json",
  "tempfile",
@@ -1987,6 +1987,17 @@ name = "sandogasa-koji"
 version = "0.18.0"
 dependencies = [
  "chrono",
+]
+
+[[package]]
+name = "sandogasa-kojihub"
+version = "0.18.0"
+dependencies = [
+ "quick-xml",
+ "reqwest",
+ "sandogasa-cli",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
