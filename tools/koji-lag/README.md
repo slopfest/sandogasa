@@ -10,8 +10,8 @@ license-validate), run at lower priority still. Slow builders and
 insufficient builders aggravate each other, costing maintainer
 time and rewarding merging PRs without waiting for CI. koji-lag
 measures the problem from Koji task metadata: how long tasks
-queue, how long they build, and which architecture actually gated
-each build.
+queue, how long they build, and which architecture each build was
+actually bottlenecked on.
 
 Everything works anonymously over the hub's XML-RPC API — no Koji
 credentials, no `koji` CLI. Datasets are plain JSON
@@ -98,8 +98,9 @@ Per architecture, over the selected window:
 - **critical-path attribution**: for every build whose per-arch
   tasks all succeeded, which arch finished last and how much
   later than the runner-up — the marginal delay that arch cost
-  the build. Rows sort by total gating delay, so the headline is
-  literally "which arch costs the most".
+  the build ("builds tend to be bottlenecked on the s390x
+  builders"). Rows sort by total bottleneck delay, so the headline
+  is literally "which arch costs the most".
 - the same stats split **scratch vs official**, quantifying the
   PR-CI pain specifically.
 
@@ -113,9 +114,9 @@ Discourse). Column glossary (also printed under every report):
 | `queued` / `built` | tasks counted in the wait / time statistics |
 | `med-wait`, `p90-wait` | task creation → a builder picked it up |
 | `med-time`, `p90-time` | builder start → completion |
-| `gated` | builds where this arch finished **last**, holding up the whole build |
-| `med-delay` | per gated build, how long after the *second-slowest* arch this arch finished — the extra wall-clock time it alone cost that build (median) |
-| `tot-delay` | the same marginal delay summed over every build it gated in the window |
+| `bottleneck` | builds where this arch finished **last** — the whole build was bottlenecked on it |
+| `med-delay` | per bottlenecked build, how long after the *second-slowest* arch this arch finished — the extra wall-clock time it alone cost that build (median) |
+| `tot-delay` | the same marginal delay summed over every build it bottlenecked in the window |
 
 Human output withholds statistics for rows with fewer than
 `--min-samples` (default 5) samples; `--json` always carries the

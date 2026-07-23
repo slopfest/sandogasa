@@ -38,8 +38,8 @@ parent-batched queries against koji's task(parent) index (~0.5s).
 Validated end to end against Fedora's hub — one day of
 mass-rebuild volume (5.5k builds / 15k tasks) fetches in minutes
 and immediately quantified the problem: s390x median queue wait
-2.6h (build time only 3.7m — starvation, not speed), gating 1120
-of 3502 builds for 2337 machine-hours in a single day, worse for
+2.6h (build time only 3.7m — starvation, not speed), bottlenecking
+1120 of 3502 builds for 2337 machine-hours in a single day, worse for
 scratch. stream/cbs instances are registered but untested, and
 DB-dump ingestion is a recorded TODO.
 

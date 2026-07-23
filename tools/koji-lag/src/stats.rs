@@ -12,8 +12,9 @@
 //!   is real even when the build later failed. Tasks canceled
 //!   before starting have no start timestamp and drop out.
 //! - **critical path**: builds whose ≥2 buildArch children are
-//!   all CLOSED. The gating arch is the last to complete; its
-//!   marginal delay is how long after the runner-up it finished
+//!   all CLOSED. The bottleneck arch is the last to complete;
+//!   its marginal delay is how long after the runner-up it
+//!   finished
 //!   (an exact tie attributes zero delay). Any FAILED/CANCELED
 //!   child disqualifies the build — its timing isn't lag.
 
@@ -75,13 +76,14 @@ pub fn in_queue_wait_population(task: &TaskRecord) -> bool {
 /// The critical-path verdict for one build.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CriticalPath {
-    /// Arch whose task completed last (gating the whole build).
-    pub gating_arch: String,
+    /// Arch whose task completed last — the build's bottleneck.
+    pub bottleneck_arch: String,
     /// Seconds it finished after the second-slowest arch.
     pub marginal_delay: f64,
 }
 
-/// Which arch gated a build, from its buildArch children.
+/// Which arch a build was bottlenecked on, from its buildArch
+/// children.
 /// `None` when fewer than two children, any child not CLOSED, or
 /// timestamps are missing.
 pub fn critical_path(children: &[&TaskRecord]) -> Option<CriticalPath> {
@@ -96,10 +98,10 @@ pub fn critical_path(children: &[&TaskRecord]) -> Option<CriticalPath> {
         completions.push((child.completion_ts?, &child.arch));
     }
     completions.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let (last_ts, gating_arch) = completions[completions.len() - 1];
+    let (last_ts, bottleneck_arch) = completions[completions.len() - 1];
     let (runner_up_ts, _) = completions[completions.len() - 2];
     Some(CriticalPath {
-        gating_arch: gating_arch.to_string(),
+        bottleneck_arch: bottleneck_arch.to_string(),
         marginal_delay: last_ts - runner_up_ts,
     })
 }
@@ -175,7 +177,7 @@ mod tests {
         let arm = task("aarch64", TASK_CLOSED, Some(0.0), Some(90.0));
         let s390x = task("s390x", TASK_CLOSED, Some(0.0), Some(400.0));
         let cp = critical_path(&[&x86, &arm, &s390x]).unwrap();
-        assert_eq!(cp.gating_arch, "s390x");
+        assert_eq!(cp.bottleneck_arch, "s390x");
         assert_eq!(cp.marginal_delay, 300.0);
     }
 

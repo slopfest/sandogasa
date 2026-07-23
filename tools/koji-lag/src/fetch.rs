@@ -634,7 +634,7 @@ mod tests {
         // The report over this dataset attributes s390x.
         let out_report = crate::report::run(&ds, &crate::report::ReportOpts::default());
         assert_eq!(out_report.arches[0].arch, "s390x");
-        assert_eq!(out_report.gated_builds, 1);
+        assert_eq!(out_report.bottlenecked_builds, 1);
     }
 
     /// Filters drop non-matching builds and their children, and

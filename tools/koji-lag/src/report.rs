@@ -46,13 +46,13 @@ pub struct ArchStats {
     pub queue_wait: Option<DistSummary>,
     /// Seconds building.
     pub build_time: Option<DistSummary>,
-    /// Builds where this arch finished last.
-    pub builds_gated: usize,
+    /// Builds where this arch finished last (their bottleneck).
+    pub builds_bottlenecked: usize,
     /// Total seconds this arch finished after the runner-up,
-    /// summed over the builds it gated.
-    pub gating_total_delay: f64,
-    /// Median marginal delay over the builds it gated.
-    pub gating_median_delay: Option<f64>,
+    /// summed over the builds it bottlenecked.
+    pub bottleneck_total_delay: f64,
+    /// Median marginal delay over the builds it bottlenecked.
+    pub bottleneck_median_delay: Option<f64>,
 }
 
 /// The whole report, serialized as-is for `--json`.
@@ -78,7 +78,7 @@ pub struct ReportOutput {
     /// from the scratch split, included in the combined stats.
     pub unattributed_tasks: usize,
     /// Builds counted for critical-path attribution.
-    pub gated_builds: usize,
+    pub bottlenecked_builds: usize,
 }
 
 /// Compute the report over a (merged) dataset.
@@ -130,23 +130,23 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
                 .push(task);
         }
     }
-    let mut gated_builds = 0usize;
-    let mut gating: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
+    let mut bottlenecked_builds = 0usize;
+    let mut bottleneck_delays: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
     let mut paths: Vec<CriticalPath> = Vec::new();
     for children in by_parent.values() {
         if let Some(cp) = critical_path(children) {
-            gated_builds += 1;
+            bottlenecked_builds += 1;
             paths.push(cp);
         }
     }
     for cp in &paths {
-        gating
-            .entry(&cp.gating_arch)
+        bottleneck_delays
+            .entry(&cp.bottleneck_arch)
             .or_default()
             .push(cp.marginal_delay);
     }
 
-    let arches = arch_stats(&selected, &gating, opts.include_failed);
+    let arches = arch_stats(&selected, &bottleneck_delays, opts.include_failed);
     let (official, scratch) = if opts.scratch.is_some() {
         (None, None)
     } else {
@@ -156,7 +156,7 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
                 .copied()
                 .filter(|t| scratchness(t) == Some(want))
                 .collect();
-            // Gating attribution is not re-split: a build's
+            // Bottleneck attribution is not re-split: a build's
             // critical path is a whole-build property already
             // classified by its own scratch-ness below.
             let mut by_parent: BTreeMap<String, Vec<&TaskRecord>> = BTreeMap::new();
@@ -168,7 +168,7 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
                         .push(task);
                 }
             }
-            let mut gating: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
+            let mut bottleneck_delays: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
             let mut paths: Vec<CriticalPath> = Vec::new();
             for children in by_parent.values() {
                 if let Some(cp) = critical_path(children) {
@@ -176,12 +176,12 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
                 }
             }
             for cp in &paths {
-                gating
-                    .entry(&cp.gating_arch)
+                bottleneck_delays
+                    .entry(&cp.bottleneck_arch)
                     .or_default()
                     .push(cp.marginal_delay);
             }
-            arch_stats(&subset, &gating, opts.include_failed)
+            arch_stats(&subset, &bottleneck_delays, opts.include_failed)
         };
         (Some(split(false)), Some(split(true)))
     };
@@ -204,16 +204,16 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
         official,
         scratch,
         unattributed_tasks: unattributed,
-        gated_builds,
+        bottlenecked_builds,
     }
 }
 
 /// Aggregate one task subset into per-arch rows, sorted by total
-/// gating delay descending (the headline ordering: which arch
+/// bottleneck delay descending (the headline ordering: which arch
 /// costs the most).
 fn arch_stats(
     tasks: &[&TaskRecord],
-    gating: &BTreeMap<&str, Vec<f64>>,
+    bottleneck_delays: &BTreeMap<&str, Vec<f64>>,
     include_failed: bool,
 ) -> Vec<ArchStats> {
     let mut queue: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
@@ -232,25 +232,28 @@ fn arch_stats(
     }
     let mut all_arches: std::collections::BTreeSet<&str> = queue.keys().copied().collect();
     all_arches.extend(build.keys().copied());
-    all_arches.extend(gating.keys().copied());
+    all_arches.extend(bottleneck_delays.keys().copied());
 
     let mut rows: Vec<ArchStats> = all_arches
         .into_iter()
         .map(|arch| {
-            let delays = gating.get(arch);
+            let delays = bottleneck_delays.get(arch);
             let mut sorted_delays = delays.cloned().unwrap_or_default();
             sorted_delays.sort_by(|a, b| a.total_cmp(b));
             ArchStats {
                 arch: arch.to_string(),
                 queue_wait: queue.get(arch).cloned().and_then(|mut v| summarize(&mut v)),
                 build_time: build.get(arch).cloned().and_then(|mut v| summarize(&mut v)),
-                builds_gated: sorted_delays.len(),
-                gating_total_delay: sorted_delays.iter().sum(),
-                gating_median_delay: median(&sorted_delays),
+                builds_bottlenecked: sorted_delays.len(),
+                bottleneck_total_delay: sorted_delays.iter().sum(),
+                bottleneck_median_delay: median(&sorted_delays),
             }
         })
         .collect();
-    rows.sort_by(|a, b| b.gating_total_delay.total_cmp(&a.gating_total_delay));
+    rows.sort_by(|a, b| {
+        b.bottleneck_total_delay
+            .total_cmp(&a.bottleneck_total_delay)
+    });
     rows
 }
 
@@ -287,9 +290,9 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
     }
     let _ = writeln!(
         o,
-        "Gated builds: {} (critical-path attribution); \
+        "Bottlenecked builds: {} (critical-path attribution); \
          unattributed tasks: {}",
-        output.gated_builds, output.unattributed_tasks
+        output.bottlenecked_builds, output.unattributed_tasks
     );
 
     render_rows(&mut o, "All builds", &output.arches, min_samples);
@@ -310,11 +313,11 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
          - `med-wait`, `p90-wait` — task creation until a builder \
          picked it up.\n\
          - `med-time`, `p90-time` — builder start until completion.\n\
-         - `gated` — builds where this arch finished last, holding \
-         up the build.\n\
+         - `bottleneck` — builds where this arch finished last (the \
+         build was bottlenecked on it).\n\
          - `med-delay` / `tot-delay` — how long after the \
          second-slowest arch the\n  \
-         gating arch finished; the extra wall-clock time it alone \
+         bottleneck arch finished; the extra wall-clock time it alone \
          cost those\n  \
          builds (median per build / summed over the window)."
     );
@@ -338,7 +341,7 @@ fn render_rows(o: &mut String, title: &str, rows: &[ArchStats], min_samples: usi
         "built",
         "med-time",
         "p90-time",
-        "gated",
+        "bottleneck",
         "med-delay",
         "tot-delay",
     ];
@@ -376,11 +379,11 @@ fn render_rows(o: &mut String, title: &str, rows: &[ArchStats], min_samples: usi
             built,
             med_time,
             p90_time,
-            row.builds_gated.to_string(),
-            row.gating_median_delay
+            row.builds_bottlenecked.to_string(),
+            row.bottleneck_median_delay
                 .map(fmt_duration)
                 .unwrap_or_else(|| "-".into()),
-            fmt_duration(row.gating_total_delay),
+            fmt_duration(row.bottleneck_total_delay),
         ]);
     }
 
@@ -495,12 +498,12 @@ mod tests {
     fn combined_report_attributes_and_counts() {
         let ds = dataset();
         let out = run(&ds, &ReportOpts::default());
-        assert_eq!(out.gated_builds, 2);
+        assert_eq!(out.bottlenecked_builds, 2);
         assert_eq!(out.unattributed_tasks, 1);
-        // s390x tops the ordering with 300s total gating delay.
+        // s390x tops the ordering with 300s total bottleneck delay.
         assert_eq!(out.arches[0].arch, "s390x");
-        assert_eq!(out.arches[0].gating_total_delay, 300.0);
-        assert_eq!(out.arches[0].builds_gated, 1);
+        assert_eq!(out.arches[0].bottleneck_total_delay, 300.0);
+        assert_eq!(out.arches[0].builds_bottlenecked, 1);
         // Its queue population includes the unattributed task.
         assert_eq!(out.arches[0].queue_wait.as_ref().unwrap().count, 2);
     }
@@ -514,13 +517,13 @@ mod tests {
         assert!(
             official
                 .iter()
-                .any(|r| r.arch == "s390x" && r.builds_gated == 1)
+                .any(|r| r.arch == "s390x" && r.builds_bottlenecked == 1)
         );
         assert!(official.iter().all(|r| r.arch != "ppc64le"));
         assert!(
             scratch
                 .iter()
-                .any(|r| r.arch == "ppc64le" && r.builds_gated == 1)
+                .any(|r| r.arch == "ppc64le" && r.builds_bottlenecked == 1)
         );
     }
 

@@ -29,7 +29,7 @@ enum Command {
     Fetch(FetchArgs),
     /// Union datasets collected independently into one.
     Merge(MergeArgs),
-    /// Per-arch queue-wait / build-time / gating report.
+    /// Per-arch queue-wait / build-time / bottleneck report.
     Report(ReportArgs),
 }
 
