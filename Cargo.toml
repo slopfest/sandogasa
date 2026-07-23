@@ -35,6 +35,7 @@ members = [
     "tools/hs-intake",
     "tools/hs-meetings",
     "tools/koji-diff",
+    "tools/koji-lag",
     "tools/hs-relmon",
     "tools/sandogasa-hattrack",
     "tools/poi-tracker",

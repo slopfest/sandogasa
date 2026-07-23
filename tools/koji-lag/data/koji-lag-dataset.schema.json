@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dataset",
+  "description": "A pooled collection of build/task records from one or more\nKoji instances.",
+  "type": "object",
+  "properties": {
+    "builds": {
+      "description": "Parent `build` tasks, keyed `\"<instance>:<task_id>\"`.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/BuildRecord"
+      },
+      "default": {}
+    },
+    "channels": {
+      "description": "`\"<instance>:<channel_id>\"` → channel name.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "hosts": {
+      "description": "`\"<instance>:<host_id>\"` → builder hostname.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "meta": {
+      "$ref": "#/$defs/DatasetMeta"
+    },
+    "tasks": {
+      "description": "`buildArch` tasks, keyed `\"<instance>:<task_id>\"`.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/TaskRecord"
+      },
+      "default": {}
+    }
+  },
+  "required": [
+    "meta"
+  ],
+  "$defs": {
+    "BuildRecord": {
+      "description": "A parent `build` task.",
+      "type": "object",
+      "properties": {
+        "completion_ts": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "create_ts": {
+          "type": "number",
+          "format": "double"
+        },
+        "instance": {
+          "type": "string"
+        },
+        "nvr": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package": {
+          "description": "Source package name, when extractable from the request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "scratch": {
+          "type": "boolean",
+          "default": false
+        },
+        "start_ts": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "state": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "instance",
+        "task_id",
+        "state",
+        "create_ts"
+      ]
+    },
+    "DatasetMeta": {
+      "type": "object",
+      "properties": {
+        "generated": {
+          "description": "When this file was last written.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "windows": {
+          "description": "Completion-time windows the records were swept from.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FetchWindow"
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "generated"
+      ]
+    },
+    "FetchWindow": {
+      "description": "One fetch's coverage: tasks completing in `[from, to]` on\n`instance`.",
+      "type": "object",
+      "properties": {
+        "fetched": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "filtered": {
+          "description": "True when the fetch was scoped (--owner/--package/\n--inventory) — such a window is NOT full coverage, and\nmerge/report warn when mixing it with unfiltered ones.",
+          "type": "boolean",
+          "default": false
+        },
+        "from": {
+          "description": "UTC unix seconds, inclusive lower bound.",
+          "type": "number",
+          "format": "double"
+        },
+        "instance": {
+          "type": "string"
+        },
+        "to": {
+          "description": "UTC unix seconds, inclusive upper bound.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "instance",
+        "from",
+        "to",
+        "fetched"
+      ]
+    },
+    "TaskRecord": {
+      "description": "A per-arch `buildArch` task.",
+      "type": "object",
+      "properties": {
+        "arch": {
+          "type": "string"
+        },
+        "channel_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "completion_ts": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "create_ts": {
+          "type": "number",
+          "format": "double"
+        },
+        "host_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "instance": {
+          "type": "string"
+        },
+        "package": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "description": "Parent build task id (same instance); tasks whose parent\nwasn't captured are reported as unattributed.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "start_ts": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "state": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "task_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "weight": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "instance",
+        "task_id",
+        "arch",
+        "state",
+        "create_ts"
+      ]
+    }
+  }
+}

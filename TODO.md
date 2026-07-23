@@ -1,5 +1,23 @@
 # TODO
 
+## koji-lag
+
+- (2026-07-22) DB-dump ingestion: for whole-history analysis, an
+  extraction script over a Koji database dump (SELECT just the task
+  columns we store, bounded by completion timestamp, to keep the
+  dump small) plus an `import` subcommand reading its output. The
+  API sweep stays the path for maintainers without dump access.
+- (2026-07-22) Validate the `stream` and `cbs` instances — older
+  hub versions may omit or rename listTasks fields; only `fedora`
+  has been probed live. HubTask decodes tolerantly, so the risk is
+  silently-missing fields, not crashes.
+- (2026-07-22) Chainbuild ancestry: buildArch tasks whose parent
+  isn't a `build` task (e.g. chainbuild layers) stay unattributed;
+  walking further up the task tree would attribute them.
+- (2026-07-22) Per-host medians report (`--per-host`, deferred from
+  v1): median build time per (host, arch) to spot sick builders —
+  host names are already captured in the dataset.
+
 ## hs-relmon
 
 - (2026-07-22) Migrate cbs.rs's hand-rolled XML-RPC client onto

@@ -1146,6 +1146,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "koji-lag"
+version = "0.18.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "sandogasa-cli",
+ "sandogasa-inventory",
+ "sandogasa-koji",
+ "sandogasa-kojihub",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

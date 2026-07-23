@@ -1,0 +1,23 @@
+[package]
+name = "koji-lag"
+description = "Quantify Koji build queue lag and per-arch build-time drag"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+clap = { workspace = true }
+sandogasa-cli = { workspace = true }
+sandogasa-inventory = { workspace = true }
+sandogasa-koji = { workspace = true }
+sandogasa-kojihub = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+wiremock = { workspace = true }

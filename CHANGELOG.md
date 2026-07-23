@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### New koji-lag tool
+
+Quantify Koji build queue lag and per-arch build-time drag — the
+"one slow architecture delays every build" problem (s390x
+foremost), made worse for scratch builds that gate dist-git PR CI
+at lower priority. `fetch` collects a completion-time window of
+build/buildArch task metadata from a Koji hub (anonymous XML-RPC;
+no credentials or koji CLI needed; paced and resumable); `merge`
+pools independently collected datasets (records dedupe per
+instance + task id, coverage windows coalesce, gaps are reported);
+`report` gives per-arch queue-wait and build-time distributions
+(median/p90/max), critical-path attribution (which arch finished
+last per build and how far behind the runner-up — the marginal
+delay it cost), and a scratch-vs-official split, with `--json` for
+machine consumption. Datasets are plain JSON with a checked-in
+schema.
+
+The fetch strategy was shaped by live measurement on a hub under
+mass-rebuild load, where even five-minute completion-window
+filters timed out: no server-side completion filters at all.
+Parent build tasks are found by walking `listTasks` pages
+newest-first by task id (an index walk, ~1.3s/500 rows under that
+same load) and windowed client-side; per-arch children come from
+parent-batched queries against koji's task(parent) index (~0.5s).
+Validated end to end against Fedora's hub — one day of
+mass-rebuild volume (5.5k builds / 15k tasks) fetches in minutes
+and immediately quantified the problem: s390x median queue wait
+2.6h (build time only 3.7m — starvation, not speed), gating 1120
+of 3502 builds for 2337 machine-hours in a single day, worse for
+scratch. stream/cbs instances are registered but untested, and
+DB-dump ingestion is a recorded TODO.
+
 ### sandogasa-kojihub: shared Koji hub XML-RPC client
 
 koji-diff's hand-rolled XML-RPC layer moved to a new
