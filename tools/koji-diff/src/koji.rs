@@ -11,8 +11,11 @@ use sandogasa_kojihub::{Client, Error, Value, retry};
 const DEFAULT_RETRIES: u32 = 3;
 
 /// Task state constants from Koji (re-exported from the shared
-/// hub crate so `koji::TASK_CLOSED` callers keep working).
-pub use sandogasa_kojihub::hub::{TASK_CLOSED, TASK_FAILED};
+/// hub crate; local definitions (rather than re-exports) keep
+/// `koji::TASK_CLOSED` callers working AND visible to rustdoc /
+/// cargo-semver-checks, which don't inline foreign re-exports.
+pub const TASK_CLOSED: i64 = sandogasa_kojihub::hub::TASK_CLOSED;
+pub const TASK_FAILED: i64 = sandogasa_kojihub::hub::TASK_FAILED;
 
 /// Koji API client.
 pub struct KojiClient {

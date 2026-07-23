@@ -47,7 +47,11 @@ DB-dump ingestion is a recorded TODO.
 
 koji-diff's hand-rolled XML-RPC layer moved to a new
 sandogasa-kojihub crate (koji-diff re-exports it, so
-`koji_diff::xmlrpc` paths keep compiling — non-breaking), joined
+`koji_diff::xmlrpc` paths keep compiling — non-breaking; note
+that cargo-semver-checks flags the cross-crate re-exports as
+removed items, a known false positive for source compatibility
+since it neither inlines foreign items nor accepts a kind change,
+verified by compiling the old usage patterns), joined
 by a typed `hub` layer: `HubClient` with `listTasks` (single
 pages, a descending-id walk, and a completion-window bisection
 sweep), `getTaskInfo`, `listHosts`, `listChannels`, and an
