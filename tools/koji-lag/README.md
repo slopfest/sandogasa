@@ -103,6 +103,18 @@ Per architecture, over the selected window:
 - the same stats split **scratch vs official**, quantifying the
   PR-CI pain specifically.
 
+Column glossary (also printed under every report, since the
+tables get pasted into tickets and threads):
+
+| column | meaning |
+|---|---|
+| `queued` / `built` | tasks counted in the wait / time statistics |
+| `med-wait`, `p90-wait` | task creation → a builder picked it up |
+| `med-time`, `p90-time` | builder start → completion |
+| `gated` | builds where this arch finished **last**, holding up the whole build |
+| `med-delay` | per gated build, how long after the *second-slowest* arch this arch finished — the extra wall-clock time it alone cost that build (median) |
+| `tot-delay` | the same marginal delay summed over every build it gated in the window |
+
 Human output withholds statistics for rows with fewer than
 `--min-samples` (default 5) samples; `--json` always carries the
 full numbers plus counts so pooled data can be re-filtered.

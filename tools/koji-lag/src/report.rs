@@ -367,6 +367,23 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
     if let Some(scratch) = &output.scratch {
         render_rows(&mut o, "Scratch builds", scratch);
     }
+    // These tables get pasted into tickets and threads, so they
+    // must explain themselves.
+    let _ = writeln!(
+        o,
+        "\nColumns: queued/built = tasks counted in the wait/time \
+         stats.\n\
+         *-wait = task creation until a builder picked it up \
+         (median, p90).\n\
+         *-time = builder start until completion (median, p90).\n\
+         gated = builds where this arch finished last, holding up \
+         the build.\n\
+         med-delay / tot-delay = how long after the second-slowest \
+         arch the\n\
+         gating arch finished — the extra wall-clock time it alone \
+         cost those\n\
+         builds (median per build / summed over the window)."
+    );
     o
 }
 
@@ -518,6 +535,9 @@ mod tests {
         let text = render(&out, 1);
         assert!(text.contains("s390x"), "{text}");
         assert!(text.contains("tot-delay"), "{text}");
+        // The legend ships with every report.
+        assert!(text.contains("finished last"), "{text}");
+        assert!(text.contains("second-slowest"), "{text}");
     }
 
     #[test]
