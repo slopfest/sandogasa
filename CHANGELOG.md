@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.18.1
 
 ### New koji-lag tool
 
