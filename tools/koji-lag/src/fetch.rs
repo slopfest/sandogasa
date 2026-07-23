@@ -26,6 +26,65 @@ use sandogasa_kojihub::{Value, retry};
 
 use crate::dataset::{BuildRecord, Dataset, FetchWindow, TaskRecord};
 
+/// Parse a `YYYY-MM-DD` CLI date to UTC-midnight unix seconds.
+pub fn date_to_ts(date: &str) -> Result<f64, String> {
+    let parsed = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|e| format!("invalid date '{date}': {e}"))?;
+    Ok(parsed
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight exists")
+        .and_utc()
+        .timestamp() as f64)
+}
+
+/// Start of the current UTC day (unix days are exactly 86400s).
+fn utc_day_start(now: f64) -> f64 {
+    (now / 86_400.0).floor() * 86_400.0
+}
+
+/// Resolve the CLI window flags to a `[after, before]` completion
+/// window (UTC unix seconds). Windows cover **whole UTC days**
+/// only: `--days N` means the last N *complete* days, and a
+/// dateless upper bound stops at today's 00:00 UTC — never the
+/// partial current day — so periodic "a few days at a time"
+/// fetches compose seamlessly. An explicit `--until DATE`
+/// includes that whole day (clamped to `now` if it's today).
+///
+/// The window selects builds by **completion** time: a build
+/// still running has no timing to report yet and is picked up by
+/// whichever fetch covers the day it finishes, so every build is
+/// counted exactly once.
+pub fn resolve_window(
+    since: Option<&str>,
+    until: Option<&str>,
+    days: Option<u32>,
+    now: f64,
+) -> Result<(f64, f64), String> {
+    let today = utc_day_start(now);
+    let after = match (since, days) {
+        (Some(date), _) => date_to_ts(date)?,
+        (None, Some(days)) => today - f64::from(days) * 86_400.0,
+        (None, None) => {
+            return Err("a window lower bound is required: --since or --days".to_string());
+        }
+    };
+    let before = match until {
+        // Inclusive end date: up to midnight of the following day.
+        Some(date) => (date_to_ts(date)? + 86_400.0).min(now),
+        // Only complete days by default.
+        None => today,
+    };
+    if before <= after {
+        return Err(
+            "the window is empty — it covers complete UTC days only, so \
+             fetching today's builds needs an explicit --until with \
+             today's date"
+                .to_string(),
+        );
+    }
+    Ok((after, before))
+}
+
 /// Everything a fetch needs, resolved by the CLI layer.
 pub struct FetchOpts {
     pub instance_key: String,
@@ -642,6 +701,52 @@ mod tests {
         assert_eq!(incoming.tasks.len(), 1);
         assert!(incoming.tasks.contains_key("fedora:11"));
         assert!(opts.filtered());
+    }
+
+    // ---- resolve_window ----
+
+    /// 2026-07-20 15:00 UTC (8 AM US Pacific): the user's worked
+    /// example — the last scanned day must be July 19.
+    const MID_JULY_20: f64 = 1_784_559_600.0;
+    const JULY_20_MIDNIGHT: f64 = 1_784_505_600.0;
+
+    #[test]
+    fn days_cover_whole_utc_days_ending_yesterday() {
+        // --days 1 run mid-day on July 20 scans exactly July 19.
+        let (after, before) = resolve_window(None, None, Some(1), MID_JULY_20).unwrap();
+        assert_eq!(before, JULY_20_MIDNIGHT);
+        assert_eq!(after, JULY_20_MIDNIGHT - 86_400.0);
+        // --days 3: July 17 through 19.
+        let (after, _) = resolve_window(None, None, Some(3), MID_JULY_20).unwrap();
+        assert_eq!(after, JULY_20_MIDNIGHT - 3.0 * 86_400.0);
+    }
+
+    #[test]
+    fn since_without_until_also_stops_at_the_last_complete_day() {
+        let (after, before) = resolve_window(Some("2026-07-15"), None, None, MID_JULY_20).unwrap();
+        assert_eq!(after, JULY_20_MIDNIGHT - 5.0 * 86_400.0);
+        assert_eq!(before, JULY_20_MIDNIGHT);
+    }
+
+    #[test]
+    fn explicit_until_includes_that_day_clamped_to_now() {
+        // A past end date covers through its full day.
+        let (_, before) =
+            resolve_window(Some("2026-07-15"), Some("2026-07-18"), None, MID_JULY_20).unwrap();
+        assert_eq!(before, JULY_20_MIDNIGHT - 86_400.0);
+        // Today's date opts into the partial running day.
+        let (_, before) =
+            resolve_window(Some("2026-07-15"), Some("2026-07-20"), None, MID_JULY_20).unwrap();
+        assert_eq!(before, MID_JULY_20);
+    }
+
+    #[test]
+    fn empty_and_invalid_windows_error() {
+        // --since today with no --until: no complete day yet.
+        let err = resolve_window(Some("2026-07-20"), None, None, MID_JULY_20).unwrap_err();
+        assert!(err.contains("complete UTC days"), "{err}");
+        assert!(resolve_window(None, None, None, MID_JULY_20).is_err());
+        assert!(resolve_window(Some("garbage"), None, None, MID_JULY_20).is_err());
     }
 
     #[test]

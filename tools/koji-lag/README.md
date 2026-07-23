@@ -39,6 +39,17 @@ koji-lag fetch --since 2026-07-01 --until 2026-07-14 -o sprint.json
 koji-lag fetch --days 7 --inventory inventory.toml -o mine.json
 ```
 
+Windows cover **whole UTC days** and select builds by
+**completion time**. `--days N` means the last N complete days:
+run at any hour, it ends at today's 00:00 UTC, so the partial
+running day is never mixed in — fetching "a few days at a time"
+composes without seams (pass `--until` with today's date to
+explicitly include the running day, clamped to now). A build
+still running when a window is fetched has no timing to report
+yet; it is picked up by whichever fetch covers the day it
+*finishes*, so periodic collection counts every build exactly
+once.
+
 `--instance` picks a known hub (`fedora` default; `cbs` and
 `stream` are registered but not yet validated) or `--hub-url`
 points anywhere. By default the whole window is swept — scoping

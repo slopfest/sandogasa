@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use chrono::{NaiveDate, Utc};
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use koji_lag::dataset::Dataset;
 use koji_lag::{fetch, instance, report};
@@ -47,11 +47,12 @@ struct FetchArgs {
     #[arg(long, value_name = "YYYY-MM-DD", conflicts_with = "days")]
     since: Option<String>,
 
-    /// Window end date (UTC midnight, inclusive; default: now).
+    /// Window end date, inclusive (default: the last complete
+    /// UTC day — the running day is never included implicitly).
     #[arg(long, value_name = "YYYY-MM-DD")]
     until: Option<String>,
 
-    /// Sweep the last N days (shorthand for --since).
+    /// Sweep the last N complete UTC days.
     #[arg(long, value_name = "N")]
     days: Option<u32>,
 
@@ -148,17 +149,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// Parse a `YYYY-MM-DD` CLI date to UTC-midnight unix seconds.
-fn date_to_ts(date: &str) -> Result<f64, String> {
-    let parsed = NaiveDate::parse_from_str(date, "%Y-%m-%d")
-        .map_err(|e| format!("invalid date '{date}': {e}"))?;
-    Ok(parsed
-        .and_hms_opt(0, 0, 0)
-        .expect("midnight exists")
-        .and_utc()
-        .timestamp() as f64)
-}
-
 fn cmd_fetch(args: &FetchArgs) -> ExitCode {
     let (instance_key, hub_url) = match instance::resolve(&args.instance, args.hub_url.as_deref()) {
         Ok(pair) => pair,
@@ -167,37 +157,17 @@ fn cmd_fetch(args: &FetchArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Freeze the bounds once; whole-UTC-day semantics live in
+    // fetch::resolve_window.
     let now = Utc::now().timestamp() as f64;
-    let after = match (&args.since, args.days) {
-        (Some(date), _) => match date_to_ts(date) {
-            Ok(ts) => ts,
+    let (after, before) =
+        match fetch::resolve_window(args.since.as_deref(), args.until.as_deref(), args.days, now) {
+            Ok(window) => window,
             Err(e) => {
                 eprintln!("error: {e}");
                 return ExitCode::FAILURE;
             }
-        },
-        (None, Some(days)) => now - f64::from(days) * 86_400.0,
-        (None, None) => {
-            eprintln!("error: a window lower bound is required: --since or --days");
-            return ExitCode::FAILURE;
-        }
-    };
-    // Freeze the upper bound once; also makes re-runs mergeable.
-    let before = match &args.until {
-        // Inclusive end date: midnight of the following day.
-        Some(date) => match date_to_ts(date) {
-            Ok(ts) => (ts + 86_400.0).min(now),
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        },
-        None => now,
-    };
-    if before <= after {
-        eprintln!("error: the window is empty (until is not after since)");
-        return ExitCode::FAILURE;
-    }
+        };
 
     let mut packages: Option<BTreeSet<String>> = None;
     if !args.package.is_empty() {
@@ -325,7 +295,7 @@ fn cmd_report(args: &ReportArgs) -> ExitCode {
         (&args.until, &mut opts.until),
     ] {
         if let Some(date) = flag {
-            match date_to_ts(date) {
+            match fetch::date_to_ts(date) {
                 Ok(ts) => *target = Some(ts),
                 Err(e) => {
                     eprintln!("error: {e}");

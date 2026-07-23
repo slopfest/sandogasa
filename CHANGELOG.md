@@ -19,6 +19,14 @@ delay it cost), and a scratch-vs-official split, with `--json` for
 machine consumption. Datasets are plain JSON with a checked-in
 schema.
 
+Windows cover whole UTC days and select builds by completion
+time: `--days N` means the last N *complete* days (ending at
+today's 00:00 UTC regardless of local time), a dateless end never
+includes the partial running day, and a still-running build is
+picked up by whichever later fetch covers the day it finishes —
+so periodic few-days-at-a-time collection counts every build
+exactly once, with no partial-day seams.
+
 The fetch strategy was shaped by live measurement on a hub under
 mass-rebuild load, where even five-minute completion-window
 filters timed out: no server-side completion filters at all.
