@@ -12,3 +12,4 @@ pub mod checklist;
 pub mod config;
 pub mod cratesio;
 pub mod review;
+pub mod runner;

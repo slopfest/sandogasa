@@ -9,7 +9,7 @@ use sandogasa_config::ConfigFile;
 
 use fedora_review_digest::checklist::{self, Item, Mark, Resolution, ReviewedIssue};
 use fedora_review_digest::review::{Generator, Review};
-use fedora_review_digest::{bugzilla, config, cratesio};
+use fedora_review_digest::{bugzilla, config, cratesio, runner};
 use sandogasa_bugzilla::BzClient;
 use sandogasa_review::resolve_interactive;
 
@@ -36,35 +36,71 @@ struct Cli {
 enum Command {
     /// Set up or verify the Bugzilla API key used by `--post`.
     Config,
+    /// Run fedora-review on a bug, then digest the result.
+    Run(RunArgs),
+}
+
+#[derive(Args)]
+struct RunArgs {
+    /// Review-request Bugzilla bug id (fedora-review -b).
+    #[arg(value_name = "BUGID")]
+    bug: String,
+
+    /// COPR(s) with staged deps (owner/project; CSV ok)
+    #[arg(long, value_delimiter = ',', value_name = "OWNER/PROJECT")]
+    copr: Vec<String>,
+
+    /// Extra repo baseurl(s) to build against (CSV ok)
+    #[arg(long, value_delimiter = ',', value_name = "URL")]
+    repo: Vec<String>,
+
+    /// Mock config; doubles as the COPR chroot name
+    #[arg(short, long, value_name = "NAME")]
+    mock_config: Option<String>,
+
+    /// Print the fedora-review command without running it
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Stop after the fedora-review build (skip digest)
+    #[arg(long)]
+    no_digest: bool,
+
+    #[command(flatten)]
+    opts: DigestOpts,
 }
 
 #[derive(Args)]
 struct DigestArgs {
-    /// A `fedora-review` result directory, or a review-request bug id
-    /// (resolved to `<id>-*` under --reviews-dir).
+    /// fedora-review result dir, or a bug id under --reviews-dir
     #[arg(value_name = "DIR-OR-BUGID")]
     input: Option<String>,
 
-    /// Free-form reviewer note placed above the review (e.g. "Looks
-    /// good to me!"). Without it, you're prompted (unless --yes).
+    #[command(flatten)]
+    opts: DigestOpts,
+}
+
+/// Digest options shared by the default action and `run` (which
+/// flows into a digest after the fedora-review build).
+#[derive(Args)]
+struct DigestOpts {
+    /// Reviewer note placed above the review ("LGTM!")
     #[arg(short, long, value_name = "TEXT")]
     comment: Option<String>,
 
-    /// Accept the inferred checklist marks without prompting.
+    /// Accept inferred checklist marks without prompting
     #[arg(short = 'y', long)]
     yes: bool,
 
-    /// Base directory to resolve a bug id in (default: current dir).
+    /// Base directory for bug-id lookup
     #[arg(long, value_name = "DIR", default_value = ".")]
     reviews_dir: PathBuf,
 
-    /// Skip the crates.io latest-version check (offline / faster).
+    /// Skip the crates.io latest-version check
     #[arg(long)]
     no_net: bool,
 
-    /// Post the review to the Bugzilla bug: a comment, the fedora-review
-    /// flag (`+` if approved, else `?`), status POST on approval, and
-    /// claim the bug for you. Asks to confirm first.
+    /// Post to Bugzilla: comment, review flag, claim
     #[arg(long)]
     post: bool,
 }
@@ -73,6 +109,7 @@ fn main() -> ExitCode {
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     let result = match cli.command {
         Some(Command::Config) => cmd_config(),
+        Some(Command::Run(args)) => cmd_run(&args),
         None => run(&cli.digest).map(|text| print!("{text}")),
     };
     match result {
@@ -122,12 +159,46 @@ fn cmd_config() -> Result<(), String> {
     Ok(())
 }
 
+/// The `run` subcommand: invoke fedora-review (optionally with
+/// extra dependency repos for builds whose deps are staged in a
+/// COPR ahead of Rawhide), then flow straight into the digest —
+/// a mock build takes minutes, so its result shouldn't dead-end.
+fn cmd_run(args: &RunArgs) -> Result<(), String> {
+    let review_args = runner::build_args(
+        &args.bug,
+        &args.copr,
+        &args.repo,
+        args.mock_config.as_deref(),
+    )?;
+    if args.dry_run {
+        println!("{}", runner::display_command(&review_args));
+        return Ok(());
+    }
+    runner::run_fedora_review(&review_args, &args.opts.reviews_dir)?;
+    if args.no_digest {
+        let dir = find_review_dir(&args.opts.reviews_dir, &args.bug)?;
+        eprintln!("review results in {}", dir.display());
+        return Ok(());
+    }
+    let digest = DigestArgs {
+        input: Some(args.bug.clone()),
+        opts: DigestOpts {
+            comment: args.opts.comment.clone(),
+            yes: args.opts.yes,
+            reviews_dir: args.opts.reviews_dir.clone(),
+            no_net: args.opts.no_net,
+            post: args.opts.post,
+        },
+    };
+    run(&digest).map(|text| print!("{text}"))
+}
+
 fn run(cli: &DigestArgs) -> Result<String, String> {
     let input = cli
         .input
         .as_deref()
         .ok_or("provide a fedora-review result directory or a bug id")?;
-    let dir = resolve_input(input, &cli.reviews_dir)?;
+    let dir = resolve_input(input, &cli.opts.reviews_dir)?;
     let review = Review::from_dir(&dir)?;
     match review.spec.generator {
         Generator::Rust2Rpm => {}
@@ -145,7 +216,7 @@ fn run(cli: &DigestArgs) -> Result<String, String> {
     // Evidence for the "latest version" item: the latest stable on
     // crates.io. A lookup failure is a warning, not fatal — the item
     // just reports "not checked".
-    let crate_latest = if cli.no_net {
+    let crate_latest = if cli.opts.no_net {
         None
     } else {
         match cratesio::fetch_max_stable_version(&review.upstream_name) {
@@ -163,8 +234,8 @@ fn run(cli: &DigestArgs) -> Result<String, String> {
     // Finalize the marks: interactively by default, or accept the
     // inferred ones with --yes. A non-tty without --yes can't prompt, so
     // fail with a remedy rather than silently rubber-stamping.
-    let interactive = !cli.yes && std::io::stdin().is_terminal();
-    if !cli.yes {
+    let interactive = !cli.opts.yes && std::io::stdin().is_terminal();
+    if !cli.opts.yes {
         if !interactive {
             return Err(
                 "not a terminal; pass -y to accept the inferred marks (and --comment for a note)"
@@ -187,7 +258,7 @@ fn run(cli: &DigestArgs) -> Result<String, String> {
         finalize_issues(&mut issues)?;
     }
 
-    let comment = match &cli.comment {
+    let comment = match &cli.opts.comment {
         Some(c) => Some(c.clone()),
         None if interactive => prompt_comment()?,
         None => None,
@@ -197,9 +268,9 @@ fn run(cli: &DigestArgs) -> Result<String, String> {
     let post_block = checklist::render_post_import(review.spec.generator, &review.upstream_name);
     let text = checklist::assemble(comment.as_deref(), &review_block, &post_block);
 
-    if cli.post {
+    if cli.opts.post {
         let approved = checklist::approved(&items, &issues);
-        post_to_bugzilla(input, &dir, &text, approved, cli.yes)?;
+        post_to_bugzilla(input, &dir, &text, approved, cli.opts.yes)?;
     }
     Ok(text)
 }

@@ -26,9 +26,10 @@ cargo install fedora-review-digest
 
 External tools:
 
-- [`fedora-review`](https://pagure.io/FedoraReview) — you run it first
-  (`fedora-review -b <bug>`) to produce the result directory this tool
-  reads. (Running it for you is a planned follow-up.)
+- [`fedora-review`](https://pagure.io/FedoraReview) — produces the
+  result directory this tool reads. Run it yourself
+  (`fedora-review -b <bug>`) or let the `run` subcommand drive it
+  (see below); only `run` needs it installed.
 - `curl` — for the crates.io latest-version check; skip it with
   `--no-net`.
 
@@ -89,6 +90,51 @@ an optional free-form comment for the top.
 
 The finished comment is written to **stdout**, ready to paste into
 Bugzilla.
+
+## Running fedora-review for you
+
+`run` drives `fedora-review` itself, then flows straight into the
+digest above once the build finishes:
+
+```
+fedora-review-digest run <BUGID> [--copr <OWNER/PROJECT>]...
+    [--repo <URL>]... [-m <MOCK-CONFIG>] [--dry-run] [--no-digest]
+    [digest options]
+```
+
+```
+$ fedora-review-digest run 2497354 --copr decathorpe/glycin-next
+```
+
+The motivating case is a **staged group update**: nothing lands in
+Rawhide until every member package is ready, so a new package under
+review can depend on versions Rawhide doesn't have yet (e.g.
+rust-gufo-svg needing `gufo-common ≥ 2.0.0~alpha` while Rawhide still
+had 1.1). The staging COPR named in the bug makes the build resolvable:
+
+- `--copr <OWNER/PROJECT>` (repeatable, or comma-separated) enables a
+  COPR's repo for the mock build. A leading `@` marks a group project,
+  as in COPR itself. The chroot is the mock config name
+  (`fedora-rawhide-<arch>` by default), which COPR chroots mirror.
+- `--repo <URL>` (repeatable, or comma-separated) passes an arbitrary
+  repo baseurl instead.
+- `-m`/`--mock-config <NAME>` selects the mock configuration
+  (`fedora-review -m`) and thereby the COPR chroot; the default is
+  fedora-review's own, `fedora-rawhide-<host arch>`.
+- `--dry-run` prints the assembled `fedora-review` command and exits.
+- `--no-digest` stops after the build (just reports the result
+  directory).
+
+Repos reach mock via `--addrepo`, threaded through `fedora-review -o`.
+Since `-o` *replaces* fedora-review's default mock options rather than
+appending, `run` restates those defaults (`--no-cleanup-after
+--no-clean --plugin-option=tmpfs:keep_mounted=True`) before the
+`--addrepo` entries.
+
+`fedora-review` runs in `--reviews-dir` (default: the current
+directory) with its output streaming to the terminal, and the digest
+options (`--comment`, `-y`, `--no-net`, `--post`, …) apply to the
+digest that follows.
 
 ## Posting to Bugzilla
 

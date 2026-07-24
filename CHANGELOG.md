@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### fedora-review-digest: run fedora-review, with staged-dependency repos
+
+A new `run` subcommand drives `fedora-review` itself and flows the
+finished result straight into the digest, instead of only consuming
+a directory produced by hand. Its reason to exist: staged group
+updates whose dependencies live in a COPR before anything lands in
+Rawhide (e.g. rhbz#2497354, rust-gufo-svg needing gufo-common ≥
+2.0.0~alpha while Rawhide had 1.1) — `--copr OWNER/PROJECT`
+(repeatable/CSV) enables the staging COPR's repo for the mock
+build, `--repo URL` passes an arbitrary repo baseurl, and
+`-m`/`--mock-config` picks the mock config (which doubles as the
+COPR chroot name). Extra repos reach mock via `--addrepo` through
+`fedora-review -o`, restating fedora-review's default mock options
+(which `-o` would otherwise replace). `--dry-run` prints the
+assembled command; `--no-digest` stops after the build. The
+`fedora-review` binary is only required by `run` and is probed
+before starting.
+
 ### koji-lag: windows are half-open
 
 Completion windows are now half-open `[start, next-midnight)`
