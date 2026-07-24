@@ -98,7 +98,8 @@ digest above once the build finishes:
 
 ```
 fedora-review-digest run <BUGID> [--copr <OWNER/PROJECT>]...
-    [--repo <URL>]... [-m <MOCK-CONFIG>] [--dry-run] [--no-digest]
+    [--repo <URL>]... [-m <MOCK-CONFIG>] [--uniqueext <TEXT>]
+    [--mock-option <OPT>]... [--dry-run] [--no-digest]
     [digest options]
 ```
 
@@ -121,6 +122,15 @@ had 1.1). The staging COPR named in the bug makes the build resolvable:
 - `-m`/`--mock-config <NAME>` selects the mock configuration
   (`fedora-review -m`) and thereby the COPR chroot; the default is
   fedora-review's own, `fedora-rawhide-<host arch>`.
+- `--uniqueext <TEXT>` gives the review its own mock buildroot (mock
+  `--uniqueext`), so it can run alongside a mock build you already
+  have going in the same chroot — mock doesn't abort cleanly when it
+  finds the chroot in use.
+- `--mock-option <OPT>` (repeatable) appends any other mock option to
+  the `fedora-review -o` string. Each value must be a single token
+  with no spaces (`--opt=value` form), since `-o` is re-split on
+  whitespace. Values starting with a dash are accepted directly:
+  `--mock-option --nocheck` or `--mock-option=--nocheck`.
 - `--dry-run` prints the assembled `fedora-review` command and exits.
 - `--no-digest` stops after the build (just reports the result
   directory).

@@ -37,7 +37,7 @@ enum Command {
     /// Set up or verify the Bugzilla API key used by `--post`.
     Config,
     /// Run fedora-review on a bug, then digest the result.
-    Run(RunArgs),
+    Run(Box<RunArgs>),
 }
 
 #[derive(Args)]
@@ -57,6 +57,14 @@ struct RunArgs {
     /// Mock config; doubles as the COPR chroot name
     #[arg(short, long, value_name = "NAME")]
     mock_config: Option<String>,
+
+    /// Extra mock option(s), appended to fedora-review -o
+    #[arg(long, value_name = "OPT", allow_hyphen_values = true)]
+    mock_option: Vec<String>,
+
+    /// Unique mock buildroot suffix (mock --uniqueext)
+    #[arg(long, value_name = "TEXT")]
+    uniqueext: Option<String>,
 
     /// Print the fedora-review command without running it
     #[arg(long)]
@@ -164,12 +172,14 @@ fn cmd_config() -> Result<(), String> {
 /// COPR ahead of Rawhide), then flow straight into the digest —
 /// a mock build takes minutes, so its result shouldn't dead-end.
 fn cmd_run(args: &RunArgs) -> Result<(), String> {
-    let review_args = runner::build_args(
-        &args.bug,
-        &args.copr,
-        &args.repo,
-        args.mock_config.as_deref(),
-    )?;
+    let review_args = runner::build_args(&runner::RunSpec {
+        bug: args.bug.clone(),
+        coprs: args.copr.clone(),
+        repos: args.repo.clone(),
+        mock_config: args.mock_config.clone(),
+        uniqueext: args.uniqueext.clone(),
+        mock_options: args.mock_option.clone(),
+    })?;
     if args.dry_run {
         println!("{}", runner::display_command(&review_args));
         return Ok(());

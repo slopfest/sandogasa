@@ -49,31 +49,66 @@ pub fn chroot_name(mock_config: Option<&str>) -> String {
     }
 }
 
+/// Everything that shapes the `fedora-review` invocation.
+#[derive(Default)]
+pub struct RunSpec {
+    pub bug: String,
+    /// COPRs as `owner/project`, resolved to repo URLs per chroot.
+    pub coprs: Vec<String>,
+    /// Raw repo baseurls, passed through as-is.
+    pub repos: Vec<String>,
+    pub mock_config: Option<String>,
+    /// mock `--uniqueext` suffix, so the review's buildroot doesn't
+    /// collide with a mock build already running in the same chroot
+    /// (mock doesn't abort cleanly when the chroot is in use).
+    pub uniqueext: Option<String>,
+    /// Arbitrary extra mock options, appended verbatim.
+    pub mock_options: Vec<String>,
+}
+
 /// Assemble the `fedora-review` argument vector.
-pub fn build_args(
-    bug: &str,
-    coprs: &[String],
-    repos: &[String],
-    mock_config: Option<&str>,
-) -> Result<Vec<String>, String> {
+pub fn build_args(spec: &RunSpec) -> Result<Vec<String>, String> {
+    let bug = &spec.bug;
     if bug.is_empty() || !bug.bytes().all(|b| b.is_ascii_digit()) {
         return Err(format!("'{bug}' is not a Bugzilla bug id"));
     }
     let mut args = vec!["-b".to_string(), bug.to_string()];
-    if let Some(cfg) = mock_config {
+    if let Some(cfg) = &spec.mock_config {
         args.push("-m".to_string());
         args.push(cfg.to_string());
     }
-    let chroot = chroot_name(mock_config);
-    let mut urls: Vec<String> = Vec::new();
-    for copr in coprs {
-        urls.push(copr_repo_url(copr, &chroot)?);
+    let chroot = chroot_name(spec.mock_config.as_deref());
+    // Everything destined for `fedora-review -o` (one space-separated
+    // string that fedora-review re-splits into mock arguments — so no
+    // entry may itself contain whitespace).
+    let mut extra: Vec<String> = Vec::new();
+    for copr in &spec.coprs {
+        extra.push(format!("--addrepo={}", copr_repo_url(copr, &chroot)?));
     }
-    urls.extend(repos.iter().cloned());
-    if !urls.is_empty() {
+    for url in &spec.repos {
+        extra.push(format!("--addrepo={url}"));
+    }
+    if let Some(ext) = &spec.uniqueext {
+        if ext.is_empty() || ext.chars().any(|c| c.is_whitespace()) {
+            return Err(format!(
+                "invalid --uniqueext '{ext}': must be a non-empty suffix without whitespace"
+            ));
+        }
+        extra.push(format!("--uniqueext={ext}"));
+    }
+    for opt in &spec.mock_options {
+        if opt.is_empty() || opt.chars().any(|c| c.is_whitespace()) {
+            return Err(format!(
+                "invalid mock option '{opt}': fedora-review -o splits on whitespace, so each option must be a single token (use --opt=value form)"
+            ));
+        }
+        extra.push(opt.clone());
+    }
+    if !extra.is_empty() {
         let mut mock_options = DEFAULT_MOCK_OPTIONS.to_string();
-        for url in &urls {
-            mock_options.push_str(&format!(" --addrepo={url}"));
+        for entry in &extra {
+            mock_options.push(' ');
+            mock_options.push_str(entry);
         }
         args.push("-o".to_string());
         args.push(mock_options);
@@ -154,9 +189,16 @@ mod tests {
         assert!(chroot_name(None).starts_with("fedora-rawhide-"));
     }
 
+    fn spec(bug: &str) -> RunSpec {
+        RunSpec {
+            bug: bug.to_string(),
+            ..RunSpec::default()
+        }
+    }
+
     #[test]
     fn build_args_plain_bug_has_no_mock_options() {
-        let args = build_args("2497354", &[], &[], None).unwrap();
+        let args = build_args(&spec("2497354")).unwrap();
         assert_eq!(args, vec!["-b", "2497354"]);
     }
 
@@ -164,8 +206,12 @@ mod tests {
     fn build_args_preserves_default_mock_options() {
         // fedora-review's -o REPLACES its defaults; ours must
         // restate them ahead of the addrepo entries.
-        let coprs = vec!["decathorpe/glycin-next".to_string()];
-        let args = build_args("2497354", &coprs, &[], Some("fedora-rawhide-x86_64")).unwrap();
+        let args = build_args(&RunSpec {
+            coprs: vec!["decathorpe/glycin-next".to_string()],
+            mock_config: Some("fedora-rawhide-x86_64".to_string()),
+            ..spec("2497354")
+        })
+        .unwrap();
         assert_eq!(args[0..4], ["-b", "2497354", "-m", "fedora-rawhide-x86_64"]);
         assert_eq!(args[4], "-o");
         assert!(args[5].starts_with(DEFAULT_MOCK_OPTIONS), "{}", args[5]);
@@ -183,18 +229,76 @@ mod tests {
 
     #[test]
     fn build_args_mixes_coprs_and_raw_repos() {
-        let coprs = vec!["a/b".to_string()];
-        let repos = vec!["https://example.org/repo/".to_string()];
-        let args = build_args("1", &coprs, &repos, None).unwrap();
+        let args = build_args(&RunSpec {
+            coprs: vec!["a/b".to_string()],
+            repos: vec!["https://example.org/repo/".to_string()],
+            ..spec("1")
+        })
+        .unwrap();
         let opts = &args[3];
         assert_eq!(opts.matches("--addrepo=").count(), 2);
         assert!(opts.contains("--addrepo=https://example.org/repo/"));
     }
 
     #[test]
+    fn build_args_uniqueext_alone_still_emits_mock_options() {
+        // A parallel-buildroot suffix without any extra repos must
+        // still produce -o (with the defaults restated).
+        let args = build_args(&RunSpec {
+            uniqueext: Some("review".to_string()),
+            ..spec("1")
+        })
+        .unwrap();
+        assert_eq!(args[2], "-o");
+        assert!(args[3].starts_with(DEFAULT_MOCK_OPTIONS));
+        assert!(args[3].ends_with(" --uniqueext=review"), "{}", args[3]);
+    }
+
+    #[test]
+    fn build_args_appends_arbitrary_mock_options() {
+        let args = build_args(&RunSpec {
+            mock_options: vec!["--isolation=simple".to_string(), "--nocheck".to_string()],
+            ..spec("1")
+        })
+        .unwrap();
+        assert!(
+            args[3].ends_with(" --isolation=simple --nocheck"),
+            "{}",
+            args[3]
+        );
+    }
+
+    #[test]
+    fn build_args_rejects_whitespace_in_o_entries() {
+        // fedora-review re-splits the -o string on whitespace, so a
+        // spaced entry would silently become two mock arguments.
+        assert!(
+            build_args(&RunSpec {
+                uniqueext: Some("a b".to_string()),
+                ..spec("1")
+            })
+            .is_err()
+        );
+        assert!(
+            build_args(&RunSpec {
+                uniqueext: Some(String::new()),
+                ..spec("1")
+            })
+            .is_err()
+        );
+        assert!(
+            build_args(&RunSpec {
+                mock_options: vec!["--plugin-option a".to_string()],
+                ..spec("1")
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
     fn build_args_rejects_non_numeric_bug() {
-        assert!(build_args("abc", &[], &[], None).is_err());
-        assert!(build_args("", &[], &[], None).is_err());
+        assert!(build_args(&spec("abc")).is_err());
+        assert!(build_args(&spec("")).is_err());
     }
 
     #[test]

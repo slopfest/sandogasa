@@ -20,6 +20,13 @@ assembled command; `--no-digest` stops after the build. The
 `fedora-review` binary is only required by `run` and is probed
 before starting.
 
+`run` also takes `--uniqueext SUFFIX` (mock `--uniqueext`), giving
+the review its own buildroot so it can proceed alongside a mock
+build already running in the same chroot (mock doesn't abort
+cleanly when the chroot is in use), and a general
+`--mock-option OPT` (repeatable) that appends any other
+single-token mock option to the `-o` string.
+
 ### koji-lag: windows are half-open
 
 Completion windows are now half-open `[start, next-midnight)`
