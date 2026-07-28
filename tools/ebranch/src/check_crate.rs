@@ -14,10 +14,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::dag;
 
-/// Upper bound on any single crates.io request — a hang-catcher rather
-/// than a latency cap (reqwest's default client has no timeout).
-const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
 // ---- Public types ----
 
 /// Options for the check-crate command.
@@ -371,19 +367,7 @@ pub fn render_report(report: &CheckCrateReport) -> String {
     if !report.transitive_build_order.is_empty() {
         let phases = report.full_build_phases();
 
-        // Build a version lookup: crate name → version_req.
-        let versions: std::collections::HashMap<&str, &str> = report
-            .transitive_missing
-            .iter()
-            .map(|d| (d.name.as_str(), d.version_req.as_str()))
-            .chain(
-                report
-                    .dependencies
-                    .iter()
-                    .filter(|d| matches!(d.status, DepStatus::Missing))
-                    .map(|d| (d.dep.name.as_str(), d.dep.version_req.as_str())),
-            )
-            .collect();
+        let versions = missing_versions(report);
 
         let total: usize = phases.iter().map(|p| p.packages.len()).sum();
         let _ = writeln!(
@@ -429,19 +413,7 @@ pub fn render_report(report: &CheckCrateReport) -> String {
 /// package to its dependencies (what must be built/reviewed first).
 /// Nodes are grouped by build phase when available.
 pub fn print_dot(report: &CheckCrateReport) {
-    // Build a version lookup: crate name → version_req.
-    let versions: std::collections::HashMap<&str, &str> = report
-        .transitive_missing
-        .iter()
-        .map(|d| (d.name.as_str(), d.version_req.as_str()))
-        .chain(
-            report
-                .dependencies
-                .iter()
-                .filter(|d| matches!(d.status, DepStatus::Missing))
-                .map(|d| (d.dep.name.as_str(), d.dep.version_req.as_str())),
-        )
-        .collect();
+    let versions = missing_versions(report);
 
     println!("digraph {{");
     println!("  rankdir=BT;");
@@ -524,6 +496,23 @@ pub fn load_report(path: &str) -> Result<CheckCrateReport, String> {
 
 fn opt_label(d: &DepResult) -> &str {
     if d.dep.optional { ", optional" } else { "" }
+}
+
+/// Version lookup for crates that need building: crate name →
+/// version_req, covering transitive-missing and direct missing deps.
+fn missing_versions(report: &CheckCrateReport) -> std::collections::HashMap<&str, &str> {
+    report
+        .transitive_missing
+        .iter()
+        .map(|d| (d.name.as_str(), d.version_req.as_str()))
+        .chain(
+            report
+                .dependencies
+                .iter()
+                .filter(|d| matches!(d.status, DepStatus::Missing))
+                .map(|d| (d.dep.name.as_str(), d.dep.version_req.as_str())),
+        )
+        .collect()
 }
 
 /// Count unique crate names in a list of dep results.
@@ -744,25 +733,31 @@ struct VersionInfo {
     features: std::collections::HashMap<String, Vec<String>>,
 }
 
+/// Shared HTTP client for crates.io requests, built once.
+fn client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        sandogasa_cli::http::builder("sandogasa-ebranch")
+            .build()
+            .expect("failed to create HTTP client")
+    })
+}
+
+/// GET a crates.io API URL and deserialize the JSON response.
+async fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
+    let what = format!("GET {url}");
+    let resp = client()
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("{what}: {e}"))?;
+    sandogasa_cli::http::json_ok(resp, &what).await
+}
+
 /// Fetch all non-yanked versions of a crate from crates.io.
 async fn fetch_versions(name: &str) -> Result<Vec<String>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}");
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .user_agent("sandogasa-ebranch")
-        .build()
-        .map_err(|e| format!("failed to create HTTP client: {e}"))?;
-    let resp: CrateInfoResponse = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("failed to fetch crate info: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("crates.io error: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("failed to parse crate info: {e}"))?;
-
+    let resp: CrateInfoResponse = get_json(&url).await?;
     Ok(resp
         .versions
         .into_iter()
@@ -882,22 +877,7 @@ async fn fetch_features(
     version: &str,
 ) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}");
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .user_agent("sandogasa-ebranch")
-        .build()
-        .map_err(|e| format!("failed to create HTTP client: {e}"))?;
-    let resp: VersionInfoResponse = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("failed to fetch version info: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("crates.io error: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("failed to parse version info: {e}"))?;
-
+    let resp: VersionInfoResponse = get_json(&url).await?;
     Ok(resp.version.features)
 }
 
@@ -939,21 +919,7 @@ async fn resolve_matching_version(name: &str, version_req: &str) -> Result<Strin
 /// defaults as non-optional (since RPMs are built with defaults).
 async fn fetch_dependencies(name: &str, version: &str) -> Result<Vec<CrateDep>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}/dependencies");
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .user_agent("sandogasa-ebranch")
-        .build()
-        .map_err(|e| format!("failed to create HTTP client: {e}"))?;
-    let resp: DepsResponse = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("failed to fetch dependencies: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("crates.io error: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("failed to parse dependencies: {e}"))?;
+    let resp: DepsResponse = get_json(&url).await?;
 
     // Resolve default features to find which optional deps are
     // activated by default (RPMs are built with default features).

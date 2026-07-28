@@ -220,7 +220,6 @@ fn confirm_plan(
     text: &str,
     decisions: &[BugDecision],
 ) -> Result<bool, String> {
-    use std::io::{BufRead, Write};
     eprintln!("\nVote plan for {alias}:");
     eprintln!("  overall karma: {} ({reason})", fmt_karma(karma));
     if !text.is_empty() {
@@ -245,15 +244,7 @@ fn confirm_plan(
             );
         }
     }
-    eprint!("Post this comment? [Y/n]: ");
-    std::io::stderr().flush().map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(|e| e.to_string())?;
-    let answer = line.trim();
-    Ok(answer.is_empty() || answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
+    sandogasa_cli::confirm("Post this comment?", true).map_err(|e| e.to_string())
 }
 
 /// Ensure a usable bodhi CLI session exists, driving an

@@ -661,6 +661,38 @@ enum Mode {
     FindCycles,
 }
 
+/// Human-readable label for a branch/repo pair. The caller has
+/// already validated that at least one of the two is set.
+fn branch_repo_label(branch: Option<&str>, repo: Option<&str>) -> String {
+    match (branch, repo) {
+        (Some(b), Some(r)) => format!("{b} ({r})"),
+        (Some(b), None) => b.to_string(),
+        (None, Some(r)) => r.to_string(),
+        (None, None) => unreachable!(),
+    }
+}
+
+/// Configure the global rayon thread pool when `--jobs` is nonzero.
+fn configure_jobs(jobs: usize) {
+    if jobs > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(jobs)
+            .build_global()
+            .expect("failed to configure thread pool");
+    }
+}
+
+/// Map a unit result to an exit code, printing any error to stderr.
+fn exit_code(result: Result<(), String>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Build branch-request `Options` from the shared flags,
 /// resolving the API key (CLI flag → env → config file).
 fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Options, String> {
@@ -697,13 +729,7 @@ fn handle_branch_request_command(cmd: &Command) -> Option<ExitCode> {
             .and_then(|opts| branch_request::run_escalate(&a.toml, &opts)),
         _ => return None,
     };
-    Some(match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
-    })
+    Some(exit_code(result))
 }
 
 /// Clear the fedrq + libdnf5 repo metadata caches if `--refresh` was passed.
@@ -730,13 +756,7 @@ fn main() -> ExitCode {
     // config and check-pkg-reviews don't need fedrq.
     if matches!(cli.command, Command::Config) {
         let rt = tokio::runtime::Runtime::new().expect("failed to create async runtime");
-        return match rt.block_on(config::cmd_config()) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::FAILURE
-            }
-        };
+        return exit_code(rt.block_on(config::cmd_config()));
     }
 
     if let Command::CheckPkgReviews(a) = &cli.command {
@@ -754,13 +774,7 @@ fn main() -> ExitCode {
             dry_run: a.dry_run,
             verbose: a.verbose,
         };
-        return match review_deps::check_pkg_reviews(&opts) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::FAILURE
-            }
-        };
+        return exit_code(review_deps::check_pkg_reviews(&opts));
     }
 
     // Branch-request subcommands talk to Bugzilla, not fedrq.
@@ -785,18 +799,8 @@ fn main() -> ExitCode {
         if let Err(code) = handle_refresh(a.refresh, a.verbose) {
             return code;
         }
-        if a.jobs > 0 {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(a.jobs)
-                .build_global()
-                .expect("failed to configure thread pool");
-        }
-        let label = match (&a.branch, &a.repo) {
-            (Some(b), Some(r)) => format!("{b} ({r})"),
-            (Some(b), None) => b.clone(),
-            (None, Some(r)) => r.clone(),
-            (None, None) => unreachable!(),
-        };
+        configure_jobs(a.jobs);
+        let label = branch_repo_label(a.branch.as_deref(), a.repo.as_deref());
         let opts = check_crate::CheckCrateOptions {
             branch: a.branch.clone(),
             repo: a.repo.clone(),
@@ -920,12 +924,7 @@ fn main() -> ExitCode {
         if let Err(code) = handle_refresh(a.refresh, a.verbose) {
             return code;
         }
-        if a.jobs > 0 {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(a.jobs)
-                .build_global()
-                .expect("failed to configure thread pool");
-        }
+        configure_jobs(a.jobs);
         let opts = check_update::CheckUpdateOptions {
             branch: a.branch.clone(),
             repo: a.repo.clone(),
@@ -1008,7 +1007,7 @@ fn main() -> ExitCode {
                             );
                             return ExitCode::FAILURE;
                         }
-                        match submit::confirm_default_no("submit anyway?") {
+                        match sandogasa_cli::confirm("submit anyway?", false) {
                             Ok(true) => {}
                             Ok(false) => {
                                 eprintln!("aborted: update not submitted");
@@ -1097,12 +1096,7 @@ fn main() -> ExitCode {
         return code;
     }
 
-    if args.jobs > 0 {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(args.jobs)
-            .build_global()
-            .expect("failed to configure thread pool");
-    }
+    configure_jobs(args.jobs);
 
     // When the source repo is a Koji repo, create a @koji-src:
     // companion for source RPM queries (BuildRequires, subpkg Requires).
@@ -1153,18 +1147,8 @@ fn main() -> ExitCode {
             repo: None,
         }),
     };
-    let source_label = match (&args.source, &args.source_repo) {
-        (Some(b), Some(r)) => format!("{b} ({r})"),
-        (Some(b), None) => b.clone(),
-        (None, Some(r)) => r.clone(),
-        (None, None) => unreachable!(),
-    };
-    let target_label = match (&args.target, &args.target_repo) {
-        (Some(b), Some(r)) => format!("{b} ({r})"),
-        (Some(b), None) => b.clone(),
-        (None, Some(r)) => r.clone(),
-        (None, None) => unreachable!(),
-    };
+    let source_label = branch_repo_label(args.source.as_deref(), args.source_repo.as_deref());
+    let target_label = branch_repo_label(args.target.as_deref(), args.target_repo.as_deref());
     let options = ResolveOptions {
         max_depth: args.max_depth,
         verbose: args.verbose,

@@ -7,7 +7,6 @@
 //! updates the Blocks/Depends On fields to match the dependency graph.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::io::Write;
 
 use sandogasa_bugzilla::BzClient;
 
@@ -178,14 +177,9 @@ async fn check_pkg_reviews_async(opts: &CheckPkgReviewsOptions) -> Result<(), St
     }
 
     // Prompt for confirmation.
-    print!("\nApply changes? [y/N] ");
-    std::io::stdout().flush().ok();
-    let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .map_err(|e| format!("failed to read input: {e}"))?;
-
-    if input.trim().to_lowercase() != "y" {
+    if !sandogasa_cli::confirm("\nApply changes?", false)
+        .map_err(|e| format!("failed to read input: {e}"))?
+    {
         println!("Aborted.");
         return Ok(());
     }
@@ -291,12 +285,8 @@ fn crate_edges_to_pkg_edges(
     for dep in &report.transitive_missing {
         crate_to_pkg.insert(&dep.name, &dep.package);
     }
-    for dep in &report.dependencies {
-        if matches!(dep.status, DepStatus::Missing) {
-            // Direct deps don't have a package field; derive it.
-            // We'll use the pkg_to_crate map in the caller instead.
-        }
-    }
+    // Direct missing deps have no package field; to_pkg derives the
+    // `rust-<crate>` name as its fallback.
 
     let to_pkg = |name: &str| -> String {
         crate_to_pkg

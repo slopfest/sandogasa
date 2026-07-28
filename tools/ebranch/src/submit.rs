@@ -58,21 +58,6 @@ pub fn resolve_notes(inline: Option<&str>, file: Option<&Path>) -> Result<String
     Ok(notes)
 }
 
-/// Ask a yes/no question on stderr, defaulting to **no** — used to
-/// override a non-passing check.
-pub fn confirm_default_no(question: &str) -> Result<bool, String> {
-    use std::io::{BufRead, Write};
-    eprint!("{question} [y/N]: ");
-    std::io::stderr().flush().map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(|e| e.to_string())?;
-    let answer = line.trim();
-    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
-}
-
 /// Format the submission plan shown for confirmation. Leads with the
 /// package list — the whole point of checking before submitting is
 /// spotting a subpackage update that is accidentally missing one.
@@ -122,17 +107,8 @@ fn plan_text(tag: &str, packages: &[String], opts: &SubmitOptions) -> String {
 
 /// Print the submission plan and confirm (default yes).
 fn confirm_plan(tag: &str, packages: &[String], opts: &SubmitOptions) -> Result<bool, String> {
-    use std::io::{BufRead, Write};
     eprint!("{}", plan_text(tag, packages, opts));
-    eprint!("Submit this update? [Y/n]: ");
-    std::io::stderr().flush().map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(|e| e.to_string())?;
-    let answer = line.trim();
-    Ok(answer.is_empty() || answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
+    sandogasa_cli::confirm("Submit this update?", true).map_err(|e| e.to_string())
 }
 
 /// Submit the side tag to Bodhi. `packages` are the update's source

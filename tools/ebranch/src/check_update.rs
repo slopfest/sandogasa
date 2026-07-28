@@ -294,13 +294,6 @@ fn parse_copr_spec(input: &str) -> Option<(String, String)> {
         .then(|| (owner.to_string(), project.to_string()))
 }
 
-/// Extract the source package name from an NVR string.
-///
-/// E.g. "rust-uucore-0.0.28-2.el9" → "rust-uucore"
-pub fn parse_nvr(nvr: &str) -> Option<&str> {
-    sandogasa_koji::parse_nvr_name(nvr)
-}
-
 /// List NVRs in a Koji tag via `koji list-tagged --quiet`.
 pub fn koji_list_tagged(tag: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
     // `--latest` (via `list_tagged`) so a side tag that accumulated
@@ -312,14 +305,6 @@ pub fn koji_list_tagged(tag: &str, profile: Option<&str>) -> Result<Vec<String>,
         .into_iter()
         .map(|b| b.nvr)
         .collect())
-}
-
-/// List binary RPM names for a build via `koji buildinfo`.
-///
-/// Parses the RPMs section, returning binary package names
-/// (excluding `.src.rpm` entries).
-pub fn koji_build_rpms(nvr: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
-    sandogasa_koji::build_rpms(nvr, profile)
 }
 
 /// Run the check-update analysis.
@@ -421,7 +406,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
     // Extract unique source package names from NVRs.
     let updated_packages: Vec<String> = nvrs
         .iter()
-        .filter_map(|nvr| parse_nvr(nvr))
+        .filter_map(|nvr| sandogasa_koji::parse_nvr_name(nvr))
         .map(|s| s.to_string())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -548,59 +533,40 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             testing_fedrq.subpkgs_nvrs(src).unwrap_or_default()
         });
 
-    if has_testing {
-        if opts.verbose {
-            eprintln!("[check-update] using @testing for new provides");
-        }
-        // Get binary RPM names for installability checking.
-        let testing_bins: Vec<String> = updated_packages
-            .iter()
-            .flat_map(|pkg| filter_none(testing_fedrq.subpkgs_names(pkg).unwrap_or_default()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        let changed =
-            compute_changed_provides_via_subpkgs(&updated_packages, &stable_fedrq, &testing_fedrq);
-        return run_provides_analysis(
-            input,
-            &branch,
-            &updated_packages,
-            &changes,
-            &testing_bins,
-            changed,
-            vec![],
-            &stable_fedrq,
-            &testing_fedrq,
-            opts,
-        );
-    }
-
-    // The COPR path mirrors the @testing one: the repo indexes source
+    // The COPR path mirrors the @testing one: both repos index source
     // RPMs (unlike koji side-tag repos), so subpackage queries work
     // directly, and COPR regenerates repodata itself after each build —
     // no koji staleness/regen machinery.
-    if let Some(ref copr_fq) = copr_fedrq {
+    let new_repo = if has_testing {
+        Some((&testing_fedrq, "using @testing for new provides"))
+    } else {
+        copr_fedrq
+            .as_ref()
+            .map(|fq| (fq, "comparing provides via the COPR repo"))
+    };
+    if let Some((new_fq, how)) = new_repo {
         if opts.verbose {
-            eprintln!("[check-update] comparing provides via the COPR repo");
+            eprintln!("[check-update] {how}");
         }
-        let copr_bins: Vec<String> = updated_packages
+        // Get binary RPM names for installability checking.
+        let new_bins: Vec<String> = updated_packages
             .iter()
-            .flat_map(|pkg| filter_none(copr_fq.subpkgs_names(pkg).unwrap_or_default()))
+            .flat_map(|pkg| filter_none(new_fq.subpkgs_names(pkg).unwrap_or_default()))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
         let changed =
-            compute_changed_provides_via_subpkgs(&updated_packages, &stable_fedrq, copr_fq);
+            compute_changed_provides_via_subpkgs(&updated_packages, &stable_fedrq, new_fq);
         return run_provides_analysis(
             input,
             &branch,
             &updated_packages,
             &changes,
-            &copr_bins,
+            &new_bins,
             changed,
             vec![],
             &stable_fedrq,
-            copr_fq,
+            new_fq,
             opts,
         );
     }
@@ -615,7 +581,9 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         // Binary RPM names from koji (for installability checking).
         let koji_bins: Vec<String> = nvrs
             .iter()
-            .flat_map(|nvr| koji_build_rpms(nvr, opts.koji_profile.as_deref()).unwrap_or_default())
+            .flat_map(|nvr| {
+                sandogasa_koji::build_rpms(nvr, opts.koji_profile.as_deref()).unwrap_or_default()
+            })
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -1682,7 +1650,7 @@ fn compute_changed_provides_via_koji(
     let binary_names: Vec<String> = nvrs
         .iter()
         .flat_map(|nvr| {
-            koji_build_rpms(nvr, koji_profile).unwrap_or_else(|e| {
+            sandogasa_koji::build_rpms(nvr, koji_profile).unwrap_or_else(|e| {
                 if verbose {
                     eprintln!(
                         "[check-update] warning: \
@@ -2101,27 +2069,9 @@ fn check_side_tag_staleness(
     warnings
 }
 
-/// Interpret a y/n answer line, falling back to `default_yes` on
-/// empty input.
-fn parse_confirm(line: &str, default_yes: bool) -> bool {
-    match line.trim() {
-        "" => default_yes,
-        s => s.eq_ignore_ascii_case("y") || s.eq_ignore_ascii_case("yes"),
-    }
-}
-
 /// Prompt on stderr and read a y/n answer from stdin.
 fn confirm(prompt: &str, default_yes: bool) -> Result<bool, String> {
-    use std::io::{BufRead, Write};
-    let hint = if default_yes { "Y/n" } else { "y/N" };
-    eprint!("{prompt} [{hint}]: ");
-    std::io::stderr().flush().map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(|e| e.to_string())?;
-    Ok(parse_confirm(&line, default_yes))
+    sandogasa_cli::confirm(prompt, default_yes).map_err(|e| e.to_string())
 }
 
 /// Interactively resolve stale side-tag repodata: offer to run
@@ -2509,62 +2459,6 @@ mod tests {
         // It actually wrapped (more than one line) and lost no words.
         assert!(wrapped.lines().count() > 1);
         assert_eq!(unquote(&wrapped).split_whitespace().count(), 9);
-    }
-
-    // --- parse_confirm ---
-
-    #[test]
-    fn parse_confirm_empty_uses_default() {
-        assert!(parse_confirm("", true));
-        assert!(parse_confirm("\n", true));
-        assert!(!parse_confirm("", false));
-        assert!(!parse_confirm("  \n", false));
-    }
-
-    #[test]
-    fn parse_confirm_explicit_yes() {
-        for answer in ["y", "Y", "yes", "YES", " y \n"] {
-            assert!(parse_confirm(answer, false), "{answer:?}");
-        }
-    }
-
-    #[test]
-    fn parse_confirm_explicit_no() {
-        for answer in ["n", "N", "no", "anything-else"] {
-            assert!(!parse_confirm(answer, true), "{answer:?}");
-        }
-    }
-
-    // --- parse_nvr ---
-
-    #[test]
-    fn parse_nvr_standard() {
-        assert_eq!(parse_nvr("foo-1.0-1.fc42"), Some("foo"));
-    }
-
-    #[test]
-    fn parse_nvr_hyphenated_name() {
-        assert_eq!(parse_nvr("rust-uucore-0.0.28-2.el9"), Some("rust-uucore"));
-    }
-
-    #[test]
-    fn parse_nvr_many_hyphens() {
-        assert_eq!(parse_nvr("python-a-b-c-1.2.3-4.fc42"), Some("python-a-b-c"));
-    }
-
-    #[test]
-    fn parse_nvr_too_short() {
-        assert_eq!(parse_nvr("foo-1.0"), None);
-    }
-
-    #[test]
-    fn parse_nvr_empty() {
-        assert_eq!(parse_nvr(""), None);
-    }
-
-    #[test]
-    fn parse_nvr_no_hyphens() {
-        assert_eq!(parse_nvr("foobar"), None);
     }
 
     // --- provide_name ---

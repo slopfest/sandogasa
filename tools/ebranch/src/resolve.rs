@@ -438,12 +438,6 @@ fn classify_against_base(
     }
 }
 
-/// Interpret an override-prompt answer (default **no** — EPEL must not
-/// replace base packages, so declining is the safe choice).
-fn parse_yes(line: &str) -> bool {
-    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
-}
-
 /// A dep classified as blocked, pending an override decision at the
 /// sequential merge point (prompts can't run inside the parallel BFS).
 struct BlockedCandidate {
@@ -484,7 +478,6 @@ fn decide_override(
 /// Ask (on stderr/stdin) whether to descend into a base-distro-blocked
 /// provider as an alternate-package override.
 fn prompt_override(candidate: &BlockedCandidate, parent: &str, base_branch: &str) -> bool {
-    use std::io::{BufRead, Write};
     eprintln!(
         "{} is in {base_branch} (base distro; EPEL must not replace it).",
         candidate.provider
@@ -493,13 +486,9 @@ fn prompt_override(candidate: &BlockedCandidate, parent: &str, base_branch: &str
         "  needed by {parent}: {} — {base_branch} has {}",
         candidate.dep, candidate.base_vr
     );
-    eprint!("Descend as an alternate-package override? [y/N]: ");
-    let _ = std::io::stderr().flush();
-    let mut line = String::new();
-    if std::io::stdin().lock().read_line(&mut line).is_err() {
-        return false;
-    }
-    parse_yes(&line)
+    // Default **no** — EPEL must not replace base packages, so
+    // declining (also on a read error) is the safe choice.
+    sandogasa_cli::confirm("Descend as an alternate-package override?", false).unwrap_or(false)
 }
 
 /// Merge one blocked map into another, unioning `required_by` for
@@ -530,6 +519,23 @@ fn record_blocked(
         })
         .required_by
         .insert(parent.to_string());
+}
+
+/// Fetch a dep's resolution from a cache map, querying `resolve` on a
+/// miss and keeping the first real provider (fedrq may return a
+/// literal "(none)", which is filtered out).
+fn cached_first(
+    map: &DashMap<String, Option<String>>,
+    dep: &str,
+    resolve: impl FnOnce(&str) -> Result<Vec<String>, String>,
+) -> Option<String> {
+    map.entry(dep.to_string())
+        .or_insert_with(|| {
+            resolve(dep)
+                .ok()
+                .and_then(|v| v.into_iter().find(|s| s != "(none)"))
+        })
+        .clone()
 }
 
 /// Resolve the full transitive closure of missing build dependencies.
@@ -676,31 +682,15 @@ fn resolve_closure_with_cache(
                         continue;
                     }
 
-                    let target_resolved = cache
-                        .target
-                        .entry(dep_str.to_string())
-                        .or_insert_with(|| {
-                            resolver
-                                .resolve_target(dep_str)
-                                .ok()
-                                .and_then(|v| v.into_iter().find(|s| s != "(none)"))
-                        })
-                        .clone();
+                    let target_resolved =
+                        cached_first(&cache.target, dep_str, |d| resolver.resolve_target(d));
 
                     if target_resolved.is_some() {
                         continue;
                     }
 
-                    let source_resolved = cache
-                        .source
-                        .entry(dep_str.to_string())
-                        .or_insert_with(|| {
-                            resolver
-                                .resolve_source(dep_str)
-                                .ok()
-                                .and_then(|v| v.into_iter().find(|s| s != "(none)"))
-                        })
-                        .clone();
+                    let source_resolved =
+                        cached_first(&cache.source, dep_str, |d| resolver.resolve_source(d));
 
                     let Some(provider) = source_resolved else {
                         continue;
@@ -897,31 +887,15 @@ fn check_installability_with_cache(
                     continue;
                 }
 
-                let target_resolved = cache
-                    .target
-                    .entry(dep_str.to_string())
-                    .or_insert_with(|| {
-                        resolver
-                            .resolve_target(dep_str)
-                            .ok()
-                            .and_then(|v| v.into_iter().find(|s| s != "(none)"))
-                    })
-                    .clone();
+                let target_resolved =
+                    cached_first(&cache.target, dep_str, |d| resolver.resolve_target(d));
 
                 if target_resolved.is_some() {
                     continue;
                 }
 
-                let source_resolved = cache
-                    .source
-                    .entry(dep_str.to_string())
-                    .or_insert_with(|| {
-                        resolver
-                            .resolve_source(dep_str)
-                            .ok()
-                            .and_then(|v| v.into_iter().find(|s| s != "(none)"))
-                    })
-                    .clone();
+                let source_resolved =
+                    cached_first(&cache.source, dep_str, |d| resolver.resolve_source(d));
 
                 match &source_resolved {
                     Some(provider) if provider == *pkg => {
@@ -1072,12 +1046,7 @@ pub fn resolve_with_installability(
         }
 
         // Keep base-blocked runtime deps from every round.
-        for (provider, entry) in &report.blocked_by_base {
-            install_blocked
-                .entry(provider.clone())
-                .and_modify(|e| e.required_by.extend(entry.required_by.iter().cloned()))
-                .or_insert_with(|| entry.clone());
-        }
+        merge_blocked(&mut install_blocked, report.blocked_by_base.clone());
 
         if report.additional_packages.is_empty() {
             // Fixed point reached. Restore original requested list.
@@ -1616,15 +1585,6 @@ packages = ["a"]
         assert!(!constraint_satisfied("1.2-2.el10", ">=", "1.2-3"));
         assert!(constraint_satisfied("2.0-1.el10", ">", "1.9"));
         assert!(constraint_satisfied("1.0-1.el10", "<=", "1.0"));
-    }
-
-    #[test]
-    fn parse_yes_defaults_no() {
-        assert!(parse_yes("y"));
-        assert!(parse_yes("Yes"));
-        assert!(!parse_yes(""));
-        assert!(!parse_yes("n"));
-        assert!(!parse_yes("maybe"));
     }
 
     #[test]
