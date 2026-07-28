@@ -700,36 +700,11 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
     })
 }
 
-/// Word-wrap `text` to `width` columns and prefix every line with
-/// `prefix` (e.g. `"> "` for a Markdown blockquote). Collapses runs of
-/// whitespace; never splits a word. Keeps notes readable both in the
-/// terminal and as a wrapped blockquote in a Bodhi comment.
-fn wrap_prefixed(text: &str, prefix: &str, width: usize) -> String {
-    let mut out = String::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        if !line.is_empty() && prefix.len() + line.len() + 1 + word.len() > width {
-            out.push_str(prefix);
-            out.push_str(&line);
-            out.push('\n');
-            line.clear();
-        }
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        line.push_str(word);
-    }
-    if !line.is_empty() {
-        out.push_str(prefix);
-        out.push_str(&line);
-    }
-    out
-}
-
 /// The "> **Note:** …" block shown when a full Provides comparison
 /// couldn't run, tailored to [`SkipReason`] so it explains the actual
 /// gap rather than always blaming a missing side tag. The body is plain
-/// prose; [`wrap_prefixed`] handles the blockquote prefix and wrapping.
+/// prose; [`sandogasa_cli::wrap_prefixed`] handles the blockquote
+/// prefix and wrapping.
 fn skip_note(report: &CheckUpdateReport) -> String {
     let body = match &report.skip_reason {
         Some(SkipReason::TestingLag { expected }) => {
@@ -768,7 +743,7 @@ fn skip_note(report: &CheckUpdateReport) -> String {
                  are listed below for manual review."
             .to_string(),
     };
-    wrap_prefixed(&body, "> ", 76)
+    sandogasa_cli::wrap_prefixed(&body, "> ", 76)
 }
 
 /// In non-detailed output, how many list items to show before
@@ -2447,18 +2422,6 @@ mod tests {
         let bar = md.find("(bar)").unwrap();
         let foo = md.find("(foo)").unwrap();
         assert!(bar < foo, "expected bar before foo, got:\n{md}");
-    }
-
-    #[test]
-    fn wrap_prefixed_wraps_and_prefixes() {
-        let text = "alpha beta gamma delta epsilon zeta eta theta iota";
-        let wrapped = wrap_prefixed(text, "> ", 20);
-        // Every line is prefixed and within width.
-        assert!(wrapped.lines().all(|l| l.starts_with("> ")));
-        assert!(wrapped.lines().all(|l| l.chars().count() <= 20));
-        // It actually wrapped (more than one line) and lost no words.
-        assert!(wrapped.lines().count() > 1);
-        assert_eq!(unquote(&wrapped).split_whitespace().count(), 9);
     }
 
     // --- provide_name ---

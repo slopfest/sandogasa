@@ -160,6 +160,39 @@ pub fn require_tools(tools: &[(&str, &str, Option<&str>)]) -> Result<(), String>
     }
 }
 
+/// Word-wrap `text` to `width` columns and prefix every line with
+/// `prefix` (e.g. `"> "` for a Markdown blockquote, or the leading
+/// indent of a wrapped list item). Collapses runs of whitespace and
+/// never splits a word, so a single token longer than the width — a
+/// URL, typically — overflows rather than being broken. Such a token
+/// also stays on the line it started on: breaking before a word that
+/// won't fit on a fresh line either would only orphan whatever label
+/// introduces it (`LINK:`, `Minutes:`) while still overflowing.
+pub fn wrap_prefixed(text: &str, prefix: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty()
+            && prefix.len() + line.len() + 1 + word.len() > width
+            && prefix.len() + word.len() <= width
+        {
+            out.push_str(prefix);
+            out.push_str(&line);
+            out.push('\n');
+            line.clear();
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        out.push_str(prefix);
+        out.push_str(&line);
+    }
+    out
+}
+
 /// Ask a yes/no question on stderr (keeping stdout clean for piped
 /// or `--json` output) and read one line from stdin.
 ///
@@ -221,6 +254,33 @@ mod tests {
         assert!(err.contains("nonexistent_bbb_222"));
         assert!(err.contains("install bbb"));
         assert!(!err.contains("true ("));
+    }
+
+    #[test]
+    fn wrap_prefixed_wraps_and_prefixes() {
+        let text = "alpha beta gamma delta epsilon zeta eta theta iota";
+        let wrapped = wrap_prefixed(text, "> ", 20);
+        // Every line is prefixed and within width.
+        assert!(wrapped.lines().all(|l| l.starts_with("> ")));
+        assert!(wrapped.lines().all(|l| l.chars().count() <= 20));
+        // It actually wrapped (more than one line) and lost no words.
+        assert!(wrapped.lines().count() > 1);
+        assert_eq!(
+            wrapped.split_whitespace().count(),
+            9 + wrapped.lines().count()
+        );
+    }
+
+    #[test]
+    fn wrap_prefixed_keeps_a_long_word_whole_and_in_place() {
+        // A URL longer than the width overflows rather than breaking,
+        // and stays with the label that introduces it.
+        let url = "https://example.com/a/very/long/path/that/exceeds/the/width";
+        let wrapped = wrap_prefixed(&format!("LINK: {url} please"), "  ", 20);
+        assert!(wrapped.contains(url), "{wrapped}");
+        assert_eq!(wrapped.lines().next().unwrap(), format!("  LINK: {url}"));
+        // Wrapping resumes normally after the oversized word.
+        assert_eq!(wrapped.lines().nth(1).unwrap(), "  please");
     }
 
     #[test]
