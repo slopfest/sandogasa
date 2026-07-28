@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+### sandogasa-cli: shared confirm prompt and HTTP plumbing
+
+Two additions that existed in copy-pasted form across the workspace:
+
+- `confirm(question, default_yes)` prompts on stderr as
+  `question [Y/n]: ` / `question [y/N]: ` and reads one line from
+  stdin. It replaces ~15 hand-rolled variants whose semantics had
+  drifted apart.
+- A new `http` feature (off by default, so network-free tools don't
+  pull in reqwest) provides `TIMEOUT`, `builder`/`blocking_builder`
+  (crypto provider installed, user agent and timeout set) and
+  `ok`/`json_ok`/`blocking_ok`/`blocking_json_ok`, which turn a
+  non-success response into `"{what}: HTTP {status}: {body}"`.
+
+### Workspace: deduplication sweep
+
+Roughly 1,800 lines removed with no intended change in behavior,
+mostly by adopting the two helpers above and collapsing repeated
+local patterns. Highlights: sandogasa-gitlab lost 20 copies of the
+HTTP status check and four pagination loops; sandogasa-forgejo's
+three pagination loops became one; sandogasa-fedrq's twelve query
+methods share one command builder and one column parser;
+poi-tracker's `cmd_*` functions return `Result` instead of
+hand-rolling the error-to-exit-code dance 39 times;
+cpu-sig-tracker's `retire`/`untag` duplication moved into shared
+modules and its four blocking JIRA wrappers became one (now sharing
+a single tokio runtime); hs-relmon and cpu-sig-tracker dropped their
+pure-delegation GitLab newtype wrappers in favor of re-exporting
+`sandogasa_gitlab` directly; hs-intake's three `compare-*` modules
+share one implementation; sandogasa-report gained a `forge` module
+holding the per-forge token lookup and date-range helpers that four
+modules had each copied.
+
+Interactive prompts across every tool now come from the shared
+helper, which unifies three small details that previously varied per
+call site: prompts go to stderr with a trailing colon, `yes`/`no`
+are accepted as full words alongside `y`/`n`, and an unrecognized
+answer takes that site's default instead of being read as "no".
+HTTP error strings from the affected client crates now use the
+shared `"{what}: HTTP {status}: {body}"` wording. The
+`fedora-cve-triage` missing-`bodhi` message comes from
+`require_tools` and reads `missing required tool(s): bodhi
+(install: sudo dnf install bodhi-client)`.
+
+Two fixes fell out of the sweep: `sandogasa-gitlab` and
+`sandogasa-repology` were sending a hardcoded `0.6.2` user agent
+(now derived from `CARGO_PKG_VERSION`), and `sandogasa-jira`,
+`-mailman`, `-nvd`, `-bugzilla` and `-discourse` were sending none
+at all.
+
 ### fesco-chair: followup inference reads number-last topics
 
 `extract_ticket_numbers` only recognized `* TOPIC: #NNNN Title`
