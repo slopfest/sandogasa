@@ -537,7 +537,7 @@ mod tests {
     /// and the recorded coverage window.
     #[test]
     fn fetch_end_to_end() {
-        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::matchers::{body_string_contains, method};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = block_on(MockServer::start());

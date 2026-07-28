@@ -3,6 +3,7 @@
 //! koji-lag CLI: fetch, merge, and report on Koji build lag.
 
 use std::collections::BTreeSet;
+use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -142,45 +143,34 @@ struct ReportArgs {
 fn main() -> ExitCode {
     sandogasa_cli::init();
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
-    match cli.command {
+    let result = match cli.command {
         Command::Fetch(args) => cmd_fetch(&args),
         Command::Merge(args) => cmd_merge(&args),
         Command::Report(args) => cmd_report(&args),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
-fn cmd_fetch(args: &FetchArgs) -> ExitCode {
-    let (instance_key, hub_url) = match instance::resolve(&args.instance, args.hub_url.as_deref()) {
-        Ok(pair) => pair,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+fn cmd_fetch(args: &FetchArgs) -> Result<(), Box<dyn Error>> {
+    let (instance_key, hub_url) = instance::resolve(&args.instance, args.hub_url.as_deref())?;
     // Freeze the bounds once; whole-UTC-day semantics live in
     // fetch::resolve_window.
     let now = Utc::now().timestamp() as f64;
     let (after, before) =
-        match fetch::resolve_window(args.since.as_deref(), args.until.as_deref(), args.days, now) {
-            Ok(window) => window,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
+        fetch::resolve_window(args.since.as_deref(), args.until.as_deref(), args.days, now)?;
 
     let mut packages: Option<BTreeSet<String>> = None;
     if !args.package.is_empty() {
         packages = Some(args.package.iter().cloned().collect());
     }
     if !args.inventory.is_empty() {
-        let inventory = match sandogasa_inventory::load_and_merge(&args.inventory) {
-            Ok(inv) => inv,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
+        let inventory = sandogasa_inventory::load_and_merge(&args.inventory)?;
         let set = packages.get_or_insert_with(BTreeSet::new);
         set.extend(inventory.package.iter().map(|p| p.name.clone()));
     }
@@ -197,36 +187,23 @@ fn cmd_fetch(args: &FetchArgs) -> ExitCode {
         retries: args.retries,
         verbose: args.verbose,
     };
-    match fetch::run(&opts, &args.output) {
-        Ok(report) => {
-            eprintln!(
-                "swept {} build(s), {} buildArch task(s); {} added, \
-                 {} refreshed -> {}",
-                report.builds_swept,
-                report.tasks_swept,
-                report.records_added,
-                report.records_replaced,
-                args.output.display()
-            );
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
-    }
+    let report = fetch::run(&opts, &args.output)?;
+    eprintln!(
+        "swept {} build(s), {} buildArch task(s); {} added, \
+         {} refreshed -> {}",
+        report.builds_swept,
+        report.tasks_swept,
+        report.records_added,
+        report.records_replaced,
+        args.output.display()
+    );
+    Ok(())
 }
 
-fn cmd_merge(args: &MergeArgs) -> ExitCode {
+fn cmd_merge(args: &MergeArgs) -> Result<(), Box<dyn Error>> {
     let mut merged = Dataset::new();
     for input in &args.inputs {
-        let ds = match Dataset::load(input) {
-            Ok(ds) => ds,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
+        let ds = Dataset::load(input)?;
         let stats = merged.merge(ds);
         eprintln!(
             "{}: {} added, {} refreshed, {} unchanged",
@@ -248,36 +225,21 @@ fn cmd_merge(args: &MergeArgs) -> ExitCode {
              counts under-represent the full instance"
         );
     }
-    match merged.save(&args.output) {
-        Ok(()) => {
-            eprintln!(
-                "merged {} file(s) -> {} ({} task(s), {} build(s))",
-                args.inputs.len(),
-                args.output.display(),
-                merged.tasks.len(),
-                merged.builds.len()
-            );
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
-    }
+    merged.save(&args.output)?;
+    eprintln!(
+        "merged {} file(s) -> {} ({} task(s), {} build(s))",
+        args.inputs.len(),
+        args.output.display(),
+        merged.tasks.len(),
+        merged.builds.len()
+    );
+    Ok(())
 }
 
-fn cmd_report(args: &ReportArgs) -> ExitCode {
+fn cmd_report(args: &ReportArgs) -> Result<(), Box<dyn Error>> {
     let mut dataset = Dataset::new();
     for input in &args.inputs {
-        match Dataset::load(input) {
-            Ok(ds) => {
-                dataset.merge(ds);
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
+        dataset.merge(Dataset::load(input)?);
     }
     let mut opts = report::ReportOpts {
         arches: args.arch.clone(),
@@ -295,13 +257,7 @@ fn cmd_report(args: &ReportArgs) -> ExitCode {
         (&args.until, &mut opts.until),
     ] {
         if let Some(date) = flag {
-            match fetch::date_to_ts(date) {
-                Ok(ts) => *target = Some(ts),
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::FAILURE;
-                }
-            }
+            *target = Some(fetch::date_to_ts(date)?);
         }
     }
     // Inclusive end date.
@@ -311,15 +267,9 @@ fn cmd_report(args: &ReportArgs) -> ExitCode {
 
     let output = report::run(&dataset, &opts);
     if args.json {
-        match serde_json::to_string_pretty(&output) {
-            Ok(s) => println!("{s}"),
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
+        println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         print!("{}", report::render(&output, args.min_samples));
     }
-    ExitCode::SUCCESS
+    Ok(())
 }
