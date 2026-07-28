@@ -255,16 +255,7 @@ pub fn partition_forced(items: Vec<Ticket>, forced: &[u64]) -> (Vec<Ticket>, Vec
 
 /// Ask a yes/no question on stderr, defaulting to **no**.
 pub fn confirm_default_no(question: &str) -> Result<bool, String> {
-    use std::io::{BufRead, Write};
-    eprint!("{question} [y/N]: ");
-    std::io::stderr().flush().map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(|e| e.to_string())?;
-    let answer = line.trim();
-    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
+    sandogasa_cli::confirm(question, false).map_err(|e| e.to_string())
 }
 
 /// Open fesco/docs issues and pull requests, as agenda candidates

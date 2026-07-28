@@ -91,15 +91,7 @@ impl Ui {
     /// thing. No-op outside `--explain` and under `--dry-run` (nothing
     /// was edited).
     pub fn explain_diff(&self, repo: &Path, paths: &[&str]) {
-        if !self.explain || self.dry_run {
-            return;
-        }
-        let _ = Command::new("git")
-            .args(["--no-pager", "diff", "--"])
-            .args(paths)
-            .current_dir(repo)
-            .status();
-        self.pause_with("[Enter to continue]");
+        self.explain_diff_with(repo, paths, false);
     }
 
     /// Like [`explain_diff`](Self::explain_diff) but shows *staged*
@@ -107,14 +99,22 @@ impl Ui {
     /// must be `git add`ed first and so isn't visible in the unstaged
     /// diff.
     pub fn explain_diff_cached(&self, repo: &Path, paths: &[&str]) {
+        self.explain_diff_with(repo, paths, true);
+    }
+
+    /// Shared core of [`explain_diff`](Self::explain_diff) /
+    /// [`explain_diff_cached`](Self::explain_diff_cached): run
+    /// `git diff [--cached] -- <paths>` and pause.
+    fn explain_diff_with(&self, repo: &Path, paths: &[&str], cached: bool) {
         if !self.explain || self.dry_run {
             return;
         }
-        let _ = Command::new("git")
-            .args(["--no-pager", "diff", "--cached", "--"])
-            .args(paths)
-            .current_dir(repo)
-            .status();
+        let mut cmd = Command::new("git");
+        cmd.args(["--no-pager", "diff"]);
+        if cached {
+            cmd.arg("--cached");
+        }
+        let _ = cmd.arg("--").args(paths).current_dir(repo).status();
         self.pause_with("[Enter to continue]");
     }
 
@@ -122,15 +122,7 @@ impl Ui {
     /// Empty input / EOF → yes; only `n`/`no` is a no. The caller is
     /// responsible for only prompting when interactive.
     pub fn confirm(&self, question: &str) -> bool {
-        use std::io::Write;
-        let mut err = std::io::stderr();
-        let _ = write!(err, "{question} [Y/n] ");
-        let _ = err.flush();
-        let mut line = String::new();
-        if std::io::stdin().read_line(&mut line).is_err() {
-            return true;
-        }
-        !matches!(line.trim().to_ascii_lowercase().as_str(), "n" | "no")
+        sandogasa_cli::confirm(question, true).unwrap_or(true)
     }
 
     /// Ask a yes/no question defaulting to **no** (`[y/N]`) — for a
@@ -139,15 +131,7 @@ impl Ui {
     /// is a yes; empty input / EOF → no. The caller is responsible for
     /// only prompting when interactive.
     pub fn confirm_default_no(&self, question: &str) -> bool {
-        use std::io::Write;
-        let mut err = std::io::stderr();
-        let _ = write!(err, "{question} [y/N] ");
-        let _ = err.flush();
-        let mut line = String::new();
-        if std::io::stdin().read_line(&mut line).is_err() {
-            return false;
-        }
-        matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+        sandogasa_cli::confirm(question, false).unwrap_or(false)
     }
 
     /// In `--explain`, wait for the user to press Enter before

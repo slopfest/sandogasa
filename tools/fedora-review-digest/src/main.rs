@@ -354,13 +354,7 @@ fn bug_id_from_dirname(name: &str) -> Option<u64> {
 
 /// Yes/no confirmation defaulting to yes (the `--post` intent).
 fn confirm_yes(question: &str) -> Result<bool, String> {
-    eprint!("{question} [Y/n] ");
-    let _ = std::io::stderr().flush();
-    let line = read_line()?;
-    Ok(!matches!(
-        line.trim().to_ascii_lowercase().as_str(),
-        "n" | "no"
-    ))
+    sandogasa_cli::confirm(question, true).map_err(|e| e.to_string())
 }
 
 /// Resolve the positional input to a review directory: an existing

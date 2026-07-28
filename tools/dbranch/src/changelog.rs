@@ -144,6 +144,25 @@ pub fn debian_base(version: &str) -> &str {
     version
 }
 
+/// Shared core of the version computers ([`rebuild_version`],
+/// [`proposed_version`], [`backports_version`]): take the Debian base
+/// of the newest stanza's version (any existing suffix stripped),
+/// append `sep`, and count one past the highest existing `<base><sep><N>`
+/// in the changelog (`1` when there is none). Returns `None` for an
+/// empty/unparseable changelog.
+fn next_suffixed(changelog: &str, sep: &str) -> Option<String> {
+    let headers = stanza_headers(changelog);
+    let debver = debian_base(&headers.first()?.version);
+    let prefix = format!("{debver}{sep}");
+    let max_n = headers
+        .iter()
+        .filter_map(|h| h.version.strip_prefix(&prefix))
+        .filter_map(|n| n.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+    Some(format!("{prefix}{}", max_n + 1))
+}
+
 /// Compute the fresh rebuild version `<debver>~<codename>+<N>`.
 ///
 /// `debver` is the Debian base of the newest stanza's version (any
@@ -153,16 +172,7 @@ pub fn debian_base(version: &str) -> &str {
 /// on the same Debian version bumps the counter), or `1` when there
 /// is none. Returns `None` for an empty/unparseable changelog.
 pub fn rebuild_version(changelog: &str, codename: &str) -> Option<String> {
-    let headers = stanza_headers(changelog);
-    let debver = debian_base(&headers.first()?.version);
-    let prefix = format!("{debver}~{codename}+");
-    let max_n = headers
-        .iter()
-        .filter_map(|h| h.version.strip_prefix(&prefix))
-        .filter_map(|n| n.parse::<u32>().ok())
-        .max()
-        .unwrap_or(0);
-    Some(format!("{prefix}{}", max_n + 1))
+    next_suffixed(changelog, &format!("~{codename}+"))
 }
 
 /// Compute the fresh proposed-update version `<debver>~deb<major>u<M>`
@@ -178,16 +188,7 @@ pub fn rebuild_version(changelog: &str, codename: &str) -> Option<String> {
 /// never shadows testing/unstable on upgrade. Returns `None` for an
 /// empty/unparseable changelog.
 pub fn proposed_version(changelog: &str, major: u32) -> Option<String> {
-    let headers = stanza_headers(changelog);
-    let debver = debian_base(&headers.first()?.version);
-    let prefix = format!("{debver}~deb{major}u");
-    let max_m = headers
-        .iter()
-        .filter_map(|h| h.version.strip_prefix(&prefix))
-        .filter_map(|m| m.parse::<u32>().ok())
-        .max()
-        .unwrap_or(0);
-    Some(format!("{prefix}{}", max_m + 1))
+    next_suffixed(changelog, &format!("~deb{major}u"))
 }
 
 /// The next backports version for a Debian backports branch:
@@ -201,16 +202,7 @@ pub fn proposed_version(changelog: &str, major: u32) -> Option<String> {
 /// the counter. The `~` makes the backport sort older than the plain
 /// version, so it never shadows the release it came from.
 pub fn backports_version(changelog: &str, major: u32) -> Option<String> {
-    let headers = stanza_headers(changelog);
-    let debver = debian_base(&headers.first()?.version);
-    let prefix = format!("{debver}~bpo{major}+");
-    let max_m = headers
-        .iter()
-        .filter_map(|h| h.version.strip_prefix(&prefix))
-        .filter_map(|m| m.parse::<u32>().ok())
-        .max()
-        .unwrap_or(0);
-    Some(format!("{prefix}{}", max_m + 1))
+    next_suffixed(changelog, &format!("~bpo{major}+"))
 }
 
 /// Rewrite the top stanza into a clean rebuild entry, replacing

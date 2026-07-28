@@ -745,12 +745,7 @@ fn acquire_new_ticket() -> Result<(), Box<dyn std::error::Error>> {
             Ok(()) => return Ok(()),
             Err(e) => {
                 eprintln!("kinit failed: {e}");
-                eprint!("Try again? [Y/n] ");
-                io::stderr().flush()?;
-                let mut answer = String::new();
-                io::stdin().read_line(&mut answer)?;
-                let answer = answer.trim();
-                if !answer.is_empty() && !answer.eq_ignore_ascii_case("y") {
+                if !sandogasa_cli::confirm("Try again?", true)? {
                     return Err("Kerberos authentication cancelled".into());
                 }
             }
@@ -1097,7 +1092,7 @@ async fn enrich_with_holidays(entries: &mut [LocalTimeEntry], refresh: bool) {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 struct ServiceLastSeen {
     service: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1287,9 +1282,9 @@ async fn check_discourse(username: &str) -> (ServiceLastSeen, Option<String>) {
                     service: "Discourse".to_string(),
                     last_active: user.last_posted_at.map(|t| t.to_rfc3339()),
                     detail: user.last_posted_at.map(|_| "last post".to_string()),
-                    error: None,
                     status,
                     status_expires,
+                    ..Default::default()
                 },
                 tz,
             )
@@ -1297,11 +1292,8 @@ async fn check_discourse(username: &str) -> (ServiceLastSeen, Option<String>) {
         Err(e) => (
             ServiceLastSeen {
                 service: "Discourse".to_string(),
-                last_active: None,
-                detail: None,
                 error: Some(e.to_string()),
-                status: None,
-                status_expires: None,
+                ..Default::default()
             },
             None,
         ),
@@ -1346,9 +1338,7 @@ async fn check_bodhi(username: &str) -> ServiceLastSeen {
         } else {
             Some(detail.to_string())
         },
-        error: None,
-        status: None,
-        status_expires: None,
+        ..Default::default()
     }
 }
 
@@ -1367,18 +1357,13 @@ async fn check_distgit(username: &str) -> ServiceLastSeen {
                     })
                     .map(|naive| naive.and_utc().to_rfc3339()),
                 detail: latest.map(|d| format!("last active on {d}")),
-                error: None,
-                status: None,
-                status_expires: None,
+                ..Default::default()
             }
         }
         Err(e) => ServiceLastSeen {
             service: "Dist-git".to_string(),
-            last_active: None,
-            detail: None,
             error: Some(e.to_string()),
-            status: None,
-            status_expires: None,
+            ..Default::default()
         },
     }
 }
@@ -1396,19 +1381,13 @@ async fn check_bugzilla(emails: &[String]) -> ServiceLastSeen {
                 service: "Bugzilla".to_string(),
                 last_active: Some(bug.creation_time.to_rfc3339()),
                 detail: Some(format!("#{} {}", bug.id, bug.summary)),
-                error: None,
-                status: None,
-                status_expires: None,
+                ..Default::default()
             };
         }
     }
     ServiceLastSeen {
         service: "Bugzilla".to_string(),
-        last_active: None,
-        detail: None,
-        error: None,
-        status: None,
-        status_expires: None,
+        ..Default::default()
     }
 }
 
@@ -1428,19 +1407,13 @@ async fn check_mailman(emails: &[String], lists: &[String], max_pages: u32) -> S
                 service: "Mailing lists".to_string(),
                 last_active: rfc3339,
                 detail: Some(post.subject),
-                error: None,
-                status: None,
-                status_expires: None,
+                ..Default::default()
             };
         }
     }
     ServiceLastSeen {
         service: "Mailing lists".to_string(),
-        last_active: None,
-        detail: None,
-        error: None,
-        status: None,
-        status_expires: None,
+        ..Default::default()
     }
 }
 

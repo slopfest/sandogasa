@@ -72,19 +72,23 @@ impl Stages {
     }
 }
 
-/// Parse the `--stage` selector. Empty defaults to **merge** only
-/// (the other stages are opt-in for now). `all` enables every stage.
-pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
-    if tokens.is_empty() {
-        return Ok(Stages {
-            merge: true,
-            ..Stages::default()
-        });
-    }
+/// Shared core of [`parse_stages`] / [`parse_update_stages`] — the two
+/// selectors differ only in the head stage: its token (`head`) and
+/// which flag it sets (`set_head`). Empty defaults to the head only;
+/// `all` is head + build + lint + push.
+fn parse_stages_with(
+    tokens: &[String],
+    head: &str,
+    set_head: fn(&mut Stages),
+) -> Result<Stages, String> {
     let mut s = Stages::default();
+    if tokens.is_empty() {
+        set_head(&mut s);
+        return Ok(s);
+    }
     for token in tokens {
         match token.trim() {
-            "merge" => s.merge = true,
+            t if t == head => set_head(&mut s),
             "build" => s.build = true,
             "lint" => s.lint = true,
             "push" => s.push = true,
@@ -93,7 +97,7 @@ pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
             "all" => {
                 // `all` is the build-and-verify flow; `upload` and `tag`
                 // (deliberate publish/release steps) stay opt-in.
-                s.merge = true;
+                set_head(&mut s);
                 s.build = true;
                 s.lint = true;
                 s.push = true;
@@ -101,7 +105,7 @@ pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
             other => {
                 return Err(format!(
                     "unknown stage '{other}' \
-                     (valid: merge, build, lint, push, upload, tag, all)"
+                     (valid: {head}, build, lint, push, upload, tag, all)"
                 ));
             }
         }
@@ -112,43 +116,17 @@ pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
     Ok(s)
 }
 
+/// Parse the `--stage` selector. Empty defaults to **merge** only
+/// (the other stages are opt-in for now). `all` enables every stage.
+pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
+    parse_stages_with(tokens, "merge", |s| s.merge = true)
+}
+
 /// Parse the `update --stage` selector. Like [`parse_stages`] but the
 /// head stage is `import` (new upstream) instead of `merge`. Empty
 /// defaults to **import** only; `all` is import + build + lint + push.
 pub fn parse_update_stages(tokens: &[String]) -> Result<Stages, String> {
-    if tokens.is_empty() {
-        return Ok(Stages {
-            import: true,
-            ..Stages::default()
-        });
-    }
-    let mut s = Stages::default();
-    for token in tokens {
-        match token.trim() {
-            "import" => s.import = true,
-            "build" => s.build = true,
-            "lint" => s.lint = true,
-            "push" => s.push = true,
-            "upload" => s.upload = true,
-            "tag" => s.tag = true,
-            "all" => {
-                s.import = true;
-                s.build = true;
-                s.lint = true;
-                s.push = true;
-            }
-            other => {
-                return Err(format!(
-                    "unknown stage '{other}' \
-                     (valid: import, build, lint, push, upload, tag, all)"
-                ));
-            }
-        }
-    }
-    if !s.any() {
-        return Err("no stages selected".to_string());
-    }
-    Ok(s)
+    parse_stages_with(tokens, "import", |s| s.import = true)
 }
 
 /// Where the upload stage sends the source package.
@@ -1242,17 +1220,7 @@ fn checkout_existing(
     location: TargetLocation,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match location {
-        TargetLocation::Local => {
-            // Skip a no-op checkout when we're already on the branch —
-            // it just prints "Already on '<branch>'" and, under
-            // --explain, adds a pointless pause on a do-nothing command.
-            if git::current_branch(repo)? == target {
-                ui.step(&format!("Already on {target}"));
-                Ok(())
-            } else {
-                ui.run_required(&plan::checkout_argv(target), repo)
-            }
-        }
+        TargetLocation::Local => ensure_on_branch(ui, repo, target),
         TargetLocation::Remote => {
             ui.step(&format!("Check out {target} tracking origin/{target}"));
             ui.run_required(

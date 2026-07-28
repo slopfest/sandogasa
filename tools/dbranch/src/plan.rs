@@ -469,15 +469,6 @@ pub fn is_terminal_status(status: &str) -> bool {
     )
 }
 
-/// `glab auth status --hostname <host>` — verify glab has a token for
-/// the specific instance the repo lives on. glab stores a separate
-/// token per host, so a bare `glab auth status` would pass on a
-/// gitlab.com login even with no salsa.debian.org token; scoping to
-/// `host` checks the one the CI commands will actually use.
-pub fn glab_auth_status_argv(host: &str) -> Vec<String> {
-    argv(&["glab", "auth", "status", "--hostname", host])
-}
-
 /// The host of a git remote URL — scp-like (`git@host:path`),
 /// `ssh://[user@]host/path`, or `https://[user@]host/path` →
 /// `host`. `None` if it can't be parsed.
@@ -782,10 +773,6 @@ mod tests {
         assert_eq!(
             glab_ci_list_sha_argv("ea4102c"),
             ["glab", "ci", "list", "--sha", "ea4102c", "-F", "json"]
-        );
-        assert_eq!(
-            glab_auth_status_argv("salsa.debian.org"),
-            ["glab", "auth", "status", "--hostname", "salsa.debian.org"]
         );
     }
 
