@@ -15,8 +15,7 @@ use sandogasa_bugzilla::models::Bug;
 use sandogasa_distgit::DistGitClient;
 use sandogasa_inventory::Inventory;
 
-/// Anitya / the-new-hotness reporter address.
-pub const RELEASE_MONITORING_REPORTER: &str = "upstream-release-monitoring@fedoraproject.org";
+use crate::triage_updates::{RELEASE_MONITORING_REPORTER, confirm, urlencode};
 
 /// One planned bug close.
 #[derive(Debug, Clone)]
@@ -103,19 +102,6 @@ pub fn bug_search_query(component: &str, branch: &str, all_reporters: bool) -> S
     }
     parts.push("bug_status=__open__".to_string());
     parts.join("&")
-}
-
-fn urlencode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
 }
 
 /// Print one package's planned closures as soon as they're
@@ -462,18 +448,6 @@ fn print_tally(closes: &[BugClose]) {
             .collect();
         println!("  {pkg}: {}", ids.join(", "));
     }
-}
-
-fn confirm(prompt: &str) -> Result<bool, String> {
-    use std::io::{BufRead, Write};
-    eprint!("{prompt} [y/N]: ");
-    std::io::stderr().flush().map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(|e| e.to_string())?;
-    Ok(line.trim().eq_ignore_ascii_case("y"))
 }
 
 #[cfg(test)]

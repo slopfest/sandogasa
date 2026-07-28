@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use sandogasa_pkg_health::{Context, HealthReport, duration, registry::default_registry};
+use sandogasa_pkg_health::{Context, CostTier, HealthReport, duration, registry::default_registry};
 
 #[derive(Parser)]
 #[command(
@@ -112,34 +112,32 @@ enum PackageOutcome {
 }
 
 /// Sort and deduplicate a version list, warning on duplicates.
+/// The sorted pass collects the repeats (each named once, in
+/// ascending order) as it drops them.
 fn dedup_versions(versions: &[u32], label: &str) -> Vec<u32> {
     let mut sorted: Vec<u32> = versions.to_vec();
     sorted.sort_unstable();
-    let orig_len = sorted.len();
-    sorted.dedup();
-    if sorted.len() < orig_len {
+    let mut unique: Vec<u32> = Vec::with_capacity(sorted.len());
+    let mut dups: Vec<u32> = Vec::new();
+    for v in sorted {
+        if unique.last() == Some(&v) {
+            if dups.last() != Some(&v) {
+                dups.push(v);
+            }
+        } else {
+            unique.push(v);
+        }
+    }
+    if !dups.is_empty() {
         eprintln!(
             "warning: duplicate --{label}-version value(s) ignored: {}",
-            duplicates(versions)
-                .iter()
+            dups.iter()
                 .map(u32::to_string)
                 .collect::<Vec<_>>()
                 .join(", ")
         );
     }
-    sorted
-}
-
-/// Return the duplicated values in `xs` (each reported once).
-fn duplicates(xs: &[u32]) -> Vec<u32> {
-    let mut seen = std::collections::HashSet::new();
-    let mut dups = std::collections::BTreeSet::new();
-    for &x in xs {
-        if !seen.insert(x) {
-            dups.insert(x);
-        }
-    }
-    dups.into_iter().collect()
+    unique
 }
 
 fn main() -> ExitCode {
@@ -230,28 +228,27 @@ async fn cmd_run(args: &RunArgs) -> ExitCode {
         HealthReport::new(&inventory.inventory.name)
     };
 
-    // Determine which checks to run.
+    // Determine which checks to run. A tier flag (mutually
+    // exclusive with the others via clap) selects that whole
+    // tier and wins over an explicit --check list; with no flag
+    // at all the default is the cheap tier.
+    let tier = if args.cheap {
+        Some(CostTier::Cheap)
+    } else if args.medium {
+        Some(CostTier::Medium)
+    } else if args.expensive {
+        Some(CostTier::Expensive)
+    } else if args.checks.is_empty() {
+        Some(CostTier::Cheap)
+    } else {
+        None
+    };
     let selected_ids: Vec<&str> = if args.all {
         reg.all().map(|c| c.id()).collect()
-    } else if args.cheap {
-        reg.by_tier(sandogasa_pkg_health::CostTier::Cheap)
-            .map(|c| c.id())
-            .collect()
-    } else if args.medium {
-        reg.by_tier(sandogasa_pkg_health::CostTier::Medium)
-            .map(|c| c.id())
-            .collect()
-    } else if args.expensive {
-        reg.by_tier(sandogasa_pkg_health::CostTier::Expensive)
-            .map(|c| c.id())
-            .collect()
-    } else if !args.checks.is_empty() {
-        args.checks.iter().map(|s| s.as_str()).collect()
+    } else if let Some(tier) = tier {
+        reg.by_tier(tier).map(|c| c.id()).collect()
     } else {
-        // Default: all cheap checks.
-        reg.by_tier(sandogasa_pkg_health::CostTier::Cheap)
-            .map(|c| c.id())
-            .collect()
+        args.checks.iter().map(|s| s.as_str()).collect()
     };
 
     if args.verbose {

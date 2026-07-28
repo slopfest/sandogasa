@@ -15,7 +15,6 @@ sandogasa-bugclass = { workspace = true }
 sandogasa-bugzilla = { workspace = true }
 sandogasa-config = { workspace = true }
 sandogasa-distgit = { workspace = true }
-sandogasa-fasjson = { workspace = true }
 sandogasa-inventory = { workspace = true }
 sandogasa-koji = { workspace = true }
 schemars = { workspace = true }

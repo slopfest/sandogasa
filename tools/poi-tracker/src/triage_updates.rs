@@ -190,8 +190,8 @@ pub fn group_bugs_by_component(bugs: Vec<Bug>) -> BTreeMap<String, Vec<Bug>> {
 /// Bugzilla expects standard URL encoding. We could pull in
 /// `percent-encoding`, but the only characters we ever encode in
 /// these search queries are spaces, `@`, and `+`. Keep it tight
-/// and dependency-free.
-fn urlencode(s: &str) -> String {
+/// and dependency-free. Shared with `triage_retired`'s queries.
+pub(crate) fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
@@ -1000,16 +1000,12 @@ fn print_stale_plan(plans: &[StaleBugPlan]) {
     }
 }
 
+/// Default-no confirmation prompt, adapting the shared helper's
+/// `io::Error` to the `String` errors this crate uses (also as
+/// the `resolve_claim` callback). Shared with `triage_retired`
+/// and the inventory-modifying commands in `main`.
 pub(crate) fn confirm(prompt: &str) -> Result<bool, String> {
-    use std::io::{BufRead, Write};
-    eprint!("{prompt} [y/N]: ");
-    std::io::stderr().flush().map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(|e| e.to_string())?;
-    Ok(line.trim().eq_ignore_ascii_case("y"))
+    sandogasa_cli::confirm(prompt, false).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

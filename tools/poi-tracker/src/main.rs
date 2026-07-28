@@ -591,6 +591,12 @@ struct SyncGitlabArgs {
     name: Option<String>,
 }
 
+/// Command outcome: hard failures bubble up as an error (printed
+/// as `error: {e}` with a FAILURE exit by `main`); soft outcomes
+/// already reported inline (e.g. partial failures, "not found")
+/// pick their own `ExitCode`.
+type CmdResult = Result<ExitCode, Box<dyn std::error::Error>>;
+
 /// Derive a YAML filename for a workload export.
 fn workload_export_filename(
     inventory: &sandogasa_inventory::Inventory,
@@ -676,7 +682,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    match &cli.command {
+    let result = match &cli.command {
         Command::Add(args) => cmd_add(&paths, args),
         Command::Adopt(args) => cmd_adopt(&paths, args),
         Command::Config => cmd_config(),
@@ -692,34 +698,29 @@ fn main() -> ExitCode {
         Command::TriageRetired(args) => cmd_triage_retired(&paths, args),
         Command::TriageUpdates(args) => cmd_triage_updates(&paths, args),
         Command::Validate => cmd_validate(&paths),
+    };
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
-fn cmd_semver_audit(paths: &[String], args: &SemverAuditArgs) -> ExitCode {
-    let inventory = match sandogasa_inventory::load_and_merge(paths) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+/// Create a Tokio runtime, prefixing the (rare) failure so the
+/// boundary's `error: {e}` matches the old inline message.
+fn new_runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Runtime::new().map_err(|e| format!("failed to create runtime: {e}"))
+}
+
+fn cmd_semver_audit(paths: &[String], args: &SemverAuditArgs) -> CmdResult {
+    let inventory = sandogasa_inventory::load_and_merge(paths)?;
     // Read-only: anonymous Bugzilla search + public dist-git.
     let bz = sandogasa_bugzilla::BzClient::new(&config::resolve_url());
     let dg = sandogasa_distgit::DistGitClient::new();
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("error: failed to create runtime: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let batch_email = match resolve_batch_email(&args.batch) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let rt = new_runtime()?;
+    let batch_email = resolve_batch_email(&args.batch)?;
     let koji_lookup = koji_tag_lookup();
     let latest_tagged = match &koji_lookup {
         Some(l) => Some(l as &triage_updates::TagLookup),
@@ -732,7 +733,7 @@ fn cmd_semver_audit(paths: &[String], args: &SemverAuditArgs) -> ExitCode {
             None
         }
     };
-    match rt.block_on(semver_audit::run(
+    let entries = rt.block_on(semver_audit::run(
         &inventory,
         &bz,
         &dg,
@@ -741,55 +742,30 @@ fn cmd_semver_audit(paths: &[String], args: &SemverAuditArgs) -> ExitCode {
         args.non_breaking,
         batch_email.as_deref(),
         args.verbose,
-    )) {
-        Ok(entries) => {
-            if args.json {
-                match serde_json::to_string_pretty(&entries) {
-                    Ok(s) => println!("{s}"),
-                    Err(e) => {
-                        eprintln!("error: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                }
-            } else {
-                semver_audit::print_report(&entries);
-            }
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
+    ))?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+    } else {
+        semver_audit::print_report(&entries);
     }
+    Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_prune_retired(paths: &[String], args: &PruneRetiredArgs) -> ExitCode {
+fn cmd_prune_retired(paths: &[String], args: &PruneRetiredArgs) -> CmdResult {
     // Pruning rewrites the inventory, which only makes sense for
     // a single file; --dry-run may preview a merged view.
     if !args.dry_run && paths.len() != 1 {
-        eprintln!(
-            "error: prune-retired modifies the inventory and needs \
+        return Err(format!(
+            "prune-retired modifies the inventory and needs \
              exactly one inventory file (got {}); use --dry-run to \
              preview a merged view",
             paths.len()
-        );
-        return ExitCode::FAILURE;
+        )
+        .into());
     }
-    let inventory = match sandogasa_inventory::load_and_merge(paths) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let inventory = sandogasa_inventory::load_and_merge(paths)?;
     let dg = sandogasa_distgit::DistGitClient::new();
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("error: failed to create runtime: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let rt = new_runtime()?;
 
     // The active branch set defines "carried anywhere": explicit
     // --branch wins (keeping the user's order), otherwise ask
@@ -798,32 +774,20 @@ fn cmd_prune_retired(paths: &[String], args: &PruneRetiredArgs) -> ExitCode {
     let active: Vec<String> = if !args.branch.is_empty() {
         args.branch.clone()
     } else {
-        match rt.block_on(prune_retired::active_branches_from_bodhi()) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
+        rt.block_on(prune_retired::active_branches_from_bodhi())?
     };
     if args.verbose {
         eprintln!("[poi-tracker] active branches: {}", active.join(", "));
     }
 
-    let report = match rt.block_on(prune_retired::run(
+    let report = rt.block_on(prune_retired::run(
         &inventory,
         &dg,
         &active,
         &args.filter,
         args.jobs,
         args.verbose,
-    )) {
-        Ok(report) => report,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    ))?;
 
     if !report.candidates.is_empty() {
         println!("Packages no longer carried on any active branch:");
@@ -849,40 +813,27 @@ fn cmd_prune_retired(paths: &[String], args: &PruneRetiredArgs) -> ExitCode {
         report.invalid.len()
     );
     if args.dry_run {
-        return ExitCode::SUCCESS;
+        return Ok(ExitCode::SUCCESS);
     }
 
     // Apply to the single inventory file. Default: update the
     // `unshipped` markers (both directions — clears marks on
     // revived packages). --remove deletes the entries instead.
     let path = &paths[0];
-    let mut inv = match sandogasa_inventory::load(path) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: reloading {path}: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let mut inv = sandogasa_inventory::load(path).map_err(|e| format!("reloading {path}: {e}"))?;
     if args.remove {
         if report.candidates.is_empty() {
             eprintln!("nothing to remove");
-            return ExitCode::SUCCESS;
+            return Ok(ExitCode::SUCCESS);
         }
-        if !args.yes {
-            match triage_updates::confirm(&format!(
+        if !args.yes
+            && !triage_updates::confirm(&format!(
                 "Remove {} package(s) from {path}?",
                 report.candidates.len()
-            )) {
-                Ok(true) => {}
-                Ok(false) => {
-                    eprintln!("aborted: inventory not modified");
-                    return ExitCode::SUCCESS;
-                }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::FAILURE;
-                }
-            }
+            ))?
+        {
+            eprintln!("aborted: inventory not modified");
+            return Ok(ExitCode::SUCCESS);
         }
         let mut removed = 0usize;
         for c in &report.candidates {
@@ -890,101 +841,56 @@ fn cmd_prune_retired(paths: &[String], args: &PruneRetiredArgs) -> ExitCode {
                 removed += 1;
             }
         }
-        if let Err(e) = sandogasa_inventory::save(&inv, path) {
-            eprintln!("error: saving {path}: {e}");
-            return ExitCode::FAILURE;
-        }
+        sandogasa_inventory::save(&inv, path).map_err(|e| format!("saving {path}: {e}"))?;
         eprintln!("removed {removed} package(s) from {path}");
-        return ExitCode::SUCCESS;
+        return Ok(ExitCode::SUCCESS);
     }
 
     let changed =
         prune_retired::apply_unshipped_marks(&mut inv, &report.checked, &report.candidates);
     if changed == 0 {
         eprintln!("unshipped markers already up to date");
-        return ExitCode::SUCCESS;
+        return Ok(ExitCode::SUCCESS);
     }
-    if !args.yes {
-        match triage_updates::confirm(&format!(
+    if !args.yes
+        && !triage_updates::confirm(&format!(
             "Update unshipped markers on {changed} package(s) in {path}?"
-        )) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("aborted: inventory not modified");
-                return ExitCode::SUCCESS;
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
+        ))?
+    {
+        eprintln!("aborted: inventory not modified");
+        return Ok(ExitCode::SUCCESS);
     }
-    if let Err(e) = sandogasa_inventory::save(&inv, path) {
-        eprintln!("error: saving {path}: {e}");
-        return ExitCode::FAILURE;
-    }
+    sandogasa_inventory::save(&inv, path).map_err(|e| format!("saving {path}: {e}"))?;
     eprintln!("updated unshipped markers on {changed} package(s) in {path}");
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> ExitCode {
+fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> CmdResult {
     // --mark writes results back, which only makes sense for a
     // single inventory file (a merged view has no single home).
     if args.mark && paths.len() != 1 {
-        eprintln!(
-            "error: --mark needs exactly one inventory file (got {})",
+        return Err(format!(
+            "--mark needs exactly one inventory file (got {})",
             paths.len()
-        );
-        return ExitCode::FAILURE;
+        )
+        .into());
     }
-    let inventory = match sandogasa_inventory::load_and_merge(paths) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let api_key = match config::resolve_api_key(args.api_key.as_deref()) {
-        Ok(k) => k,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let inventory = sandogasa_inventory::load_and_merge(paths)?;
+    let api_key = config::resolve_api_key(args.api_key.as_deref())?;
     let url = config::resolve_url();
-    let bz = match sandogasa_bugzilla::BzClient::new(&url).with_api_key(api_key) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let bz = sandogasa_bugzilla::BzClient::new(&url).with_api_key(api_key)?;
     let dg = sandogasa_distgit::DistGitClient::new();
 
     let claim_email = config::resolve_email();
     if args.claim && claim_email.is_none() {
-        eprintln!(
-            "error: --claim needs a configured Bugzilla email.\n\
+        return Err("--claim needs a configured Bugzilla email.\n\
              Set it with: poi-tracker config"
-        );
-        return ExitCode::FAILURE;
+            .into());
     }
 
-    let batch_email = match resolve_batch_email(&args.batch) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("error: failed to create runtime: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    match rt.block_on(triage_retired::run(
+    let batch_email = resolve_batch_email(&args.batch)?;
+    let rt = new_runtime()?;
+    let report = rt.block_on(triage_retired::run(
         &inventory,
         &bz,
         &dg,
@@ -997,116 +903,57 @@ fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> ExitCode {
         args.dry_run,
         args.yes,
         args.verbose,
-    )) {
-        Ok(report) => {
-            eprintln!(
-                "\n{} checked, {} retired, {} planned, {} closed, {} failed",
-                report.packages_checked,
-                report.packages_retired,
-                report.closes_planned,
-                report.closes_applied,
-                report.failures
-            );
-            // Record the retirement checks in the inventory. The
-            // facts were gathered regardless of whether any bug
-            // closures were confirmed, so marking is independent
-            // of the close outcome.
-            if args.mark {
-                let path = &paths[0];
-                let mut inv = match sandogasa_inventory::load(path) {
-                    Ok(inv) => inv,
-                    Err(e) => {
-                        eprintln!("error: reloading {path} for --mark: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                };
-                let changed = triage_retired::apply_retirement_marks(&mut inv, &report.checks);
-                if changed > 0 {
-                    if let Err(e) = sandogasa_inventory::save(&inv, path) {
-                        eprintln!("error: saving {path}: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                    eprintln!("marked {changed} package(s) in {path}");
-                } else {
-                    eprintln!("retirement markers already up to date");
-                }
-            }
-            if report.failures > 0 {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            }
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
+    ))?;
+    eprintln!(
+        "\n{} checked, {} retired, {} planned, {} closed, {} failed",
+        report.packages_checked,
+        report.packages_retired,
+        report.closes_planned,
+        report.closes_applied,
+        report.failures
+    );
+    // Record the retirement checks in the inventory. The facts
+    // were gathered regardless of whether any bug closures were
+    // confirmed, so marking is independent of the close outcome.
+    if args.mark {
+        let path = &paths[0];
+        let mut inv = sandogasa_inventory::load(path)
+            .map_err(|e| format!("reloading {path} for --mark: {e}"))?;
+        let changed = triage_retired::apply_retirement_marks(&mut inv, &report.checks);
+        if changed > 0 {
+            sandogasa_inventory::save(&inv, path).map_err(|e| format!("saving {path}: {e}"))?;
+            eprintln!("marked {changed} package(s) in {path}");
+        } else {
+            eprintln!("retirement markers already up to date");
         }
     }
+    Ok(if report.failures > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
-fn cmd_config() -> ExitCode {
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("error: failed to create runtime: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    match rt.block_on(config::cmd_config()) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
-    }
+fn cmd_config() -> CmdResult {
+    let rt = new_runtime()?;
+    rt.block_on(config::cmd_config())?;
+    Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
-    let inventory = match sandogasa_inventory::load_and_merge(paths) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let api_key = match config::resolve_api_key(args.api_key.as_deref()) {
-        Ok(k) => k,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> CmdResult {
+    let inventory = sandogasa_inventory::load_and_merge(paths)?;
+    let api_key = config::resolve_api_key(args.api_key.as_deref())?;
     let url = config::resolve_url();
-    let client = match sandogasa_bugzilla::BzClient::new(&url).with_api_key(api_key) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let client = sandogasa_bugzilla::BzClient::new(&url).with_api_key(api_key)?;
 
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("error: failed to create runtime: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let rt = new_runtime()?;
     let claim_email = config::resolve_email();
     if args.claim && claim_email.is_none() {
-        eprintln!(
-            "error: --claim needs a configured Bugzilla email.\n\
+        return Err("--claim needs a configured Bugzilla email.\n\
              Set it with: poi-tracker config"
-        );
-        return ExitCode::FAILURE;
+            .into());
     }
-    let batch_email = match resolve_batch_email(&args.batch) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let batch_email = resolve_batch_email(&args.batch)?;
     let dg = sandogasa_distgit::DistGitClient::new();
     let bodhi = sandogasa_bodhi::BodhiClient::new();
     let koji_lookup = koji_tag_lookup();
@@ -1122,7 +969,7 @@ fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
         }
         (_, true) => None,
     };
-    match rt.block_on(triage_updates::run(
+    let report = rt.block_on(triage_updates::run(
         &inventory,
         &client,
         &dg,
@@ -1137,40 +984,27 @@ fn cmd_triage_updates(paths: &[String], args: &TriageUpdatesArgs) -> ExitCode {
         args.dry_run,
         args.yes,
         args.verbose,
-    )) {
-        Ok(report) => {
-            eprintln!(
-                "\n{} package(s) with managed priority, {} priority update(s) \
-                 planned, {} applied; {} stale-bug action(s) planned, {} \
-                 applied, {} failed",
-                report.packages_with_priority,
-                report.updates_planned,
-                report.updates_applied,
-                report.stale_planned,
-                report.stale_applied,
-                report.failures
-            );
-            if report.failures > 0 {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            }
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
-    }
+    ))?;
+    eprintln!(
+        "\n{} package(s) with managed priority, {} priority update(s) \
+         planned, {} applied; {} stale-bug action(s) planned, {} \
+         applied, {} failed",
+        report.packages_with_priority,
+        report.updates_planned,
+        report.updates_applied,
+        report.stale_planned,
+        report.stale_applied,
+        report.failures
+    );
+    Ok(if report.failures > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
-fn cmd_show(paths: &[String], args: &ShowArgs) -> ExitCode {
-    let inventory = match sandogasa_inventory::load_and_merge(paths) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+fn cmd_show(paths: &[String], args: &ShowArgs) -> CmdResult {
+    let inventory = sandogasa_inventory::load_and_merge(paths)?;
 
     let packages = inventory.packages_for_workload(args.workload.as_deref());
 
@@ -1208,17 +1042,11 @@ fn cmd_show(paths: &[String], args: &ShowArgs) -> ExitCode {
         }
     }
 
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_validate(paths: &[String]) -> ExitCode {
-    let inventory = match sandogasa_inventory::load_and_merge(paths) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+fn cmd_validate(paths: &[String]) -> CmdResult {
+    let inventory = sandogasa_inventory::load_and_merge(paths)?;
 
     let mut errors = 0;
 
@@ -1251,21 +1079,21 @@ fn cmd_validate(paths: &[String]) -> ExitCode {
 
     if errors > 0 {
         eprintln!("\n{errors} error(s) found.");
-        ExitCode::FAILURE
+        Ok(ExitCode::FAILURE)
     } else {
         println!("Inventory OK: {} package(s).", inventory.package.len());
-        ExitCode::SUCCESS
+        Ok(ExitCode::SUCCESS)
     }
 }
 
-fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
-    let inventory = match sandogasa_inventory::load_and_merge(paths) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+/// Write an export file, labelling the path in the error the way
+/// every export site does.
+fn write_export(path: &str, content: &str) -> Result<(), String> {
+    std::fs::write(path, content).map_err(|e| format!("failed to write {path}: {e}"))
+}
+
+fn cmd_export(paths: &[String], args: &ExportArgs) -> CmdResult {
+    let inventory = sandogasa_inventory::load_and_merge(paths)?;
 
     match &args.format {
         ExportFormat::ContentResolver { workload, output } => {
@@ -1290,10 +1118,7 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
                 let default_filename =
                     format!("{}.yaml", inventory.inventory.name.replace(' ', "_"));
                 let path = output.as_deref().unwrap_or(&default_filename);
-                if let Err(e) = std::fs::write(path, &yaml) {
-                    eprintln!("error: failed to write {path}: {e}");
-                    return ExitCode::FAILURE;
-                }
+                write_export(path, &yaml)?;
                 eprintln!("Wrote {path}");
             } else if workload_keys.len() == 1 {
                 // Single workload: respect -o if given.
@@ -1303,27 +1128,19 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
                 );
                 let wl_name = workload_export_filename(&inventory, workload_keys[0]);
                 let path = output.as_deref().unwrap_or(&wl_name);
-                if let Err(e) = std::fs::write(path, &yaml) {
-                    eprintln!("error: failed to write {path}: {e}");
-                    return ExitCode::FAILURE;
-                }
+                write_export(path, &yaml)?;
                 eprintln!("Wrote {path}");
             } else {
                 // Multi-workload: one file per workload.
                 if output.is_some() {
-                    eprintln!(
-                        "error: -o/--output cannot be used when \
+                    return Err("-o/--output cannot be used when \
                          exporting multiple workloads"
-                    );
-                    return ExitCode::FAILURE;
+                        .into());
                 }
                 for key in &workload_keys {
                     let yaml = sandogasa_inventory::content_resolver::export(&inventory, Some(key));
                     let path = workload_export_filename(&inventory, key);
-                    if let Err(e) = std::fs::write(&path, &yaml) {
-                        eprintln!("error: failed to write {path}: {e}");
-                        return ExitCode::FAILURE;
-                    }
+                    write_export(&path, &yaml)?;
                     eprintln!("Wrote {path}");
                 }
             }
@@ -1344,19 +1161,13 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
             if let Some(path) = output
                 && std::path::Path::new(path).exists()
             {
-                let result = match sandogasa_inventory::hs_relmon::merge_into_manifest(
+                let result = sandogasa_inventory::hs_relmon::merge_into_manifest(
                     path,
                     &inventory,
                     workload.as_deref(),
                     &defaults,
                     *prune,
-                ) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        eprintln!("error: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                };
+                )?;
 
                 if !result.stale.is_empty() && !prune {
                     eprintln!(
@@ -1369,10 +1180,7 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
                     }
                 }
 
-                if let Err(e) = std::fs::write(path, &result.content) {
-                    eprintln!("error: failed to write {path}: {e}");
-                    return ExitCode::FAILURE;
-                }
+                write_export(path, &result.content)?;
 
                 if !result.unshipped_removed.is_empty() {
                     eprintln!(
@@ -1398,10 +1206,7 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
                     &defaults,
                 );
                 if let Some(path) = output {
-                    if let Err(e) = std::fs::write(path, &toml) {
-                        eprintln!("error: failed to write {path}: {e}");
-                        return ExitCode::FAILURE;
-                    }
+                    write_export(path, &toml)?;
                     eprintln!("Wrote {path}");
                 } else {
                     print!("{toml}");
@@ -1410,10 +1215,10 @@ fn cmd_export(paths: &[String], args: &ExportArgs) -> ExitCode {
         }
     }
 
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_find(paths: &[String], args: &FindArgs) -> ExitCode {
+fn cmd_find(paths: &[String], args: &FindArgs) -> CmdResult {
     let mut found = false;
     for path in paths {
         let inventory = match sandogasa_inventory::load(path) {
@@ -1446,9 +1251,9 @@ fn cmd_find(paths: &[String], args: &FindArgs) -> ExitCode {
     }
     if !found {
         eprintln!("{} not found in any inventory.", args.name);
-        return ExitCode::FAILURE;
+        return Ok(ExitCode::FAILURE);
     }
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Merge new fields into an existing package without overwriting.
@@ -1484,58 +1289,36 @@ fn merge_into_package(existing: &mut sandogasa_inventory::Package, args: &AddArg
     }
 }
 
-fn cmd_adopt(paths: &[String], args: &AdoptArgs) -> ExitCode {
-    let inventory = match sandogasa_inventory::load_and_merge(paths) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+fn cmd_adopt(paths: &[String], args: &AdoptArgs) -> CmdResult {
+    let inventory = sandogasa_inventory::load_and_merge(paths)?;
     // Detection is unauthenticated GETs, so --dry-run works
     // without a token; only actual adoption needs one.
     let token = if args.dry_run {
         None
     } else {
-        match config::resolve_distgit_token(args.api_token.as_deref()) {
-            Ok(t) => Some(t),
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
+        Some(config::resolve_distgit_token(args.api_token.as_deref())?)
     };
     let mut dg = sandogasa_distgit::DistGitClient::new();
     if let Some(token) = token {
         dg = dg.with_token(token);
     }
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("error: failed to create runtime: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let rt = new_runtime()?;
     // Cheap precondition: a bad token should fail in seconds, not
     // after walking the whole inventory. Also tells us who the
     // new point of contact will be.
     let username = if args.dry_run {
         String::new()
     } else {
-        match rt.block_on(dg.verify_token()) {
-            Ok(u) => u,
-            Err(e) => {
-                eprintln!(
-                    "error: dist-git token validation failed: {e}\n\
-                     The token needs the \"Modify an existing project\" ACL; \
-                     generate one at\n  \
-                     https://src.fedoraproject.org/settings/token/new"
-                );
-                return ExitCode::FAILURE;
-            }
-        }
+        rt.block_on(dg.verify_token()).map_err(|e| {
+            format!(
+                "dist-git token validation failed: {e}\n\
+                 The token needs the \"Modify an existing project\" ACL; \
+                 generate one at\n  \
+                 https://src.fedoraproject.org/settings/token/new"
+            )
+        })?
     };
-    match rt.block_on(adopt::run(
+    let report = rt.block_on(adopt::run(
         &inventory,
         &dg,
         &username,
@@ -1543,26 +1326,19 @@ fn cmd_adopt(paths: &[String], args: &AdoptArgs) -> ExitCode {
         args.dry_run,
         args.yes,
         args.verbose,
-    )) {
-        Ok(report) => {
-            eprintln!(
-                "\n{} checked, {} orphaned, {} adopted, {} failed",
-                report.packages_checked, report.orphaned_found, report.adopted, report.failures
-            );
-            if report.failures > 0 {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            }
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
-    }
+    ))?;
+    eprintln!(
+        "\n{} checked, {} orphaned, {} adopted, {} failed",
+        report.packages_checked, report.orphaned_found, report.adopted, report.failures
+    );
+    Ok(if report.failures > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
-fn cmd_add(paths: &[String], args: &AddArgs) -> ExitCode {
+fn cmd_add(paths: &[String], args: &AddArgs) -> CmdResult {
     // Search all inventories for the package.
     let mut target_path = None;
     for path in paths {
@@ -1577,13 +1353,7 @@ fn cmd_add(paths: &[String], args: &AddArgs) -> ExitCode {
     // Fall back to first inventory file.
     let target_path = target_path.unwrap_or_else(|| paths[0].clone());
 
-    let mut inventory = match sandogasa_inventory::load(&target_path) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let mut inventory = sandogasa_inventory::load(&target_path)?;
 
     if let Some(existing) = inventory.find_package_mut(&args.name) {
         // Merge into existing package.
@@ -1597,20 +1367,9 @@ fn cmd_add(paths: &[String], args: &AddArgs) -> ExitCode {
             reason: args.reason.clone(),
             team: args.team.clone(),
             task: args.task.clone(),
-            rpms: if args.rpm.is_empty() {
-                None
-            } else {
-                Some(args.rpm.clone())
-            },
-            arch_rpms: None,
+            rpms: (!args.rpm.is_empty()).then(|| args.rpm.clone()),
             track: args.track.clone(),
-            repology_name: None,
-            distros: None,
-            file_issue: None,
-            priority: None,
-            retired_on: None,
-            unshipped: None,
-            archived_builds: None,
+            ..Default::default()
         };
         inventory.add_package(pkg);
         eprintln!("Added {} to {target_path}", args.name);
@@ -1621,66 +1380,42 @@ fn cmd_add(paths: &[String], args: &AddArgs) -> ExitCode {
         inventory.add_to_workload(wl, &args.name);
     }
 
-    if let Err(e) = sandogasa_inventory::save(&inventory, &target_path) {
-        eprintln!("error: {e}");
-        return ExitCode::FAILURE;
-    }
+    sandogasa_inventory::save(&inventory, &target_path)?;
 
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_remove(path: &str, args: &RemoveArgs) -> ExitCode {
-    let mut inventory = match sandogasa_inventory::load(path) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+fn cmd_remove(path: &str, args: &RemoveArgs) -> CmdResult {
+    let mut inventory = sandogasa_inventory::load(path)?;
 
     if args.rpm.is_empty() {
         // Remove the whole package.
         if !inventory.remove_package(&args.name) {
-            eprintln!("error: package '{}' not found", args.name);
-            return ExitCode::FAILURE;
+            return Err(format!("package '{}' not found", args.name).into());
         }
         eprintln!("Removed {} from {path}", args.name);
     } else {
         // Remove specific RPMs from the package.
-        let pkg = match inventory.find_package_mut(&args.name) {
-            Some(p) => p,
-            None => {
-                eprintln!("error: package '{}' not found", args.name);
-                return ExitCode::FAILURE;
-            }
-        };
+        let pkg = inventory
+            .find_package_mut(&args.name)
+            .ok_or_else(|| format!("package '{}' not found", args.name))?;
         if let Some(ref mut rpms) = pkg.rpms {
             for rpm in &args.rpm {
                 rpms.retain(|r| r != rpm);
             }
             eprintln!("Removed RPM(s) {} from {}", args.rpm.join(", "), args.name);
         } else {
-            eprintln!("error: package '{}' has no RPM list", args.name);
-            return ExitCode::FAILURE;
+            return Err(format!("package '{}' has no RPM list", args.name).into());
         }
     }
 
-    if let Err(e) = sandogasa_inventory::save(&inventory, path) {
-        eprintln!("error: {e}");
-        return ExitCode::FAILURE;
-    }
+    sandogasa_inventory::save(&inventory, path)?;
 
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_import(args: &ImportArgs) -> ExitCode {
-    let mut inventory = match sandogasa_inventory::import_json::import_file(&args.json_file) {
-        Ok(inv) => inv,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+fn cmd_import(args: &ImportArgs) -> CmdResult {
+    let mut inventory = sandogasa_inventory::import_json::import_file(&args.json_file)?;
 
     if !args.private_fields.is_empty() {
         inventory.inventory.private_fields = args.private_fields.clone();
@@ -1695,10 +1430,7 @@ fn cmd_import(args: &ImportArgs) -> ExitCode {
         }
     }
 
-    if let Err(e) = sandogasa_inventory::save(&inventory, &args.output) {
-        eprintln!("error: {e}");
-        return ExitCode::FAILURE;
-    }
+    sandogasa_inventory::save(&inventory, &args.output)?;
 
     eprintln!(
         "Imported {} package(s) from {} to {}",
@@ -1706,7 +1438,7 @@ fn cmd_import(args: &ImportArgs) -> ExitCode {
         args.json_file,
         args.output
     );
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Check if a package name matches any of the Pagure patterns.
@@ -1831,6 +1563,127 @@ fn resume_patterns(patterns: Vec<String>, failed: &str) -> Vec<String> {
         Some(idx) => patterns[idx..].to_vec(),
         None => patterns,
     }
+}
+
+/// Load an existing inventory file as a sync's base, or build a
+/// fresh one described by the source when the file doesn't exist
+/// yet. `default_name` names the fresh inventory (`--name` or a
+/// source-derived default); it's ignored for an existing file.
+fn load_or_create_inventory(
+    path: &str,
+    source_kind: &str,
+    source_label: &str,
+    default_name: &str,
+    workloads: &[String],
+) -> Result<sandogasa_inventory::Inventory, String> {
+    if std::path::Path::new(path).exists() {
+        return sandogasa_inventory::load(path).map_err(|e| format!("{path}: {e}"));
+    }
+    Ok(sandogasa_inventory::Inventory {
+        inventory: sandogasa_inventory::InventoryMeta {
+            name: default_name.to_string(),
+            description: format!("Packages synced from {source_kind} ({source_label})"),
+            maintainer: source_label.to_string(),
+            labels: vec![],
+            workloads: workloads_from_names(workloads),
+            private_fields: vec![],
+        },
+        package: vec![],
+    })
+}
+
+/// Add every remote name missing from the inventory, tagging each
+/// with the sync's workloads. Returns the names added, which the
+/// callers reuse for counts and retirement checks.
+fn add_new_packages<'a>(
+    inventory: &mut sandogasa_inventory::Inventory,
+    names: impl IntoIterator<Item = &'a str>,
+    workloads: &[String],
+) -> Vec<String> {
+    let mut added: Vec<String> = Vec::new();
+    for name in names {
+        if inventory.find_package(name).is_some() {
+            continue;
+        }
+        inventory.add_package(sandogasa_inventory::Package {
+            name: name.to_string(),
+            ..Default::default()
+        });
+        for wl in workloads {
+            inventory.add_to_workload(wl, name);
+        }
+        added.push(name.to_string());
+    }
+    added
+}
+
+/// Inventory packages the remote listing no longer has, scoped to
+/// the patterns the run actually queried (an empty pattern list
+/// means everything was in scope, so `--prune --pattern 'a*'`
+/// won't drop non-`a*` packages). Packages marked unshipped are
+/// preserved: a gone project is absent from the remote listing by
+/// definition, and the tombstone is what keeps triage-retired
+/// processing it.
+fn stale_packages(
+    inventory: &sandogasa_inventory::Inventory,
+    remote_names: &std::collections::HashSet<&str>,
+    patterns: &[String],
+) -> Vec<String> {
+    inventory
+        .package
+        .iter()
+        .filter(|p| !p.is_unshipped())
+        .filter(|p| !remote_names.contains(p.name.as_str()))
+        .filter(|p| matches_any_pattern(&p.name, patterns))
+        .map(|p| p.name.clone())
+        .collect()
+}
+
+/// Remove the stale packages under `--prune`, or list them as a
+/// warning so the user can decide.
+fn prune_or_warn_stale(
+    inventory: &mut sandogasa_inventory::Inventory,
+    stale: &[String],
+    prune: bool,
+) {
+    if stale.is_empty() {
+        return;
+    }
+    if prune {
+        for name in stale {
+            inventory.remove_package(name);
+        }
+    } else {
+        eprintln!(
+            "warning: {} package(s) not in sync scope \
+             (use --prune to remove):",
+            stale.len()
+        );
+        for name in stale {
+            eprintln!("  {name}");
+        }
+    }
+}
+
+/// The closing line every sync prints once the inventory is saved.
+fn print_sync_summary(
+    source_label: &str,
+    added: usize,
+    pruned: usize,
+    prune: bool,
+    inventory: &sandogasa_inventory::Inventory,
+    output: &str,
+) {
+    let pruned_msg = if prune && pruned > 0 {
+        format!(", {pruned} pruned")
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "Synced {source_label}: {added} new{pruned_msg}, \
+         {} total in {output}",
+        inventory.package.len()
+    );
 }
 
 async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -1960,24 +1813,18 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
     // failure), the existing output otherwise, or a fresh one.
     let mut inventory = if resuming {
         sandogasa_inventory::load(&partial_path).map_err(|e| format!("{partial_path}: {e}"))?
-    } else if std::path::Path::new(&args.output).exists() {
-        sandogasa_inventory::load(&args.output).map_err(|e| format!("{}: {e}", args.output))?
     } else {
-        let inv_name = args
+        let default_name = args
             .name
             .clone()
             .unwrap_or_else(|| source_label.replace(':', "-"));
-        sandogasa_inventory::Inventory {
-            inventory: sandogasa_inventory::InventoryMeta {
-                name: inv_name,
-                description: format!("Packages synced from dist-git ({source_label})"),
-                maintainer: source_label.clone(),
-                labels: vec![],
-                workloads: workloads_from_names(&args.workload),
-                private_fields: vec![],
-            },
-            package: vec![],
-        }
+        load_or_create_inventory(
+            &args.output,
+            "dist-git",
+            &source_label,
+            &default_name,
+            &args.workload,
+        )?
     };
 
     // Update inventory name if explicitly provided.
@@ -1990,33 +1837,11 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
 
     // Add new packages, remembering which ones for
     // --mark-unshipped.
-    let mut added_names: Vec<String> = Vec::new();
-    for p in &filtered {
-        if inventory.find_package(&p.name).is_some() {
-            continue;
-        }
-        inventory.add_package(sandogasa_inventory::Package {
-            name: p.name.clone(),
-            poc: None,
-            reason: None,
-            team: None,
-            task: None,
-            rpms: None,
-            arch_rpms: None,
-            track: None,
-            repology_name: None,
-            distros: None,
-            file_issue: None,
-            priority: None,
-            retired_on: None,
-            unshipped: None,
-            archived_builds: None,
-        });
-        for wl in &args.workload {
-            inventory.add_to_workload(wl, &p.name);
-        }
-        added_names.push(p.name.clone());
-    }
+    let added_names = add_new_packages(
+        &mut inventory,
+        filtered.iter().map(|p| p.name.as_str()),
+        &args.workload,
+    );
     let added = added_names.len();
 
     // On fetch error, save partial results plus the failed
@@ -2034,39 +1859,13 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         return Err(e);
     }
 
-    // Detect packages in the inventory but not in the filtered results.
-    // Scoped to the active pattern(s) so --prune with --pattern 'a*'
-    // won't drop non-a* packages. Excluded packages naturally fall
-    // out of remote_names since they were filtered above. Packages
-    // marked unshipped are preserved: a gone project is absent from
-    // the remote listing by definition, and the tombstone is what
-    // keeps triage-retired processing it.
-    let stale: Vec<String> = inventory
-        .package
-        .iter()
-        .filter(|p| !p.is_unshipped())
-        .filter(|p| !remote_names.contains(p.name.as_str()))
-        .filter(|p| matches_any_pattern(&p.name, &patterns))
-        .map(|p| p.name.clone())
-        .collect();
-
+    // Detect packages in the inventory but not in the filtered
+    // results, scoped to the active pattern(s). Excluded packages
+    // naturally fall out of remote_names since they were filtered
+    // above.
+    let stale = stale_packages(&inventory, &remote_names, &patterns);
     let pruned = stale.len();
-    if !stale.is_empty() {
-        if args.prune {
-            for name in &stale {
-                inventory.remove_package(name);
-            }
-        } else {
-            eprintln!(
-                "warning: {} package(s) not in sync scope \
-                 (use --prune to remove):",
-                stale.len()
-            );
-            for name in &stale {
-                eprintln!("  {name}");
-            }
-        }
-    }
+    prune_or_warn_stale(&mut inventory, &stale, args.prune);
 
     // Check the packages this run added against the active
     // branches, so a fresh inventory starts with `unshipped`
@@ -2135,47 +1934,30 @@ async fn sync_distgit_async(args: &SyncDistgitArgs) -> Result<(), Box<dyn std::e
         let _ = std::fs::remove_file(&state_path);
     }
 
-    let pruned_msg = if args.prune && pruned > 0 {
-        format!(", {pruned} pruned")
-    } else {
-        String::new()
-    };
-    eprintln!(
-        "Synced {source_label}: {added} new{pruned_msg}, \
-         {} total in {}",
-        inventory.package.len(),
-        args.output
+    print_sync_summary(
+        &source_label,
+        added,
+        pruned,
+        args.prune,
+        &inventory,
+        &args.output,
     );
     Ok(())
 }
 
-fn cmd_sync_distgit(args: &SyncDistgitArgs) -> ExitCode {
+fn cmd_sync_distgit(args: &SyncDistgitArgs) -> CmdResult {
     // Group filters only apply to user mode.
     if args.user.is_none()
         && (args.no_groups || !args.include_group.is_empty() || !args.exclude_group.is_empty())
     {
-        eprintln!(
-            "error: --no-groups, --include-group, and \
+        return Err("--no-groups, --include-group, and \
              --exclude-group only apply with --user"
-        );
-        return ExitCode::FAILURE;
+            .into());
     }
 
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("error: failed to create runtime: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    match rt.block_on(sync_distgit_async(args)) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
-    }
+    let rt = new_runtime()?;
+    rt.block_on(sync_distgit_async(args))?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn resolve_gitlab_url(args: &SyncGitlabArgs) -> Result<String, String> {
@@ -2197,14 +1979,8 @@ fn resolve_gitlab_url(args: &SyncGitlabArgs) -> Result<String, String> {
     Err("specify --url or --preset".to_string())
 }
 
-fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
-    let group_url = match resolve_gitlab_url(args) {
-        Ok(u) => u,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> CmdResult {
+    let group_url = resolve_gitlab_url(args)?;
 
     let source_label = args.preset.clone().unwrap_or_else(|| group_url.clone());
 
@@ -2214,31 +1990,20 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
     let sig = if args.mark_unshipped {
         let Some(sig) = gitlab_unshipped::Sig::from_source(args.preset.as_deref(), &group_url)
         else {
-            eprintln!(
-                "error: --mark-unshipped supports the hyperscale and \
+            return Err(format!(
+                "--mark-unshipped supports the hyperscale and \
                  proposed-updates sources only (no CBS release \
                  lifecycle for {source_label})"
-            );
-            return ExitCode::FAILURE;
+            )
+            .into());
         };
-        if let Err(e) =
-            sandogasa_cli::require_tools(&[("koji", "sudo dnf install koji", Some("version"))])
-        {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
+        sandogasa_cli::require_tools(&[("koji", "sudo dnf install koji", Some("version"))])?;
         Some(sig)
     } else {
         None
     };
 
-    let projects = match sandogasa_gitlab::list_group_projects(&group_url) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let projects = sandogasa_gitlab::list_group_projects(&group_url)?;
 
     let total_fetched = projects.len();
 
@@ -2259,28 +2024,14 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
     }
 
     // Load existing inventory or create a new one.
-    let mut inventory = if std::path::Path::new(&args.output).exists() {
-        match sandogasa_inventory::load(&args.output) {
-            Ok(inv) => inv,
-            Err(e) => {
-                eprintln!("error: {}: {e}", args.output);
-                return ExitCode::FAILURE;
-            }
-        }
-    } else {
-        let inv_name = args.name.clone().unwrap_or_else(|| source_label.clone());
-        sandogasa_inventory::Inventory {
-            inventory: sandogasa_inventory::InventoryMeta {
-                name: inv_name,
-                description: format!("Packages synced from GitLab ({source_label})"),
-                maintainer: source_label.clone(),
-                labels: vec![],
-                workloads: workloads_from_names(&args.workload),
-                private_fields: vec![],
-            },
-            package: vec![],
-        }
-    };
+    let default_name = args.name.clone().unwrap_or_else(|| source_label.clone());
+    let mut inventory = load_or_create_inventory(
+        &args.output,
+        "GitLab",
+        &source_label,
+        &default_name,
+        &args.workload,
+    )?;
 
     if let Some(ref name) = args.name {
         inventory.inventory.name.clone_from(name);
@@ -2288,61 +2039,13 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
 
     let remote_names: std::collections::HashSet<&str> = names.iter().copied().collect();
 
-    let mut added = 0usize;
-    for name in &names {
-        if inventory.find_package(name).is_some() {
-            continue;
-        }
-        inventory.add_package(sandogasa_inventory::Package {
-            name: name.to_string(),
-            poc: None,
-            reason: None,
-            team: None,
-            task: None,
-            rpms: None,
-            arch_rpms: None,
-            track: None,
-            repology_name: None,
-            distros: None,
-            file_issue: None,
-            priority: None,
-            retired_on: None,
-            unshipped: None,
-            archived_builds: None,
-        });
-        for wl in &args.workload {
-            inventory.add_to_workload(wl, name);
-        }
-        added += 1;
-    }
+    let added = add_new_packages(&mut inventory, names.iter().copied(), &args.workload).len();
 
-    // Detect stale packages. Unshipped tombstones are preserved
-    // (see the sync-distgit prune above).
-    let stale: Vec<String> = inventory
-        .package
-        .iter()
-        .filter(|p| !p.is_unshipped())
-        .filter(|p| !remote_names.contains(p.name.as_str()))
-        .map(|p| p.name.clone())
-        .collect();
-
+    // Detect stale packages. Every synced name is in scope here
+    // (GitLab syncs have no pattern flag).
+    let stale = stale_packages(&inventory, &remote_names, &[]);
     let pruned = stale.len();
-    if !stale.is_empty() {
-        if args.prune {
-            for name in &stale {
-                inventory.remove_package(name);
-            }
-        } else {
-            eprintln!(
-                "warning: {} package(s) not in sync scope \
-                 (use --prune to remove):",
-                stale.len()
-            );
-            for name in &stale {
-                eprintln!("  {name}");
-            }
-        }
-    }
+    prune_or_warn_stale(&mut inventory, &stale, args.prune);
 
     // Mark archived projects with no released CBS build as
     // unshipped. Best-effort: a CBS/GitLab failure warns but the
@@ -2390,23 +2093,17 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> ExitCode {
         }
     }
 
-    if let Err(e) = sandogasa_inventory::save(&inventory, &args.output) {
-        eprintln!("error: {e}");
-        return ExitCode::FAILURE;
-    }
+    sandogasa_inventory::save(&inventory, &args.output)?;
 
-    let pruned_msg = if args.prune && pruned > 0 {
-        format!(", {pruned} pruned")
-    } else {
-        String::new()
-    };
-    eprintln!(
-        "Synced {source_label}: {added} new{pruned_msg}, \
-         {} total in {}",
-        inventory.package.len(),
-        args.output
+    print_sync_summary(
+        &source_label,
+        added,
+        pruned,
+        args.prune,
+        &inventory,
+        &args.output,
     );
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
