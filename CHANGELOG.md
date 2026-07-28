@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### fesco-chair: followup inference reads number-last topics
+
+`extract_ticket_numbers` only recognized `* TOPIC: #NNNN Title`
+minutes lines, but chairs also write the ticket number last
+(`* TOPIC: Title #NNNN`, as at the 2026-07-21 meeting) — so none of
+that meeting's tickets counted as previously discussed and #3636
+landed under New business instead of Followups. Every `#NNNN` on a
+TOPIC line now counts.
+
 ### fesco-chair: parse lowercase decision tallies
 
 The in-ticket decision parser only matched uppercase

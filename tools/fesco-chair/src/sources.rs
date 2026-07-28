@@ -224,20 +224,24 @@ pub fn extract_decision<'a>(bodies_newest_first: impl Iterator<Item = &'a str>) 
 }
 
 /// Ticket numbers discussed at a meeting, from its plain-text
-/// minutes: meetbot renders each `!topic #NNNN Title` command as a
-/// `* TOPIC: #NNNN Title (@chair, HH:MM:SS)` line.
+/// minutes: meetbot renders each `!topic` command as a
+/// `* TOPIC: … (@chair, HH:MM:SS)` line. Chairs write the ticket
+/// number first (`#NNNN Title`) or last (`Title #NNNN`), so every
+/// `#NNNN` on a TOPIC line counts.
 pub fn extract_ticket_numbers(minutes: &str) -> BTreeSet<u64> {
     let mut out = BTreeSet::new();
     for line in minutes.lines() {
         let Some(rest) = line.trim_start().strip_prefix("* TOPIC:") else {
             continue;
         };
-        let Some(num) = rest.trim_start().strip_prefix('#') else {
-            continue;
-        };
-        let digits: String = num.chars().take_while(char::is_ascii_digit).collect();
-        if let Ok(n) = digits.parse() {
-            out.insert(n);
+        for (i, _) in rest.match_indices('#') {
+            let digits: String = rest[i + 1..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if let Ok(n) = digits.parse() {
+                out.insert(n);
+            }
         }
     }
     out
@@ -457,6 +461,22 @@ Meeting summary
 ";
         let numbers = extract_ticket_numbers(minutes);
         assert_eq!(numbers, BTreeSet::from([3620, 3623]));
+    }
+
+    #[test]
+    fn extract_ticket_numbers_reads_number_last_topics() {
+        // The 2026-07-21 FESCo meeting wrote topics with the ticket
+        // number at the end instead of the front.
+        let minutes = "\
+Meeting summary
+---------------
+* TOPIC: Init Process (@zbyszek:fedora.im, 17:01:36)
+* TOPIC: Change: libxml215 #3628 (@zbyszek:fedora.im, 17:03:55)
+* TOPIC: Change: Enable Shadow Stack by Default on x86_64 #3636 (@zbyszek:fedora.im, 17:25:43)
+* TOPIC: Next week's chair (@zbyszek:fedora.im, 18:24:00)
+";
+        let numbers = extract_ticket_numbers(minutes);
+        assert_eq!(numbers, BTreeSet::from([3628, 3636]));
     }
 
     fn docs_item(number: u64) -> Ticket {
