@@ -54,16 +54,14 @@ pub fn parse(content: &str) -> Result<Inventory, String> {
     toml::from_str(content).map_err(|e| format!("failed to parse inventory: {e}"))
 }
 
-/// Save an inventory to a TOML file.
-pub fn save(inventory: &Inventory, path: &str) -> Result<(), String> {
-    let content =
-        toml::to_string_pretty(inventory).map_err(|e| format!("TOML serialization failed: {e}"))?;
-    std::fs::write(path, content).map_err(|e| format!("failed to write {path}: {e}"))
-}
-
 /// Serialize an inventory to a TOML string.
 pub fn to_toml(inventory: &Inventory) -> Result<String, String> {
     toml::to_string_pretty(inventory).map_err(|e| format!("TOML serialization failed: {e}"))
+}
+
+/// Save an inventory to a TOML file.
+pub fn save(inventory: &Inventory, path: &str) -> Result<(), String> {
+    std::fs::write(path, to_toml(inventory)?).map_err(|e| format!("failed to write {path}: {e}"))
 }
 
 #[cfg(test)]

@@ -73,20 +73,25 @@ pub fn numeric_components(version: &str) -> Option<Vec<u64>> {
     v.split('.').map(|c| c.parse::<u64>().ok()).collect()
 }
 
+/// Parse two versions and zero-pad their numeric components to a
+/// common width, so they compare positionally. `None` when either
+/// version isn't plainly numeric.
+fn padded(a: &str, b: &str) -> Option<(Vec<u64>, Vec<u64>)> {
+    let (a, b) = (numeric_components(a)?, numeric_components(b)?);
+    let width = a.len().max(b.len());
+    let pad =
+        |v: &[u64]| -> Vec<u64> { (0..width).map(|i| v.get(i).copied().unwrap_or(0)).collect() };
+    Some((pad(&a), pad(&b)))
+}
+
 /// Whether `candidate` is at least `target`, comparing dotted
 /// numeric components (shorter versions are zero-padded). Used to
 /// decide whether a build addresses a release-monitoring bug.
 /// Non-numeric versions only match on exact string equality.
 pub fn version_at_least(candidate: &str, target: &str) -> bool {
-    match (numeric_components(candidate), numeric_components(target)) {
-        (Some(c), Some(t)) => {
-            let width = c.len().max(t.len());
-            let pad = |v: &[u64]| -> Vec<u64> {
-                (0..width).map(|i| v.get(i).copied().unwrap_or(0)).collect()
-            };
-            pad(&c) >= pad(&t)
-        }
-        _ => candidate == target,
+    match padded(candidate, target) {
+        Some((c, t)) => c >= t,
+        None => candidate == target,
     }
 }
 
@@ -94,16 +99,9 @@ pub fn version_at_least(candidate: &str, target: &str) -> bool {
 /// rule: a change at or before the leftmost non-zero component of
 /// `current` is breaking.
 pub fn classify(current: &str, new: &str) -> Bump {
-    let (Some(cur), Some(new_c)) = (numeric_components(current), numeric_components(new)) else {
+    let Some((cur, new_c)) = padded(current, new) else {
         return Bump::NeedsReview;
     };
-    let width = cur.len().max(new_c.len());
-    let cur: Vec<u64> = (0..width)
-        .map(|i| cur.get(i).copied().unwrap_or(0))
-        .collect();
-    let new_c: Vec<u64> = (0..width)
-        .map(|i| new_c.get(i).copied().unwrap_or(0))
-        .collect();
     if new_c == cur {
         // Same version — the bug is stale, nothing to update.
         return Bump::UpToDate;

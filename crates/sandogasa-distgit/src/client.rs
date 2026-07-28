@@ -91,15 +91,10 @@ pub fn retain_rpms_namespace(projects: &mut Vec<ProjectInfo>) {
     projects.retain(|p| p.fullname.as_deref().is_none_or(|f| f.starts_with("rpms/")));
 }
 
+/// A paginated project listing, as returned by both the projects
+/// and the group endpoints.
 #[derive(Debug, Deserialize)]
-struct UserProjectsResponse {
-    projects: Vec<ProjectInfo>,
-    #[serde(default)]
-    pagination: Option<Pagination>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GroupProjectsResponse {
+struct ProjectsResponse {
     projects: Vec<ProjectInfo>,
     #[serde(default)]
     pagination: Option<Pagination>,
@@ -176,13 +171,7 @@ impl Default for DistGitClient {
 
 impl DistGitClient {
     pub fn new() -> Self {
-        sandogasa_cli::install_crypto_provider();
-
-        Self {
-            base_url: DISTGIT_BASE.to_string(),
-            client: build_http_client(),
-            api_token: None,
-        }
+        Self::with_base_url(DISTGIT_BASE)
     }
 
     pub fn with_base_url(base_url: &str) -> Self {
@@ -326,22 +315,15 @@ impl DistGitClient {
         Ok(())
     }
 
-    /// Remove all ACLs for a user or group on an RPM package.
+    /// Remove all ACLs for a user or group on an RPM package
+    /// (an empty `acl` value clears the entry).
     pub async fn remove_acl(
         &self,
         package: &str,
         user_type: &str,
         name: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        validate_segment(package, "package name")?;
-        let url = format!("{}/api/0/rpms/{}/git/modifyacls", self.base_url, package);
-        let form = [("user_type", user_type), ("name", name), ("acl", "")];
-        self.auth(self.client.post(&url))
-            .form(&form)
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
+        self.set_acl(package, user_type, name, "").await
     }
 
     /// Verify the API token and return the authenticated username.
@@ -575,23 +557,15 @@ impl DistGitClient {
         pattern: Option<&str>,
     ) -> Result<Vec<ProjectInfo>, Box<dyn std::error::Error>> {
         validate_segment(username, "username")?;
-        let mut all = Vec::new();
-        let mut page = 1u64;
         let pattern_param = pattern.map(|p| format!("&pattern={p}")).unwrap_or_default();
-        loop {
-            let url = format!(
-                "{}/api/0/projects?namespace=rpms&fork=false&username={}&per_page={}&page={}{}",
-                self.base_url, username, per_page, page, pattern_param
-            );
-            eprint!("\r  fetching page {page}...");
-            let resp = self.get_with_retry(&url).await?;
-            let data: UserProjectsResponse = resp.json().await?;
-            all.extend(data.projects);
-            match data.pagination {
-                Some(ref p) if page < p.pages => page += 1,
-                _ => break,
-            }
-        }
+        let mut all = self
+            .paged_projects(|page| {
+                format!(
+                    "{}/api/0/projects?namespace=rpms&fork=false&username={}&per_page={}&page={}{}",
+                    self.base_url, username, per_page, page, pattern_param
+                )
+            })
+            .await?;
         dedup_projects(&mut all);
         eprintln!("\r  fetched {} package(s)", all.len());
         Ok(all)
@@ -649,23 +623,15 @@ impl DistGitClient {
         pattern: Option<&str>,
     ) -> Result<Vec<ProjectInfo>, Box<dyn std::error::Error>> {
         validate_segment(group, "group name")?;
-        let mut all = Vec::new();
-        let mut page = 1u64;
         let pattern_param = pattern.map(|p| format!("&pattern={p}")).unwrap_or_default();
-        loop {
-            let url = format!(
-                "{}/api/0/group/{}?projects=true&per_page={}&page={}{}",
-                self.base_url, group, per_page, page, pattern_param
-            );
-            eprint!("\r  fetching page {page}...");
-            let resp = self.get_with_retry(&url).await?;
-            let data: GroupProjectsResponse = resp.json().await?;
-            all.extend(data.projects);
-            match data.pagination {
-                Some(ref p) if page < p.pages => page += 1,
-                _ => break,
-            }
-        }
+        let mut all = self
+            .paged_projects(|page| {
+                format!(
+                    "{}/api/0/group/{}?projects=true&per_page={}&page={}{}",
+                    self.base_url, group, per_page, page, pattern_param
+                )
+            })
+            .await?;
         let fetched = all.len();
         retain_rpms_namespace(&mut all);
         let dropped = fetched - all.len();
@@ -678,6 +644,29 @@ impl DistGitClient {
             );
         } else {
             eprintln!("\r  fetched {} package(s)", all.len());
+        }
+        Ok(all)
+    }
+
+    /// Fetch every page of a paginated project listing, with
+    /// per-page progress on stderr and transient-error retries.
+    /// `make_url` builds the URL for a given (1-based) page number.
+    async fn paged_projects(
+        &self,
+        make_url: impl Fn(u64) -> String,
+    ) -> Result<Vec<ProjectInfo>, Box<dyn std::error::Error>> {
+        let mut all = Vec::new();
+        let mut page = 1u64;
+        loop {
+            let url = make_url(page);
+            eprint!("\r  fetching page {page}...");
+            let resp = self.get_with_retry(&url).await?;
+            let data: ProjectsResponse = resp.json().await?;
+            all.extend(data.projects);
+            match data.pagination {
+                Some(ref p) if page < p.pages => page += 1,
+                _ => break,
+            }
         }
         Ok(all)
     }

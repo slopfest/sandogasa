@@ -53,7 +53,6 @@ pub struct Meeting {
 pub struct Meetbot {
     http: reqwest::blocking::Client,
     base_url: String,
-    artefact_base: String,
 }
 
 impl Default for Meetbot {
@@ -73,16 +72,16 @@ impl Meetbot {
     /// the same base so callers can mock the whole surface in
     /// a single wiremock server.
     pub fn with_base_url(base_url: &str) -> Self {
-        sandogasa_cli::install_crypto_provider();
-        let http = reqwest::blocking::Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
-            .user_agent(concat!("sandogasa-meetbot/", env!("CARGO_PKG_VERSION"),))
-            .build()
-            .expect("build reqwest client");
+        let http = sandogasa_cli::http::blocking_builder(concat!(
+            env!("CARGO_PKG_NAME"),
+            "/",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .build()
+        .expect("build reqwest client");
         Self {
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
-            artefact_base: base_url.trim_end_matches('/').to_string(),
         }
     }
 
@@ -121,7 +120,7 @@ impl Meetbot {
         let raw: Vec<RawMeeting> = resp.json()?;
         let mut meetings: Vec<Meeting> = raw
             .into_iter()
-            .filter_map(|r| r.into_meeting(&self.artefact_base))
+            .filter_map(|r| r.into_meeting(&self.base_url))
             .collect();
         meetings.sort_by_key(|a| a.datetime);
         Ok(meetings)
@@ -222,11 +221,6 @@ fn rewrite_artefact_url(url: &str, base: &str) -> String {
     };
     format!("{}{}", base, &rest[slash..])
 }
-
-/// Upper bound on any single HTTP request — a hang-catcher rather than
-/// a latency cap. reqwest's default client has *no* timeout, so a hung
-/// connection would otherwise block forever.
-const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 #[cfg(test)]
 mod tests {

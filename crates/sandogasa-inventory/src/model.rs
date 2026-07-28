@@ -104,7 +104,7 @@ pub struct WorkloadMeta {
 }
 
 /// A package of interest (source RPM).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct Package {
     /// Source RPM name (required).
     pub name: String,
@@ -334,19 +334,12 @@ impl Inventory {
         if let Some(p) = pkg.priority {
             return Some(p);
         }
-        let mut best: Option<Priority> = None;
-        for meta in self.inventory.workloads.values() {
-            if !meta.packages.iter().any(|p| p == name) {
-                continue;
-            }
-            if let Some(p) = meta.default_priority {
-                best = match best {
-                    None => Some(p),
-                    Some(b) => Some(b.max(p)),
-                };
-            }
-        }
-        best
+        self.inventory
+            .workloads
+            .values()
+            .filter(|meta| meta.packages.iter().any(|p| p == name))
+            .filter_map(|meta| meta.default_priority)
+            .max()
     }
 
     /// Find a package by name (mutable).

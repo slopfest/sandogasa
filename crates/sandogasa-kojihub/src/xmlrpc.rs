@@ -207,14 +207,7 @@ fn write_value(xml: &mut String, value: &Value) {
         }
         Value::String(s) => {
             xml.push_str("<string>");
-            for ch in s.chars() {
-                match ch {
-                    '<' => xml.push_str("&lt;"),
-                    '>' => xml.push_str("&gt;"),
-                    '&' => xml.push_str("&amp;"),
-                    _ => xml.push(ch),
-                }
-            }
+            xml.push_str(&quick_xml::escape::escape(s));
             xml.push_str("</string>");
         }
         Value::Boolean(b) => {

@@ -75,41 +75,28 @@ pub fn parse_period(period: &str) -> Result<(NaiveDate, NaiveDate), String> {
     let year: i32 = year_str
         .parse()
         .map_err(|_| format!("invalid year in period: {period}"))?;
-    if kind.is_empty() {
-        return Ok((
-            NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
-        ));
-    }
-    match kind.to_uppercase().as_str() {
-        "Q1" => Ok((
-            NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 3, 31).unwrap(),
-        )),
-        "Q2" => Ok((
-            NaiveDate::from_ymd_opt(year, 4, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 6, 30).unwrap(),
-        )),
-        "Q3" => Ok((
-            NaiveDate::from_ymd_opt(year, 7, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 9, 30).unwrap(),
-        )),
-        "Q4" => Ok((
-            NaiveDate::from_ymd_opt(year, 10, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
-        )),
-        "H1" => Ok((
-            NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 6, 30).unwrap(),
-        )),
-        "H2" => Ok((
-            NaiveDate::from_ymd_opt(year, 7, 1).unwrap(),
-            NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
-        )),
-        _ => Err(format!(
-            "invalid period: {period} (expected Q1-Q4 or H1-H2)"
-        )),
-    }
+    let (start_month, end_month) = match kind.to_uppercase().as_str() {
+        "" => (1, 12),
+        "Q1" => (1, 3),
+        "Q2" => (4, 6),
+        "Q3" => (7, 9),
+        "Q4" => (10, 12),
+        "H1" => (1, 6),
+        "H2" => (7, 12),
+        _ => {
+            return Err(format!(
+                "invalid period: {period} (expected Q1-Q4 or H1-H2)"
+            ));
+        }
+    };
+    let start = NaiveDate::from_ymd_opt(year, start_month, 1).unwrap();
+    // Last day of end_month: the day before the first of the
+    // following month.
+    let end = NaiveDate::from_ymd_opt(year + i32::from(end_month == 12), end_month % 12 + 1, 1)
+        .unwrap()
+        .pred_opt()
+        .unwrap();
+    Ok((start, end))
 }
 
 #[cfg(test)]

@@ -19,23 +19,6 @@ pub struct TaggedBuild {
     pub owner: String,
 }
 
-/// Parse an NVR string into the package name.
-///
-/// Returns `None` if the NVR doesn't contain at least two hyphens.
-///
-/// ```
-/// assert_eq!(sandogasa_koji::parse_nvr_name("systemd-256.12-1.fc42"), Some("systemd"));
-/// assert_eq!(sandogasa_koji::parse_nvr_name("intel-gpu-tools-1.28-2.el10"), Some("intel-gpu-tools"));
-/// assert_eq!(sandogasa_koji::parse_nvr_name("nohyphens"), None);
-/// ```
-pub fn parse_nvr_name(nvr: &str) -> Option<&str> {
-    let mut parts = nvr.rsplitn(3, '-');
-    let _release = parts.next()?;
-    let _version = parts.next()?;
-    let name = parts.next()?;
-    if name.is_empty() { None } else { Some(name) }
-}
-
 /// Parse an NVR string into (name, version, release).
 ///
 /// ```
@@ -54,6 +37,19 @@ pub fn parse_nvr(nvr: &str) -> Option<(&str, &str, &str)> {
     } else {
         Some((name, version, release))
     }
+}
+
+/// Parse an NVR string into the package name.
+///
+/// Returns `None` if the NVR doesn't contain at least two hyphens.
+///
+/// ```
+/// assert_eq!(sandogasa_koji::parse_nvr_name("systemd-256.12-1.fc42"), Some("systemd"));
+/// assert_eq!(sandogasa_koji::parse_nvr_name("intel-gpu-tools-1.28-2.el10"), Some("intel-gpu-tools"));
+/// assert_eq!(sandogasa_koji::parse_nvr_name("nohyphens"), None);
+/// ```
+pub fn parse_nvr_name(nvr: &str) -> Option<&str> {
+    parse_nvr(nvr).map(|(name, _, _)| name)
 }
 
 /// Whether the `koji` CLI is available on PATH. Callers that can

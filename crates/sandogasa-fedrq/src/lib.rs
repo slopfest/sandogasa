@@ -145,14 +145,27 @@ impl Fedrq {
         Ok(lines)
     }
 
+    /// Run `fedrq <args>... [opts] -- <operands>...` and return the
+    /// trimmed, non-empty output lines. All queries funnel through
+    /// here so the branch/repo options and the `--` separator (which
+    /// keeps an operand starting with `-` from being read as a flag)
+    /// are applied uniformly.
+    fn query<S: AsRef<std::ffi::OsStr>>(
+        &self,
+        args: &[&str],
+        operands: &[S],
+    ) -> Result<Vec<String>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(args);
+        self.apply_opts(&mut cmd);
+        cmd.arg("--");
+        cmd.args(operands);
+        Self::run(&mut cmd)
+    }
+
     /// Run `fedrq subpkgs -S -F <formatter> <srpm>` and return one entry per line.
     fn subpkgs_query(&self, formatter: &str, srpm: &str) -> Result<Vec<String>, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["subpkgs", "-S", "-F", formatter]);
-        self.apply_opts(&mut cmd);
-        // `--` so a name starting with `-` can't be read as a flag.
-        cmd.args(["--", srpm]);
-        Self::run(&mut cmd)
+        self.query(&["subpkgs", "-S", "-F", formatter], &[srpm])
     }
 
     /// Return the Provides of all subpackages of a source package.
@@ -177,20 +190,9 @@ impl Fedrq {
     /// the expected V-R of an update (the bare `subpkgs_names`
     /// query can't distinguish old vs. new content).
     pub fn subpkgs_nvrs(&self, srpm: &str) -> Result<Vec<(String, String, String)>, Error> {
-        let raw = self.subpkgs_query("line:name,version,release", srpm)?;
-        let mut out = Vec::new();
-        for line in raw {
-            let parts: Vec<&str> = line.split(" : ").collect();
-            if parts.len() != 3 {
-                continue;
-            }
-            let (name, version, release) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
-            if name.is_empty() || name == "(none)" {
-                continue;
-            }
-            out.push((name.to_string(), version.to_string(), release.to_string()));
-        }
-        Ok(out)
+        Ok(parse_3col(
+            self.subpkgs_query("line:name,version,release", srpm)?,
+        ))
     }
 
     /// Return source package names that require any of the given packages.
@@ -201,12 +203,7 @@ impl Fedrq {
         if packages.is_empty() {
             return Ok(vec![]);
         }
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["whatrequires", "-F", "source"]);
-        self.apply_opts(&mut cmd);
-        cmd.arg("--");
-        cmd.args(packages);
-        Self::run(&mut cmd)
+        self.query(&["whatrequires", "-F", "source"], packages)
     }
 
     /// Return the Requires of a *source* package — its BuildRequires —
@@ -215,11 +212,7 @@ impl Fedrq {
     /// Requires): an update can break a reverse dependency's next
     /// rebuild without breaking its installed binaries.
     pub fn src_requires(&self, srpm: &str) -> Result<Vec<String>, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "--src", "-F", "requires"]);
-        self.apply_opts(&mut cmd);
-        cmd.args(["--", srpm]);
-        Self::run(&mut cmd)
+        self.src_buildrequires(srpm)
     }
 
     /// Resolve a dependency name to the source package(s) that provide it.
@@ -228,11 +221,7 @@ impl Fedrq {
     /// RPM provides a given capability (package name, virtual Provide, or
     /// file path).
     pub fn resolve_to_source(&self, dep: &str) -> Result<Vec<String>, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "-P", "-S", "-F", "source_name"]);
-        self.apply_opts(&mut cmd);
-        cmd.args(["--", dep]);
-        Self::run(&mut cmd)
+        self.query(&["pkgs", "-P", "-S", "-F", "source_name"], &[dep])
     }
 
     /// Resolve a dependency to the source package(s) providing it, with
@@ -245,20 +234,15 @@ impl Fedrq {
     /// entirely". Pass the bare capability (no version constraint) to
     /// see every offered version.
     pub fn resolve_source_vr(&self, dep: &str) -> Result<Vec<(String, String)>, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "-P", "-S", "-F", "line:source,version,release"]);
-        self.apply_opts(&mut cmd);
-        cmd.args(["--", dep]);
-        Ok(parse_source_vr_lines(Self::run(&mut cmd)?))
+        Ok(parse_source_vr_lines(self.query(
+            &["pkgs", "-P", "-S", "-F", "line:source,version,release"],
+            &[dep],
+        )?))
     }
 
     /// Return the Provides of a binary package (by name).
     pub fn pkg_provides(&self, name: &str) -> Result<Vec<String>, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "-F", "provides"]);
-        self.apply_opts(&mut cmd);
-        cmd.args(["--", name]);
-        Self::run(&mut cmd)
+        self.query(&["pkgs", "-F", "provides"], &[name])
     }
 
     /// Return `(name, version, release)` for binary packages
@@ -267,24 +251,10 @@ impl Fedrq {
     /// Lets callers detect side-tag repos whose metadata still
     /// serves a stale V-R for a name that koji has at a newer NVR.
     pub fn pkg_nvrs(&self, name: &str) -> Result<Vec<(String, String, String)>, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "-F", "line:name,version,release"]);
-        self.apply_opts(&mut cmd);
-        cmd.args(["--", name]);
-        let raw = Self::run(&mut cmd)?;
-        let mut out = Vec::new();
-        for line in raw {
-            let parts: Vec<&str> = line.split(" : ").collect();
-            if parts.len() != 3 {
-                continue;
-            }
-            let (n, v, r) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
-            if n.is_empty() || n == "(none)" {
-                continue;
-            }
-            out.push((n.to_string(), v.to_string(), r.to_string()));
-        }
-        Ok(out)
+        Ok(parse_3col(self.query(
+            &["pkgs", "-F", "line:name,version,release"],
+            &[name],
+        )?))
     }
 
     /// Map binary package names to their source and version-release in
@@ -301,53 +271,35 @@ impl Fedrq {
         if names.is_empty() {
             return Ok(Vec::new());
         }
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "-F", "line:source,version,release"]);
-        self.apply_opts(&mut cmd);
-        cmd.arg("--");
-        cmd.args(names);
-        Ok(parse_source_vr_lines(Self::run(&mut cmd)?))
+        Ok(parse_source_vr_lines(self.query(
+            &["pkgs", "-F", "line:source,version,release"],
+            names,
+        )?))
     }
 
     /// Return the Requires of a binary package by name.
     pub fn pkg_requires(&self, name: &str) -> Result<Vec<String>, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "-F", "requires"]);
-        self.apply_opts(&mut cmd);
-        cmd.arg(name);
-        Self::run(&mut cmd)
+        self.query(&["pkgs", "-F", "requires"], &[name])
     }
 
     /// Return the Provides of packages that provide a given capability.
     ///
     /// Uses `-P` to search by Provides rather than package name.
     pub fn provides_of_provider(&self, capability: &str) -> Result<Vec<String>, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "-P", "-F", "provides"]);
-        self.apply_opts(&mut cmd);
-        cmd.args(["--", capability]);
-        Self::run(&mut cmd)
+        self.query(&["pkgs", "-P", "-F", "provides"], &[capability])
     }
 
     /// Check whether a source package exists.
     ///
     /// Equivalent to `fedrq pkgs --src <name>`.
     pub fn src_exists(&self, srpm: &str) -> Result<bool, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "--src"]);
-        self.apply_opts(&mut cmd);
-        cmd.args(["--", srpm]);
-        let result = Self::run(&mut cmd)?;
+        let result = self.query(&["pkgs", "--src"], &[srpm])?;
         Ok(result.iter().any(|s| !s.is_empty() && s != "(none)"))
     }
 
     /// Return the BuildRequires of a source package.
     pub fn src_buildrequires(&self, srpm: &str) -> Result<Vec<String>, Error> {
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "--src", "-F", "requires"]);
-        self.apply_opts(&mut cmd);
-        cmd.args(["--", srpm]);
-        Self::run(&mut cmd)
+        self.query(&["pkgs", "--src", "-F", "requires"], &[srpm])
     }
 
     /// Return the NVRs of the given source packages on this
@@ -369,23 +321,13 @@ impl Fedrq {
         if packages.is_empty() {
             return Ok(vec![]);
         }
-        let mut cmd = Command::new("fedrq");
-        cmd.args(["pkgs", "--src", "-F", "line:name,version,release"]);
-        self.apply_opts(&mut cmd);
-        cmd.arg("--");
-        cmd.args(packages);
-        let raw = Self::run(&mut cmd)?;
+        let raw = self.query(
+            &["pkgs", "--src", "-F", "line:name,version,release"],
+            packages,
+        )?;
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
-        for line in raw {
-            let parts: Vec<&str> = line.split(" : ").collect();
-            if parts.len() != 3 {
-                continue;
-            }
-            let (name, version, release) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
-            if name.is_empty() || name == "(none)" {
-                continue;
-            }
+        for (name, version, release) in parse_3col(raw) {
             let nvr = format!("{name}-{version}-{release}");
             if seen.insert(nvr.clone()) {
                 out.push(nvr);
@@ -395,24 +337,33 @@ impl Fedrq {
     }
 }
 
+/// Parse fedrq's three-column `line:` output (columns separated by
+/// ` : `) into trimmed triples, dropping malformed lines and rows
+/// whose first column is empty or `(none)`.
+fn parse_3col(raw: Vec<String>) -> Vec<(String, String, String)> {
+    raw.iter()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split(" : ").collect();
+            let [a, b, c] = parts[..] else { return None };
+            let (a, b, c) = (a.trim(), b.trim(), c.trim());
+            if a.is_empty() || a == "(none)" {
+                return None;
+            }
+            Some((a.to_string(), b.to_string(), c.to_string()))
+        })
+        .collect()
+}
+
 /// Parse `line:source,version,release` output into
 /// `(source, "version-release")` pairs, dropping `(none)` and malformed
 /// lines. Shared by [`Fedrq::pkgs_source_vr`] and
 /// [`Fedrq::resolve_source_vr`].
 fn parse_source_vr_lines(raw: Vec<String>) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for line in raw {
-        let parts: Vec<&str> = line.split(" : ").collect();
-        if parts.len() != 3 {
-            continue;
-        }
-        let (source, version, release) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
-        if source.is_empty() || source == "(none)" || version.is_empty() || release.is_empty() {
-            continue;
-        }
-        out.push((source.to_string(), format!("{version}-{release}")));
-    }
-    out
+    parse_3col(raw)
+        .into_iter()
+        .filter(|(_, version, release)| !version.is_empty() && !release.is_empty())
+        .map(|(source, version, release)| (source, format!("{version}-{release}")))
+        .collect()
 }
 
 #[cfg(test)]

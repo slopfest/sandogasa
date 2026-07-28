@@ -21,13 +21,48 @@ impl Default for RelmonDefaults {
     }
 }
 
+/// A relmon manifest field value, for renderer-agnostic emission.
+enum FieldValue<'a> {
+    Str(&'a str),
+    Bool(bool),
+}
+
+/// The relmon fields of a package that differ from the defaults, as
+/// `(key, value)` pairs in manifest order. Shared by [`export`] and
+/// [`merge_into_manifest`] so both emit the same fields; rendering
+/// stays with each caller.
+fn non_default_fields<'a>(
+    pkg: &'a Package,
+    defaults: &RelmonDefaults,
+) -> Vec<(&'static str, FieldValue<'a>)> {
+    let mut fields = Vec::new();
+    if let Some(ref track) = pkg.track
+        && track != &defaults.track
+    {
+        fields.push(("track", FieldValue::Str(track)));
+    }
+    if let Some(ref repology_name) = pkg.repology_name {
+        fields.push(("repology_name", FieldValue::Str(repology_name)));
+    }
+    if let Some(ref distros) = pkg.distros
+        && distros != &defaults.distros
+    {
+        fields.push(("distros", FieldValue::Str(distros)));
+    }
+    if let Some(file_issue) = pkg.file_issue
+        && file_issue != defaults.file_issue
+    {
+        fields.push(("file_issue", FieldValue::Bool(file_issue)));
+    }
+    fields
+}
+
 /// Export an inventory to hs-relmon manifest TOML format.
 ///
 /// Includes all packages (hs-relmon applies defaults for missing
 /// fields). Filters by workload if specified.
 pub fn export(inventory: &Inventory, workload: Option<&str>, defaults: &RelmonDefaults) -> String {
     let packages = inventory.packages_for_workload(workload);
-    let relmon_packages: Vec<&&Package> = packages.iter().collect();
 
     let mut out = String::new();
     out.push_str("# SPDX-License-Identifier: Apache-2.0 OR MIT\n\n");
@@ -36,29 +71,16 @@ pub fn export(inventory: &Inventory, workload: Option<&str>, defaults: &RelmonDe
     out.push_str(&format!("track = \"{}\"\n", defaults.track));
     out.push_str(&format!("file_issue = {}\n", defaults.file_issue));
 
-    for pkg in &relmon_packages {
+    for pkg in &packages {
         out.push('\n');
         out.push_str("[[package]]\n");
         out.push_str(&format!("name = \"{}\"\n", pkg.name));
 
-        // Only emit fields that differ from defaults.
-        if let Some(ref track) = pkg.track
-            && track != &defaults.track
-        {
-            out.push_str(&format!("track = \"{track}\"\n"));
-        }
-        if let Some(ref repology_name) = pkg.repology_name {
-            out.push_str(&format!("repology_name = \"{repology_name}\"\n"));
-        }
-        if let Some(ref distros) = pkg.distros
-            && distros != &defaults.distros
-        {
-            out.push_str(&format!("distros = \"{distros}\"\n"));
-        }
-        if let Some(file_issue) = pkg.file_issue
-            && file_issue != defaults.file_issue
-        {
-            out.push_str(&format!("file_issue = {file_issue}\n"));
+        for (key, value) in non_default_fields(pkg, defaults) {
+            match value {
+                FieldValue::Str(s) => out.push_str(&format!("{key} = \"{s}\"\n")),
+                FieldValue::Bool(b) => out.push_str(&format!("{key} = {b}\n")),
+            }
         }
     }
 
@@ -162,23 +184,11 @@ pub fn merge_into_manifest(
         let mut table = toml_edit::Table::new();
         table.insert("name", toml_edit::value(&pkg.name));
 
-        if let Some(ref track) = pkg.track
-            && track != &defaults.track
-        {
-            table.insert("track", toml_edit::value(track.as_str()));
-        }
-        if let Some(ref repology_name) = pkg.repology_name {
-            table.insert("repology_name", toml_edit::value(repology_name.as_str()));
-        }
-        if let Some(ref distros) = pkg.distros
-            && distros != &defaults.distros
-        {
-            table.insert("distros", toml_edit::value(distros.as_str()));
-        }
-        if let Some(file_issue) = pkg.file_issue
-            && file_issue != defaults.file_issue
-        {
-            table.insert("file_issue", toml_edit::value(file_issue));
+        for (key, value) in non_default_fields(pkg, defaults) {
+            match value {
+                FieldValue::Str(s) => table.insert(key, toml_edit::value(s)),
+                FieldValue::Bool(b) => table.insert(key, toml_edit::value(b)),
+            };
         }
 
         arr.push(table);

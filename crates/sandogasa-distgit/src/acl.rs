@@ -94,83 +94,65 @@ pub struct AccessGroups {
     pub ticket: Vec<String>,
 }
 
-impl ProjectAcls {
-    /// Return the highest direct access level for a user.
-    pub fn user_level(&self, username: &str) -> Option<AccessLevel> {
-        if self.access_users.owner.iter().any(|u| u == username) {
-            return Some(AccessLevel::Owner);
-        }
-        if self.access_users.admin.iter().any(|u| u == username) {
-            return Some(AccessLevel::Admin);
-        }
-        if self.access_users.commit.iter().any(|u| u == username) {
-            return Some(AccessLevel::Commit);
-        }
-        if self.access_users.collaborator.iter().any(|u| u == username) {
-            return Some(AccessLevel::Collaborator);
-        }
-        if self.access_users.ticket.iter().any(|u| u == username) {
-            return Some(AccessLevel::Ticket);
-        }
-        None
-    }
-
-    /// Return the highest access level for a group.
-    pub fn group_level(&self, group_name: &str) -> Option<AccessLevel> {
-        if self.access_groups.admin.iter().any(|g| g == group_name) {
-            return Some(AccessLevel::Admin);
-        }
-        if self.access_groups.commit.iter().any(|g| g == group_name) {
-            return Some(AccessLevel::Commit);
-        }
-        if self
-            .access_groups
-            .collaborator
-            .iter()
-            .any(|g| g == group_name)
-        {
-            return Some(AccessLevel::Collaborator);
-        }
-        if self.access_groups.ticket.iter().any(|g| g == group_name) {
-            return Some(AccessLevel::Ticket);
-        }
-        None
-    }
-
-    /// Return groups that have access at or above `min_level`.
-    pub fn groups_with_level(&self, min_level: AccessLevel) -> Vec<(&str, AccessLevel)> {
-        let mut result = Vec::new();
-        if min_level <= AccessLevel::Admin {
-            for g in &self.access_groups.admin {
-                result.push((g.as_str(), AccessLevel::Admin));
-            }
-        }
-        if min_level <= AccessLevel::Commit {
-            for g in &self.access_groups.commit {
-                result.push((g.as_str(), AccessLevel::Commit));
-            }
-        }
-        if min_level <= AccessLevel::Collaborator {
-            for g in &self.access_groups.collaborator {
-                result.push((g.as_str(), AccessLevel::Collaborator));
-            }
-        }
-        if min_level <= AccessLevel::Ticket {
-            for g in &self.access_groups.ticket {
-                result.push((g.as_str(), AccessLevel::Ticket));
-            }
-        }
-        result
+impl AccessUsers {
+    /// The user lists paired with their level, highest first.
+    fn tiers(&self) -> [(&Vec<String>, AccessLevel); 5] {
+        [
+            (&self.owner, AccessLevel::Owner),
+            (&self.admin, AccessLevel::Admin),
+            (&self.commit, AccessLevel::Commit),
+            (&self.collaborator, AccessLevel::Collaborator),
+            (&self.ticket, AccessLevel::Ticket),
+        ]
     }
 }
 
 impl AccessGroups {
+    /// The group lists paired with their level, highest first.
+    fn tiers(&self) -> [(&Vec<String>, AccessLevel); 4] {
+        [
+            (&self.admin, AccessLevel::Admin),
+            (&self.commit, AccessLevel::Commit),
+            (&self.collaborator, AccessLevel::Collaborator),
+            (&self.ticket, AccessLevel::Ticket),
+        ]
+    }
+
     /// Check whether a group has any level of access.
     pub fn contains_group(&self, group: &str) -> bool {
-        self.admin.iter().any(|g| g == group)
-            || self.commit.iter().any(|g| g == group)
-            || self.collaborator.iter().any(|g| g == group)
-            || self.ticket.iter().any(|g| g == group)
+        self.tiers()
+            .iter()
+            .any(|(list, _)| list.iter().any(|g| g == group))
+    }
+}
+
+impl ProjectAcls {
+    /// Return the highest direct access level for a user.
+    pub fn user_level(&self, username: &str) -> Option<AccessLevel> {
+        self.access_users
+            .tiers()
+            .into_iter()
+            .find(|(list, _)| list.iter().any(|u| u == username))
+            .map(|(_, level)| level)
+    }
+
+    /// Return the highest access level for a group.
+    pub fn group_level(&self, group_name: &str) -> Option<AccessLevel> {
+        self.access_groups
+            .tiers()
+            .into_iter()
+            .find(|(list, _)| list.iter().any(|g| g == group_name))
+            .map(|(_, level)| level)
+    }
+
+    /// Return groups that have access at or above `min_level`.
+    pub fn groups_with_level(&self, min_level: AccessLevel) -> Vec<(&str, AccessLevel)> {
+        self.access_groups
+            .tiers()
+            .into_iter()
+            .filter(|&(_, level)| min_level <= level)
+            .flat_map(|(list, level)| list.iter().map(move |g| (g.as_str(), level)))
+            .collect()
     }
 }
 
