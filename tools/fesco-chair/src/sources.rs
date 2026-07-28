@@ -198,10 +198,16 @@ pub fn txt_url(html_url: &str) -> String {
 /// from its comments (searched newest-first). The vote concludes with
 /// a comment like "After a week: APPROVED (+3, 0, 0)" right before
 /// the ticket is tagged; this returns the verdict-through-tally slice
-/// of that line, e.g. `APPROVED (+3, 0, 0)`.
+/// of that line, e.g. `APPROVED (+3, 0, 0)`. The verdict is matched
+/// case-insensitively ("… is approved (+6, 0, 0)" is just as common)
+/// and normalized to uppercase for the announcement.
 pub fn extract_decision<'a>(bodies_newest_first: impl Iterator<Item = &'a str>) -> Option<String> {
     for body in bodies_newest_first {
         for line in body.lines() {
+            // Uppercasing both matches the verdict case-insensitively
+            // and normalizes it; the tally is digits and punctuation,
+            // unaffected.
+            let line = line.to_ascii_uppercase();
             for verdict in ["APPROVED", "REJECTED"] {
                 let Some(start) = line.find(verdict) else {
                     continue;
@@ -504,6 +510,28 @@ Meeting summary
         );
         // ...and no comments means no decision.
         assert_eq!(extract_decision(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn extract_decision_is_case_insensitive() {
+        // The real ticket-3634 shape: a lowercase verdict (with the
+        // bare word "approve" earlier on the line), normalized to
+        // uppercase for the announcement.
+        assert_eq!(
+            extract_decision(
+                [
+                    "After a week, @gotmax23's proposal to approve my proposal is \
+                  approved (+6, 0, 0). I'll merge the docs PR."
+                ]
+                .into_iter()
+            ),
+            Some("APPROVED (+6, 0, 0)".to_string())
+        );
+        // Still no tally, no decision — even in lowercase.
+        assert_eq!(
+            extract_decision(["I think this should be approved"].into_iter()),
+            None
+        );
     }
 
     #[test]

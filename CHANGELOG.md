@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### fesco-chair: parse lowercase decision tallies
+
+The in-ticket decision parser only matched uppercase
+APPROVED/REJECTED, so a concluding comment like "… my proposal is
+approved (+6, 0, 0)" (ticket #3634) left the DECISION placeholder in
+the agenda. The verdict is now matched case-insensitively and
+normalized to uppercase in the announcement.
+
 ### fedora-review-digest: run fedora-review, with staged-dependency repos
 
 A new `run` subcommand drives `fedora-review` itself and flows the
