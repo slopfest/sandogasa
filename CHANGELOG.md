@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### fesco-chair: wrap the summary email to 71 columns
+
+meetbot emits its minutes one line per event, with `AGREED`/`ACTION`
+lines routinely past 200 columns, so something wraps them either way:
+if `summary` doesn't, the sending mail client does — at its own width
+and with continuations flush left, which loses the bullet structure
+the minutes rely on. `summary` now wraps the body itself, keeping
+each line's leading indent and `*` bullet and aligning continuations
+under the text. Ticket titles wrap the same way.
+
+The width matters more than it looks. It must not exceed the
+client's, or every line is broken a second time and the result is
+littered with one- and two-word orphans; the 2026-07-28 summary went
+out wrapped at 80 and its archived copy shows exactly that. 71 rather
+than the conventional 72 because that archived copy contains
+surviving 71-column lines — so 71 is known to pass through untouched,
+while nothing in it reaches 72 despite lines clustering at 66-71.
+Both are within the convention; this is the one with evidence.
+
+Lines whose URL alone exceeds the width still overflow — splitting a
+URL stops it being a link — and such a URL stays on the line it
+started on rather than orphaning the label introducing it. That's the
+four artefact links and the occasional `LINK:` line.
+
+`wrap_prefixed` moved from ebranch to `sandogasa_cli`, which is where
+the second caller found it.
+
 ### fesco-chair: summary announces late in-ticket votes
 
 Tickets sometimes get tagged `pending announcement` after the

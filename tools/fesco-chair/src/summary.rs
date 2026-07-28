@@ -115,6 +115,47 @@ pub fn subject(date: NaiveDate) -> String {
     format!("Summary/Minutes from today's FESCo Meeting ({date})")
 }
 
+/// Column the email body is wrapped to. meetbot's minutes routinely
+/// run past 200 columns, so something has to wrap them — and if we
+/// don't, the sending mail client does, at its own width and with
+/// continuations flush left, which loses the bullet structure.
+///
+/// The width must not exceed the client's, or every line is broken a
+/// second time and the result is littered with one- and two-word
+/// orphans — which is what 80 produced in the 2026-07-28 summary.
+///
+/// 71 rather than the conventional 72
+/// (<https://useplaintext.email/#etiquette>): that summary's archived
+/// copy contains surviving 71-column lines, so 71 is known to pass
+/// through untouched, while nothing reaches 72 anywhere in it despite
+/// lines clustering at 66-71 — so 72 may well be one past the break.
+/// Both are within the convention; this is the one with evidence.
+const WRAP: usize = 71;
+
+/// Word-wrap one minutes line, keeping its leading indent and `*`
+/// bullet on the first line and aligning continuations under the
+/// text. Lines already within [`WRAP`] — blanks, separators, the
+/// attendee tallies — pass through untouched, and a word longer than
+/// the width (a bare URL) overflows rather than being broken, since a
+/// split URL stops being a link.
+fn wrap_line(line: &str) -> String {
+    if line.chars().count() <= WRAP {
+        return line.to_string();
+    }
+    let indent = line.len() - line.trim_start().len();
+    let bullet = if line[indent..].starts_with("* ") {
+        2
+    } else {
+        0
+    };
+    let (prefix, content) = line.split_at(indent + bullet);
+    // Continuations align under the text; same width as the prefix, so
+    // swapping it back in below keeps every line's length correct.
+    let hang = " ".repeat(prefix.len());
+    let wrapped = sandogasa_cli::wrap_prefixed(content, &hang, WRAP);
+    format!("{prefix}{}", &wrapped[hang.len()..])
+}
+
 /// Tickets to announce alongside the minutes, with their decisions.
 /// Best-effort: without a token or a reachable tracker the summary
 /// still stands on the minutes alone, so any failure warns rather
@@ -146,6 +187,10 @@ fn pending_announcements(verbose: bool) -> Vec<sources::Ticket> {
 /// section header matches the schedule announcement's, since it lists
 /// the same kind of item; it is omitted when there is nothing to
 /// announce.
+///
+/// Ticket titles and the minutes are wrapped to [`WRAP`] columns. The
+/// artefact links aren't: each is one unbreakable URL already past
+/// the width, and wrapping would only orphan its label.
 pub fn render_body(
     minutes_url: &str,
     minutes_txt_url: &str,
@@ -165,10 +210,14 @@ pub fn render_body(
         let _ = writeln!(o, "\n= Discussed and Voted in the Ticket =");
         for t in voted {
             let decision = t.decision.as_deref().unwrap_or("DECISION (+X, Y, -Z)");
-            let _ = writeln!(o, "\n{} {}\n{}\n{decision}", t.label(), t.title, t.url);
+            let title = wrap_line(&format!("{} {}", t.label(), t.title));
+            let _ = writeln!(o, "\n{title}\n{}\n{decision}", t.url);
         }
     }
-    let _ = write!(o, "\n{minutes}");
+    o.push('\n');
+    for line in minutes.lines() {
+        let _ = writeln!(o, "{}", wrap_line(line));
+    }
     if !o.ends_with('\n') {
         o.push('\n');
     }
@@ -185,6 +234,42 @@ mod tests {
             subject(NaiveDate::from_ymd_opt(2026, 7, 7).unwrap()),
             "Summary/Minutes from today's FESCo Meeting (2026-07-07)"
         );
+    }
+
+    #[test]
+    fn wrap_line_keeps_bullets_and_aligns_continuations() {
+        // A nested AGREED line from the 2026-07-21 minutes: the bullet
+        // stays put and continuations align under the text.
+        let line = "    * AGREED: FESCo asks the Change Owner to update the wiki page to \
+                    ensure critical path packages are fixed before the change is merged \
+                    (+6, 0, 0) (@zbyszek:fedora.im, 17:25:10)";
+        let wrapped = wrap_line(line);
+        let mut lines = wrapped.lines();
+        assert!(lines.next().unwrap().starts_with("    * AGREED: FESCo"));
+        for cont in lines {
+            assert!(cont.starts_with("      "), "not aligned: {cont:?}");
+            assert!(
+                !cont.trim_start().starts_with('*'),
+                "false bullet: {cont:?}"
+            );
+        }
+        assert!(
+            wrapped.lines().all(|l| l.chars().count() <= WRAP),
+            "{wrapped}"
+        );
+        // No words lost or duplicated.
+        assert_eq!(
+            wrapped.split_whitespace().collect::<Vec<_>>(),
+            line.split_whitespace().collect::<Vec<_>>()
+        );
+        // Short lines, blanks and separators pass through untouched.
+        for short in [
+            "",
+            "---------------",
+            "* TOPIC: Init Process (@z, 17:01:36)",
+        ] {
+            assert_eq!(wrap_line(short), short);
+        }
     }
 
     #[test]

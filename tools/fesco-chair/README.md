@@ -142,6 +142,19 @@ artefact links (minutes/log, HTML and text), and the full plain-text
 minutes. Send it as a reply to the schedule announcement, then
 comment/close the discussed tickets.
 
+The body is wrapped to 71 columns, keeping the minutes' bullet
+structure with continuations aligned under the text. meetbot's
+`AGREED`/`ACTION` lines routinely run past 200 columns, so something
+wraps them either way — and a mail client left to do it wraps at its
+own width with continuations flush left, losing the structure. The
+width must not exceed the client's: wrap wider and it breaks every
+line a second time, leaving one- and two-word orphans. 71 sits just
+inside the [conventional
+72](https://useplaintext.email/#etiquette), and is a width observed
+passing through a client untouched. A line whose URL alone exceeds
+the width still overflows, since splitting a URL would stop it being
+a link.
+
 Any ticket still tagged `pending announcement` is announced here as
 well, in a "Discussed and Voted in the Ticket" section between the
 links and the minutes, with its tally parsed from the ticket
