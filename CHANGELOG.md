@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### fesco-chair: Council happenings in the agenda and the script
+
+The wiki gained a standing Council-representative slot, so `script`
+emits `!topic Council happenings` between the next-week's-chair action
+and Open Floor, and the agenda announcement carries a
+`= Council happenings =` section in the matching position, after New
+business. The section is always emitted and left empty for the chair
+to fill, like Followups and New business.
+
 ### fesco-chair: wrap both emails to 71 columns
 
 The agenda announcement now wraps like the summary, sharing one

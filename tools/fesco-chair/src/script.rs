@@ -100,7 +100,9 @@ pub fn checklist(date: NaiveDate) -> String {
 
 /// The meetbot command script, per the wiki template: followups
 /// first, then new business, each with a ticket info lookup and an
-/// `!agreed` placeholder recording the vote tally.
+/// `!agreed` placeholder recording the vote tally, then the standing
+/// topics that close every meeting — next week's chair, Council
+/// happenings, Open Floor.
 ///
 /// Plain fesco/tickets issues use the `!fesco NNNN` alias (fixed by
 /// <https://github.com/fedora-infra/maubot-fedora/pull/154>, now
@@ -145,6 +147,7 @@ pub fn render_script(date: NaiveDate, discussion: &[&Ticket]) -> String {
         o,
         "!topic Next week's chair\n\
          !action NAME will chair next meeting\n\
+         !topic Council happenings\n\
          !topic Open Floor\n\
          !endmeeting"
     );
@@ -177,6 +180,7 @@ mod tests {
 !agreed DECISION (+X, Y, -Z)
 !topic Next week's chair
 !action NAME will chair next meeting
+!topic Council happenings
 !topic Open Floor
 !endmeeting
 ";

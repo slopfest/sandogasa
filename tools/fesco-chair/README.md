@@ -76,6 +76,10 @@ inference; a number carrying neither agenda label is fetched
 individually so it can still be placed. If meetbot is unreachable the
 tool warns and lists every meeting ticket under New business.
 
+A `= Council happenings =` section follows New business — the
+standing slot for the FESCo Council representative, emitted empty for
+you to fill in.
+
 The body is wrapped to 71 columns, the same width the summary uses
 (see below for why that number).
 
@@ -110,7 +114,9 @@ Prints the day-of checklist to stderr (the spam-filter-safe
 the 15-minute topic rule) and the meetbot command script to stdout:
 `!startmeeting FESCO (date)` through per-ticket
 `!topic`/`!forge`/`!agreed` blocks (Followups first, then New
-business) to `!endmeeting`. Lookups match the item: tracker tickets
+business), then the standing topics that close every meeting — next
+week's chair, Council happenings, Open Floor — to `!endmeeting`.
+Lookups match the item: tracker tickets
 use `!forge issue fesco tickets NNNN`, fesco/docs issues
 `!forge issue fesco docs NNNN`, and fesco/docs pull requests
 `!forge pr fesco docs NNNN`. Copy/paste lines as the meeting

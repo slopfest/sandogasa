@@ -262,7 +262,9 @@ pub fn assemble(
 /// following the wiki template. The "Discussed and Voted in the
 /// Ticket" section is omitted when empty (matching the wiki's
 /// sample); Followups and New business always appear so the chair
-/// can slot in late additions.
+/// can slot in late additions, as does Council happenings — the
+/// standing slot for the FESCo Council representative, which the
+/// chair fills in by hand.
 pub fn render_body(date: NaiveDate, sections: &Sections) -> String {
     use std::fmt::Write as _;
     let mut o = String::new();
@@ -301,7 +303,9 @@ pub fn render_body(date: NaiveDate, sections: &Sections) -> String {
     }
     let _ = writeln!(
         o,
-        "\n= Open Floor =\n\
+        "\n= Council happenings =\n\
+         \n\
+         = Open Floor =\n\
          \n\
          For more complete details, please visit each individual\n\
          issue.  The report of the agenda items can be found at\n\
@@ -456,6 +460,8 @@ https://forge.fedoraproject.org/fesco/tickets/issues/3623
 
 #3630 F45 Change: Unified Kernel Images Phase 4
 https://forge.fedoraproject.org/fesco/tickets/issues/3630
+
+= Council happenings =
 
 = Open Floor =
 
