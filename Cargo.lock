@@ -1843,8 +1843,10 @@ version = "0.18.1"
 dependencies = [
  "chrono",
  "clap",
+ "reqwest",
  "rustls",
  "sandogasa-config",
+ "serde",
  "toml",
  "url",
 ]
@@ -2083,7 +2085,6 @@ dependencies = [
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-distgit",
- "sandogasa-fasjson",
  "sandogasa-inventory",
  "sandogasa-koji",
  "schemars",

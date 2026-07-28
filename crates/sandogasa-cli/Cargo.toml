@@ -9,7 +9,15 @@ repository.workspace = true
 [dependencies]
 chrono = { workspace = true }
 clap = { workspace = true }
+reqwest = { workspace = true, optional = true }
 rustls = { workspace = true }
 sandogasa-config = { workspace = true }
+serde = { workspace = true, optional = true }
 toml = { workspace = true }
 url = { workspace = true }
+
+[features]
+# HTTP plumbing shared by the API-client crates (the `http` module):
+# preconfigured reqwest builders and uniform status/JSON handling.
+# Off by default so network-free tools don't pull in reqwest.
+http = ["dep:reqwest", "dep:serde"]

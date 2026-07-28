@@ -4,6 +4,8 @@
 
 pub mod date;
 pub mod defaults;
+#[cfg(feature = "http")]
+pub mod http;
 
 pub use defaults::parse_with_defaults;
 
@@ -158,6 +160,36 @@ pub fn require_tools(tools: &[(&str, &str, Option<&str>)]) -> Result<(), String>
     }
 }
 
+/// Ask a yes/no question on stderr (keeping stdout clean for piped
+/// or `--json` output) and read one line from stdin.
+///
+/// `y`/`yes` and `n`/`no` (any case) answer explicitly; anything
+/// else — including just Enter or EOF — takes the default. The
+/// prompt shows `[Y/n]` or `[y/N]` to match `default_yes`. Callers
+/// must not prompt when stdin isn't a terminal or in `--json` mode
+/// (see the CLI-behavior conventions).
+pub fn confirm(question: &str, default_yes: bool) -> std::io::Result<bool> {
+    use std::io::{BufRead, Write};
+    let hint = if default_yes { "[Y/n]" } else { "[y/N]" };
+    eprint!("{question} {hint}: ");
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    Ok(parse_confirm(&line, default_yes))
+}
+
+/// Pure core of [`confirm`], unit-testable without stdin.
+fn parse_confirm(answer: &str, default_yes: bool) -> bool {
+    let answer = answer.trim();
+    if answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes") {
+        true
+    } else if answer.eq_ignore_ascii_case("n") || answer.eq_ignore_ascii_case("no") {
+        false
+    } else {
+        default_yes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +221,21 @@ mod tests {
         assert!(err.contains("nonexistent_bbb_222"));
         assert!(err.contains("install bbb"));
         assert!(!err.contains("true ("));
+    }
+
+    #[test]
+    fn parse_confirm_answers_and_defaults() {
+        for yes in ["y", "Y", "yes", "YES", " y "] {
+            assert!(parse_confirm(yes, false));
+        }
+        for no in ["n", "N", "no", "NO"] {
+            assert!(!parse_confirm(no, true));
+        }
+        // Empty (Enter/EOF) and anything unrecognized take the default.
+        for other in ["", "\n", "maybe"] {
+            assert!(parse_confirm(other, true));
+            assert!(!parse_confirm(other, false));
+        }
     }
 
     #[test]
