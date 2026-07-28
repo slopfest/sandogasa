@@ -39,6 +39,20 @@ pub const MEETBOT_TOPIC: &str = "fesco";
 pub const AGENDA_URL: &str = "https://forge.fedoraproject.org/fesco/tickets/issues?labels=6114";
 /// Where the announcement is sent.
 pub const ANNOUNCE_TO: &str = "devel@lists.fedoraproject.org";
+/// Column both emails are wrapped to. Something has to wrap them —
+/// meetbot's minutes run past 200 columns — and if we don't, the
+/// sending mail client does, at its own width and with continuations
+/// flush left, which loses the structure.
+///
+/// The width must not exceed the client's, or every line is broken a
+/// second time and the result fills with one- and two-word orphans;
+/// that is what 80 produced in the 2026-07-28 summary. 71 rather than
+/// the conventional 72 (<https://useplaintext.email/#etiquette>):
+/// that summary's archived copy contains surviving 71-column lines,
+/// so 71 is known to pass through untouched, while nothing in it
+/// reaches 72 despite lines clustering at 66-71. Both are within the
+/// convention; this is the one with evidence.
+pub const WRAP: usize = 71;
 
 /// A tracker ticket on the agenda.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -192,6 +206,41 @@ pub fn txt_url(html_url: &str) -> String {
         Some(base) => format!("{base}.txt"),
         None => html_url.to_string(),
     }
+}
+
+/// Word-wrap one line to [`WRAP`], keeping its leading indent and
+/// `*` bullet on the first line and aligning continuations under the
+/// text — the shape meetbot's minutes rely on. Lines already within
+/// the width pass through untouched, and a word longer than the width
+/// (a bare URL) overflows rather than being broken, since a split URL
+/// stops being a link.
+pub fn wrap_line(line: &str) -> String {
+    if line.chars().count() <= WRAP {
+        return line.to_string();
+    }
+    let indent = line.len() - line.trim_start().len();
+    let bullet = if line[indent..].starts_with("* ") {
+        2
+    } else {
+        0
+    };
+    let (prefix, content) = line.split_at(indent + bullet);
+    // Continuations align under the text; same width as the prefix, so
+    // swapping it back in below keeps every line's length correct.
+    let hang = " ".repeat(prefix.len());
+    let wrapped = sandogasa_cli::wrap_prefixed(content, &hang, WRAP);
+    format!("{prefix}{}", &wrapped[hang.len()..])
+}
+
+/// An agenda or summary entry for `ticket`: the wrapped
+/// `#NNNN Title` line followed by its URL, which is left long rather
+/// than broken.
+pub fn entry(ticket: &Ticket) -> String {
+    format!(
+        "{}\n{}",
+        wrap_line(&format!("{} {}", ticket.label(), ticket.title)),
+        ticket.url
+    )
 }
 
 /// The in-ticket decision for a pending-announcement ticket, parsed
@@ -479,6 +528,58 @@ mod tests {
         );
         // Unrecognized shape passes through unchanged.
         assert_eq!(txt_url("https://m/x/foo.txt"), "https://m/x/foo.txt");
+    }
+
+    #[test]
+    fn wrap_line_keeps_bullets_and_aligns_continuations() {
+        // A nested AGREED line from the 2026-07-21 minutes: the bullet
+        // stays put and continuations align under the text.
+        let line = "    * AGREED: FESCo asks the Change Owner to update the wiki page to \
+                    ensure critical path packages are fixed before the change is merged \
+                    (+6, 0, 0) (@zbyszek:fedora.im, 17:25:10)";
+        let wrapped = wrap_line(line);
+        let mut lines = wrapped.lines();
+        assert!(lines.next().unwrap().starts_with("    * AGREED: FESCo"));
+        for cont in lines {
+            assert!(cont.starts_with("      "), "not aligned: {cont:?}");
+            assert!(
+                !cont.trim_start().starts_with('*'),
+                "false bullet: {cont:?}"
+            );
+        }
+        assert!(
+            wrapped.lines().all(|l| l.chars().count() <= WRAP),
+            "{wrapped}"
+        );
+        // No words lost or duplicated.
+        assert_eq!(
+            wrapped.split_whitespace().collect::<Vec<_>>(),
+            line.split_whitespace().collect::<Vec<_>>()
+        );
+        // Short lines, blanks and separators pass through untouched.
+        for short in [
+            "",
+            "---------------",
+            "* TOPIC: Init Process (@z, 17:01:36)",
+        ] {
+            assert_eq!(wrap_line(short), short);
+        }
+    }
+
+    #[test]
+    fn entry_wraps_the_title_but_never_the_url() {
+        let mut long = ticket(3656);
+        long.title = "[FastTrack] Proposal: gate all stable release updates on \
+                      rmdepcheck and friends"
+            .to_string();
+        let rendered = entry(&long);
+        let (title, url) = rendered.rsplit_once('\n').unwrap();
+        assert!(
+            title.lines().count() > 1,
+            "expected a wrapped title: {title}"
+        );
+        assert!(title.lines().all(|l| l.chars().count() <= WRAP), "{title}");
+        assert_eq!(url, long.url);
     }
 
     #[test]

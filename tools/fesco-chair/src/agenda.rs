@@ -268,8 +268,8 @@ pub fn render_body(date: NaiveDate, sections: &Sections) -> String {
     let mut o = String::new();
     let _ = writeln!(
         o,
-        "Following is the list of topics that will be discussed in the\n\
-         FESCo meeting Tuesday at 18:00 Europe/London in #meeting:fedoraproject.org\n\
+        "Following is the list of topics that will be discussed in the FESCo\n\
+         meeting Tuesday at 18:00 Europe/London in #meeting:fedoraproject.org\n\
          on Matrix.\n\
          \n\
          To convert Europe/London (UTC/UTC+1) to your local time, take a look at\n\
@@ -288,16 +288,16 @@ pub fn render_body(date: NaiveDate, sections: &Sections) -> String {
             let decision = t.decision.as_deref().unwrap_or("DECISION (+X, Y, -Z)");
             // Entries lead with #NNNN like the other sections (the
             // wiki template omits it here, but consistency wins).
-            let _ = writeln!(o, "\n{} {}\n{}\n{decision}", t.label(), t.title, t.url);
+            let _ = writeln!(o, "\n{}\n{decision}", sources::entry(t));
         }
     }
     let _ = writeln!(o, "\n= Followups =");
     for t in &sections.followups {
-        let _ = writeln!(o, "\n{} {}\n{}", t.label(), t.title, t.url);
+        let _ = writeln!(o, "\n{}", sources::entry(t));
     }
     let _ = writeln!(o, "\n= New business =");
     for t in &sections.new_business {
-        let _ = writeln!(o, "\n{} {}\n{}", t.label(), t.title, t.url);
+        let _ = writeln!(o, "\n{}", sources::entry(t));
     }
     let _ = writeln!(
         o,
@@ -309,9 +309,10 @@ pub fn render_body(date: NaiveDate, sections: &Sections) -> String {
          \n\
          If you would like to add something to this agenda, you can\n\
          reply to this e-mail, file a new issue at\n\
-         {}/{}/{}, e-mail me directly, or bring it\n\
-         up at the end of the meeting, during the open floor topic. Note\n\
-         that added topics may be deferred until the following meeting.",
+         {}/{}/{}, e-mail me directly,\n\
+         or bring it up at the end of the meeting, during the open floor\n\
+         topic. Note that added topics may be deferred until the following\n\
+         meeting.",
         sources::AGENDA_URL,
         sources::FORGE_URL,
         sources::TRACKER_OWNER,
@@ -372,6 +373,43 @@ mod tests {
     }
 
     #[test]
+    fn render_body_stays_within_the_wrap_width() {
+        // Guards the static template as much as the entries: a line
+        // over the width gets rewrapped by the sending mail client,
+        // which orphans its tail. Only a line carrying a URL longer
+        // than the width may exceed it, since splitting a URL stops it
+        // being a link.
+        let mut voted = ticket(3656, "");
+        voted.title = "[FastTrack] Proposal: gate all stable release updates on \
+                       rmdepcheck, everywhere"
+            .to_string();
+        voted.decision = Some("APPROVED (+8, 0, -0)".to_string());
+        let sections = Sections {
+            voted: vec![voted],
+            followups: vec![ticket(
+                3628,
+                "Change: libxml215, with a deliberately overlong title to force a wrap",
+            )],
+            new_business: vec![ticket(
+                3636,
+                "Change: Enable Shadow Stack by Default on x86_64",
+            )],
+        };
+        let body = render_body(date(), &sections);
+        for line in body.lines() {
+            if line.chars().count() <= sources::WRAP {
+                continue;
+            }
+            let longest = line.split_whitespace().map(str::len).max().unwrap_or(0);
+            assert!(
+                longest > sources::WRAP,
+                "line over {} without an unbreakable URL: {line:?}",
+                sources::WRAP
+            );
+        }
+    }
+
+    #[test]
     fn subject_embeds_date() {
         assert_eq!(
             subject(date()),
@@ -390,8 +428,8 @@ mod tests {
         };
         let body = render_body(date(), &sections);
         let expected = "\
-Following is the list of topics that will be discussed in the
-FESCo meeting Tuesday at 18:00 Europe/London in #meeting:fedoraproject.org
+Following is the list of topics that will be discussed in the FESCo
+meeting Tuesday at 18:00 Europe/London in #meeting:fedoraproject.org
 on Matrix.
 
 To convert Europe/London (UTC/UTC+1) to your local time, take a look at
@@ -427,9 +465,10 @@ https://forge.fedoraproject.org/fesco/tickets/issues?labels=6114
 
 If you would like to add something to this agenda, you can
 reply to this e-mail, file a new issue at
-https://forge.fedoraproject.org/fesco/tickets, e-mail me directly, or bring it
-up at the end of the meeting, during the open floor topic. Note
-that added topics may be deferred until the following meeting.
+https://forge.fedoraproject.org/fesco/tickets, e-mail me directly,
+or bring it up at the end of the meeting, during the open floor
+topic. Note that added topics may be deferred until the following
+meeting.
 ";
         assert_eq!(body, expected);
     }

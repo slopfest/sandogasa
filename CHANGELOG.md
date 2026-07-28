@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### fesco-chair: wrap both emails to 71 columns
+
+The agenda announcement now wraps like the summary, sharing one
+`sources::WRAP` so the width can be changed in one place. Two lines
+of its static template were over the width and had been getting
+rewrapped by the sending client, orphaning `#meeting:fedoraproject.org`
+and `it`; they are re-flowed, and a test now asserts no rendered line
+exceeds the width unless it carries an unbreakable URL — which guards
+the template against the same thing creeping back.
+
+Ticket entries in both emails are rendered by one `sources::entry`,
+so a long title wraps the same way wherever it appears.
+
 ### fesco-chair: wrap the summary email to 71 columns
 
 meetbot emits its minutes one line per event, with `AGREED`/`ACTION`

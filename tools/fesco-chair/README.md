@@ -76,6 +76,9 @@ inference; a number carrying neither agenda label is fetched
 individually so it can still be placed. If meetbot is unreachable the
 tool warns and lists every meeting ticket under New business.
 
+The body is wrapped to 71 columns, the same width the summary uses
+(see below for why that number).
+
 Open [fesco/docs](https://forge.fedoraproject.org/fesco/docs) issues
 and pull requests (the wiki's pre-meeting step 3) are offered onto
 the agenda: on a terminal each one is prompted for individually
