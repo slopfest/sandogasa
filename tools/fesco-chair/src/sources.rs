@@ -258,6 +258,51 @@ pub fn confirm_default_no(question: &str) -> Result<bool, String> {
     sandogasa_cli::confirm(question, false).map_err(|e| e.to_string())
 }
 
+/// Open tickets tagged `pending announcement` — decided by an
+/// in-ticket vote and awaiting their announcement. Only *open* ones:
+/// the flow is tag → announce → untag + close, so a closed ticket
+/// still carrying the label is stale state from a past announcement.
+pub fn pending_tickets(
+    client: &sandogasa_forgejo::Client,
+) -> Result<Vec<Ticket>, Box<dyn std::error::Error>> {
+    let mut tickets: Vec<Ticket> = client
+        .repo_issues(TRACKER_OWNER, TRACKER_REPO, "open", &[PENDING_LABEL])?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    tickets.sort_by_key(|t| t.number);
+    Ok(tickets)
+}
+
+/// Fill in each ticket's decision from its comments (the vote
+/// concludes with e.g. "After a week: APPROVED (+3, 0, 0)" right
+/// before the ticket is tagged). Best-effort: a fetch or parse miss
+/// warns and leaves the template placeholder for the chair.
+pub fn fill_decisions(client: &sandogasa_forgejo::Client, tickets: &mut [Ticket], verbose: bool) {
+    for ticket in tickets {
+        if verbose {
+            eprintln!("[decision] parsing #{}", ticket.number);
+        }
+        match client.issue_comments(TRACKER_OWNER, TRACKER_REPO, ticket.number) {
+            Ok(comments) => {
+                ticket.decision = extract_decision(comments.iter().rev().map(|c| c.body.as_str()));
+                if ticket.decision.is_none() {
+                    eprintln!(
+                        "warning: no APPROVED/REJECTED tally found in #{}'s comments; \
+                         fill in the DECISION line by hand",
+                        ticket.number
+                    );
+                }
+            }
+            Err(e) => eprintln!(
+                "warning: could not fetch #{}'s comments ({e}); fill in the \
+                 DECISION line by hand",
+                ticket.number
+            ),
+        }
+    }
+}
+
 /// Open fesco/docs issues and pull requests, as agenda candidates
 /// (`repo` set so they render as `fesco/docs#NN`), sorted by number
 /// (issues and PRs share one number space on Forgejo).

@@ -153,20 +153,7 @@ pub fn assemble(
     if args.verbose {
         eprintln!("[agenda] fetching '{}' tickets", sources::PENDING_LABEL);
     }
-    // Only *open* pending-announcement tickets: the flow is tag →
-    // announce → untag + close, so a closed ticket still carrying the
-    // label is stale state from a past announcement, not agenda
-    // material.
-    let voted: Vec<sources::Ticket> = client
-        .repo_issues(
-            sources::TRACKER_OWNER,
-            sources::TRACKER_REPO,
-            "open",
-            &[sources::PENDING_LABEL],
-        )?
-        .into_iter()
-        .map(Into::into)
-        .collect();
+    let voted = sources::pending_tickets(&client)?;
     if args.verbose {
         eprintln!("[agenda] fetching '{}' tickets", sources::MEETING_LABEL);
     }
@@ -266,33 +253,7 @@ pub fn assemble(
         Err(e) => eprintln!("warning: could not fetch fesco/docs items ({e})"),
     }
 
-    // Parse each announced ticket's decision from its comments (the
-    // vote concludes with e.g. "After a week: APPROVED (+3, 0, 0)"
-    // right before the ticket is tagged). Best-effort: a fetch or
-    // parse miss leaves the template placeholder for the chair.
-    for ticket in &mut sections.voted {
-        if args.verbose {
-            eprintln!("[agenda] parsing decision for #{}", ticket.number);
-        }
-        match client.issue_comments(sources::TRACKER_OWNER, sources::TRACKER_REPO, ticket.number) {
-            Ok(comments) => {
-                ticket.decision =
-                    sources::extract_decision(comments.iter().rev().map(|c| c.body.as_str()));
-                if ticket.decision.is_none() {
-                    eprintln!(
-                        "warning: no APPROVED/REJECTED tally found in #{}'s comments; \
-                         fill in the DECISION line by hand",
-                        ticket.number
-                    );
-                }
-            }
-            Err(e) => eprintln!(
-                "warning: could not fetch #{}'s comments ({e}); fill in the \
-                 DECISION line by hand",
-                ticket.number
-            ),
-        }
-    }
+    sources::fill_decisions(&client, &mut sections.voted, args.verbose);
 
     Ok((date, sections, docs_open))
 }
