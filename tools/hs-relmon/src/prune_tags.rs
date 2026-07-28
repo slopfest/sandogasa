@@ -19,7 +19,6 @@
 //! package in the manifest in order.
 
 use std::cmp::Ordering;
-use std::io::{BufRead, Write};
 
 use sandogasa_koji::untag_build;
 
@@ -336,17 +335,6 @@ pub fn apply_plan(plan: &PrunePlan, verbose: bool) -> usize {
         }
     }
     errors
-}
-
-/// Interactive confirmation prompt. Reads one line from stdin
-/// and treats `y` / `Y` as approval; anything else (including
-/// EOF) is a rejection.
-pub fn confirm(prompt: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    eprint!("{prompt} [y/N]: ");
-    std::io::stderr().flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    Ok(line.trim().eq_ignore_ascii_case("y"))
 }
 
 /// Parse a comma-separated repository list. Empty entries are

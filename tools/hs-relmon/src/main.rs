@@ -845,7 +845,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             manifest,
             add_missing,
         } => {
-            let client = gitlab::GroupClient::from_group_url(&group)?;
+            let client = gitlab::group_client_from_group_url(&group)?;
             let issues = client.list_issues(ISSUE_LABEL, None)?;
 
             let manifest_names = match &manifest {
@@ -1058,7 +1058,7 @@ fn resolve_releases(release: &[String]) -> Result<Vec<String>, Box<dyn std::erro
 /// error doesn't silently suppress issue filing; the filing attempt
 /// itself will then surface the real error.
 fn project_issue_block_reason(project_url: &str) -> Option<&'static str> {
-    let client = gitlab::Client::from_project_url(project_url).ok()?;
+    let client = gitlab::client_from_project_url(project_url).ok()?;
     let status = client.project_status().ok()?;
     status.issue_block_reason()
 }
@@ -1090,7 +1090,7 @@ fn run_prune_one(
     if dry_run {
         return Ok(());
     }
-    if !yes && !prune_tags::confirm(&format!("Untag {total} build(s) for {package}?"))? {
+    if !yes && !sandogasa_cli::confirm(&format!("Untag {total} build(s) for {package}?"), false)? {
         eprintln!("{package}: aborted.");
         return Ok(());
     }
@@ -1168,7 +1168,7 @@ fn maybe_set_in_progress(
     if issue.status == IN_PROGRESS {
         return;
     }
-    let client = match gitlab::Client::from_project_url(project_url) {
+    let client = match gitlab::client_from_project_url(project_url) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{package}: setting status: {e}");
@@ -1208,7 +1208,7 @@ fn maybe_close_issue(
     if issue.state != "opened" {
         return;
     }
-    let client = match gitlab::Client::from_project_url(project_url) {
+    let client = match gitlab::client_from_project_url(project_url) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{package}: closing issue: {e}");
@@ -1266,7 +1266,7 @@ fn resolve_issue_ref(
 fn lookup_issue(
     project_url: &str,
 ) -> Result<Option<check_latest::IssueRef>, Box<dyn std::error::Error>> {
-    let client = gitlab::Client::from_project_url(project_url)?;
+    let client = gitlab::client_from_project_url(project_url)?;
     let issues = client.list_issues(ISSUE_LABEL, None)?;
     match issues.first() {
         Some(issue) => Ok(Some(resolve_issue_ref(&client, issue)?)),
@@ -1279,7 +1279,7 @@ fn file_or_update_issue(
     title: &str,
     description: &str,
 ) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
-    let client = gitlab::Client::from_project_url(project_url)?;
+    let client = gitlab::client_from_project_url(project_url)?;
 
     // Check for an existing open issue first.
     let open_issues = client.list_issues(ISSUE_LABEL, Some("opened"))?;

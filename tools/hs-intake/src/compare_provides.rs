@@ -9,17 +9,11 @@ pub fn compare_provides(
     source_branch: &str,
     target_branch: &str,
 ) -> Result<CompareResult, crate::fedrq::Error> {
-    let source_fq = Fedrq {
-        branch: Some(source_branch.to_string()),
-        ..Default::default()
-    };
-    let target_fq = Fedrq {
-        branch: Some(target_branch.to_string()),
-        ..Default::default()
-    };
-
-    let source = source_fq.subpkgs_provides(srpm)?;
-    let target = target_fq.subpkgs_provides(srpm)?;
-
-    Ok(compare::diff(source, target))
+    compare::compare_attr(
+        srpm,
+        source_branch,
+        target_branch,
+        Fedrq::subpkgs_provides,
+        false,
+    )
 }

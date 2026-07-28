@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
+use crate::fedrq::Fedrq;
 use crate::rpmvercmp::compare_evr;
 
 /// An entry whose version changed between branches.
@@ -69,6 +70,44 @@ pub fn filter_self_deps(entries: Vec<String>, subpkg_names: &BTreeSet<String>) -
             !subpkg_names.contains(name)
         })
         .collect()
+}
+
+/// Compare one dependency-style attribute of a source package
+/// between two branches.
+///
+/// `read` is the [`Fedrq`] accessor that lists the attribute's
+/// entries for a branch (e.g. `Fedrq::subpkgs_requires`).
+/// `filter_self` drops entries naming the srpm's own subpackages,
+/// which is what you want for Requires / BuildRequires but not
+/// for Provides.
+pub fn compare_attr(
+    srpm: &str,
+    source_branch: &str,
+    target_branch: &str,
+    read: fn(&Fedrq, &str) -> Result<Vec<String>, crate::fedrq::Error>,
+    filter_self: bool,
+) -> Result<CompareResult, crate::fedrq::Error> {
+    let source_fq = Fedrq {
+        branch: Some(source_branch.to_string()),
+        ..Default::default()
+    };
+    let target_fq = Fedrq {
+        branch: Some(target_branch.to_string()),
+        ..Default::default()
+    };
+
+    let mut source = read(&source_fq, srpm)?;
+    let mut target = read(&target_fq, srpm)?;
+
+    if filter_self {
+        let source_names = source_fq.subpkgs_names(srpm)?;
+        let target_names = target_fq.subpkgs_names(srpm)?;
+        let self_names: BTreeSet<String> = source_names.into_iter().chain(target_names).collect();
+        source = filter_self_deps(source, &self_names);
+        target = filter_self_deps(target, &self_names);
+    }
+
+    Ok(diff(source, target))
 }
 
 /// Diff two sets of RPM dependency/provide strings, detecting upgrades

@@ -19,11 +19,11 @@ use sandogasa_rpmvercmp::compare_evr;
 
 use crate::dump_inventory::proposed_updates_tag;
 use crate::file_issue::scan_rhel_key;
-use crate::{gitlab, jira};
+use crate::gitlab;
 
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
-use crate::utils::gitlab_base;
+use crate::utils::{canonical_jira_suffix, format_jira_line, format_mr_line, gitlab_base};
 const KOJI_PROFILE: &str = "cbs";
 
 #[derive(clap::Args)]
@@ -135,9 +135,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
         None => inventory.inventory.workloads.keys().cloned().collect(),
     };
 
-    let group_client = gitlab::GroupClient::new(&gitlab_base(), PROPOSED_UPDATES_GROUP)?;
-    let runtime = tokio::runtime::Runtime::new()?;
-    let jira_client = jira::client();
+    let group_client = gitlab::group_client(&gitlab_base(), PROPOSED_UPDATES_GROUP)?;
 
     let package_filter: Option<std::collections::HashSet<&str>> = if args.packages.is_empty() {
         None
@@ -220,7 +218,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
             let jira_key = parsed.jira_key.clone();
 
             let jira_info = match jira_key.as_deref() {
-                Some(key) => fetch_jira(&runtime, &jira_client, key, args.verbose),
+                Some(key) => fetch_jira(key, args.verbose),
                 None => None,
             };
             let (jira_status, jira_resolution, jira_resolved, jira_resolution_date) =
@@ -584,16 +582,6 @@ fn jira_suffix_drift(
     }
 }
 
-/// The `<status>` or `<status> (<resolution>)` text we'd put
-/// after ` — ` on the JIRA line. None when no live status.
-fn canonical_jira_suffix(status: Option<&str>, resolution: Option<&str>) -> Option<String> {
-    match (status, resolution) {
-        (Some(s), Some(r)) => Some(format!("{s} ({r})")),
-        (Some(s), None) => Some(s.to_string()),
-        (None, _) => None,
-    }
-}
-
 /// Detect lines from older body layouts that the current
 /// canonical format no longer emits (standalone Status line,
 /// legacy bullet-style MR/affected rows).
@@ -641,7 +629,7 @@ fn scan_mr_url_in_body(body: &str) -> Option<String> {
 /// need (title, state, description).
 fn fetch_mr(url: &str, verbose: bool) -> Option<gitlab::MergeRequest> {
     let (_parsed_base, project, iid) = gitlab::parse_mr_url(url).ok()?;
-    let client = gitlab::Client::new(&gitlab_base(), &project).ok()?;
+    let client = gitlab::client(&gitlab_base(), &project).ok()?;
     if verbose {
         eprintln!("[cpu-sig-tracker] fetching MR !{iid} in {project}");
     }
@@ -708,7 +696,7 @@ fn maybe_refresh_work_item_status(
     verbose: bool,
 ) {
     let desired = desired_work_item_status(jira_resolved, jira_resolution, has_build);
-    let client = match gitlab::Client::new(&gitlab_base(), project_path) {
+    let client = match gitlab::client(&gitlab_base(), project_path) {
         Ok(c) => c,
         Err(e) => {
             if verbose {
@@ -788,7 +776,7 @@ fn maybe_refresh_dates(
         return;
     }
 
-    let client = match gitlab::Client::new(&gitlab_base(), project_path) {
+    let client = match gitlab::client(&gitlab_base(), project_path) {
         Ok(c) => c,
         Err(e) => {
             if verbose {
@@ -862,7 +850,7 @@ fn maybe_refresh_issue(ctx: RefreshCtx<'_>) -> bool {
     if new_body.trim_end() == ctx.original_body.trim_end() {
         return false;
     }
-    let client = match gitlab::Client::new(&gitlab_base(), ctx.project_path) {
+    let client = match gitlab::client(&gitlab_base(), ctx.project_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!(
@@ -917,34 +905,6 @@ fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
     }
 }
 
-/// Build `- **MR**: [title](url) — state` (suffix omitted when
-/// state is unknown).
-fn format_mr_line(mr_url: &str, mr_title: &str, mr_state: Option<&str>) -> String {
-    match mr_state {
-        Some(state) => format!("- **MR**: [{mr_title}]({mr_url}) — {state}"),
-        None => format!("- **MR**: [{mr_title}]({mr_url})"),
-    }
-}
-
-/// Build `- **JIRA**: [KEY](url) — status (resolution)` with
-/// graceful degradation for missing fields.
-fn format_jira_line(
-    jira_key: Option<&str>,
-    jira_status: Option<&str>,
-    jira_resolution: Option<&str>,
-) -> String {
-    let Some(key) = jira_key else {
-        return "- **JIRA**: _(not found in MR; set with `--jira`)_".to_string();
-    };
-    let url = format!("{}/browse/{key}", crate::utils::jira_base());
-    let suffix = match (jira_status, jira_resolution) {
-        (Some(s), Some(r)) => format!(" — {s} ({r})"),
-        (Some(s), None) => format!(" — {s}"),
-        (None, _) => String::new(),
-    };
-    format!("- **JIRA**: [{key}]({url}){suffix}")
-}
-
 /// Strip the existing structured metadata lines (and their
 /// blank-line separator) from a body, leaving only the prose
 /// that preceded them. Returns None if there's no prose.
@@ -988,31 +948,14 @@ struct JiraInfo {
     resolution_date: Option<chrono::NaiveDate>,
 }
 
-fn fetch_jira(
-    runtime: &tokio::runtime::Runtime,
-    client: &sandogasa_jira::JiraClient,
-    key: &str,
-    verbose: bool,
-) -> Option<JiraInfo> {
-    if verbose {
-        eprintln!("[cpu-sig-tracker] fetching JIRA {key}");
-    }
-    match runtime.block_on(client.issue(key)) {
-        Ok(Some(issue)) => Some(JiraInfo {
-            status: issue.status().to_string(),
-            resolution: issue.resolution().map(|s| s.to_string()),
-            resolved: issue.is_resolved(),
-            resolution_date: issue.resolution_date(),
-        }),
-        Ok(None) => {
-            eprintln!("warning: JIRA {key} not found or not visible");
-            None
-        }
-        Err(e) => {
-            eprintln!("warning: JIRA {key} lookup failed: {e}");
-            None
-        }
-    }
+fn fetch_jira(key: &str, verbose: bool) -> Option<JiraInfo> {
+    let issue = crate::jira::fetch_or_warn(key, verbose)?;
+    Some(JiraInfo {
+        status: issue.status().to_string(),
+        resolution: issue.resolution().map(|s| s.to_string()),
+        resolved: issue.is_resolved(),
+        resolution_date: issue.resolution_date(),
+    })
 }
 
 fn fetch_proposed_updates_nvrs(release: &str, verbose: bool) -> HashMap<String, String> {
@@ -1217,11 +1160,8 @@ fn format_jira_state(r: &Row) -> String {
     if r.issue_state == "closed" {
         return "closed".to_string();
     }
-    match (&r.jira_status, &r.jira_resolution) {
-        (Some(status), Some(resolution)) => format!("{status} ({resolution})"),
-        (Some(status), None) => status.clone(),
-        (None, _) => "unknown".to_string(),
-    }
+    canonical_jira_suffix(r.jira_status.as_deref(), r.jira_resolution.as_deref())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 #[cfg(test)]

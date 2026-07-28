@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use hs_intake::{
     compare, compare_buildrequires, compare_provides, compare_requires, fedrq, safe_to_backport,
 };
@@ -17,53 +17,32 @@ struct Cli {
     command: Commands,
 }
 
+/// Positional arguments and flags shared by the three
+/// `compare-*` subcommands.
+#[derive(Args)]
+struct CompareArgs {
+    /// Source RPM name (e.g. "systemd").
+    srpm: String,
+    /// Branch to compare from (e.g. "rawhide").
+    source_branch: String,
+    /// Branch to compare to (e.g. "c10s-hyperscale").
+    target_branch: String,
+    /// Output as JSON.
+    #[arg(long)]
+    json: bool,
+    /// Also show unchanged entries.
+    #[arg(long)]
+    show_unchanged: bool,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Compare the BuildRequires of a source package between two branches.
-    CompareBuildRequires {
-        /// Source RPM name (e.g. "systemd").
-        srpm: String,
-        /// Branch to compare from (e.g. "rawhide").
-        source_branch: String,
-        /// Branch to compare to (e.g. "c10s-hyperscale").
-        target_branch: String,
-        /// Output as JSON.
-        #[arg(long)]
-        json: bool,
-        /// Also show unchanged entries.
-        #[arg(long)]
-        show_unchanged: bool,
-    },
+    CompareBuildRequires(CompareArgs),
     /// Compare the Provides of a source package between two branches.
-    CompareProvides {
-        /// Source RPM name (e.g. "systemd").
-        srpm: String,
-        /// Branch to compare from (e.g. "rawhide").
-        source_branch: String,
-        /// Branch to compare to (e.g. "c10s-hyperscale").
-        target_branch: String,
-        /// Output as JSON.
-        #[arg(long)]
-        json: bool,
-        /// Also show unchanged entries.
-        #[arg(long)]
-        show_unchanged: bool,
-    },
+    CompareProvides(CompareArgs),
     /// Compare the Requires of a source package between two branches.
-    CompareRequires {
-        /// Source RPM name (e.g. "systemd").
-        srpm: String,
-        /// Branch to compare from (e.g. "rawhide").
-        source_branch: String,
-        /// Branch to compare to (e.g. "c10s-hyperscale").
-        target_branch: String,
-        /// Output as JSON.
-        #[arg(long)]
-        json: bool,
-        /// Also show unchanged entries.
-        #[arg(long)]
-        show_unchanged: bool,
-    },
+    CompareRequires(CompareArgs),
     /// Check if a source package is safe to backport between branches.
     SafeToBackport {
         /// Source RPM name (e.g. "systemd").
@@ -81,20 +60,25 @@ enum Commands {
     },
 }
 
+/// Run one `compare-*` subcommand: `compare` produces the diff for
+/// the attribute, `label` names it in the rendered output.
 fn run_compare(
-    result: Result<compare::CompareResult, fedrq::Error>,
+    args: &CompareArgs,
     label: &str,
-    source_branch: &str,
-    target_branch: &str,
-    json: bool,
-    show_unchanged: bool,
+    compare_fn: fn(&str, &str, &str) -> Result<compare::CompareResult, fedrq::Error>,
 ) {
-    match result {
+    match compare_fn(&args.srpm, &args.source_branch, &args.target_branch) {
         Ok(cmp) => {
-            if json {
+            if args.json {
                 println!("{}", serde_json::to_string_pretty(&cmp).unwrap());
             } else {
-                compare::print_result(&cmp, label, source_branch, target_branch, show_unchanged);
+                compare::print_result(
+                    &cmp,
+                    label,
+                    &args.source_branch,
+                    &args.target_branch,
+                    args.show_unchanged,
+                );
             }
         }
         Err(e) => {
@@ -109,57 +93,16 @@ fn main() {
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
 
     match cli.command {
-        Commands::CompareBuildRequires {
-            srpm,
-            source_branch,
-            target_branch,
-            json,
-            show_unchanged,
-        } => {
-            let result =
-                compare_buildrequires::compare_buildrequires(&srpm, &source_branch, &target_branch);
-            run_compare(
-                result,
-                "BuildRequire",
-                &source_branch,
-                &target_branch,
-                json,
-                show_unchanged,
-            );
+        Commands::CompareBuildRequires(args) => run_compare(
+            &args,
+            "BuildRequire",
+            compare_buildrequires::compare_buildrequires,
+        ),
+        Commands::CompareProvides(args) => {
+            run_compare(&args, "Provide", compare_provides::compare_provides)
         }
-        Commands::CompareProvides {
-            srpm,
-            source_branch,
-            target_branch,
-            json,
-            show_unchanged,
-        } => {
-            let result = compare_provides::compare_provides(&srpm, &source_branch, &target_branch);
-            run_compare(
-                result,
-                "Provide",
-                &source_branch,
-                &target_branch,
-                json,
-                show_unchanged,
-            );
-        }
-        Commands::CompareRequires {
-            srpm,
-            source_branch,
-            target_branch,
-            json,
-            show_unchanged,
-        } => {
-            let result = compare_requires::compare_requires(&srpm, &source_branch, &target_branch);
-            run_compare(
-                result,
-                "Require",
-                &source_branch,
-                &target_branch,
-                json,
-                show_unchanged,
-            );
+        Commands::CompareRequires(args) => {
+            run_compare(&args, "Require", compare_requires::compare_requires)
         }
         Commands::SafeToBackport {
             srpm,

@@ -6,8 +6,8 @@
 
 // Re-export everything from the library crate.
 pub use sandogasa_gitlab::{
-    Assignee, Issue, IssueUpdate, ProjectStatus, package_from_issue_url, parse_project_url,
-    project_path_from_issue_url, validate_token,
+    Assignee, Client, GroupClient, Issue, IssueUpdate, ProjectStatus, package_from_issue_url,
+    parse_project_url, project_path_from_issue_url, validate_token,
 };
 
 /// Load the GitLab token from `GITLAB_TOKEN` env var or config file.
@@ -24,113 +24,18 @@ pub fn load_token() -> Result<String, Box<dyn std::error::Error>> {
     })
 }
 
-/// Project-level GitLab client that loads the token automatically.
-pub struct Client(sandogasa_gitlab::Client);
-
-impl Client {
-    /// Create a client from a project URL, loading the token
-    /// from the environment or config file.
-    pub fn from_project_url(url: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let token = load_token()?;
-        let (base_url, project_path) = parse_project_url(url)?;
-        Ok(Self(sandogasa_gitlab::Client::new(
-            &base_url,
-            &project_path,
-            &token,
-        )?))
-    }
-
-    /// Create a client with explicit parameters.
-    pub fn new(
-        base_url: &str,
-        project_path: &str,
-        token: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self(sandogasa_gitlab::Client::new(
-            base_url,
-            project_path,
-            token,
-        )?))
-    }
-
-    pub fn create_issue(
-        &self,
-        title: &str,
-        description: Option<&str>,
-        labels: Option<&str>,
-    ) -> Result<Issue, Box<dyn std::error::Error>> {
-        self.0.create_issue(title, description, labels)
-    }
-
-    pub fn list_issues(
-        &self,
-        label: &str,
-        state: Option<&str>,
-    ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
-        self.0.list_issues(label, state)
-    }
-
-    pub fn project_status(&self) -> Result<ProjectStatus, Box<dyn std::error::Error>> {
-        self.0.project_status()
-    }
-
-    pub fn add_note(&self, iid: u64, body: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.0.add_note(iid, body)
-    }
-
-    pub fn edit_issue(
-        &self,
-        iid: u64,
-        updates: &IssueUpdate,
-    ) -> Result<Issue, Box<dyn std::error::Error>> {
-        self.0.edit_issue(iid, updates)
-    }
-
-    pub fn get_work_item_status(
-        &self,
-        iid: u64,
-    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        self.0.get_work_item_status(iid)
-    }
-
-    pub fn set_work_item_status(
-        &self,
-        iid: u64,
-        status: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.0.set_work_item_status(iid, status)
-    }
+/// Project-level client for a project URL, with the token loaded
+/// from the environment or config file.
+pub fn client_from_project_url(url: &str) -> Result<Client, Box<dyn std::error::Error>> {
+    let token = load_token()?;
+    let (base_url, project_path) = parse_project_url(url)?;
+    Client::new(&base_url, &project_path, &token)
 }
 
-/// Group-level GitLab client that loads the token automatically.
-pub struct GroupClient(sandogasa_gitlab::GroupClient);
-
-impl GroupClient {
-    /// Create a group client from a group URL, loading the token
-    /// from the environment or config file.
-    pub fn from_group_url(url: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let token = load_token()?;
-        let (base_url, group_path) = parse_project_url(url)?;
-        Ok(Self(sandogasa_gitlab::GroupClient::new(
-            &base_url,
-            &group_path,
-            &token,
-        )?))
-    }
-
-    pub fn list_issues(
-        &self,
-        label: &str,
-        state: Option<&str>,
-    ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
-        self.0.list_issues(label, state)
-    }
-
-    pub fn get_work_item_status(
-        &self,
-        project_path: &str,
-        iid: u64,
-    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        self.0.get_work_item_status(project_path, iid)
-    }
+/// Group-level client for a group URL, with the token loaded from
+/// the environment or config file.
+pub fn group_client_from_group_url(url: &str) -> Result<GroupClient, Box<dyn std::error::Error>> {
+    let token = load_token()?;
+    let (base_url, group_path) = parse_project_url(url)?;
+    GroupClient::new(&base_url, &group_path, &token)
 }

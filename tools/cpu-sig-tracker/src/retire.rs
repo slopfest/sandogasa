@@ -13,13 +13,13 @@
 //! `--force` skips the condition checks, `--yes` skips the
 //! prompt.
 
-use std::io::{BufRead, Write};
 use std::process::ExitCode;
 
 use sandogasa_koji::{list_tagged_nvrs, parse_nvr_name};
 
 use crate::dump_inventory::proposed_updates_tag;
-use crate::{gitlab, jira};
+use crate::gitlab;
+use crate::utils::{Check, parse_jira_key_from_body, report_check};
 
 const KOJI_PROFILE: &str = "cbs";
 
@@ -64,7 +64,7 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     if args.verbose {
         eprintln!("[cpu-sig-tracker] fetching issue {project_path}!{iid}");
     }
-    let client = gitlab::Client::new(&crate::utils::gitlab_base(), &project_path)?;
+    let client = gitlab::client(&crate::utils::gitlab_base(), &project_path)?;
     let issue = client.issue(iid)?;
 
     if issue.state == "closed" {
@@ -80,13 +80,13 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     let jira_key = parse_jira_key_from_body(body);
 
     // Precondition 1: JIRA resolved.
-    let jira_check = check_jira_resolved(jira_key.as_deref(), args.verbose);
+    let jira_check = crate::jira::check_resolved(jira_key.as_deref(), args.verbose);
 
     // Precondition 2: no pu build tagged.
     let build_check = check_package_untagged(&release, package, args.verbose);
 
-    report_precondition("JIRA resolved", &jira_check.check);
-    report_precondition("no pu build tagged", &build_check);
+    report_check("JIRA resolved", &jira_check.check);
+    report_check("no pu build tagged", &build_check);
 
     let preconditions_ok =
         matches!(&jira_check.check, Check::Pass(_)) && matches!(&build_check, Check::Pass(_));
@@ -110,7 +110,7 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     if let Some(date) = jira_check.resolution_date {
         println!("  due_date: {date} (from JIRA resolutiondate)");
     }
-    if !args.yes && !confirm("Proceed?")? {
+    if !args.yes && !sandogasa_cli::confirm("Proceed?", false)? {
         eprintln!("aborted.");
         return Ok(());
     }
@@ -171,91 +171,6 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-/// Outcome of a single precondition check.
-enum Check {
-    Pass(String),
-    Fail(String),
-    Skipped(String),
-}
-
-impl Check {
-    fn label(&self) -> &'static str {
-        match self {
-            Check::Pass(_) => "ok",
-            Check::Fail(_) => "FAIL",
-            Check::Skipped(_) => "skipped",
-        }
-    }
-
-    fn detail(&self) -> &str {
-        match self {
-            Check::Pass(d) | Check::Fail(d) | Check::Skipped(d) => d,
-        }
-    }
-}
-
-/// Outcome of the JIRA-resolved check, plus details extracted
-/// from the fetch for use downstream (resolution name → GitLab
-/// status, resolution date → due_date).
-struct JiraCheck {
-    check: Check,
-    resolution_name: Option<String>,
-    resolution_date: Option<chrono::NaiveDate>,
-}
-
-fn check_jira_resolved(jira_key: Option<&str>, verbose: bool) -> JiraCheck {
-    let Some(key) = jira_key else {
-        return JiraCheck {
-            check: Check::Skipped("no JIRA key found in issue body".to_string()),
-            resolution_name: None,
-            resolution_date: None,
-        };
-    };
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            return JiraCheck {
-                check: Check::Skipped(format!("tokio runtime init failed: {e}")),
-                resolution_name: None,
-                resolution_date: None,
-            };
-        }
-    };
-    let jira_client = jira::client();
-    if verbose {
-        eprintln!("[cpu-sig-tracker] fetching JIRA {key}");
-    }
-    match runtime.block_on(jira_client.issue(key)) {
-        Ok(Some(issue)) if issue.is_resolved() => JiraCheck {
-            check: Check::Pass(format!("{} — {}", key, describe_jira(&issue))),
-            resolution_name: issue.resolution().map(|s| s.to_string()),
-            resolution_date: issue.resolution_date(),
-        },
-        Ok(Some(issue)) => JiraCheck {
-            check: Check::Fail(format!("{} is {} (not resolved)", key, issue.status())),
-            resolution_name: None,
-            resolution_date: None,
-        },
-        Ok(None) => JiraCheck {
-            check: Check::Skipped(format!("JIRA {key} not visible")),
-            resolution_name: None,
-            resolution_date: None,
-        },
-        Err(e) => JiraCheck {
-            check: Check::Skipped(format!("JIRA {key} fetch failed: {e}")),
-            resolution_name: None,
-            resolution_date: None,
-        },
-    }
-}
-
-fn describe_jira(issue: &sandogasa_jira::Issue) -> String {
-    match issue.resolution() {
-        Some(res) => format!("{} ({})", issue.status(), res),
-        None => issue.status().to_string(),
-    }
-}
-
 fn check_package_untagged(release: &str, package: &str, verbose: bool) -> Check {
     let tag = match proposed_updates_tag(release) {
         Ok(t) => t,
@@ -272,10 +187,6 @@ fn check_package_untagged(release: &str, package: &str, verbose: bool) -> Check 
         Some(nvr) => Check::Fail(format!("package still tagged as {nvr} — run `untag` first")),
         None => Check::Pass(format!("no {package} build tagged in {tag}")),
     }
-}
-
-fn report_precondition(name: &str, check: &Check) {
-    println!("check {name}: {} — {}", check.label(), check.detail());
 }
 
 fn compose_audit_note(
@@ -331,26 +242,6 @@ fn parse_release_from_body(body: &str) -> Option<String> {
     None
 }
 
-/// Find the RHEL-\d+ key in `- **JIRA**: [KEY](url)...`.
-fn parse_jira_key_from_body(body: &str) -> Option<String> {
-    for line in body.lines() {
-        if let Some(rest) = line.strip_prefix("- **JIRA**: [")
-            && let Some(end) = rest.find(']')
-        {
-            return Some(rest[..end].to_string());
-        }
-    }
-    None
-}
-
-fn confirm(prompt: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    eprint!("{prompt} [y/N]: ");
-    std::io::stderr().flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    Ok(line.trim().eq_ignore_ascii_case("y"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,17 +255,6 @@ mod tests {
     #[test]
     fn parse_release_returns_none_when_missing() {
         assert_eq!(parse_release_from_body("no release line"), None);
-    }
-
-    #[test]
-    fn parse_jira_key_from_standard_body() {
-        let body = "- **JIRA**: [RHEL-1](https://example/) — New\n";
-        assert_eq!(parse_jira_key_from_body(body).as_deref(), Some("RHEL-1"));
-    }
-
-    #[test]
-    fn parse_jira_key_returns_none_when_missing() {
-        assert_eq!(parse_jira_key_from_body("no jira"), None);
     }
 
     #[test]

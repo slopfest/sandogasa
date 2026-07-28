@@ -122,8 +122,8 @@ pub(crate) fn build_rows(args: &SyncIssuesArgs) -> Result<Vec<Row>, Box<dyn std:
         None => inventory.inventory.workloads.keys().cloned().collect(),
     };
 
-    let group_client = gitlab::GroupClient::new(&gitlab_base(), PROPOSED_UPDATES_GROUP)?;
-    let tracker_client = gitlab::Client::new(&gitlab_base(), PACKAGE_TRACKER_PROJECT)?;
+    let group_client = gitlab::group_client(&gitlab_base(), PROPOSED_UPDATES_GROUP)?;
+    let tracker_client = gitlab::client(&gitlab_base(), PACKAGE_TRACKER_PROJECT)?;
 
     let mut rows: Vec<Row> = Vec::new();
     for release in &releases {

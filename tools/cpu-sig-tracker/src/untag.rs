@@ -9,17 +9,16 @@
 //! c10s` → optionally follow with `retire` to close the
 //! tracking issue once the build is gone.
 
-use std::io::{BufRead, Write};
 use std::process::ExitCode;
 
 use sandogasa_koji::{list_tagged_nvrs, parse_nvr_name, untag_build};
 
 use crate::dump_inventory::{proposed_updates_tag, proposed_updates_testing_tag};
-use crate::{gitlab, jira};
+use crate::gitlab;
 
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
-use crate::utils::gitlab_base;
+use crate::utils::{Check, gitlab_base, parse_jira_key_from_body, report_check};
 const KOJI_PROFILE: &str = "cbs";
 
 #[derive(clap::Args)]
@@ -98,7 +97,7 @@ pub(crate) fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Erro
     }
     println!("  package: {}", resolved.package);
     println!("  release: {}", args.release);
-    if !args.yes && !confirm("Proceed?")? {
+    if !args.yes && !sandogasa_cli::confirm("Proceed?", false)? {
         eprintln!("aborted.");
         return Ok(());
     }
@@ -180,7 +179,7 @@ fn resolve_target(
 /// `cpu-sig-tracker`-labeled group and check whether its JIRA
 /// is resolved.
 fn check_tracking_issue_jira(package: &str, release: &str, verbose: bool) -> Check {
-    let group_client = match gitlab::GroupClient::new(&gitlab_base(), PROPOSED_UPDATES_GROUP) {
+    let group_client = match gitlab::group_client(&gitlab_base(), PROPOSED_UPDATES_GROUP) {
         Ok(c) => c,
         Err(e) => return Check::Skipped(format!("GitLab group client: {e}")),
     };
@@ -213,92 +212,12 @@ fn check_tracking_issue_jira(package: &str, release: &str, verbose: bool) -> Che
             issue.web_url,
         ));
     };
-    fetch_jira_resolved(&key, verbose)
-}
-
-fn fetch_jira_resolved(key: &str, verbose: bool) -> Check {
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => return Check::Skipped(format!("tokio runtime init failed: {e}")),
-    };
-    let jira_client = jira::client();
-    if verbose {
-        eprintln!("[cpu-sig-tracker] fetching JIRA {key}");
-    }
-    match runtime.block_on(jira_client.issue(key)) {
-        Ok(Some(issue)) if issue.is_resolved() => {
-            let summary = match issue.resolution() {
-                Some(r) => format!("{} ({})", issue.status(), r),
-                None => issue.status().to_string(),
-            };
-            Check::Pass(format!("{key} — {summary}"))
-        }
-        Ok(Some(issue)) => Check::Fail(format!("{key} is {} (not resolved)", issue.status())),
-        Ok(None) => Check::Skipped(format!("JIRA {key} not visible")),
-        Err(e) => Check::Skipped(format!("JIRA {key} fetch failed: {e}")),
-    }
-}
-
-/// Find the `RHEL-\d+` key in `- **JIRA**: [KEY](...)`.
-fn parse_jira_key_from_body(body: &str) -> Option<String> {
-    for line in body.lines() {
-        if let Some(rest) = line.strip_prefix("- **JIRA**: [")
-            && let Some(end) = rest.find(']')
-        {
-            return Some(rest[..end].to_string());
-        }
-    }
-    None
-}
-
-enum Check {
-    Pass(String),
-    Fail(String),
-    Skipped(String),
-}
-
-impl Check {
-    fn label(&self) -> &'static str {
-        match self {
-            Check::Pass(_) => "ok",
-            Check::Fail(_) => "FAIL",
-            Check::Skipped(_) => "skipped",
-        }
-    }
-
-    fn detail(&self) -> &str {
-        match self {
-            Check::Pass(d) | Check::Fail(d) | Check::Skipped(d) => d,
-        }
-    }
-}
-
-fn report_check(name: &str, check: &Check) {
-    println!("check {name}: {} — {}", check.label(), check.detail());
-}
-
-fn confirm(prompt: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    eprint!("{prompt} [y/N]: ");
-    std::io::stderr().flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    Ok(line.trim().eq_ignore_ascii_case("y"))
+    crate::jira::check_resolved(Some(&key), verbose).check
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_jira_key_from_standard_body() {
-        let body = "- **JIRA**: [RHEL-1](https://example/) — Closed (Done)\n";
-        assert_eq!(parse_jira_key_from_body(body).as_deref(), Some("RHEL-1"));
-    }
-
-    #[test]
-    fn parse_jira_key_missing() {
-        assert_eq!(parse_jira_key_from_body("no jira"), None);
-    }
 
     #[test]
     fn resolve_exact_nvr_in_release_only() {

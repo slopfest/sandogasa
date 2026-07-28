@@ -29,7 +29,7 @@ use sandogasa_repology as repology;
 use sandogasa_rpmvercmp::rpmvercmp;
 
 use crate::cbs::{Build, Client};
-use crate::prune_tags::{KOJI_PROFILE, PruneOptions, TagBuilds, confirm, fetch_managed_tags};
+use crate::prune_tags::{KOJI_PROFILE, PruneOptions, TagBuilds, fetch_managed_tags};
 
 /// Parse a hyperscale tag's leading version token into
 /// `(major, is_stream)`: `hyperscale10s-…` → `(10, true)`,
@@ -187,10 +187,13 @@ pub fn apply_plan(plan: &ArchivedPlan, assume_yes: bool, verbose: bool) -> Apply
     // Declining means "leave this package alone" — including its
     // ahead-of-stock builds.
     if safe_total > 0 && !assume_yes {
-        let approved = confirm(&format!(
-            "{}: untag {safe_total} build(s) at or behind stock?",
-            plan.package
-        ))
+        let approved = sandogasa_cli::confirm(
+            &format!(
+                "{}: untag {safe_total} build(s) at or behind stock?",
+                plan.package
+            ),
+            false,
+        )
         .unwrap_or(false);
         if !approved {
             return out;
@@ -214,10 +217,13 @@ pub fn apply_plan(plan: &ArchivedPlan, assume_yes: bool, verbose: bool) -> Apply
                 out.skipped_ahead += 1;
                 continue;
             }
-            let approved = confirm(&format!(
-                "{nvr} in {} is newer than stock {stock}; untag anyway?",
-                tp.tag
-            ))
+            let approved = sandogasa_cli::confirm(
+                &format!(
+                    "{nvr} in {} is newer than stock {stock}; untag anyway?",
+                    tp.tag
+                ),
+                false,
+            )
             .unwrap_or(false);
             if approved {
                 match do_untag(&tp.tag, nvr, verbose) {

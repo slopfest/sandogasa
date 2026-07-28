@@ -11,6 +11,7 @@ use std::process::ExitCode;
 
 use crate::gitlab;
 use crate::jira;
+use crate::utils::{format_jira_line, format_mr_line};
 
 /// GitLab group where tracking issues are filed.
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
@@ -105,7 +106,7 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     let package = package_from_project(&mr_project)
         .ok_or_else(|| format!("could not extract package name from '{mr_project}'"))?;
 
-    let mr_client = gitlab::Client::new(&crate::utils::gitlab_base(), &mr_project)?;
+    let mr_client = gitlab::client(&crate::utils::gitlab_base(), &mr_project)?;
     let mr = mr_client.merge_request(iid)?;
 
     let release = args
@@ -163,7 +164,7 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     if args.verbose {
         eprintln!("[cpu-sig-tracker] creating issue in {tracking_project}");
     }
-    let tracking_client = gitlab::Client::new(&crate::utils::gitlab_base(), &tracking_project)?;
+    let tracking_client = gitlab::client(&crate::utils::gitlab_base(), &tracking_project)?;
     let issue = tracking_client.create_issue(&title, Some(&body), Some(&labels))?;
     eprintln!("Filed #{} {}", issue.iid, issue.web_url);
 
@@ -338,31 +339,11 @@ pub(crate) fn scan_rhel_key(text: &str) -> Option<String> {
 /// in the rendered body. Returns `(status, resolution)` where
 /// resolution is None when the issue is still open.
 fn fetch_jira_info(key: &str, verbose: bool) -> Option<(String, Option<String>)> {
-    if verbose {
-        eprintln!("[cpu-sig-tracker] fetching JIRA {key}");
-    }
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("warning: could not start tokio runtime for JIRA lookup: {e}");
-            return None;
-        }
-    };
-    let client = jira::client();
-    match runtime.block_on(client.issue(key)) {
-        Ok(Some(issue)) => Some((
-            issue.status().to_string(),
-            issue.resolution().map(|s| s.to_string()),
-        )),
-        Ok(None) => {
-            eprintln!("warning: JIRA {key} not found or not visible");
-            None
-        }
-        Err(e) => {
-            eprintln!("warning: JIRA {key} lookup failed: {e}");
-            None
-        }
-    }
+    let issue = jira::fetch_or_warn(key, verbose)?;
+    Some((
+        issue.status().to_string(),
+        issue.resolution().map(|s| s.to_string()),
+    ))
 }
 
 fn format_title(
@@ -375,34 +356,6 @@ fn format_title(
         (Some(a), Some(e)) => format!("{package}: {a} → {e}"),
         _ => format!("{package}: {mr_title}"),
     }
-}
-
-/// `- **MR**: [title](url) — state` (state suffix omitted when
-/// unknown).
-fn format_mr_line(mr_url: &str, mr_title: &str, mr_state: Option<&str>) -> String {
-    match mr_state {
-        Some(state) => format!("- **MR**: [{mr_title}]({mr_url}) — {state}"),
-        None => format!("- **MR**: [{mr_title}]({mr_url})"),
-    }
-}
-
-/// `- **JIRA**: [KEY](url) — status (resolution)` with
-/// graceful degradation when fields are missing.
-fn format_jira_line(
-    jira_key: Option<&str>,
-    jira_status: Option<&str>,
-    jira_resolution: Option<&str>,
-) -> String {
-    let Some(key) = jira_key else {
-        return "- **JIRA**: _(not found in MR; set with `--jira`)_".to_string();
-    };
-    let url = format!("{}/browse/{key}", crate::utils::jira_base());
-    let suffix = match (jira_status, jira_resolution) {
-        (Some(s), Some(r)) => format!(" — {s} ({r})"),
-        (Some(s), None) => format!(" — {s}"),
-        (None, _) => String::new(),
-    };
-    format!("- **JIRA**: [{key}]({url}){suffix}")
 }
 
 fn format_body(f: &BodyFields<'_>) -> String {
