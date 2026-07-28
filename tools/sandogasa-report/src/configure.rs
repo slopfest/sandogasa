@@ -331,165 +331,131 @@ enum TokenChoice {
     Skipped,
 }
 
-/// Interactively collect a GitLab API token for `instance`.
-/// Validates existing tokens first (and keeps them if still
-/// valid), then prompts for a new one via `rpassword`. An empty
-/// response skips the instance — useful when a shell env var is
-/// providing the token and the user doesn't want to persist it.
+/// Every forge's `validate_token` has this shape: `Ok(true)` valid,
+/// `Ok(false)` rejected, `Err` couldn't reach the API.
+type ValidateFn = fn(&str, &str) -> Result<bool, Box<dyn std::error::Error>>;
+
+/// Interactively collect an API token for `instance` on one forge.
+/// Validates an existing token first (and keeps it if still valid),
+/// then prompts for a new one via `rpassword`. An empty response
+/// skips the instance — useful when a shell env var is providing
+/// the token and the user doesn't want to persist it.
+///
+/// `prompt` is the full rpassword prompt (it names the scope the
+/// forge needs). `keep_on_unreachable` decides what an `Err` from
+/// validating the *existing* token means: `true` keeps it so a
+/// transient outage doesn't force re-entry, `false` re-prompts.
+fn prompt_token(
+    instance: &str,
+    existing: Option<&str>,
+    prompt: &str,
+    keep_on_unreachable: bool,
+    validate: ValidateFn,
+) -> Result<TokenChoice, Box<dyn std::error::Error>> {
+    if let Some(tok) = existing {
+        eprint!("  Validating existing {instance} token... ");
+        match validate(instance, tok) {
+            Ok(true) => {
+                eprintln!("valid.");
+                return Ok(TokenChoice::KeepExisting);
+            }
+            Ok(false) => eprintln!("invalid — re-prompting."),
+            Err(e) if keep_on_unreachable => {
+                eprintln!("check failed ({e}); keeping existing token.");
+                return Ok(TokenChoice::KeepExisting);
+            }
+            Err(e) => eprintln!("check failed ({e}); re-prompting."),
+        }
+    }
+    let token = rpassword::prompt_password(prompt)?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Ok(TokenChoice::Skipped);
+    }
+    eprint!("  Validating... ");
+    match validate(instance, &token) {
+        Ok(true) => {
+            eprintln!("valid.");
+            Ok(TokenChoice::Saved(token))
+        }
+        Ok(false) => Err(format!("token rejected by {instance}").into()),
+        Err(e) => Err(format!("validation failed for {instance}: {e}").into()),
+    }
+}
+
+/// GitLab tokens. An unreachable API re-prompts rather than
+/// keeping the existing token.
 fn prompt_gitlab_token(
     instance: &str,
     existing: Option<&str>,
 ) -> Result<TokenChoice, Box<dyn std::error::Error>> {
-    if let Some(tok) = existing {
-        eprint!("  Validating existing {instance} token... ");
-        match sandogasa_gitlab::validate_token(instance, tok) {
-            Ok(true) => {
-                eprintln!("valid.");
-                return Ok(TokenChoice::KeepExisting);
-            }
-            Ok(false) => eprintln!("invalid — re-prompting."),
-            Err(e) => eprintln!("check failed ({e}); re-prompting."),
-        }
-    }
-    let token = rpassword::prompt_password(format!(
-        "  Paste a personal access token for {instance} with 'api' scope \
-         (enter to skip): "
-    ))?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        return Ok(TokenChoice::Skipped);
-    }
-    eprint!("  Validating... ");
-    match sandogasa_gitlab::validate_token(instance, &token) {
-        Ok(true) => {
-            eprintln!("valid.");
-            Ok(TokenChoice::Saved(token))
-        }
-        Ok(false) => Err(format!("token rejected by {instance}").into()),
-        Err(e) => Err(format!("validation failed for {instance}: {e}").into()),
-    }
+    prompt_token(
+        instance,
+        existing,
+        &format!(
+            "  Paste a personal access token for {instance} with 'api' scope \
+             (enter to skip): "
+        ),
+        false,
+        sandogasa_gitlab::validate_token,
+    )
 }
 
-/// Same flow as `prompt_gitlab_token` but for GitHub. Uses
-/// `sandogasa-github`'s three-state `validate_token`: an
-/// `Ok(false)` means the saved token is actually invalid (re-
-/// prompt), while `Err` means we couldn't reach the API (warn
-/// and keep the existing token so the user can retry).
+/// GitHub tokens. An `Ok(false)` means the saved token is actually
+/// invalid (re-prompt), while `Err` means we couldn't reach the API
+/// (warn and keep the existing token so the user can retry).
 fn prompt_github_token(
     instance: &str,
     existing: Option<&str>,
 ) -> Result<TokenChoice, Box<dyn std::error::Error>> {
-    if let Some(tok) = existing {
-        eprint!("  Validating existing {instance} token... ");
-        match sandogasa_github::validate_token(instance, tok) {
-            Ok(true) => {
-                eprintln!("valid.");
-                return Ok(TokenChoice::KeepExisting);
-            }
-            Ok(false) => eprintln!("invalid — re-prompting."),
-            Err(e) => {
-                eprintln!("check failed ({e}); keeping existing token.");
-                return Ok(TokenChoice::KeepExisting);
-            }
-        }
-    }
-    let token = rpassword::prompt_password(format!(
-        "  Paste a personal access token for {instance} with 'repo' scope \
-         (enter to skip): "
-    ))?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        return Ok(TokenChoice::Skipped);
-    }
-    eprint!("  Validating... ");
-    match sandogasa_github::validate_token(instance, &token) {
-        Ok(true) => {
-            eprintln!("valid.");
-            Ok(TokenChoice::Saved(token))
-        }
-        Ok(false) => Err(format!("token rejected by {instance}").into()),
-        Err(e) => Err(format!("validation failed for {instance}: {e}").into()),
-    }
+    prompt_token(
+        instance,
+        existing,
+        &format!(
+            "  Paste a personal access token for {instance} with 'repo' scope \
+             (enter to skip): "
+        ),
+        true,
+        sandogasa_github::validate_token,
+    )
 }
 
-/// Same flow as `prompt_github_token` but for Forgejo / Gitea.
-/// Treats an unreachable API (`Err`) as "keep the existing token"
-/// so a transient outage doesn't force re-entry.
+/// Forgejo / Gitea tokens. Treats an unreachable API (`Err`) as
+/// "keep the existing token" so a transient outage doesn't force
+/// re-entry.
 fn prompt_forgejo_token(
     instance: &str,
     existing: Option<&str>,
 ) -> Result<TokenChoice, Box<dyn std::error::Error>> {
-    if let Some(tok) = existing {
-        eprint!("  Validating existing {instance} token... ");
-        match sandogasa_forgejo::validate_token(instance, tok) {
-            Ok(true) => {
-                eprintln!("valid.");
-                return Ok(TokenChoice::KeepExisting);
-            }
-            Ok(false) => eprintln!("invalid — re-prompting."),
-            Err(e) => {
-                eprintln!("check failed ({e}); keeping existing token.");
-                return Ok(TokenChoice::KeepExisting);
-            }
-        }
-    }
-    let token = rpassword::prompt_password(format!(
-        "  Paste a personal access token for {instance} \
-         (enter to skip): "
-    ))?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        return Ok(TokenChoice::Skipped);
-    }
-    eprint!("  Validating... ");
-    match sandogasa_forgejo::validate_token(instance, &token) {
-        Ok(true) => {
-            eprintln!("valid.");
-            Ok(TokenChoice::Saved(token))
-        }
-        Ok(false) => Err(format!("token rejected by {instance}").into()),
-        Err(e) => Err(format!("validation failed for {instance}: {e}").into()),
-    }
+    prompt_token(
+        instance,
+        existing,
+        &format!(
+            "  Paste a personal access token for {instance} \
+             (enter to skip): "
+        ),
+        true,
+        sandogasa_forgejo::validate_token,
+    )
 }
 
-/// Same flow as `prompt_forgejo_token` but for Sourcehut. The token is a
-/// personal access token from meta.sr.ht/oauth2/personal-token (which
-/// grants read access across services by default).
+/// Sourcehut tokens — a personal access token from
+/// meta.sr.ht/oauth2/personal-token (which grants read access
+/// across services by default).
 fn prompt_sourcehut_token(
     instance: &str,
     existing: Option<&str>,
 ) -> Result<TokenChoice, Box<dyn std::error::Error>> {
-    if let Some(tok) = existing {
-        eprint!("  Validating existing {instance} token... ");
-        match sandogasa_sourcehut::validate_token(instance, tok) {
-            Ok(true) => {
-                eprintln!("valid.");
-                return Ok(TokenChoice::KeepExisting);
-            }
-            Ok(false) => eprintln!("invalid — re-prompting."),
-            Err(e) => {
-                eprintln!("check failed ({e}); keeping existing token.");
-                return Ok(TokenChoice::KeepExisting);
-            }
-        }
-    }
-    let token = rpassword::prompt_password(format!(
-        "  Paste a personal access token for {instance} \
-         (from meta.sr.ht/oauth2/personal-token; enter to skip): "
-    ))?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        return Ok(TokenChoice::Skipped);
-    }
-    eprint!("  Validating... ");
-    match sandogasa_sourcehut::validate_token(instance, &token) {
-        Ok(true) => {
-            eprintln!("valid.");
-            Ok(TokenChoice::Saved(token))
-        }
-        Ok(false) => Err(format!("token rejected by {instance}").into()),
-        Err(e) => Err(format!("validation failed for {instance}: {e}").into()),
-    }
+    prompt_token(
+        instance,
+        existing,
+        &format!(
+            "  Paste a personal access token for {instance} \
+             (from meta.sr.ht/oauth2/personal-token; enter to skip): "
+        ),
+        true,
+        sandogasa_sourcehut::validate_token,
+    )
 }
 
 /// Parse an overlay file's text as a TOML *document*. Deliberately uses

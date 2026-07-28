@@ -163,6 +163,22 @@ pub async fn bugzilla_report(
     .await
 }
 
+/// Bug statuses that count as a finished review: Bugzilla moves a
+/// review either straight to CLOSED or through RELEASE_PENDING, so
+/// both have to be queried and unioned.
+const COMPLETED_STATUSES: [&str; 2] = ["CLOSED", "RELEASE_PENDING"];
+
+/// Run one Bugzilla search (unlimited results), normalizing the
+/// transport error into our string form.
+async fn search(
+    bz: &BzClient,
+    query: &str,
+) -> Result<Vec<sandogasa_bugzilla::models::Bug>, String> {
+    bz.search(query, 0)
+        .await
+        .map_err(|e| format!("Bugzilla search failed: {e}"))
+}
+
 async fn bugzilla_report_with_client(
     bz: &BzClient,
     email: &str,
@@ -185,90 +201,66 @@ async fn bugzilla_report_with_client(
     if verbose {
         eprintln!("[bugzilla] searching bugs filed by {email}");
     }
-    let bugs_filed = bz
-        .search(
-            &format!(
-                "product=Fedora&product=Fedora EPEL\
-                 &creator={email}\
-                 &creation_time={since_str}\
-                 &chfieldfrom={since_str}&chfieldto={until_str}"
-            ),
-            0,
-        )
-        .await
-        .map_err(|e| format!("Bugzilla search failed: {e}"))?;
+    let bugs_filed = search(
+        bz,
+        &format!(
+            "product=Fedora&product=Fedora EPEL\
+             &creator={email}\
+             &creation_time={since_str}\
+             &chfieldfrom={since_str}&chfieldto={until_str}"
+        ),
+    )
+    .await?;
 
     // Query 2: Bugs assigned to the user, closed during the period.
     if verbose {
         eprintln!("[bugzilla] searching bugs closed (assigned to {email})");
     }
-    let bugs_closed = bz
-        .search(
-            &format!(
-                "product=Fedora&product=Fedora EPEL\
-                 &assigned_to={email}\
-                 &bug_status=CLOSED\
-                 &chfield=bug_status&chfieldvalue=CLOSED\
-                 &chfieldfrom={since_str}&chfieldto={until_str}"
-            ),
-            0,
-        )
-        .await
-        .map_err(|e| format!("Bugzilla search failed: {e}"))?;
+    let bugs_closed = search(
+        bz,
+        &format!(
+            "product=Fedora&product=Fedora EPEL\
+             &assigned_to={email}\
+             &bug_status=CLOSED\
+             &chfield=bug_status&chfieldvalue=CLOSED\
+             &chfieldfrom={since_str}&chfieldto={until_str}"
+        ),
+    )
+    .await?;
 
     // Query 3: Package Review bugs assigned to user (reviews done)
     // that had activity in the period.
     if verbose {
         eprintln!("[bugzilla] searching reviews assigned to {email}");
     }
-    let reviews_assigned = bz
-        .search(
-            &format!(
-                "product=Fedora&component=Package Review\
-                 &assigned_to={email}\
-                 &chfieldfrom={since_str}&chfieldto={until_str}"
-            ),
-            0,
-        )
-        .await
-        .map_err(|e| format!("Bugzilla search failed: {e}"))?;
+    let reviews_assigned = search(
+        bz,
+        &format!(
+            "product=Fedora&component=Package Review\
+             &assigned_to={email}\
+             &chfieldfrom={since_str}&chfieldto={until_str}"
+        ),
+    )
+    .await?;
 
     // Query 4: Review requests filed by user that reached
     // CLOSED or RELEASE_PENDING during the period.
     if verbose {
         eprintln!("[bugzilla] searching completed review requests by {email}");
     }
-    let reviews_completed_closed = bz
-        .search(
-            &format!(
-                "product=Fedora&component=Package Review\
-                 &creator={email}\
-                 &chfield=bug_status&chfieldvalue=CLOSED\
-                 &chfieldfrom={since_str}&chfieldto={until_str}"
-            ),
-            0,
-        )
-        .await
-        .map_err(|e| format!("Bugzilla search failed: {e}"))?;
-    let reviews_completed_pending = bz
-        .search(
-            &format!(
-                "product=Fedora&component=Package Review\
-                 &creator={email}\
-                 &chfield=bug_status&chfieldvalue=RELEASE_PENDING\
-                 &chfieldfrom={since_str}&chfieldto={until_str}"
-            ),
-            0,
-        )
-        .await
-        .map_err(|e| format!("Bugzilla search failed: {e}"))?;
-
     let mut reviews_completed_ids: HashSet<u64> = HashSet::new();
-    for bug in reviews_completed_closed
-        .iter()
-        .chain(reviews_completed_pending.iter())
-    {
-        reviews_completed_ids.insert(bug.id);
+    for status in COMPLETED_STATUSES {
+        let bugs = search(
+            bz,
+            &format!(
+                "product=Fedora&component=Package Review\
+                 &creator={email}\
+                 &chfield=bug_status&chfieldvalue={status}\
+                 &chfieldfrom={since_str}&chfieldto={until_str}"
+            ),
+        )
+        .await?;
+        reviews_completed_ids.extend(bugs.iter().map(|b| b.id));
     }
 
     // Query 5: Reviews done for others that reached
@@ -276,37 +268,19 @@ async fn bugzilla_report_with_client(
     if verbose {
         eprintln!("[bugzilla] searching reviews done for others by {email}");
     }
-    let reviews_done_closed = bz
-        .search(
-            &format!(
-                "product=Fedora&component=Package Review\
-                 &assigned_to={email}\
-                 &chfield=bug_status&chfieldvalue=CLOSED\
-                 &chfieldfrom={since_str}&chfieldto={until_str}"
-            ),
-            0,
-        )
-        .await
-        .map_err(|e| format!("Bugzilla search failed: {e}"))?;
-    let reviews_done_pending = bz
-        .search(
-            &format!(
-                "product=Fedora&component=Package Review\
-                 &assigned_to={email}\
-                 &chfield=bug_status&chfieldvalue=RELEASE_PENDING\
-                 &chfieldfrom={since_str}&chfieldto={until_str}"
-            ),
-            0,
-        )
-        .await
-        .map_err(|e| format!("Bugzilla search failed: {e}"))?;
-
     let mut reviews_done_completed_ids: HashSet<u64> = HashSet::new();
-    for bug in reviews_done_closed
-        .iter()
-        .chain(reviews_done_pending.iter())
-    {
-        reviews_done_completed_ids.insert(bug.id);
+    for status in COMPLETED_STATUSES {
+        let bugs = search(
+            bz,
+            &format!(
+                "product=Fedora&component=Package Review\
+                 &assigned_to={email}\
+                 &chfield=bug_status&chfieldvalue={status}\
+                 &chfieldfrom={since_str}&chfieldto={until_str}"
+            ),
+        )
+        .await?;
+        reviews_done_completed_ids.extend(bugs.iter().map(|b| b.id));
     }
 
     // Build the report.

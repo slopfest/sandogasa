@@ -10,6 +10,7 @@ mod brace;
 mod bugzilla;
 mod config;
 mod configure;
+mod forge;
 mod forgejo;
 mod github;
 mod gitlab;

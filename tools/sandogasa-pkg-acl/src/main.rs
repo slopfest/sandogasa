@@ -221,11 +221,7 @@ async fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(e) => {
                     println!("FAILED ({e})");
-                    println!("Would you like to replace the token? [y/N] ");
-                    io::stdout().flush()?;
-                    let mut answer = String::new();
-                    io::stdin().read_line(&mut answer)?;
-                    if !answer.trim().eq_ignore_ascii_case("y") {
+                    if !sandogasa_cli::confirm("Would you like to replace the token?", false)? {
                         return Err("Token verification failed".into());
                     }
                 }
@@ -401,11 +397,11 @@ async fn check_my_access(
     let username = match resolve_username() {
         Some(u) => u,
         None => {
+            // `client` may be unauthenticated here, so verify
+            // against a client built from the stored token.
             let token = resolve_token().ok()?;
             let auth_client = DistGitClient::new().with_token(token);
-            let u = auth_client.verify_token().await.ok()?;
-            cache_username(&u);
-            u
+            current_username(&auth_client).await.ok()?
         }
     };
     let result = client
@@ -413,6 +409,18 @@ async fn check_my_access(
         .await
         .ok()?;
     Some((username, result))
+}
+
+/// Resolve the acting username: the value cached in the config
+/// file, else `verify_token()` on `client` (caching the answer for
+/// next time).
+async fn current_username(client: &DistGitClient) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(username) = resolve_username() {
+        return Ok(username);
+    }
+    let username = client.verify_token().await?;
+    cache_username(&username);
+    Ok(username)
 }
 
 /// Verify that the current user has admin access on a package.
@@ -425,14 +433,7 @@ async fn require_admin(
     package: &str,
 ) -> Result<sandogasa_distgit::ProjectAcls, Box<dyn std::error::Error>> {
     let acls = client.get_acls(package).await?;
-    let username = match resolve_username() {
-        Some(u) => u,
-        None => {
-            let u = client.verify_token().await?;
-            cache_username(&u);
-            u
-        }
-    };
+    let username = current_username(client).await?;
     let result = client
         .check_access(&acls, &username, AccessLevel::Admin)
         .await?;
@@ -459,14 +460,7 @@ async fn require_owner(
     package: &str,
 ) -> Result<sandogasa_distgit::ProjectAcls, Box<dyn std::error::Error>> {
     let acls = client.get_acls(package).await?;
-    let username = match resolve_username() {
-        Some(u) => u,
-        None => {
-            let u = client.verify_token().await?;
-            cache_username(&u);
-            u
-        }
-    };
+    let username = current_username(client).await?;
     if acls.access_users.owner.iter().any(|o| o == &username) {
         Ok(acls)
     } else {
@@ -775,145 +769,90 @@ async fn cmd_apply(
         let mut errors = Vec::new();
         let mut entries = Vec::new();
 
-        for (name, level) in &config.users {
-            let is_remove = level == "remove";
+        // Users first, then groups — the two passes are identical
+        // apart from which ACL map they read and the owner check,
+        // which only applies to users.
+        for (user_type, targets) in [("user", &config.users), ("group", &config.groups)] {
+            for (name, level) in targets {
+                let is_remove = level == "remove";
+                let current = if user_type == "user" {
+                    acls.user_level(name)
+                } else {
+                    acls.group_level(name)
+                };
 
-            // Cannot modify a package owner
-            if acls.user_level(name) == Some(AccessLevel::Owner) {
-                if !json {
-                    eprintln!(
-                        "Skipped user '{name}' on {package}: \
-                         cannot modify package owner"
-                    );
+                // Cannot modify a package owner. Checked up front
+                // for users (so it also blocks a removal), whereas
+                // for groups `check_skip` handles it.
+                if user_type == "user" && current == Some(AccessLevel::Owner) {
+                    if !json {
+                        eprintln!(
+                            "Skipped user '{name}' on {package}: \
+                             cannot modify package owner"
+                        );
+                    }
+                    if json {
+                        entries.push(ApplyEntry {
+                            user_type: "user".to_string(),
+                            name: name.clone(),
+                            action: "skipped".to_string(),
+                            level: Some("owner".to_string()),
+                            ok: false,
+                            error: Some("cannot modify package owner".to_string()),
+                        });
+                    }
+                    continue;
+                }
+
+                // Check for skip (only when setting, not removing)
+                if !is_remove
+                    && let Some(action) =
+                        check_skip(user_type, name, level, current, strict, package, json)
+                {
+                    if json {
+                        entries.push(action);
+                    }
+                    continue;
+                }
+
+                let result = if is_remove {
+                    client.remove_acl(package, user_type, name).await
+                } else {
+                    client.set_acl(package, user_type, name, level).await
+                };
+                match &result {
+                    Ok(()) => {
+                        if !json {
+                            if is_remove {
+                                println!("Removed {user_type} '{name}' from {package}");
+                            } else {
+                                println!("Set {user_type} '{name}' to '{level}' on {package}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if !json {
+                            eprintln!("error: {user_type} '{name}' on {package}: {e}");
+                        }
+                    }
                 }
                 if json {
                     entries.push(ApplyEntry {
-                        user_type: "user".to_string(),
+                        user_type: user_type.to_string(),
                         name: name.clone(),
-                        action: "skipped".to_string(),
-                        level: Some("owner".to_string()),
-                        ok: false,
-                        error: Some("cannot modify package owner".to_string()),
+                        action: if is_remove {
+                            "remove".to_string()
+                        } else {
+                            "set".to_string()
+                        },
+                        level: if is_remove { None } else { Some(level.clone()) },
+                        ok: result.is_ok(),
+                        error: result.as_ref().err().map(|e| e.to_string()),
                     });
                 }
-                continue;
-            }
-
-            // Check for skip (only when setting, not removing)
-            if !is_remove
-                && let Some(action) = check_skip(
-                    "user",
-                    name,
-                    level,
-                    acls.user_level(name),
-                    strict,
-                    package,
-                    json,
-                )
-            {
-                if json {
-                    entries.push(action);
+                if let Err(e) = result {
+                    errors.push(e);
                 }
-                continue;
-            }
-
-            let result = if is_remove {
-                client.remove_acl(package, "user", name).await
-            } else {
-                client.set_acl(package, "user", name, level).await
-            };
-            match &result {
-                Ok(()) => {
-                    if !json {
-                        if is_remove {
-                            println!("Removed user '{name}' from {package}");
-                        } else {
-                            println!("Set user '{name}' to '{level}' on {package}");
-                        }
-                    }
-                }
-                Err(e) => {
-                    if !json {
-                        eprintln!("error: user '{name}' on {package}: {e}");
-                    }
-                }
-            }
-            if json {
-                entries.push(ApplyEntry {
-                    user_type: "user".to_string(),
-                    name: name.clone(),
-                    action: if is_remove {
-                        "remove".to_string()
-                    } else {
-                        "set".to_string()
-                    },
-                    level: if is_remove { None } else { Some(level.clone()) },
-                    ok: result.is_ok(),
-                    error: result.as_ref().err().map(|e| e.to_string()),
-                });
-            }
-            if let Err(e) = result {
-                errors.push(e);
-            }
-        }
-
-        for (name, level) in &config.groups {
-            let is_remove = level == "remove";
-
-            if !is_remove
-                && let Some(action) = check_skip(
-                    "group",
-                    name,
-                    level,
-                    acls.group_level(name),
-                    strict,
-                    package,
-                    json,
-                )
-            {
-                if json {
-                    entries.push(action);
-                }
-                continue;
-            }
-
-            let result = if is_remove {
-                client.remove_acl(package, "group", name).await
-            } else {
-                client.set_acl(package, "group", name, level).await
-            };
-            match &result {
-                Ok(()) => {
-                    if !json {
-                        if is_remove {
-                            println!("Removed group '{name}' from {package}");
-                        } else {
-                            println!("Set group '{name}' to '{level}' on {package}");
-                        }
-                    }
-                }
-                Err(e) => {
-                    if !json {
-                        eprintln!("error: group '{name}' on {package}: {e}");
-                    }
-                }
-            }
-            if json {
-                entries.push(ApplyEntry {
-                    user_type: "group".to_string(),
-                    name: name.clone(),
-                    action: if is_remove {
-                        "remove".to_string()
-                    } else {
-                        "set".to_string()
-                    },
-                    level: if is_remove { None } else { Some(level.clone()) },
-                    ok: result.is_ok(),
-                    error: result.as_ref().err().map(|e| e.to_string()),
-                });
-            }
-            if let Err(e) = result {
-                errors.push(e);
             }
         }
 

@@ -18,6 +18,15 @@ use sandogasa_github::{Client, Event, PullRequest, User};
 use serde::Serialize;
 
 use crate::config::GithubConfig;
+pub(crate) use crate::forge::instance_host;
+use crate::forge::{self, TokenSpec, date_in_range};
+
+const TOKEN_SPEC: TokenSpec = TokenSpec {
+    service: "GitHub",
+    generic_env: "GITHUB_TOKEN",
+    host_separators: &['.'],
+    hint: "",
+};
 
 /// A user's GitHub activity for a single domain.
 #[derive(Debug, Default, Serialize)]
@@ -417,7 +426,7 @@ fn collect_tags(
                     continue;
                 }
             };
-            if !tagger_in_window(&annotated.tagger.date, since, until) {
+            if !date_in_range(&annotated.tagger.date, since, until) {
                 continue;
             }
             if !tagger_matches_user(&annotated.tagger, user) {
@@ -432,15 +441,6 @@ fn collect_tags(
     }
     out.sort_by(|a, b| a.repo.cmp(&b.repo).then(a.tag.cmp(&b.tag)));
     out
-}
-
-fn tagger_in_window(date: &str, since: NaiveDate, until: NaiveDate) -> bool {
-    let Some(day) = date.split('T').next() else {
-        return false;
-    };
-    NaiveDate::parse_from_str(day, "%Y-%m-%d")
-        .map(|d| d >= since && d <= until)
-        .unwrap_or(false)
 }
 
 fn tagger_matches_user(tagger: &sandogasa_github::Tagger, user: &User) -> bool {
@@ -622,12 +622,7 @@ fn unique_repos<T>(items: &[T], repo_of: impl Fn(&T) -> &String) -> usize {
 }
 
 fn event_in_range(event: &Event, since: NaiveDate, until: NaiveDate) -> bool {
-    let Some(day) = event.created_at.split('T').next() else {
-        return false;
-    };
-    NaiveDate::parse_from_str(day, "%Y-%m-%d")
-        .map(|d| d >= since && d <= until)
-        .unwrap_or(false)
+    date_in_range(&event.created_at, since, until)
 }
 
 fn repo_in_org(slug: &str, org: Option<&str>) -> bool {
@@ -650,46 +645,18 @@ fn repo_in_org(slug: &str, org: Option<&str>) -> bool {
 /// Order: instance-specific env var → generic env var →
 /// `github_tokens.<hostname>` from the user overlay → error.
 fn find_token(instance: &str, tokens: &BTreeMap<String, String>) -> Result<String, String> {
-    let var = instance_token_env(instance);
-    if let Ok(t) = std::env::var(&var) {
-        return Ok(t);
-    }
-    if let Ok(t) = std::env::var("GITHUB_TOKEN") {
-        return Ok(t);
-    }
-    let host = instance_host(instance);
-    if let Some(t) = tokens.get(&host) {
-        return Ok(t.clone());
-    }
-    Err(format!(
-        "no GitHub token for {host}: set {var} (instance-specific), \
-         GITHUB_TOKEN (generic), or run `sandogasa-report config` to \
-         store one in the overlay"
-    ))
-}
-
-fn instance_token_env(instance: &str) -> String {
-    format!(
-        "GITHUB_TOKEN_{}",
-        instance_host(instance).to_uppercase().replace('.', "_")
-    )
-}
-
-/// Strip scheme + trailing slash to get the bare hostname. For
-/// `api.github.com` we keep the `api.` prefix — that's the
-/// canonical token-keying host so a user with both github.com
-/// and a GHES `api.example.com` ends up with two distinct keys.
-pub(crate) fn instance_host(instance: &str) -> String {
-    instance
-        .trim_end_matches('/')
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .to_string()
+    forge::find_token(instance, tokens, &TOKEN_SPEC)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The env-var name is a documented interface, so keep
+    /// asserting it per service through the module's spec.
+    fn instance_token_env(instance: &str) -> String {
+        forge::instance_token_env(instance, &TOKEN_SPEC)
+    }
 
     #[test]
     fn repo_in_org_matches_owner_prefix() {
@@ -963,12 +930,12 @@ mod tests {
     }
 
     #[test]
-    fn tagger_in_window_parses_iso8601() {
+    fn tagger_date_in_window_parses_iso8601() {
         let s = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
         let u = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
-        assert!(tagger_in_window("2026-05-15T17:03:15Z", s, u));
-        assert!(!tagger_in_window("2026-06-01T00:00:00Z", s, u));
-        assert!(!tagger_in_window("garbage", s, u));
+        assert!(date_in_range("2026-05-15T17:03:15Z", s, u));
+        assert!(!date_in_range("2026-06-01T00:00:00Z", s, u));
+        assert!(!date_in_range("garbage", s, u));
     }
 
     #[test]

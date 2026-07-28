@@ -17,6 +17,15 @@ use sandogasa_gitlab::{
 use serde::Serialize;
 
 use crate::config::GitlabConfig;
+pub(crate) use crate::forge::instance_host;
+use crate::forge::{self, TokenSpec, date_in_range};
+
+const TOKEN_SPEC: TokenSpec = TokenSpec {
+    service: "GitLab",
+    generic_env: "GITLAB_TOKEN",
+    host_separators: &['.'],
+    hint: "",
+};
 
 /// A user's GitLab activity for a single domain.
 #[derive(Debug, Default, Serialize)]
@@ -164,7 +173,7 @@ pub fn gitlab_report(
     // report actually covers.
     let mut project_ids_in_group: BTreeSet<u64> = BTreeSet::new();
     for ev in &events {
-        if !in_date_range(&ev.created_at, since, until) {
+        if !date_in_range(&ev.created_at, since, until) {
             continue;
         }
         let Some(path) = paths.get(&ev.project_id) else {
@@ -210,7 +219,7 @@ pub fn gitlab_report(
             let in_window = tag
                 .created_at
                 .as_deref()
-                .is_some_and(|ts| in_date_range(ts, since, until));
+                .is_some_and(|ts| date_in_range(ts, since, until));
             if !in_window {
                 continue;
             }
@@ -283,7 +292,7 @@ pub fn gitlab_report(
             if r.author.username != user_obj.username {
                 continue;
             }
-            if !in_date_range(&r.released_at, since, until) {
+            if !date_in_range(&r.released_at, since, until) {
                 continue;
             }
             let url = r
@@ -472,16 +481,6 @@ fn is_tag_push_event(ev: &Event) -> bool {
     pd.ref_type.as_deref() == Some("tag")
 }
 
-fn in_date_range(created_at: &str, since: NaiveDate, until: NaiveDate) -> bool {
-    let Some(day) = created_at.split('T').next() else {
-        return false;
-    };
-    match NaiveDate::parse_from_str(day, "%Y-%m-%d") {
-        Ok(d) => d >= since && d <= until,
-        Err(_) => false,
-    }
-}
-
 fn path_in_group(path: &str, group: Option<&str>) -> bool {
     match group {
         None => true,
@@ -569,44 +568,18 @@ fn find_token(
     instance: &str,
     tokens: &std::collections::BTreeMap<String, String>,
 ) -> Result<String, String> {
-    let var = instance_token_env(instance);
-    if let Ok(t) = std::env::var(&var) {
-        return Ok(t);
-    }
-    if let Ok(t) = std::env::var("GITLAB_TOKEN") {
-        return Ok(t);
-    }
-    let host = instance_host(instance);
-    if let Some(t) = tokens.get(&host) {
-        return Ok(t.clone());
-    }
-    Err(format!(
-        "no GitLab token for {host}: set {var} (instance-specific), \
-         GITLAB_TOKEN (generic), or run `sandogasa-report config` to \
-         store one in the overlay"
-    ))
-}
-
-fn instance_token_env(instance: &str) -> String {
-    format!(
-        "GITLAB_TOKEN_{}",
-        instance_host(instance).to_uppercase().replace('.', "_")
-    )
-}
-
-/// Strip scheme + trailing slash to get the bare hostname, e.g.
-/// `"https://gitlab.com/"` → `"gitlab.com"`.
-pub(crate) fn instance_host(instance: &str) -> String {
-    instance
-        .trim_end_matches('/')
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .to_string()
+    forge::find_token(instance, tokens, &TOKEN_SPEC)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The env-var name is a documented interface, so keep
+    /// asserting it per service through the module's spec.
+    fn instance_token_env(instance: &str) -> String {
+        forge::instance_token_env(instance, &TOKEN_SPEC)
+    }
 
     fn sample_event(
         action: &str,
@@ -662,9 +635,9 @@ mod tests {
     fn in_date_range_parses_iso8601() {
         let s = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
         let u = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        assert!(in_date_range("2026-02-15T10:00:00Z", s, u));
-        assert!(!in_date_range("2025-12-31T23:59:59Z", s, u));
-        assert!(!in_date_range("2026-04-01T00:00:00Z", s, u));
+        assert!(date_in_range("2026-02-15T10:00:00Z", s, u));
+        assert!(!date_in_range("2025-12-31T23:59:59Z", s, u));
+        assert!(!date_in_range("2026-04-01T00:00:00Z", s, u));
     }
 
     #[test]

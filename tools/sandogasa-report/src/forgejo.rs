@@ -20,6 +20,15 @@ use sandogasa_forgejo::{Client, Issue, PullRequest};
 use serde::Serialize;
 
 use crate::config::ForgejoConfig;
+pub(crate) use crate::forge::instance_host;
+use crate::forge::{self, TokenSpec, date_in_range};
+
+const TOKEN_SPEC: TokenSpec = TokenSpec {
+    service: "Forgejo",
+    generic_env: "FORGEJO_TOKEN",
+    host_separators: &['.'],
+    hint: "",
+};
 
 /// A user's Forgejo activity for a single domain.
 #[derive(Debug, Default, Serialize)]
@@ -311,60 +320,23 @@ fn write_pr_list(out: &mut String, prs: &[PrRef], with_status: bool) {
     out.push('\n');
 }
 
-/// Whether an RFC 3339 timestamp's date falls within `[since, until]`
-/// (inclusive). Only the date part is considered.
-fn date_in_range(ts: &str, since: NaiveDate, until: NaiveDate) -> bool {
-    let Some(day) = ts.split('T').next() else {
-        return false;
-    };
-    NaiveDate::parse_from_str(day, "%Y-%m-%d")
-        .map(|d| d >= since && d <= until)
-        .unwrap_or(false)
-}
-
 /// Look up the Forgejo API token for an instance.
 ///
 /// Order: instance-specific env var → generic env var →
 /// `forgejo_tokens.<hostname>` from the user overlay → error.
 fn find_token(instance: &str, tokens: &BTreeMap<String, String>) -> Result<String, String> {
-    let var = instance_token_env(instance);
-    if let Ok(t) = std::env::var(&var) {
-        return Ok(t);
-    }
-    if let Ok(t) = std::env::var("FORGEJO_TOKEN") {
-        return Ok(t);
-    }
-    let host = instance_host(instance);
-    if let Some(t) = tokens.get(&host) {
-        return Ok(t.clone());
-    }
-    Err(format!(
-        "no Forgejo token for {host}: set {var} (instance-specific), \
-         FORGEJO_TOKEN (generic), or run `sandogasa-report config` to \
-         store one in the overlay"
-    ))
-}
-
-fn instance_token_env(instance: &str) -> String {
-    format!(
-        "FORGEJO_TOKEN_{}",
-        instance_host(instance).to_uppercase().replace('.', "_")
-    )
-}
-
-/// Strip scheme + trailing slash to get the bare hostname — the
-/// token-keying host.
-pub(crate) fn instance_host(instance: &str) -> String {
-    instance
-        .trim_end_matches('/')
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .to_string()
+    forge::find_token(instance, tokens, &TOKEN_SPEC)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The env-var name is a documented interface, so keep
+    /// asserting it per service through the module's spec.
+    fn instance_token_env(instance: &str) -> String {
+        forge::instance_token_env(instance, &TOKEN_SPEC)
+    }
 
     fn pr(json: &str) -> PullRequest {
         serde_json::from_str(json).unwrap()
