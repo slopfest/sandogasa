@@ -18,11 +18,7 @@ impl Default for FasjsonClient {
 
 impl FasjsonClient {
     pub fn new() -> Self {
-        sandogasa_cli::install_crypto_provider();
-
-        Self {
-            base_url: FASJSON_BASE.to_string(),
-        }
+        Self::with_base_url(FASJSON_BASE)
     }
 
     pub fn with_base_url(base_url: &str) -> Self {

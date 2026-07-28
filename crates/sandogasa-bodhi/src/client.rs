@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::time::Duration;
-
 use reqwest::Client;
+use sandogasa_cli::http;
 
 use crate::models::{
     BodhiRelease, BugFeedbackItem, Comment, CommentsResponse, NewUpdateFromTag, NewUpdateResponse,
@@ -10,12 +9,6 @@ use crate::models::{
 };
 
 const BODHI_API_BASE: &str = "https://bodhi.fedoraproject.org";
-
-/// Upper bound on any single Bodhi HTTP request. Bodhi routinely
-/// takes 5–30s on larger queries, so this is deliberately
-/// generous; its job is to catch genuinely hung connections
-/// rather than to bound latency.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct BodhiClient {
     base_url: String,
@@ -30,25 +23,23 @@ impl Default for BodhiClient {
 }
 
 fn build_http_client() -> Client {
-    sandogasa_cli::install_crypto_provider();
-    Client::builder()
-        .timeout(DEFAULT_TIMEOUT)
-        // Bodhi authenticates write requests by the `auth_tkt`
-        // cookie set by `GET /oidc/login-token`, and binds the
-        // CSRF token to the session cookie — both must persist
-        // across the login -> csrf -> POST sequence.
-        .cookie_store(true)
-        .build()
-        .expect("build reqwest client")
+    http::builder(concat!(
+        env!("CARGO_PKG_NAME"),
+        "/",
+        env!("CARGO_PKG_VERSION")
+    ))
+    // Bodhi authenticates write requests by the `auth_tkt`
+    // cookie set by `GET /oidc/login-token`, and binds the
+    // CSRF token to the session cookie — both must persist
+    // across the login -> csrf -> POST sequence.
+    .cookie_store(true)
+    .build()
+    .expect("build reqwest client")
 }
 
 impl BodhiClient {
     pub fn new() -> Self {
-        Self {
-            base_url: BODHI_API_BASE.to_string(),
-            client: build_http_client(),
-            token: None,
-        }
+        Self::with_base_url(BODHI_API_BASE)
     }
 
     pub fn with_base_url(base_url: &str) -> Self {
@@ -96,9 +87,9 @@ impl BodhiClient {
     ) -> Result<Vec<Update>, reqwest::Error> {
         let mut all_updates = Vec::new();
         let mut page = 1;
+        let status_params: String = statuses.iter().map(|s| format!("&status={s}")).collect();
 
         loop {
-            let status_params: String = statuses.iter().map(|s| format!("&status={s}")).collect();
             let url = format!(
                 "{}/updates/?packages={}&releases={}{}&rows_per_page=100&page={}",
                 self.base_url, package, release, status_params, page
@@ -303,6 +294,35 @@ impl BodhiClient {
         Ok(resp.csrf_token)
     }
 
+    /// Run the authenticated write sequence shared by
+    /// [`Self::comment`] and [`Self::new_update_from_tag`]: login
+    /// (session cookie), fetch a CSRF token, append it to `form`,
+    /// POST the form to `path`, and decode the JSON response.
+    /// Non-2xx responses become errors naming `what` and carrying
+    /// the response body (Bodhi's validation errors).
+    ///
+    /// The POST itself is deliberately not auto-retried: a
+    /// transport error after the server processed the request
+    /// would repeat a non-idempotent write. The retried
+    /// login/csrf steps absorb most transient failures.
+    async fn post_form<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        mut form: Vec<(String, String)>,
+        what: &str,
+    ) -> Result<T, Box<dyn std::error::Error>> {
+        self.login().await?;
+        form.push(("csrf_token".to_string(), self.csrf().await?));
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self
+            .auth(self.client.post(&url))
+            .header(reqwest::header::ACCEPT, "application/json")
+            .form(&form)
+            .send()
+            .await?;
+        Ok(http::json_ok(resp, what).await?)
+    }
+
     /// Post a comment on an update, with overall karma and
     /// optional per-bug feedback (the web UI's per-bug thumbs
     /// up/down). Requires a bearer token ([`Self::with_token`]).
@@ -324,36 +344,16 @@ impl BodhiClient {
         karma: i32,
         bug_feedback: &[BugFeedbackItem],
     ) -> Result<SingleCommentResponse, Box<dyn std::error::Error>> {
-        self.login().await?;
-        let csrf_token = self.csrf().await?;
         let mut form: Vec<(String, String)> = vec![
             ("update".to_string(), update_alias.to_string()),
             ("text".to_string(), text.to_string()),
             ("karma".to_string(), karma.to_string()),
-            ("csrf_token".to_string(), csrf_token),
         ];
         for (i, fb) in bug_feedback.iter().enumerate() {
             form.push((format!("bug_feedback.{i}.bug_id"), fb.bug_id.to_string()));
             form.push((format!("bug_feedback.{i}.karma"), fb.karma.to_string()));
         }
-        // The POST itself is deliberately not auto-retried: a
-        // transport error after the server processed the request
-        // would double-post the comment. The retried login/csrf
-        // steps above absorb most transient failures.
-        let url = format!("{}/comments/", self.base_url);
-        let resp = self
-            .auth(self.client.post(&url))
-            .header(reqwest::header::ACCEPT, "application/json")
-            .form(&form)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("posting comment failed (HTTP {status}): {body}").into());
-        }
-        let resp: SingleCommentResponse = resp.json().await?;
-        Ok(resp)
+        self.post_form("/comments/", form, "posting comment").await
     }
 
     /// Create an update from a Koji side tag (`POST /updates/` with
@@ -371,19 +371,15 @@ impl BodhiClient {
         &self,
         req: &NewUpdateFromTag,
     ) -> Result<NewUpdateResponse, Box<dyn std::error::Error>> {
-        self.login().await?;
-        let csrf_token = self.csrf().await?;
-        let bool_str = |b: bool| if b { "true" } else { "false" }.to_string();
         let mut form: Vec<(String, String)> = vec![
             ("from_tag".to_string(), req.from_tag.clone()),
             ("notes".to_string(), req.notes.clone()),
             ("type".to_string(), req.update_type.clone()),
             ("severity".to_string(), req.severity.clone()),
-            ("close_bugs".to_string(), bool_str(req.close_bugs)),
-            ("autokarma".to_string(), bool_str(req.autokarma)),
+            ("close_bugs".to_string(), req.close_bugs.to_string()),
+            ("autokarma".to_string(), req.autokarma.to_string()),
             ("stable_karma".to_string(), req.stable_karma.to_string()),
             ("unstable_karma".to_string(), req.unstable_karma.to_string()),
-            ("csrf_token".to_string(), csrf_token),
         ];
         if !req.bugs.is_empty() {
             let bugs = req
@@ -394,22 +390,7 @@ impl BodhiClient {
                 .join(",");
             form.push(("bugs".to_string(), bugs));
         }
-        // Not auto-retried: a transport error after the server
-        // processed the request would double-create the update.
-        let url = format!("{}/updates/", self.base_url);
-        let resp = self
-            .auth(self.client.post(&url))
-            .header(reqwest::header::ACCEPT, "application/json")
-            .form(&form)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("creating update failed (HTTP {status}): {body}").into());
-        }
-        let resp: NewUpdateResponse = resp.json().await?;
-        Ok(resp)
+        self.post_form("/updates/", form, "creating update").await
     }
 }
 

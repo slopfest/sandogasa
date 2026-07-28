@@ -8,7 +8,7 @@ repository.workspace = true
 
 [dependencies]
 reqwest = { workspace = true }
-sandogasa-cli = { workspace = true }
+sandogasa-cli = { workspace = true, features = ["http"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

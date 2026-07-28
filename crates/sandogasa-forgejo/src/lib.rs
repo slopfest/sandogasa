@@ -41,14 +41,9 @@
 //! # }
 //! ```
 
-use std::time::Duration;
-
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
+use sandogasa_cli::http;
 use serde::{Deserialize, Serialize};
-
-/// Upper bound on any single Forgejo HTTP request — a hang-catcher
-/// rather than a latency cap.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Gitea/Forgejo cap the page size on most list endpoints at 50.
 const PAGE_LIMIT: u32 = 50;
@@ -272,6 +267,35 @@ impl Client {
         self.search_created("issues", state, owner)
     }
 
+    /// Paginate a list endpoint: GET `url` with `base_query` plus
+    /// `limit`/`page` parameters, accumulating batches until a short
+    /// page. Errors are labeled with `what`.
+    fn get_paged<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+        base_query: &[(&str, &str)],
+        what: &str,
+    ) -> Result<Vec<T>, Box<dyn std::error::Error>> {
+        let limit = PAGE_LIMIT.to_string();
+        let mut out: Vec<T> = Vec::new();
+        let mut page = 1u32;
+        loop {
+            let page_str = page.to_string();
+            let mut query: Vec<(&str, &str)> = base_query.to_vec();
+            query.push(("limit", &limit));
+            query.push(("page", &page_str));
+            let resp = self.http.get(url).query(&query).send()?;
+            let batch: Vec<T> = http::blocking_json_ok(resp, what)?;
+            let n = batch.len() as u32;
+            out.extend(batch);
+            if n < PAGE_LIMIT {
+                break;
+            }
+            page += 1;
+        }
+        Ok(out)
+    }
+
     /// Paginate the global issue/pull search for items the token owner
     /// created (`created=true`). `kind` is `pulls` or `issues`; the
     /// result is deserialized into the caller's chosen type.
@@ -282,36 +306,12 @@ impl Client {
         owner: Option<&str>,
     ) -> Result<Vec<T>, Box<dyn std::error::Error>> {
         let url = format!("{}/api/v1/repos/issues/search", self.base_url);
-        let limit = PAGE_LIMIT.to_string();
-        let mut out: Vec<T> = Vec::new();
-        let mut page = 1u32;
-        loop {
-            let page_str = page.to_string();
-            let mut query: Vec<(&str, &str)> = vec![
-                ("type", kind),
-                ("state", state),
-                ("created", "true"),
-                ("limit", &limit),
-                ("page", &page_str),
-            ];
-            if let Some(o) = owner {
-                query.push(("owner", o));
-            }
-            let resp = self.http.get(&url).query(&query).send()?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text()?;
-                return Err(format!("Forgejo {kind} search failed: {status}: {text}").into());
-            }
-            let batch: Vec<T> = resp.json()?;
-            let n = batch.len() as u32;
-            out.extend(batch);
-            if n < PAGE_LIMIT {
-                break;
-            }
-            page += 1;
+        let mut query: Vec<(&str, &str)> =
+            vec![("type", kind), ("state", state), ("created", "true")];
+        if let Some(o) = owner {
+            query.push(("owner", o));
         }
-        Ok(out)
+        self.get_paged(&url, &query, &format!("Forgejo {kind} search"))
     }
 
     /// Fetch the fuller pull-request object for `owner/repo#number` —
@@ -328,15 +328,10 @@ impl Client {
             self.base_url
         );
         let resp = self.http.get(&url).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!(
-                "Forgejo get pull {owner}/{repo}#{number} failed: {status}: {text}"
-            )
-            .into());
-        }
-        Ok(resp.json()?)
+        Ok(http::blocking_json_ok(
+            resp,
+            &format!("Forgejo get pull {owner}/{repo}#{number}"),
+        )?)
     }
 
     /// Whether `sha` is already contained in `branch` — i.e. an
@@ -357,14 +352,8 @@ impl Client {
             self.base_url
         );
         let resp = self.http.get(&url).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(
-                format!("Forgejo compare {branch}...{sha} failed: {status}: {text}").into(),
-            );
-        }
-        let cmp: CompareResult = resp.json()?;
+        let cmp: CompareResult =
+            http::blocking_json_ok(resp, &format!("Forgejo compare {branch}...{sha}"))?;
         Ok(cmp.total_commits == 0)
     }
 
@@ -382,12 +371,7 @@ impl Client {
             .post(&url)
             .json(&serde_json::json!({ "title": title, "body": body }))
             .send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("Forgejo create issue failed: {status}: {text}").into());
-        }
-        Ok(resp.json()?)
+        Ok(http::blocking_json_ok(resp, "Forgejo create issue")?)
     }
 
     /// List issues (not pulls) on `owner/repo`, filtered by `state`
@@ -428,36 +412,12 @@ impl Client {
         labels: &[&str],
     ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
         let url = format!("{}/api/v1/repos/{owner}/{repo}/issues", self.base_url);
-        let limit = PAGE_LIMIT.to_string();
         let labels = labels.join(",");
-        let mut out: Vec<Issue> = Vec::new();
-        let mut page = 1u32;
-        loop {
-            let page_str = page.to_string();
-            let mut query: Vec<(&str, &str)> = vec![
-                ("type", kind),
-                ("state", state),
-                ("limit", &limit),
-                ("page", &page_str),
-            ];
-            if !labels.is_empty() {
-                query.push(("labels", &labels));
-            }
-            let resp = self.http.get(&url).query(&query).send()?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text()?;
-                return Err(format!("Forgejo {kind} list failed: {status}: {text}").into());
-            }
-            let batch: Vec<Issue> = resp.json()?;
-            let n = batch.len() as u32;
-            out.extend(batch);
-            if n < PAGE_LIMIT {
-                break;
-            }
-            page += 1;
+        let mut query: Vec<(&str, &str)> = vec![("type", kind), ("state", state)];
+        if !labels.is_empty() {
+            query.push(("labels", &labels));
         }
-        Ok(out)
+        self.get_paged(&url, &query, &format!("Forgejo {kind} list"))
     }
 
     /// Fetch a single issue by number.
@@ -472,12 +432,10 @@ impl Client {
             self.base_url
         );
         let resp = self.http.get(&url).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("Forgejo issue {owner}/{repo}#{number}: {status}: {text}").into());
-        }
-        Ok(resp.json()?)
+        Ok(http::blocking_json_ok(
+            resp,
+            &format!("Forgejo issue {owner}/{repo}#{number}"),
+        )?)
     }
 
     /// Fetch an issue's comments, oldest first, paginated.
@@ -491,33 +449,11 @@ impl Client {
             "{}/api/v1/repos/{owner}/{repo}/issues/{number}/comments",
             self.base_url
         );
-        let limit = PAGE_LIMIT.to_string();
-        let mut out: Vec<IssueComment> = Vec::new();
-        let mut page = 1u32;
-        loop {
-            let page_str = page.to_string();
-            let resp = self
-                .http
-                .get(&url)
-                .query(&[("limit", limit.as_str()), ("page", &page_str)])
-                .send()?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text()?;
-                return Err(format!(
-                    "Forgejo comments for {owner}/{repo}#{number}: {status}: {text}"
-                )
-                .into());
-            }
-            let batch: Vec<IssueComment> = resp.json()?;
-            let n = batch.len() as u32;
-            out.extend(batch);
-            if n < PAGE_LIMIT {
-                break;
-            }
-            page += 1;
-        }
-        Ok(out)
+        self.get_paged(
+            &url,
+            &[],
+            &format!("Forgejo comments for {owner}/{repo}#{number}"),
+        )
     }
 
     /// Search issues (not pulls) on `owner/repo` matching `query`, across
@@ -535,12 +471,7 @@ impl Client {
             .get(&url)
             .query(&[("type", "issues"), ("state", "all"), ("q", query)])
             .send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("Forgejo issue search failed: {status}: {text}").into());
-        }
-        Ok(resp.json()?)
+        Ok(http::blocking_json_ok(resp, "Forgejo issue search")?)
     }
 }
 
@@ -570,19 +501,17 @@ pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::
 fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn std::error::Error>> {
     let mut headers = HeaderMap::new();
     headers.insert(
-        HeaderName::from_static("authorization"),
+        AUTHORIZATION,
         HeaderValue::from_str(&format!("token {token}"))?,
     );
-    headers.insert(
-        HeaderName::from_static("accept"),
-        HeaderValue::from_static("application/json"),
-    );
-    sandogasa_cli::install_crypto_provider();
-    Ok(reqwest::blocking::Client::builder()
-        .user_agent(concat!("sandogasa-forgejo/", env!("CARGO_PKG_VERSION")))
-        .default_headers(headers)
-        .timeout(DEFAULT_TIMEOUT)
-        .build()?)
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    Ok(http::blocking_builder(concat!(
+        env!("CARGO_PKG_NAME"),
+        "/",
+        env!("CARGO_PKG_VERSION")
+    ))
+    .default_headers(headers)
+    .build()?)
 }
 
 #[cfg(test)]

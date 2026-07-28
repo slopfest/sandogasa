@@ -28,18 +28,12 @@
 //! # }
 //! ```
 
-use std::time::Duration;
-
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use sandogasa_cli::http;
 use serde::{Deserialize, Serialize};
 
 /// Default production base URL for the GitHub REST API.
 pub const DEFAULT_BASE_URL: &str = "https://api.github.com";
-
-/// Upper bound on any single GitHub HTTP request. GitHub usually
-/// responds in well under 5s; this is a hang-catcher rather than
-/// a latency cap.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A GitHub user as returned by `/users/{username}`. Only the
 /// fields downstream tools currently consume.
@@ -258,12 +252,10 @@ impl Client {
         if resp.status().as_u16() == 404 {
             return Ok(None);
         }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitHub GET {url} failed: {status}: {text}").into());
-        }
-        Ok(Some(resp.json()?))
+        Ok(Some(http::blocking_json_ok(
+            resp,
+            &format!("GitHub GET {url}"),
+        )?))
     }
 
     /// Run the Search Issues endpoint with the caller-supplied
@@ -286,12 +278,7 @@ impl Client {
                 .get(&url)
                 .query(&[("q", query), ("per_page", "100"), ("page", &page_str)])
                 .send()?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text()?;
-                return Err(format!("GitHub search failed: {status}: {text}").into());
-            }
-            let batch: SearchIssuesResponse = resp.json()?;
+            let batch: SearchIssuesResponse = http::blocking_json_ok(resp, "GitHub search")?;
             let n = batch.items.len();
             out.extend(batch.items);
             if n < 100 || out.len() as u64 >= batch.total_count {
@@ -315,12 +302,7 @@ impl Client {
                 .get(&url)
                 .query(&[("per_page", "100"), ("page", &page_str)])
                 .send()?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text()?;
-                return Err(format!("GitHub GET {url} failed: {status}: {text}").into());
-            }
-            let batch: Vec<Event> = resp.json()?;
+            let batch: Vec<Event> = http::blocking_json_ok(resp, &format!("GitHub GET {url}"))?;
             let n = batch.len();
             out.extend(batch);
             // GitHub serves at most 300 events / 3 pages of 100.
@@ -375,12 +357,8 @@ impl Client {
             if resp.status().as_u16() == 404 || resp.status().as_u16() == 409 {
                 break;
             }
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text()?;
-                return Err(format!("GitHub GET {url} failed: {status}: {text}").into());
-            }
-            let batch: Vec<serde_json::Value> = resp.json()?;
+            let batch: Vec<serde_json::Value> =
+                http::blocking_json_ok(resp, &format!("GitHub GET {url}"))?;
             let n = batch.len() as u64;
             total += n;
             if n < 100 {
@@ -405,11 +383,7 @@ impl Client {
         if resp.status().as_u16() == 404 || resp.status().as_u16() == 409 {
             return Ok(Vec::new());
         }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitHub GET {url} failed: {status}: {text}").into());
-        }
+        let resp = http::blocking_ok(resp, &format!("GitHub GET {url}"))?;
         // GitHub returns an object (not an array) when there's
         // exactly one match. The standard `/git/refs/tags` shape
         // returns an array for the namespace listing; we only see
@@ -438,12 +412,7 @@ impl Client {
             self.base_url, owner, repo, sha
         );
         let resp = self.http.get(&url).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitHub GET {url} failed: {status}: {text}").into());
-        }
-        Ok(resp.json()?)
+        Ok(http::blocking_json_ok(resp, &format!("GitHub GET {url}"))?)
     }
 }
 
@@ -474,23 +443,24 @@ pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::
 fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn std::error::Error>> {
     let mut headers = HeaderMap::new();
     headers.insert(
-        HeaderName::from_static("authorization"),
+        AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {token}"))?,
     );
     headers.insert(
-        HeaderName::from_static("accept"),
+        ACCEPT,
         HeaderValue::from_static("application/vnd.github+json"),
     );
     headers.insert(
         HeaderName::from_static("x-github-api-version"),
         HeaderValue::from_static("2022-11-28"),
     );
-    sandogasa_cli::install_crypto_provider();
-    Ok(reqwest::blocking::Client::builder()
-        .user_agent(concat!("sandogasa-github/", env!("CARGO_PKG_VERSION")))
-        .default_headers(headers)
-        .timeout(DEFAULT_TIMEOUT)
-        .build()?)
+    Ok(http::blocking_builder(concat!(
+        env!("CARGO_PKG_NAME"),
+        "/",
+        env!("CARGO_PKG_VERSION")
+    ))
+    .default_headers(headers)
+    .build()?)
 }
 
 #[cfg(test)]

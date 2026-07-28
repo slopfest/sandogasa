@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-sandogasa-cli = { workspace = true }
+sandogasa-cli = { workspace = true, features = ["http"] }
 reqwest = { workspace = true }
 sandogasa-rpmvercmp = { workspace = true }
 serde = { workspace = true }

@@ -3,7 +3,12 @@
 //! GitLab REST and GraphQL API client for issues and work items.
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use sandogasa_cli::http::{blocking_json_ok, blocking_ok};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+
+/// User-Agent sent by every client this crate builds.
+const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 /// A GitLab user (assignee).
 #[derive(Debug, Deserialize)]
@@ -110,10 +115,7 @@ fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn s
         HeaderName::from_static("private-token"),
         HeaderValue::from_str(token)?,
     );
-    sandogasa_cli::install_crypto_provider();
-    Ok(reqwest::blocking::Client::builder()
-        .timeout(DEFAULT_TIMEOUT)
-        .user_agent("sandogasa-gitlab/0.6.2")
+    Ok(sandogasa_cli::http::blocking_builder(USER_AGENT)
         .default_headers(headers)
         .build()?)
 }
@@ -148,12 +150,7 @@ impl Client {
             self.base_url, encoded, iid
         );
         let resp = self.http.get(&url).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GET {url} failed: {status}: {text}").into());
-        }
-        Ok(resp.json()?)
+        Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
     }
 
     /// Fetch a single issue by its internal ID (iid).
@@ -164,12 +161,7 @@ impl Client {
             self.base_url, encoded, iid
         );
         let resp = self.http.get(&url).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GET {url} failed: {status}: {text}").into());
-        }
-        Ok(resp.json()?)
+        Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
     }
 
     /// Fetch the project's status flags (archival, Issues feature).
@@ -179,12 +171,7 @@ impl Client {
         let encoded = self.project_path.replace('/', "%2F");
         let url = format!("{}/api/v4/projects/{}", self.base_url, encoded);
         let resp = self.http.get(&url).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GET {url} failed: {status}: {text}").into());
-        }
-        Ok(resp.json()?)
+        Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
     }
 
     /// Create a new issue.
@@ -202,8 +189,9 @@ impl Client {
             body["labels"] = labels.into();
         }
 
-        let resp = self.http.post(self.issues_url()).json(&body).send()?;
-        check_response(resp)
+        let url = self.issues_url();
+        let resp = self.http.post(&url).json(&body).send()?;
+        Ok(blocking_json_ok(resp, &format!("GitLab POST {url}"))?)
     }
 
     /// List issues matching a label and optional state.
@@ -216,28 +204,17 @@ impl Client {
         if let Some(s) = state {
             query.push(("state", s));
         }
-        let resp = self.http.get(self.issues_url()).query(&query).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab API error {status}: {text}").into());
-        }
-        Ok(resp.json()?)
+        let url = self.issues_url();
+        let resp = self.http.get(&url).query(&query).send()?;
+        Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
     }
 
     /// Add a note (comment) to an issue.
     pub fn add_note(&self, iid: u64, body: &str) -> Result<(), Box<dyn std::error::Error>> {
         let payload = serde_json::json!({ "body": body });
-        let resp = self
-            .http
-            .post(format!("{}/{iid}/notes", self.issues_url()))
-            .json(&payload)
-            .send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab API error {status}: {text}").into());
-        }
+        let url = format!("{}/{iid}/notes", self.issues_url());
+        let resp = self.http.post(&url).json(&payload).send()?;
+        blocking_ok(resp, &format!("GitLab POST {url}"))?;
         Ok(())
     }
 
@@ -248,12 +225,9 @@ impl Client {
         updates: &IssueUpdate,
     ) -> Result<Issue, Box<dyn std::error::Error>> {
         let body = serde_json::to_value(updates)?;
-        let resp = self
-            .http
-            .put(format!("{}/{iid}", self.issues_url()))
-            .json(&body)
-            .send()?;
-        check_response(resp)
+        let url = format!("{}/{iid}", self.issues_url());
+        let resp = self.http.put(&url).json(&body).send()?;
+        Ok(blocking_json_ok(resp, &format!("GitLab PUT {url}"))?)
     }
 
     /// Fetch the work-item status for an issue via GraphQL.
@@ -279,12 +253,7 @@ impl Client {
         );
         let body = serde_json::json!({ "query": query });
         let resp = self.http.post(self.graphql_url()).json(&body).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GraphQL error {status}: {text}").into());
-        }
-        let json: serde_json::Value = resp.json()?;
+        let json: serde_json::Value = blocking_json_ok(resp, "GitLab GraphQL")?;
         Ok(parse_work_item_status(&json))
     }
 
@@ -326,12 +295,7 @@ impl Client {
         );
         let body = serde_json::json!({ "query": query });
         let resp = self.http.post(self.graphql_url()).json(&body).send()?;
-        if !resp.status().is_success() {
-            let http_status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GraphQL error {http_status}: {text}").into());
-        }
-        let json: serde_json::Value = resp.json()?;
+        let json: serde_json::Value = blocking_json_ok(resp, "GitLab GraphQL")?;
         if let Some(errors) = parse_mutation_errors(&json) {
             return Err(format!("workItemUpdate errors: {errors:?}").into());
         }
@@ -362,12 +326,7 @@ impl Client {
         );
         let body = serde_json::json!({ "query": query });
         let resp = self.http.post(self.graphql_url()).json(&body).send()?;
-        if !resp.status().is_success() {
-            let http_status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GraphQL error {http_status}: {text}").into());
-        }
-        let json: serde_json::Value = resp.json()?;
+        let json: serde_json::Value = blocking_json_ok(resp, "GitLab GraphQL")?;
         if let Some(errors) = parse_mutation_errors(&json) {
             return Err(format!("workItemUpdate errors: {errors:?}").into());
         }
@@ -386,12 +345,7 @@ impl Client {
         );
         let body = serde_json::json!({ "query": query });
         let resp = self.http.post(self.graphql_url()).json(&body).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GraphQL error {status}: {text}").into());
-        }
-        let json: serde_json::Value = resp.json()?;
+        let json: serde_json::Value = blocking_json_ok(resp, "GitLab GraphQL")?;
         parse_work_item_id(&json).ok_or_else(|| "work item not found".into())
     }
 
@@ -414,12 +368,7 @@ impl Client {
         );
         let body = serde_json::json!({ "query": query });
         let resp = self.http.post(self.graphql_url()).json(&body).send()?;
-        if !resp.status().is_success() {
-            let http_status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GraphQL error {http_status}: {text}").into());
-        }
-        let json: serde_json::Value = resp.json()?;
+        let json: serde_json::Value = blocking_json_ok(resp, "GitLab GraphQL")?;
         parse_status_id(&json, name)
             .ok_or_else(|| format!("status {name:?} not found in project").into())
     }
@@ -535,12 +484,9 @@ impl GroupClient {
             if let Some(s) = state {
                 query.push(("state", s));
             }
-            let resp = self.http.get(self.issues_url()).query(&query).send()?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text()?;
-                return Err(format!("GitLab API error {status}: {text}").into());
-            }
+            let url = self.issues_url();
+            let resp = self.http.get(&url).query(&query).send()?;
+            let resp = blocking_ok(resp, &format!("GitLab GET {url}"))?;
             let next_page = resp
                 .headers()
                 .get("x-next-page")
@@ -578,12 +524,7 @@ impl GroupClient {
         );
         let body = serde_json::json!({ "query": query });
         let resp = self.http.post(self.graphql_url()).json(&body).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GraphQL error {status}: {text}").into());
-        }
-        let json: serde_json::Value = resp.json()?;
+        let json: serde_json::Value = blocking_json_ok(resp, "GitLab GraphQL")?;
         Ok(parse_work_item_status(&json))
     }
 
@@ -666,29 +607,10 @@ pub struct IssueUpdate {
     pub due_date: Option<String>,
 }
 
-fn check_response(resp: reqwest::blocking::Response) -> Result<Issue, Box<dyn std::error::Error>> {
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text()?;
-        return Err(format!("GitLab API error {status}: {text}").into());
-    }
-    Ok(resp.json()?)
-}
-
 /// Check whether a token is valid by calling `GET /api/v4/user`.
 pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::error::Error>> {
     sandogasa_cli::ensure_secure_url(base_url)?;
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        HeaderName::from_static("private-token"),
-        HeaderValue::from_str(token)?,
-    );
-    sandogasa_cli::install_crypto_provider();
-    let client = reqwest::blocking::Client::builder()
-        .timeout(DEFAULT_TIMEOUT)
-        .user_agent("sandogasa-gitlab/0.6.2")
-        .default_headers(headers)
-        .build()?;
+    let client = build_http_client(token)?;
     let url = format!("{}/api/v4/user", base_url.trim_end_matches('/'));
     let resp = client.get(&url).send()?;
     Ok(resp.status().is_success())
@@ -733,11 +655,7 @@ fn list_group_projects_query(
 ) -> Result<Vec<GroupProject>, Box<dyn std::error::Error>> {
     let (base_url, group_path) = parse_project_url(group_url)?;
     let encoded = group_path.replace('/', "%2F");
-    sandogasa_cli::install_crypto_provider();
-    let client = reqwest::blocking::Client::builder()
-        .timeout(DEFAULT_TIMEOUT)
-        .user_agent("sandogasa-gitlab")
-        .build()?;
+    let client = sandogasa_cli::http::blocking_builder(USER_AGENT).build()?;
     let mut all = Vec::new();
     let mut page = 1u32;
     loop {
@@ -788,11 +706,7 @@ fn get_with_retry_blocking(
             last_err = Some(format!("{status} for {url}"));
             continue;
         }
-        if !resp.status().is_success() {
-            let text = resp.text()?;
-            return Err(format!("GitLab API error {status}: {text}").into());
-        }
-        return Ok(resp);
+        return Ok(blocking_ok(resp, &format!("GitLab GET {url}"))?);
     }
     Err(last_err.unwrap().into())
 }
@@ -827,12 +741,19 @@ pub fn parse_project_url(url: &str) -> Result<(String, String), String> {
     Ok((format!("{scheme}://{host}"), path.to_string()))
 }
 
-/// Parse a merge request URL into its components.
+/// Parse a `<base>/<project>/-/<kind>/<iid>` URL into
+/// (base_url, project_path, iid).
 ///
-/// Example:
-/// `https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42`
-/// returns `("https://gitlab.com", "redhat/centos-stream/rpms/xz", 42)`.
-pub fn parse_mr_url(url: &str) -> Result<(String, String, u64), String> {
+/// `separators` are the `/-/<kind>/` infixes to accept, tried in
+/// order (an issue URL may use either `/-/issues/` or the newer
+/// `/-/work_items/`). `no_match` / `bad_iid` are the caller's error
+/// wordings, each formatted as `"<msg>: <url>"`.
+fn parse_ref_url(
+    url: &str,
+    separators: &[&str],
+    no_match: &str,
+    bad_iid: &str,
+) -> Result<(String, String, u64), String> {
     let trimmed = url.trim_end_matches('/');
     let rest = trimmed
         .strip_prefix("https://")
@@ -850,20 +771,33 @@ pub fn parse_mr_url(url: &str) -> Result<(String, String, u64), String> {
         "http"
     };
 
-    let (project, iid_str) = path
-        .rsplit_once("/-/merge_requests/")
-        .ok_or_else(|| format!("not a merge request URL: {url}"))?;
-    // `iid_str` may have trailing query or fragment; strip them.
+    let (project, iid_str) = separators
+        .iter()
+        .find_map(|sep| path.rsplit_once(sep))
+        .ok_or_else(|| format!("{no_match}: {url}"))?;
+    // `iid_str` may have a trailing query or fragment; strip them.
     let iid_str = iid_str.split(['?', '#']).next().unwrap_or(iid_str);
-    let iid: u64 = iid_str
-        .parse()
-        .map_err(|_| format!("invalid merge request IID in URL: {url}"))?;
+    let iid: u64 = iid_str.parse().map_err(|_| format!("{bad_iid}: {url}"))?;
 
     if project.is_empty() {
         return Err(format!("no project path in URL: {url}"));
     }
 
     Ok((format!("{scheme}://{host}"), project.to_string(), iid))
+}
+
+/// Parse a merge request URL into its components.
+///
+/// Example:
+/// `https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42`
+/// returns `("https://gitlab.com", "redhat/centos-stream/rpms/xz", 42)`.
+pub fn parse_mr_url(url: &str) -> Result<(String, String, u64), String> {
+    parse_ref_url(
+        url,
+        &["/-/merge_requests/"],
+        "not a merge request URL",
+        "invalid merge request IID in URL",
+    )
 }
 
 /// Parse a GitLab issue / work-item URL into its components.
@@ -873,37 +807,12 @@ pub fn parse_mr_url(url: &str) -> Result<(String, String, u64), String> {
 /// `https://gitlab.com/CentOS/proposed_updates/rpms/xz/-/work_items/1`
 /// returns `("https://gitlab.com", "CentOS/proposed_updates/rpms/xz", 1)`.
 pub fn parse_issue_url(url: &str) -> Result<(String, String, u64), String> {
-    let trimmed = url.trim_end_matches('/');
-    let rest = trimmed
-        .strip_prefix("https://")
-        .or_else(|| trimmed.strip_prefix("http://"))
-        .ok_or_else(|| format!("invalid GitLab URL: {url}"))?;
-    let slash = rest
-        .find('/')
-        .ok_or_else(|| format!("no project path in URL: {url}"))?;
-    let host = &rest[..slash];
-    let path = &rest[slash + 1..];
-
-    let scheme = if trimmed.starts_with("https://") {
-        "https"
-    } else {
-        "http"
-    };
-
-    let (project, iid_str) = path
-        .rsplit_once("/-/issues/")
-        .or_else(|| path.rsplit_once("/-/work_items/"))
-        .ok_or_else(|| format!("not an issue or work-item URL: {url}"))?;
-    let iid_str = iid_str.split(['?', '#']).next().unwrap_or(iid_str);
-    let iid: u64 = iid_str
-        .parse()
-        .map_err(|_| format!("invalid issue IID in URL: {url}"))?;
-
-    if project.is_empty() {
-        return Err(format!("no project path in URL: {url}"));
-    }
-
-    Ok((format!("{scheme}://{host}"), project.to_string(), iid))
+    parse_ref_url(
+        url,
+        &["/-/issues/", "/-/work_items/"],
+        "not an issue or work-item URL",
+        "invalid issue IID in URL",
+    )
 }
 
 /// A GitLab user as returned by `/users?username=<name>`.
@@ -924,13 +833,41 @@ pub fn user_by_username(
     let http = build_http_client(token)?;
     let url = format!("{}/api/v4/users", base_url.trim_end_matches('/'));
     let resp = http.get(&url).query(&[("username", username)]).send()?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text()?;
-        return Err(format!("GitLab GET {url} failed: {status}: {text}").into());
-    }
-    let users: Vec<User> = resp.json()?;
+    let users: Vec<User> = blocking_json_ok(resp, &format!("GitLab GET {url}"))?;
     Ok(users.into_iter().next())
+}
+
+/// Fetch every page of a `per_page=100` listing endpoint, following
+/// pages until a short one arrives. `extra` is appended to the query
+/// after `per_page` / `page`; a response whose status is in
+/// `tolerated` (e.g. 404 for a vanished project, 403 for a disabled
+/// feature) ends the walk and yields what was collected so far
+/// rather than erroring.
+fn get_all_pages<T: DeserializeOwned>(
+    http: &reqwest::blocking::Client,
+    endpoint: &str,
+    extra: &[(&str, &str)],
+    tolerated: &[u16],
+) -> Result<Vec<T>, Box<dyn std::error::Error>> {
+    let mut out: Vec<T> = Vec::new();
+    let mut page = 1u32;
+    loop {
+        let page_str = page.to_string();
+        let mut query: Vec<(&str, &str)> = vec![("per_page", "100"), ("page", &page_str)];
+        query.extend_from_slice(extra);
+        let resp = http.get(endpoint).query(&query).send()?;
+        if tolerated.contains(&resp.status().as_u16()) {
+            break;
+        }
+        let batch: Vec<T> = blocking_json_ok(resp, &format!("GitLab GET {endpoint}"))?;
+        let n = batch.len();
+        out.extend(batch);
+        if n < 100 {
+            break;
+        }
+        page += 1;
+    }
+    Ok(out)
 }
 
 /// One entry from the user-activity events endpoint. Fields are
@@ -1004,34 +941,14 @@ pub fn user_events(
     );
     let after_str = after.to_string();
     let before_str = before.to_string();
-    let mut out: Vec<Event> = Vec::new();
-    let mut page = 1u32;
-    loop {
-        let page_str = page.to_string();
-        let mut query: Vec<(&str, &str)> = vec![
-            ("per_page", "100"),
-            ("page", &page_str),
-            ("after", &after_str),
-            ("before", &before_str),
-        ];
-        if let Some(a) = action {
-            query.push(("action", a));
-        }
-        let resp = http.get(&endpoint).query(&query).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GET {endpoint} failed: {status}: {text}").into());
-        }
-        let batch: Vec<Event> = resp.json()?;
-        let n = batch.len();
-        out.extend(batch);
-        if n < 100 {
-            break;
-        }
-        page += 1;
+    let mut extra = vec![
+        ("after", after_str.as_str()),
+        ("before", before_str.as_str()),
+    ];
+    if let Some(a) = action {
+        extra.push(("action", a));
     }
-    Ok(out)
+    get_all_pages(&http, &endpoint, &extra, &[])
 }
 
 /// Minimal project identity: what you need to filter events by
@@ -1057,12 +974,7 @@ pub fn project_summary(
         project_id
     );
     let resp = http.get(&url).send()?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text()?;
-        return Err(format!("GitLab GET {url} failed: {status}: {text}").into());
-    }
-    Ok(resp.json()?)
+    Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
 }
 
 /// Count commits in `project_id` authored by `author` within
@@ -1093,34 +1005,19 @@ pub fn count_authored_commits(
     // events endpoint), so pass the days as-is.
     let since_str = format!("{since}T00:00:00Z");
     let until_str = format!("{until}T23:59:59Z");
-    let mut total: u64 = 0;
-    let mut page = 1u32;
-    loop {
-        let page_str = page.to_string();
-        let query: Vec<(&str, &str)> = vec![
-            ("per_page", "100"),
-            ("page", &page_str),
+    // The endpoint returns an array; we only need the length, so
+    // decode as generic values and count.
+    let commits: Vec<serde_json::Value> = get_all_pages(
+        &http,
+        &endpoint,
+        &[
             ("author", author),
             ("since", &since_str),
             ("until", &until_str),
-        ];
-        let resp = http.get(&endpoint).query(&query).send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GET {endpoint} failed: {status}: {text}").into());
-        }
-        // The endpoint returns an array; we only need the length
-        // so decode as a generic array and count.
-        let batch: Vec<serde_json::Value> = resp.json()?;
-        let n = batch.len() as u64;
-        total += n;
-        if n < 100 {
-            break;
-        }
-        page += 1;
-    }
-    Ok(total)
+        ],
+        &[],
+    )?;
+    Ok(commits.len() as u64)
 }
 
 /// A tag as returned by `/projects/:id/repository/tags`. The
@@ -1156,34 +1053,12 @@ pub fn list_tags(
         base_url.trim_end_matches('/'),
         project_id
     );
-    let mut out: Vec<Tag> = Vec::new();
-    let mut page = 1u32;
-    loop {
-        let page_str = page.to_string();
-        let query: Vec<(&str, &str)> = vec![
-            ("per_page", "100"),
-            ("page", &page_str),
-            ("order_by", "updated"),
-            ("sort", "desc"),
-        ];
-        let resp = http.get(&endpoint).query(&query).send()?;
-        if resp.status().as_u16() == 404 {
-            break;
-        }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GET {endpoint} failed: {status}: {text}").into());
-        }
-        let batch: Vec<Tag> = resp.json()?;
-        let n = batch.len();
-        out.extend(batch);
-        if n < 100 {
-            break;
-        }
-        page += 1;
-    }
-    Ok(out)
+    get_all_pages(
+        &http,
+        &endpoint,
+        &[("order_by", "updated"), ("sort", "desc")],
+        &[404],
+    )
 }
 
 /// A GitLab Release as returned by `/projects/:id/releases`.
@@ -1235,39 +1110,12 @@ pub fn project_releases(
         base_url.trim_end_matches('/'),
         project_id
     );
-    let mut out: Vec<Release> = Vec::new();
-    let mut page = 1u32;
-    loop {
-        let page_str = page.to_string();
-        let query: Vec<(&str, &str)> = vec![("per_page", "100"), ("page", &page_str)];
-        let resp = http.get(&endpoint).query(&query).send()?;
-        // 404: project gone. 403: the project's releases feature is
-        // disabled (GitLab forbids the endpoint rather than returning
-        // an empty list — observed on gitlab.com dist-git mirrors).
-        // Both mean "no releases to report", not an error.
-        if matches!(resp.status().as_u16(), 404 | 403) {
-            break;
-        }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("GitLab GET {endpoint} failed: {status}: {text}").into());
-        }
-        let batch: Vec<Release> = resp.json()?;
-        let n = batch.len();
-        out.extend(batch);
-        if n < 100 {
-            break;
-        }
-        page += 1;
-    }
-    Ok(out)
+    // 404: project gone. 403: the project's releases feature is
+    // disabled (GitLab forbids the endpoint rather than returning an
+    // empty list — observed on gitlab.com dist-git mirrors). Both
+    // mean "no releases to report", not an error.
+    get_all_pages(&http, &endpoint, &[], &[404, 403])
 }
-
-/// Upper bound on any single HTTP request — a hang-catcher rather than
-/// a latency cap. reqwest's default client has *no* timeout, so a hung
-/// connection would otherwise block forever.
-const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 #[cfg(test)]
 mod tests {

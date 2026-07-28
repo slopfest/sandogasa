@@ -22,16 +22,12 @@
 //! ```
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
+use sandogasa_cli::http;
 use serde::Deserialize;
 
 /// The Fedora COPR instance.
 pub const DEFAULT_BASE_URL: &str = "https://copr.fedorainfracloud.org";
-
-/// Upper bound on any single COPR HTTP request — a hang-catcher
-/// rather than a latency cap.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A package's latest-build state in one chroot, from
 /// `/api_3/monitor`.
@@ -84,12 +80,13 @@ impl Copr {
 
     /// Client for another instance (or a test server).
     pub fn with_base_url(base_url: &str) -> Self {
-        sandogasa_cli::install_crypto_provider();
-        let http = reqwest::blocking::Client::builder()
-            .user_agent(concat!("sandogasa-copr/", env!("CARGO_PKG_VERSION")))
-            .timeout(DEFAULT_TIMEOUT)
-            .build()
-            .expect("build reqwest client");
+        let http = http::blocking_builder(concat!(
+            env!("CARGO_PKG_NAME"),
+            "/",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .build()
+        .expect("build reqwest client");
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             http,
@@ -110,12 +107,8 @@ impl Copr {
             .get(&url)
             .query(&[("ownername", owner), ("projectname", project)])
             .send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("COPR monitor for {owner}/{project}: {status}: {text}").into());
-        }
-        let resp: MonitorResponse = resp.json()?;
+        let resp: MonitorResponse =
+            http::blocking_json_ok(resp, &format!("COPR monitor for {owner}/{project}"))?;
         Ok(resp.packages)
     }
 }
@@ -162,13 +155,14 @@ pub fn chroot_prefix(branch: &str) -> Option<String> {
 pub fn nvrs_for_chroot(packages: &[PackageStatus], prefix: &str) -> Vec<String> {
     let mut out = Vec::new();
     for pkg in packages {
-        let mut candidates: Vec<(&String, &ChrootState)> = pkg
+        // BTreeMap iteration is key-ordered and `min_by_key` keeps the
+        // first minimum, so ties break on chroot name deterministically.
+        let candidate = pkg
             .chroots
             .iter()
             .filter(|(chroot, _)| chroot.starts_with(prefix))
-            .collect();
-        candidates.sort_by_key(|(chroot, _)| !chroot.ends_with("-x86_64"));
-        let Some((_, state)) = candidates.first() else {
+            .min_by_key(|(chroot, _)| !chroot.ends_with("-x86_64"));
+        let Some((_, state)) = candidate else {
             continue;
         };
         if state.state != "succeeded" {
@@ -187,14 +181,13 @@ pub fn nvrs_for_chroot(packages: &[PackageStatus], prefix: &str) -> Vec<String> 
 /// The distinct chroot names appearing across `packages` — used for
 /// a helpful error when no chroot matches the requested branch.
 pub fn available_chroots(packages: &[PackageStatus]) -> Vec<String> {
-    let mut out: Vec<String> = packages
+    // The BTreeSet dedups and yields the names already sorted.
+    packages
         .iter()
         .flat_map(|p| p.chroots.keys().cloned())
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
-        .collect();
-    out.sort();
-    out
+        .collect()
 }
 
 #[cfg(test)]

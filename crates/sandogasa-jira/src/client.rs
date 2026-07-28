@@ -19,8 +19,6 @@ impl JiraClient {
     /// Construct a new client. The base URL should NOT include the
     /// `/rest/api/2` path — that's added by each endpoint.
     pub fn new(base_url: &str) -> Self {
-        sandogasa_cli::install_crypto_provider();
-
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: build_http_client(),
@@ -67,18 +65,17 @@ impl JiraClient {
     }
 }
 
-/// Upper bound on any single HTTP request — a hang-catcher rather than
-/// a latency cap. reqwest's default client has *no* timeout, so a hung
-/// connection would otherwise block forever.
-const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// Build the crate's HTTP client with the standard request timeout.
-/// Panics only where `Client::new()` would too (TLS backend init).
+/// Build the crate's HTTP client with the shared sandogasa defaults
+/// (user agent, request timeout, crypto provider). Panics only where
+/// `Client::new()` would too (TLS backend init).
 fn build_http_client() -> Client {
-    Client::builder()
-        .timeout(DEFAULT_TIMEOUT)
-        .build()
-        .expect("build reqwest client")
+    sandogasa_cli::http::builder(concat!(
+        env!("CARGO_PKG_NAME"),
+        "/",
+        env!("CARGO_PKG_VERSION")
+    ))
+    .build()
+    .expect("build reqwest client")
 }
 
 #[cfg(test)]

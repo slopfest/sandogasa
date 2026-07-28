@@ -26,14 +26,9 @@
 //! The `host` is passed in full (`sr.ht`, or a self-hosted host), so the
 //! client works against any deployment.
 
-use std::time::Duration;
-
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::{Value, json};
-
-/// Upper bound on any single sr.ht HTTP request — a hang-catcher.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A patchset submitted to a mailing list (lists.sr.ht).
 #[derive(Debug, Clone, Deserialize)]
@@ -413,12 +408,13 @@ fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn s
         HeaderName::from_static("accept"),
         HeaderValue::from_static("application/json"),
     );
-    sandogasa_cli::install_crypto_provider();
-    Ok(reqwest::blocking::Client::builder()
-        .user_agent(concat!("sandogasa-sourcehut/", env!("CARGO_PKG_VERSION")))
-        .default_headers(headers)
-        .timeout(DEFAULT_TIMEOUT)
-        .build()?)
+    Ok(sandogasa_cli::http::blocking_builder(concat!(
+        env!("CARGO_PKG_NAME"),
+        "/",
+        env!("CARGO_PKG_VERSION")
+    ))
+    .default_headers(headers)
+    .build()?)
 }
 
 // ---- GraphQL envelope + per-query response shapes ----
