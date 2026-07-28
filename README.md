@@ -40,7 +40,9 @@ library crates:
 - **sandogasa-bodhi** — Bodhi API client for Fedora update queries
 - **sandogasa-bugclass** — bug classification (CVE, FTBFS, update request, etc.) across issue trackers
 - **sandogasa-bugzilla** — Bugzilla REST API client
-- **sandogasa-cli** — shared CLI utilities (external tool availability checks)
+- **sandogasa-cli** — shared CLI utilities (external tool availability
+  checks, yes/no prompts, word wrapping, and an optional `http` feature
+  with the API clients' shared reqwest plumbing)
 - **sandogasa-config** — shared config file management and interactive prompting
 - **sandogasa-copr** — COPR API client for read-only project monitoring
 - **sandogasa-depfilter** — RPM dependency filtering for cross-branch analysis

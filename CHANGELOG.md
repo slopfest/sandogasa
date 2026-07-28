@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.18.2
 
 ### fesco-chair: Council happenings in the agenda and the script
 
