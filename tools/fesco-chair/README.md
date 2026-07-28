@@ -142,6 +142,16 @@ artefact links (minutes/log, HTML and text), and the full plain-text
 minutes. Send it as a reply to the schedule announcement, then
 comment/close the discussed tickets.
 
+Any ticket still tagged `pending announcement` is announced here as
+well, in a "Discussed and Voted in the Ticket" section between the
+links and the minutes, with its tally parsed from the ticket
+comments. Since the label is dropped once an announcement goes out,
+anything still carrying it was decided in-ticket after the schedule
+was sent and would otherwise never be announced. Remember to comment
+`Announced: <archive link>`, untag, and close those tickets too. This
+lookup needs a token and is best-effort: if none is configured or the
+tracker is unreachable, the summary still prints the minutes.
+
 ## License
 
 Licensed under either of

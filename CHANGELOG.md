@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### fesco-chair: summary announces late in-ticket votes
+
+Tickets sometimes get tagged `pending announcement` after the
+schedule announcement has gone out, which left them with no
+announcement at all — the agenda had already been sent and the
+summary only carried the minutes. `summary` now lists every open
+`pending announcement` ticket in a "Discussed and Voted in the
+Ticket" section between the artefact links and the minutes, with the
+tally parsed from its comments, and reminds the chair to comment,
+untag and close them. Since the label is dropped once an
+announcement goes out, anything still carrying it is by definition
+unannounced.
+
+This adds a tracker lookup to a subcommand that previously only
+needed meetbot, so it is best-effort: with no token configured or an
+unreachable tracker it warns and prints the minutes as before. The
+`--json` output gains a `voted` array.
+
 ### sandogasa-cli: shared confirm prompt and HTTP plumbing
 
 Two additions that existed in copy-pasted form across the workspace:
