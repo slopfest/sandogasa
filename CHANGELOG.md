@@ -16,9 +16,17 @@ ever writes under `/etc`, so a system file is always admin-authored
 (an RPM wants to own the directory and `%ghost %config(noreplace)`
 the file); a system file alone is sufficient, since `load` succeeds
 with no user file; and the 700/600 enforcement applies to the user
-file only, so a packaged `root:root 0644` is read as-is — which
-means a system file holding an API token needs restricting
-deliberately, because nothing warns.
+file only, so a packaged `root:root 0644` is what to ship.
+
+That last point is deliberate rather than a caveat: the system layer
+is for shared, non-secret settings, and credentials stay in the
+per-user file or an environment variable. Restricting a shared token
+by group barely works on Fedora, where each user has their own
+group; setgid would be both discouraged and a poor fit for tools
+that exec `koji`, `fedrq` and `git`; and a shared token collapses
+the audit trail at the far end. A machine that needs its own
+credential should get its own user, or take the token from the
+environment.
 
 ## v0.18.2
 

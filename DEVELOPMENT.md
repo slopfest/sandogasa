@@ -86,13 +86,33 @@ Four consequences worth knowing, for packaging in particular:
   *neither* file exists.)
 - **Permissions are enforced on the user file only** — 700 on the
   directory, 600 on the file, fixed in place on read. The system
-  file is read as-is with no mode check and no complaint, so
-  `root:root 0644` works. Several of these configs hold API
-  tokens, though, so a system file carrying one should be
-  restricted deliberately (`0640 root:<group>`); nothing in the
-  tooling will warn that 0644 exposes it to every local user.
+  file is read as-is with no mode check, so `root:root 0644` is
+  both what a package should ship and what the split assumes: the
+  system layer is for shared, non-secret settings (koji tags, group
+  and instance definitions, `[defaults]`), and credentials stay in
+  the per-user file where the 600 enforcement applies and each
+  token maps to one person.
 - **A missing system file is not an error**, so shipping the
   directory empty is fine.
+
+Keeping credentials out of the system layer is a design choice, not
+just caution, because the alternatives are all worse. Restricting by
+group barely works on Fedora, where each user gets their own group,
+so there is no natural group to grant and the admin would have to
+invent and populate one. setgid on the binaries would be both
+discouraged in Fedora and a bad fit here, since these tools exec
+`koji`, `fedrq`, `git` and `mock` and parse network data — a large
+escalation surface for no gain. And a shared token defeats the audit
+trail on the far end, where every action arrives as one identity.
+
+Where a machine genuinely needs its own credential — a builder, a
+cron job — give that job its own user with its own 600 config, or
+pass the token in the environment: every credential has an env
+override (`FORGEJO_TOKEN`, `GITLAB_TOKEN`, `GITHUB_TOKEN`,
+`JIRA_TOKEN`, `BUGZILLA_API_KEY`, `PAGURE_API_TOKEN`,
+`SOURCEHUT_TOKEN`, plus per-host variants such as
+`FORGEJO_TOKEN_FORGE_FEDORAPROJECT_ORG`), so under systemd a
+`LoadCredential` drop-in works without any config file at all.
 
 ## Flag defaults come from the config file — a common pattern
 

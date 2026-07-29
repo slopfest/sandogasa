@@ -16,9 +16,10 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
   succeeds from `/etc` with no user file present.
 - **Permissions apply to the user file only** — 700 on its
   directory, 600 on the file, corrected in place on read. The
-  system file is read as-is, with no mode check: a packaged
-  `root:root 0644` works, but a system file holding a token should
-  be restricted deliberately, since nothing here will warn.
+  system file is read as-is, with no mode check, so a packaged
+  `root:root 0644` is fine: the system layer is for shared,
+  non-secret settings, with credentials left to the per-user file
+  (or an environment variable), where the 600 enforcement applies.
 - **prompt_field** — prompt the user for a config value with support for
   sensitive (hidden) input and optional sync validation.
 - **validate_email** — basic email address validation for config fields.

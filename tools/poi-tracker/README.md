@@ -608,9 +608,16 @@ table pinning flag defaults (see the root `DEVELOPMENT.md`).
 
 `poi-tracker config` writes the user file only, with 700 on the
 directory and 600 on the file. Nothing here ever writes under `/etc`, so
-a system file is always admin-authored, and its permissions are left as
-they are: if it holds a token, restrict it deliberately (e.g. `0640
-root:<group>`), since 0644 exposes it to every local user.
+a system file is always admin-authored — and it is meant for shared,
+non-secret settings, which is why `root:root 0644` is the right mode to
+ship it with.
+
+Keep credentials out of the system file. Tokens belong in the per-user
+file, which is already 600, or in an environment variable; a token under
+`/etc` would be readable by every local user, and Fedora's per-user
+groups leave no natural group to restrict it to. For an unattended
+machine, give the job its own user and its own 600 config rather than
+sharing one file.
 
 ## License
 
