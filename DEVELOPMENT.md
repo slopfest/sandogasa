@@ -64,6 +64,36 @@ file. The system layer suits org-wide deployments (a distro
 package or ansible dropping shared settings) while each user
 keeps their own credentials and overrides.
 
+Every tool reads the system layer, whether or not it has settings
+of its own: the nine with a `config` subcommand (cpu-sig-tracker,
+ebranch, fedora-cve-triage, fedora-review-digest, fesco-chair,
+hs-relmon, poi-tracker, sandogasa-pkg-acl, sandogasa-report) load
+their own keys from it, and the rest reach it through
+`parse_with_defaults`, which reads the same layered files for the
+`[defaults]` table described below.
+
+Four consequences worth knowing, for packaging in particular:
+
+- **Nothing ever creates the system file.** No tool writes under
+  `/etc`; `save` writes the user file only. A system config is
+  always authored by an admin (or shipped by a package), so an RPM
+  wants to own the directory and mark the file `%ghost
+  %config(noreplace)` rather than expect it to appear.
+- **A system file alone is enough.** `read_merged` returns the
+  system table when no user file exists, so `load` succeeds from
+  `/etc` with no per-user setup. (The not-found error names the
+  user path, which reads oddly in that case — it only fires when
+  *neither* file exists.)
+- **Permissions are enforced on the user file only** — 700 on the
+  directory, 600 on the file, fixed in place on read. The system
+  file is read as-is with no mode check and no complaint, so
+  `root:root 0644` works. Several of these configs hold API
+  tokens, though, so a system file carrying one should be
+  restricted deliberately (`0640 root:<group>`); nothing in the
+  tooling will warn that 0644 exposes it to every local user.
+- **A missing system file is not an error**, so shipping the
+  directory empty is fine.
+
 ## Flag defaults come from the config file — a common pattern
 
 Every tool supports a `[defaults]` table in its config (the same

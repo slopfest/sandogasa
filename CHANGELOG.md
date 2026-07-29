@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Docs: system-wide configuration
+
+Every tool reads `/etc/<tool>/config.toml` beneath the per-user
+file, but that was only written down in `DEVELOPMENT.md` and the
+sandogasa-config crate docs — no tool's README mentioned it. Each of
+the 16 now carries a "System-wide configuration" section naming both
+paths, distinguishing the nine that load their own settings from the
+seven that read the file only for its `[defaults]` table.
+
+`DEVELOPMENT.md` gains the details that packaging needs: no tool
+ever writes under `/etc`, so a system file is always admin-authored
+(an RPM wants to own the directory and `%ghost %config(noreplace)`
+the file); a system file alone is sufficient, since `load` succeeds
+with no user file; and the 700/600 enforcement applies to the user
+file only, so a packaged `root:root 0644` is read as-is — which
+means a system file holding an API token needs restricting
+deliberately, because nothing warns.
+
 ## v0.18.2
 
 ### fesco-chair: Council happenings in the agenda and the script

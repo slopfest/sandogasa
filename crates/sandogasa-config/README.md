@@ -11,7 +11,14 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
   user file wins per key, recursively for tables; command-line
   flags override both). `save` only ever writes the user file.
   `read_merged` exposes the raw merged TOML for generic
-  inspection (the flag-defaults lookup uses it).
+  inspection (the flag-defaults lookup uses it). Either layer may
+  be absent, and the system layer alone is enough — `load`
+  succeeds from `/etc` with no user file present.
+- **Permissions apply to the user file only** — 700 on its
+  directory, 600 on the file, corrected in place on read. The
+  system file is read as-is, with no mode check: a packaged
+  `root:root 0644` works, but a system file holding a token should
+  be restricted deliberately, since nothing here will warn.
 - **prompt_field** — prompt the user for a config value with support for
   sensitive (hidden) input and optional sync validation.
 - **validate_email** — basic email address validation for config fields.

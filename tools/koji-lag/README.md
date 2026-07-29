@@ -131,6 +131,15 @@ and `hosts`/`channels` id→name maps. Build and task IDs are only
 unique per Koji instance, so records from different instances
 (fedora, stream, cbs) coexist in one dataset.
 
+## System-wide configuration
+
+This tool keeps no settings of its own, but it does read a `[defaults]`
+table — for pinning the flags you always pass — from
+`/etc/koji-lag/config.toml` and `~/.config/koji-lag/config.toml`, the
+user file overriding the system one per key and command-line flags
+overriding both. Either path may be absent. See the root
+`DEVELOPMENT.md` for the table format.
+
 ## License
 
 Licensed under either of

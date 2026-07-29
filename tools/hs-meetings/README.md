@@ -85,6 +85,15 @@ it freely. New entries are rendered without an `agenda,` prefix
 since no SIG meeting has had an external agenda link since
 January 2023.
 
+## System-wide configuration
+
+This tool keeps no settings of its own, but it does read a `[defaults]`
+table — for pinning the flags you always pass — from
+`/etc/hs-meetings/config.toml` and `~/.config/hs-meetings/config.toml`,
+the user file overriding the system one per key and command-line flags
+overriding both. Either path may be absent. See the root
+`DEVELOPMENT.md` for the table format.
+
 ## License
 
 Licensed under either of

@@ -170,6 +170,20 @@ cpu-sig-tracker untag xz --release c10s --yes
 cpu-sig-tracker retire https://gitlab.com/CentOS/proposed_updates/rpms/xz/-/work_items/1 --yes
 ```
 
+## System-wide configuration
+
+Settings are read from `/etc/cpu-sig-tracker/config.toml` first, then
+overridden per key by `~/.config/cpu-sig-tracker/config.toml`, with
+command-line flags overriding both. A system file alone is enough — no
+per-user file is required — and either may also carry a `[defaults]`
+table pinning flag defaults (see the root `DEVELOPMENT.md`).
+
+`cpu-sig-tracker config` writes the user file only, with 700 on the
+directory and 600 on the file. Nothing here ever writes under `/etc`, so
+a system file is always admin-authored, and its permissions are left as
+they are: if it holds a token, restrict it deliberately (e.g. `0640
+root:<group>`), since 0644 exposes it to every local user.
+
 ## License
 
 Licensed under either of
