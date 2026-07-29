@@ -40,6 +40,9 @@ name = "chkconfig"
 name = "createrepo_c"
 
 [[package]]
+name = "crun"
+
+[[package]]
 name = "dbus-broker"
 
 [[package]]
