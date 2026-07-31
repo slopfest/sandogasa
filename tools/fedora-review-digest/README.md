@@ -268,3 +268,11 @@ groups leave no natural group to restrict it to. For an unattended
 machine, give the job its own user and its own 600 config rather than
 sharing one file.
 
+## License
+
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.

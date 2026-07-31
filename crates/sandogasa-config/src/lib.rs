@@ -80,8 +80,14 @@ impl ConfigFile {
 
     /// Human-readable list of the layer paths, for error messages.
     pub fn describe_sources(&self) -> String {
+        self.join_sources("+")
+    }
+
+    /// The configured paths joined by `sep` — `+` when describing a
+    /// merge, `or` when reporting that neither was found.
+    fn join_sources(&self, sep: &str) -> String {
         match &self.system_path {
-            Some(sys) => format!("{} + {}", sys.display(), self.path.display()),
+            Some(sys) => format!("{} {sep} {}", sys.display(), self.path.display()),
             None => self.path.display().to_string(),
         }
     }
@@ -97,9 +103,12 @@ impl ConfigFile {
     pub fn load<T: DeserializeOwned>(&self) -> Result<T, Box<dyn std::error::Error>> {
         match self.read_merged()? {
             Some(table) => Ok(toml::Value::Table(table).try_into()?),
+            // Name both paths: a tool configured entirely from /etc
+            // has no user file, so naming only that one would point
+            // at a file that was never expected to exist.
             None => Err(format!(
                 "Could not read {}: file not found. Run 'config' to set up.",
-                self.path.display()
+                self.join_sources("or")
             )
             .into()),
         }
@@ -354,10 +363,26 @@ mod tests {
         let loaded: TestConfig = cf.load().unwrap();
         assert_eq!(loaded.my_section.key, "from-system");
 
-        // No layer at all keeps the "run config" error.
+        // No layer at all keeps the "run config" error, and names
+        // both paths — neither exists, so blaming only the user file
+        // would misdirect an /etc-only deployment.
         std::fs::remove_file(&system).unwrap();
         let err = cf.load::<TestConfig>().unwrap_err().to_string();
         assert!(err.contains("Run 'config'"), "{err}");
+        assert!(err.contains(&system.display().to_string()), "{err}");
+        assert!(err.contains(&user.display().to_string()), "{err}");
+    }
+
+    #[test]
+    fn not_found_error_names_only_the_user_file_without_a_system_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let err = ConfigFile::from_path(path.clone())
+            .load::<TestConfig>()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&path.display().to_string()), "{err}");
+        assert!(!err.contains(" or "), "{err}");
     }
 
     #[test]

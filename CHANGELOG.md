@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### sandogasa-config: the not-found error names both layers
+
+`load`'s "file not found" error named only the user path, which
+misdirects a deployment configured entirely from `/etc` — that file
+was never meant to exist there. It now names whichever paths were
+configured, joined by "or", since the error only fires when none of
+them is present.
+
+### Docs: License sections on three READMEs
+
+`fedora-review-digest`, `sandogasa-review` and `sandogasa-sourcehut`
+were missing the License section the other 38 crates carry; their
+`LICENSE-APACHE`/`LICENSE-MIT` symlinks were already in place.
+
 ### Docs: system-wide configuration
 
 Every tool reads `/etc/<tool>/config.toml` beneath the per-user

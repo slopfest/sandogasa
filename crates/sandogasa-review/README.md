@@ -40,3 +40,12 @@ for (finding, resolution) in decisions {
 Each finding is shown as `[i/total] <summary>` followed by
 `(k)eep / (e)xplain / (r)emove [k]:` on stderr; Enter keeps (the safe
 default), and `explain` requires a non-empty justification.
+
+## License
+
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.

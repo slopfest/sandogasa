@@ -40,3 +40,12 @@ for p in client.patches("michel")? {
 The host is passed in full (`sr.ht`, or a self-hosted host), so the client
 works against any deployment. See `DEVELOPMENT.md` for API conventions and
 the metric-mapping caveats.
+
+## License
+
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.
