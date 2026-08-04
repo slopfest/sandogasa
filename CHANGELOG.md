@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### fedora-cve-triage: JS checks route by what the maintainer knows
+
+Three changes to how `js-fps` and `cross-ecosystem` decide, after a run
+closed three cachelib bugs with the wrong justification.
+
+`sandogasa-nvd`'s `targets_js` no longer accepts a bare "javascript" in
+a description. `javascript:` URIs are the standard XSS payload, so
+advisories in every ecosystem mention them — Mistune, a Python
+library, describes not blocking "percent-encoded javascript URIs" — and
+that alone made `js-fps` propose closing a live Python CVE. The list
+now needs a phrase naming the ecosystem (`javascript library`,
+`node.js`, `npm package`, …); it was earning nothing anyway, matching
+neither DOMPurify nor axios.
+
+Both checks now share one JS determination, including the
+GitHub-repository-language fallback that only `cross-ecosystem` had. A
+CVE NVD hasn't analyzed carries no CPE data, so DOMPurify's and axios'
+CVEs were invisible to `js-fps` and fell through to `cross-ecosystem`,
+whose "different package in a different ecosystem sharing a name" is
+untrue of a package that vendors those files as website assets.
+
+Because nothing in a CVE says *why* a package contains JavaScript, the
+distinction between the two checks is maintainer knowledge. `[check."<name>"]`
+now accepts `components`, `assignees` and `skip_components`, filtered
+over the run's single query, so `js-fps` can be scoped the way its
+standalone config always was — without which it claims every JS CVE
+and `cross-ecosystem` never fires.
+
 ### fedora-cve-triage: unshipped-tools no longer guesses at absence
 
 The check closes a bug when the package doesn't ship the affected

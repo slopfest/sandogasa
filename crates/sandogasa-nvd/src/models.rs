@@ -88,13 +88,26 @@ impl CpeMatch {
 /// Maps source identifier (UUID or email) to a human-readable name.
 const JS_CNAS: &[(&str, &str)] = &[("ce714d77-add3-4f53-aff5-83d477b104bb", "OpenJS Foundation")];
 
-/// Keywords that indicate a JavaScript-related CVE when found in the description.
+/// Description phrases that indicate the JavaScript *ecosystem*.
+///
+/// Deliberately not a bare "javascript". `javascript:` URIs are the
+/// standard XSS payload, so advisories for packages in every ecosystem
+/// describe them — Mistune, a Python library, says its `safe_url()`
+/// "does not block percent-encoded javascript URIs". The bare word is
+/// evidence of a vulnerability class, not of an ecosystem, and the
+/// callers of [`CveResponse::targets_js`] close bugs on this signal, so
+/// weak evidence closes live CVEs.
 const JS_KEYWORDS: &[&str] = &[
-    "javascript",
     "node.js",
     "nodejs",
     "npm package",
     "npm module",
+    "javascript library",
+    "javascript package",
+    "javascript module",
+    "javascript project",
+    "javascript implementation",
+    "written in javascript",
 ];
 
 /// A fixed version extracted from CPE match data.
@@ -623,16 +636,24 @@ mod tests {
 
     #[test]
     fn cpe_wildcard_target_sw_falls_through_to_description() {
-        // CPE has wildcard target_sw, description says JS — should detect as JS
-        let mut resp = cve_with_cpe("cpe:2.3:a:cure53:dompurify:*:*:*:*:*:*:*:*");
-        resp.vulnerabilities[0]
-            .cve
-            .descriptions
-            .push(CveDescription {
-                lang: "en".to_string(),
-                value: "Attackers can inject payloads to execute JavaScript".to_string(),
-            });
-        assert!(resp.targets_js());
+        // Wildcard target_sw is not authoritative, so the description
+        // decides — JS-only libraries like DOMPurify do publish
+        // wildcard CPEs.
+        let described = |text: &str| {
+            let mut resp = cve_with_cpe("cpe:2.3:a:cure53:dompurify:*:*:*:*:*:*:*:*");
+            resp.vulnerabilities[0]
+                .cve
+                .descriptions
+                .push(CveDescription {
+                    lang: "en".to_string(),
+                    value: text.to_string(),
+                });
+            resp
+        };
+        assert!(described("DOMPurify is a JavaScript library for sanitizing HTML").targets_js());
+        // But describing the *payload* is not a statement about the
+        // ecosystem: every XSS advisory mentions executing JavaScript.
+        assert!(!described("Attackers can inject payloads to execute JavaScript").targets_js());
     }
 
     #[test]
@@ -681,6 +702,27 @@ mod tests {
     fn response_targets_js_via_keyword_javascript() {
         let resp = cve_with_description("en", "Prototype pollution in a JavaScript library");
         assert!(resp.targets_js());
+    }
+
+    #[test]
+    fn response_not_js_via_javascript_uri_mention() {
+        // The real CVE-2026-59923 shape: a Python library whose XSS bug
+        // is about `javascript:` URIs. The word appears, the ecosystem
+        // does not.
+        let resp = cve_with_description(
+            "en",
+            "HTMLRenderer.safe_url() does not block percent-encoded javascript \
+             URIs, allowing attacker-supplied Markdown links to execute script",
+        );
+        assert!(!resp.targets_js());
+        // Nor do the other ways advisories name the payload.
+        for text in [
+            "The sanitizer permits javascript: links",
+            "Improper filtering of JavaScript URLs",
+            "allows javascript scheme in href attributes",
+        ] {
+            assert!(!cve_with_description("en", text).targets_js(), "{text}");
+        }
     }
 
     #[test]
