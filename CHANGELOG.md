@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### fedora-cve-triage: list the changes next to the confirmation
+
+Every resolution stage now prints the bugs it is about to act on
+immediately before asking to proceed. `fix-version` printed its plans
+as it classified them, which under `run` happens up front for all six
+checks — so "Apply 17 update(s)?" arrived with the list long scrolled
+away behind other checks' output. `bodhi-check` printed its categorized
+lists further up, with the reassign prompt and several other sections
+in between, and its late-filed set was only ever counted, never
+listed. The false-positive stage now names the bugs its plan covers
+rather than just counting them.
+
+A new `tools/fedora-cve-triage/DEVELOPMENT.md` records the design a
+later check has to fit: the classifier contract, the shared `Triage`
+context and why its accessors return owned data, why the check order
+is what it is, NVD's authority over the fallbacks, narrowing versus
+subtracting, and the rule that a plan belongs next to its prompt.
+
 ### fedora-cve-triage: --skip-component excludes packages from a run
 
 `--component` is an allowlist, so "everything assigned to me except
