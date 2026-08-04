@@ -12,13 +12,13 @@ pub struct UpdatesResponse {
 }
 
 /// The user who submitted an update.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[non_exhaustive]
 pub struct BodhiUser {
     pub name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[non_exhaustive]
 pub struct Update {
     pub alias: String,
@@ -57,13 +57,13 @@ pub struct Update {
     pub date_stable: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[non_exhaustive]
 pub struct Build {
     pub nvr: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[non_exhaustive]
 pub struct BodhiBug {
     pub bug_id: u64,
@@ -82,7 +82,7 @@ pub struct BugFeedbackItem {
     pub karma: i32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[non_exhaustive]
 pub struct Release {
     pub name: String,
@@ -197,7 +197,7 @@ impl NewUpdateResponse {
 }
 
 /// A Bodhi release entry from the releases API.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[non_exhaustive]
 pub struct BodhiRelease {
     pub name: String,
