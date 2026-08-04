@@ -14,6 +14,9 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
   inspection (the flag-defaults lookup uses it). Either layer may
   be absent, and the system layer alone is enough — `load`
   succeeds from `/etc` with no user file present.
+- **try_for_tool_file** — the same layered pair for a file other than
+  `config.toml`, e.g. a run profile a package ships under
+  `/etc/{tool}/` while users override it per key in `~/.config/{tool}/`.
 - **Permissions apply to the user file only** — 700 on its
   directory, 600 on the file, corrected in place on read. The
   system file is read as-is, with no mode check, so a packaged
