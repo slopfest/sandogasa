@@ -80,8 +80,7 @@ A `= Council happenings =` section follows New business — the
 standing slot for the FESCo Council representative, emitted empty for
 you to fill in.
 
-The body is wrapped to 71 columns, the same width the summary uses
-(see below for why that number).
+The body is wrapped to 71 columns, like the summary.
 
 Open [fesco/docs](https://forge.fedoraproject.org/fesco/docs) issues
 and pull requests (the wiki's pre-meeting step 3) are offered onto
@@ -151,28 +150,20 @@ artefact links (minutes/log, HTML and text), and the full plain-text
 minutes. Send it as a reply to the schedule announcement, then
 comment/close the discussed tickets.
 
-The body is wrapped to 71 columns, keeping the minutes' bullet
-structure with continuations aligned under the text. meetbot's
-`AGREED`/`ACTION` lines routinely run past 200 columns, so something
-wraps them either way — and a mail client left to do it wraps at its
-own width with continuations flush left, losing the structure. The
-width must not exceed the client's: wrap wider and it breaks every
-line a second time, leaving one- and two-word orphans. 71 sits just
-inside the [conventional
-72](https://useplaintext.email/#etiquette), and is a width observed
-passing through a client untouched. A line whose URL alone exceeds
-the width still overflows, since splitting a URL would stop it being
-a link.
+The body is wrapped to 71 columns — just inside the [conventional
+72](https://useplaintext.email/#etiquette) — keeping the minutes'
+bullet structure with continuations aligned under the text. A line
+whose URL alone exceeds the width overflows rather than being split,
+which would stop it being a link.
 
-Any ticket still tagged `pending announcement` is announced here as
-well, in a "Discussed and Voted in the Ticket" section between the
-links and the minutes, with its tally parsed from the ticket
-comments. Since the label is dropped once an announcement goes out,
-anything still carrying it was decided in-ticket after the schedule
-was sent and would otherwise never be announced. Remember to comment
-`Announced: <archive link>`, untag, and close those tickets too. This
-lookup needs a token and is best-effort: if none is configured or the
-tracker is unreachable, the summary still prints the minutes.
+Any ticket still tagged `pending announcement` is announced here too,
+in a "Discussed and Voted in the Ticket" section between the links and
+the minutes, with its tally parsed from the ticket comments — the label
+is dropped once an announcement goes out, so anything still carrying it
+was decided in-ticket after the schedule was sent. Remember to comment
+`Announced: <archive link>`, untag, and close those tickets as well.
+The lookup needs a token and is best-effort: without one, or with the
+tracker unreachable, the summary still prints the minutes.
 
 ## System-wide configuration
 
@@ -183,17 +174,14 @@ per-user file is required — and either may also carry a `[defaults]`
 table pinning flag defaults (see the root `DEVELOPMENT.md`).
 
 `fesco-chair config` writes the user file only, with 700 on the
-directory and 600 on the file. Nothing here ever writes under `/etc`, so
-a system file is always admin-authored — and it is meant for shared,
-non-secret settings, which is why `root:root 0644` is the right mode to
-ship it with.
+directory and 600 on the file. Nothing writes under `/etc`: a system
+file is admin-authored, holds shared non-secret settings, and is
+normally shipped `root:root 0644`.
 
-Keep credentials out of the system file. Tokens belong in the per-user
-file, which is already 600, or in an environment variable; a token under
-`/etc` would be readable by every local user, and Fedora's per-user
-groups leave no natural group to restrict it to. For an unattended
-machine, give the job its own user and its own 600 config rather than
-sharing one file.
+Credentials belong in the per-user file, which is 600, or in an
+environment variable — a token under `/etc` is readable by every local
+user. For an unattended machine, give the job its own user and its own
+600 config.
 
 ## License
 

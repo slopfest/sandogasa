@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Docs: READMEs describe rather than justify
+
+The tool READMEs had accumulated rationale for recent changes —
+comparisons to how things used to work, arguments for why a default is
+what it is. That belongs in this file and in the development notes, so
+the READMEs now state what the tools do.
+
+fedora-cve-triage's needed correcting as well: it still documented the
+per-check subcommands retired in 0.19.0, and still described the
+false-positive review as skipped when piped with every detected bug
+closed unreviewed, which stopped being true when the review became
+uniform. Its opening now describes the range of misfiled CVEs a
+maintainer's queue collects, rather than leading with the bundled-
+JavaScript case alone.
+
 ## v0.19.0
 
 ### sandogasa-distgit: send a User-Agent

@@ -507,18 +507,15 @@ overriding both. A system file alone is enough — no per-user file is
 required — and either may also carry a `[defaults]` table pinning flag
 defaults (see the root `DEVELOPMENT.md`).
 
-`ebranch config` writes the user file only, with 700 on the directory
-and 600 on the file. Nothing here ever writes under `/etc`, so a system
-file is always admin-authored — and it is meant for shared, non-secret
-settings, which is why `root:root 0644` is the right mode to ship it
-with.
+`ebranch config` writes the user file only, with 700 on the
+directory and 600 on the file. Nothing writes under `/etc`: a system
+file is admin-authored, holds shared non-secret settings, and is
+normally shipped `root:root 0644`.
 
-Keep credentials out of the system file. Tokens belong in the per-user
-file, which is already 600, or in an environment variable; a token under
-`/etc` would be readable by every local user, and Fedora's per-user
-groups leave no natural group to restrict it to. For an unattended
-machine, give the job its own user and its own 600 config rather than
-sharing one file.
+Credentials belong in the per-user file, which is 600, or in an
+environment variable — a token under `/etc` is readable by every local
+user. For an unattended machine, give the job its own user and its own
+600 config.
 
 ## License
 
