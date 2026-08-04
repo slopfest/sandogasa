@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### fedora-cve-triage: uniform per-bug review, plus -y (breaking CLI)
+
+`--apply`/`--close-bugs` now reviews every bug through the same
+keep/explain/remove flow, whichever check proposed it: keep performs
+the planned action, explain performs it and records the note on the
+bug, remove skips that bug. Previously only the false-positive checks
+reviewed; `fix-version` and `bodhi-check` were single all-or-nothing
+confirmations, so one wrong reassignment among seventeen could only be
+avoided by narrowing the whole run.
+
+New `-y`/`--yes` accepts everything without reviewing or confirming,
+and `--claim` reassigns without asking. Claiming now goes through
+`sandogasa_bugzilla::claim::resolve_claim`, so the project matrix
+holds: `--claim` claims, `-y` alone declines rather than reassigning
+bugs nobody asked it to, and an unset email skips silently.
+
+**Breaking:** without a terminal and without `-y`, nothing is written.
+The false-positive checks previously closed every detected bug
+unreviewed when piped, while the other two stages refused — the same
+invocation was maximally trusting on one path and maximally cautious
+on the other. Automation that relied on the bulk close must now pass
+`-y`, and `--claim` for the reassignment it previously lost.
+
 ### fedora-cve-triage: run's config is layered and shippable
 
 `run --config` is now optional. Without it the profile is read from
