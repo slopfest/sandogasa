@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.19.0
 
 ### sandogasa-distgit: send a User-Agent
 
@@ -8,6 +8,38 @@ The last reqwest client without one, and it talks to dist-git —
 Fedora's infrastructure tarpits UA-less requests. It now builds through
 `sandogasa_cli::http`, so it picks up the shared timeout and crypto
 provider along with the UA.
+
+### fedora-cve-triage: only `run` triages now (breaking CLI)
+
+The six per-check subcommands — `js-fps`, `cross-ecosystem`,
+`interpreter-fps`, `unshipped-tools`, `fix-version`, `bodhi-check` —
+are removed. `run --check <name>` does what each did, and since
+`[check."<name>"]` can scope a check to its own components, assignees
+and skipped components, nothing was left that only a standalone
+invocation could express. They had already been hidden from `--help`,
+and keeping two entry points in step was the reason several of this
+release's bugs existed at all.
+
+Migration — one run config replaces the per-check ones, with the query
+supplied by flags:
+
+| Was | Now |
+|---|---|
+| `js-fps -f js-fps-folly-stack.toml` | `run --check js-fps` |
+| `bodhi-check -f bodhi-check-salimma.toml` | `run --assignee michel@michel-slm.name --check bodhi-check` |
+| `bodhi-check -f bodhi-check-freerdp.toml` | `run -c freerdp --check bodhi-check` |
+| `fix-version --apply` | `run --check fix-version --apply` |
+| `--close-bugs` | `--apply` |
+
+`--status` is new, overriding the config's `statuses` the way
+`--component` and `--assignee` already override theirs. The old
+`fix-version` and `interpreter-fps` configs swept
+`POST`/`MODIFIED` where the others did not; that divergence looks
+accidental, so the shipped config uses `NEW`/`ASSIGNED` and `--status`
+covers the wider sweep. The eight per-check configs under
+`configs/fedora-cve-triage/` are deleted, leaving the maintainer-
+agnostic `run.toml`; their component lists were the targets of past
+runs rather than configuration, and are now flags.
 
 ### fedora-cve-triage: uniform per-bug review, plus -y (breaking CLI)
 
