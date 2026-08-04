@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### fedora-cve-triage: close bugs whose fix version NVD doesn't have
+
+`bodhi-check` could only work from NVD's CPE data, so a CVE still
+`Awaiting Analysis` was skipped as "No fixed version in NVD" even when
+the fix had shipped weeks earlier — CVE-2026-14266 against 7zip being
+the case in hand, where 7zip-26.02 went stable on 2026-07-01 and the
+CVE was not published until 2026-07-29.
+
+Two ways out, in preference order. A `[fixed_versions]` table in the
+bodhi-check config supplies a version per CVE, consulted only when NVD
+yields nothing, so it never overrides NVD and a stale entry is
+harmless. Failing that, the advisories NVD links to are read for a
+`fixed in <version>` line — ZDI ends every advisory that way, and the
+oss-security posts quoting them inherit it. A scraped version is a
+suggestion, not a decision: it is confirmed at a prompt (default no)
+and merely reported in non-interactive runs, because closing a live
+security bug on parsed prose should not happen unasked. Advisories are
+read once per CVE, however many bugs track it.
+
+The "No fixed version in NVD" list now names the CVE, NVD's analysis
+state and the reference URLs, so it distinguishes "NVD hasn't looked
+yet" from "NVD looked and nothing fixes it", and says where to check.
+
+### sandogasa-nvd: expose analysis state and reference URLs
+
+`CveResponse` gains `vuln_status()` and `reference_urls()`, and
+`CveItem` a `vuln_status` field, so callers can tell an unanalyzed CVE
+from one with no fix and follow its references. `FixedVersion` now
+derives `Clone`, `CveItem` derives `Default`.
+
 ### sandogasa-config: the not-found error names both layers
 
 `load`'s "file not found" error named only the user path, which
