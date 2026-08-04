@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+### fedora-cve-triage: --assignee and --component on every check
+
+Apart from whose queue to sweep, a triage config is generic, so
+`--assignee` (like the existing `--component`) now overrides it on
+`run` and on all six standalone checks. Each flag replaces the
+corresponding config list, since a flag asks a different question than
+the file. `configs/fedora-cve-triage/run.toml` ships as a
+maintainer-agnostic config for exactly this.
+
+`js-fps`, `cross-ecosystem` and `unshipped-tools` previously required
+`components` in their config; it is now optional, since `assignees`
+can narrow the query instead. A config (or invocation) that narrows by
+neither is refused rather than sweeping every CVE bug in the product,
+which also replaces `fix-version`'s narrower "config must list
+'components'" error.
+
+### fedora-cve-triage: one `run` for every classifier
+
+The six classifiers had to be invoked one at a time, in an order the
+operator had to remember, and each did its own Bugzilla search and kept
+its own NVD cache — so the same CVE was fetched once per check against
+a service rate limited to one request every six seconds.
+
+`run` applies them to one bug population in the configured order, the
+first check that claims a bug keeping it. That ordering is the point: a
+bug `js-fps` recognizes as a false positive is never judged against
+Bodhi, and one filed against a branch the package never shipped on is
+moved before its fix is looked for. The default order is `js-fps`,
+`cross-ecosystem`, `interpreter-fps`, `unshipped-tools`,
+`fix-version`, `bodhi-check`; `checks` in the config or `--check` on
+the command line changes it or runs a subset.
+
+Its config states the query once and then each check's settings under
+`[check."<name>"]`. One search and one NVD lookup per CVE now serve
+every check, as do the dist-git spec, branch, Bodhi and
+GitHub-language caches.
+
+Each classifier is now written once and shared: the standalone
+subcommands keep their flags, configs and output, and call the same
+functions `run` does. Every check's own review flow is preserved, so
+`--apply` is as careful as the individual subcommands.
+
+### sandogasa-bodhi: Clone on the response models
+
+`Update`, `Build`, `BodhiRelease` and the types they contain derive
+`Clone`, so a caller can hold an update while consulting another
+cache.
+
 ### fedora-cve-triage: close bugs whose fix version NVD doesn't have
 
 `bodhi-check` could only work from NVD's CPE data, so a CVE still

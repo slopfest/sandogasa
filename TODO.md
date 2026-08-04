@@ -386,3 +386,27 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   lookup). Cross-check against `validate_token` and the actual
   endpoints each `*_report` calls.
 
+
+## fedora-cve-triage
+
+- (2026-07-31) Make `--apply` uniformly per-bug, and add a `-y`
+  override. Today the four false-positive checks review each bug
+  (keep/explain/remove) while `fix-version` and `bodhi-check` are
+  all-or-nothing single confirmations, so one wrong reassignment or
+  ERRATA closure can only be avoided by narrowing the run. Off a TTY
+  the split is worse: `curate_and_close` skips its review and closes
+  every detected false positive, while the other two hit `confirm`'s
+  default of no and write nothing — so the same piped invocation is
+  maximally trusting on one path and maximally cautious on the other.
+  Extend the `sandogasa-review` keep/explain/remove flow to the
+  reassignment and ERRATA paths, then add `-y` meaning "yes to all"
+  consistently. Per the project convention, `-y` without an explicit
+  claim flag must still decline reassignment.
+- (2026-07-31) Add `--skip-component NAME,...` (singular, CSV or
+  repeated) plus an optional `skip_components` config key, so a sweep
+  can exclude packages. `--component` is an allowlist that replaces
+  the configured list, so "everything assigned to me except this one
+  package" is currently inexpressible — it would mean enumerating
+  every other component. Filter after the Bugzilla search rather than
+  expressing NOT in the query, and apply it to `run` and the
+  standalone checks alike.
