@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### fedora-cve-triage: run's config is layered and shippable
+
+`run --config` is now optional. Without it the profile is read from
+`/etc/fedora-cve-triage/run.toml` merged beneath
+`$XDG_CONFIG_HOME/fedora-cve-triage/run.toml`, user winning per key —
+the same layering as the tool's own `config.toml`. A package can
+therefore ship a complete profile (every check's tracker, reason and
+scoping) while a user writes only `assignees = [...]`. An explicit
+`-f` still names one file, unlayered, and with neither present the run
+is refused naming both paths.
+
+The profile could not simply be dropped at
+`/etc/fedora-cve-triage/config.toml`: that path is parsed as the tool's
+own `AppConfig` and would fail on the missing `[bugzilla]` section.
+Supplying the path via `[defaults.run]` doesn't work either, since
+`parse_with_defaults` injects defaults only after a first successful
+parse and a missing required argument fails it.
+
+### sandogasa-config: layered lookup for a differently-named file
+
+`ConfigFile::try_for_tool_file(tool, file_name)` gives the
+`/etc/<tool>/<file>` and `$XDG_CONFIG_HOME/<tool>/<file>` pair for a
+file other than `config.toml`, so a tool can layer a profile without
+hand-rolling XDG resolution. Permissions are enforced only for
+`config.toml`, since such a profile is not where credentials belong.
+
 ### fedora-cve-triage: JS checks route by what the maintainer knows
 
 Three changes to how `js-fps` and `cross-ecosystem` decide, after a run
