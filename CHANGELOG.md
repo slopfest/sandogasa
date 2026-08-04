@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### sandogasa-distgit: send a User-Agent
+
+The last reqwest client without one, and it talks to dist-git —
+Fedora's infrastructure tarpits UA-less requests. It now builds through
+`sandogasa_cli::http`, so it picks up the shared timeout and crypto
+provider along with the UA.
+
 ### fedora-cve-triage: uniform per-bug review, plus -y (breaking CLI)
 
 `--apply`/`--close-bugs` now reviews every bug through the same

@@ -26,15 +26,13 @@
 
 ## Cross-cutting
 
-- (2026-07-22) Send a User-Agent from every HTTP client crate:
-  Fedora's infrastructure tarpits UA-less requests (see
-  DEVELOPMENT.md; discovered via koji-lag). sandogasa-kojihub,
-  -repology, and -forgejo set one; sandogasa-bugzilla, -bodhi,
-  -distgit, and -fasjson do not — add
-  `user_agent(concat!("<crate>/", env!("CARGO_PKG_VERSION")))` to
-  their client builders. Bugzilla/Bodhi/dist-git responses are
-  small (likely below today's tarpit threshold), but that's
-  incidental protection, not a policy.
+- (2026-07-22, mostly done) Send a User-Agent from every HTTP client
+  crate: Fedora's infrastructure tarpits UA-less requests (see
+  DEVELOPMENT.md; discovered via koji-lag). All the reqwest-based
+  crates now set one, most via `sandogasa_cli::http`'s builders.
+  Remaining: `sandogasa-fasjson` shells out to `curl --negotiate`
+  rather than using reqwest, so it inherits curl's UA — pass
+  `--user-agent` there if the tarpit ever reaches it.
 
 ## poi-tracker / sandogasa-pkg-health seam
 

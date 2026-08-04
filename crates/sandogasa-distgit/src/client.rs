@@ -745,18 +745,18 @@ impl DistGitClient {
     }
 }
 
-/// Upper bound on any single HTTP request — a hang-catcher rather than
-/// a latency cap. reqwest's default client has *no* timeout, so a hung
-/// connection would otherwise block forever.
-const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// Build the crate's HTTP client with the standard request timeout.
+/// Build the crate's HTTP client: the shared timeout, crypto provider
+/// and User-Agent. The last matters here — Fedora's infrastructure
+/// tarpits UA-less requests, and this crate talks to dist-git.
 /// Panics only where `Client::new()` would too (TLS backend init).
 fn build_http_client() -> Client {
-    Client::builder()
-        .timeout(DEFAULT_TIMEOUT)
-        .build()
-        .expect("build reqwest client")
+    sandogasa_cli::http::builder(concat!(
+        env!("CARGO_PKG_NAME"),
+        "/",
+        env!("CARGO_PKG_VERSION")
+    ))
+    .build()
+    .expect("build reqwest client")
 }
 
 #[cfg(test)]
