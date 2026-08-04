@@ -45,11 +45,22 @@ impl ConfigFile {
     /// For optional reads (e.g. `[defaults]` lookup) where a
     /// homeless environment should mean "no config", not a crash.
     pub fn try_for_tool(tool_name: &str) -> Option<Self> {
-        let path = dirs::config_dir()?.join(tool_name).join("config.toml");
+        Self::try_for_tool_file(tool_name, "config.toml")
+    }
+
+    /// The same layered pair for a differently-named file in those
+    /// directories: `/etc/<tool>/<file>` beneath
+    /// `$XDG_CONFIG_HOME/<tool>/<file>`.
+    ///
+    /// For a config a package can ship system-wide while users
+    /// override it per key — a tool's run profile, say — rather than
+    /// the tool's own `config.toml`. Permissions are not enforced,
+    /// since such a file is not where credentials belong.
+    pub fn try_for_tool_file(tool_name: &str, file_name: &str) -> Option<Self> {
         Some(Self {
-            path,
-            secure: true,
-            system_path: Some(system_config_path(tool_name)),
+            path: dirs::config_dir()?.join(tool_name).join(file_name),
+            secure: file_name == "config.toml",
+            system_path: Some(Path::new("/etc").join(tool_name).join(file_name)),
         })
     }
 
@@ -383,6 +394,52 @@ mod tests {
             .to_string();
         assert!(err.contains(&path.display().to_string()), "{err}");
         assert!(!err.contains(" or "), "{err}");
+    }
+
+    #[test]
+    fn try_for_tool_file_layers_a_named_file() {
+        // Same directories as config.toml, different file name — for a
+        // profile a package ships while users override it per key.
+        let cf = ConfigFile::try_for_tool_file("t", "run.toml").expect("config dir");
+        assert!(cf.path().ends_with("t/run.toml"));
+        let sources = cf.describe_sources();
+        assert!(sources.starts_with("/etc/t/run.toml + "), "{sources}");
+        assert!(sources.ends_with("t/run.toml"), "{sources}");
+    }
+
+    #[test]
+    fn try_for_tool_file_only_hardens_config_toml() {
+        // A run profile is not where credentials belong, so its
+        // permissions are left alone; config.toml's are not.
+        assert!(
+            !ConfigFile::try_for_tool_file("t", "run.toml")
+                .unwrap()
+                .secure
+        );
+        assert!(
+            ConfigFile::try_for_tool_file("t", "config.toml")
+                .unwrap()
+                .secure
+        );
+        assert!(ConfigFile::try_for_tool("t").unwrap().secure);
+    }
+
+    #[test]
+    fn named_file_merges_the_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        let system = dir.path().join("system-run.toml");
+        let user = dir.path().join("user-run.toml");
+        std::fs::write(&system, "products = [\"Fedora\"]\nstatuses = [\"NEW\"]\n").unwrap();
+        std::fs::write(&user, "statuses = [\"ASSIGNED\"]\n").unwrap();
+        let merged = ConfigFile::from_path(user)
+            .with_system_path(system)
+            .read_merged()
+            .unwrap()
+            .expect("a layer exists");
+        // The user file wins per key; untouched keys survive.
+        assert_eq!(merged["statuses"].as_array().unwrap().len(), 1);
+        assert_eq!(merged["statuses"][0].as_str(), Some("ASSIGNED"));
+        assert_eq!(merged["products"][0].as_str(), Some("Fedora"));
     }
 
     #[test]
