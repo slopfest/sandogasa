@@ -80,6 +80,24 @@
 - Symlink the root LICENSE file into each crate subdirectory so it is included when publishing to crates.io
 - All dependencies (external and internal) are declared in `[workspace.dependencies]` in the root `Cargo.toml`, then referenced as `{ workspace = true }` in member crates
 
+## Documentation
+- A README describes the tool **as it is now**. Keep out of it: rationale for
+  recent changes, comparisons to how something used to behave, and arguments for
+  why a default or a number is what it is. Those belong in `CHANGELOG.md` (what
+  changed and why) and the tool's `DEVELOPMENT.md` (design decisions and rules
+  future work must follow). Tells that a README has drifted into justifying
+  rather than describing: "used to", "previously", "which matters because", "is
+  the point", "not something to do"
+- Don't open a README with the one narrow use case that prompted the work.
+  Describe the general problem the tool addresses, then let the specific cases
+  follow — a tool that handles five kinds of misfiled CVE shouldn't read as if
+  it only handles bundled JavaScript
+- When a change lands, put the reasoning in the CHANGELOG entry, put any rule
+  future work must follow in `DEVELOPMENT.md`, and give the README only the
+  resulting behavior. Documentation that survived a behavior change unedited is
+  worse than none: check whether an existing section now describes something
+  that is no longer true
+
 ## fedrq quirks
 - Koji side tag repos (`-r @koji:<tag>`) only index binary RPMs, not source RPMs. `fedrq subpkgs -S` returns nothing for side tags. To query side tag contents, use `fedrq pkgs -r @koji:<tag> '*'` (but this includes inherited packages) or resolve binary RPM names via `koji buildinfo <nvr>` first
 - Use `@koji-src:<tag>` to query source RPMs in a Koji repo (e.g. BuildRequires). ebranch's resolve command does this automatically when given `--source-repo @koji:<tag>`
