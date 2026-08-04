@@ -402,11 +402,3 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   reassignment and ERRATA paths, then add `-y` meaning "yes to all"
   consistently. Per the project convention, `-y` without an explicit
   claim flag must still decline reassignment.
-- (2026-07-31) Add `--skip-component NAME,...` (singular, CSV or
-  repeated) plus an optional `skip_components` config key, so a sweep
-  can exclude packages. `--component` is an allowlist that replaces
-  the configured list, so "everything assigned to me except this one
-  package" is currently inexpressible — it would mean enumerating
-  every other component. Filter after the Bugzilla search rather than
-  expressing NOT in the query, and apply it to `run` and the
-  standalone checks alike.

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### fedora-cve-triage: --skip-component excludes packages from a run
+
+`--component` is an allowlist, so "everything assigned to me except
+this one package" meant enumerating every other component — which
+defeats the point of an assignee sweep. `--skip-component NAME,...`
+(and `skip_components` in the config) subtracts instead, on `run` and
+every standalone check.
+
+The exclusion is applied after the Bugzilla search, since its
+component filter is a set to match rather than one to subtract from,
+and matching is case-insensitive. A run that drops bugs says so and
+names the components, because a quietly shorter run looks like a clean
+one. Being a subtraction, a skip list does not satisfy the requirement
+that `components` or `assignees` narrow the query.
+
 ### fedora-cve-triage: --help leads with `run`
 
 The nine subcommands were listed as one alphabetical block, which gave
