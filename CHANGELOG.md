@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### fedora-cve-triage: --help leads with `run`
+
+The nine subcommands were listed as one alphabetical block, which gave
+`run` no more prominence than the six checks it supersedes. Those
+checks are now grouped below the options instead, in the order `run`
+applies them, leaving `config`, `run` and `search` in Commands. clap 4
+has no help heading for subcommands, so this is `hide` plus an
+`after_help` section; the checks themselves are unchanged and
+`help <check>` still works.
+
 ### fedora-cve-triage: --assignee and --component on every check
 
 Apart from whose queue to sweep, a triage config is generic, so
