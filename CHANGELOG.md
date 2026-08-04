@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### fedora-cve-triage: unshipped-tools no longer guesses at absence
+
+The check closes a bug when the package doesn't ship the affected
+tool, but it treated "cannot tell" as "not shipped" — so
+`uutils-coreutils`, whose spec ships `%{_bindir}/uu_*`, looked like it
+shipped no `mv` and CVE-2026-35354 was flagged as a false positive.
+Globs cannot be reported by name, so their absence from the binary
+list meant nothing, and the same held for a spec that could not be
+fetched at all (a retired branch, a renamed component).
+
+Both now bow out with a note naming the bug, leaving the call to a
+human. Matching is also looser in the safe direction: one
+`<word><-|_>` prefix is stripped, so `uu_mv` counts as shipping `mv`
+where the binaries *are* named. `sandogasa-distgit` gains
+`spec::binaries_are_globbed` for the first part.
+
 ### fedora-cve-triage: list the changes next to the confirmation
 
 Every resolution stage now prints the bugs it is about to act on

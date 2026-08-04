@@ -147,8 +147,26 @@ pub fn extract_package_name(spec: &str) -> Option<String> {
 /// Returns the final path component of each binary, with `%{name}` expanded
 /// to the package name from the `Name:` field.
 pub fn shipped_binaries(spec: &str) -> Vec<String> {
+    walk_files_binaries(spec).0
+}
+
+/// Whether any `%files` entry names binaries by glob, e.g.
+/// `%{_bindir}/uu_*`.
+///
+/// [`shipped_binaries`] cannot report such an entry — there is no name
+/// to report — so its absence from that list means "unknown", not "not
+/// shipped". Callers deciding whether a package ships some tool have
+/// to check this before concluding anything from an absence.
+pub fn binaries_are_globbed(spec: &str) -> bool {
+    walk_files_binaries(spec).1
+}
+
+/// Walk the `%files` sections once, collecting the binaries that can
+/// be named and noting whether any entry was a glob.
+fn walk_files_binaries(spec: &str) -> (Vec<String>, bool) {
     let name = extract_package_name(spec);
     let mut binaries = Vec::new();
+    let mut globbed = false;
     let mut in_files = false;
 
     for line in spec.lines() {
@@ -171,6 +189,11 @@ pub fn shipped_binaries(spec: &str) -> Vec<String> {
             continue;
         }
 
+        if is_globbed_binary(trimmed) {
+            globbed = true;
+            continue;
+        }
+
         if let Some(binary) = extract_binary(trimmed, name.as_deref())
             && !binaries.contains(&binary)
         {
@@ -178,7 +201,20 @@ pub fn shipped_binaries(spec: &str) -> Vec<String> {
         }
     }
 
-    binaries
+    (binaries, globbed)
+}
+
+/// Whether a `%files` line names binaries by glob rather than by name.
+fn is_globbed_binary(line: &str) -> bool {
+    ["%{_bindir}/", "%{_libexecdir}/"]
+        .iter()
+        .any(|prefix| match line.find(prefix) {
+            Some(pos) => line[pos + prefix.len()..]
+                .split_whitespace()
+                .next()
+                .is_some_and(|entry| entry.contains('*') || entry.contains('?')),
+            None => false,
+        })
 }
 
 /// Check if a line starts a new RPM spec section (ending the current %files block).
@@ -641,6 +677,44 @@ Version: 1.0
     }
 
     // ---- extract_binary ----
+
+    #[test]
+    fn binaries_are_globbed_detects_an_unenumerable_files_entry() {
+        // The real uutils-coreutils shape: one named binary and the
+        // rest behind a glob, so shipped_binaries can only see the one.
+        let spec = "\
+Name:           rust-coreutils
+
+%files       -n uutils-coreutils
+%{_bindir}/uutils-coreutils
+%{_bindir}/uu_*
+";
+        assert!(binaries_are_globbed(spec));
+        assert_eq!(shipped_binaries(spec), vec!["uutils-coreutils"]);
+    }
+
+    #[test]
+    fn binaries_are_not_globbed_when_every_entry_is_named() {
+        let spec = "\
+Name:           xmlstarlet
+
+%files
+%{_bindir}/xmllint
+%{_libexecdir}/xmlstarlet/helper
+";
+        assert!(!binaries_are_globbed(spec));
+        // A glob outside %files, or in another directory, is not a
+        // binary glob.
+        let other = "\
+Name:           foo
+
+%files
+%{_datadir}/foo/*
+%{_bindir}/foo
+";
+        assert!(!binaries_are_globbed(other));
+        assert_eq!(shipped_binaries(other), vec!["foo"]);
+    }
 
     #[test]
     fn extract_binary_bindir() {
