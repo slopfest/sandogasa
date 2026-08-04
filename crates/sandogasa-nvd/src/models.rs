@@ -12,11 +12,17 @@ pub struct Vulnerability {
     pub cve: CveItem,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct CveItem {
     pub id: String,
     #[serde(default, rename = "sourceIdentifier")]
     pub source_identifier: String,
+    /// NVD's analysis state, e.g. `Analyzed`, `Awaiting Analysis`,
+    /// `Received`. Only an `Analyzed` CVE is expected to carry
+    /// `configurations`, so this distinguishes "NVD says nothing
+    /// fixes it" from "NVD hasn't looked yet".
+    #[serde(default, rename = "vulnStatus")]
+    pub vuln_status: String,
     #[serde(default)]
     pub descriptions: Vec<CveDescription>,
     #[serde(default)]
@@ -92,7 +98,7 @@ const JS_KEYWORDS: &[&str] = &[
 ];
 
 /// A fixed version extracted from CPE match data.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FixedVersion {
     /// The product name from the CPE string (e.g. "freerdp").
     pub product: String,
@@ -160,10 +166,33 @@ impl CveResponse {
         out
     }
 
+    /// NVD's analysis state for the first CVE in the response — see
+    /// [`CveItem::vuln_status`]. Empty when absent.
+    pub fn vuln_status(&self) -> &str {
+        self.vulnerabilities
+            .first()
+            .map(|v| v.cve.vuln_status.as_str())
+            .unwrap_or_default()
+    }
+
+    /// Every reference URL NVD lists. For a CVE still awaiting
+    /// analysis these are often the only place a fixed version is
+    /// recorded (a vendor advisory, an oss-security post).
+    pub fn reference_urls(&self) -> Vec<&str> {
+        self.vulnerabilities
+            .iter()
+            .flat_map(|v| &v.cve.references)
+            .map(|r| r.url.as_str())
+            .collect()
+    }
+
     /// Extract fixed versions from CPE match data.
     ///
     /// Looks for vulnerable CPE matches with `versionEndExcluding` set,
     /// which indicates the first version that fixes the vulnerability.
+    /// A CVE that NVD has not analyzed yet carries no `configurations`
+    /// at all, so this is empty — check [`Self::vuln_status`] to tell
+    /// that apart from "analyzed, and nothing fixes it".
     pub fn fixed_versions(&self) -> Vec<FixedVersion> {
         self.vulnerabilities
             .iter()
@@ -380,6 +409,7 @@ mod tests {
                 cve: CveItem {
                     id: "CVE-2026-0001".to_string(),
                     source_identifier: String::new(),
+                    vuln_status: String::new(),
                     descriptions: vec![],
                     configurations: vec![Configuration {
                         nodes: vec![Node {
@@ -400,6 +430,7 @@ mod tests {
                 cve: CveItem {
                     id: "CVE-2025-13836".to_string(),
                     source_identifier: String::new(),
+                    vuln_status: String::new(),
                     descriptions: vec![],
                     configurations: vec![Configuration {
                         nodes: vec![Node {
@@ -438,6 +469,7 @@ mod tests {
                 cve: CveItem {
                     id: "CVE-2026-0002".to_string(),
                     source_identifier: source_id.to_string(),
+                    vuln_status: String::new(),
                     descriptions: vec![],
                     configurations: vec![],
                     references: vec![],
@@ -452,6 +484,7 @@ mod tests {
                 cve: CveItem {
                     id: "CVE-2026-0003".to_string(),
                     source_identifier: String::new(),
+                    vuln_status: String::new(),
                     descriptions: vec![CveDescription {
                         lang: lang.to_string(),
                         value: text.to_string(),
@@ -469,6 +502,7 @@ mod tests {
                 cve: CveItem {
                     id: "CVE-2026-0004".to_string(),
                     source_identifier: String::new(),
+                    vuln_status: String::new(),
                     descriptions: vec![],
                     configurations: vec![],
                     references: urls
@@ -486,6 +520,7 @@ mod tests {
                 cve: CveItem {
                     id: "CVE-2026-0000".to_string(),
                     source_identifier: String::new(),
+                    vuln_status: String::new(),
                     descriptions: vec![],
                     configurations: vec![],
                     references: vec![],
@@ -689,6 +724,7 @@ mod tests {
                 cve: CveItem {
                     id: "CVE-2026-1234".to_string(),
                     source_identifier: String::new(),
+                    vuln_status: String::new(),
                     descriptions: vec![],
                     configurations: vec![Configuration {
                         nodes: vec![Node {
@@ -820,6 +856,7 @@ mod tests {
                 cve: CveItem {
                     id: "CVE-2026-27951".to_string(),
                     source_identifier: String::new(),
+                    vuln_status: String::new(),
                     descriptions: vec![],
                     configurations: vec![Configuration {
                         nodes: vec![Node {
@@ -846,6 +883,7 @@ mod tests {
                 cve: CveItem {
                     id: "CVE-2026-0001".to_string(),
                     source_identifier: String::new(),
+                    vuln_status: String::new(),
                     descriptions: vec![],
                     references: vec![],
                     configurations: vec![Configuration {
@@ -872,6 +910,7 @@ mod tests {
                 cve: CveItem {
                     id: "CVE-2026-0001".to_string(),
                     source_identifier: String::new(),
+                    vuln_status: String::new(),
                     descriptions: vec![],
                     references: vec![],
                     configurations: vec![Configuration {
@@ -898,12 +937,39 @@ mod tests {
     }
 
     #[test]
+    fn awaiting_analysis_has_no_versions_but_keeps_its_references() {
+        // The real CVE-2026-14266 shape: NVD had not analyzed it, so
+        // there are no configurations to read a fixed version from,
+        // and the version was only stated in a referenced advisory.
+        let resp: CveResponse = serde_json::from_str(
+            r#"{"vulnerabilities":[{"cve":{
+                 "id":"CVE-2026-14266",
+                 "vulnStatus":"Awaiting Analysis",
+                 "references":[
+                   {"url":"https://www.zerodayinitiative.com/advisories/ZDI-26-444/"},
+                   {"url":"http://www.openwall.com/lists/oss-security/2026/07/17/12"}]}}]}"#,
+        )
+        .unwrap();
+        assert!(resp.fixed_versions().is_empty());
+        assert_eq!(resp.vuln_status(), "Awaiting Analysis");
+        assert_eq!(resp.reference_urls().len(), 2);
+        assert!(resp.reference_urls()[0].contains("ZDI-26-444"));
+    }
+
+    #[test]
+    fn vuln_status_is_empty_when_absent() {
+        assert_eq!(empty_cve().vuln_status(), "");
+        assert!(empty_cve().reference_urls().is_empty());
+    }
+
+    #[test]
     fn fixed_versions_multiple_ranges() {
         let resp = CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
                     id: "CVE-2026-27951".to_string(),
                     source_identifier: String::new(),
+                    vuln_status: String::new(),
                     descriptions: vec![],
                     references: vec![],
                     configurations: vec![Configuration {
