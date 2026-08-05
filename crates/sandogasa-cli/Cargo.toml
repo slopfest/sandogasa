@@ -17,6 +17,9 @@ serde = { workspace = true, optional = true }
 toml = { workspace = true }
 url = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [features]
 # HTTP plumbing shared by the API-client crates (the `http` module):
 # preconfigured reqwest builders and uniform status/JSON handling.

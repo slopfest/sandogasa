@@ -109,8 +109,8 @@ Each tool ships a man page at `tools/<tool>/man/<tool>.1`, covering the
 tool and all of its subcommands in one page. The pages are generated
 from the same clap definitions that produce `--help`, so the two cannot
 disagree; each tool's test suite fails if its page stops documenting a
-flag. Regenerate them with `make man` after changing a command-line
-interface.
+flag or falls behind the current version. Regenerate them with `make
+man` after changing a command-line interface or bumping the version.
 
 The pages are committed and included in the published crates, so
 packagers can install them without building or running the binaries:

@@ -26,13 +26,19 @@
 //!
 //! `scripts/gen-man.sh` (`SANDOGASA_UPDATE_MAN=1 cargo test
 //! --workspace`) rewrites every page in place. Without that
-//! variable the test asserts only that the committed page documents
-//! every visible flag and subcommand, not that it is byte-identical
-//! to what this version of clap_mangen would produce: a distro
-//! build runs `%check` against the clap_mangen *it* packages, and
-//! must not fail over roff formatting that changed between patch
-//! releases. Exact regeneration belongs to the release flow, where
-//! `git diff` shows any wording that moved.
+//! variable the test asserts that the committed page documents every
+//! visible flag and subcommand and carries the current version — not
+//! that it is byte-identical to what this version of clap_mangen
+//! would produce: a distro build runs `%check` against the
+//! clap_mangen *it* packages, and must not fail over roff formatting
+//! that changed between patch releases. Exact regeneration belongs
+//! to the release flow, where `git diff` shows any wording that
+//! moved.
+//!
+//! Because the version is checked, bumping the workspace version
+//! makes every page's test fail until the pages are regenerated —
+//! which is deliberate: it puts "regenerate after the version bump"
+//! in the test suite instead of only in the release checklist.
 
 use std::io::Write;
 use std::path::Path;
@@ -40,19 +46,31 @@ use std::path::Path;
 use clap::{Command, CommandFactory};
 use clap_mangen::Man;
 
-/// The `.TH` source field. Deliberately carries no version: it
-/// would rewrite every committed page on each release bump, and
-/// `--version` already reports it.
-const SOURCE: &str = "sandogasa";
-
-/// The `.TH` manual field.
+/// The `.TH` manual field: the header's centre text.
 const MANUAL: &str = "Sandogasa Manual";
 
-/// Render `cmd` and its visible subcommands as one roff man page.
-pub fn render(cmd: Command) -> Vec<u8> {
+/// The `.TH` source field: the footer's left text, naming the
+/// project and its version the way `man bash` shows "GNU Bash 5.3".
+fn source(cmd: &Command) -> String {
+    match cmd.get_version() {
+        Some(version) => format!("sandogasa {version}"),
+        None => "sandogasa".to_string(),
+    }
+}
+
+/// Render `cmd` and its visible subcommands as one roff man page,
+/// dated `date` (`YYYY-MM-DD`, shown in the footer's centre).
+pub fn render_dated(cmd: Command, date: &str) -> Vec<u8> {
     let mut cmd = cmd;
     cmd.build();
-    let man = Man::new(cmd.clone()).source(SOURCE).manual(MANUAL);
+    // The date must be set: clap_mangen writes an unset date as bare
+    // whitespace, which groff then parses as an *absent* field, so
+    // every later `.TH` field shifts down one — the source lands in
+    // the date's place and the manual in the source's.
+    let man = Man::new(cmd.clone())
+        .date(date)
+        .source(source(&cmd))
+        .manual(MANUAL);
     let mut out = Vec::new();
     // The title block carries the page's one roff preamble; every
     // later block repeats it and has it stripped.
@@ -71,30 +89,42 @@ pub fn render(cmd: Command) -> Vec<u8> {
     out
 }
 
+/// Render `cmd` as a man page dated today.
+pub fn render(cmd: Command) -> Vec<u8> {
+    render_dated(cmd, &today())
+}
+
+/// Today's date in UTC, `YYYY-MM-DD`.
+fn today() -> String {
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
 /// Regenerate the page at `path` when `SANDOGASA_UPDATE_MAN` is
 /// set; otherwise assert that the committed page documents every
-/// visible flag and subcommand of `C`.
+/// visible flag and subcommand of `C` and carries the current
+/// version.
 ///
 /// Panics with the regeneration command on any mismatch — it is
 /// called from tests, where a panic is the failure.
 pub fn check<C: CommandFactory>(path: &str) {
-    let page = render(C::command());
+    let source = source(&C::command());
     if std::env::var_os("SANDOGASA_UPDATE_MAN").is_some() {
-        let path = Path::new(path);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
-        }
-        std::fs::write(path, &page).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        update::<C>(Path::new(path), &source);
         return;
     }
     let committed = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}\n{REGENERATE}"));
     // Roff escapes hyphens as `\-`, and wraps names in `\fB...\fR`;
-    // dropping every backslash leaves the flag and command names
-    // findable without reimplementing the escaping rules.
+    // dropping every backslash leaves the flag, command and version
+    // names findable without reimplementing the escaping rules.
     let flat = String::from_utf8_lossy(&committed).replace('\\', "");
+    let (title, _) = split_title(&flat);
     assert!(
-        flat.contains(".TH "),
+        !title.is_empty(),
         "{path} does not look like a man page\n{REGENERATE}"
+    );
+    assert!(
+        title.contains(&source),
+        "{path} does not name `{source}` — the version moved on\n{REGENERATE}"
     );
     for token in tokens(&C::command()) {
         assert!(
@@ -102,6 +132,41 @@ pub fn check<C: CommandFactory>(path: &str) {
             "{path} does not document `{token}`\n{REGENERATE}"
         );
     }
+}
+
+/// Write the page for `C` to `path`, keeping the committed file when
+/// only its date would change.
+///
+/// Every page is regenerated at once, so stamping today's date
+/// unconditionally would rewrite all of them whenever one tool's
+/// flags change. Keeping a page whose content still matches leaves
+/// `git diff` showing the tools that actually changed.
+fn update<C: CommandFactory>(path: &Path, source: &str) {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    }
+    let page = render(C::command());
+    if let Ok(committed) = std::fs::read_to_string(path) {
+        let fresh = String::from_utf8_lossy(&page);
+        let (old_title, old_body) = split_title(&committed);
+        let (_, new_body) = split_title(&fresh);
+        if old_body == new_body && old_title.contains(source) {
+            return;
+        }
+    }
+    std::fs::write(path, &page).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+}
+
+/// Split a page into its `.TH` line and everything after it. An
+/// empty title means no `.TH` line was found.
+fn split_title(page: &str) -> (&str, &str) {
+    let Some(start) = page.find(".TH ") else {
+        return ("", page);
+    };
+    let end = page[start..]
+        .find('\n')
+        .map_or(page.len(), |n| start + n + 1);
+    (&page[start..end], &page[end..])
 }
 
 /// `expect` message for writes into a `Vec`, which cannot fail.
@@ -232,13 +297,81 @@ mod tests {
     }
 
     #[test]
-    fn render_omits_the_version_from_the_title() {
-        let page = String::from_utf8(render(cmd().version("1.2.3"))).unwrap();
-        let title = page.lines().find(|l| l.starts_with(".TH ")).unwrap();
-        assert!(title.contains("sandogasa"), "{title}");
-        assert!(!title.contains("1.2.3"), "{title}");
+    fn render_titles_carry_the_date_and_version() {
+        let page = String::from_utf8(render_dated(cmd().version("1.2.3"), "2026-08-05")).unwrap();
+        let (title, _) = split_title(&page);
+        // `.TH <title> <section> <date> <source> <manual>` — all five
+        // fields present and in order, so groff does not shift them.
+        assert_eq!(
+            title.trim_end(),
+            r#".TH demo 1 2026-08-05 "sandogasa 1.2.3" "Sandogasa Manual""#,
+            "{title}"
+        );
         // `--version` is still a documented flag.
         assert!(page.contains("\\-\\-version"), "{page}");
+    }
+
+    #[test]
+    fn render_without_a_version_still_names_the_project() {
+        let page = String::from_utf8(render_dated(cmd(), "2026-08-05")).unwrap();
+        let (title, _) = split_title(&page);
+        assert!(title.contains(" sandogasa "), "{title}");
+    }
+
+    /// A `CommandFactory` for [`cmd`], since `update` is generic over
+    /// one the way the tools' `Cli` structs are.
+    struct Demo;
+
+    impl clap::CommandFactory for Demo {
+        fn command() -> Command {
+            cmd().version("1.2.3")
+        }
+        fn command_for_update() -> Command {
+            Self::command()
+        }
+    }
+
+    #[test]
+    fn update_keeps_a_page_whose_content_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("demo.1");
+        let source = source(&Demo::command());
+
+        // A page generated in the past, still current apart from its
+        // date, is left alone — one tool's change must not restamp
+        // every other tool's page.
+        let old = render_dated(Demo::command(), "2020-01-01");
+        std::fs::write(&path, &old).unwrap();
+        update::<Demo>(&path, &source);
+        assert_eq!(std::fs::read(&path).unwrap(), old);
+
+        // A stale version rewrites it, even with the body unchanged.
+        let stale = String::from_utf8(old.clone())
+            .unwrap()
+            .replace("sandogasa 1.2.3", "sandogasa 1.0.0");
+        std::fs::write(&path, &stale).unwrap();
+        update::<Demo>(&path, &source);
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("sandogasa 1.2.3"), "{written}");
+        assert!(!written.contains("2020-01-01"), "{written}");
+    }
+
+    #[test]
+    fn update_writes_a_missing_page() {
+        let dir = tempfile::tempdir().unwrap();
+        // A nested path: the tool's `man/` directory may not exist.
+        let path = dir.path().join("man").join("demo.1");
+        update::<Demo>(&path, &source(&Demo::command()));
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains(".TH demo 1"), "{written}");
+    }
+
+    #[test]
+    fn split_title_finds_the_th_line() {
+        let (title, body) = split_title(".ie x\n.TH a 1 b\nrest\n");
+        assert_eq!(title, ".TH a 1 b\n");
+        assert_eq!(body, "rest\n");
+        assert_eq!(split_title("no title\n"), ("", "no title\n"));
     }
 
     #[test]

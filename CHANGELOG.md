@@ -29,6 +29,29 @@ off by default and enabled only as a dev-dependency, so shipped
 binaries do not carry the roff renderer. New workspace dependency:
 `clap_mangen`.
 
+### Man page footers name the version
+
+The pages carried no version, and their `.TH` fields were shifted:
+clap_mangen writes an unset date as bare whitespace, which groff reads
+as an *absent* field, so every later field moved down one — the source
+was parsed as the date and the manual as the source. The footer read
+`Sandogasa Manual | sandogasa | koji-lag(1)` and the header fell back
+to groff's generic "General Commands Manual".
+
+Setting the date fixes the shift, and the footer now reads the way
+`man bash` does — `sandogasa 0.19.0` at the left, the page's date in
+the centre, `koji-lag(1)` at the right — with "Sandogasa Manual" in the
+header.
+
+Because the version is in the page, `man_page_matches_cli` also checks
+it, so a page that falls behind the workspace version is a test
+failure. Regeneration therefore has to follow the version bump at
+release time, and forgetting it can no longer ship a stale footer.
+
+Regenerating preserves the committed date of any page whose content
+has not otherwise changed, so a one-tool CLI change does not restamp
+the other fifteen.
+
 ### A Makefile for discoverability
 
 The workspace's checks were spread across `scripts/` and a `cov` alias

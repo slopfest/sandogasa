@@ -56,8 +56,8 @@ untrue, fix that section in the same commit.
 
 **Regenerated man pages** when you change a command-line interface.
 Each tool's `man/<tool>.1` is generated from its clap definition, never
-hand-edited: run `scripts/gen-man.sh` and commit the result. A test per
-tool fails if a page stops documenting a flag, so this is not optional.
+hand-edited: run `make man` and commit the result. A test per tool fails
+if a page stops documenting a flag, so this is not optional.
 Prose for the man page's DESCRIPTION belongs in a doc comment on the
 tool's `Cli` struct, where it also becomes the long `--help` output.
 
