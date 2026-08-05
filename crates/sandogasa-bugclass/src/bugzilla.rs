@@ -28,6 +28,18 @@ pub fn extract_new_version(summary: &str, component: &str) -> Option<String> {
     (!version.is_empty()).then(|| version.to_string())
 }
 
+/// Extract the package name from a package-review bug summary of the
+/// form `"Review Request: <package> - <description>"`. The package
+/// name is the first word after the prefix; a summary that does not
+/// start with it is not a review request.
+pub fn review_request_package(summary: &str) -> Option<String> {
+    const PREFIX: &str = "review request:";
+    let summary = summary.trim();
+    let (prefix, rest) = summary.split_at_checked(PREFIX.len())?;
+    prefix.eq_ignore_ascii_case(PREFIX).then_some(())?;
+    Some(rest.split_whitespace().next()?.to_string())
+}
+
 /// Classify a Bugzilla bug into a [`BugKind`].
 ///
 /// Returns `Review` for bugs filed against the "Package Review"
@@ -172,6 +184,36 @@ mod tests {
             extract_new_version("otherpkg-1.0 is available", "foo"),
             None
         );
+    }
+
+    #[test]
+    fn review_request_package_handles_real_summaries() {
+        // Package names contain dashes themselves, so the split is on
+        // whitespace, not on the description separator.
+        assert_eq!(
+            review_request_package(
+                "Review Request: rust-linktime-proc-macro - Proc-macro helpers \
+                 for linktime crates"
+            )
+            .as_deref(),
+            Some("rust-linktime-proc-macro")
+        );
+        // No description, an em dash separator, and lowercased prefix.
+        assert_eq!(
+            review_request_package("Review Request: rust-macrotest").as_deref(),
+            Some("rust-macrotest")
+        );
+        assert_eq!(
+            review_request_package("Review request: python-foo — a thing").as_deref(),
+            Some("python-foo")
+        );
+    }
+
+    #[test]
+    fn review_request_package_rejects_other_summaries() {
+        assert_eq!(review_request_package("rust-foo-1.0 is available"), None);
+        assert_eq!(review_request_package("Review Request:"), None);
+        assert_eq!(review_request_package("short"), None);
     }
 
     #[test]

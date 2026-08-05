@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### ebranch: karma voting understands review requests
+
+`check-update --give-karma` decided per-bug feedback automatically only
+for release-monitoring bugs, whose summary carries a version to compare
+against the update's builds. A new package's Review Request bug has no
+version, so every one of them fell through to the interactive prompt —
+exactly the case a `--type newpackage` update is made of, where each
+bug names one of the packages being shipped.
+
+A review request is now auto-voted `+1` when the update builds the
+package under review, with `update ships <nvr>, the package under
+review` as the recorded reason. A review of a package the update does
+not build gets no automatic verdict: it may belong to a different
+update, so it is still put to the user rather than voted down.
+
+New in `sandogasa-bugclass`: `bugzilla::review_request_package`, which
+extracts the package name from a `Review Request: <package> -
+<description>` summary. The prefix match is case-insensitive and the
+name is the first word after it, since package names contain dashes of
+their own.
+
 ### Docs: CONTRIBUTING.md, and AGENTS.md for any agent
 
 A new `CONTRIBUTING.md` states what a contribution needs: one

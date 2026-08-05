@@ -6,7 +6,9 @@
 //! way the Bodhi web UI does. Release-monitoring update-request
 //! bugs ("<pkg>-<version> is available") are auto-voted by
 //! comparing the requested version against what the update's
-//! builds deliver; anything else is put to the user.
+//! builds deliver, and review requests ("Review Request: <pkg>")
+//! by whether the update builds that package; anything else is
+//! put to the user.
 //!
 //! Authentication reuses the bodhi CLI's cached OIDC session
 //! (see `sandogasa_bodhi::auth`) — authenticate once with any
@@ -72,10 +74,21 @@ fn fmt_karma(karma: i32) -> String {
 ///
 /// A release-monitoring title `"<pkg>-<version> is available"`
 /// matching one of the update's packages gets +1 when the build
-/// delivers at least the requested version and -1 otherwise.
-/// Returns `None` for anything else — the caller should ask the
-/// user.
+/// delivers at least the requested version and -1 otherwise. A
+/// review request `"Review Request: <pkg> - ..."` gets +1 when the
+/// update builds that package. Returns `None` for anything else —
+/// the caller should ask the user.
 fn auto_bug_karma(title: &str, builds: &[(String, String)]) -> Option<(i32, String)> {
+    // A package review is answered by shipping the package under
+    // review; there is no version in the title to compare. If the
+    // update does not build that package, we have nothing to say
+    // about the review and leave it to the user.
+    if let Some(pkg) = sandogasa_bugclass::bugzilla::review_request_package(title) {
+        return builds
+            .iter()
+            .find(|(p, _)| *p == pkg)
+            .map(|(p, v)| (1, format!("update ships {p}-{v}, the package under review")));
+    }
     for (pkg, build_version) in builds {
         let Some(bug_version) = sandogasa_bugclass::bugzilla::extract_new_version(title, pkg)
         else {
@@ -451,7 +464,7 @@ async fn run_async(
                 bug_id: bug.bug_id,
                 title: bug.title.clone(),
                 karma: 0,
-                note: "not an update-request bug; skipped under --yes".to_string(),
+                note: "no automatic verdict; skipped under --yes".to_string(),
             }),
             None => manual.push(bug),
         }
@@ -682,6 +695,28 @@ mod tests {
             auto_bug_karma("rust-quick-xml-0.41.0 is available", &builds()).unwrap();
         assert_eq!(karma, -1);
         assert!(note.contains('<'), "{note}");
+    }
+
+    #[test]
+    fn auto_bug_karma_upvotes_package_review() {
+        // A newpackage update answers the review request for the
+        // package it ships.
+        let (karma, note) = auto_bug_karma(
+            "Review Request: rust-quick-xml - High performance XML reader and writer",
+            &builds(),
+        )
+        .unwrap();
+        assert_eq!(karma, 1);
+        assert!(note.contains("rust-quick-xml-0.40.1"), "{note}");
+    }
+
+    #[test]
+    fn auto_bug_karma_ignores_review_for_another_package() {
+        // Nothing to say about a review of a package this update does
+        // not build — leave it to the user rather than voting -1.
+        assert!(
+            auto_bug_karma("Review Request: rust-macrotest - Testing macros", &builds()).is_none()
+        );
     }
 
     #[test]

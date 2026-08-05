@@ -280,13 +280,17 @@ when no issues remain, `-1` when reverse deps break or the updated
 packages have unsatisfied deps, `0` when the analysis was incomplete —
 and you are prompted with that suggestion as the default (Enter accepts,
 or override with `+1`/`-1`/`0`). Listed bugs get per-bug
-feedback like the Bodhi web UI: update-request bugs
+feedback like the Bodhi web UI. Update-request bugs
 (`<pkg>-<version> is available`) are auto-voted `+1` when the
 update delivers at least the requested version and `-1`
-otherwise; for any other bug you are prompted (`+1`/`-1`/`0`).
+otherwise. Review requests (`Review Request: <pkg> - ...`) are
+auto-voted `+1` when the update builds the package under review —
+the usual case for a `--type newpackage` update. For any other
+bug, including a review of a package this update does not build,
+you are prompted (`+1`/`-1`/`0`).
 The full voting plan is shown for confirmation before anything
-is posted; `--yes` skips the prompts (non-update bugs then get
-`0`). The posted comment is the full Markdown check report with
+is posted; `--yes` skips the prompts (bugs with no automatic
+verdict then get `0`). The posted comment is the full Markdown check report with
 a provenance footer (ebranch version and the command invocation);
 `--comment <TEXT>` adds reviewer notes as a section near the top,
 and you are prompted for notes interactively when the flag is
