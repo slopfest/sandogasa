@@ -59,6 +59,7 @@ anstyle = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
+clap_mangen = "0.2"
 dashmap = "6"
 dirs = "6"
 emojis = "0.8"

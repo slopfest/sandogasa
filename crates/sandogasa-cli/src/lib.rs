@@ -6,6 +6,8 @@ pub mod date;
 pub mod defaults;
 #[cfg(feature = "http")]
 pub mod http;
+#[cfg(feature = "man")]
+pub mod man;
 
 pub use defaults::parse_with_defaults;
 

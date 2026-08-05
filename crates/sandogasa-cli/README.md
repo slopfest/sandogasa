@@ -15,6 +15,15 @@ standard user agent and timeout set, and `ok`/`json_ok` (plus their
 error naming the request, status, and body. It is off by default so
 tools that do no networking don't pull in reqwest.
 
+The optional `man` feature adds a `man` module that renders a clap
+`Command` as a single roff man page, with each subcommand as a `.SS`
+subsection so one page documents a whole CLI. `check::<Cli>(path)`
+regenerates the page at `path` when `SANDOGASA_UPDATE_MAN` is set and
+otherwise asserts that the committed page still documents every
+visible flag and subcommand — the tools call it from a test, since a
+binary's clap type is private to it. The feature is off by default and
+enabled as a dev-dependency, so no binary carries the renderer.
+
 The `defaults` module implements the workspace-wide flag-defaults
 pattern: `parse_with_defaults::<Cli>(tool)` parses the command line
 like `Cli::parse()`, then applies a `[defaults]` table from the

@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 chrono = { workspace = true }
 clap = { workspace = true }
+clap_mangen = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 rustls = { workspace = true }
 sandogasa-config = { workspace = true }
@@ -21,3 +22,8 @@ url = { workspace = true }
 # preconfigured reqwest builders and uniform status/JSON handling.
 # Off by default so network-free tools don't pull in reqwest.
 http = ["dep:reqwest", "dep:serde"]
+
+# Man page generation from the clap definition (the `man` module).
+# Off by default and enabled as a dev-dependency by the tools, so
+# shipped binaries do not carry the roff renderer.
+man = ["dep:clap_mangen"]
