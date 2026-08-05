@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Release tooling: verify a publish landed
+
+`make check-published` (`scripts/check-published.sh`) checks every
+publishable workspace crate against crates.io at the workspace version,
+listing anything missing and printing the re-run command. `cargo ws
+publish` can stop partway — a 429, an interrupted upload, a crate whose
+packaging fails — and a tag pointing at a half-published workspace is
+worse than a tag that arrives late, so this now runs between publishing
+and tagging. It takes an optional version argument to check a past
+release.
+
+The check exists as a script because the query has a trap: crates.io
+requires a User-Agent under its API data access policy and answers
+`200` with an error body when one is absent, so an ad-hoc `curl` check
+without a UA reports *every* crate as missing — indistinguishable from
+a failed publish.
+
+The release notes in `AGENTS.md` also now record that `--publish-interval`
+has to be computed rather than reused: every crate shares the workspace
+version, so the number bumped per release is the full member count,
+which is well past crates.io's burst of 30. There is a floor of roughly
+`N - 30` minutes on the run whatever interval is passed. And publishing
+rewrites `Cargo.lock` without the workspace's dev-dependencies, which
+should be discarded rather than committed.
+
 ## v0.19.1
 
 ### Man pages for every tool

@@ -56,6 +56,10 @@ semver-checks: ## Check the library crates for semver breakage
 packaging-test: ## Run the tests as a distro build does (offline, no distro tools)
 	./scripts/packaging-test.sh
 
+.PHONY: check-published
+check-published: ## Verify every crate reached crates.io (run after publishing)
+	./scripts/check-published.sh
+
 .PHONY: srht-schemas
 srht-schemas: ## Refresh the vendored sr.ht GraphQL schemas (needs network)
 	./scripts/update-srht-schemas.sh
