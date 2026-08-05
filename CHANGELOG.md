@@ -29,6 +29,18 @@ off by default and enabled only as a dev-dependency, so shipped
 binaries do not carry the roff renderer. New workspace dependency:
 `clap_mangen`.
 
+### A Makefile for discoverability
+
+The workspace's checks were spread across `scripts/` and a `cov` alias
+in `.cargo/config.toml`, which meant knowing they existed before you
+could run them. A root `Makefile` collects them: `make help` (the
+default target) lists everything, `make check` runs what a pull request
+should pass, and `make release-checks` adds the audit, semver and
+coverage gates. `make man` regenerates the man pages.
+
+It is a task runner, not a build system — cargo still builds and
+installs, and distro packaging drives cargo directly without this file.
+
 ### ebranch: karma voting understands review requests
 
 `check-update --give-karma` decided per-bug feedback automatically only

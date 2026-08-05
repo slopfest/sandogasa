@@ -69,18 +69,20 @@ what broke, with a migration hint.
 Before opening a pull request, please also run:
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets
-cargo test --workspace
-./scripts/gen-man.sh           # if you changed any CLI
-./scripts/packaging-test.sh    # if you touched tests or dependencies
+make check      # fmt --check, clippy, test, packaging-test
+make man        # if you changed any CLI
 ```
 
-`scripts/packaging-test.sh` re-runs the suite the way a packaging build
-does: no external network, and the distro tools (`koji`, `fedrq`, `gbp`,
-`dput`, …) replaced by failing stubs. Workspace coverage is expected to
-stay at or above 80% line coverage, checked with `cargo cov` at release
-time.
+`make help` lists every target — `make` on its own does the same. The
+Makefile is a task runner over cargo and `scripts/`, not a build system:
+building and installing go through cargo, as distro packaging does.
+`make check` runs what a pull request should pass; the individual pieces
+are `make fmt`, `make clippy`, `make test` and `make packaging-test`.
+
+The packaging test re-runs the suite the way a packaging build does: no
+external network, and the distro tools (`koji`, `fedrq`, `gbp`, `dput`,
+…) replaced by failing stubs. Workspace coverage is expected to stay at
+or above 80% line coverage, checked with `make cov` at release time.
 
 ## Commits
 
