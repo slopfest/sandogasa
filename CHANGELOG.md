@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.19.1
 
 ### Man pages for every tool
 
