@@ -1,0 +1,37 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH koji-diff 1  sandogasa "Sandogasa Manual"
+.SH NAME
+koji\-diff \- Koji build log differ — compare buildroot and build logs between two Koji builds
+.SH SYNOPSIS
+\fBkoji\-diff\fR [\fB\-\-instance\fR] [\fB\-\-arch\fR] [\fB\-\-log\-lines\fR] [\fB\-\-json\fR] [\fB\-\-debug\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIREF1\fR> <\fIREF2\fR> 
+.SH DESCRIPTION
+Koji build log differ — compare buildroot and build logs between two Koji builds
+.SH OPTIONS
+.TP
+\fB\-\-instance\fR \fI<HOST>\fR
+Koji instance hostname (required for bare IDs)
+.TP
+\fB\-\-arch\fR \fI<ARCH>\fR [default: x86_64]
+Architecture to compare
+.TP
+\fB\-\-log\-lines\fR \fI<N>\fR [default: 50]
+build.log tail lines on failure
+.TP
+\fB\-\-json\fR
+Output as JSON
+.TP
+\fB\-\-debug\fR
+Show debug info (log snippets, file listings)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.TP
+<\fIREF1\fR>
+First build reference (Koji URL, build:<ID>, or task:<ID>)
+.TP
+<\fIREF2\fR>
+Second build reference (Koji URL, build:<ID>, or task:<ID>)

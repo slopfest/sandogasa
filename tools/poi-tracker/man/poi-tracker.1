@@ -1,0 +1,445 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH poi-tracker 1  sandogasa "Sandogasa Manual"
+.SH NAME
+poi\-tracker \- Package\-of\-interest tracker for Fedora, EPEL, and CentOS SIGs
+.SH SYNOPSIS
+\fBpoi\-tracker\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Package\-of\-interest tracker for Fedora, EPEL, and CentOS SIGs
+.SH OPTIONS
+.TP
+\fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
+Path(s) to inventory TOML file(s)
+.TP
+\fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
+Directory to scan for *.toml inventory files
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS poi-tracker add
+\fBpoi\-tracker add\fR [\fB\-\-poc\fR] [\fB\-\-reason\fR] [\fB\-\-team\fR] [\fB\-\-task\fR] [\fB\-\-rpm\fR] [\fB\-\-workload\fR] [\fB\-\-track\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR> 
+.PP
+Add a package to the inventory
+.TP
+\fB\-\-poc\fR \fI<POC>\fR
+Point of contact ("Name <email>")
+.TP
+\fB\-\-reason\fR \fI<REASON>\fR
+Reason for tracking
+.TP
+\fB\-\-team\fR \fI<TEAM>\fR
+Team responsible
+.TP
+\fB\-\-task\fR \fI<TASK>\fR
+Internal task/ticket reference
+.TP
+\fB\-\-rpm\fR \fI<RPM>\fR
+Binary RPM subpackage(s) to track (comma\-separated or repeated)
+.TP
+\fB\-\-workload\fR \fI<WORKLOAD>\fR
+Workload tag(s) (comma\-separated or repeated)
+.TP
+\fB\-\-track\fR \fI<TRACK>\fR
+Track branch for hs\-relmon (e.g. upstream, fedora\-rawhide)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fINAME\fR>
+Source RPM name
+.SS poi-tracker adopt
+\fBpoi\-tracker adopt\fR [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-\-api\-token\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Adopt orphaned inventory packages on dist\-git
+.TP
+\fB\-\-pattern\fR \fI<GLOB,...>\fR
+Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
+.TP
+\fB\-\-start\-from\fR \fI<NAME>\fR
+Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
+.TP
+\fB\-\-end\-with\fR \fI<NAME>\fR
+Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a sub\-range
+.TP
+\fB\-\-api\-token\fR \fI<API_TOKEN>\fR
+Dist\-git API token with the `modify_project` ACL (or set PAGURE_API_TOKEN, or run `poi\-tracker config`)
+.RS
+May also be specified with the \fBPAGURE_API_TOKEN\fR environment variable. 
+.RE
+.TP
+\fB\-\-dry\-run\fR
+Preview orphaned packages without adopting them
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Adopt every orphaned match without per\-package prompts
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker config
+\fBpoi\-tracker config\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Configure poi\-tracker (Bugzilla API key, etc.)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker export
+\fBpoi\-tracker export\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.PP
+Export inventory to another format
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker export content-resolver
+\fBpoi\-tracker export content\-resolver\fR [\fB\-\-workload\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Export as content\-resolver YAML
+.TP
+\fB\-\-workload\fR \fI<WORKLOAD>\fR
+Export only this workload
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
+Output file (default: {workload\-name}.yaml)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker export hs-relmon
+\fBpoi\-tracker export hs\-relmon\fR [\fB\-\-workload\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-distros\fR] [\fB\-\-track\fR] [\fB\-\-prune\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Export as hs\-relmon manifest TOML
+.TP
+\fB\-\-workload\fR \fI<WORKLOAD>\fR
+Filter by workload
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
+Output file (default: stdout)
+.TP
+\fB\-\-distros\fR \fI<DISTROS>\fR [default: upstream,fedora,centos,hyperscale]
+Default distros list
+.TP
+\fB\-\-track\fR \fI<TRACK>\fR [default: upstream]
+Default tracking branch
+.TP
+\fB\-\-prune\fR
+Remove manifest entries not in the inventory
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker find
+\fBpoi\-tracker find\fR [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR> 
+.PP
+Find which inventory file(s) contain a package
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fINAME\fR>
+Source RPM name to search for
+.SS poi-tracker import
+\fBpoi\-tracker import\fR [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-private\-fields\fR] [\fB\-\-workload\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIJSON_FILE\fR> 
+.PP
+Import from legacy JSON format
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR [default: inventory.toml]
+Output path for TOML inventory
+.TP
+\fB\-\-private\-fields\fR \fI<FIELD,...>\fR
+Fields to mark as private (stripped on export)
+.TP
+\fB\-\-workload\fR \fI<WORKLOAD,...>\fR
+Workload tag(s) to apply to all imported packages
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIJSON_FILE\fR>
+Path to legacy JSON inventory file
+.SS poi-tracker prune-retired
+\fBpoi\-tracker prune\-retired\fR [\fB\-\-branch\fR] [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-dry\-run\fR] [\fB\-\-remove\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Mark (or remove) packages no longer carried on any active branch (dist\-git project gone or retired everywhere)
+.TP
+\fB\-\-branch\fR \fI<BRANCH,...>\fR
+Active branch(es) to check against (CSV or repeated; e.g. `rawhide,f44,epel9`). Default: queried from Bodhi\*(Aqs active releases, plus rawhide
+.TP
+\fB\-\-pattern\fR \fI<GLOB,...>\fR
+Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
+.TP
+\fB\-\-start\-from\fR \fI<NAME>\fR
+Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
+.TP
+\fB\-\-end\-with\fR \fI<NAME>\fR
+Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a sub\-range
+.TP
+\fB\-j\fR, \fB\-\-jobs\fR \fI<JOBS>\fR [default: 8]
+Parallel dist\-git queries
+.TP
+\fB\-\-dry\-run\fR
+Preview without modifying the inventory
+.TP
+\fB\-\-remove\fR
+Delete matched packages from the inventory instead of marking them `unshipped` (the default; marking survives re\-syncs and lets triage\-retired keep closing bugs)
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip the confirmation prompt
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker remove
+\fBpoi\-tracker remove\fR [\fB\-\-rpm\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR> 
+.PP
+Remove a package from the inventory
+.TP
+\fB\-\-rpm\fR \fI<RPM>\fR
+Remove specific binary RPM(s) instead of the whole package
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fINAME\fR>
+Source RPM name to remove
+.SS poi-tracker semver-audit
+\fBpoi\-tracker semver\-audit\fR [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-\-batch\fR] [\fB\-\-non\-breaking\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Audit pending upstream updates by semver impact, flagging which are non\-breaking, breaking, or need review
+.TP
+\fB\-\-pattern\fR \fI<GLOB,...>\fR
+Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
+.TP
+\fB\-\-start\-from\fR \fI<NAME>\fR
+Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
+.TP
+\fB\-\-end\-with\fR \fI<NAME>\fR
+Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a sub\-range
+.TP
+\fB\-\-batch\fR [\fI<EMAIL>\fR]
+Batch mode: one Bugzilla query for bugs assigned to or CC\*(Aqing EMAIL (default: the configured email), matched against the inventory locally. Much faster on a large inventory, but misses bugs where EMAIL is neither assignee nor CC\*(Aqd
+.TP
+\fB\-\-non\-breaking\fR
+Show only non\-breaking updates
+.TP
+\fB\-\-json\fR
+Output as JSON instead of human\-readable text
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker show
+\fBpoi\-tracker show\fR [\fB\-\-workload\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Show inventory contents
+.TP
+\fB\-\-workload\fR \fI<WORKLOAD>\fR
+Filter by workload
+.TP
+\fB\-\-json\fR
+Output as JSON instead of human\-readable
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker sync-distgit
+\fBpoi\-tracker sync\-distgit\fR [\fB\-\-user\fR] [\fB\-\-group\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-fast\fR] [\fB\-\-no\-groups\fR] [\fB\-\-include\-group\fR] [\fB\-\-exclude\-group\fR] [\fB\-\-exclude\fR] [\fB\-\-pattern\fR] [\fB\-\-start\-pattern\fR] [\fB\-\-end\-pattern\fR] [\fB\-\-auto\-prefix\fR] [\fB\-\-no\-auto\-prefix\fR] [\fB\-\-prune\fR] [\fB\-\-mark\-unshipped\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-per\-page\fR] [\fB\-\-workload\fR] [\fB\-\-name\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Sync inventory from Fedora dist\-git (Pagure) access
+.TP
+\fB\-\-user\fR \fI<USER>\fR
+Import packages for this dist\-git user
+.TP
+\fB\-\-group\fR \fI<GROUP>\fR
+Import packages for this dist\-git group
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR [default: inventory.toml]
+Output TOML file
+.TP
+\fB\-\-fast\fR
+One owner\-alias request instead of a prefix scan. Direct owner/admin/commit only: collaborator/ticket grants are missed (and removed under \-\-prune). Implies \-\-no\-groups
+.TP
+\fB\-\-no\-groups\fR
+Exclude group\-only access
+.TP
+\fB\-\-include\-group\fR \fI<GROUP,...>\fR
+Keep only these groups (CSV or repeated)
+.TP
+\fB\-\-exclude\-group\fR \fI<GROUP,...>\fR
+Drop these groups (CSV or repeated)
+.TP
+\fB\-\-exclude\fR \fI<GLOB,...>\fR
+Exclude packages by glob (CSV or repeated)
+.TP
+\fB\-\-pattern\fR \fI<PATTERN>\fR
+Name pattern for a single patterned query
+.TP
+\fB\-\-start\-pattern\fR \fI<PREFIX>\fR
+Start the prefix scan at this prefix
+.TP
+\fB\-\-end\-pattern\fR \fI<PREFIX>\fR
+Stop the prefix scan before this prefix
+.TP
+\fB\-\-auto\-prefix\fR
+Query by a\-z/0\-9 prefix (\-\-user default)
+.TP
+\fB\-\-no\-auto\-prefix\fR
+Single query; may 504 for a \-\-user sync
+.TP
+\fB\-\-prune\fR
+Remove packages no longer in dist\-git results
+.TP
+\fB\-\-mark\-unshipped\fR
+Mark packages added by this sync that are already retired everywhere (like prune\-retired)
+.TP
+\fB\-j\fR, \fB\-\-jobs\fR \fI<JOBS>\fR [default: 8]
+Parallel dist\-git queries for \-\-mark\-unshipped
+.TP
+\fB\-\-per\-page\fR \fI<PER_PAGE>\fR [default: 100]
+Pagure API page size
+.TP
+\fB\-\-workload\fR \fI<WORKLOAD,...>\fR
+Workload tags (CSV or repeated)
+.TP
+\fB\-\-name\fR \fI<NAME>\fR
+Inventory name (default: user/group)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker sync-gitlab
+\fBpoi\-tracker sync\-gitlab\fR [\fB\-\-url\fR] [\fB\-\-preset\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-exclude\fR] [\fB\-\-prune\fR] [\fB\-\-workload\fR] [\fB\-\-mark\-unshipped\fR] [\fB\-\-centos\-release\fR] [\fB\-\-name\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Sync inventory from a GitLab RPM group
+.TP
+\fB\-\-url\fR \fI<URL>\fR
+GitLab group URL
+.TP
+\fB\-\-preset\fR \fI<PRESET>\fR
+Preset: hyperscale, proposed\-updates, centos\-stream
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR [default: inventory.toml]
+Output TOML file
+.TP
+\fB\-\-exclude\fR \fI<GLOB,...>\fR
+Exclude packages by glob (CSV or repeated)
+.TP
+\fB\-\-prune\fR
+Remove packages no longer in GitLab results
+.TP
+\fB\-\-workload\fR \fI<WORKLOAD,...>\fR
+Workload tags (CSV or repeated)
+.TP
+\fB\-\-mark\-unshipped\fR
+Mark archived projects with no released CBS build as unshipped (Hyperscale: RHEL or Stream; Proposed Updates: Stream only)
+.TP
+\fB\-\-centos\-release\fR \fI<REL,...>\fR [default: 9,10]
+CentOS releases to count as currently shipped (CSV)
+.TP
+\fB\-\-name\fR \fI<NAME>\fR
+Inventory name (default: derived from group)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker triage-retired
+\fBpoi\-tracker triage\-retired\fR [\fB\-\-branch\fR] [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-\-batch\fR] [\fB\-\-all\-reporters\fR] [\fB\-\-mark\fR] [\fB\-\-api\-key\fR] [\fB\-\-claim\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Close open release\-monitoring bugs as CANTFIX for any inventoried package that is retired on a dist\-git branch
+.TP
+\fB\-\-branch\fR \fI<BRANCH,...>\fR [default: rawhide]
+Dist\-git branch(es) to check retirement against (CSV or repeated; e.g. `rawhide`, `epel10`, `f43`). Each branch scopes its own Bugzilla search — a `rawhide` retirement closes the Fedora/rawhide bug, an `epel9` retirement closes the Fedora EPEL/epel9 bug. A package retired on one branch but live on another only has bugs closed where it\*(Aqs dead
+.TP
+\fB\-\-pattern\fR \fI<GLOB,...>\fR
+Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
+.TP
+\fB\-\-start\-from\fR \fI<NAME>\fR
+Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
+.TP
+\fB\-\-end\-with\fR \fI<NAME>\fR
+Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a sub\-range
+.TP
+\fB\-\-batch\fR [\fI<EMAIL>\fR]
+Batch mode: one Bugzilla query for bugs assigned to or CC\*(Aqing EMAIL (default: the configured email), matched against the inventory locally. Much faster on a large inventory, but misses bugs where EMAIL is neither assignee nor CC\*(Aqd
+.TP
+\fB\-\-all\-reporters\fR
+Close ALL open bugs on retired branches, not just release\-monitoring (Anitya) bugs. Use with care: this closes human\-filed bugs (CVEs, FTBFS, etc.) too
+.TP
+\fB\-\-mark\fR
+Record results in the inventory\*(Aqs `retired_on` markers (adds and removes; needs a single \-i file)
+.TP
+\fB\-\-api\-key\fR \fI<API_KEY>\fR
+Bugzilla API key (or set BUGZILLA_API_KEY env var, or run `poi\-tracker config`)
+.RS
+May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
+.RE
+.TP
+\fB\-\-claim\fR
+Also set `assigned_to` on each closed bug to the Bugzilla email set via `poi\-tracker config`. Interactive mode prompts; with `\-y` this flag is the only way to claim
+.TP
+\fB\-\-dry\-run\fR
+Preview closures without applying them
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip the confirmation prompt
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker triage-updates
+\fBpoi\-tracker triage\-updates\fR [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-\-batch\fR] [\fB\-\-close\-stale\fR] [\fB\-\-skip\-stale\fR] [\fB\-\-api\-key\fR] [\fB\-\-claim\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Triage open release\-monitoring bugs for inventoried packages by bumping their Bugzilla priority to match the inventory
+.TP
+\fB\-\-pattern\fR \fI<GLOB,...>\fR
+Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
+.TP
+\fB\-\-start\-from\fR \fI<NAME>\fR
+Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
+.TP
+\fB\-\-end\-with\fR \fI<NAME>\fR
+Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a sub\-range
+.TP
+\fB\-\-batch\fR [\fI<EMAIL>\fR]
+Batch mode: one Bugzilla query for bugs assigned to or CC\*(Aqing EMAIL (default: the configured email), matched against the inventory locally. Much faster on a large inventory, but misses bugs where EMAIL is neither assignee nor CC\*(Aqd
+.TP
+\fB\-\-close\-stale\fR
+Close partially\-addressed bugs without asking
+.TP
+\fB\-\-skip\-stale\fR
+Skip the Bodhi check for already\-built updates
+.TP
+\fB\-\-api\-key\fR \fI<API_KEY>\fR
+Bugzilla API key (or set BUGZILLA_API_KEY env var, or run `poi\-tracker config`)
+.RS
+May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
+.RE
+.TP
+\fB\-\-claim\fR
+Also set `assigned_to` on each closed bug to the Bugzilla email set via `poi\-tracker config`. Interactive mode prompts; with `\-y` this flag is the only way to claim
+.TP
+\fB\-\-dry\-run\fR
+Preview updates without applying them
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip the confirmation prompt
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker validate
+\fBpoi\-tracker validate\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Validate inventory consistency
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

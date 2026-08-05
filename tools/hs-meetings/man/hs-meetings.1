@@ -1,0 +1,64 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH hs-meetings 1  sandogasa "Sandogasa Manual"
+.SH NAME
+hs\-meetings \- List and sync CentOS Hyperscale SIG meeting archives from meetbot
+.SH SYNOPSIS
+\fBhs\-meetings\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+List and sync CentOS Hyperscale SIG meeting archives from meetbot
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS hs-meetings list
+\fBhs\-meetings list\fR [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-period\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+List SIG meetings recorded on meetbot
+.TP
+\fB\-t\fR, \fB\-\-topic\fR \fI<TOPIC>\fR [default: centos\-hyperscale\-sig]
+Meetbot search topic (matches meeting topic substrings)
+.TP
+\fB\-\-since\fR \fI<SINCE>\fR
+Start date filter (inclusive, YYYY\-MM\-DD)
+.TP
+\fB\-\-until\fR \fI<UNTIL>\fR
+End date filter (inclusive, YYYY\-MM\-DD, default: today)
+.TP
+\fB\-\-period\fR \fI<PERIOD>\fR
+Calendar period filter — e.g. `2026`, `2026Q1`, `2026H1`
+.TP
+\fB\-\-json\fR
+Emit JSON instead of the human\-readable table
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS hs-meetings sync
+\fBhs\-meetings sync\fR <\fB\-f\fR|\fB\-\-file\fR> [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-period\fR] [\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Sync SIG meetings into a tool\-managed markdown list file
+.TP
+\fB\-f\fR, \fB\-\-file\fR \fI<PATH>\fR
+Path to the tool\-managed meetings list file
+.TP
+\fB\-t\fR, \fB\-\-topic\fR \fI<TOPIC>\fR [default: centos\-hyperscale\-sig]
+Meetbot search topic
+.TP
+\fB\-\-since\fR \fI<SINCE>\fR
+Start date filter (inclusive, YYYY\-MM\-DD)
+.TP
+\fB\-\-until\fR \fI<UNTIL>\fR
+End date filter (inclusive, YYYY\-MM\-DD, default: today)
+.TP
+\fB\-\-period\fR \fI<PERIOD>\fR
+Calendar period filter — e.g. `2026`, `2026Q1`, `2026H1`
+.TP
+\fB\-\-dry\-run\fR
+Print planned changes without writing
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

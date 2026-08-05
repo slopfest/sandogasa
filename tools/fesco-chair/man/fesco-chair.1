@@ -1,0 +1,102 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH fesco-chair 1  sandogasa "Sandogasa Manual"
+.SH NAME
+fesco\-chair \- FESCo meeting chair helper — agenda email, day\-of script, summary email
+.SH SYNOPSIS
+\fBfesco\-chair\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+FESCo meeting chair helper — agenda email, day\-of script, summary email
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS fesco-chair agenda
+\fBfesco\-chair agenda\fR [\fB\-\-date\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Compose the meeting announcement email from the tracker
+.TP
+\fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
+Meeting date (default: the coming Tuesday)
+.TP
+\fB\-\-voted\fR \fI<N>\fR
+Force ticket(s) into Discussed and Voted (repeat/CSV)
+.TP
+\fB\-\-followup\fR \fI<N>\fR
+Force ticket(s) into Followups (repeat/CSV)
+.TP
+\fB\-\-new\fR \fI<N>\fR
+Force ticket(s) into New business (repeat/CSV)
+.TP
+\fB\-\-docs\fR \fI<N>\fR
+Add fesco/docs issue/PR(s) to the agenda (repeat/CSV)
+.TP
+\fB\-\-history\fR \fI<N>\fR
+Past meetings scanned for followups (default 12)
+.TP
+\fB\-\-json\fR
+Machine\-readable JSON output
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS fesco-chair config
+\fBfesco\-chair config\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Store the Forgejo API token (interactive)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS fesco-chair script
+\fBfesco\-chair script\fR [\fB\-\-date\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Day\-of checklist plus the meetbot command script
+.TP
+\fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
+Meeting date (default: the coming Tuesday)
+.TP
+\fB\-\-voted\fR \fI<N>\fR
+Force ticket(s) into Discussed and Voted (repeat/CSV)
+.TP
+\fB\-\-followup\fR \fI<N>\fR
+Force ticket(s) into Followups (repeat/CSV)
+.TP
+\fB\-\-new\fR \fI<N>\fR
+Force ticket(s) into New business (repeat/CSV)
+.TP
+\fB\-\-docs\fR \fI<N>\fR
+Add fesco/docs issue/PR(s) to the agenda (repeat/CSV)
+.TP
+\fB\-\-history\fR \fI<N>\fR
+Past meetings scanned for followups (default 12)
+.TP
+\fB\-\-json\fR
+Machine\-readable JSON output
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS fesco-chair summary
+\fBfesco\-chair summary\fR [\fB\-\-date\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Compose the post\-meeting summary email from the minutes
+.TP
+\fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
+Meeting date (default: today)
+.TP
+\fB\-\-json\fR
+Machine\-readable JSON output
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

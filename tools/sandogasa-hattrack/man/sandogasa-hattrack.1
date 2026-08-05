@@ -1,0 +1,472 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH sandogasa-hattrack 1  sandogasa "Sandogasa Manual"
+.SH NAME
+sandogasa\-hattrack \- Look up a Fedora contributor\*(Aqs activity across services
+.SH SYNOPSIS
+\fBsandogasa\-hattrack\fR [\fB\-\-json\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Look up a Fedora contributor\*(Aqs activity across services
+.SH OPTIONS
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-\-tz\-source\fR \fI<TZ_SOURCE>\fR [default: auto]
+Source for tzdb\*(Aqs zone1970.tab (country lookup table). `auto` picks the newer of system + bundled
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto
+.IP \(bu 2
+system
+.IP \(bu 2
+bundled
+.RE
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Colorize output. `auto` = TTY + NO_COLOR\-aware
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
+Working\-hours range `START\-END` (24h local). Outside is dimmed
+.TP
+\fB\-\-no\-holidays\fR
+Skip the Nager.Date public\-holiday lookup
+.TP
+\fB\-\-refresh\-holidays\fR
+Force\-refetch holiday data from Nager.Date even when a cached copy is present
+.TP
+\fB\-\-now\fR \fI<NOW>\fR
+Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS sandogasa-hattrack bodhi
+\fBsandogasa\-hattrack bodhi\fR [\fB\-\-json\fR] [\fB\-\-url\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
+.PP
+Show a contributor\*(Aqs recent Bodhi updates and comments
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-\-url\fR \fI<URL>\fR [default: https://bodhi.fedoraproject.org]
+Bodhi instance base URL
+.TP
+\fB\-\-tz\-source\fR \fI<TZ_SOURCE>\fR [default: auto]
+Source for tzdb\*(Aqs zone1970.tab (country lookup table). `auto` picks the newer of system + bundled
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto
+.IP \(bu 2
+system
+.IP \(bu 2
+bundled
+.RE
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Colorize output. `auto` = TTY + NO_COLOR\-aware
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
+Working\-hours range `START\-END` (24h local). Outside is dimmed
+.TP
+\fB\-\-no\-holidays\fR
+Skip the Nager.Date public\-holiday lookup
+.TP
+\fB\-\-refresh\-holidays\fR
+Force\-refetch holiday data from Nager.Date even when a cached copy is present
+.TP
+\fB\-\-now\fR \fI<NOW>\fR
+Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIUSERNAME\fR>
+Bodhi/FAS username to look up
+.SS sandogasa-hattrack bugzilla
+\fBsandogasa\-hattrack bugzilla\fR [\fB\-\-email\fR] [\fB\-\-json\fR] [\fB\-\-no\-fas\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-url\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIUSERNAME\fR] 
+.PP
+Show a contributor\*(Aqs recent Bugzilla activity
+.TP
+\fB\-\-email\fR \fI<EMAIL>\fR
+Email address(es) to search for. Repeat for multiple: \-\-email a@x.org \-\-email b@y.org
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-\-no\-fas\fR
+Skip FASJSON lookup, only search username@fedoraproject.org
+.TP
+\fB\-\-tz\-source\fR \fI<TZ_SOURCE>\fR [default: auto]
+Source for tzdb\*(Aqs zone1970.tab (country lookup table). `auto` picks the newer of system + bundled
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto
+.IP \(bu 2
+system
+.IP \(bu 2
+bundled
+.RE
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Colorize output. `auto` = TTY + NO_COLOR\-aware
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-\-url\fR \fI<URL>\fR [default: https://bugzilla.redhat.com]
+Bugzilla instance base URL
+.TP
+\fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
+Working\-hours range `START\-END` (24h local). Outside is dimmed
+.TP
+\fB\-\-no\-holidays\fR
+Skip the Nager.Date public\-holiday lookup
+.TP
+\fB\-\-refresh\-holidays\fR
+Force\-refetch holiday data from Nager.Date even when a cached copy is present
+.TP
+\fB\-\-now\fR \fI<NOW>\fR
+Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+[\fIUSERNAME\fR]
+FAS username to look up (used to discover email via FASJSON)
+.SS sandogasa-hattrack distgit
+\fBsandogasa\-hattrack distgit\fR [\fB\-\-json\fR] [\fB\-\-url\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
+.PP
+Show a contributor\*(Aqs recent dist\-git activity
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-\-url\fR \fI<URL>\fR [default: https://src.fedoraproject.org]
+Dist\-git instance base URL
+.TP
+\fB\-\-tz\-source\fR \fI<TZ_SOURCE>\fR [default: auto]
+Source for tzdb\*(Aqs zone1970.tab (country lookup table). `auto` picks the newer of system + bundled
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto
+.IP \(bu 2
+system
+.IP \(bu 2
+bundled
+.RE
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Colorize output. `auto` = TTY + NO_COLOR\-aware
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
+Working\-hours range `START\-END` (24h local). Outside is dimmed
+.TP
+\fB\-\-no\-holidays\fR
+Skip the Nager.Date public\-holiday lookup
+.TP
+\fB\-\-refresh\-holidays\fR
+Force\-refetch holiday data from Nager.Date even when a cached copy is present
+.TP
+\fB\-\-now\fR \fI<NOW>\fR
+Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIUSERNAME\fR>
+FAS/Pagure username to look up
+.SS sandogasa-hattrack discourse
+\fBsandogasa\-hattrack discourse\fR [\fB\-\-json\fR] [\fB\-\-url\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
+.PP
+Show a contributor\*(Aqs Discourse profile and activity
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-\-url\fR \fI<URL>\fR [default: https://discussion.fedoraproject.org]
+Discourse instance base URL
+.TP
+\fB\-\-tz\-source\fR \fI<TZ_SOURCE>\fR [default: auto]
+Source for tzdb\*(Aqs zone1970.tab (country lookup table). `auto` picks the newer of system + bundled
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto
+.IP \(bu 2
+system
+.IP \(bu 2
+bundled
+.RE
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Colorize output. `auto` = TTY + NO_COLOR\-aware
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
+Working\-hours range `START\-END` (24h local). Outside is dimmed
+.TP
+\fB\-\-no\-holidays\fR
+Skip the Nager.Date public\-holiday lookup
+.TP
+\fB\-\-refresh\-holidays\fR
+Force\-refetch holiday data from Nager.Date even when a cached copy is present
+.TP
+\fB\-\-now\fR \fI<NOW>\fR
+Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIUSERNAME\fR>
+Discourse username to look up
+.SS sandogasa-hattrack last-seen
+\fBsandogasa\-hattrack last\-seen\fR [\fB\-\-email\fR] [\fB\-\-json\fR] [\fB\-\-no\-fas\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-list\fR] [\fB\-\-max\-pages\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-skip\fR] [\fB\-\-only\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
+.PP
+Summary of a contributor\*(Aqs last activity across all services
+.TP
+\fB\-\-email\fR \fI<EMAIL>\fR
+Email address(es) for Bugzilla/Mailman. Repeat for multiple: \-\-email a@x.org \-\-email b@y.org
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-\-no\-fas\fR
+Skip FASJSON lookup for email discovery
+.TP
+\fB\-\-tz\-source\fR \fI<TZ_SOURCE>\fR [default: auto]
+Source for tzdb\*(Aqs zone1970.tab (country lookup table). `auto` picks the newer of system + bundled
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto
+.IP \(bu 2
+system
+.IP \(bu 2
+bundled
+.RE
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Colorize output. `auto` = TTY + NO_COLOR\-aware
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-\-list\fR \fI<LIST>\fR [default: devel@lists.fedoraproject.org]
+Mailing list(s) to search for sender ID
+.TP
+\fB\-\-max\-pages\fR \fI<MAX_PAGES>\fR [default: 200]
+Max pages to scan mailing list archives
+.TP
+\fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
+Working\-hours range `START\-END` (24h local). Outside is dimmed
+.TP
+\fB\-\-no\-holidays\fR
+Skip the Nager.Date public\-holiday lookup
+.TP
+\fB\-\-skip\fR \fI<SKIP>\fR
+Skip these services (comma\-separated, repeatable). Mailman is the slowest, so `\-\-skip mailman` is the common speed\-up when a user doesn\*(Aqt post to lists
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+bodhi
+.IP \(bu 2
+bugzilla
+.IP \(bu 2
+discourse
+.IP \(bu 2
+distgit
+.IP \(bu 2
+mailman
+.RE
+.TP
+\fB\-\-only\fR \fI<ONLY>\fR
+Run only these services (comma\-separated, repeatable). Inverse of `\-\-skip`
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+bodhi
+.IP \(bu 2
+bugzilla
+.IP \(bu 2
+discourse
+.IP \(bu 2
+distgit
+.IP \(bu 2
+mailman
+.RE
+.TP
+\fB\-\-refresh\-holidays\fR
+Force\-refetch holiday data from Nager.Date even when a cached copy is present
+.TP
+\fB\-\-now\fR \fI<NOW>\fR
+Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIUSERNAME\fR>
+FAS username to look up
+.SS sandogasa-hattrack mailman
+\fBsandogasa\-hattrack mailman\fR [\fB\-\-email\fR] [\fB\-\-json\fR] [\fB\-\-no\-fas\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-list\fR] [\fB\-\-max\-pages\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIUSERNAME\fR] 
+.PP
+Show a contributor\*(Aqs mailing list activity
+.TP
+\fB\-\-email\fR \fI<EMAIL>\fR
+Email address(es) to search for (skips FASJSON lookup). Repeat for multiple: \-\-email a@x.org \-\-email b@y.org
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-\-no\-fas\fR
+Skip FASJSON lookup, only search username@fedoraproject.org
+.TP
+\fB\-\-tz\-source\fR \fI<TZ_SOURCE>\fR [default: auto]
+Source for tzdb\*(Aqs zone1970.tab (country lookup table). `auto` picks the newer of system + bundled
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto
+.IP \(bu 2
+system
+.IP \(bu 2
+bundled
+.RE
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Colorize output. `auto` = TTY + NO_COLOR\-aware
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-\-list\fR \fI<LIST>\fR [default: devel@lists.fedoraproject.org]
+Mailing list(s) to search for the sender. Repeat for multiple: \-\-list a@x.org \-\-list b@x.org
+.TP
+\fB\-\-max\-pages\fR \fI<MAX_PAGES>\fR [default: 200]
+Max pages to scan when searching for sender (each page has ~10 emails; high\-traffic lists may need 200+ to cover a week)
+.TP
+\fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
+Working\-hours range `START\-END` (24h local). Outside is dimmed
+.TP
+\fB\-\-no\-holidays\fR
+Skip the Nager.Date public\-holiday lookup
+.TP
+\fB\-\-refresh\-holidays\fR
+Force\-refetch holiday data from Nager.Date even when a cached copy is present
+.TP
+\fB\-\-now\fR \fI<NOW>\fR
+Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+[\fIUSERNAME\fR]
+FAS username to look up (used to discover email via FASJSON)

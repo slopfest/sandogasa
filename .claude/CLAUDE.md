@@ -54,6 +54,7 @@
 ## CLI behavior
 - Non-interactive subcommands (e.g. `show`, `search`) must support a `--json` flag that outputs pretty-printed, machine-readable JSON instead of human-readable text
 - Each tool must support `--version` and display its name, version, and short description (matching `Cargo.toml` `description`) in the `--help` header. In clap, use `#[command(version, about, long_about = None, before_help = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")))]`
+- Every tool ships a committed man page at `tools/<tool>/man/<tool>.1`, generated from its clap definition by `sandogasa_cli::man` — one page per tool, with each subcommand as a `.SS` subsection. **Never hand-edit a page**: after changing any flag, subcommand, doc comment or `about` string, run `scripts/gen-man.sh` and commit the result. A `man_page_matches_cli` test in each tool's `main.rs` fails when a page stops documenting a visible flag or subcommand, so the pages cannot silently drift from `--help`. Prose that belongs in the man page (a real DESCRIPTION, not the one-line `about`) goes in a doc comment on the tool's `Cli` struct, where it also becomes `--help`'s long output — never in the roff. A new tool must be wired the same way: `sandogasa-cli = { workspace = true, features = ["man"] }` under `[dev-dependencies]`, plus the test
 - Don't throw away the result of expensive computation. When a tool
   detects a fixable problem mid-run (stale metadata, missing
   credentials/session, a transient failure), it should offer to fix

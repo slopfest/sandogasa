@@ -1,0 +1,85 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH sandogasa-report 1  sandogasa "Sandogasa Manual"
+.SH NAME
+sandogasa\-report \- Activity reporting for Fedora, EPEL, and CentOS SIG packaging work
+.SH SYNOPSIS
+\fBsandogasa\-report\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Activity reporting for Fedora, EPEL, and CentOS SIG packaging work
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS sandogasa-report config
+\fBsandogasa\-report config\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Interactively set per\-user overrides in `~/.config/sandogasa\-report/config.toml`
+.TP
+\fB\-c\fR, \fB\-\-config\fR \fI<PATH>\fR
+Main config file to enumerate domains / forge instances from. Without one, there are no instances to configure
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS sandogasa-report report
+\fBsandogasa\-report report\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-u\fR|\fB\-\-user\fR] <\fB\-d\fR|\fB\-\-domain\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-period\fR] [\fB\-\-no\-bugzilla\fR] [\fB\-\-no\-bodhi\fR] [\fB\-\-no\-koji\fR] [\fB\-\-no\-gitlab\fR] [\fB\-\-no\-github\fR] [\fB\-\-no\-forgejo\fR] [\fB\-\-no\-sourcehut\fR] [\fB\-\-detailed\fR]... [\fB\-\-json\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Generate an activity report across one or more domains
+.TP
+\fB\-c\fR, \fB\-\-config\fR \fI<PATH>\fR
+Path to main config file (domains, groups)
+.TP
+\fB\-u\fR, \fB\-\-user\fR \fI<USER>\fR
+FAS username to report on
+.TP
+\fB\-d\fR, \fB\-\-domain\fR \fI<DOMAIN>\fR
+Domain(s) to report on (defined in config)
+.TP
+\fB\-\-since\fR \fI<SINCE>\fR
+Start date (inclusive, YYYY\-MM\-DD)
+.TP
+\fB\-\-until\fR \fI<UNTIL>\fR
+End date (inclusive, YYYY\-MM\-DD, default: today)
+.TP
+\fB\-\-period\fR \fI<PERIOD>\fR
+Reporting period (e.g. 2026Q1, 2026H1)
+.TP
+\fB\-\-no\-bugzilla\fR
+Skip Bugzilla queries
+.TP
+\fB\-\-no\-bodhi\fR
+Skip Bodhi queries
+.TP
+\fB\-\-no\-koji\fR
+Skip Koji queries
+.TP
+\fB\-\-no\-gitlab\fR
+Skip GitLab queries
+.TP
+\fB\-\-no\-github\fR
+Skip GitHub queries
+.TP
+\fB\-\-no\-forgejo\fR
+Skip Forgejo queries
+.TP
+\fB\-\-no\-sourcehut\fR
+Skip Sourcehut queries
+.TP
+\fB\-\-detailed\fR
+Include per\-item details. Repeat for deeper detail — level 1 (`\-\-detailed`) lists each Bodhi update but summarizes multi\-build ones as "N builds", level 2 (`\-\-detailed \-\-detailed`) lists every build. Koji, GitLab, and Bugzilla ignore the difference between levels 1 and 2 (no deeper layer to expose)
+.TP
+\fB\-\-json\fR
+Output as JSON instead of Markdown
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<PATH>\fR
+Write output to file instead of stdout
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

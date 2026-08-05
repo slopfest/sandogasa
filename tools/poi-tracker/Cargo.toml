@@ -24,4 +24,5 @@ tokio = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
+sandogasa-cli = { workspace = true, features = ["man"] }
 wiremock = { workspace = true }

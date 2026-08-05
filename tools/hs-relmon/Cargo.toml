@@ -25,5 +25,6 @@ toml = { workspace = true }
 toml_edit = { workspace = true }
 
 [dev-dependencies]
+sandogasa-cli = { workspace = true, features = ["man"] }
 mockito = { workspace = true }
 tempfile = { workspace = true }

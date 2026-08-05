@@ -1,0 +1,86 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH sandogasa-pkg-health 1  sandogasa "Sandogasa Manual"
+.SH NAME
+sandogasa\-pkg\-health \- Audit package health across a sandogasa inventory
+.SH SYNOPSIS
+\fBsandogasa\-pkg\-health\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Audit package health across a sandogasa inventory
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS sandogasa-pkg-health checks
+\fBsandogasa\-pkg\-health checks\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+List registered health checks and their cost tiers
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS sandogasa-pkg-health run
+\fBsandogasa\-pkg\-health run\fR <\fB\-i\fR|\fB\-\-inventory\fR> <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-check\fR] [\fB\-\-cheap\fR] [\fB\-\-medium\fR] [\fB\-\-expensive\fR] [\fB\-\-all\fR] [\fB\-\-max\-age\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-\-fedora\-version\fR] [\fB\-\-epel\-version\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Run health checks against an inventory
+.TP
+\fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
+Path to inventory TOML file
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
+Path to report TOML file (read if exists, written after run)
+.TP
+\fB\-\-check\fR \fI<ID>\fR
+Run only these checks (repeatable)
+.TP
+\fB\-\-cheap\fR
+Run all cheap\-tier checks
+.TP
+\fB\-\-medium\fR
+Run all medium\-tier checks
+.TP
+\fB\-\-expensive\fR
+Run all expensive\-tier checks
+.TP
+\fB\-\-all\fR
+Run all checks regardless of tier
+.TP
+\fB\-\-max\-age\fR \fI<DURATION>\fR
+Re\-run any selected check whose stored result is older than this duration (e.g. "7d", "24h")
+.TP
+\fB\-\-package\fR \fI<NAME>\fR
+Limit to specific packages (repeatable)
+.TP
+\fB\-\-json\fR
+Output summary as JSON
+.TP
+\fB\-\-fedora\-version\fR \fI<N>\fR
+Fedora version(s) for FTBFS / FTI tracker lookup (CSV or repeated). Rawhide trackers are always included
+.TP
+\fB\-\-epel\-version\fR \fI<N>\fR
+EPEL version(s) for FTBFS / FTI tracker lookup (CSV or repeated)
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS sandogasa-pkg-health show
+\fBsandogasa\-pkg\-health show\fR [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIREPORT\fR> 
+.PP
+Display a previously\-generated health report without re\-running any checks
+.TP
+\fB\-\-package\fR \fI<NAME>\fR
+Limit to specific packages (repeatable)
+.TP
+\fB\-\-json\fR
+Output as JSON instead of human\-readable
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIREPORT\fR>
+Path to an existing report TOML file

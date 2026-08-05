@@ -14,3 +14,6 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+
+[dev-dependencies]
+sandogasa-cli = { workspace = true, features = ["man"] }

@@ -54,6 +54,13 @@ under `## Unreleased`; a rule that future work must follow goes in that
 tool's `DEVELOPMENT.md`. If a change makes an existing doc section
 untrue, fix that section in the same commit.
 
+**Regenerated man pages** when you change a command-line interface.
+Each tool's `man/<tool>.1` is generated from its clap definition, never
+hand-edited: run `scripts/gen-man.sh` and commit the result. A test per
+tool fails if a page stops documenting a flag, so this is not optional.
+Prose for the man page's DESCRIPTION belongs in a doc comment on the
+tool's `Cli` struct, where it also becomes the long `--help` output.
+
 **A CHANGELOG entry** for anything user-visible. When a change breaks
 something, the entry's heading ends with `(breaking)` — or a narrower
 form like `(breaking CLI)` / `(breaking JSON)` — and the body enumerates
@@ -65,6 +72,7 @@ Before opening a pull request, please also run:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets
 cargo test --workspace
+./scripts/gen-man.sh           # if you changed any CLI
 ./scripts/packaging-test.sh    # if you touched tests or dependencies
 ```
 

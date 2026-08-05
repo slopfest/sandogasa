@@ -1527,3 +1527,16 @@ fn print_cycles(cycles: &[dag::Cycle], closure: &resolve::Closure) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// The committed man page is generated from this CLI; see
+    /// `sandogasa_cli::man` and `scripts/gen-man.sh`.
+    #[test]
+    fn man_page_matches_cli() {
+        sandogasa_cli::man::check::<super::Cli>(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/man/ebranch.1"
+        ));
+    }
+}

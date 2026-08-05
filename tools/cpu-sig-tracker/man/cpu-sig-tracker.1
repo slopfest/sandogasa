@@ -1,0 +1,182 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH cpu-sig-tracker 1  sandogasa "Sandogasa Manual"
+.SH NAME
+cpu\-sig\-tracker \- Track CentOS Proposed Updates (CPU) SIG package state across Koji, GitLab, and JIRA
+.SH SYNOPSIS
+\fBcpu\-sig\-tracker\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Track CentOS Proposed Updates (CPU) SIG package state across Koji, GitLab, and JIRA
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS cpu-sig-tracker config
+\fBcpu\-sig\-tracker config\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Set up GitLab and JIRA authentication tokens
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS cpu-sig-tracker dump-inventory
+\fBcpu\-sig\-tracker dump\-inventory\fR [\fB\-r\fR|\fB\-\-release\fR] <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-koji\-profile\fR] [\fB\-\-prune\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Enumerate packages in a proposed_updates Koji tag and emit a sandogasa\-inventory TOML file
+.TP
+\fB\-r\fR, \fB\-\-release\fR \fI<RELEASES>\fR
+CentOS release(s) to enumerate, e.g. "c10s" or "c9s,c10s" (CSV or repeated). The Koji tag queried per release is "proposed_updates<N>s\-packages\-main\-release" where N is the major version digit
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
+Output file (sandogasa\-inventory TOML). If it exists, merge in the newly\-discovered packages; existing entries are preserved
+.TP
+\fB\-\-koji\-profile\fR \fI<KOJI_PROFILE>\fR [default: cbs]
+Koji CLI profile (cbs for CentOS Build System)
+.TP
+\fB\-\-prune\fR
+Drop packages from each workload that are no longer tagged in either the `\-release` or `\-testing` tag for that release. Orphan `[[package]]` entries (metadata blocks for packages no longer referenced by any workload) are left in place so user\-entered fields aren\*(Aqt lost
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS cpu-sig-tracker file-issue
+\fBcpu\-sig\-tracker file\-issue\fR [\fB\-\-affected\fR] [\fB\-\-expected\-fix\fR] [\fB\-\-jira\fR] [\fB\-\-release\fR] [\fB\-\-type\fR] [\fB\-\-note\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMR_URL\fR> 
+.PP
+File a tracking issue in the proposed_updates GitLab group for a given Merge Request URL
+.TP
+\fB\-\-affected\fR \fI<AFFECTED>\fR
+Affected (currently\-tagged) NVR. If omitted, left blank in the issue body; can be filled in later
+.TP
+\fB\-\-expected\-fix\fR \fI<EXPECTED_FIX>\fR
+Expected fix NVR once the MR lands and is built
+.TP
+\fB\-\-jira\fR \fI<JIRA>\fR
+Override the auto\-extracted JIRA key (e.g. "RHEL\-12345"). Useful when the MR description doesn\*(Aqt mention it verbatim
+.TP
+\fB\-\-release\fR \fI<RELEASE>\fR
+Override the release auto\-derived from the MR target branch (e.g. `c10s`)
+.TP
+\fB\-\-type\fR \fI<ISSUE_TYPE>\fR
+Apply one of the proposed_updates type labels: enhancement, bugfix, arch\-enablement, security
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+enhancement
+.IP \(bu 2
+bugfix
+.IP \(bu 2
+arch\-enablement
+.IP \(bu 2
+security
+.RE
+.TP
+\fB\-\-note\fR \fI<NOTE>\fR
+Free\-form context note prepended to the issue body as a lead paragraph before the structured metadata
+.TP
+\fB\-\-dry\-run\fR
+Print the issue that would be filed and exit without making any GitLab API calls
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIMR_URL\fR>
+Full Merge Request URL to track, e.g. `https://gitlab.com/redhat/centos\-stream/rpms/xz/\-/merge_requests/42`
+.SS cpu-sig-tracker retire
+\fBcpu\-sig\-tracker retire\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE_URL\fR> 
+.PP
+Close a tracking issue (retire\-issue suggestion) after verifying JIRA is resolved and the build is untagged
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip the interactive confirmation prompt
+.TP
+\fB\-\-force\fR
+Skip the retire\-issue precondition checks (JIRA resolved, build untagged). Use when the tool can\*(Aqt reach JIRA/Koji or when you\*(Aqre sure the conditions hold
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIISSUE_URL\fR>
+Full tracking issue URL (either `/\-/issues/<n>` or `/\-/work_items/<n>` form)
+.SS cpu-sig-tracker status
+\fBcpu\-sig\-tracker status\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-p\fR|\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-\-refresh\fR] [\fB\-\-include\-closed\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Report JIRA status and suggested next action for each active tracking issue
+.TP
+\fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR [default: inventory.toml]
+Path to the sandogasa\-inventory TOML file
+.TP
+\fB\-\-release\fR \fI<RELEASE>\fR
+Restrict the check to a single release (e.g. `c10s`)
+.TP
+\fB\-p\fR, \fB\-\-package\fR \fI<PACKAGES>\fR
+Narrow to specific packages (repeatable or CSV). When unset, every tracked package in scope is processed. Primarily useful with \-\-refresh to skip the extra work\-item\-status probes for packages you don\*(Aqt care about
+.TP
+\fB\-\-json\fR
+Emit JSON instead of grouped text
+.TP
+\fB\-\-refresh\fR
+Rewrite tracking issue bodies to the standardized format, refreshing the MR state and JIRA status lines to their current values. Normalizes legacy bodies and keeps already\-standard bodies up to date. Mutates GitLab state; off by default
+.TP
+\fB\-\-include\-closed\fR
+With \-\-refresh, also process closed tracking issues — backfill their start_date / due_date and reconcile their work\-item status against the current JIRA resolution (e.g. Done → Won\*(Aqt do when JIRA was retroactively flipped). Body content is left alone. No\-op without \-\-refresh
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS cpu-sig-tracker sync-issues
+\fBcpu\-sig\-tracker sync\-issues\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Report which inventory packages have active, proposed, or missing tracking issues per release
+.TP
+\fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR [default: inventory.toml]
+Path to the sandogasa\-inventory TOML file
+.TP
+\fB\-\-release\fR \fI<RELEASE>\fR
+Restrict the check to a single release (e.g. `c10s`). If omitted, every workload in the inventory is checked
+.TP
+\fB\-\-json\fR
+Emit a machine\-readable JSON array instead of grouped text
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS cpu-sig-tracker untag
+\fBcpu\-sig\-tracker untag\fR <\fB\-\-release\fR> [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR> 
+.PP
+Untag a proposed_updates build from its CBS \-release tag after verifying the JIRA is resolved
+.TP
+\fB\-\-release\fR \fI<RELEASE>\fR
+CentOS release whose proposed_updates tags to untag from (`c9s`, `c10s`, …)
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip the interactive confirmation prompt
+.TP
+\fB\-\-force\fR
+Skip the JIRA\-resolved precondition. Use when the tracking issue can\*(Aqt be located or you\*(Aqre sure the check would pass
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fITARGET\fR>
+Either a package name (e.g. `xz` — the tool discovers the currently\-tagged NVR in `\-release` and `\-testing`) or a specific NVR (e.g. `xz\-5.6.4\-1~proposed.el10`)

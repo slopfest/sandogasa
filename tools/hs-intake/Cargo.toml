@@ -14,3 +14,6 @@ sandogasa-fedrq = { workspace = true }
 sandogasa-rpmvercmp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+sandogasa-cli = { workspace = true, features = ["man"] }

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Man pages for every tool
+
+Each tool now ships a man page at `tools/<tool>/man/<tool>.1`,
+generated from its clap definition by the new `sandogasa_cli::man`
+module. One page per tool documents the whole CLI: the top-level
+options, then every subcommand as a subsection under COMMANDS, so
+`man ebranch` covers `check-update` and the rest rather than sending
+the reader to nine separate pages.
+
+Generating from clap is what keeps the pages honest — the man page and
+`--help` are rendered from one definition, so they cannot disagree
+about what a tool accepts. A `man_page_matches_cli` test in each
+tool's `main.rs` fails when a committed page stops documenting a
+visible flag or subcommand, which makes drift a test failure rather
+than something a reader discovers. `scripts/gen-man.sh` regenerates
+every page.
+
+The pages are committed and included in the published crates, so a
+packager can install them with `install -m644` without building or
+running the binaries — a cross-build for another architecture cannot
+execute the tool to scrape its `--help`.
+
+Man page rendering is behind a new `man` feature on `sandogasa-cli`,
+off by default and enabled only as a dev-dependency, so shipped
+binaries do not carry the roff renderer. New workspace dependency:
+`clap_mangen`.
+
 ### ebranch: karma voting understands review requests
 
 `check-update --give-karma` decided per-bug feedback automatically only

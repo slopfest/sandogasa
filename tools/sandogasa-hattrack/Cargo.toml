@@ -23,3 +23,6 @@ sandogasa-mailman = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+sandogasa-cli = { workspace = true, features = ["man"] }

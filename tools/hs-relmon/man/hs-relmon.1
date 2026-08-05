@@ -1,0 +1,350 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH hs-relmon 1  sandogasa "Sandogasa Manual"
+.SH NAME
+hs\-relmon \- Release monitoring tool for CentOS Hyperscale SIG packages
+.SH SYNOPSIS
+\fBhs\-relmon\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Release monitoring tool for CentOS Hyperscale SIG packages
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS hs-relmon check-latest
+\fBhs\-relmon check\-latest\fR [\fB\-d\fR|\fB\-\-distros\fR] [\fB\-\-repology\-name\fR] [\fB\-\-track\fR] [\fB\-\-json\fR] [\fB\-\-file\-issue\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> 
+.PP
+Check the latest version of a package across distributions
+.TP
+\fB\-d\fR, \fB\-\-distros\fR \fI<DISTROS>\fR
+Comma\-separated list of distros to check.
+
+Valid names:
+  upstream         Newest version across all repos
+  fedora           Fedora Rawhide + latest stable
+  fedora\-rawhide   Fedora Rawhide only
+  fedora\-stable    Latest stable Fedora only
+  centos           Latest CentOS Stream
+  centos\-stream    Latest CentOS Stream
+  hyperscale / hs  Hyperscale EL9 + EL10
+  hs9              Hyperscale EL9 only
+  hs10             Hyperscale EL10 only
+.TP
+\fB\-\-repology\-name\fR \fI<PROJECT>\fR
+Override Repology project name when it differs
+from the package (e.g. linux for perf).
+.TP
+\fB\-\-track\fR \fI<TRACK>\fR [default: upstream]
+Distribution to compare Hyperscale builds against.
+
+Valid names:
+  upstream         Newest version across all repos (default)
+  fedora\-rawhide   Fedora Rawhide
+  fedora\-stable    Latest stable Fedora
+  centos           Latest CentOS Stream
+  centos\-stream    Latest CentOS Stream
+.TP
+\fB\-\-json\fR
+Output as JSON instead of a table
+.TP
+\fB\-\-file\-issue\fR [\fI<URL>\fR]
+File or update a GitLab issue if the package is
+outdated. Searches for an open issue labeled
+rfe::new\-version and updates its title, or creates
+a new one. Defaults to
+https://gitlab.com/CentOS/Hyperscale/rpms/PKG.
+Uses the token from \*(Aqhs\-relmon config\*(Aq, or
+GITLAB_TOKEN env var as an override.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIPACKAGE\fR>
+Source package name (e.g. ethtool)
+.SS hs-relmon check-manifest
+\fBhs\-relmon check\-manifest\fR [\fB\-\-json\fR] [\fB\-\-issue\-status\fR] [\fB\-\-issue\-assignee\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMANIFEST\fR> 
+.PP
+Check all packages listed in a manifest file
+.TP
+\fB\-\-json\fR
+Output as JSON instead of tables
+.TP
+\fB\-\-issue\-status\fR \fI<STATUS>\fR
+Only show packages whose GitLab issue matches this
+work\-item status. Packages without an issue are
+excluded. Issues that do not match are not updated.
+
+Default statuses:
+  To do          Planned but not started
+  In progress    Currently being worked on
+  Done           Completed
+  Canceled       Will not be done
+.TP
+\fB\-\-issue\-assignee\fR \fI<USERNAME>\fR
+Only show packages whose GitLab issue is assigned
+to this username. Use "none" to match unassigned
+issues. Packages without an issue or without a
+matching assignee are excluded.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIMANIFEST\fR>
+Path to the TOML manifest file
+.SS hs-relmon dupe-subpkgs
+\fBhs\-relmon dupe\-subpkgs\fR [\fB\-\-repositories\fR] [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-fix\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Find binary RPMs shipped by 2+ source packages in a tag
+.TP
+\fB\-\-repositories\fR \fI<REPOSITORIES>\fR [default: main]
+Comma\-separated Hyperscale repositories to scan.
+The repository is the segment between `\-packages\-`
+and the stage suffix, e.g. `main` in
+`hyperscale10s\-packages\-main\-release`. Each
+repository\*(Aqs `\-release` and `\-testing` tags across
+EL9/EL10 (and the Stream variants) are scanned.
+.TP
+\fB\-\-release\fR \fI<RELEASE>\fR
+Hyperscale release(s) to scan, repeatable or comma\-
+separated. Each value is a short EL token (`9`, `9s`,
+`10`, `10s`) or the equivalent full release name
+(`hyperscale9s`, `hyperscale10s`, ...) — both forms
+mean the same release. Defaults to all four.
+.TP
+\fB\-\-package\fR \fI<PACKAGE>\fR
+Source package name(s), repeatable or comma\-separated.
+Only collisions that involve one of these sources are
+reported (the whole tag is still scanned to find what
+they collide with). Defaults to all packages.
+.TP
+\fB\-\-fix\fR
+For each collision, show the candidate builds and the
+binaries only each one provides (which would vanish
+from the tag if it were untagged), then prompt for
+which build to untag. Defaults to skipping. Requires
+CBS write authentication. In \-\-json mode or without a
+terminal the plan is printed and nothing is untagged.
+.TP
+\fB\-\-json\fR
+Output as JSON instead of a table
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SS hs-relmon file-conflicts
+\fBhs\-relmon file\-conflicts\fR [\fB\-\-repositories\fR] [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Find files shipped by 2+ sources across enabled repos
+.TP
+\fB\-\-repositories\fR \fI<REPOSITORIES>\fR
+Comma\-separated repositories that are enabled together
+on a host, compared per EL version. Overrides the
+per\-EL defaults (main + kernel on EL10/10s; main only
+on EL9/9s, which has no kernel repo). The `\-release`
+tag of each is combined and files owned by two or more
+distinct source packages are flagged.
+.TP
+\fB\-\-release\fR \fI<RELEASE>\fR
+Hyperscale release(s) to scan, repeatable or comma\-
+separated. Each value is a short EL token (`9`, `9s`,
+`10`, `10s`) or the equivalent full release name
+(`hyperscale9s`, `hyperscale10s`, ...) — both forms
+mean the same release. Defaults to all four.
+.TP
+\fB\-\-package\fR \fI<PACKAGE>\fR
+Source package name(s), repeatable or comma\-separated.
+Only conflicts that involve one of these sources are
+reported (the whole repo set is still scanned to find
+what they conflict with). Defaults to all packages.
+.TP
+\fB\-\-json\fR
+Output as JSON instead of a table
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SS hs-relmon list-issues
+\fBhs\-relmon list\-issues\fR [\fB\-\-group\fR] [\fB\-\-issue\-status\fR] [\fB\-\-issue\-assignee\fR] [\fB\-\-json\fR] [\fB\-\-manifest\fR] [\fB\-\-add\-missing\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+List GitLab issues labeled rfe::new\-version
+.TP
+\fB\-\-group\fR \fI<GROUP>\fR [default: https://gitlab.com/CentOS/Hyperscale/rpms]
+GitLab group URL to search
+.TP
+\fB\-\-issue\-status\fR \fI<STATUS>\fR
+Only show issues matching this work\-item status.
+
+Default statuses:
+  To do          Planned but not started
+  In progress    Currently being worked on
+  Done           Completed
+  Canceled       Will not be done
+.TP
+\fB\-\-issue\-assignee\fR \fI<USERNAME>\fR
+Only show issues assigned to this username.
+Use "none" to match unassigned issues.
+.TP
+\fB\-\-json\fR
+Output as JSON instead of a table
+.TP
+\fB\-\-manifest\fR \fI<PATH>\fR
+Path to a TOML manifest file. When provided, the
+output shows which packages with rfe::new\-version
+issues are missing from the manifest.
+.TP
+\fB\-\-add\-missing\fR
+Add packages that have rfe::new\-version issues but
+are missing from the manifest. Requires \-\-manifest.
+Packages are inserted in sorted order.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SS hs-relmon prune-archived
+\fBhs\-relmon prune\-archived\fR [\fB\-\-repositories\fR] [\fB\-\-skip\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMANIFEST\fR> 
+.PP
+Untag CBS builds for archived\-upstream packages stock caught up to
+.TP
+\fB\-\-repositories\fR \fI<REPOSITORIES>\fR [default: main]
+Comma\-separated Hyperscale repositories to manage.
+The repository is the segment between `\-packages\-`
+and the stage suffix, e.g. `main` in
+`hyperscale10s\-packages\-main\-release`. Tags whose
+repository is not in this list are not touched.
+.TP
+\fB\-\-skip\fR \fI<LIST>\fR
+Comma\-separated packages to skip
+.TP
+\fB\-\-dry\-run\fR
+Preview operations without applying them
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Untag at/behind\-stock without prompting; skip ahead\-of\-stock
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIMANIFEST\fR>
+Path to the TOML manifest file
+.SS hs-relmon prune-manifest
+\fBhs\-relmon prune\-manifest\fR [\fB\-\-release\-keep\fR] [\fB\-\-testing\-keep\fR] [\fB\-\-repositories\fR] [\fB\-\-skip\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMANIFEST\fR> 
+.PP
+Untag old hyperscale builds for every package in a manifest, keeping N newest in each `\-release`/`\-testing` tag
+.TP
+\fB\-\-release\-keep\fR \fI<RELEASE_KEEP>\fR [default: 2]
+Builds to keep per `\-release` tag
+.TP
+\fB\-\-testing\-keep\fR \fI<TESTING_KEEP>\fR [default: 1]
+Builds to keep per `\-testing` tag
+.TP
+\fB\-\-repositories\fR \fI<REPOSITORIES>\fR [default: main]
+Comma\-separated Hyperscale repositories to manage.
+The repository is the segment between `\-packages\-`
+and the stage suffix, e.g. `main` in
+`hyperscale10s\-packages\-main\-release`. Tags whose
+repository is not in this list are not touched.
+.TP
+\fB\-\-skip\fR \fI<LIST>\fR
+Comma\-separated package names to skip during the
+batch run. Useful when one package manages its own
+tag cleanup (e.g. systemd) and you don\*(Aqt want this
+tool to touch it.
+.TP
+\fB\-\-dry\-run\fR
+Preview operations without applying them
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip the per\-package confirmation prompt
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIMANIFEST\fR>
+Path to the TOML manifest file
+.SS hs-relmon prune-tags
+\fBhs\-relmon prune\-tags\fR [\fB\-\-release\-keep\fR] [\fB\-\-testing\-keep\fR] [\fB\-\-repositories\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> 
+.PP
+Untag old hyperscale builds for one package, keeping N newest in each `\-release`/`\-testing` tag
+.TP
+\fB\-\-release\-keep\fR \fI<RELEASE_KEEP>\fR [default: 2]
+Builds to keep per `\-release` tag
+.TP
+\fB\-\-testing\-keep\fR \fI<TESTING_KEEP>\fR [default: 1]
+Builds to keep per `\-testing` tag
+.TP
+\fB\-\-repositories\fR \fI<REPOSITORIES>\fR [default: main]
+Comma\-separated Hyperscale repositories to manage.
+The repository is the segment between `\-packages\-`
+and the stage suffix, e.g. `main` in
+`hyperscale10s\-packages\-main\-release`. Tags whose
+repository is not in this list are not touched.
+.TP
+\fB\-\-dry\-run\fR
+Preview operations without applying them
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip the confirmation prompt
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIPACKAGE\fR>
+Source package name (e.g. ethtool)
+.SS hs-relmon review
+\fBhs\-relmon review\fR [\fB\-\-repositories\fR] [\fB\-\-skip\fR] [\fB\-\-changelog\-lines\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fITARGET\fR] 
+.PP
+Interactively review builds in hyperscale `\-testing` tags and promote (+1), reject (\-1), or skip (0) each one
+.TP
+\fB\-\-repositories\fR \fI<REPOSITORIES>\fR [default: main]
+Comma\-separated Hyperscale repositories to scan.
+The repository is the segment between `\-packages\-`
+and the stage suffix, e.g. `main` in
+`hyperscale10s\-packages\-main\-testing`.
+.TP
+\fB\-\-skip\fR \fI<SKIP>\fR
+Package name(s) to exclude from review, repeatable
+or comma\-separated. Use for packages with their own
+release pipeline (e.g. systemd) that should never be
+promoted through this tool.
+.TP
+\fB\-\-changelog\-lines\fR \fI<CHANGELOG_LINES>\fR [default: 20]
+For a package with nothing yet in release, show at
+most this many lines of its changelog (a new package
+has no prior version to diff against). Packages that
+are already in release always show just the entries
+newer than the released build.
+.TP
+\fB\-\-dry\-run\fR
+List the builds that would be reviewed, then exit
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+[\fITARGET\fR]
+Optional package name or build NVR. With a package name, reviews its latest build in each testing tag; with an NVR, reviews that specific build; omitted, reviews everything in testing
+.SS hs-relmon config
+\fBhs\-relmon config\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Configure GitLab authentication
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

@@ -89,6 +89,23 @@ From source:
 cargo build --release
 ```
 
+## Man pages
+
+Each tool ships a man page at `tools/<tool>/man/<tool>.1`, covering the
+tool and all of its subcommands in one page. The pages are generated
+from the same clap definitions that produce `--help`, so the two cannot
+disagree; each tool's test suite fails if its page stops documenting a
+flag. Regenerate them with `scripts/gen-man.sh` after changing a
+command-line interface.
+
+The pages are committed and included in the published crates, so
+packagers can install them without building or running the binaries:
+
+```
+install -Dm644 tools/koji-lag/man/koji-lag.1 \
+  "$RPM_BUILD_ROOT/usr/share/man/man1/koji-lag.1"
+```
+
 ## Deprecations
 
 Deprecated functionality, its replacement, and the release it

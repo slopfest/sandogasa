@@ -1,0 +1,88 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH fedora-review-digest 1  sandogasa "Sandogasa Manual"
+.SH NAME
+fedora\-review\-digest \- Condense a fedora\-review run of an auto\-generated spec into a review comment
+.SH SYNOPSIS
+\fBfedora\-review\-digest\fR [\fB\-c\fR|\fB\-\-comment\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-reviews\-dir\fR] [\fB\-\-no\-net\fR] [\fB\-\-post\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIDIR\-OR\-BUGID\fR] [\fIsubcommands\fR]
+.SH DESCRIPTION
+Condense a fedora\-review run of an auto\-generated spec into a review comment
+.SH OPTIONS
+.TP
+\fB\-c\fR, \fB\-\-comment\fR \fI<TEXT>\fR
+Reviewer note placed above the review ("LGTM!")
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Accept inferred checklist marks without prompting
+.TP
+\fB\-\-reviews\-dir\fR \fI<DIR>\fR [default: .]
+Base directory for bug\-id lookup
+.TP
+\fB\-\-no\-net\fR
+Skip the crates.io latest\-version check
+.TP
+\fB\-\-post\fR
+Post to Bugzilla: comment, review flag, claim
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.TP
+[\fIDIR\-OR\-BUGID\fR]
+fedora\-review result dir, or a bug id under \-\-reviews\-dir
+.SH COMMANDS
+.SS fedora-review-digest config
+\fBfedora\-review\-digest config\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Set up or verify the Bugzilla API key used by `\-\-post`
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS fedora-review-digest run
+\fBfedora\-review\-digest run\fR [\fB\-\-copr\fR] [\fB\-\-repo\fR] [\fB\-m\fR|\fB\-\-mock\-config\fR] [\fB\-\-mock\-option\fR] [\fB\-\-uniqueext\fR] [\fB\-\-dry\-run\fR] [\fB\-\-no\-digest\fR] [\fB\-c\fR|\fB\-\-comment\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-reviews\-dir\fR] [\fB\-\-no\-net\fR] [\fB\-\-post\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIBUGID\fR> 
+.PP
+Run fedora\-review on a bug, then digest the result
+.TP
+\fB\-\-copr\fR \fI<OWNER/PROJECT>\fR
+COPR(s) with staged deps (owner/project; CSV ok)
+.TP
+\fB\-\-repo\fR \fI<URL>\fR
+Extra repo baseurl(s) to build against (CSV ok)
+.TP
+\fB\-m\fR, \fB\-\-mock\-config\fR \fI<NAME>\fR
+Mock config; doubles as the COPR chroot name
+.TP
+\fB\-\-mock\-option\fR \fI<OPT>\fR
+Extra mock option(s), appended to fedora\-review \-o
+.TP
+\fB\-\-uniqueext\fR \fI<TEXT>\fR
+Unique mock buildroot suffix (mock \-\-uniqueext)
+.TP
+\fB\-\-dry\-run\fR
+Print the fedora\-review command without running it
+.TP
+\fB\-\-no\-digest\fR
+Stop after the fedora\-review build (skip digest)
+.TP
+\fB\-c\fR, \fB\-\-comment\fR \fI<TEXT>\fR
+Reviewer note placed above the review ("LGTM!")
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Accept inferred checklist marks without prompting
+.TP
+\fB\-\-reviews\-dir\fR \fI<DIR>\fR [default: .]
+Base directory for bug\-id lookup
+.TP
+\fB\-\-no\-net\fR
+Skip the crates.io latest\-version check
+.TP
+\fB\-\-post\fR
+Post to Bugzilla: comment, review flag, claim
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIBUGID\fR>
+Review\-request Bugzilla bug id (fedora\-review \-b)

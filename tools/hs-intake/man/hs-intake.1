@@ -1,0 +1,105 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH hs-intake 1  sandogasa "Sandogasa Manual"
+.SH NAME
+hs\-intake \- Hyperscale package intake tool — compare RPM package metadata between branches
+.SH SYNOPSIS
+\fBhs\-intake\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Hyperscale package intake tool — compare RPM package metadata between branches
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS hs-intake compare-build-requires
+\fBhs\-intake compare\-build\-requires\fR [\fB\-\-json\fR] [\fB\-\-show\-unchanged\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fISOURCE_BRANCH\fR> <\fITARGET_BRANCH\fR> 
+.PP
+Compare the BuildRequires of a source package between two branches
+.TP
+\fB\-\-json\fR
+Output as JSON
+.TP
+\fB\-\-show\-unchanged\fR
+Also show unchanged entries
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fISRPM\fR>
+Source RPM name (e.g. "systemd")
+.TP
+<\fISOURCE_BRANCH\fR>
+Branch to compare from (e.g. "rawhide")
+.TP
+<\fITARGET_BRANCH\fR>
+Branch to compare to (e.g. "c10s\-hyperscale")
+.SS hs-intake compare-provides
+\fBhs\-intake compare\-provides\fR [\fB\-\-json\fR] [\fB\-\-show\-unchanged\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fISOURCE_BRANCH\fR> <\fITARGET_BRANCH\fR> 
+.PP
+Compare the Provides of a source package between two branches
+.TP
+\fB\-\-json\fR
+Output as JSON
+.TP
+\fB\-\-show\-unchanged\fR
+Also show unchanged entries
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fISRPM\fR>
+Source RPM name (e.g. "systemd")
+.TP
+<\fISOURCE_BRANCH\fR>
+Branch to compare from (e.g. "rawhide")
+.TP
+<\fITARGET_BRANCH\fR>
+Branch to compare to (e.g. "c10s\-hyperscale")
+.SS hs-intake compare-requires
+\fBhs\-intake compare\-requires\fR [\fB\-\-json\fR] [\fB\-\-show\-unchanged\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fISOURCE_BRANCH\fR> <\fITARGET_BRANCH\fR> 
+.PP
+Compare the Requires of a source package between two branches
+.TP
+\fB\-\-json\fR
+Output as JSON
+.TP
+\fB\-\-show\-unchanged\fR
+Also show unchanged entries
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fISRPM\fR>
+Source RPM name (e.g. "systemd")
+.TP
+<\fISOURCE_BRANCH\fR>
+Branch to compare from (e.g. "rawhide")
+.TP
+<\fITARGET_BRANCH\fR>
+Branch to compare to (e.g. "c10s\-hyperscale")
+.SS hs-intake safe-to-backport
+\fBhs\-intake safe\-to\-backport\fR [\fB\-\-json\fR] [\fB\-\-also\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fITARGET_BRANCH\fR> <\fISOURCE_BRANCH\fR> 
+.PP
+Check if a source package is safe to backport between branches
+.TP
+\fB\-\-json\fR
+Output as JSON
+.TP
+\fB\-\-also\-check\fR \fI<ALSO_CHECK>\fR
+Additional branches to check for reverse dependencies (comma\-separated)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fISRPM\fR>
+Source RPM name (e.g. "systemd")
+.TP
+<\fITARGET_BRANCH\fR>
+Branch to backport to (e.g. "c10s\-hyperscale")
+.TP
+<\fISOURCE_BRANCH\fR>
+Branch to take the package from (e.g. "rawhide")
