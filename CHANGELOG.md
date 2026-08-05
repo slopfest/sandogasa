@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Docs: CONTRIBUTING.md, and AGENTS.md for any agent
+
+A new `CONTRIBUTING.md` states what a contribution needs: one
+identified issue to fix or implement, tests that pass offline, `cargo
+fmt` and no new clippy warnings, docs put where they belong, and a
+signed-off commit.
+
+Its AI section follows the [Fedora AI-Assisted Contributions
+Policy](https://docs.fedoraproject.org/en-US/council/policy/ai-assisted-contributions/)
+and the kernel's [AI Coding
+Assistants](https://docs.kernel.org/process/coding-assistants.html)
+guidance: the human is the author and accountable, assistance is
+disclosed with an `Assisted-by: <agent>:<model-id>` trailer (never
+`Co-Authored-By`), only a human may add `Signed-off-by` because the DCO
+is a certification only a person can make, and a model must not be the
+sole or final arbiter of whether a contribution is acceptable.
+
+`AGENTS.md` at the top level symlinks to `.claude/CLAUDE.md`, so agents
+other than Claude Code find the project conventions at the name they
+look for. The trailer rule there is now agent-neutral, and records that
+the ask-before-committing rule exists because the sign-off certifies
+the DCO in a human's name.
+
+The README also describes the project's actual scope — cross-
+distribution packaging focused on Fedora, CentOS and Debian, with the
+activity-tracking crates useful to anyone tracking their own
+contributions.
+
 ### Docs: READMEs describe rather than justify
 
 The tool READMEs had accumulated rationale for recent changes —

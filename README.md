@@ -6,9 +6,17 @@
 
 [![Packaging status](https://repology.org/badge/vertical-allrepos/sandogasa.svg)](https://repology.org/project/sandogasa/versions)
 
-A collection of tools and libraries for Fedora package maintenance
-and contributor activity tracking, built around shared API clients
-for Bugzilla, Bodhi, NVD, dist-git, Discourse, FASJSON, and HyperKitty.
+Cross-distribution packaging tools and libraries, focused primarily on
+Fedora, CentOS and Debian, built around shared API clients for Bugzilla,
+Bodhi, Koji, NVD, dist-git, GitLab, Forgejo, Discourse, FASJSON and
+HyperKitty.
+
+Most of it is packaging work — branching, CVE triage, build-queue
+analysis, ACLs, release monitoring. The activity-tracking parts are
+narrower in their assumptions: `sandogasa-report` and
+`sandogasa-hattrack` collect a person's contributions across forges and
+mailing lists, which is useful to anyone tracking their own work, with
+or without a distribution attached.
 
 The name **sandogasa** (菅笠) refers to a Japanese straw hat often
 associated with "slum" or post-apocalyptic robots in popular culture.
@@ -86,6 +94,13 @@ cargo build --release
 Deprecated functionality, its replacement, and the release it
 will be removed in are tracked in
 [DEPRECATIONS.md](DEPRECATIONS.md).
+
+## Contributing
+
+Issues and pull requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for what a contribution needs —
+tests that pass offline, a specific issue to fix, a signed-off commit —
+and for how to disclose AI assistance with an `Assisted-by:` trailer.
 
 ## License
 
