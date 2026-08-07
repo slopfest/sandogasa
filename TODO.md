@@ -501,6 +501,14 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
      dist-git) and parse the usual `rhbz#NNN` / `RHBZ#NNN` /
      `bz#NNN` / bugzilla URL forms.
 
+  Do not let the update's `--type` decide which kinds to look for.
+  An update is routinely a mix: the epel9 update this work came out
+  of was `--type enhancement` and carried three Review Request bugs
+  for new packages alongside two update requests. Bodhi's type is a
+  single value chosen for the update as a whole, so it says nothing
+  about which bugs belong to it. Search both kinds for every
+  component, whatever the type.
+
   Present the union for confirmation with each bug's provenance
   (which build's changelog, or which component's open-bug query) and
   let the user drop entries, the way the per-bug vote plan already
