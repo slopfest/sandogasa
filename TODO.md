@@ -428,6 +428,61 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   Confirm before writing, and print the bugs being dropped with the
   reason each was flagged.
 
+- (2026-08-07) Judge FTBFS bugs — the strongest verdict available,
+  and worth doing first. An FTBFS bug claims a package does not build
+  on a release; a successful, tagged build of that package for that
+  release refutes the claim outright. That is proof rather than
+  inference: no model of the repo, no prediction, just the artifact
+  the bug says cannot exist. The pieces exist: `bugclass::classify`
+  already identifies FTBFS by the tracker the bug blocks, and the
+  bug's `version` field carries the release. What needs care is
+  matching that release against the update's — Bugzilla's `version`
+  values ("41", "rawhide", "epel9") and Bodhi's release identifiers
+  (F41, EPEL-9) are not the same strings, so a mapping is needed,
+  and a mismatch has to mean "no verdict" rather than a guess.
+
+- (2026-08-07) Judge FTI bugs from the installability check we
+  already run. An FTI bug says a package fails to install on a
+  release, and `check-update` computes exactly that: it resolves the
+  update's subpackage Requires and reports `installability_issues`.
+  So for an FTI bug against a component in the update, on a matching
+  release, the check's own result is the verdict — clean is +1, still
+  broken is -1 with the unresolved requirement as the reason.
+
+  Weaker than the FTBFS case, though, and worth treating as such: the
+  check resolves dependencies against a repo snapshot we assemble, so
+  it is a prediction of what dnf would do rather than an observation.
+  It can over-report when a touched capability is also provided by an
+  unrelated package, and the repo set it resolves against is not
+  necessarily the one the reporter had. Good enough to suggest, and
+  the reason should name the requirement so the user can judge it.
+
+- (2026-08-07) Judge a bug that depends on a satisfied update
+  request. If a bug's component is a package in the update, *and* the
+  bug depends on another bug that is an update request for the same
+  package, *and* the update satisfies that update request, then the
+  update carries the version the bug was waiting for. A CVE against
+  foo 4 that depends on "foo-4.1 is available" is closed by an update
+  shipping foo 4.1.
+
+  Both conditions are required. The component matching a package in
+  the update is what keeps this from firing on an unrelated
+  dependency, and the depended-on bug being satisfied is what
+  supplies the version evidence — neither is enough alone.
+  `Bug::depends_on` is already on the model, and the depended-on bug
+  is judged by the same `bug_verdict` path, so this is mostly a
+  second Bugzilla fetch for the dependencies plus the two guards.
+  Only ever a +1. A bug whose chain is *not* satisfied is not thereby
+  unfixed, and the reason is worth spelling out because it is easy to
+  get wrong: the-new-hotness rewrites an update request's summary as
+  new upstream versions appear, so the bug that said "foo-4.1 is
+  available" when the CVE was linked to it may say "foo-4.2 is
+  available" by the time the update is submitted. An update shipping
+  4.1 then correctly scores -1 on that update request — it really is
+  behind again — while the CVE it was linked for really is fixed,
+  because the fix landed in 4.1. The two verdicts diverge, so an
+  unsatisfied chain has to mean silence, never -1.
+
 - (2026-08-07) Discover an update's bugs instead of making the
   maintainer find them: `--submit` should propose the bug list.
   Finding which bugs belong to a big update is one of the more
