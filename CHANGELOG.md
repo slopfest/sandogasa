@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### ebranch: say when an update cannot be fixing a bug
+
+An update that builds nothing for a bug's package cannot be fixing
+that bug. `check-update` used to treat such a bug like any other it
+had no opinion about, and just prompted with a bare default of 0. It
+now suggests -1 and prints the reason ("update builds no rust-dtor").
+`--yes` takes that suggestion, rather than posting a 0 there is reason
+to think is wrong.
+
+Only bugs that name their package outright are judged this way: an
+update request names it through its Bugzilla component, a review
+request through the package in its title. A CVE or FTBFS bug is not
+classified here, and its component can be stale after a package
+rename, so a missing match means nothing. Those keep the plain prompt.
+
+`--submit` now screens the bug list before showing the submission
+plan. A bug listed on an update that ships nothing for it will be
+closed when that update goes stable, against a package it never
+touched. Catching that before submission costs nothing, while a -1
+afterwards is both noise and beside the point. Misfiled bugs are
+printed with the package each one names, and you are offered the
+chance to leave them off. `--yes` warns and keeps them instead:
+silently discarding a bug passed to `--bug` is not something to do
+unasked. A Bugzilla fetch failure likewise leaves the list untouched.
+
+
 ### sandogasa-bugclass: a package name is not a version prefix
 
 `extract_new_version` stripped the component name off a release

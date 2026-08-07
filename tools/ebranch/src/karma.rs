@@ -74,48 +74,95 @@ fn fmt_karma(karma: i32) -> String {
     }
 }
 
+/// What the automatic check concluded about one bug.
+pub(crate) enum Verdict {
+    /// Decided from what the update contains.
+    Decided { karma: i32, reason: String },
+    /// The bug names a package the update builds nothing for, so the
+    /// update does not fix it. Suggested rather than applied: only
+    /// bugs that name their package outright reach this, but a
+    /// component can still be stale, so the user is asked.
+    Missing { reason: String },
+    /// Not a kind we classify. The user decides, with no suggestion.
+    Unknown,
+}
+
+/// The package a bug names outright, if it is a kind that does: a
+/// review request names the package under review in its title, and
+/// an update request's package is its Bugzilla component, confirmed
+/// by the summary parsing as `<component>-<version> is available`.
+///
+/// `None` for anything else. A CVE or FTBFS bug is not classified
+/// here and its component can be stale after a package rename, so
+/// nothing may be concluded from it not matching a build. This is
+/// the same rule [`bug_verdict`] applies before it compares
+/// versions.
+pub(crate) fn bug_package(title: &str, component: Option<&str>) -> Option<String> {
+    if let Some(pkg) = sandogasa_bugclass::bugzilla::review_request_package(title) {
+        return Some(pkg);
+    }
+    let pkg = component?;
+    sandogasa_bugclass::bugzilla::extract_new_version(title, pkg).map(|_| pkg.to_string())
+}
+
 /// Decide automatic feedback for one bug title against the
 /// update's builds (`(source name, version)` pairs).
 ///
-/// A release-monitoring title `"<pkg>-<version> is available"`
-/// gets +1 when the update's build of `component` delivers at least
-/// the requested version and -1 otherwise. A review request
+/// A release-monitoring title `"<pkg>-<version> is available"` gets
+/// +1 when the update's build of `component` delivers at least the
+/// requested version and -1 otherwise. A review request
 /// `"Review Request: <pkg> - ..."` gets +1 when the update builds
-/// that package. Returns `None` for anything else — the caller
-/// should ask the user.
+/// that package. Either kind names its package outright, so when the
+/// update builds nothing for it the answer is `Missing` — the update
+/// cannot be fixing that bug. Anything else is `Unknown`: a CVE or
+/// FTBFS bug is not classified here, and its component may be stale
+/// after a package rename, so a missing match means nothing.
 ///
 /// `component` is the bug's Bugzilla component, which names the
 /// package outright; without it an update request cannot be judged,
 /// because the package cannot be recovered from the summary alone
 /// (see `sandogasa_bugclass::bugzilla::extract_new_version`).
-fn auto_bug_karma(
+pub(crate) fn bug_verdict(
     title: &str,
     component: Option<&str>,
     builds: &[(String, String)],
-) -> Option<(i32, String)> {
+) -> Verdict {
     // A package review is answered by shipping the package under
-    // review; there is no version in the title to compare. If the
-    // update does not build that package, we have nothing to say
-    // about the review and leave it to the user.
+    // review; there is no version in the title to compare.
     if let Some(pkg) = sandogasa_bugclass::bugzilla::review_request_package(title) {
-        return builds
-            .iter()
-            .find(|(p, _)| *p == pkg)
-            .map(|(p, v)| (1, format!("update ships {p}-{v}, the package under review")));
+        return match builds.iter().find(|(p, _)| *p == pkg) {
+            Some((p, v)) => Verdict::Decided {
+                karma: 1,
+                reason: format!("update ships {p}-{v}, the package under review"),
+            },
+            None => Verdict::Missing {
+                reason: format!("update builds no {pkg}, the package under review"),
+            },
+        };
     }
     // The component names the package, so the summary only has to
     // yield its version, and the build is found by an exact name
     // match. Nothing here has to guess where the name ends.
-    let pkg = component?;
-    let bug_version = sandogasa_bugclass::bugzilla::extract_new_version(title, pkg)?;
-    let (_, build_version) = builds.iter().find(|(p, _)| p == pkg)?;
-    let addressed = sandogasa_rpmvercmp::rpmvercmp(build_version, &bug_version) != Ordering::Less;
-    let note = if addressed {
-        format!("update delivers {pkg}-{build_version} >= {bug_version}")
-    } else {
-        format!("update only delivers {pkg}-{build_version} < {bug_version}")
+    let Some(pkg) = component else {
+        return Verdict::Unknown;
     };
-    Some((if addressed { 1 } else { -1 }, note))
+    let Some(bug_version) = sandogasa_bugclass::bugzilla::extract_new_version(title, pkg) else {
+        return Verdict::Unknown;
+    };
+    let Some((_, build_version)) = builds.iter().find(|(p, _)| p == pkg) else {
+        return Verdict::Missing {
+            reason: format!("update builds no {pkg}"),
+        };
+    };
+    let addressed = sandogasa_rpmvercmp::rpmvercmp(build_version, &bug_version) != Ordering::Less;
+    Verdict::Decided {
+        karma: if addressed { 1 } else { -1 },
+        reason: if addressed {
+            format!("update delivers {pkg}-{build_version} >= {bug_version}")
+        } else {
+            format!("update only delivers {pkg}-{build_version} < {bug_version}")
+        },
+    }
 }
 
 /// Interpret a karma answer: `+1`/`1`/`+`, `-1`/`-`, `0`, or
@@ -128,6 +175,16 @@ fn parse_karma_answer(line: &str, default: i32) -> Option<i32> {
         "+1" | "1" | "+" => Some(1),
         "-1" | "-" => Some(-1),
         _ => None,
+    }
+}
+
+/// A karma value written the way the prompt accepts it, for showing
+/// which answer Enter will pick.
+fn fmt_karma_answer(karma: i32) -> &'static str {
+    match karma {
+        1 => "+1",
+        -1 => "-1",
+        _ => "0",
     }
 }
 
@@ -147,20 +204,32 @@ fn print_update_context(update: &sandogasa_bodhi::models::Update) {
 }
 
 /// Ask the user for feedback on a bug that couldn't be
-/// auto-decided.
-fn prompt_bug_karma(bug_id: u64, title: &str) -> Result<i32, String> {
+/// auto-decided. `reason`, when present, says why `default` is being
+/// suggested — an unexplained -1 is worse than no suggestion.
+fn prompt_bug_karma(
+    bug_id: u64,
+    title: &str,
+    default: i32,
+    reason: Option<&str>,
+) -> Result<i32, String> {
     use std::io::{BufRead, Write};
     loop {
         eprintln!("bug #{bug_id}: {title}");
         eprintln!("  https://bugzilla.redhat.com/{bug_id}");
-        eprint!("  feedback? [+1/-1/0, default 0]: ");
+        if let Some(reason) = reason {
+            eprintln!("  {reason}");
+        }
+        eprint!(
+            "  feedback? [+1/-1/0, default {}]: ",
+            fmt_karma_answer(default)
+        );
         std::io::stderr().flush().map_err(|e| e.to_string())?;
         let mut line = String::new();
         std::io::stdin()
             .lock()
             .read_line(&mut line)
             .map_err(|e| e.to_string())?;
-        if let Some(karma) = parse_karma_answer(&line, 0) {
+        if let Some(karma) = parse_karma_answer(&line, default) {
             return Ok(karma);
         }
         eprintln!("  unrecognized answer; enter +1, -1, or 0");
@@ -359,33 +428,40 @@ async fn backfill_bug_titles(
     bugs: &mut [sandogasa_bodhi::models::BodhiBug],
 ) -> Components {
     let ids: Vec<u64> = bugs.iter().map(|b| b.bug_id).collect();
-    if ids.is_empty() {
-        return Components::default();
-    }
-    match bz.bugs(&ids).await {
-        Ok(fetched) => {
-            let mut components = Components::default();
-            let mut titles = std::collections::HashMap::new();
-            for bug in fetched {
-                if let Some(component) = bug.component.first() {
-                    components.insert(bug.id, component.clone());
-                }
-                titles.insert(bug.id, bug.summary);
-            }
-            for bug in bugs.iter_mut() {
-                if bug.title.is_none() {
-                    bug.title = titles.get(&bug.bug_id).cloned();
-                }
-            }
-            components
+    let fetched = fetch_bugs(bz, &ids).await;
+    for bug in bugs.iter_mut() {
+        if bug.title.is_none() {
+            bug.title = fetched.get(&bug.bug_id).map(|(summary, _)| summary.clone());
         }
+    }
+    fetched
+        .into_iter()
+        .filter_map(|(id, (_, component))| component.map(|c| (id, c)))
+        .collect()
+}
+
+/// Fetch `ids` from Bugzilla in one batch, as
+/// `id -> (summary, component)`. Best-effort: a failure warns and
+/// yields nothing, leaving callers to fall back on asking the user.
+pub(crate) async fn fetch_bugs(
+    bz: &sandogasa_bugzilla::BzClient,
+    ids: &[u64],
+) -> std::collections::HashMap<u64, (String, Option<String>)> {
+    if ids.is_empty() {
+        return std::collections::HashMap::new();
+    }
+    match bz.bugs(ids).await {
+        Ok(fetched) => fetched
+            .into_iter()
+            .map(|bug| (bug.id, (bug.summary, bug.component.first().cloned())))
+            .collect(),
         Err(e) => {
             eprintln!(
                 "warning: could not fetch bugs from Bugzilla ({e}); \
                  bugs without a Bodhi-cached title, and update requests \
                  whose component is therefore unknown, need manual feedback"
             );
-            Components::default()
+            std::collections::HashMap::new()
         }
     }
 }
@@ -466,43 +542,61 @@ async fn run_async(
         .collect();
 
     let mut decisions = Vec::new();
-    let mut manual = Vec::new();
+    // Bugs to put to the user, each with the answer Enter will take
+    // and, when there is one, why it is being suggested.
+    let mut manual: Vec<(&sandogasa_bodhi::models::BodhiBug, i32, Option<String>)> = Vec::new();
     for bug in &update.bugs {
-        let auto = bug.title.as_deref().and_then(|title| {
-            auto_bug_karma(
+        let verdict = bug.title.as_deref().map_or(Verdict::Unknown, |title| {
+            bug_verdict(
                 title,
                 components.get(&bug.bug_id).map(String::as_str),
                 &builds,
             )
         });
-        match auto {
-            Some((bug_karma, note)) => decisions.push(BugDecision {
+        match verdict {
+            Verdict::Decided { karma, reason } => decisions.push(BugDecision {
                 bug_id: bug.bug_id,
                 title: bug.title.clone(),
-                karma: bug_karma,
-                note,
+                karma,
+                note: reason,
             }),
-            None if assume_yes => decisions.push(BugDecision {
+            // The update ships nothing for this bug's package, so it
+            // does not fix it. Answering 0 would post a claim we have
+            // reason to believe is wrong, so -1 is what `--yes` takes
+            // and what Enter picks.
+            Verdict::Missing { reason } if assume_yes => decisions.push(BugDecision {
+                bug_id: bug.bug_id,
+                title: bug.title.clone(),
+                karma: -1,
+                note: reason,
+            }),
+            Verdict::Missing { reason } => manual.push((bug, -1, Some(reason))),
+            Verdict::Unknown if assume_yes => decisions.push(BugDecision {
                 bug_id: bug.bug_id,
                 title: bug.title.clone(),
                 karma: 0,
                 note: "no automatic verdict; skipped under --yes".to_string(),
             }),
-            None => manual.push(bug),
+            Verdict::Unknown => manual.push((bug, 0, None)),
         }
     }
     if !manual.is_empty() {
         // Show what the update says about itself before asking
         // the user to judge its bugs.
         print_update_context(&update);
-        for bug in manual {
+        for (bug, default, reason) in manual {
             let title = bug.title.as_deref().unwrap_or("<no title>");
-            let bug_karma = prompt_bug_karma(bug.bug_id, title)?;
+            let bug_karma = prompt_bug_karma(bug.bug_id, title, default, reason.as_deref())?;
             decisions.push(BugDecision {
                 bug_id: bug.bug_id,
                 title: bug.title.clone(),
                 karma: bug_karma,
-                note: "manual".to_string(),
+                // Keep the reason when the user took the suggestion,
+                // so the plan and the posted comment say why.
+                note: match reason {
+                    Some(reason) if bug_karma == default => reason,
+                    _ => "manual".to_string(),
+                },
             });
         }
     }
@@ -696,110 +790,166 @@ mod tests {
         assert_eq!(derive_karma(&report(true, false, false, true)).0, 0);
     }
 
+    /// The `(karma, reason)` of a decided verdict, for the tests
+    /// that only care about a decided outcome.
+    fn decided(verdict: Verdict) -> Option<(i32, String)> {
+        match verdict {
+            Verdict::Decided { karma, reason } => Some((karma, reason)),
+            _ => None,
+        }
+    }
+
+    /// Whether the verdict is "the update ships nothing for this
+    /// bug's package", and its reason.
+    fn missing(verdict: Verdict) -> Option<String> {
+        match verdict {
+            Verdict::Missing { reason } => Some(reason),
+            _ => None,
+        }
+    }
+
+    fn is_unknown(verdict: Verdict) -> bool {
+        matches!(verdict, Verdict::Unknown)
+    }
+
     #[test]
-    fn auto_bug_karma_upvotes_exact_version() {
-        let (karma, note) = auto_bug_karma(
+    fn bug_verdict_upvotes_exact_version() {
+        let (karma, note) = decided(bug_verdict(
             "rust-quick-xml-0.40.1 is available",
             Some("rust-quick-xml"),
             &builds(),
-        )
+        ))
         .unwrap();
         assert_eq!(karma, 1);
         assert!(note.contains("0.40.1"), "{note}");
     }
 
     #[test]
-    fn auto_bug_karma_upvotes_newer_build() {
+    fn bug_verdict_upvotes_newer_build() {
         // The update delivers more than the bug asked for.
-        let (karma, _) =
-            auto_bug_karma("fish-3.9.0 is available", Some("fish"), &builds()).unwrap();
+        let (karma, _) = decided(bug_verdict(
+            "fish-3.9.0 is available",
+            Some("fish"),
+            &builds(),
+        ))
+        .unwrap();
         assert_eq!(karma, 1);
     }
 
     #[test]
-    fn auto_bug_karma_downvotes_version_mismatch() {
-        let (karma, note) = auto_bug_karma(
+    fn bug_verdict_downvotes_version_mismatch() {
+        let (karma, note) = decided(bug_verdict(
             "rust-quick-xml-0.41.0 is available",
             Some("rust-quick-xml"),
             &builds(),
-        )
+        ))
         .unwrap();
         assert_eq!(karma, -1);
         assert!(note.contains('<'), "{note}");
     }
 
     #[test]
-    fn auto_bug_karma_upvotes_package_review() {
+    fn bug_verdict_upvotes_package_review() {
         // A newpackage update answers the review request for the
         // package it ships.
-        let (karma, note) = auto_bug_karma(
+        let (karma, note) = decided(bug_verdict(
             "Review Request: rust-quick-xml - High performance XML reader and writer",
             Some("Package Review"),
             &builds(),
-        )
+        ))
         .unwrap();
         assert_eq!(karma, 1);
         assert!(note.contains("rust-quick-xml-0.40.1"), "{note}");
     }
 
     #[test]
-    fn auto_bug_karma_ignores_review_for_another_package() {
-        // Nothing to say about a review of a package this update does
-        // not build — leave it to the user rather than voting -1.
-        assert!(
-            auto_bug_karma(
-                "Review Request: rust-macrotest - Testing macros",
-                Some("Package Review"),
-                &builds()
-            )
-            .is_none()
-        );
+    fn bug_verdict_flags_a_review_for_a_package_not_built() {
+        // The package under review is named in the title, so an
+        // update that does not build it cannot be answering the
+        // review — suggest -1 rather than saying nothing.
+        let reason = missing(bug_verdict(
+            "Review Request: rust-macrotest - Testing macros",
+            Some("Package Review"),
+            &builds(),
+        ))
+        .expect("expected a Missing verdict");
+        assert!(reason.contains("rust-macrotest"), "{reason}");
     }
 
     #[test]
-    fn auto_bug_karma_ignores_a_longer_package_name() {
-        // The bug is about rust-quick-xml-derive, which this update
-        // does not build; rust-quick-xml must not answer for it.
-        assert!(
-            auto_bug_karma(
-                "rust-quick-xml-derive-0.1.0 is available",
-                Some("rust-quick-xml-derive"),
-                &builds()
-            )
-            .is_none(),
-            "a package the update does not ship was auto-voted"
-        );
+    fn bug_verdict_flags_an_update_request_for_a_package_not_built() {
+        let reason = missing(bug_verdict(
+            "rust-dtor-1.0.5 is available",
+            Some("rust-dtor"),
+            &builds(),
+        ))
+        .expect("expected a Missing verdict");
+        assert!(reason.contains("rust-dtor"), "{reason}");
     }
 
     #[test]
-    fn auto_bug_karma_needs_the_component_for_an_update_request() {
+    fn bug_verdict_needs_the_component_for_an_update_request() {
         // Bodhi does not carry the component; when the Bugzilla
         // fetch fails there is nothing to anchor the summary on, so
-        // the bug goes to the user rather than being guessed at.
-        assert!(auto_bug_karma("rust-quick-xml-0.40.1 is available", None, &builds()).is_none());
+        // the bug goes to the user with no suggestion.
+        assert!(is_unknown(bug_verdict(
+            "rust-quick-xml-0.40.1 is available",
+            None,
+            &builds()
+        )));
     }
 
     #[test]
-    fn auto_bug_karma_uses_the_component_not_the_title() {
+    fn bug_verdict_uses_the_component_not_the_title() {
         // rust-ctor is a prefix of the bug's package but a different
-        // component, and it is the component that decides.
-        assert!(
-            auto_bug_karma(
-                "rust-ctor-proc-macro-0.0.13 is available",
-                Some("rust-ctor-proc-macro"),
-                &[("rust-ctor".to_string(), "1.0.8".to_string())],
-            )
-            .is_none(),
-            "a bug for a package the update does not build was auto-voted"
-        );
+        // component, and it is the component that decides. The
+        // update does not build rust-ctor-proc-macro, so this is a
+        // Missing, not a wrong +1 against rust-ctor.
+        let reason = missing(bug_verdict(
+            "rust-ctor-proc-macro-0.0.13 is available",
+            Some("rust-ctor-proc-macro"),
+            &[("rust-ctor".to_string(), "1.0.8".to_string())],
+        ))
+        .expect("expected a Missing verdict");
+        assert!(reason.contains("rust-ctor-proc-macro"), "{reason}");
     }
 
     #[test]
-    fn auto_bug_karma_ignores_other_bugs() {
-        assert!(auto_bug_karma("fish crashes on startup", Some("fish"), &builds()).is_none());
-        assert!(auto_bug_karma("CVE-2026-1234 fish: overflow", Some("fish"), &builds()).is_none());
-        // Update-request bug for a package not in this update.
-        assert!(auto_bug_karma("zsh-5.9 is available", Some("zsh"), &builds()).is_none());
+    fn bug_verdict_says_nothing_about_unclassified_bugs() {
+        // A CVE or a plain bug report names no package we can check,
+        // and its component may be stale after a rename — so no
+        // suggestion, in either direction.
+        assert!(is_unknown(bug_verdict(
+            "fish crashes on startup",
+            Some("fish"),
+            &builds()
+        )));
+        assert!(is_unknown(bug_verdict(
+            "CVE-2026-1234 fish: overflow",
+            Some("fish"),
+            &builds()
+        )));
+    }
+
+    #[test]
+    fn bug_package_names_only_the_kinds_we_classify() {
+        assert_eq!(
+            bug_package("rust-dtor-1.0.5 is available", Some("rust-dtor")).as_deref(),
+            Some("rust-dtor")
+        );
+        assert_eq!(
+            bug_package(
+                "Review Request: rust-macrotest - Testing",
+                Some("Package Review")
+            )
+            .as_deref(),
+            Some("rust-macrotest")
+        );
+        assert_eq!(
+            bug_package("CVE-2026-1234 fish: overflow", Some("fish")),
+            None
+        );
+        assert_eq!(bug_package("fish crashes on startup", Some("fish")), None);
     }
 
     #[test]

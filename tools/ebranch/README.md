@@ -285,14 +285,17 @@ feedback like the Bodhi web UI. Update-request bugs
 update delivers at least the requested version and `-1`
 otherwise; the package is taken from the bug's Bugzilla component,
 which names it outright, so a bug is never matched to a
-similarly-named package. Review requests (`Review Request: <pkg> - ...`) are
+similarly-named package. When the update builds nothing for a bug's
+package it cannot be fixing it, so `-1` is suggested with the reason
+shown — for update requests and review requests only, since those
+name their package; a CVE or FTBFS bug gets no suggestion. Review requests (`Review Request: <pkg> - ...`) are
 auto-voted `+1` when the update builds the package under review —
 the usual case for a `--type newpackage` update. For any other
 bug, including a review of a package this update does not build,
 you are prompted (`+1`/`-1`/`0`).
 The full voting plan is shown for confirmation before anything
-is posted; `--yes` skips the prompts (bugs with no automatic
-verdict then get `0`). The posted comment is the full Markdown check report with
+is posted; `--yes` skips the prompts, taking the suggested `-1`
+where there is one and `0` where there is no verdict at all. The posted comment is the full Markdown check report with
 a provenance footer (ebranch version and the command invocation);
 `--comment <TEXT>` adds reviewer notes as a section near the top,
 and you are prompted for notes interactively when the flag is
@@ -322,6 +325,13 @@ default bugfix), `--severity` (required for `--type security`),
 `--bug <ID,...>` (repeated or CSV; associated bugs are closed when the
 update goes stable), and `--stable-karma`/`--unstable-karma`/
 `--disable-autokarma` for the autopush thresholds.
+
+Listed bugs are screened before the plan is shown: a bug whose package
+the update builds nothing for would be closed by an update that never
+touched it, so it is reported and you are offered the chance to leave
+it off. Only update requests and review requests are screened, since
+they name their package; a CVE or FTBFS bug is never dropped. `--yes`
+warns and keeps them rather than discarding a bug you asked for.
 
 The pass gate reuses the karma derivation: a clean `+1` check submits
 after showing the plan (packages, type, bugs, thresholds, notes
