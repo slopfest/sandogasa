@@ -535,7 +535,246 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
     <https://copr.fedorainfracloud.org/coprs/g/rust/uutils-and-nushell/>,
     and it is the piece that decides what to do next.
 
-  Design first — this spans ebranch, fedora-review-digest and
-  probably poi-tracker's inventory, and the status report needs a
-  clear model of the states a package moves through. Write it up in
-  a DEVELOPMENT.md before building any of it.
+  Design settled so far (2026-08-07), the rest still open.
+
+  It goes in ebranch, as a `copr-status` subcommand. ebranch already
+  owns every action the report dispatches to — `file-request`,
+  `resolve`, `check-update --submit`, `check-pkg-reviews` — and
+  already takes a COPR project as a `check-update` subject. The
+  report is a status view over capabilities that exist, not new
+  plumbing; what is actually new is the state model.
+
+  Each package sits in one state, observed from a client we already
+  have, and each state has one thing that unblocks it:
+
+  | state              | observed via            | next action              |
+  |--------------------|-------------------------|--------------------------|
+  | staged             | sandogasa-copr monitor  | file a review request    |
+  | review filed       | Bugzilla Package Review | wait / nag               |
+  | review approved    | the fedora-review flag  | SCM request              |
+  | repo created       | sandogasa-distgit       | import + build           |
+  | in rawhide         | sandogasa-koji          | ebranch file-request     |
+  | branched           | dist-git branches       | ebranch resolve          |
+  | built for target   | Koji / side tag         | check-update --submit    |
+  | in update          | sandogasa-bodhi         | wait / karma             |
+  | stable             | sandogasa-bodhi         | done                     |
+
+  An existing package being updated skips the first four states and
+  enters at "in rawhide" with a new version, so this is one model
+  with the review states marked N/A — not two.
+
+  A package the report cannot place is reported as unknown with no
+  suggested action, the same principle the karma verdicts settled
+  on: something built in the COPR with no review bug and no dist-git
+  repo may be a build-only dependency that is never meant to ship,
+  and guessing would nag about it every run.
+
+  The effort is tracked in a local state file, not read fresh from
+  the COPR each run. A COPR is a staging area that shrinks: once a
+  package is reviewed, imported and built for Rawhide it gets
+  removed, and with it every trace that it was ever part of the
+  effort. Deriving the package set from the COPR alone would make
+  finished work vanish from the report exactly when you want to see
+  that it is done. The file also holds what no service can tell us —
+  whether a package is meant to ship at all, and which review bug
+  belongs to it.
+
+  So each run reconciles rather than rebuilds:
+  - in the COPR, not in the file → new work, add it;
+  - in both → refresh the observable fields (version, build state);
+  - in the file, not in the COPR → keep it, and stop calling it
+    staged. It is finished, or moved on. Dropping it needs an
+    explicit `--prune`, following poi-tracker's convention.
+
+  State is not monotonic per package, which is the part worth
+  getting right: the review states happen once in a package's life,
+  but the delivery states repeat per version. A newer build
+  appearing in the COPR for something already in Rawhide means that
+  package is staged again at the new version — reviews stay done,
+  everything downstream of them reopens. So the file records the
+  version currently being pushed through, and the delivery states
+  are relative to it.
+
+  `check-crate --toml` already persists a `CheckCrateReport` across
+  runs, and `check-pkg-reviews` writes discovered review bugs back
+  into its `review_bugs` map — this pattern in miniature. Reuse it,
+  but as a separate document that feeds the effort file rather than
+  one merged shape. The obstacle is lifetime, not fields: a rerun of
+  `check-crate` has to be free to overwrite its output wholesale,
+  while the ledger must never lose an entry. One file cannot have
+  both properties, and a union of the two field sets would leave
+  half of them meaningless in each use.
+
+  Three seams to reuse instead:
+  - `review_bugs` (package → bug ID) is the same durable fact the
+    ledger needs. Give it one owner: the ledger, with
+    `check-pkg-reviews` writing there when one is in play and
+    falling back to the analysis TOML otherwise.
+  - `transitive_build_order` is already "what to build, in what
+    order" — consume those `BuildPhase`s rather than recomputing a
+    build order from the ledger.
+  - `TransitiveDep` carries both `name` (the crate) and `package`
+    (the RPM), which is exactly the crate↔package mapping the ledger
+    needs and would otherwise have to derive.
+
+  Seeding is not one path, and the COPR is the primary one: point
+  ebranch at an existing project and it should create the ledger
+  from what is built there, with no prior analysis. A `check-crate
+  --toml` run is an alternative seed for work that starts from a
+  crate rather than a COPR ("these 8 crates need packaging, in this
+  order"), and enrichment for a ledger that already exists.
+
+  That sets the ledger's floor: it has to be useful knowing only
+  package names and versions, because that is all a COPR gives.
+  Every field that comes from an analysis — the crate a package
+  builds, the build order, the dependency edges — is optional and
+  fillable later. Placing a package in its state needs only its
+  name, since the review bug, dist-git repo, Koji builds and Bodhi
+  updates are all looked up by package name; the build order matters
+  only for the "branched, not built" action, and its absence should
+  degrade that to an unordered list rather than blocking the report.
+
+  An explicit path fits ebranch's habits better than a
+  `dirs::state_dir()` location (only fesco-chair uses that today,
+  for its saved agenda), and an effort file is something you may
+  want to keep beside the work rather than under `~/.local/state`.
+
+  Tying a package to its review bug has three ways in, in order of
+  how much they cost the user: set it directly in the ledger; scan
+  the ledger for packages whose review bug is unknown and, for each,
+  either take an ID or search for one; or search silently where the
+  answer is unambiguous. The search itself already exists in
+  `review_deps.rs` — product=Fedora, component=Package Review,
+  `short_desc` substring on `Review Request: <pkg> - ` — and should
+  be extracted rather than written again.
+
+  Two changes to it for this use:
+  - Post-filter with `bugzilla::review_request_package(summary) ==
+    package` instead of the `starts_with` prefix. It is exact where
+    a substring is not, which is the mistake that produced a wrong
+    +1 on an update this week, and it is also more tolerant: the
+    prefix form requires the summary to use " - " as its separator
+    and silently finds nothing when a reviewer wrote something else.
+  - On multiple candidates, ask rather than take the newest.
+    `review_deps` prefers the latest open bug, which is fine for
+    linking Depends On, but the ledger is durable and a wrong ID
+    persists until someone notices. Show the candidates with their
+    status and let the user pick.
+
+  Closed reviews are wanted, not noise: an approved-and-closed
+  review is exactly how a package that already graduated is
+  recognized, and filtering to open bugs would lose that.
+
+  Better still, make the field the *route* a package takes out of
+  the COPR rather than a review bug with exceptions. There are
+  three, and every package is on exactly one:
+  - review — a new package, tracked by its Review Request bug;
+  - pull request — an update to an existing package, tracked by its
+    dist-git PR (someone else's package, or your own when you want
+    it reviewed);
+  - direct — your own package, pushed and built with nothing to
+    track.
+
+  Plus "unknown", meaning nobody has said yet. That subsumes the
+  "not applicable" case a review-bug-shaped field would need: an
+  existing package is not a review with no bug, it is a different
+  route. Without it, a scan re-searches Bugzilla for the same
+  package forever and the report shows an entry that can never
+  resolve.
+
+  It also fixes an oversimplification above: an existing package
+  does not skip straight to "in rawhide". It has middle states of
+  its own — PR open, PR merged — and the direct route has none at
+  all. Three entry paths that converge once the build lands in
+  Rawhide, after which every package follows the same branch,
+  build, update sequence.
+
+  `sandogasa-distgit` already has `user_pull_requests` and
+  `user_actionable_pull_requests`, keyed by user, which covers "my
+  PR" — the usual case when staging an effort. Finding anyone's PR
+  against a given package would want a per-project query
+  (`/api/0/rpms/<pkg>/pull-requests`), a small addition to the
+  client if it turns out to be needed.
+
+  Two modes, split on facts versus decisions rather than read
+  versus write. By default `copr-status` reports: it refreshes what
+  the services can tell us — COPR versions, Koji builds, dist-git
+  branches, Bodhi updates — writes those back to the ledger, prints
+  the report, and leaves every unknown as unknown. It never prompts
+  and never guesses. Writing the refreshed facts back is deliberate
+  rather than a surprise on a read command: they were expensive to
+  gather and they are observations, not choices, so discarding them
+  would just make the next run pay again.
+
+  `--update` adds the part that needs a person: searching for a
+  review bug or PR, asking which route a package takes, resolving
+  ambiguous candidates. In `--json` mode or without a terminal it
+  must not prompt; it can still fill in what is unambiguous and
+  leave the rest, the way the rest of the workspace behaves.
+
+  `--offline` prints the ledger without contacting anything. Not a
+  nicety to add later: the point of keeping durable state is that it
+  survives, so reading it must not require five services to be
+  reachable. Someone on a train wants to know where the effort
+  stands.
+
+  Which makes staleness the thing to get right. Each fact records
+  when it was last refreshed, so an offline report says "built for
+  rawhide (as of 2026-08-05)" rather than presenting a week-old
+  observation as current. A status tool that silently shows stale
+  data is worse than one that refuses to run.
+
+  Refreshing stays the default, because the usual question is where
+  things stand now — but it degrades per source rather than all or
+  nothing. A spotty connection is the awkward case: Koji answers,
+  Bodhi times out. Keep the last-known Bodhi facts with their old
+  timestamp, warn, and report the rest, instead of failing the run
+  or blanking a field we simply could not check this time.
+
+  Setting one association directly should not require a full run,
+  since it is the fastest path when you already know the answer:
+  something like `copr-status --set rust-foo=pr:1234` that writes
+  the ledger and exits.
+
+  This is the package → review bug direction. The other direction —
+  review bug → COPR, by scanning a bug's comments for
+  `coprs/(g/)?<owner>/<project>`, which is how the project behind
+  bug 2498026 was found — is still wanted, but for a different
+  feature: enabling the right repo when reviewing. Keep them
+  separate.
+  Targets are derived from the COPR's chroots, narrowed by
+  `--target`. The chroots are the universe of what is possible, so a
+  `--target` naming a release the COPR does not build for is an
+  error that lists the available ones, not an empty report.
+  `sandogasa_copr::chroot_prefix` already maps a branch to its
+  chroot prefix (rawhide, eln, f42, epel9, c10s) and
+  `available_chroots` lists what a project has, so the mapping is
+  done.
+
+  One ledger holds every target, rather than one ledger per
+  release. Sort the facts by whether they depend on the target and
+  the reason is plain:
+  - target-independent: the route and its review bug or PR (a
+    review happens once in a package's life), the crate↔package
+    mapping, whether the package is in scope at all, and whether it
+    reached Rawhide;
+  - per-target: branched, built, in an update, which side tag.
+
+  Splitting per release would copy the first group into every file,
+  and copies of durable facts drift. It would also make a backport
+  phase start empty, re-asking which review bug belongs to each of
+  forty packages that already know. With one ledger, phase two is
+  adding `epel9` to the targets and everything human-supplied is
+  already there — the phased workflow is a view, `--target`, not a
+  storage layout.
+
+  Rawhide is not a peer of the other targets, which is what makes
+  this shape fall out: a package lands in Rawhide first and is
+  branched from there, so "in rawhide" belongs to the shared spine
+  (staged → route → in rawhide) and only branched/built/update
+  repeat per target. A ledger targeting Rawhide alone simply has no
+  per-target section yet, which is exactly the state the
+  uutils-and-nushell effort is in now.
+
+  Write the settled model into ebranch's DEVELOPMENT.md when the
+  work starts; it lives here until then because none of it exists.
