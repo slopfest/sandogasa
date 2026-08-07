@@ -385,3 +385,102 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   endpoints each `*_report` calls.
 
 
+
+## ebranch check-update (2026-08-07)
+
+- (2026-08-07) When a recognized bug's package is in no build of the
+  update, suggest -1 instead of falling through to a bare prompt. If
+  the update ships nothing for that package it does not fix that bug,
+  which is what a -1 on Bodhi means, and a silent default of 0 leaves
+  the user wondering why nothing was decided.
+
+  Scope it to the two kinds that name their package outright: an
+  update request (its Bugzilla component, confirmed by the summary
+  parsing as `<component>-<version> is available`) and a review
+  request (the package under review, from the title). Everything else
+  — CVE, FTBFS, plain bugs — is not classified here and must keep
+  today's behavior of no verdict and a 0 default; those are the ones
+  where a component can be stale after a package rename, and we have
+  no basis to read anything into a missing match.
+
+  Treat it as a suggestion rather than a verdict: the interactive
+  prompt defaults to -1 and prints the reason ("this update builds no
+  rust-dtor"), and `--yes` takes the suggestion rather than 0, since
+  0 would post a claim we have reason to think is wrong. The reason
+  goes in the vote plan either way, which is confirmed before
+  anything is posted.
+
+  On our own updates, prefer fixing the update to voting on it. A -1
+  from the submitter is nearly useless anyway — Bodhi zeroes the
+  submitter's overall karma, and karma.rs already detects this as
+  `own_update` — while the bug being listed at all is the actual
+  mistake. So:
+  - under `--submit`, when a bug we are about to attach would score
+    -1, offer to leave it off the update before submitting;
+  - under `--give-karma` on an update we submitted, offer to edit the
+    update and drop the bug instead of casting the -1.
+
+  Editing an update's bug list is safe: it does not unpush the update
+  or reset its state, unlike touching its builds. `sandogasa-bodhi`
+  has no edit method yet (`new_update_from_tag` and `comment` are the
+  only writes), so this needs one — a POST to the update's edit
+  endpoint carrying the existing fields with a modified `bugs` list.
+  Confirm before writing, and print the bugs being dropped with the
+  reason each was flagged.
+
+- (2026-08-07) Discover an update's bugs instead of making the
+  maintainer find them: `--submit` should propose the bug list.
+  Finding which bugs belong to a big update is one of the more
+  time-consuming parts of the flow. Two sources, and the second is
+  the one that earns its keep:
+  1. Open Bugzilla bugs against the components being built — update
+     requests (`<pkg>-<version> is available`, FutureFeature) and
+     package reviews. `sandogasa_bugclass::bugzilla::classify`
+     already sorts these, and the anchored `extract_new_version`
+     tells us whether the build actually satisfies the request.
+  2. `rhbz#NNN` mentions in the builds' RPM changelogs. A bug fixed
+     in Rawhide is auto-closed when that build lands, so it is no
+     longer *open* against the component and source 1 misses it —
+     but the EPEL/branch update still fixes it and should list it.
+     Read the changelog from the build (koji, or the spec in
+     dist-git) and parse the usual `rhbz#NNN` / `RHBZ#NNN` /
+     `bz#NNN` / bugzilla URL forms.
+
+  Present the union for confirmation with each bug's provenance
+  (which build's changelog, or which component's open-bug query) and
+  let the user drop entries, the way the per-bug vote plan already
+  works. Bugs already attached to the update are left alone.
+
+## COPR-staged update workflows (2026-08-07)
+
+- (2026-08-07) Big multi-package updates get staged in a COPR first,
+  and the COPR is currently a fact that lives only in the
+  maintainer's head. Several tools already speak COPR — `ebranch
+  check-update` accepts an `owner/project` spec or project URL as
+  its subject, `fedora-review-digest` can review against one, and
+  `sandogasa-copr` is the shared read-only client — so this is
+  mostly about connecting them rather than new plumbing. Wanted:
+  - Record the COPR on a review request when filing it, and find it
+    again when reviewing. Real example: the reviews for the
+    uutils/nushell stack carry the project only as a build URL in a
+    comment — bug 2498026 has
+    `copr.fedorainfracloud.org/coprs/g/rust/uutils-and-nushell/build/10697994/`
+    in comment 2, while the bug's `url` field points at crates.io.
+    So detection means scanning comments for
+    `coprs/(g/)?<owner>/<project>` and normalizing to the
+    `@group/project` spec the other tools take.
+  - Given a review request that names a COPR, have
+    `fedora-review-digest` enable that repo for the review run
+    automatically, instead of the reviewer wiring it up by hand.
+  - Given the COPR, report the state of the whole effort: which
+    packages are built there but have no review request, which have
+    a review in progress, which are approved and need importing,
+    which are in Rawhide but not yet branched, and which need a
+    Bodhi update. That is the missing overview for something like
+    <https://copr.fedorainfracloud.org/coprs/g/rust/uutils-and-nushell/>,
+    and it is the piece that decides what to do next.
+
+  Design first — this spans ebranch, fedora-review-digest and
+  probably poi-tracker's inventory, and the status report needs a
+  clear model of the states a package moves through. Write it up in
+  a DEVELOPMENT.md before building any of it.
