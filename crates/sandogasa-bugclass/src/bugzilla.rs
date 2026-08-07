@@ -17,15 +17,29 @@ pub struct TrackerIds {
     pub fti: HashSet<u64>,
 }
 
-/// Extract the new version from a release-monitoring bug summary
-/// of the form `"<component>-<version> is available"`.
+/// Extract the new version from a release-monitoring bug summary of
+/// the form `"<component>-<version> is available"`.
+///
+/// The match is anchored on `component`: the summary must continue
+/// with a `-` and then a digit, so a component is not taken for the
+/// prefix of a longer package name — `rust-ctor` does not answer for
+/// `rust-ctor-proc-macro-0.0.13`, whose remainder begins a name
+/// segment rather than a version.
+///
+/// Anchoring is what makes this reliable, and why there is no
+/// version of this that parses a summary without being told the
+/// package. `rust-md-5-0.10.6` splits as `rust-md-5` + `0.10.6` or
+/// `rust-md` + `5-0.10.6` with equal justification — both are real
+/// Fedora package names — and only the caller's candidate settles
+/// it. Splitting from the right the way [`sandogasa_koji::parse_nvr`]
+/// does is no help either: a summary carries no release field, and a
+/// version may itself contain a `-` (`0.5a1.dev-r2707`).
 pub fn extract_new_version(summary: &str, component: &str) -> Option<String> {
     let body = summary.trim().strip_suffix(" is available")?;
-    // The component prefix is followed by a single `-`; the rest is
-    // the version (which may itself contain `-`, e.g. `1.0-r2707`).
-    let rest = body.strip_prefix(component)?;
-    let version = rest.strip_prefix('-').unwrap_or(rest);
-    (!version.is_empty()).then(|| version.to_string())
+    let version = body.strip_prefix(component)?.strip_prefix('-')?;
+    version
+        .starts_with(|c: char| c.is_ascii_digit())
+        .then(|| version.to_string())
 }
 
 /// Extract the package name from a package-review bug summary of the
@@ -67,15 +81,17 @@ pub fn classify(bug: &Bug, trackers: &TrackerIds) -> BugKind {
         return BugKind::Security;
     }
 
-    // Update request: FutureFeature keyword + "is available" summary.
-    if bug.keywords.iter().any(|k| k == "FutureFeature") {
-        let component = bug.component.first().map(|s| s.as_str()).unwrap_or("");
-        if !component.is_empty()
-            && bug.summary.starts_with(component)
-            && bug.summary.contains("is available")
-        {
-            return BugKind::Update;
-        }
+    // Update request: FutureFeature keyword, and a summary naming
+    // this component and a new version. Going through
+    // `extract_new_version` rather than a bare `starts_with` anchors
+    // the component the same way the version comparison does, so a
+    // bug against `rust-ctor` is not labelled an update request on
+    // the strength of a `rust-ctor-proc-macro-0.0.13` summary.
+    if bug.keywords.iter().any(|k| k == "FutureFeature")
+        && let Some(component) = bug.component.first()
+        && extract_new_version(&bug.summary, component).is_some()
+    {
+        return BugKind::Update;
     }
 
     // Branch request.
@@ -187,6 +203,46 @@ mod tests {
     }
 
     #[test]
+    fn extract_new_version_handles_names_ending_in_a_digit() {
+        // rust-md-5, rust-sha-1, rust-utf-8 and friends are real
+        // packages: the last name segment is a digit, so the version
+        // boundary cannot be found without knowing the name.
+        assert_eq!(
+            extract_new_version("rust-md-5-0.10.6 is available", "rust-md-5").as_deref(),
+            Some("0.10.6")
+        );
+        assert_eq!(
+            extract_new_version("rust-sha-1-0.10.1 is available", "rust-sha-1").as_deref(),
+            Some("0.10.1")
+        );
+    }
+
+    #[test]
+    fn extract_new_version_rejects_a_longer_package_name() {
+        // `rust-ctor` is a prefix of `rust-ctor-proc-macro`, but the
+        // bug is about the latter: what follows the prefix is another
+        // name segment, not a version.
+        assert_eq!(
+            extract_new_version("rust-ctor-proc-macro-0.0.13 is available", "rust-ctor"),
+            None
+        );
+        // The package it really names still resolves.
+        assert_eq!(
+            extract_new_version(
+                "rust-ctor-proc-macro-0.0.13 is available",
+                "rust-ctor-proc-macro"
+            )
+            .as_deref(),
+            Some("0.0.13")
+        );
+        // A name that merely starts the same is not a match either.
+        assert_eq!(
+            extract_new_version("rust-ctor2-1.0 is available", "rust-ctor"),
+            None
+        );
+    }
+
+    #[test]
     fn review_request_package_handles_real_summaries() {
         // Package names contain dashes themselves, so the split is on
         // whitespace, not on the description separator.
@@ -242,6 +298,30 @@ mod tests {
         let trackers = TrackerIds::default();
         let bug = make_bug("fish-4.0 is available", "fish", &["FutureFeature"], &[]);
         assert_eq!(classify(&bug, &trackers), BugKind::Update);
+        // A name that merely ends in a digit is still this component's
+        // update request.
+        let bug = make_bug(
+            "rust-md-5-0.10.6 is available",
+            "rust-md-5",
+            &["FutureFeature"],
+            &[],
+        );
+        assert_eq!(classify(&bug, &trackers), BugKind::Update);
+    }
+
+    #[test]
+    fn classify_update_request_is_anchored_on_the_component() {
+        let trackers = TrackerIds::default();
+        // The summary is about rust-ctor-proc-macro, so this is not
+        // an update request for rust-ctor, whose name merely prefixes
+        // it.
+        let bug = make_bug(
+            "rust-ctor-proc-macro-0.0.13 is available",
+            "rust-ctor",
+            &["FutureFeature"],
+            &[],
+        );
+        assert_eq!(classify(&bug, &trackers), BugKind::Other);
     }
 
     #[test]

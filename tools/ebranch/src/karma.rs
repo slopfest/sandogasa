@@ -5,10 +5,10 @@
 //! Posts a comment with overall karma and per-bug feedback, the
 //! way the Bodhi web UI does. Release-monitoring update-request
 //! bugs ("<pkg>-<version> is available") are auto-voted by
-//! comparing the requested version against what the update's
-//! builds deliver, and review requests ("Review Request: <pkg>")
-//! by whether the update builds that package; anything else is
-//! put to the user.
+//! comparing the requested version against what the update's build
+//! of that bug's Bugzilla component delivers, and review requests
+//! ("Review Request: <pkg>") by whether the update builds that
+//! package; anything else is put to the user.
 //!
 //! Authentication reuses the bodhi CLI's cached OIDC session
 //! (see `sandogasa_bodhi::auth`) — authenticate once with any
@@ -18,6 +18,11 @@ use std::cmp::Ordering;
 
 use sandogasa_bodhi::models::BugFeedbackItem;
 use sandogasa_bodhi::{BodhiClient, auth};
+
+/// Bug ID to Bugzilla component. A release-monitoring bug's
+/// component names the package it is about, which is what an
+/// update's builds are matched against.
+type Components = std::collections::HashMap<u64, String>;
 
 /// One per-bug feedback decision, with the rationale shown in the
 /// confirmation plan.
@@ -73,12 +78,21 @@ fn fmt_karma(karma: i32) -> String {
 /// update's builds (`(source name, version)` pairs).
 ///
 /// A release-monitoring title `"<pkg>-<version> is available"`
-/// matching one of the update's packages gets +1 when the build
-/// delivers at least the requested version and -1 otherwise. A
-/// review request `"Review Request: <pkg> - ..."` gets +1 when the
-/// update builds that package. Returns `None` for anything else —
-/// the caller should ask the user.
-fn auto_bug_karma(title: &str, builds: &[(String, String)]) -> Option<(i32, String)> {
+/// gets +1 when the update's build of `component` delivers at least
+/// the requested version and -1 otherwise. A review request
+/// `"Review Request: <pkg> - ..."` gets +1 when the update builds
+/// that package. Returns `None` for anything else — the caller
+/// should ask the user.
+///
+/// `component` is the bug's Bugzilla component, which names the
+/// package outright; without it an update request cannot be judged,
+/// because the package cannot be recovered from the summary alone
+/// (see `sandogasa_bugclass::bugzilla::extract_new_version`).
+fn auto_bug_karma(
+    title: &str,
+    component: Option<&str>,
+    builds: &[(String, String)],
+) -> Option<(i32, String)> {
     // A package review is answered by shipping the package under
     // review; there is no version in the title to compare. If the
     // update does not build that package, we have nothing to say
@@ -89,21 +103,19 @@ fn auto_bug_karma(title: &str, builds: &[(String, String)]) -> Option<(i32, Stri
             .find(|(p, _)| *p == pkg)
             .map(|(p, v)| (1, format!("update ships {p}-{v}, the package under review")));
     }
-    for (pkg, build_version) in builds {
-        let Some(bug_version) = sandogasa_bugclass::bugzilla::extract_new_version(title, pkg)
-        else {
-            continue;
-        };
-        let addressed =
-            sandogasa_rpmvercmp::rpmvercmp(build_version, &bug_version) != Ordering::Less;
-        let note = if addressed {
-            format!("update delivers {pkg}-{build_version} >= {bug_version}")
-        } else {
-            format!("update only delivers {pkg}-{build_version} < {bug_version}")
-        };
-        return Some((if addressed { 1 } else { -1 }, note));
-    }
-    None
+    // The component names the package, so the summary only has to
+    // yield its version, and the build is found by an exact name
+    // match. Nothing here has to guess where the name ends.
+    let pkg = component?;
+    let bug_version = sandogasa_bugclass::bugzilla::extract_new_version(title, pkg)?;
+    let (_, build_version) = builds.iter().find(|(p, _)| p == pkg)?;
+    let addressed = sandogasa_rpmvercmp::rpmvercmp(build_version, &bug_version) != Ordering::Less;
+    let note = if addressed {
+        format!("update delivers {pkg}-{build_version} >= {bug_version}")
+    } else {
+        format!("update only delivers {pkg}-{build_version} < {bug_version}")
+    };
+    Some((if addressed { 1 } else { -1 }, note))
 }
 
 /// Interpret a karma answer: `+1`/`1`/`+`, `-1`/`-`, `0`, or
@@ -345,29 +357,36 @@ async fn session_username_with_retry(http: &reqwest::Client) -> Option<String> {
 async fn backfill_bug_titles(
     bz: &sandogasa_bugzilla::BzClient,
     bugs: &mut [sandogasa_bodhi::models::BodhiBug],
-) {
-    let missing: Vec<u64> = bugs
-        .iter()
-        .filter(|b| b.title.is_none())
-        .map(|b| b.bug_id)
-        .collect();
-    if missing.is_empty() {
-        return;
+) -> Components {
+    let ids: Vec<u64> = bugs.iter().map(|b| b.bug_id).collect();
+    if ids.is_empty() {
+        return Components::default();
     }
-    match bz.bugs(&missing).await {
+    match bz.bugs(&ids).await {
         Ok(fetched) => {
-            let by_id: std::collections::HashMap<u64, String> =
-                fetched.into_iter().map(|b| (b.id, b.summary)).collect();
+            let mut components = Components::default();
+            let mut titles = std::collections::HashMap::new();
+            for bug in fetched {
+                if let Some(component) = bug.component.first() {
+                    components.insert(bug.id, component.clone());
+                }
+                titles.insert(bug.id, bug.summary);
+            }
             for bug in bugs.iter_mut() {
                 if bug.title.is_none() {
-                    bug.title = by_id.get(&bug.bug_id).cloned();
+                    bug.title = titles.get(&bug.bug_id).cloned();
                 }
             }
+            components
         }
-        Err(e) => eprintln!(
-            "warning: could not fetch bug titles from Bugzilla ({e}); \
-             bugs without a Bodhi-cached title need manual feedback"
-        ),
+        Err(e) => {
+            eprintln!(
+                "warning: could not fetch bugs from Bugzilla ({e}); \
+                 bugs without a Bodhi-cached title, and update requests \
+                 whose component is therefore unknown, need manual feedback"
+            );
+            Components::default()
+        }
     }
 }
 
@@ -405,7 +424,7 @@ async fn run_async(
         .map_err(|e| format!("cannot fetch update {alias}: {e}"))?;
     // Bodhi's bug tracker is Red Hat Bugzilla (the same instance
     // the manual prompt links to); public summaries need no auth.
-    backfill_bug_titles(
+    let components = backfill_bug_titles(
         &sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com"),
         &mut update.bugs,
     )
@@ -449,10 +468,13 @@ async fn run_async(
     let mut decisions = Vec::new();
     let mut manual = Vec::new();
     for bug in &update.bugs {
-        let auto = bug
-            .title
-            .as_deref()
-            .and_then(|title| auto_bug_karma(title, &builds));
+        let auto = bug.title.as_deref().and_then(|title| {
+            auto_bug_karma(
+                title,
+                components.get(&bug.bug_id).map(String::as_str),
+                &builds,
+            )
+        });
         match auto {
             Some((bug_karma, note)) => decisions.push(BugDecision {
                 bug_id: bug.bug_id,
@@ -676,8 +698,12 @@ mod tests {
 
     #[test]
     fn auto_bug_karma_upvotes_exact_version() {
-        let (karma, note) =
-            auto_bug_karma("rust-quick-xml-0.40.1 is available", &builds()).unwrap();
+        let (karma, note) = auto_bug_karma(
+            "rust-quick-xml-0.40.1 is available",
+            Some("rust-quick-xml"),
+            &builds(),
+        )
+        .unwrap();
         assert_eq!(karma, 1);
         assert!(note.contains("0.40.1"), "{note}");
     }
@@ -685,14 +711,19 @@ mod tests {
     #[test]
     fn auto_bug_karma_upvotes_newer_build() {
         // The update delivers more than the bug asked for.
-        let (karma, _) = auto_bug_karma("fish-3.9.0 is available", &builds()).unwrap();
+        let (karma, _) =
+            auto_bug_karma("fish-3.9.0 is available", Some("fish"), &builds()).unwrap();
         assert_eq!(karma, 1);
     }
 
     #[test]
     fn auto_bug_karma_downvotes_version_mismatch() {
-        let (karma, note) =
-            auto_bug_karma("rust-quick-xml-0.41.0 is available", &builds()).unwrap();
+        let (karma, note) = auto_bug_karma(
+            "rust-quick-xml-0.41.0 is available",
+            Some("rust-quick-xml"),
+            &builds(),
+        )
+        .unwrap();
         assert_eq!(karma, -1);
         assert!(note.contains('<'), "{note}");
     }
@@ -703,6 +734,7 @@ mod tests {
         // package it ships.
         let (karma, note) = auto_bug_karma(
             "Review Request: rust-quick-xml - High performance XML reader and writer",
+            Some("Package Review"),
             &builds(),
         )
         .unwrap();
@@ -715,16 +747,59 @@ mod tests {
         // Nothing to say about a review of a package this update does
         // not build — leave it to the user rather than voting -1.
         assert!(
-            auto_bug_karma("Review Request: rust-macrotest - Testing macros", &builds()).is_none()
+            auto_bug_karma(
+                "Review Request: rust-macrotest - Testing macros",
+                Some("Package Review"),
+                &builds()
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn auto_bug_karma_ignores_a_longer_package_name() {
+        // The bug is about rust-quick-xml-derive, which this update
+        // does not build; rust-quick-xml must not answer for it.
+        assert!(
+            auto_bug_karma(
+                "rust-quick-xml-derive-0.1.0 is available",
+                Some("rust-quick-xml-derive"),
+                &builds()
+            )
+            .is_none(),
+            "a package the update does not ship was auto-voted"
+        );
+    }
+
+    #[test]
+    fn auto_bug_karma_needs_the_component_for_an_update_request() {
+        // Bodhi does not carry the component; when the Bugzilla
+        // fetch fails there is nothing to anchor the summary on, so
+        // the bug goes to the user rather than being guessed at.
+        assert!(auto_bug_karma("rust-quick-xml-0.40.1 is available", None, &builds()).is_none());
+    }
+
+    #[test]
+    fn auto_bug_karma_uses_the_component_not_the_title() {
+        // rust-ctor is a prefix of the bug's package but a different
+        // component, and it is the component that decides.
+        assert!(
+            auto_bug_karma(
+                "rust-ctor-proc-macro-0.0.13 is available",
+                Some("rust-ctor-proc-macro"),
+                &[("rust-ctor".to_string(), "1.0.8".to_string())],
+            )
+            .is_none(),
+            "a bug for a package the update does not build was auto-voted"
         );
     }
 
     #[test]
     fn auto_bug_karma_ignores_other_bugs() {
-        assert!(auto_bug_karma("fish crashes on startup", &builds()).is_none());
-        assert!(auto_bug_karma("CVE-2026-1234 fish: overflow", &builds()).is_none());
+        assert!(auto_bug_karma("fish crashes on startup", Some("fish"), &builds()).is_none());
+        assert!(auto_bug_karma("CVE-2026-1234 fish: overflow", Some("fish"), &builds()).is_none());
         // Update-request bug for a package not in this update.
-        assert!(auto_bug_karma("zsh-5.9 is available", &builds()).is_none());
+        assert!(auto_bug_karma("zsh-5.9 is available", Some("zsh"), &builds()).is_none());
     }
 
     #[test]
@@ -779,15 +854,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backfill_bug_titles_fills_missing_only() {
+    async fn backfill_bug_titles_keeps_cached_titles() {
         use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
-        // Only the title-less bug is requested; the cached one is not.
+        // Every bug is requested — components are never cached by
+        // Bodhi — but a title Bodhi already has is not overwritten.
         Mock::given(method("GET"))
             .and(path("/rest/bug"))
             .and(query_param("id", "100"))
+            .and(query_param("id", "200"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "bugs": [{
                     "id": 100,
@@ -810,20 +887,25 @@ mod tests {
 
         let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
         let mut bugs = vec![bodhi_bug(100, None), bodhi_bug(200, Some("cached title"))];
-        backfill_bug_titles(&bz, &mut bugs).await;
+        let components = backfill_bug_titles(&bz, &mut bugs).await;
         assert_eq!(
             bugs[0].title.as_deref(),
             Some("tree-sitter-fsharp-0.3.1 is available")
         );
         assert_eq!(bugs[1].title.as_deref(), Some("cached title"));
+        // The component came back for the bug Bugzilla returned.
+        assert_eq!(
+            components.get(&100).map(String::as_str),
+            Some("rust-tree-sitter-fsharp")
+        );
     }
 
     #[tokio::test]
-    async fn backfill_bug_titles_survives_fetch_failure_and_skips_when_cached() {
+    async fn backfill_bug_titles_survives_fetch_failure() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        // Fetch failure: titles stay missing, no panic.
+        // Fetch failure: titles stay missing, no components, no panic.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/rest/bug"))
@@ -832,20 +914,47 @@ mod tests {
             .await;
         let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
         let mut bugs = vec![bodhi_bug(100, None)];
-        backfill_bug_titles(&bz, &mut bugs).await;
+        let components = backfill_bug_titles(&bz, &mut bugs).await;
         assert!(bugs[0].title.is_none());
+        assert!(components.is_empty());
+    }
 
-        // All titles cached: no request at all (expect(0)).
+    #[tokio::test]
+    async fn backfill_bug_titles_fetches_components_for_cached_titles() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Bodhi caches titles but never components, so a cached
+        // title is no reason to skip the fetch: without the
+        // component an update request cannot be judged at all.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/rest/bug"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(0)
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{
+                    "id": 200,
+                    "summary": "cached",
+                    "status": "NEW",
+                    "resolution": "",
+                    "product": "Fedora",
+                    "component": ["rust-md-5"],
+                    "severity": "",
+                    "priority": "",
+                    "assigned_to": "",
+                    "creator": "",
+                    "creation_time": "2026-01-01T00:00:00Z",
+                    "last_change_time": "2026-01-01T00:00:00Z",
+                    "keywords": [],
+                    "blocks": [],
+                }]
+            })))
+            .expect(1)
             .mount(&server)
             .await;
         let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
         let mut bugs = vec![bodhi_bug(200, Some("cached"))];
-        backfill_bug_titles(&bz, &mut bugs).await;
+        let components = backfill_bug_titles(&bz, &mut bugs).await;
         assert_eq!(bugs[0].title.as_deref(), Some("cached"));
+        assert_eq!(components.get(&200).map(String::as_str), Some("rust-md-5"));
     }
 }

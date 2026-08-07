@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+### sandogasa-bugclass: a package name is not a version prefix
+
+`extract_new_version` stripped the component name off a release
+monitoring summary and took whatever remained as the version, so a
+component that is the *prefix* of a longer package name matched a bug
+that was not about it. `rust-ctor` against "rust-ctor-proc-macro-0.0.13
+is available" yielded `proc-macro-0.0.13`, and comparing that to a real
+version left the verdict to whatever rpmvercmp made of it — it ranks a
+leading digit above a leading letter, so `1.0.8` came out "newer" and
+the bug looked fixed.
+
+In `ebranch check-update --give-karma` that meant a confident, wrong
+`+1` posted to Bodhi: an update shipping rust-ctor claimed to fix the
+rust-ctor-proc-macro update request, with `update delivers
+rust-ctor-1.0.8 >= proc-macro-0.0.13` as its stated reason. Bugs whose
+package is genuinely absent from an update now fall through to the
+interactive prompt, which is what should have happened.
+
+The match is now anchored: after the component name the summary must
+continue with a `-` and then a digit, so a remainder that begins
+another name segment is no longer accepted as a version.
+
+Anchoring on a name the caller supplies is the only reliable way to
+read these summaries, because they are ambiguous on their own.
+`rust-md-5-0.10.6` splits as `rust-md-5` + `0.10.6` or as `rust-md` +
+`5-0.10.6` with equal justification, and both are real Fedora package
+names (as are `rust-sha-1`, `rust-utf-8`, `rust-loopdev-3` and
+`rust-z-base-32`). Splitting from the right the way
+`sandogasa_koji::parse_nvr` does is no help either: a summary carries
+no release field, and a version may itself contain a `-`
+(`python-peak-rules-0.5a1.dev-r2707`).
+
+poi-tracker's `semver-audit` and `triage-updates` and
+sandogasa-pkg-health's pending-update check pass a component that came
+from Bugzilla, so anchoring simply always succeeds for them; they
+shared the flaw through `extract_new_version` and are fixed with it.
+
+`ebranch check-update` was the one caller with no component to anchor
+on — Bodhi's bug records carry only an ID and a title — which is why it
+was reduced to trying each of the update's builds as a prefix. It now
+reads each bug's component from Bugzilla, in the batched fetch it
+already made to backfill titles Bodhi had not cached yet, and matches
+that against the update's builds by exact name. Since the component
+names the package outright, nothing has to infer where the name ends.
+When the Bugzilla fetch fails the component is unknown and the bug goes
+to the interactive prompt rather than being guessed at.
+
+`classify` labelled a bug `BugKind::Update` on a bare
+`summary.starts_with(component)`, so it had the same blind spot — a
+`rust-ctor-proc-macro-0.0.13` summary read as an update request for
+`rust-ctor`. It now anchors through `extract_new_version` like
+everything else. This also makes the summary have to *end* with "is
+available" rather than merely contain it, which is how
+the-new-hotness files them.
+
+This predates the review-request support added in the same release;
+review requests match a build name exactly and were never affected.
+
 ### Release tooling: verify a publish landed
 
 `make check-published` (`scripts/check-published.sh`) checks every

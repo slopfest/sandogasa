@@ -283,7 +283,9 @@ or override with `+1`/`-1`/`0`). Listed bugs get per-bug
 feedback like the Bodhi web UI. Update-request bugs
 (`<pkg>-<version> is available`) are auto-voted `+1` when the
 update delivers at least the requested version and `-1`
-otherwise. Review requests (`Review Request: <pkg> - ...`) are
+otherwise; the package is taken from the bug's Bugzilla component,
+which names it outright, so a bug is never matched to a
+similarly-named package. Review requests (`Review Request: <pkg> - ...`) are
 auto-voted `+1` when the update builds the package under review —
 the usual case for a `--type newpackage` update. For any other
 bug, including a review of a package this update does not build,
