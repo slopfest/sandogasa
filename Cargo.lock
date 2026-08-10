@@ -453,6 +453,7 @@ dependencies = [
  "sandogasa-config",
  "sandogasa-copr",
  "sandogasa-depfilter",
+ "sandogasa-distgit",
  "sandogasa-fedrq",
  "sandogasa-koji",
  "sandogasa-review",

@@ -29,10 +29,23 @@ gather, and dropping them would only make the next run pay again.
 Decisions are never inferred — a package that cannot be placed is
 reported as unplaced rather than guessed at.
 
-This is the first slice: it knows what a COPR can tell it. Reading a
-package's review bug, dist-git branches, Koji builds and Bodhi updates
-comes next, along with the `--update` mode for the parts that need a
-person.
+Beyond the COPR it asks dist-git whether each package has a repository
+and which branches it has, and asks each targeted branch — Rawhide
+always included — what version it already ships. That is what lets a
+heading say `in dist-git, newer build staged` rather than merely that
+the package exists: staged 0.13.0 against Rawhide's 0.12.0 is work
+that has not landed, and both versions are printed so the comparison
+can be checked. A package with no dist-git repository has not been
+imported yet, which for a new package means its review is unfinished.
+
+Absence and ignorance are kept apart throughout. `exists: false` from
+dist-git is a real answer and is stored; a failed lookup stores
+nothing and the report says "not checked" rather than implying the
+package is missing.
+
+Still to come: the review bug and its `fedora-review` flag, Koji
+builds for a branch, Bodhi updates, and the `--update` mode for the
+parts that need a person.
 
 
 ### ebranch: propose an update's bug list

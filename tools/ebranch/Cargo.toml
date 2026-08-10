@@ -19,6 +19,7 @@ sandogasa-cli = { workspace = true, features = ["http"] }
 sandogasa-config = { workspace = true }
 sandogasa-copr = { workspace = true }
 sandogasa-depfilter = { workspace = true }
+sandogasa-distgit = { workspace = true }
 sandogasa-fedrq = { workspace = true }
 sandogasa-koji = { workspace = true }
 sandogasa-review = { workspace = true }

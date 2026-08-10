@@ -157,15 +157,29 @@ built for Rawhide, branched, built again, shipped in an update. Use
 
 ```console
 $ ebranch check-wip uutils.toml --copr @rust/uutils-and-nushell
-@rust/uutils-and-nushell: 15 new package(s): rust-exacl, rust-keccak, ...
 15 package(s) tracked in @rust/uutils-and-nushell
 targets: rawhide
 
-staged, route not decided (15)
+in dist-git, newer build staged (12)
   rust-exacl 0.13.0-1 (as of 2026-08-10)
-  rust-keccak 0.2.0-1 (as of 2026-08-10)
+    dist-git: rawhide (as of 2026-08-10)
+    rawhide: 0.12.0-7.fc45 (as of 2026-08-10)
   ...
+
+in dist-git, not built for rawhide (1)
+  ...
+
+staged, not yet in dist-git (2)
+  rust-sponge-cursor 0.1.0-1 (as of 2026-08-10)
+    dist-git: no repository (as of 2026-08-10)
 ```
+
+Each heading names what stands in the way rather than the state
+alone, and the versions are shown side by side so the comparison
+behind the heading can be checked by eye: `rust-exacl` is staged at
+0.13.0 while Rawhide still carries 0.12.0, so that work has not landed
+yet. A package with no dist-git repository has not been imported —
+for a new package, its review has not finished.
 
 The effort lives in a **ledger**, the TOML file named on the command
 line, created on first run. It — not the COPR — is the source of truth
