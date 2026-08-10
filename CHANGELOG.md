@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### ebranch: check-wip notices retirement, and stops re-asking settled questions
+
+A retired package keeps its dist-git repository, so "the repo exists
+but nothing is built for Rawhide" described a dead package as work
+waiting to be done. Retirement is now read from `dead.package` and
+reported ahead of anything about builds, since unretiring is what
+blocks everything downstream. On the uutils effort that immediately
+reclassified `rust-uu_touch`, whose repository exists only because
+retirement leaves it behind.
+
+Whether coming back needs a fresh review depends on how long the
+package has been retired. That is Fedora policy, with tooling that has
+changed recently, so it is deliberately not encoded: the tool reports
+the retirement and leaves the judgement to the reader.
+
+Observations that cannot change are no longer re-fetched. A closed
+review of an imported package is settled, so it is skipped — a saving
+of one Bugzilla query per package per run on a long-lived effort.
+Retirement deliberately breaks that condition, because a returning
+package may need a new review.
+
+New `--rescan-reviews` searches for a review request again even where
+one is recorded. Searching rather than fetching the known ID is the
+point: after a retirement the recorded bug is the old review, and what
+matters is whether a new one has been filed.
+
+`--package NAME,...` narrows the per-package lookups and the report,
+which is what makes a rescan cheap — you know which package was
+retired, and the alternative is a Bugzilla query for every other one.
+The COPR reconcile deliberately stays whole: it is a single query for
+the effort, and narrowing it would leave a package that has left the
+COPR still recorded as staged. A name the ledger does not track warns
+rather than silently matching nothing.
+
+
 ### sandogasa-bugzilla: ask for the fields we deserialize
 
 Bugzilla's default field set leaves out `flags`, and `Bug` declares

@@ -88,6 +88,12 @@ pub struct DistGit {
     /// Branches the repository has, when it exists.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub branches: Vec<String>,
+    /// Whether Rawhide carries a `dead.package`. A retired package
+    /// keeps its repository, so "the repo exists" says nothing about
+    /// whether the package is alive — and a package retired long
+    /// enough needs a fresh review before it can come back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retired: bool,
     /// When this was last observed, `YYYY-MM-DD`.
     pub seen: String,
 }
@@ -287,6 +293,12 @@ pub struct Options {
     pub targets: Vec<String>,
     pub offline: bool,
     pub prune: bool,
+    /// Search for a review request again even where one is recorded,
+    /// for a package whose retirement means a new one is needed.
+    pub rescan_reviews: bool,
+    /// Limit the per-package lookups and the report to these
+    /// packages. Empty means all of them.
+    pub packages: Vec<String>,
     pub json: bool,
 }
 
@@ -334,14 +346,14 @@ pub fn run(opts: &Options) -> Result<(), String> {
                 Err(e) => eprintln!("warning: {spec}: {e}; keeping what the ledger has"),
             }
         }
-        refresh_distgit(&mut ledger, &today);
+        refresh_distgit(&mut ledger, &today, &opts.packages);
         // Rawhide is where everything lands first, so it is always
         // worth comparing against even when the effort targets
         // branches as well.
         let mut branches = vec!["rawhide".to_string()];
         branches.extend(ledger.targets.iter().filter(|t| *t != "rawhide").cloned());
-        refresh_shipped(&mut ledger, &branches, &today);
-        refresh_reviews_blocking(&mut ledger, &today);
+        refresh_shipped(&mut ledger, &branches, &today, &opts.packages);
+        refresh_reviews_blocking(&mut ledger, &today, opts.rescan_reviews, &opts.packages);
         dirty = true;
     }
 
@@ -361,13 +373,22 @@ pub fn run(opts: &Options) -> Result<(), String> {
         ledger.save(&opts.ledger)?;
     }
 
+    for name in &opts.packages {
+        if !ledger.packages.contains_key(name) {
+            eprintln!(
+                "warning: {name} is not tracked in {}",
+                opts.ledger.display()
+            );
+        }
+    }
+
     if opts.json {
         println!(
             "{}",
             serde_json::to_string_pretty(&ledger).map_err(|e| e.to_string())?
         );
     } else {
-        print!("{}", render(&ledger));
+        print!("{}", render(&ledger, &opts.packages));
     }
     Ok(())
 }
@@ -384,14 +405,25 @@ pub fn run(opts: &Options) -> Result<(), String> {
 /// takes stays a decision for the user, so `route` is not set from
 /// this — but the report can say a review is filed and whether it has
 /// been approved.
-async fn refresh_reviews(bz: &sandogasa_bugzilla::BzClient, ledger: &mut Ledger, today: &str) {
+async fn refresh_reviews(
+    bz: &sandogasa_bugzilla::BzClient,
+    ledger: &mut Ledger,
+    today: &str,
+    rescan: bool,
+    only: &[String],
+) {
     let wanted: Vec<String> = ledger
         .packages
         .iter()
-        .filter(|(_, p)| {
-            p.review_bug.is_some()
+        .filter(|(name, p)| {
+            selected(only, name)
+                // Retired packages are searched again: coming back may
+                // require a fresh review, and the bug to find is a new
+                // one rather than the original.
+                && (rescan
+                || p.review_bug.is_some()
                 || p.review.is_some()
-                || p.distgit.as_ref().is_some_and(|d| !d.exists)
+                || p.distgit.as_ref().is_some_and(|d| !d.exists || d.retired))
         })
         .map(|(name, _)| name.clone())
         .collect();
@@ -399,10 +431,28 @@ async fn refresh_reviews(bz: &sandogasa_bugzilla::BzClient, ledger: &mut Ledger,
     for name in wanted {
         // A bug the ledger already knows is fetched directly; there
         // is no point searching for what we were told.
-        let known = ledger
-            .packages
-            .get(&name)
-            .and_then(|p| p.review_bug.or(p.review.as_ref().map(|r| r.bug)));
+        // A closed review of an imported package is settled: nothing
+        // about it will change, so re-fetching it every run buys
+        // nothing. `--rescan-reviews` overrides that, for a package
+        // whose retirement means a *new* review is needed.
+        if !rescan
+            && let Some(p) = ledger.packages.get(&name)
+            && p.review.as_ref().is_some_and(|r| r.status == "CLOSED")
+            && p.distgit.as_ref().is_some_and(|d| d.exists && !d.retired)
+        {
+            continue;
+        }
+        // Searching, not fetching, is the point of a rescan: after a
+        // retirement the recorded bug is the old review, and what
+        // matters is whether a new one has been filed.
+        let known = (!rescan)
+            .then(|| {
+                ledger
+                    .packages
+                    .get(&name)
+                    .and_then(|p| p.review_bug.or(p.review.as_ref().map(|r| r.bug)))
+            })
+            .flatten();
         let found = match known {
             Some(id) => match bz.bugs(&[id]).await {
                 Ok(bugs) => bugs
@@ -436,7 +486,7 @@ async fn refresh_reviews(bz: &sandogasa_bugzilla::BzClient, ledger: &mut Ledger,
 }
 
 /// Run the review lookups on their own runtime, since `run` is sync.
-fn refresh_reviews_blocking(ledger: &mut Ledger, today: &str) {
+fn refresh_reviews_blocking(ledger: &mut Ledger, today: &str, rescan: bool, only: &[String]) {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -445,7 +495,7 @@ fn refresh_reviews_blocking(ledger: &mut Ledger, today: &str) {
         }
     };
     let bz = sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com");
-    rt.block_on(refresh_reviews(&bz, ledger, today));
+    rt.block_on(refresh_reviews(&bz, ledger, today, rescan, only));
 }
 
 /// Whether a review bug carries `fedora-review+`.
@@ -462,8 +512,13 @@ fn is_approved(bug: &sandogasa_bugzilla::models::Bug) -> bool {
 /// yet" rather than only "does the package exist". A package absent
 /// from a branch simply has no entry for it; the whole query failing
 /// records nothing at all, leaving the previous reading in place.
-fn refresh_shipped(ledger: &mut Ledger, branches: &[String], today: &str) {
-    let names: Vec<String> = ledger.packages.keys().cloned().collect();
+fn refresh_shipped(ledger: &mut Ledger, branches: &[String], today: &str, only: &[String]) {
+    let names: Vec<String> = ledger
+        .packages
+        .keys()
+        .filter(|name| selected(only, name))
+        .cloned()
+        .collect();
     if names.is_empty() {
         return;
     }
@@ -486,6 +541,9 @@ fn refresh_shipped(ledger: &mut Ledger, branches: &[String], today: &str) {
             })
             .collect();
         for (name, package) in ledger.packages.iter_mut() {
+            if !selected(only, name) {
+                continue;
+            }
             match found.get(name.as_str()) {
                 Some(version) => {
                     package.shipped.insert(
@@ -506,6 +564,12 @@ fn refresh_shipped(ledger: &mut Ledger, branches: &[String], today: &str) {
     }
 }
 
+/// Whether a package is one the run was narrowed to. An empty
+/// selection means everything.
+fn selected(packages: &[String], name: &str) -> bool {
+    packages.is_empty() || packages.iter().any(|p| p == name)
+}
+
 /// Ask dist-git about every tracked package: whether it has a
 /// repository yet, and which branches it has.
 ///
@@ -513,8 +577,13 @@ fn refresh_shipped(ledger: &mut Ledger, branches: &[String], today: &str) {
 /// package that means the review has not finished. That is a real
 /// answer and is recorded as one; a lookup that fails is not, and
 /// leaves whatever the ledger already knew, dated as before.
-fn refresh_distgit(ledger: &mut Ledger, today: &str) {
-    let names: Vec<String> = ledger.packages.keys().cloned().collect();
+fn refresh_distgit(ledger: &mut Ledger, today: &str, only: &[String]) {
+    let names: Vec<String> = ledger
+        .packages
+        .keys()
+        .filter(|name| selected(only, name))
+        .cloned()
+        .collect();
     if names.is_empty() {
         return;
     }
@@ -531,9 +600,18 @@ fn refresh_distgit(ledger: &mut Ledger, today: &str) {
         for name in &names {
             match client.project_branches(name).await {
                 Ok(branches) => {
+                    let exists = branches.is_some();
+                    // Only worth asking once the repo is known to be
+                    // there; a missing repo cannot be retired.
+                    let retired = if exists {
+                        client.is_retired(name, "rawhide").await.unwrap_or(false)
+                    } else {
+                        false
+                    };
                     let record = DistGit {
-                        exists: branches.is_some(),
+                        exists,
                         branches: branches.unwrap_or_default(),
+                        retired,
                         seen: today.to_string(),
                     };
                     if let Some(package) = ledger.packages.get_mut(name) {
@@ -638,6 +716,21 @@ fn state(package: &Package, targets: &[String]) -> &'static str {
             if missing_branch(d) {
                 return "in dist-git, needs branching";
             }
+            if d.retired {
+                // A retired package keeps its repository, so this has
+                // to be checked before concluding anything from a
+                // missing build: the obstacle is the retirement, not
+                // an unbuilt package.
+                //
+                // Whether coming back needs a fresh review depends on
+                // how long it has been retired, and that threshold is
+                // Fedora policy with tooling that has changed recently
+                // — so it is deliberately not encoded here. Report the
+                // retirement and leave the judgement to the user;
+                // `--rescan-reviews` finds a new review if one was
+                // filed.
+                return "retired in rawhide, needs unretiring";
+            }
             match (package.shipped.get("rawhide"), staged) {
                 // The staged build is newer than what Rawhide has,
                 // so the work has not landed there yet.
@@ -660,7 +753,9 @@ fn state(package: &Package, targets: &[String]) -> &'static str {
 /// Every line dates what it shows, so a report served from the
 /// ledger without contacting anything is honest about its age rather
 /// than presenting an old reading as current.
-pub fn render(ledger: &Ledger) -> String {
+/// Renders only the named packages, or all of them when none are
+/// named.
+pub fn render(ledger: &Ledger, only: &[String]) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     if ledger.packages.is_empty() {
@@ -686,6 +781,9 @@ pub fn render(ledger: &Ledger) -> String {
 
     let mut group: BTreeMap<&str, Vec<(&String, &Package)>> = BTreeMap::new();
     for (name, package) in &ledger.packages {
+        if !selected(only, name) {
+            continue;
+        }
         group
             .entry(state(package, &ledger.targets))
             .or_default()
@@ -716,7 +814,8 @@ pub fn render(ledger: &Ledger) -> String {
                         .collect();
                     let _ = writeln!(
                         out,
-                        "    dist-git: {} (as of {})",
+                        "    dist-git: {}{} (as of {})",
+                        if d.retired { "retired, " } else { "" },
                         if shown.is_empty() {
                             format!("{} branch(es)", d.branches.len())
                         } else {
@@ -888,7 +987,7 @@ mod tests {
             "2026-08-10",
         );
         ledger.packages.get_mut("rust-a").unwrap().route = Route::Direct;
-        let text = render(&ledger);
+        let text = render(&ledger, &[]);
         // Nothing has been looked up beyond the COPR yet, and the
         // heading says so rather than implying the package is
         // absent from dist-git.
@@ -904,6 +1003,7 @@ mod tests {
         DistGit {
             exists,
             branches: branches.iter().map(|b| b.to_string()).collect(),
+            retired: false,
             seen: "2026-08-10".to_string(),
         }
     }
@@ -1049,7 +1149,7 @@ mod tests {
         let package = ledger.packages.get_mut("rust-a").unwrap();
         package.distgit = Some(distgit(false, &[]));
         package.review = Some(review(2498026, "NEW", true));
-        let text = render(&ledger);
+        let text = render(&ledger, &[]);
         assert!(
             text.contains("review approved, needs importing (1)"),
             "{text}"
@@ -1058,6 +1158,32 @@ mod tests {
             text.contains("review: rhbz#2498026 fedora-review+ (as of 2026-08-10)"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn state_reports_retirement_rather_than_a_missing_build() {
+        // A retired package keeps its repository, so "the repo
+        // exists but nothing is built" would read as work waiting to
+        // be done when the real obstacle is the retirement.
+        let mut d = distgit(true, &["rawhide"]);
+        d.retired = true;
+        let package = Package {
+            distgit: Some(d),
+            staged: Some(staged_at("0.1.0-1")),
+            ..Package::default()
+        };
+        assert_eq!(state(&package, &[]), "retired in rawhide, needs unretiring");
+    }
+
+    #[test]
+    fn render_marks_a_retired_repository() {
+        let mut ledger = Ledger::default();
+        ledger.reconcile("@rust/uutils", &[staged("rust-a", "0.1.0-1")], "2026-08-10");
+        let mut d = distgit(true, &["rawhide"]);
+        d.retired = true;
+        ledger.packages.get_mut("rust-a").unwrap().distgit = Some(d);
+        let text = render(&ledger, &[]);
+        assert!(text.contains("dist-git: retired, rawhide"), "{text}");
     }
 
     #[test]
@@ -1073,7 +1199,7 @@ mod tests {
         package
             .shipped
             .insert("rawhide".to_string(), shipped_at("0.12.0-7.fc45"));
-        let text = render(&ledger);
+        let text = render(&ledger, &[]);
         // Both versions are visible, so the comparison the heading
         // makes can be checked by eye.
         assert!(text.contains("rust-a 0.13.0-1"), "{text}");
@@ -1092,7 +1218,7 @@ mod tests {
         let mut ledger = Ledger::default();
         ledger.reconcile("@rust/uutils", &[staged("rust-a", "1-1")], "2026-08-10");
         ledger.packages.get_mut("rust-a").unwrap().distgit = Some(distgit(false, &[]));
-        let text = render(&ledger);
+        let text = render(&ledger, &[]);
         assert!(text.contains("staged, no review filed (1)"), "{text}");
         assert!(
             text.contains("dist-git: no repository (as of 2026-08-10)"),
@@ -1101,8 +1227,24 @@ mod tests {
     }
 
     #[test]
+    fn render_narrows_to_the_named_packages() {
+        let mut ledger = Ledger::default();
+        ledger.reconcile(
+            "@rust/uutils",
+            &[staged("rust-a", "1-1"), staged("rust-b", "1-1")],
+            "2026-08-10",
+        );
+        let text = render(&ledger, &["rust-b".to_string()]);
+        assert!(text.contains("rust-b"), "{text}");
+        assert!(!text.contains("rust-a"), "{text}");
+        // The header still describes the whole effort, so the report
+        // does not imply the ledger holds only what was asked for.
+        assert!(text.contains("2 package(s) tracked"), "{text}");
+    }
+
+    #[test]
     fn render_says_what_to_do_with_an_empty_ledger() {
-        let text = render(&Ledger::default());
+        let text = render(&Ledger::default(), &[]);
         assert!(text.contains("--copr"), "{text}");
     }
 }

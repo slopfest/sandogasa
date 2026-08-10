@@ -194,6 +194,27 @@ service can report, such as which route a package is taking and which
 review bug or pull request is landing it. It remembers its COPRs too,
 so `--copr` is only needed to seed the ledger or add another.
 
+A retired package keeps its dist-git repository, so retirement is
+reported ahead of anything about builds — otherwise "in dist-git, not
+built for rawhide" would describe a dead package as work waiting to be
+done. Whether unretiring needs a fresh review depends on how long the
+package has been retired, which is policy rather than something the
+tool decides; `--rescan-reviews` looks for a new review request where
+one may have been filed.
+
+`--package NAME,...` narrows the per-package lookups and the report to
+what you name, which pairs with `--rescan-reviews` — you generally
+know which package was retired, and rescanning all of them wastes a
+Bugzilla query each. The COPR reconcile still covers the whole effort,
+since skipping it would leave a departed package marked as staged. A
+name the ledger does not track is called out rather than quietly
+matching nothing.
+
+Observations that cannot change are not re-fetched. A closed review of
+an imported package is settled, so it is skipped — unless the package
+is retired, where a returning package may need a new review and the
+recorded bug is the old one.
+
 Each run reconciles rather than rebuilds:
 
 - in the COPR but not the ledger — new work, added;

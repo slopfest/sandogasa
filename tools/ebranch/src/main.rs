@@ -643,7 +643,7 @@ struct CheckWipArgs {
     /// Ledger file tracking the effort (created if absent).
     ledger: std::path::PathBuf,
 
-    /// COPR staging it (owner/project, @group/proj, or URL).
+    /// COPR staging it (owner/project or URL).
     #[arg(long)]
     copr: Vec<String>,
 
@@ -658,6 +658,14 @@ struct CheckWipArgs {
     /// Forget packages that are no longer staged anywhere.
     #[arg(long)]
     prune: bool,
+
+    /// Search for review requests again.
+    #[arg(long)]
+    rescan_reviews: bool,
+
+    /// Limit to these packages (repeated or CSV).
+    #[arg(long, value_name = "NAME,...", value_delimiter = ',')]
+    package: Vec<String>,
 
     /// Machine-readable JSON output.
     #[arg(long)]
@@ -796,6 +804,8 @@ fn main() -> ExitCode {
             targets: a.target.clone(),
             offline: a.offline,
             prune: a.prune,
+            rescan_reviews: a.rescan_reviews,
+            packages: a.package.clone(),
             json: a.json,
         }));
     }
