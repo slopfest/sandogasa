@@ -62,7 +62,7 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_mangen = "0.2"
 dashmap = "6"
 dirs = "6"
-emojis = "0.8"
+emojis = "0.9"
 mockito = "1"
 quick-xml = "0.41"
 rayon = "1"
