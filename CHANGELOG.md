@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### ebranch: judge FTBFS and FailsToInstall bugs
+
+`check-update --give-karma` had nothing to say about the two kinds of
+bug an update most often exists to fix.
+
+An FTBFS bug claims a package does not build on a release. A build of
+that package in the update is the artifact the bug says cannot exist,
+so it now scores +1 — proof rather than inference, and the strongest
+verdict here.
+
+A FailsToInstall bug is answered from the check's own installability
+analysis, which resolves exactly what the bug complains about: +1 when
+the package's requirements all resolve, -1 naming the requirement that
+does not. Weaker than the FTBFS case, since resolving against an
+assembled repo set predicts what dnf would do rather than observing it,
+so the reason quotes the requirement for the reader to weigh. A clean
+result is not reported at all when the analysis could not run fully —
+"nothing found" is not "nothing wrong".
+
+Both kinds are recognized from two signals, and never from a loose
+reading of the summary. The tracker a bug blocks is the general one: it
+works whatever the wording, which matters because human-filed FTBFS
+bugs follow none — "python-pyemd fails to build with setuptools 74+",
+or an `[abrt]` crash report that never mentions building — and name no
+release at all.
+
+Fedora's bots do use fixed wording that names the release, so those
+summaries are read as a second signal: `F44FailsToInstall: <component>`
+and `<component>: FTBFS in Fedora rawhide/f44`. That covers what the
+trackers cannot, since EPEL has no trackers and a lookup can fail. The
+FTBFS form is matched on its numbered token and never on the literal
+`rawhide`: the mass rebuild stamps whichever version was Rawhide when
+the bug was filed, so a bug reading `rawhide/f44` is about f44 forever
+while Rawhide has moved on, and matching the word would resurrect every
+past cycle's bugs into today's.
+
+Either way the release must match the update's, so a bug about another
+release is left alone.
+
+`karma::run` now takes the check report rather than a karma and reason
+its caller derived from that report, which is also two fewer arguments.
+
+
 ### poi-tracker: retired-package triage found no bugs on numbered branches
 
 `triage-retired` searched Bugzilla with `version=<branch>`, so a

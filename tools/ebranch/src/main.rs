@@ -976,15 +976,13 @@ fn main() -> ExitCode {
                 if a.give_karma
                     && let Some(alias) = &vote_alias
                 {
-                    let (karma, reason) = karma::derive_karma(&report);
                     // The posted comment is the full Markdown report plus
                     // an "addressed by the reviewer" section; --comment
                     // adds reviewer notes near the top (prompted for
                     // interactively when absent).
                     let mut report_md = check_update::render_report(&report, a.detailed);
                     report_md.push_str(&check_update::render_addressed(&addressed));
-                    if let Err(e) =
-                        karma::run(alias, karma, &reason, &report_md, a.comment.clone(), a.yes)
+                    if let Err(e) = karma::run(alias, &report, &report_md, a.comment.clone(), a.yes)
                     {
                         eprintln!("error: {e}");
                         return ExitCode::FAILURE;
@@ -1047,7 +1045,7 @@ fn main() -> ExitCode {
                     report_md.push_str(&check_update::render_addressed(&addressed));
                     for alias in &aliases {
                         if let Err(e) =
-                            karma::run(alias, karma, &reason, &report_md, a.comment.clone(), a.yes)
+                            karma::run(alias, &report, &report_md, a.comment.clone(), a.yes)
                         {
                             eprintln!(
                                 "error: the update was submitted, but posting the review \

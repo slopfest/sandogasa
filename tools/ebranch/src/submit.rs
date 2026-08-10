@@ -87,11 +87,11 @@ async fn screen_bugs(
     let misfiled: Vec<Misfiled> = bugs
         .iter()
         .filter_map(|id| {
-            let (summary, component) = fetched.get(id)?;
-            let package = crate::karma::bug_package(summary, component.as_deref())?;
+            let bug = fetched.get(id)?;
+            let package = crate::karma::bug_package(&bug.summary, bug.component.as_deref())?;
             (!packages.contains(&package)).then(|| Misfiled {
                 bug_id: *id,
-                summary: summary.clone(),
+                summary: bug.summary.clone(),
                 package,
             })
         })

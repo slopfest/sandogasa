@@ -287,8 +287,17 @@ otherwise; the package is taken from the bug's Bugzilla component,
 which names it outright, so a bug is never matched to a
 similarly-named package. When the update builds nothing for a bug's
 package it cannot be fixing it, so `-1` is suggested with the reason
-shown — for update requests and review requests only, since those
-name their package; a CVE or FTBFS bug gets no suggestion. Review requests (`Review Request: <pkg> - ...`) are
+shown.
+
+FTBFS bugs are auto-voted `+1` when the update carries a build of the
+package: the bug says it does not build on that release, and the build
+is the artifact that says otherwise. FailsToInstall bugs are answered
+from the check's own installability analysis — `+1` when the package's
+requirements all resolve, `-1` naming the requirement that does not.
+Both are recognized by the release tracker the bug blocks, not by its
+summary, so a bug filed against a different release is left alone;
+EPEL has no such trackers, so its FTBFS and FTI bugs get no automatic
+verdict. A CVE or a plain bug report gets no suggestion either way. Review requests (`Review Request: <pkg> - ...`) are
 auto-voted `+1` when the update builds the package under review —
 the usual case for a `--type newpackage` update. For any other
 bug, including a review of a package this update does not build,

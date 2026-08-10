@@ -136,6 +136,133 @@ pub fn classify(bug: &Bug, trackers: &TrackerIds) -> BugKind {
     BugKind::Other
 }
 
+/// The FTBFS and FailsToInstall tracker bugs for one branch.
+///
+/// Either may be absent when the lookup failed; both are absent for
+/// a branch with no trackers.
+#[derive(Debug, Clone, Default)]
+pub struct BranchTrackers {
+    pub ftbfs: Option<u64>,
+    pub fti: Option<u64>,
+}
+
+/// The Bugzilla aliases of a branch's FTBFS and FailsToInstall
+/// tracker bugs, or `None` when the branch has none.
+///
+/// Only Fedora has these. `RAWHIDEFTBFS` and `RAWHIDEFailsToInstall`
+/// follow Rawhide as it moves, so they need no version; a numbered
+/// branch has its own pair. EPEL has no equivalent trackers, so an
+/// EPEL branch cannot be classified this way at all — hence `None`
+/// rather than a guess.
+pub fn tracker_aliases_for_branch(branch: &str) -> Option<(String, String)> {
+    if branch == "rawhide" {
+        return Some((
+            "RAWHIDEFTBFS".to_string(),
+            "RAWHIDEFailsToInstall".to_string(),
+        ));
+    }
+    let (product, _) = product_version_for_branch(branch)?;
+    // Only Fedora has these; the EPEL names tracker_names can build
+    // are for matching bot summaries, not for a lookup that would
+    // find nothing.
+    (product == FEDORA).then(|| tracker_names(branch)).flatten()
+}
+
+/// The FTBFS or FailsToInstall kind a bot-filed summary declares for
+/// `branch`, or `None` when the summary is not one of those forms or
+/// names a different release.
+///
+/// Fedora's bots file these with fixed wording, and the wording names
+/// the release, so a summary can stand in for the tracker — which
+/// matters for EPEL, where no trackers exist. Two forms:
+///
+/// - `F44FailsToInstall: <component>`, from "Fedora Fails To Install".
+///   The release is in the prefix, explicit and stable, so this is as
+///   reliable as the tracker.
+/// - `<component>: FTBFS in Fedora rawhide/f44`, from the mass
+///   rebuild. This one names *whichever Fedora version was Rawhide
+///   when the bug was filed*, so the numbered token is matched and
+///   the literal `rawhide` is not: a bug stamped `rawhide/f44` is
+///   about f44 forever, while today's Rawhide has moved on. Matching
+///   `rawhide` would keep resurrecting bugs from past cycles.
+///
+/// Human-filed FTBFS and FTI bugs have no fixed wording at all and
+/// name no release, so nothing can be concluded from their summaries;
+/// they are recognized only by the tracker they block.
+///
+/// The bug's `version` field is deliberately not consulted. It is not
+/// reliably updated: a package that first failed when Rawhide was f42
+/// gets a fresh bug for each later cycle it stays broken, and the old
+/// one keeps `version: rawhide` while its summary still says
+/// `rawhide/f42`. An update for f42 is what closes that bug, so the
+/// summary's numbered token is right where the version field is not.
+pub fn kind_from_summary(summary: &str, component: &str, branch: &str) -> Option<BugKind> {
+    let (ftbfs_name, fti_name) = tracker_names(branch)?;
+    let summary = summary.trim();
+    if summary
+        .to_ascii_uppercase()
+        .starts_with(&format!("{}: ", fti_name.to_ascii_uppercase()))
+        && summary.ends_with(component)
+    {
+        return Some(BugKind::Fti);
+    }
+    // `<component>: FTBFS in ...`, where the tail must name this
+    // branch by its numbered or EPEL token — never by "rawhide".
+    let tail = summary
+        .strip_prefix(component)?
+        .strip_prefix(": FTBFS in ")?
+        .to_ascii_lowercase();
+    let token = ftbfs_name.trim_end_matches("FTBFS").to_ascii_lowercase();
+    tail.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| word == token)
+        .then_some(BugKind::Ftbfs)
+}
+
+/// The names Fedora uses for a branch's FTBFS and FailsToInstall
+/// trackers, which are also the prefixes its bots put in summaries:
+/// `F44FTBFS` / `F44FailsToInstall`, `EPEL9FTBFS` /
+/// `EPEL9FailsToInstall`.
+///
+/// `None` for Rawhide, whose trackers are named `RAWHIDE*` and whose
+/// summaries name a moving version — and for a branch with no
+/// Bugzilla product at all.
+fn tracker_names(branch: &str) -> Option<(String, String)> {
+    let (product, version) = product_version_for_branch(branch)?;
+    if version == "rawhide" {
+        return None;
+    }
+    let stem = if product == FEDORA_EPEL {
+        version.to_ascii_uppercase()
+    } else {
+        format!("F{version}")
+    };
+    Some((format!("{stem}FTBFS"), format!("{stem}FailsToInstall")))
+}
+
+/// Look up one branch's FTBFS and FailsToInstall tracker bug IDs.
+///
+/// Best-effort: a branch without trackers, or a failed lookup, gives
+/// an empty result, and a caller must then reach no conclusion rather
+/// than treat a bug as not-FTBFS.
+pub async fn lookup_branch_trackers(bz: &BzClient, branch: &str) -> BranchTrackers {
+    let Some((ftbfs_alias, fti_alias)) = tracker_aliases_for_branch(branch) else {
+        return BranchTrackers::default();
+    };
+    let query = format!("alias={ftbfs_alias}&alias={fti_alias}");
+    let Ok(bugs) = bz.search(&query, 0).await else {
+        return BranchTrackers::default();
+    };
+    let mut trackers = BranchTrackers::default();
+    for bug in &bugs {
+        if bug.alias.iter().any(|a| a == &ftbfs_alias) {
+            trackers.ftbfs = Some(bug.id);
+        } else if bug.alias.iter().any(|a| a == &fti_alias) {
+            trackers.fti = Some(bug.id);
+        }
+    }
+    trackers
+}
+
 /// Look up FTBFS and FTI tracker bug IDs for the given Fedora
 /// versions. Always includes the permanent Rawhide trackers.
 pub async fn lookup_trackers(bz: &BzClient, versions: &[u32], verbose: bool) -> TrackerIds {
@@ -243,6 +370,106 @@ mod tests {
         assert_eq!(product_version_for_branch("eln"), None);
         assert_eq!(product_version_for_branch(""), None);
         assert_eq!(product_version_for_branch("epel"), None);
+    }
+
+    #[test]
+    fn kind_from_summary_reads_the_bots_wording() {
+        // Real summary from bug 2437417.
+        assert_eq!(
+            kind_from_summary(
+                "F44FailsToInstall: gnome-shell-extension-argos",
+                "gnome-shell-extension-argos",
+                "f44"
+            ),
+            Some(BugKind::Fti)
+        );
+        // Real summary from bug 2433898. The mass rebuild stamps the
+        // Fedora version that was Rawhide at the time.
+        assert_eq!(
+            kind_from_summary("cachelib: FTBFS in Fedora rawhide/f44", "cachelib", "f44"),
+            Some(BugKind::Ftbfs)
+        );
+        // Another release's bug is not this branch's business.
+        assert_eq!(
+            kind_from_summary("cachelib: FTBFS in Fedora rawhide/f44", "cachelib", "f43"),
+            None
+        );
+        assert_eq!(
+            kind_from_summary(
+                "F44FailsToInstall: gnome-shell-extension-argos",
+                "gnome-shell-extension-argos",
+                "f43"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn kind_from_summary_will_not_match_rawhide_by_name() {
+        // "rawhide/f44" is about f44 forever, but Rawhide has moved
+        // on; matching the word would resurrect every past cycle's
+        // bugs into today's Rawhide.
+        assert_eq!(
+            kind_from_summary(
+                "cachelib: FTBFS in Fedora rawhide/f44",
+                "cachelib",
+                "rawhide"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn kind_from_summary_ignores_human_wording() {
+        // No fixed form and no release named — only the tracker can
+        // classify these.
+        assert_eq!(
+            kind_from_summary(
+                "python-pyemd fails to build with setuptools 74+",
+                "python-pyemd",
+                "f44"
+            ),
+            None
+        );
+        assert_eq!(
+            kind_from_summary(
+                "[abrt] glycin-loaders: __libc_recv(): killed by SIGSYS",
+                "rust-glycin",
+                "f44"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn kind_from_summary_covers_epel_where_trackers_do_not_exist() {
+        // EPEL has no trackers, so the summary is the only signal
+        // available should its bots start filing these.
+        assert_eq!(
+            kind_from_summary("EPEL9FailsToInstall: fish", "fish", "epel9"),
+            Some(BugKind::Fti)
+        );
+        assert_eq!(tracker_aliases_for_branch("epel9"), None);
+    }
+
+    #[test]
+    fn tracker_aliases_only_exist_for_fedora() {
+        assert_eq!(
+            tracker_aliases_for_branch("f43"),
+            Some(("F43FTBFS".to_string(), "F43FailsToInstall".to_string()))
+        );
+        // The rawhide aliases follow rawhide as it moves, so they
+        // carry no version.
+        assert_eq!(
+            tracker_aliases_for_branch("rawhide"),
+            Some((
+                "RAWHIDEFTBFS".to_string(),
+                "RAWHIDEFailsToInstall".to_string()
+            ))
+        );
+        // EPEL has no FTBFS or FailsToInstall trackers.
+        assert_eq!(tracker_aliases_for_branch("epel9"), None);
+        assert_eq!(tracker_aliases_for_branch("c10s"), None);
     }
 
     #[test]

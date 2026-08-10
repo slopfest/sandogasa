@@ -3,12 +3,13 @@
 //! Karma voting on Bodhi updates (`check-update --give-karma`).
 //!
 //! Posts a comment with overall karma and per-bug feedback, the
-//! way the Bodhi web UI does. Release-monitoring update-request
-//! bugs ("<pkg>-<version> is available") are auto-voted by
-//! comparing the requested version against what the update's build
-//! of that bug's Bugzilla component delivers, and review requests
-//! ("Review Request: <pkg>") by whether the update builds that
-//! package; anything else is put to the user.
+//! way the Bodhi web UI does. Four kinds of bug are judged
+//! automatically, each identified by something authoritative rather
+//! than by reading its summary: a release-monitoring request by its
+//! Bugzilla component and the version the summary asks for, a review
+//! request by the package named in its title, and FTBFS and
+//! FailsToInstall bugs by the release tracker they block. Anything
+//! else is put to the user.
 //!
 //! Authentication reuses the bodhi CLI's cached OIDC session
 //! (see `sandogasa_bodhi::auth`) — authenticate once with any
@@ -19,10 +20,40 @@ use std::cmp::Ordering;
 use sandogasa_bodhi::models::BugFeedbackItem;
 use sandogasa_bodhi::{BodhiClient, auth};
 
-/// Bug ID to Bugzilla component. A release-monitoring bug's
-/// component names the package it is about, which is what an
-/// update's builds are matched against.
-type Components = std::collections::HashMap<u64, String>;
+/// What Bugzilla says about one of an update's bugs. Bodhi carries
+/// only an ID and a title, so everything used to judge a bug beyond
+/// its summary comes from here.
+#[derive(Default)]
+pub(crate) struct BugFacts {
+    pub summary: String,
+    /// The component names the package a release-monitoring bug is
+    /// about, which is what an update's builds are matched against.
+    pub component: Option<String>,
+    /// Bugs this one blocks — how an FTBFS or FailsToInstall bug is
+    /// recognized, by the release tracker it blocks.
+    pub blocks: Vec<u64>,
+}
+
+/// Bug ID to what Bugzilla says about it.
+type BugMap = std::collections::HashMap<u64, BugFacts>;
+
+/// What the update and its check say, for judging bugs against.
+pub(crate) struct UpdateFacts<'a> {
+    /// `(source name, version)` for each build in the update.
+    pub builds: &'a [(String, String)],
+    /// The release trackers for the branch this update targets, so an
+    /// FTBFS bug for a *different* release is not answered here.
+    pub trackers: &'a sandogasa_bugclass::bugzilla::BranchTrackers,
+    /// The branch the check ran against, for reading the release out
+    /// of a bot-filed FTBFS or FailsToInstall summary.
+    pub branch: &'a str,
+    /// Packages whose Requires did not resolve, from the check.
+    pub unsatisfied: &'a [crate::check_update::UnsatisfiedDep],
+    /// Whether the check's analysis was complete enough to rely on.
+    /// With an incomplete analysis, a clean installability result
+    /// means only that nothing was found, not that nothing is wrong.
+    pub full_analysis: bool,
+}
 
 /// One per-bug feedback decision, with the rationale shown in the
 /// confirmation plan.
@@ -105,28 +136,34 @@ pub(crate) fn bug_package(title: &str, component: Option<&str>) -> Option<String
     sandogasa_bugclass::bugzilla::extract_new_version(title, pkg).map(|_| pkg.to_string())
 }
 
-/// Decide automatic feedback for one bug title against the
-/// update's builds (`(source name, version)` pairs).
+/// Decide automatic feedback for one bug.
 ///
-/// A release-monitoring title `"<pkg>-<version> is available"` gets
-/// +1 when the update's build of `component` delivers at least the
-/// requested version and -1 otherwise. A review request
-/// `"Review Request: <pkg> - ..."` gets +1 when the update builds
-/// that package. Either kind names its package outright, so when the
-/// update builds nothing for it the answer is `Missing` — the update
-/// cannot be fixing that bug. Anything else is `Unknown`: a CVE or
-/// FTBFS bug is not classified here, and its component may be stale
-/// after a package rename, so a missing match means nothing.
+/// Four kinds are judged, and each names the package it concerns, so
+/// none of this has to infer one from a summary:
 ///
-/// `component` is the bug's Bugzilla component, which names the
-/// package outright; without it an update request cannot be judged,
-/// because the package cannot be recovered from the summary alone
-/// (see `sandogasa_bugclass::bugzilla::extract_new_version`).
-pub(crate) fn bug_verdict(
-    title: &str,
-    component: Option<&str>,
-    builds: &[(String, String)],
-) -> Verdict {
+/// - a review request (`"Review Request: <pkg> - ..."`) is answered
+///   by the update shipping the package under review;
+/// - an FTBFS bug — recognized by blocking the target release's FTBFS
+///   tracker — is refuted outright by a successful build of that
+///   package being in the update. That is the strongest verdict here:
+///   the bug says the package does not build, and the build exists;
+/// - a FailsToInstall bug is answered by the check's own
+///   installability analysis, which resolves exactly what the bug
+///   complains about. Weaker than the FTBFS case, since resolving
+///   against an assembled repo set predicts what dnf would do rather
+///   than observing it;
+/// - a release-monitoring request (`"<pkg>-<version> is available"`)
+///   is +1 when the update's build of that component delivers at
+///   least the requested version, -1 when it delivers less.
+///
+/// A kind whose package the update builds nothing for gives
+/// `Missing`. Anything else is `Unknown`: a CVE or a plain bug report
+/// is not classified here, and its component may be stale after a
+/// package rename, so a missing match means nothing.
+pub(crate) fn bug_verdict(bug: &BugFacts, update: &UpdateFacts<'_>) -> Verdict {
+    let title = bug.summary.as_str();
+    let builds = update.builds;
+
     // A package review is answered by shipping the package under
     // review; there is no version in the title to compare.
     if let Some(pkg) = sandogasa_bugclass::bugzilla::review_request_package(title) {
@@ -140,10 +177,38 @@ pub(crate) fn bug_verdict(
             },
         };
     }
+
+    // FTBFS and FailsToInstall come from two signals, either of which
+    // identifies the release as well as the kind — see `tracked_kind`.
+    // Both are keyed on the bug's component, which for these is the
+    // package that fails.
+    match tracked_kind(bug, update) {
+        Some(sandogasa_bugclass::BugKind::Ftbfs) => {
+            return match bug.component.as_deref() {
+                Some(pkg) => match builds.iter().find(|(p, _)| p == pkg) {
+                    Some((p, v)) => Verdict::Decided {
+                        karma: 1,
+                        reason: format!(
+                            "{p}-{v} built for this release, so it is not failing to build"
+                        ),
+                    },
+                    None => Verdict::Missing {
+                        reason: format!("update builds no {pkg}, which is what fails to build"),
+                    },
+                },
+                None => Verdict::Unknown,
+            };
+        }
+        Some(sandogasa_bugclass::BugKind::Fti) => {
+            return fti_verdict(bug.component.as_deref(), update);
+        }
+        _ => {}
+    }
+
     // The component names the package, so the summary only has to
     // yield its version, and the build is found by an exact name
     // match. Nothing here has to guess where the name ends.
-    let Some(pkg) = component else {
+    let Some(pkg) = bug.component.as_deref() else {
         return Verdict::Unknown;
     };
     let Some(bug_version) = sandogasa_bugclass::bugzilla::extract_new_version(title, pkg) else {
@@ -162,6 +227,62 @@ pub(crate) fn bug_verdict(
         } else {
             format!("update only delivers {pkg}-{build_version} < {bug_version}")
         },
+    }
+}
+
+/// Whether a bug is an FTBFS or FailsToInstall report for the release
+/// this update targets.
+///
+/// The tracker it blocks is checked first, since that works for any
+/// wording including the human-filed bugs that follow none. Failing
+/// that, the bots' fixed summary forms name the release themselves —
+/// the only signal available for EPEL, which has no trackers.
+fn tracked_kind(bug: &BugFacts, update: &UpdateFacts<'_>) -> Option<sandogasa_bugclass::BugKind> {
+    let blocks = |tracker: Option<u64>| tracker.is_some_and(|id| bug.blocks.contains(&id));
+    if blocks(update.trackers.ftbfs) {
+        return Some(sandogasa_bugclass::BugKind::Ftbfs);
+    }
+    if blocks(update.trackers.fti) {
+        return Some(sandogasa_bugclass::BugKind::Fti);
+    }
+    sandogasa_bugclass::bugzilla::kind_from_summary(
+        &bug.summary,
+        bug.component.as_deref()?,
+        update.branch,
+    )
+}
+
+/// Answer a FailsToInstall bug from the check's installability
+/// analysis.
+///
+/// The check resolves the updated packages' Requires against the
+/// target, which is the same question the bug asks. An unresolved
+/// requirement is quoted in the reason so the user can weigh it: the
+/// analysis is a prediction of what dnf would do, and it can
+/// over-report when a touched capability is also provided elsewhere.
+fn fti_verdict(component: Option<&str>, update: &UpdateFacts<'_>) -> Verdict {
+    let Some(pkg) = component else {
+        return Verdict::Unknown;
+    };
+    if !update.builds.iter().any(|(p, _)| p == pkg) {
+        return Verdict::Missing {
+            reason: format!("update builds no {pkg}, which is what fails to install"),
+        };
+    }
+    if let Some(issue) = update.unsatisfied.iter().find(|d| d.package == pkg) {
+        return Verdict::Decided {
+            karma: -1,
+            reason: format!("{pkg} still has an unsatisfied requirement: {}", issue.dep),
+        };
+    }
+    // Nothing found — but "nothing found" is only meaningful if the
+    // analysis was able to look properly.
+    if !update.full_analysis {
+        return Verdict::Unknown;
+    }
+    Verdict::Decided {
+        karma: 1,
+        reason: format!("{pkg}'s requirements all resolve on this target"),
     }
 }
 
@@ -426,34 +547,37 @@ async fn session_username_with_retry(http: &reqwest::Client) -> Option<String> {
 async fn backfill_bug_titles(
     bz: &sandogasa_bugzilla::BzClient,
     bugs: &mut [sandogasa_bodhi::models::BodhiBug],
-) -> Components {
+) -> BugMap {
     let ids: Vec<u64> = bugs.iter().map(|b| b.bug_id).collect();
     let fetched = fetch_bugs(bz, &ids).await;
     for bug in bugs.iter_mut() {
         if bug.title.is_none() {
-            bug.title = fetched.get(&bug.bug_id).map(|(summary, _)| summary.clone());
+            bug.title = fetched.get(&bug.bug_id).map(|f| f.summary.clone());
         }
     }
     fetched
-        .into_iter()
-        .filter_map(|(id, (_, component))| component.map(|c| (id, c)))
-        .collect()
 }
 
 /// Fetch `ids` from Bugzilla in one batch, as
 /// `id -> (summary, component)`. Best-effort: a failure warns and
 /// yields nothing, leaving callers to fall back on asking the user.
-pub(crate) async fn fetch_bugs(
-    bz: &sandogasa_bugzilla::BzClient,
-    ids: &[u64],
-) -> std::collections::HashMap<u64, (String, Option<String>)> {
+pub(crate) async fn fetch_bugs(bz: &sandogasa_bugzilla::BzClient, ids: &[u64]) -> BugMap {
     if ids.is_empty() {
-        return std::collections::HashMap::new();
+        return BugMap::new();
     }
     match bz.bugs(ids).await {
         Ok(fetched) => fetched
             .into_iter()
-            .map(|bug| (bug.id, (bug.summary, bug.component.first().cloned())))
+            .map(|bug| {
+                (
+                    bug.id,
+                    BugFacts {
+                        summary: bug.summary,
+                        component: bug.component.first().cloned(),
+                        blocks: bug.blocks,
+                    },
+                )
+            })
             .collect(),
         Err(e) => {
             eprintln!(
@@ -461,7 +585,7 @@ pub(crate) async fn fetch_bugs(
                  bugs without a Bodhi-cached title, and update requests \
                  whose component is therefore unknown, need manual feedback"
             );
-            std::collections::HashMap::new()
+            BugMap::new()
         }
     }
 }
@@ -473,26 +597,24 @@ pub(crate) async fn fetch_bugs(
 /// when absent).
 pub fn run(
     alias: &str,
-    karma: i32,
-    reason: &str,
+    report: &crate::check_update::CheckUpdateReport,
     report_md: &str,
     notes: Option<String>,
     assume_yes: bool,
 ) -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    rt.block_on(run_async(
-        alias, karma, reason, report_md, notes, assume_yes,
-    ))
+    rt.block_on(run_async(alias, report, report_md, notes, assume_yes))
 }
 
 async fn run_async(
     alias: &str,
-    karma: i32,
-    reason: &str,
+    report: &crate::check_update::CheckUpdateReport,
     report_md: &str,
     notes: Option<String>,
     assume_yes: bool,
 ) -> Result<(), String> {
+    let (karma, reason) = derive_karma(report);
+    let reason = reason.as_str();
     let client = BodhiClient::new();
     let mut update = client
         .update_by_alias(alias)
@@ -500,11 +622,13 @@ async fn run_async(
         .map_err(|e| format!("cannot fetch update {alias}: {e}"))?;
     // Bodhi's bug tracker is Red Hat Bugzilla (the same instance
     // the manual prompt links to); public summaries need no auth.
-    let components = backfill_bug_titles(
-        &sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com"),
-        &mut update.bugs,
-    )
-    .await;
+    let bz = sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com");
+    let bugzilla = backfill_bug_titles(&bz, &mut update.bugs).await;
+    // Which release's FTBFS / FailsToInstall trackers to recognize.
+    // A bug blocking another release's tracker is not this update's
+    // business, and EPEL has no such trackers at all, so those bugs
+    // simply reach no verdict here.
+    let trackers = sandogasa_bugclass::bugzilla::lookup_branch_trackers(&bz, &report.branch).await;
     let update = update;
 
     // Bodhi zeroes overall karma from the submitter on their own
@@ -541,18 +665,33 @@ async fn run_async(
         .map(|(n, v, _)| (n.to_string(), v.to_string()))
         .collect();
 
+    let facts = UpdateFacts {
+        builds: &builds,
+        trackers: &trackers,
+        branch: &report.branch,
+        unsatisfied: &report.installability_issues,
+        full_analysis: report.full_analysis,
+    };
+
     let mut decisions = Vec::new();
     // Bugs to put to the user, each with the answer Enter will take
     // and, when there is one, why it is being suggested.
     let mut manual: Vec<(&sandogasa_bodhi::models::BodhiBug, i32, Option<String>)> = Vec::new();
     for bug in &update.bugs {
-        let verdict = bug.title.as_deref().map_or(Verdict::Unknown, |title| {
-            bug_verdict(
-                title,
-                components.get(&bug.bug_id).map(String::as_str),
-                &builds,
-            )
-        });
+        // Bodhi's cached title is used when Bugzilla could not be
+        // reached, so a bug still gets its update-request verdict from
+        // the summary alone where possible.
+        let verdict = match (bugzilla.get(&bug.bug_id), bug.title.as_deref()) {
+            (Some(known), _) => bug_verdict(known, &facts),
+            (None, Some(title)) => bug_verdict(
+                &BugFacts {
+                    summary: title.to_string(),
+                    ..BugFacts::default()
+                },
+                &facts,
+            ),
+            (None, None) => Verdict::Unknown,
+        };
         match verdict {
             Verdict::Decided { karma, reason } => decisions.push(BugDecision {
                 bug_id: bug.bug_id,
@@ -790,6 +929,50 @@ mod tests {
         assert_eq!(derive_karma(&report(true, false, false, true)).0, 0);
     }
 
+    /// A bug as Bugzilla would describe it.
+    fn bug(summary: &str, component: Option<&str>) -> BugFacts {
+        BugFacts {
+            summary: summary.to_string(),
+            component: component.map(str::to_string),
+            blocks: Vec::new(),
+        }
+    }
+
+    /// A bug that blocks the target release's FTBFS or
+    /// FailsToInstall tracker.
+    fn tracked_bug(summary: &str, component: &str, tracker: u64) -> BugFacts {
+        BugFacts {
+            blocks: vec![tracker],
+            ..bug(summary, Some(component))
+        }
+    }
+
+    const FTBFS_TRACKER: u64 = 2339432;
+    const FTI_TRACKER: u64 = 2339435;
+
+    fn trackers() -> sandogasa_bugclass::bugzilla::BranchTrackers {
+        sandogasa_bugclass::bugzilla::BranchTrackers {
+            ftbfs: Some(FTBFS_TRACKER),
+            fti: Some(FTI_TRACKER),
+        }
+    }
+
+    /// The update side of a verdict: the builds, this release's
+    /// trackers, and a clean installability result.
+    fn update<'a>(
+        builds: &'a [(String, String)],
+        trackers: &'a sandogasa_bugclass::bugzilla::BranchTrackers,
+        unsatisfied: &'a [crate::check_update::UnsatisfiedDep],
+    ) -> UpdateFacts<'a> {
+        UpdateFacts {
+            builds,
+            trackers,
+            branch: "f44",
+            unsatisfied,
+            full_analysis: true,
+        }
+    }
+
     /// The `(karma, reason)` of a decided verdict, for the tests
     /// that only care about a decided outcome.
     fn decided(verdict: Verdict) -> Option<(i32, String)> {
@@ -815,9 +998,8 @@ mod tests {
     #[test]
     fn bug_verdict_upvotes_exact_version() {
         let (karma, note) = decided(bug_verdict(
-            "rust-quick-xml-0.40.1 is available",
-            Some("rust-quick-xml"),
-            &builds(),
+            &bug("rust-quick-xml-0.40.1 is available", Some("rust-quick-xml")),
+            &update(&builds(), &trackers(), &[]),
         ))
         .unwrap();
         assert_eq!(karma, 1);
@@ -828,9 +1010,8 @@ mod tests {
     fn bug_verdict_upvotes_newer_build() {
         // The update delivers more than the bug asked for.
         let (karma, _) = decided(bug_verdict(
-            "fish-3.9.0 is available",
-            Some("fish"),
-            &builds(),
+            &bug("fish-3.9.0 is available", Some("fish")),
+            &update(&builds(), &trackers(), &[]),
         ))
         .unwrap();
         assert_eq!(karma, 1);
@@ -839,9 +1020,8 @@ mod tests {
     #[test]
     fn bug_verdict_downvotes_version_mismatch() {
         let (karma, note) = decided(bug_verdict(
-            "rust-quick-xml-0.41.0 is available",
-            Some("rust-quick-xml"),
-            &builds(),
+            &bug("rust-quick-xml-0.41.0 is available", Some("rust-quick-xml")),
+            &update(&builds(), &trackers(), &[]),
         ))
         .unwrap();
         assert_eq!(karma, -1);
@@ -853,9 +1033,11 @@ mod tests {
         // A newpackage update answers the review request for the
         // package it ships.
         let (karma, note) = decided(bug_verdict(
-            "Review Request: rust-quick-xml - High performance XML reader and writer",
-            Some("Package Review"),
-            &builds(),
+            &bug(
+                "Review Request: rust-quick-xml - High performance XML reader and writer",
+                Some("Package Review"),
+            ),
+            &update(&builds(), &trackers(), &[]),
         ))
         .unwrap();
         assert_eq!(karma, 1);
@@ -868,9 +1050,11 @@ mod tests {
         // update that does not build it cannot be answering the
         // review — suggest -1 rather than saying nothing.
         let reason = missing(bug_verdict(
-            "Review Request: rust-macrotest - Testing macros",
-            Some("Package Review"),
-            &builds(),
+            &bug(
+                "Review Request: rust-macrotest - Testing macros",
+                Some("Package Review"),
+            ),
+            &update(&builds(), &trackers(), &[]),
         ))
         .expect("expected a Missing verdict");
         assert!(reason.contains("rust-macrotest"), "{reason}");
@@ -879,9 +1063,8 @@ mod tests {
     #[test]
     fn bug_verdict_flags_an_update_request_for_a_package_not_built() {
         let reason = missing(bug_verdict(
-            "rust-dtor-1.0.5 is available",
-            Some("rust-dtor"),
-            &builds(),
+            &bug("rust-dtor-1.0.5 is available", Some("rust-dtor")),
+            &update(&builds(), &trackers(), &[]),
         ))
         .expect("expected a Missing verdict");
         assert!(reason.contains("rust-dtor"), "{reason}");
@@ -893,9 +1076,8 @@ mod tests {
         // fetch fails there is nothing to anchor the summary on, so
         // the bug goes to the user with no suggestion.
         assert!(is_unknown(bug_verdict(
-            "rust-quick-xml-0.40.1 is available",
-            None,
-            &builds()
+            &bug("rust-quick-xml-0.40.1 is available", None),
+            &update(&builds(), &trackers(), &[]),
         )));
     }
 
@@ -906,12 +1088,151 @@ mod tests {
         // update does not build rust-ctor-proc-macro, so this is a
         // Missing, not a wrong +1 against rust-ctor.
         let reason = missing(bug_verdict(
-            "rust-ctor-proc-macro-0.0.13 is available",
-            Some("rust-ctor-proc-macro"),
-            &[("rust-ctor".to_string(), "1.0.8".to_string())],
+            &bug(
+                "rust-ctor-proc-macro-0.0.13 is available",
+                Some("rust-ctor-proc-macro"),
+            ),
+            &update(
+                &[("rust-ctor".to_string(), "1.0.8".to_string())],
+                &trackers(),
+                &[],
+            ),
         ))
         .expect("expected a Missing verdict");
         assert!(reason.contains("rust-ctor-proc-macro"), "{reason}");
+    }
+
+    #[test]
+    fn bug_verdict_refutes_an_ftbfs_bug_with_the_build() {
+        // The bug says the package does not build on this release.
+        // A build of it in the update is the artifact the bug claims
+        // cannot exist, so this is proof rather than inference.
+        let (karma, note) = decided(bug_verdict(
+            &tracked_bug(
+                "rust-quick-xml fails to build with serde 1.0.220",
+                "rust-quick-xml",
+                FTBFS_TRACKER,
+            ),
+            &update(&builds(), &trackers(), &[]),
+        ))
+        .unwrap();
+        assert_eq!(karma, 1);
+        assert!(note.contains("rust-quick-xml-0.40.1"), "{note}");
+    }
+
+    #[test]
+    fn bug_verdict_ignores_an_ftbfs_bug_for_another_release() {
+        // Blocking a different release's tracker means the bug is not
+        // about the release this update targets. The summary says
+        // nothing about a release, so the tracker is the only signal
+        // and a non-match has to mean silence.
+        let other_release_tracker = 999_999;
+        assert!(is_unknown(bug_verdict(
+            &tracked_bug(
+                "rust-quick-xml fails to build",
+                "rust-quick-xml",
+                other_release_tracker
+            ),
+            &update(&builds(), &trackers(), &[]),
+        )));
+    }
+
+    #[test]
+    fn bug_verdict_flags_an_ftbfs_bug_for_a_package_not_built() {
+        let reason = missing(bug_verdict(
+            &tracked_bug("zsh fails to build", "zsh", FTBFS_TRACKER),
+            &update(&builds(), &trackers(), &[]),
+        ))
+        .expect("expected a Missing verdict");
+        assert!(reason.contains("zsh"), "{reason}");
+    }
+
+    #[test]
+    fn bug_verdict_answers_fti_from_the_installability_check() {
+        // The check resolves exactly what an FTI bug complains about.
+        let (karma, note) = decided(bug_verdict(
+            &tracked_bug("fish fails to install", "fish", FTI_TRACKER),
+            &update(&builds(), &trackers(), &[]),
+        ))
+        .unwrap();
+        assert_eq!(karma, 1);
+        assert!(note.contains("fish"), "{note}");
+    }
+
+    #[test]
+    fn bug_verdict_downvotes_fti_naming_the_unresolved_requirement() {
+        // Still broken, and the reason quotes the requirement so the
+        // user can weigh it — the analysis predicts what dnf would
+        // do rather than observing it, and can over-report.
+        let unsatisfied = [crate::check_update::UnsatisfiedDep {
+            package: "fish".to_string(),
+            dep: "libpcre2-32.so.0()(64bit)".to_string(),
+            unresolved: vec![],
+        }];
+        let (karma, note) = decided(bug_verdict(
+            &tracked_bug("fish fails to install", "fish", FTI_TRACKER),
+            &update(&builds(), &trackers(), &unsatisfied),
+        ))
+        .unwrap();
+        assert_eq!(karma, -1);
+        assert!(note.contains("libpcre2-32.so.0"), "{note}");
+    }
+
+    #[test]
+    fn bug_verdict_will_not_clear_fti_on_an_incomplete_analysis() {
+        // A clean result only means "nothing found", which is not the
+        // same as "nothing wrong" when the analysis could not run
+        // fully.
+        let builds = builds();
+        let facts = UpdateFacts {
+            builds: &builds,
+            trackers: &trackers(),
+            branch: "f44",
+            unsatisfied: &[],
+            full_analysis: false,
+        };
+        assert!(is_unknown(bug_verdict(
+            &tracked_bug("fish fails to install", "fish", FTI_TRACKER),
+            &facts,
+        )));
+    }
+
+    #[test]
+    fn bug_verdict_falls_back_to_the_bots_wording_without_trackers() {
+        // EPEL has no trackers and a lookup can fail, but the bots'
+        // fixed wording names the release itself. Real summaries from
+        // bugs 2433898 and 2437417.
+        let none = sandogasa_bugclass::bugzilla::BranchTrackers::default();
+        let (karma, _) = decided(bug_verdict(
+            &bug(
+                "rust-quick-xml: FTBFS in Fedora rawhide/f44",
+                Some("rust-quick-xml"),
+            ),
+            &update(&builds(), &none, &[]),
+        ))
+        .expect("the bot's FTBFS wording should classify without a tracker");
+        assert_eq!(karma, 1);
+
+        let (karma, _) = decided(bug_verdict(
+            &bug("F44FailsToInstall: fish", Some("fish")),
+            &update(&builds(), &none, &[]),
+        ))
+        .expect("the bot's FTI wording should classify without a tracker");
+        assert_eq!(karma, 1);
+    }
+
+    #[test]
+    fn bug_verdict_ignores_human_wording_without_a_tracker() {
+        // Human-filed FTBFS bugs follow no form and name no release,
+        // so with no tracker there is nothing to go on.
+        let none = sandogasa_bugclass::bugzilla::BranchTrackers::default();
+        assert!(is_unknown(bug_verdict(
+            &bug(
+                "rust-quick-xml fails to build with serde 1.0.220",
+                Some("rust-quick-xml")
+            ),
+            &update(&builds(), &none, &[]),
+        )));
     }
 
     #[test]
@@ -920,14 +1241,12 @@ mod tests {
         // and its component may be stale after a rename — so no
         // suggestion, in either direction.
         assert!(is_unknown(bug_verdict(
-            "fish crashes on startup",
-            Some("fish"),
-            &builds()
+            &bug("fish crashes on startup", Some("fish")),
+            &update(&builds(), &trackers(), &[]),
         )));
         assert!(is_unknown(bug_verdict(
-            "CVE-2026-1234 fish: overflow",
-            Some("fish"),
-            &builds()
+            &bug("CVE-2026-1234 fish: overflow", Some("fish")),
+            &update(&builds(), &trackers(), &[]),
         )));
     }
 
@@ -1045,7 +1364,7 @@ mod tests {
         assert_eq!(bugs[1].title.as_deref(), Some("cached title"));
         // The component came back for the bug Bugzilla returned.
         assert_eq!(
-            components.get(&100).map(String::as_str),
+            components.get(&100).and_then(|f| f.component.as_deref()),
             Some("rust-tree-sitter-fsharp")
         );
     }
@@ -1105,6 +1424,9 @@ mod tests {
         let mut bugs = vec![bodhi_bug(200, Some("cached"))];
         let components = backfill_bug_titles(&bz, &mut bugs).await;
         assert_eq!(bugs[0].title.as_deref(), Some("cached"));
-        assert_eq!(components.get(&200).map(String::as_str), Some("rust-md-5"));
+        assert_eq!(
+            components.get(&200).and_then(|f| f.component.as_deref()),
+            Some("rust-md-5")
+        );
     }
 }
