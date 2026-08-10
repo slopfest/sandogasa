@@ -254,7 +254,7 @@ The update to check, one of:
   \-b is a base branch like al9 (it picks the
   COPR chroot, e.g. epel9 → epel\-9\-*).
 .SS ebranch check-wip
-\fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-target\fR] [\fB\-\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-rescan\-reviews\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR> 
+\fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-target\fR] [\fB\-\-offline\fR] [\fB\-\-no\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-rescan\-reviews\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR> 
 .PP
 Track packages on their way into the distro
 .TP
@@ -266,6 +266,9 @@ Releases targeted (repeated or CSV)
 .TP
 \fB\-\-offline\fR
 Report from the ledger without contacting anything
+.TP
+\fB\-\-no\-offline\fR
+Refresh, overriding a config default
 .TP
 \fB\-\-prune\fR
 Forget packages that are no longer staged anywhere

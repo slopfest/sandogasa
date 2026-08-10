@@ -45,6 +45,18 @@ use clap::{Arg, ArgAction, ArgMatches, Command, Parser};
 /// The injected escape-hatch flag's id and long name.
 const NO_DEFAULTS: &str = "no-defaults";
 
+/// Flags that must never come from a config file, because each one
+/// authorizes a write that a person would otherwise be asked about.
+///
+/// A config file is precisely where such a setting gets forgotten, and
+/// then every run acts without asking — writing to Bugzilla, Bodhi,
+/// dist-git or the ledger. A paired `--no-yes` escape would not fix
+/// that: it only helps someone who remembers to type it, and the
+/// person at risk is the one who has forgotten the setting exists.
+/// These are passed on the command line, for the run they are meant
+/// for.
+const NEVER_DEFAULTED: &[&str] = &["apply", "claim", "give-karma", "prune", "submit", "yes"];
+
 /// Parse the command line like `T::parse()`, applying `[defaults]`
 /// from the tool's config layers (`/etc/<tool>/config.toml`, then
 /// `~/.config/<tool>/config.toml` overriding it per key) for flags
@@ -222,6 +234,13 @@ fn plan_one(
             "[defaults.{scope}{key}]: --{key} cannot be a default"
         ));
     }
+    if NEVER_DEFAULTED.contains(&key.replace('_', "-").as_str()) {
+        return Err(format!(
+            "[defaults.{scope}{key}]: --{key} authorizes a write without \
+             asking, so it cannot be a default; pass it on the command \
+             line for the run you mean it for"
+        ));
+    }
 
     // The command line (or an explicit env var) always wins.
     if given(arg_matches, arg.get_id().as_str()) {
@@ -333,6 +352,10 @@ mod tests {
         Update {
             #[arg(long)]
             explain: bool,
+            /// Stands in for the write-authorizing flags every tool
+            /// has, which must not be settable from a config file.
+            #[arg(short, long)]
+            yes: bool,
             #[arg(short, long, conflicts_with = "explain")]
             quiet: bool,
             #[arg(long)]
@@ -349,6 +372,24 @@ mod tests {
         let table: toml::Table = defaults.parse().unwrap();
         plan_injections(&cmd, &matches, &table)
             .map(|v| v.into_iter().map(|s| s.into_string().unwrap()).collect())
+    }
+
+    #[test]
+    fn refuses_to_default_a_flag_that_authorizes_a_write() {
+        // A config file is where such a setting gets forgotten, after
+        // which every run acts without asking. Better to reject it
+        // than to accept it and act on it.
+        let err = plan(&["demo", "update"], "[update]\nyes = true\n").unwrap_err();
+        assert!(err.contains("--yes"), "{err}");
+        assert!(err.contains("authorizes a write"), "{err}");
+        assert!(err.contains("command line"), "{err}");
+    }
+
+    #[test]
+    fn refuses_a_write_flag_written_with_an_underscore() {
+        // The rejection keys off the flag, not its spelling in TOML.
+        let err = plan(&["demo", "update"], "[update]\nyes = false\n").unwrap_err();
+        assert!(err.contains("authorizes a write"), "{err}");
     }
 
     #[test]

@@ -197,6 +197,44 @@ Guarantees the helper enforces (don't reimplement them per tool):
 - **Typos fail loudly.** An unknown flag or subcommand name in
   `[defaults]` is a hard error naming the config file, never
   silently ignored.
+- **Flags that authorize a write cannot be defaulted.** `--yes`,
+  `--claim`, `--apply`, `--prune`, `--submit` and `--give-karma`
+  are refused with a hard error (`NEVER_DEFAULTED` in
+  `defaults.rs`). A config file is exactly where such a setting
+  gets forgotten, and then every run writes to Bugzilla, Bodhi or
+  dist-git without asking. Add to that list when a tool gains a
+  flag whose whole purpose is to skip a confirmation.
+
+### Booleans need a `--no-<flag>` partner to be overridable
+
+`false` in `[defaults]` is a no-op — a switch cannot be turned
+*off* from the config — so a tool with `offline = true` pinned has
+no way to refresh for one run except `--no-defaults`, which drops
+every other default too. Where a boolean is plausible to pin, give
+it a negative partner:
+
+```rust
+/// Report from the ledger without contacting anything.
+#[arg(long)]
+offline: bool,
+
+/// Refresh from the services, overriding a config default.
+#[arg(long, conflicts_with = "offline")]
+no_offline: bool,
+```
+
+**`conflicts_with`, not `overrides_with`.** The conflict is what
+the "conflicts resolve in the user's favor" rule above keys off:
+giving `--no-offline` makes the mechanism skip injecting the
+configured `offline = true` entirely. `overrides_with` looks like
+the natural choice and quietly does the wrong thing — it is mutual
+and order-sensitive, and injected defaults are appended *after* the
+command line, so the injected `--offline` arrives last, wins the
+override, and unsets `no_offline`. The flag then reads as if it was
+never passed.
+
+Write-authorizing booleans need no partner: they cannot be
+defaulted at all, per the rule above.
 
 When adding a new tool, use `parse_with_defaults` from the start;
 when adding flags, nothing extra is needed — any long flag is

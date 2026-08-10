@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Config defaults cannot authorize a write, and booleans can be overridden
+
+Two gaps in the `[defaults]` mechanism, found by asking how to override
+a single pinned boolean.
+
+`--yes`, `--claim`, `--apply`, `--prune`, `--submit` and `--give-karma`
+are now refused as config defaults, with a hard error naming the flag
+and pointing at the command line. Each exists to skip a confirmation,
+and a config file is exactly where such a setting gets forgotten —
+after which every run writes to Bugzilla, Bodhi or dist-git without
+asking. A `--no-yes` escape would not have helped, since it only serves
+someone who remembers the setting exists.
+
+For booleans that are reasonable to pin, the way to override one for a
+single run is a `--no-<flag>` partner, and it must use
+`conflicts_with`, not `overrides_with`. The mechanism already skips a
+default that conflicts with an explicitly-given flag, which is exactly
+the hook needed. `overrides_with` looks like the natural choice and
+quietly fails: it is mutual and order-sensitive, and injected defaults
+are appended *after* the command line, so the injected flag arrives
+last, wins the override, and unsets the negative — leaving no trace
+that it was passed.
+
+`ebranch check-wip` gains `--no-offline` on that pattern, so a pinned
+`offline = true` can be overridden without `--no-defaults` dropping
+every other default too. Both rules are in `DEVELOPMENT.md`.
+
+
 ### ebranch: check-wip notices retirement, and stops re-asking settled questions
 
 A retired package keeps its dist-git repository, so "the repo exists

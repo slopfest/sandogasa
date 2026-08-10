@@ -655,6 +655,17 @@ struct CheckWipArgs {
     #[arg(long)]
     offline: bool,
 
+    /// Refresh, overriding a config default.
+    // `conflicts_with` rather than `overrides_with`: the defaults
+    // mechanism skips injecting a default that conflicts with a flag
+    // given on the command line, which is what lets this override
+    // `offline = true` from a config file. `overrides_with` is mutual
+    // and order-sensitive, and injected defaults arrive after the
+    // command line, so the injected `--offline` would arrive last,
+    // win the override, and unset this flag.
+    #[arg(long, conflicts_with = "offline")]
+    no_offline: bool,
+
     /// Forget packages that are no longer staged anywhere.
     #[arg(long)]
     prune: bool,
