@@ -103,6 +103,20 @@ pub struct Shipped {
     pub seen: String,
 }
 
+/// What a package's Review Request bug says.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Review {
+    pub bug: u64,
+    /// Bugzilla status: NEW, ASSIGNED, POST, CLOSED and so on.
+    pub status: String,
+    /// Whether the review carries `fedora-review+`, which is what
+    /// approval actually is — a closed bug without it was abandoned,
+    /// not accepted.
+    pub approved: bool,
+    /// When this was last observed, `YYYY-MM-DD`.
+    pub seen: String,
+}
+
 /// One package in the effort.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Package {
@@ -123,6 +137,9 @@ pub struct Package {
     /// is not the same as the package not being there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distgit: Option<DistGit>,
+    /// What the package's review request says, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<Review>,
     /// What each branch already ships, keyed by branch. Absent for a
     /// branch means the package is not in it — or that the query
     /// failed, which is why a failure records nothing rather than an
@@ -324,6 +341,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
         let mut branches = vec!["rawhide".to_string()];
         branches.extend(ledger.targets.iter().filter(|t| *t != "rawhide").cloned());
         refresh_shipped(&mut ledger, &branches, &today);
+        refresh_reviews_blocking(&mut ledger, &today);
         dirty = true;
     }
 
@@ -352,6 +370,89 @@ pub fn run(opts: &Options) -> Result<(), String> {
         print!("{}", render(&ledger));
     }
     Ok(())
+}
+
+/// Look up the review request for packages that look like they still
+/// need one.
+///
+/// Only packages dist-git has no repository for are searched, plus
+/// any whose review bug the ledger already records. A package that is
+/// already imported is past this stage, and searching for all of them
+/// would cost a Bugzilla query each to learn nothing.
+///
+/// The bug found is recorded as an observation. Which route a package
+/// takes stays a decision for the user, so `route` is not set from
+/// this — but the report can say a review is filed and whether it has
+/// been approved.
+async fn refresh_reviews(bz: &sandogasa_bugzilla::BzClient, ledger: &mut Ledger, today: &str) {
+    let wanted: Vec<String> = ledger
+        .packages
+        .iter()
+        .filter(|(_, p)| {
+            p.review_bug.is_some()
+                || p.review.is_some()
+                || p.distgit.as_ref().is_some_and(|d| !d.exists)
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    for name in wanted {
+        // A bug the ledger already knows is fetched directly; there
+        // is no point searching for what we were told.
+        let known = ledger
+            .packages
+            .get(&name)
+            .and_then(|p| p.review_bug.or(p.review.as_ref().map(|r| r.bug)));
+        let found = match known {
+            Some(id) => match bz.bugs(&[id]).await {
+                Ok(bugs) => bugs
+                    .first()
+                    .map(|b| (b.id, b.status.clone(), is_approved(b))),
+                Err(e) => {
+                    eprintln!("warning: {name}: rhbz#{id}: {e}");
+                    continue;
+                }
+            },
+            None => match crate::review_deps::find_review_bug(bz, &name).await {
+                Ok(Some(bug)) => Some((bug.id, bug.status.clone(), is_approved(&bug))),
+                Ok(None) => None,
+                Err(e) => {
+                    eprintln!("warning: {name}: {e}");
+                    continue;
+                }
+            },
+        };
+        if let Some((bug, status, approved)) = found
+            && let Some(package) = ledger.packages.get_mut(&name)
+        {
+            package.review = Some(Review {
+                bug,
+                status,
+                approved,
+                seen: today.to_string(),
+            });
+        }
+    }
+}
+
+/// Run the review lookups on their own runtime, since `run` is sync.
+fn refresh_reviews_blocking(ledger: &mut Ledger, today: &str) {
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("warning: review lookups skipped ({e})");
+            return;
+        }
+    };
+    let bz = sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com");
+    rt.block_on(refresh_reviews(&bz, ledger, today));
+}
+
+/// Whether a review bug carries `fedora-review+`.
+fn is_approved(bug: &sandogasa_bugzilla::models::Bug) -> bool {
+    bug.flags
+        .iter()
+        .any(|f| f.name == "fedora-review" && f.status == "+")
 }
 
 /// Ask each targeted branch what version it already ships, in one
@@ -522,10 +623,16 @@ fn state(package: &Package, targets: &[String]) -> &'static str {
         (None, None) => "not checked",
         (Some(d), staged) => {
             if !d.exists {
-                return match staged {
-                    Some(s) if !s.failed_chroots.is_empty() => "staged, not building",
-                    Some(_) => "staged, not yet in dist-git",
-                    None => "not in dist-git",
+                // Not imported yet, so the review is what stands in
+                // the way — and an approved one is waiting on an SCM
+                // request rather than on a reviewer.
+                return match (&package.review, staged) {
+                    (_, Some(s)) if !s.failed_chroots.is_empty() => "staged, not building",
+                    (Some(r), _) if r.approved => "review approved, needs importing",
+                    (Some(r), _) if r.status != "CLOSED" => "review filed, awaiting approval",
+                    (Some(_), _) => "review closed, not imported",
+                    (None, Some(_)) => "staged, no review filed",
+                    (None, None) => "not in dist-git",
                 };
             }
             if missing_branch(d) {
@@ -620,6 +727,14 @@ pub fn render(ledger: &Ledger) -> String {
                 } else {
                     let _ = writeln!(out, "    dist-git: no repository (as of {})", d.seen);
                 }
+            }
+            if let Some(r) = &package.review {
+                let state = if r.approved {
+                    "fedora-review+".to_string()
+                } else {
+                    r.status.to_ascii_lowercase()
+                };
+                let _ = writeln!(out, "    review: rhbz#{} {state} (as of {})", r.bug, r.seen);
             }
             for (branch, shipped) in &package.shipped {
                 let _ = writeln!(
@@ -809,8 +924,10 @@ mod tests {
         };
         assert_eq!(state(&package, &[]), "staged, dist-git not checked");
 
+        // With dist-git answered, the next question is the review —
+        // and no review record means none was found.
         package.distgit = Some(distgit(false, &[]));
-        assert_eq!(state(&package, &[]), "staged, not yet in dist-git");
+        assert_eq!(state(&package, &[]), "staged, no review filed");
     }
 
     #[test]
@@ -884,6 +1001,65 @@ mod tests {
         assert_eq!(state(&package, &[]), "in dist-git, not built for rawhide");
     }
 
+    fn review(bug: u64, status: &str, approved: bool) -> Review {
+        Review {
+            bug,
+            status: status.to_string(),
+            approved,
+            seen: "2026-08-10".to_string(),
+        }
+    }
+
+    #[test]
+    fn state_reads_the_review_for_an_unimported_package() {
+        let mut package = Package {
+            distgit: Some(distgit(false, &[])),
+            staged: Some(staged_at("0.1.0-1")),
+            ..Package::default()
+        };
+        // No review found: the first thing to do is file one.
+        assert_eq!(state(&package, &[]), "staged, no review filed");
+
+        package.review = Some(review(2498026, "NEW", false));
+        assert_eq!(state(&package, &[]), "review filed, awaiting approval");
+
+        // Approval is the fedora-review+ flag, not the status, and
+        // it moves the package on to needing an SCM request.
+        package.review = Some(review(2498026, "ASSIGNED", true));
+        assert_eq!(state(&package, &[]), "review approved, needs importing");
+    }
+
+    #[test]
+    fn state_notices_a_review_closed_without_approval() {
+        // Closed without fedora-review+ is an abandoned review, not
+        // an accepted one, and the package is still not imported.
+        let package = Package {
+            distgit: Some(distgit(false, &[])),
+            review: Some(review(2498026, "CLOSED", false)),
+            staged: Some(staged_at("0.1.0-1")),
+            ..Package::default()
+        };
+        assert_eq!(state(&package, &[]), "review closed, not imported");
+    }
+
+    #[test]
+    fn render_shows_the_review_bug_and_its_state() {
+        let mut ledger = Ledger::default();
+        ledger.reconcile("@rust/uutils", &[staged("rust-a", "0.1.0-1")], "2026-08-10");
+        let package = ledger.packages.get_mut("rust-a").unwrap();
+        package.distgit = Some(distgit(false, &[]));
+        package.review = Some(review(2498026, "NEW", true));
+        let text = render(&ledger);
+        assert!(
+            text.contains("review approved, needs importing (1)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("review: rhbz#2498026 fedora-review+ (as of 2026-08-10)"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn render_shows_what_each_branch_ships() {
         let mut ledger = Ledger::default();
@@ -917,7 +1093,7 @@ mod tests {
         ledger.reconcile("@rust/uutils", &[staged("rust-a", "1-1")], "2026-08-10");
         ledger.packages.get_mut("rust-a").unwrap().distgit = Some(distgit(false, &[]));
         let text = render(&ledger);
-        assert!(text.contains("staged, not yet in dist-git (1)"), "{text}");
+        assert!(text.contains("staged, no review filed (1)"), "{text}");
         assert!(
             text.contains("dist-git: no repository (as of 2026-08-10)"),
             "{text}"

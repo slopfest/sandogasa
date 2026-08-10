@@ -124,11 +124,13 @@ async fn check_pkg_reviews_async(opts: &CheckPkgReviewsOptions) -> Result<(), St
     // Search Bugzilla for packages without cached IDs.
     for pkg_name in &needs_search {
         match find_review_bug(&bz, pkg_name).await? {
-            Some((id, summary, status)) => {
+            Some(bug) => {
+                let (id, status) = (bug.id, bug.status.clone());
                 if opts.verbose {
                     eprintln!(
                         "[check-pkg-reviews] found bug {id} for \
-                         {pkg_name} ({status}): {summary}"
+                         {pkg_name} ({status}): {}",
+                        bug.summary
                     );
                 }
                 bug_map.insert(pkg_name.clone(), (id, status));
@@ -301,18 +303,21 @@ fn crate_edges_to_pkg_edges(
         .collect()
 }
 
-/// Search Bugzilla for a package review request.
+/// Search Bugzilla for a package review request, open or closed.
 ///
-/// Searches all statuses (open and closed). Returns `(bug_id, summary, status)`.
-async fn find_review_bug(
+/// The candidate is confirmed with
+/// [`sandogasa_bugclass::bugzilla::review_request_package`] rather
+/// than a prefix comparison: exact where a substring is not, and
+/// tolerant of a reviewer who wrote something other than " - " after
+/// the package name, which a prefix match would silently miss.
+pub async fn find_review_bug(
     bz: &BzClient,
     rpm_name: &str,
-) -> Result<Option<(u64, String, String)>, String> {
-    let prefix = format!("Review Request: {rpm_name} - ");
+) -> Result<Option<sandogasa_bugzilla::models::Bug>, String> {
     let query = format!(
         "product=Fedora&component=Package Review\
          &short_desc_type=substring\
-         &short_desc={prefix}"
+         &short_desc=Review Request: {rpm_name}"
     );
 
     let bugs = bz
@@ -320,30 +325,24 @@ async fn find_review_bug(
         .await
         .map_err(|e| format!("Bugzilla search failed for {rpm_name}: {e}"))?;
 
-    // Post-filter for exact prefix match.
     let matched: Vec<_> = bugs
         .into_iter()
-        .filter(|b| b.summary.starts_with(&prefix))
+        .filter(|b| {
+            sandogasa_bugclass::bugzilla::review_request_package(&b.summary).as_deref()
+                == Some(rpm_name)
+        })
         .collect();
 
-    match matched.len() {
-        0 => Ok(None),
-        1 => Ok(Some((
-            matched[0].id,
-            matched[0].summary.clone(),
-            matched[0].status.clone(),
-        ))),
-        _ => {
-            // Prefer the latest open bug, else the latest closed one.
-            let is_open = |b: &&sandogasa_bugzilla::models::Bug| b.status != "CLOSED";
-            let best = matched
-                .iter()
-                .filter(is_open)
-                .max_by_key(|b| b.id)
-                .unwrap_or_else(|| matched.iter().max_by_key(|b| b.id).unwrap());
-            Ok(Some((best.id, best.summary.clone(), best.status.clone())))
-        }
-    }
+    // Prefer the latest open bug, else the latest closed one. A
+    // durable record would want the user to pick between candidates;
+    // here the link is cheap to correct, so the newest open one wins.
+    let is_open = |b: &&sandogasa_bugzilla::models::Bug| b.status != "CLOSED";
+    Ok(matched
+        .iter()
+        .filter(is_open)
+        .max_by_key(|b| b.id)
+        .or_else(|| matched.iter().max_by_key(|b| b.id))
+        .cloned())
 }
 
 /// Compute link changes by diffing desired vs current depends_on.

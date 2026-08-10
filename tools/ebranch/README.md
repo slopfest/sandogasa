@@ -169,17 +169,21 @@ in dist-git, newer build staged (12)
 in dist-git, not built for rawhide (1)
   ...
 
-staged, not yet in dist-git (2)
+review filed, awaiting approval (2)
   rust-sponge-cursor 0.1.0-1 (as of 2026-08-10)
     dist-git: no repository (as of 2026-08-10)
+    review: rhbz#2498026 new (as of 2026-08-10)
 ```
 
 Each heading names what stands in the way rather than the state
 alone, and the versions are shown side by side so the comparison
 behind the heading can be checked by eye: `rust-exacl` is staged at
 0.13.0 while Rawhide still carries 0.12.0, so that work has not landed
-yet. A package with no dist-git repository has not been imported —
-for a new package, its review has not finished.
+yet. A package with no dist-git repository has not been imported, so
+its review request is looked up — only for those, since a package
+already in dist-git is past that stage. Approval means the
+`fedora-review+` flag rather than the bug being closed: a review
+closed without it was abandoned, not accepted.
 
 The effort lives in a **ledger**, the TOML file named on the command
 line, created on first run. It — not the COPR — is the source of truth

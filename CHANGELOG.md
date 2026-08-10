@@ -43,9 +43,22 @@ dist-git is a real answer and is stored; a failed lookup stores
 nothing and the report says "not checked" rather than implying the
 package is missing.
 
-Still to come: the review bug and its `fedora-review` flag, Koji
-builds for a branch, Bodhi updates, and the `--update` mode for the
-parts that need a person.
+A package dist-git has no repository for has its review request looked
+up, since the review is what stands in the way. Only those are
+searched — one already in dist-git is past that stage, and searching
+every package would cost a Bugzilla query each to learn nothing.
+Approval is the `fedora-review+` flag, not the bug being closed: a
+review closed without it was abandoned rather than accepted, and the
+report distinguishes the two.
+
+The search itself moves out of `check-pkg-reviews` to be shared, and
+now confirms a candidate with `review_request_package` rather than a
+prefix comparison — exact where a substring is not, and no longer
+silently missing a review whose summary uses something other than
+" - " after the package name.
+
+Still to come: Koji builds for a branch, Bodhi updates, and the
+`--update` mode for the parts that need a person.
 
 
 ### ebranch: propose an update's bug list
