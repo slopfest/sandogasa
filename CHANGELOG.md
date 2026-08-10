@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### poi-tracker: retired-package triage found no bugs on numbered branches
+
+`triage-retired` searched Bugzilla with `version=<branch>`, so a
+retirement on `f43` queried `version=f43`. Fedora files its bugs
+against a bare version number — `41` through `45`, plus `rawhide` — so
+that query matched nothing, and no results is indistinguishable from a
+retired package having no open bugs left to close. Only `rawhide` and
+the `epel*` branches, where the branch name happens to be the Bugzilla
+spelling, ever worked; those were also the only ones with tests.
+
+Both paths were affected: the per-package search and `bugs_for_branch`,
+which filters batch results by the same product and version pair.
+
+The mapping now lives in
+`sandogasa_bugclass::bugzilla::product_version_for_branch` and returns
+`Option`: `f43` → `43`, `epel10.3` → `epel10` (minor versions share a
+product version), and `None` for a branch Bugzilla has no product for,
+such as `c10s` or `eln`. poi-tracker warns and skips those instead of
+running a query that cannot match. Returning an `Option` is the point —
+the old signature had to invent an answer for every input, which is how
+the wrong one went unnoticed.
+
+
 ### ebranch: say when an update cannot be fixing a bug
 
 An update that builds nothing for a bug's package cannot be fixing

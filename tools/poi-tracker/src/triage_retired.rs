@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use sandogasa_bugclass::bugzilla::product_version_for_branch;
 use sandogasa_bugzilla::BzClient;
 use sandogasa_bugzilla::models::Bug;
 use sandogasa_distgit::DistGitClient;
@@ -65,21 +66,6 @@ pub fn plan_package(package: &str, branch: &str, retired: bool, bugs: &[Bug]) ->
     }
 }
 
-/// Build the Bugzilla product + version pair to scope the search
-/// to bugs filed against the dist-git branch being retired.
-///
-/// Conventions: `rawhide` maps to product `Fedora` / version
-/// `rawhide`; anything starting with `epel` maps to `Fedora EPEL`
-/// / `<branch>`; everything else maps to `Fedora` / `<branch>`
-/// (so an `f43` branch retirement still narrows correctly).
-pub fn product_version_for_branch(branch: &str) -> (&'static str, String) {
-    if branch.starts_with("epel") {
-        ("Fedora EPEL", branch.to_string())
-    } else {
-        ("Fedora", branch.to_string())
-    }
-}
-
 /// Build the Bugzilla search query for retired-package triage:
 /// the component's open bugs against the retirement branch's
 /// product/version pair. By default the search is scoped to
@@ -87,8 +73,8 @@ pub fn product_version_for_branch(branch: &str) -> (&'static str, String) {
 /// with `all_reporters` the reporter filter is dropped so every
 /// open bug on the retired branch is matched, regardless of who
 /// filed it.
-pub fn bug_search_query(component: &str, branch: &str, all_reporters: bool) -> String {
-    let (product, version) = product_version_for_branch(branch);
+pub fn bug_search_query(component: &str, branch: &str, all_reporters: bool) -> Option<String> {
+    let (product, version) = product_version_for_branch(branch)?;
     let mut parts = vec![
         format!("component={}", urlencode(component)),
         format!("product={}", urlencode(product)),
@@ -101,7 +87,7 @@ pub fn bug_search_query(component: &str, branch: &str, all_reporters: bool) -> S
         ));
     }
     parts.push("bug_status=__open__".to_string());
-    parts.join("&")
+    Some(parts.join("&"))
 }
 
 /// Print one package's planned closures as soon as they're
@@ -121,7 +107,9 @@ pub fn print_package_closes(component: &str, closes: &[BugClose]) {
 /// filed against `branch` (matched via the same product/version
 /// mapping the per-branch query uses).
 pub fn bugs_for_branch(bugs: &[Bug], branch: &str) -> Vec<Bug> {
-    let (product, version) = product_version_for_branch(branch);
+    let Some((product, version)) = product_version_for_branch(branch) else {
+        return Vec::new();
+    };
     bugs.iter()
         .filter(|b| b.product == product && b.version.iter().any(|v| v == &version))
         .cloned()
@@ -327,7 +315,17 @@ pub async fn run(
                             pkg.name
                         );
                     }
-                    let query = bug_search_query(&pkg.name, branch, all_reporters);
+                    // A branch Bugzilla has no product for cannot be
+                    // searched; say so rather than running a query
+                    // that matches nothing and reading it as "no bugs".
+                    let Some(query) = bug_search_query(&pkg.name, branch, all_reporters) else {
+                        eprintln!(
+                            "warning: {branch} has no Bugzilla product; \
+                             skipping the open-bug search for {}",
+                            pkg.name
+                        );
+                        continue;
+                    };
                     retry(
                         &format!("bug search for {} on {branch}", pkg.name),
                         RETRY_ATTEMPTS,
@@ -507,46 +505,34 @@ mod tests {
     }
 
     #[test]
-    fn product_version_picks_epel_for_epel_branches() {
-        assert_eq!(
-            product_version_for_branch("epel10"),
-            ("Fedora EPEL", "epel10".to_string())
-        );
-        assert_eq!(
-            product_version_for_branch("epel9"),
-            ("Fedora EPEL", "epel9".to_string())
-        );
-    }
-
-    #[test]
-    fn product_version_picks_fedora_for_rawhide_and_fnn() {
-        assert_eq!(
-            product_version_for_branch("rawhide"),
-            ("Fedora", "rawhide".to_string())
-        );
-        assert_eq!(
-            product_version_for_branch("f43"),
-            ("Fedora", "f43".to_string())
-        );
-    }
-
-    #[test]
     fn bug_search_query_scopes_to_branch() {
-        let q = bug_search_query("python-django6", "epel10", false);
+        let q = bug_search_query("python-django6", "epel10", false).unwrap();
         assert!(q.contains("component=python-django6"));
         assert!(q.contains("product=Fedora%20EPEL"));
         assert!(q.contains("version=epel10"));
         assert!(q.contains("bug_status=__open__"));
         assert!(q.contains("reporter=upstream-release-monitoring%40fedoraproject.org"));
 
-        let q = bug_search_query("foo", "rawhide", false);
+        let q = bug_search_query("foo", "rawhide", false).unwrap();
         assert!(q.contains("product=Fedora&"));
         assert!(q.contains("version=rawhide"));
     }
 
     #[test]
+    fn bug_search_query_uses_bugzilla_version_not_branch_name() {
+        // Bugzilla files Fedora bugs against a bare version number,
+        // so a query for "f43" matches nothing at all — which reads
+        // exactly like the package having no open bugs.
+        let q = bug_search_query("foo", "f43", true).unwrap();
+        assert!(q.contains("version=43"), "{q}");
+        assert!(!q.contains("version=f43"), "{q}");
+        // A branch with no Bugzilla product is not searchable.
+        assert_eq!(bug_search_query("foo", "c10s", true), None);
+    }
+
+    #[test]
     fn bug_search_query_all_reporters_drops_reporter_filter() {
-        let q = bug_search_query("python-django3", "epel8", true);
+        let q = bug_search_query("python-django3", "epel8", true).unwrap();
         assert!(q.contains("component=python-django3"));
         assert!(q.contains("product=Fedora%20EPEL"));
         assert!(q.contains("version=epel8"));

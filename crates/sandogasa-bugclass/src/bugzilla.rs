@@ -17,6 +17,40 @@ pub struct TrackerIds {
     pub fti: HashSet<u64>,
 }
 
+/// Bugzilla product for Fedora packages.
+pub const FEDORA: &str = "Fedora";
+
+/// Bugzilla product for EPEL packages.
+pub const FEDORA_EPEL: &str = "Fedora EPEL";
+
+/// The Bugzilla product and version that a distro branch's bugs are
+/// filed against, or `None` for a branch with no Bugzilla
+/// equivalent.
+///
+/// The version is not the branch name. Fedora numbers its versions
+/// bare — branch `f43` files against version `43` — while EPEL uses
+/// the branch name but without any minor version, so `epel10.3`
+/// files against `epel10`. Rawhide is the one case where the two
+/// agree.
+///
+/// CentOS Stream (`c10s`) and ELN have no Bugzilla product here and
+/// return `None`; a caller must skip them rather than search with a
+/// version that matches nothing, which is silently indistinguishable
+/// from a package having no bugs.
+pub fn product_version_for_branch(branch: &str) -> Option<(&'static str, String)> {
+    if branch == "rawhide" {
+        return Some((FEDORA, branch.to_string()));
+    }
+    if let Some(rest) = branch.strip_prefix("epel") {
+        // epel10.3 and friends share the epel10 product version.
+        let major: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        return (!major.is_empty()).then(|| (FEDORA_EPEL, format!("epel{major}")));
+    }
+    let number = branch.strip_prefix('f').unwrap_or(branch);
+    (!number.is_empty() && number.chars().all(|c| c.is_ascii_digit()))
+        .then(|| (FEDORA, number.to_string()))
+}
+
 /// Extract the new version from a release-monitoring bug summary of
 /// the form `"<component>-<version> is available"`.
 ///
@@ -170,6 +204,45 @@ mod tests {
             "blocks": blocks,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn product_version_for_branch_uses_bugzilla_spelling() {
+        // Fedora's versions are bare numbers: branch f43 is version
+        // 43, and querying for "f43" matches nothing at all.
+        assert_eq!(
+            product_version_for_branch("f43"),
+            Some(("Fedora", "43".to_string()))
+        );
+        assert_eq!(
+            product_version_for_branch("rawhide"),
+            Some(("Fedora", "rawhide".to_string()))
+        );
+        // EPEL keeps the branch spelling, minus any minor version.
+        assert_eq!(
+            product_version_for_branch("epel9"),
+            Some(("Fedora EPEL", "epel9".to_string()))
+        );
+        assert_eq!(
+            product_version_for_branch("epel10.3"),
+            Some(("Fedora EPEL", "epel10".to_string()))
+        );
+        // A bare number is accepted as already-Bugzilla-shaped.
+        assert_eq!(
+            product_version_for_branch("43"),
+            Some(("Fedora", "43".to_string()))
+        );
+    }
+
+    #[test]
+    fn product_version_for_branch_rejects_branches_bugzilla_lacks() {
+        // CentOS Stream and ELN have no product here. Returning a
+        // guess would build a query that matches nothing, which reads
+        // as "this package has no bugs".
+        assert_eq!(product_version_for_branch("c10s"), None);
+        assert_eq!(product_version_for_branch("eln"), None);
+        assert_eq!(product_version_for_branch(""), None);
+        assert_eq!(product_version_for_branch("epel"), None);
     }
 
     #[test]
