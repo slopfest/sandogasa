@@ -52,6 +52,43 @@ Concretely:
   just "error sending request", hiding the timeout/reset detail
   that identifies problems like these.
 
+## "Not there" and "did not ask" are different answers
+
+The 404 rule above is one case of a wider one: whenever a lookup can
+fail to produce an answer, the code has to keep *absent* apart from
+*unknown*. Folding them together always fails in the same direction —
+silently, and looking like a real negative result. Three instances
+turned up in one day:
+
+- **A field you deserialize is a field you must request.** Bugzilla's
+  default field set omits `flags`, and `Bug` declares that field
+  `#[serde(default)]`, so a read that did not ask for flags produced
+  an empty `Vec` — indistinguishable from a bug that genuinely has
+  none, and read as "this review is not approved" for every approved
+  review. `BzClient` now sends `include_fields=_default,flags` on
+  every bug read, with a wiremock test asserting it is on the wire.
+  `_default` keeps the whole default set, so adding a field to that
+  list can never take one away.
+- **An identifier that matches nothing is not an empty result.**
+  poi-tracker searched Bugzilla with `version=f43` where Fedora
+  numbers its versions bare (`43`), so every numbered-branch
+  retirement reported no open bugs. The fix was as much about
+  `product_version_for_branch` returning `Option` as about the
+  spelling: the old signature had to invent an answer for every
+  input, including branches Bugzilla has no product for.
+- **Return `Option` when "no such thing" is a real outcome.**
+  `DistGitClient::project_branches` gives `Ok(None)` for a package
+  with no repository and `Err` when the request failed, which is what
+  lets `ebranch check-wip` say "not yet in dist-git" for the first
+  and "not checked" for the second. A signature that returned an
+  empty `Vec` for both would have quietly claimed packages were
+  missing whenever the network hiccupped.
+
+The shared test for new code: if this lookup fails, does the caller
+report something indistinguishable from a genuine negative? If so, the
+absence needs its own representation — `Option`, a separate variant, or
+a timestamp recording *when* the answer was last actually obtained.
+
 ## Config files layer: /etc, then ~/.config, then the command line
 
 Every tool's config is read in layers: an optional system-wide

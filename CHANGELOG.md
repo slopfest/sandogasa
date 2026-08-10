@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### sandogasa-bugzilla: ask for the fields we deserialize
+
+Bugzilla's default field set leaves out `flags`, and `Bug` declares
+that field `#[serde(default)]`, so a read that did not request flags
+deserialized to an empty list — indistinguishable from a bug that
+genuinely has none. Every approved package review therefore looked
+unapproved, since approval *is* the `fedora-review+` flag. Bug 2498026
+carries it and `ebranch check-wip` still reported the review as
+awaiting approval.
+
+Reads now send `include_fields=_default,flags`. `_default` keeps
+everything the default set has, so adding a field to that list cannot
+take one away, and a wiremock test asserts the parameter is on the
+wire so a later refactor cannot quietly drop it.
+
+Anything else reading a bug's flags gains the fix: `sandogasa-report`
+and `fedora-cve-triage` both deserialize `Bug`.
+
+`DEVELOPMENT.md` now carries the rule this belongs to — "not there"
+and "did not ask" are different answers — alongside the two other
+instances of it found the same day.
+
+
 ### ebranch: track packages on their way into the distro
 
 `check-wip <ledger>` reports where each package of a coordinated

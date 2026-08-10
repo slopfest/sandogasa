@@ -46,6 +46,16 @@ impl BzClient {
         self.auth(self.client.get(self.url(path)))
     }
 
+    /// Fields to ask for on every bug read.
+    ///
+    /// Bugzilla's default set leaves out `flags`, and [`Bug`] declares
+    /// that field `#[serde(default)]`, so without asking for it a bug
+    /// with `fedora-review+` is indistinguishable from one with no
+    /// flags at all — silently, and in the direction that reads as
+    /// "not approved". `_default` keeps everything the default set
+    /// has, so adding a field here cannot take one away.
+    const FIELDS: &'static str = "_default,flags";
+
     /// Fetch a single bug by numeric ID.
     pub async fn bug(&self, id: u64) -> Result<Bug, reqwest::Error> {
         self.bug_by_id(&id.to_string()).await
@@ -58,7 +68,7 @@ impl BzClient {
 
     async fn bug_by_id(&self, id: &str) -> Result<Bug, reqwest::Error> {
         let resp: BugSearchResponse = self
-            .request(&format!("bug/{id}"))
+            .request(&format!("bug/{id}?include_fields={}", Self::FIELDS))
             .send()
             .await?
             .error_for_status()?
@@ -75,7 +85,7 @@ impl BzClient {
         let id_params: Vec<String> = ids.iter().map(|id| format!("id={id}")).collect();
         let query = id_params.join("&");
         let resp: BugSearchResponse = self
-            .request(&format!("bug?{query}"))
+            .request(&format!("bug?{query}&include_fields={}", Self::FIELDS))
             .send()
             .await?
             .error_for_status()?
@@ -99,7 +109,10 @@ impl BzClient {
             };
 
             let resp: BugSearchResponse = self
-                .request(&format!("bug?{query}&limit={limit}&offset={offset}"))
+                .request(&format!(
+                    "bug?{query}&limit={limit}&offset={offset}&include_fields={}",
+                    Self::FIELDS
+                ))
                 .send()
                 .await?
                 .error_for_status()?
@@ -278,6 +291,28 @@ mod tests {
             client.url("bug/12345"),
             "https://bugzilla.redhat.com/rest/bug/12345"
         );
+    }
+
+    #[tokio::test]
+    async fn bug_reads_ask_for_flags() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Bugzilla omits flags from its default field set, and Bug
+        // declares the field #[serde(default)] — so a read that does
+        // not ask for them cannot tell fedora-review+ from no flags.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("include_fields", "_default,flags"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = BzClient::new(&server.uri());
+        client.bugs(&[12345]).await.unwrap();
     }
 
     #[test]
