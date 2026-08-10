@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### ebranch: track packages on their way into the distro
+
+`check-wip <ledger>` reports where each package of a coordinated
+packaging effort stands. A stack of new crates, or a version bump that
+drags its dependencies along, moves every package through the same
+sequence — staged somewhere, reviewed or submitted as a pull request,
+built for Rawhide, branched, built again, shipped in an update — and
+working out which package is where decides what to do next.
+
+The effort lives in a ledger, the TOML file named on the command line,
+rather than being read fresh from the COPR each run. A COPR shrinks as
+packages graduate out of it, so a report rebuilt from one would lose
+exactly the work that is finished, and the ledger also holds what no
+service can report: which route a package takes, and which review bug
+or pull request is landing it. Each run reconciles — new packages are
+added, existing ones refreshed, and one that has left the COPR keeps
+its entry and stops counting as staged, since it has finished rather
+than vanished. `--prune` forgets those.
+
+Every observation is dated, so `--offline` can serve the report from
+the ledger without contacting anything and still say how old the
+reading is. Refreshing writes the ledger back despite the command
+reading like a query: observations are facts, they were expensive to
+gather, and dropping them would only make the next run pay again.
+Decisions are never inferred — a package that cannot be placed is
+reported as unplaced rather than guessed at.
+
+This is the first slice: it knows what a COPR can tell it. Reading a
+package's review bug, dist-git branches, Koji builds and Bodhi updates
+comes next, along with the `--update` mode for the parts that need a
+person.
+
+
 ### ebranch: propose an update's bug list
 
 Working out which bugs belong on a big update was one of the more

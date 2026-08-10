@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-08-05 "sandogasa 0.19.1" "Sandogasa Manual"
+.TH ebranch 1 2026-08-10 "sandogasa 0.19.1" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -253,6 +253,31 @@ The update to check, one of:
   input requires \-b, and \-\-testing\-branch when
   \-b is a base branch like al9 (it picks the
   COPR chroot, e.g. epel9 → epel\-9\-*).
+.SS ebranch check-wip
+\fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-target\fR] [\fB\-\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR> 
+.PP
+Track packages on their way into the distro
+.TP
+\fB\-\-copr\fR \fI<COPR>\fR
+COPR staging it (owner/project, @group/proj, or URL)
+.TP
+\fB\-\-target\fR \fI<BRANCH,...>\fR
+Releases targeted (repeated or CSV)
+.TP
+\fB\-\-offline\fR
+Report from the ledger without contacting anything
+.TP
+\fB\-\-prune\fR
+Forget packages that are no longer staged anywhere
+.TP
+\fB\-\-json\fR
+Machine\-readable JSON output
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fILEDGER\fR>
+Ledger file tracking the effort (created if absent)
 .SS ebranch config
 \fBebranch config\fR [\fB\-h\fR|\fB\-\-help\fR] 
 .PP

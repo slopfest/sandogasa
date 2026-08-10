@@ -14,6 +14,7 @@ mod karma;
 mod resolve;
 mod review_deps;
 mod submit;
+mod wip;
 
 use resolve::{
     FedrqResolver, ResolveOptions, resolve_closure_with_options, resolve_with_installability,
@@ -528,6 +529,8 @@ enum Command {
     CheckPkgReviews(CheckPkgReviewsArgs),
     /// Check if an update would break reverse dependencies.
     CheckUpdate(CheckUpdateArgs),
+    /// Track packages on their way into the distro.
+    CheckWip(CheckWipArgs),
     /// Set up Bugzilla API key and other settings.
     Config,
     /// Escalate (needinfo) stale branch requests in a report.
@@ -633,6 +636,32 @@ struct EscalateArgs {
 
     #[command(flatten)]
     common: BranchRequestCommon,
+}
+
+#[derive(clap::Args, Clone)]
+struct CheckWipArgs {
+    /// Ledger file tracking the effort (created if absent).
+    ledger: std::path::PathBuf,
+
+    /// COPR staging it (owner/project, @group/proj, or URL).
+    #[arg(long)]
+    copr: Vec<String>,
+
+    /// Releases targeted (repeated or CSV).
+    #[arg(long, value_name = "BRANCH,...", value_delimiter = ',')]
+    target: Vec<String>,
+
+    /// Report from the ledger without contacting anything.
+    #[arg(long)]
+    offline: bool,
+
+    /// Forget packages that are no longer staged anywhere.
+    #[arg(long)]
+    prune: bool,
+
+    /// Machine-readable JSON output.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args, Clone)]
@@ -758,6 +787,17 @@ fn main() -> ExitCode {
     if matches!(cli.command, Command::Config) {
         let rt = tokio::runtime::Runtime::new().expect("failed to create async runtime");
         return exit_code(rt.block_on(config::cmd_config()));
+    }
+
+    if let Command::CheckWip(a) = &cli.command {
+        return exit_code(wip::run(&wip::Options {
+            ledger: a.ledger.clone(),
+            coprs: a.copr.clone(),
+            targets: a.target.clone(),
+            offline: a.offline,
+            prune: a.prune,
+            json: a.json,
+        }));
     }
 
     if let Command::CheckPkgReviews(a) = &cli.command {
@@ -1075,6 +1115,7 @@ fn main() -> ExitCode {
         Command::CheckCrate(_)
         | Command::CheckPkgReviews(_)
         | Command::CheckUpdate(_)
+        | Command::CheckWip(_)
         | Command::Config
         | Command::Escalate(_)
         | Command::FileRequest(_)

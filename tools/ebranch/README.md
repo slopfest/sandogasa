@@ -11,7 +11,8 @@ be installable after building, expanding the closure as needed.
 Beyond dependency resolution, ebranch files and escalates branch
 requests (`branch-request`), analyzes crates.io dependencies
 (`check-crate`), links Bugzilla package review requests
-(`check-pkg-reviews`), and checks whether a Koji side tag or
+(`check-pkg-reviews`), tracks a packaging effort's progress into the
+distro (`check-wip`), and checks whether a Koji side tag or
 Bodhi update would break reverse dependencies (`check-update`) —
 optionally casting Bodhi karma with per-bug feedback based on the
 result (`--give-karma`), or submitting a passing side tag to Bodhi
@@ -145,6 +146,55 @@ so subsequent runs skip the Bugzilla search for already-found bugs.
 The tool only links missing packages (not unmet-version deps that
 already exist in the repo). It preserves existing Depends On links
 to bugs outside the dependency set.
+
+### Track packages on their way into the distro
+
+A coordinated effort — a stack of new crates, a version bump that
+drags its dependencies along — moves every package through the same
+sequence: staged somewhere, reviewed or submitted as a pull request,
+built for Rawhide, branched, built again, shipped in an update. Use
+`check-wip` to see where each one is.
+
+```console
+$ ebranch check-wip uutils.toml --copr @rust/uutils-and-nushell
+@rust/uutils-and-nushell: 15 new package(s): rust-exacl, rust-keccak, ...
+15 package(s) tracked in @rust/uutils-and-nushell
+targets: rawhide
+
+staged, route not decided (15)
+  rust-exacl 0.13.0-1 (as of 2026-08-10)
+  rust-keccak 0.2.0-1 (as of 2026-08-10)
+  ...
+```
+
+The effort lives in a **ledger**, the TOML file named on the command
+line, created on first run. It — not the COPR — is the source of truth
+for which packages belong to the effort: a COPR shrinks as packages
+graduate out of it, so a report rebuilt from one each run would lose
+exactly the work that is finished. The ledger also records what no
+service can report, such as which route a package is taking and which
+review bug or pull request is landing it. It remembers its COPRs too,
+so `--copr` is only needed to seed the ledger or add another.
+
+Each run reconciles rather than rebuilds:
+
+- in the COPR but not the ledger — new work, added;
+- in both — its observations refreshed;
+- in the ledger but no longer in the COPR — the entry stays and stops
+  being counted as staged, since it has finished or moved on. Use
+  `--prune` to forget those.
+
+Every observation is dated, so `--offline` can report from the ledger
+without contacting anything and still be honest about the age of what
+it shows. Refreshing writes the ledger back even though the command
+reads like a query: the observations are facts, expensive to gather,
+and discarding them would only make the next run pay again. Decisions
+are never inferred — a package the tool cannot place is reported as
+such rather than guessed at.
+
+Add `--target epel9` to record which releases the effort is for; one
+ledger holds them all, since a package's route and review bug do not
+depend on the release while its branch and build state do.
 
 ### Check if an update would break reverse dependencies
 

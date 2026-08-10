@@ -269,7 +269,7 @@ pub fn detect_input_type(input: &str) -> InputKind {
 /// Parse the path of a COPR URL (scheme already stripped):
 /// `<host>/coprs/g/<group>/<project>[/…]` → (`@group`, project),
 /// `<host>/coprs/<user>/<project>[/…]` → (user, project).
-fn parse_copr_url_path(rest: &str) -> Option<(String, String)> {
+pub fn parse_copr_url_path(rest: &str) -> Option<(String, String)> {
     let mut segments = rest.split('/').filter(|s| !s.is_empty());
     let _host = segments.next()?;
     if segments.next()? != "coprs" {
@@ -288,7 +288,7 @@ fn parse_copr_url_path(rest: &str) -> Option<(String, String)> {
 
 /// Parse a bare `owner/project` COPR spec (owner may carry the `@`
 /// group prefix). Exactly one `/`, both halves non-empty.
-fn parse_copr_spec(input: &str) -> Option<(String, String)> {
+pub fn parse_copr_spec(input: &str) -> Option<(String, String)> {
     let (owner, project) = input.split_once('/')?;
     (!owner.is_empty() && !project.is_empty() && !project.contains('/'))
         .then(|| (owner.to_string(), project.to_string()))
