@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### ebranch: propose an update's bug list
+
+Working out which bugs belong on a big update was one of the more
+tedious parts of submitting one, and it is mechanical work. `--submit`
+now proposes them, from two places.
+
+Bugs still open against a package the update builds. The search is
+deliberately not scoped to the update's release: the-new-hotness files
+update requests against Rawhide and package reviews live under Fedora,
+so an EPEL update's bugs are mostly not EPEL bugs.
+
+And `rhbz#` references in the changelog entries the update introduces.
+This is the half that earns its keep: a bug fixed in Rawhide is closed
+when that build lands, so it is no longer open and the first source
+cannot see it — while a branch update carrying the same fix still
+closes it for that branch. Only the *new* entries are read, those
+newer than the version-release the target already has, since scanning
+the whole changelog would attach bugs fixed in releases the target has
+had for years. Bug references are taken from `rhbz#123`, `bz#123`, a
+`#123` following a Resolves/Fixes/Closes keyword, and Bugzilla URLs; a
+bare `#123` is ignored, being as likely a GitHub issue, and this list
+decides what gets closed.
+
+A candidate is proposed only if the vote logic would score it +1, so
+what gets attached and what gets voted on cannot disagree. Each is
+shown with how it was found. `--yes` skips proposing altogether:
+attaching a bug closes it when the update goes stable, which is not
+something to do unasked.
+
+
 ### ebranch: judge FTBFS and FailsToInstall bugs
 
 `check-update --give-karma` had nothing to say about the two kinds of

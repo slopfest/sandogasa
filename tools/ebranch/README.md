@@ -294,18 +294,23 @@ package: the bug says it does not build on that release, and the build
 is the artifact that says otherwise. FailsToInstall bugs are answered
 from the check's own installability analysis — `+1` when the package's
 requirements all resolve, `-1` naming the requirement that does not.
-Both are recognized by the release tracker the bug blocks, not by its
-summary, so a bug filed against a different release is left alone;
-EPEL has no such trackers, so its FTBFS and FTI bugs get no automatic
-verdict. A CVE or a plain bug report gets no suggestion either way. Review requests (`Review Request: <pkg> - ...`) are
-auto-voted `+1` when the update builds the package under review —
-the usual case for a `--type newpackage` update. For any other
-bug, including a review of a package this update does not build,
-you are prompted (`+1`/`-1`/`0`).
-The full voting plan is shown for confirmation before anything
-is posted; `--yes` skips the prompts, taking the suggested `-1`
-where there is one and `0` where there is no verdict at all. The posted comment is the full Markdown check report with
-a provenance footer (ebranch version and the command invocation);
+Both are recognized either by the release tracker the bug blocks or by
+the fixed wording Fedora's bots use, which names the release itself —
+so a bug filed against a different release is left alone. The bot
+wording is what covers EPEL, which has no such trackers. A CVE or a
+plain bug report gets no suggestion either way.
+
+Review requests (`Review Request: <pkg> - ...`) are auto-voted `+1`
+when the update builds the package under review — the usual case for
+a `--type newpackage` update. For any other bug, including a review of
+a package this update does not build, you are prompted
+(`+1`/`-1`/`0`).
+
+The full voting plan is shown for confirmation before anything is
+posted; `--yes` skips the prompts, taking the suggested `-1` where
+there is one and `0` where there is no verdict at all. The posted
+comment is the full Markdown check report with a provenance footer
+(ebranch version and the command invocation);
 `--comment <TEXT>` adds reviewer notes as a section near the top,
 and you are prompted for notes interactively when the flag is
 omitted. When the update is your own,
@@ -335,12 +340,48 @@ default bugfix), `--severity` (required for `--type security`),
 update goes stable), and `--stable-karma`/`--unstable-karma`/
 `--disable-autokarma` for the autopush thresholds.
 
-Listed bugs are screened before the plan is shown: a bug whose package
-the update builds nothing for would be closed by an update that never
-touched it, so it is reported and you are offered the chance to leave
-it off. Only update requests and review requests are screened, since
-they name their package; a CVE or FTBFS bug is never dropped. `--yes`
-warns and keeps them rather than discarding a bug you asked for.
+The bug list is settled before the plan is shown. First ebranch
+proposes bugs the update looks like it closes, from two places: bugs
+still open against a package it builds, and `rhbz#` references in the
+changelog entries it introduces — the second matters because a bug
+fixed in Rawhide is closed when that build lands, so a branch update
+carrying the same fix would otherwise have nothing to attach. Only
+bugs that would be voted `+1` are proposed, and each is shown with how
+it was found. The open-bug search is not scoped to the update's
+release: update requests are filed against Rawhide and package reviews
+under Fedora, so an EPEL update's bugs are mostly not EPEL bugs.
+
+```console
+This update looks like it closes:
+  #2504649 rust-fd-find: FTBFS in Fedora rawhide/f45
+    open against rust-fd-find
+Add these bugs to the update? [Y/n]: y
+
+Submission plan for f45-build-side-146637:
+  packages (1): rust-fd-find
+  type: bugfix, severity: unspecified
+  bugs (closed on stable): #2504649
+  ...
+```
+
+The same bug then carries its reason into the karma comment, since
+both come from one verdict:
+
+```console
+  bug feedback:
+    +1 #2504649 rust-fd-find: FTBFS in Fedora rawhide/f45
+       (rust-fd-find-10.4.2 built for this release, so it is
+        not failing to build)
+```
+
+Listed bugs are then screened: a bug whose package the update builds
+nothing for would be closed by an update that never touched it, so it
+is reported and you are offered the chance to leave it off. Only
+update requests and review requests are screened, since they name
+their package; a CVE or FTBFS bug is never dropped. `--yes`
+skips proposing entirely and keeps whatever you listed: attaching a bug
+closes it when the update goes stable, and dropping one you asked for
+is equally not something to do unprompted.
 
 The pass gate reuses the karma derivation: a clean `+1` check submits
 after showing the plan (packages, type, bugs, thresholds, notes

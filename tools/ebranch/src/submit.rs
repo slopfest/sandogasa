@@ -34,6 +34,9 @@ pub struct SubmitOptions {
     pub unstable_karma: i32,
     /// Skip the submission confirmation.
     pub assume_yes: bool,
+    /// Koji profile for reading build changelogs, when not the
+    /// default one.
+    pub koji_profile: Option<String>,
 }
 
 /// Resolve the update notes from `--notes` (inline) or `--notes-file`
@@ -124,6 +127,68 @@ async fn screen_bugs(
         .collect())
 }
 
+/// Propose bugs the update looks like it closes, and return the ones
+/// the user accepts.
+///
+/// Skipped entirely under `--yes`: attaching a bug means closing it
+/// when the update goes stable, which is not something to do without
+/// being asked. Each candidate is shown with how it was found.
+async fn propose_bugs(
+    bz: &sandogasa_bugzilla::BzClient,
+    report: &crate::check_update::CheckUpdateReport,
+    already_listed: &[u64],
+    koji_profile: Option<&str>,
+) -> Result<Vec<u64>, String> {
+    // The check knows each package's old and new version-release,
+    // which is what says how much of a changelog is new.
+    let builds: Vec<(String, String)> = report
+        .changes
+        .iter()
+        .map(|c| (c.package.clone(), c.new.clone()))
+        .collect();
+    if builds.is_empty() {
+        return Ok(Vec::new());
+    }
+    let old_versions: std::collections::BTreeMap<String, Option<String>> = report
+        .changes
+        .iter()
+        .map(|c| (c.package.clone(), c.old.clone()))
+        .collect();
+    let changelogs = builds
+        .iter()
+        .filter_map(|(pkg, evr)| {
+            let nvr = format!("{pkg}-{evr}");
+            sandogasa_koji::build_info_with_changelog(&nvr, koji_profile)
+                .ok()
+                .map(|text| (pkg.clone(), text))
+        })
+        .collect();
+
+    let trackers = sandogasa_bugclass::bugzilla::lookup_branch_trackers(bz, &report.branch).await;
+    let facts = crate::karma::UpdateFacts {
+        builds: &builds,
+        trackers: &trackers,
+        branch: &report.branch,
+        unsatisfied: &report.installability_issues,
+        full_analysis: report.full_analysis,
+    };
+    let candidates =
+        crate::discover::candidates(bz, &changelogs, &old_versions, &facts, already_listed).await;
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    eprintln!("\nThis update looks like it closes:");
+    for c in &candidates {
+        eprintln!("  #{} {}", c.bug_id, c.summary);
+        eprintln!("    {}", c.source);
+    }
+    if !sandogasa_cli::confirm("Add these bugs to the update?", true).map_err(|e| e.to_string())? {
+        return Ok(Vec::new());
+    }
+    Ok(candidates.iter().map(|c| c.bug_id).collect())
+}
+
 /// Format the submission plan shown for confirmation. Leads with the
 /// package list — the whole point of checking before submitting is
 /// spotting a subpackage update that is accidentally missing one.
@@ -185,20 +250,31 @@ fn confirm_plan(
 /// packages (from the check report), shown in the confirmation plan.
 /// Returns the created update alias(es) so the caller can post the
 /// check report as a follow-up comment.
-pub fn run(tag: &str, packages: &[String], opts: &SubmitOptions) -> Result<Vec<String>, String> {
+pub fn run(
+    tag: &str,
+    report: &crate::check_update::CheckUpdateReport,
+    opts: &SubmitOptions,
+) -> Result<Vec<String>, String> {
+    let packages = &report.updated_packages;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let bz = sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com");
 
-    // Screen the bug list before the plan is shown, so what is
-    // confirmed is what gets submitted.
-    let bugs = if opts.bugs.is_empty() {
+    // Settle the bug list before the plan is shown, so what is
+    // confirmed is what gets submitted: propose what the update looks
+    // like it closes, then drop anything it cannot be closing.
+    let mut bugs = opts.bugs.clone();
+    if !opts.assume_yes {
+        bugs.extend(rt.block_on(propose_bugs(
+            &bz,
+            report,
+            &bugs,
+            opts.koji_profile.as_deref(),
+        ))?);
+    }
+    let bugs = if bugs.is_empty() {
         Vec::new()
     } else {
-        rt.block_on(screen_bugs(
-            &sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com"),
-            packages,
-            &opts.bugs,
-            opts.assume_yes,
-        ))?
+        rt.block_on(screen_bugs(&bz, packages, &bugs, opts.assume_yes))?
     };
 
     if opts.assume_yes {
@@ -262,6 +338,7 @@ mod tests {
             stable_karma: 3,
             unstable_karma: -3,
             assume_yes: false,
+            koji_profile: None,
         }
     }
 

@@ -465,6 +465,14 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   foo 4 that depends on "foo-4.1 is available" is closed by an update
   shipping foo 4.1.
 
+  This is also how CVE bugs become proposable by `--submit`'s bug
+  discovery, which offers only what the vote logic would score +1 and
+  so skips them today: give CVEs a verdict and they are discovered for
+  free, with no special case. Note when doing it that a CVE is often
+  filed once per distro rather than once per release — one bug marked
+  `[fedora-all]` in its summary and one `[epel-all]` — so the release
+  scoping lives in that tag rather than in the `version` field.
+
   Both conditions are required. The component matching a package in
   the update is what keeps this from firing on an unrelated
   dependency, and the depended-on bug being satisfied is what

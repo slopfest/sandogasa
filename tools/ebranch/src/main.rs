@@ -9,6 +9,7 @@ mod check_crate;
 mod check_update;
 mod config;
 mod dag;
+mod discover;
 mod karma;
 mod resolve;
 mod review_deps;
@@ -1026,8 +1027,9 @@ fn main() -> ExitCode {
                         stable_karma: a.stable_karma,
                         unstable_karma: a.unstable_karma,
                         assume_yes: a.yes,
+                        koji_profile: a.koji_profile.clone(),
                     };
-                    let aliases = match submit::run(tag, &report.updated_packages, &sopts) {
+                    let aliases = match submit::run(tag, &report, &sopts) {
                         Ok(aliases) => aliases,
                         Err(e) => {
                             eprintln!("error: {e}");
