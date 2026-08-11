@@ -94,6 +94,27 @@ pub struct DistGit {
     /// enough needs a fresh review before it can come back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub retired: bool,
+    /// What `dead.package` says, when retired. Usually the sentence
+    /// that decides whether the package should come back at all —
+    /// "replaced by uutils-coreutils" settles it. The retirement date
+    /// would be the commit that added the file, which Pagure's API
+    /// does not expose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_reason: Option<String>,
+    /// The date retirement happened, `YYYY-MM-DD`, when it can be
+    /// established.
+    ///
+    /// With no commit-log endpoint found on Pagure, this is the
+    /// branch's HEAD date — and it is only recorded when that commit's
+    /// subject
+    /// matches `dead.package`, which is what makes it the retirement
+    /// rather than merely the last thing that happened. Without the
+    /// match the date is left out: "when the repo was last touched"
+    /// would read as a retirement date and be later than the truth,
+    /// which is the wrong direction to be wrong in when judging how
+    /// long a package has been dead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_on: Option<String>,
     /// When this was last observed, `YYYY-MM-DD`.
     pub seen: String,
 }
@@ -119,6 +140,11 @@ pub struct Review {
     /// approval actually is — a closed bug without it was abandoned,
     /// not accepted.
     pub approved: bool,
+    /// The date the review was filed, `YYYY-MM-DD`. Context for
+    /// judging whether a retired package's review is old enough that
+    /// coming back needs a new one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub filed: String,
     /// When this was last observed, `YYYY-MM-DD`.
     pub seen: String,
 }
@@ -438,6 +464,31 @@ pub fn run(opts: &Options) -> Result<(), String> {
     Ok(())
 }
 
+/// The date a package was retired, when it can be established.
+///
+/// No commit-log endpoint was found on Pagure, so a branch's HEAD is
+/// the only commit reachable by hash. For a retired package that is
+/// normally the retirement commit,
+/// since nothing follows a retirement — and the check that it *is* is
+/// its subject matching `dead.package`, which the retirement tooling
+/// writes to both. Without that match the date is not claimed: it
+/// would be the last time anyone touched the repo, later than the
+/// retirement, and too optimistic for judging how long a package has
+/// been dead.
+async fn retirement_date(
+    client: &sandogasa_distgit::DistGitClient,
+    package: &str,
+    reason: &str,
+) -> Option<String> {
+    let heads = client.branch_heads(package).await.ok()??;
+    let head = heads.get("rawhide")?;
+    let (when, subject) = client.commit_info(package, head).await.ok()??;
+    if subject.trim() != reason.trim() {
+        return None;
+    }
+    chrono::DateTime::from_timestamp(when, 0).map(|d| d.format("%Y-%m-%d").to_string())
+}
+
 /// Ask Koji for the latest build tagged for each branch.
 ///
 /// Only packages whose staged version is ahead of what the branch
@@ -669,16 +720,26 @@ async fn refresh_reviews(
             .flatten();
         let found = match known {
             Some(id) => match bz.bugs(&[id]).await {
-                Ok(bugs) => bugs
-                    .first()
-                    .map(|b| (b.id, b.status.clone(), is_approved(b))),
+                Ok(bugs) => bugs.first().map(|b| {
+                    (
+                        b.id,
+                        b.status.clone(),
+                        is_approved(b),
+                        b.creation_time.format("%Y-%m-%d").to_string(),
+                    )
+                }),
                 Err(e) => {
                     eprintln!("warning: {name}: rhbz#{id}: {e}");
                     continue;
                 }
             },
             None => match crate::review_deps::find_review_bug(bz, &name).await {
-                Ok(Some(bug)) => Some((bug.id, bug.status.clone(), is_approved(&bug))),
+                Ok(Some(bug)) => Some((
+                    bug.id,
+                    bug.status.clone(),
+                    is_approved(&bug),
+                    bug.creation_time.format("%Y-%m-%d").to_string(),
+                )),
                 Ok(None) => None,
                 Err(e) => {
                     eprintln!("warning: {name}: {e}");
@@ -686,13 +747,14 @@ async fn refresh_reviews(
                 }
             },
         };
-        if let Some((bug, status, approved)) = found
+        if let Some((bug, status, approved, filed)) = found
             && let Some(package) = ledger.packages.get_mut(&name)
         {
             package.review = Some(Review {
                 bug,
                 status,
                 approved,
+                filed,
                 seen: today.to_string(),
             });
         }
@@ -833,15 +895,24 @@ fn refresh_distgit(ledger: &mut Ledger, today: &str, only: &[String]) {
                     let exists = branches.is_some();
                     // Only worth asking once the repo is known to be
                     // there; a missing repo cannot be retired.
-                    let retired = if exists {
-                        client.is_retired(name, "rawhide").await.unwrap_or(false)
+                    // One request answers both questions: the file's
+                    // presence is the retirement, its content the
+                    // reason.
+                    let reason = if exists {
+                        client.retired_reason(name, "rawhide").await.unwrap_or(None)
                     } else {
-                        false
+                        None
+                    };
+                    let retired_on = match &reason {
+                        Some(reason) => retirement_date(&client, name, reason).await,
+                        None => None,
                     };
                     let record = DistGit {
                         exists,
                         branches: branches.unwrap_or_default(),
-                        retired,
+                        retired: reason.is_some(),
+                        retired_reason: reason.filter(|r| !r.is_empty()),
+                        retired_on,
                         seen: today.to_string(),
                     };
                     if let Some(package) = ledger.packages.get_mut(name) {
@@ -947,6 +1018,17 @@ fn state(package: &Package, targets: &[String]) -> &'static str {
                 return "in dist-git, needs branching";
             }
             if d.retired {
+                // What is knowable is whether a review is *open*,
+                // not whether the closed one we found is the first:
+                // a package can be retired more than once, so the
+                // newest closed review need not be the original. The
+                // search prefers the newest open review, so finding
+                // only a closed one means nothing is in progress.
+                match package.review.as_ref().map(|r| r.status != "CLOSED") {
+                    Some(true) => return "retired, review in progress",
+                    Some(false) => return "retired, no open review",
+                    None => {}
+                }
                 // A retired package keeps its repository, so this has
                 // to be checked before concluding anything from a
                 // missing build: the obstacle is the retirement, not
@@ -1057,6 +1139,16 @@ pub fn render(ledger: &Ledger, only: &[String]) -> String {
                         .filter(|b| *b == "rawhide" || ledger_target(ledger, b))
                         .map(String::as_str)
                         .collect();
+                    if let Some(reason) = &d.retired_reason {
+                        match &d.retired_on {
+                            Some(on) => {
+                                let _ = writeln!(out, "    retired {on}: {reason}");
+                            }
+                            None => {
+                                let _ = writeln!(out, "    retired: {reason}");
+                            }
+                        }
+                    }
                     let _ = writeln!(
                         out,
                         "    dist-git: {}{} (as of {})",
@@ -1078,7 +1170,16 @@ pub fn render(ledger: &Ledger, only: &[String]) -> String {
                 } else {
                     r.status.to_ascii_lowercase()
                 };
-                let _ = writeln!(out, "    review: rhbz#{} {state} (as of {})", r.bug, r.seen);
+                let filed = if r.filed.is_empty() {
+                    String::new()
+                } else {
+                    format!(", filed {}", r.filed)
+                };
+                let _ = writeln!(
+                    out,
+                    "    review: rhbz#{} {state}{filed} (as of {})",
+                    r.bug, r.seen
+                );
             }
             for (branch, built) in &package.built {
                 let _ = writeln!(
@@ -1263,6 +1364,8 @@ mod tests {
             exists,
             branches: branches.iter().map(|b| b.to_string()).collect(),
             retired: false,
+            retired_reason: None,
+            retired_on: None,
             seen: "2026-08-10".to_string(),
         }
     }
@@ -1478,6 +1581,7 @@ mod tests {
             bug,
             status: status.to_string(),
             approved,
+            filed: "2024-01-13".to_string(),
             seen: "2026-08-10".to_string(),
         }
     }
@@ -1499,6 +1603,42 @@ mod tests {
         // it moves the package on to needing an SCM request.
         package.review = Some(review(2498026, "ASSIGNED", true));
         assert_eq!(state(&package, &[]), "review approved, needs importing");
+    }
+
+    #[test]
+    fn state_says_whether_a_retired_package_has_a_review_open() {
+        // The actionable question is whether a review is open, and
+        // that needs no dates: the search prefers the newest open
+        // review, so finding only a closed one means none is.
+        let mut d = distgit(true, &["rawhide"]);
+        d.retired = true;
+        let mut package = Package {
+            distgit: Some(d),
+            staged: Some(staged_at("0.9.0-1")),
+            review: Some(review(2258203, "CLOSED", true)),
+            ..Package::default()
+        };
+        // Only a closed review: nothing is in progress. Deliberately
+        // not "its original review" — a package can be retired more
+        // than once, so the newest closed review need not be the
+        // first, and the report should not claim otherwise.
+        assert_eq!(state(&package, &[]), "retired, no open review");
+
+        // An open one means someone is already reviewing it.
+        package.review = Some(review(2500000, "NEW", false));
+        assert_eq!(state(&package, &[]), "retired, review in progress");
+    }
+
+    #[test]
+    fn render_shows_when_a_review_was_filed() {
+        // The date is context for judging whether a retired
+        // package's review is old enough to need redoing — a
+        // judgement the tool deliberately leaves to the reader.
+        let mut ledger = Ledger::default();
+        ledger.reconcile("@rust/uutils", &[staged("rust-a", "0.9.0-1")], "2026-08-10");
+        ledger.packages.get_mut("rust-a").unwrap().review = Some(review(2258203, "CLOSED", true));
+        let text = render(&ledger, &[]);
+        assert!(text.contains("filed 2024-01-13"), "{text}");
     }
 
     #[test]
@@ -1527,7 +1667,9 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("review: rhbz#2498026 fedora-review+ (as of 2026-08-10)"),
+            text.contains(
+                "review: rhbz#2498026 fedora-review+, filed 2024-01-13 (as of 2026-08-10)"
+            ),
             "{text}"
         );
     }
@@ -1545,6 +1687,35 @@ mod tests {
             ..Package::default()
         };
         assert_eq!(state(&package, &[]), "retired in rawhide, needs unretiring");
+    }
+
+    #[test]
+    fn render_dates_a_retirement_only_when_it_is_known() {
+        let mut ledger = Ledger::default();
+        ledger.reconcile("@rust/uutils", &[staged("rust-a", "0.9.0-1")], "2026-08-10");
+        let mut d = distgit(true, &["rawhide"]);
+        d.retired = true;
+        d.retired_reason = Some("replaced by uutils-coreutils".to_string());
+        ledger.packages.get_mut("rust-a").unwrap().distgit = Some(d.clone());
+
+        // Without a date, the reason still shows — but no date is
+        // invented for it.
+        let text = render(&ledger, &[]);
+        assert!(
+            text.contains("retired: replaced by uutils-coreutils"),
+            "{text}"
+        );
+        assert!(!text.contains("retired 20"), "{text}");
+
+        // With one, it leads, since how long a package has been dead
+        // is what the reader is weighing.
+        d.retired_on = Some("2026-06-09".to_string());
+        ledger.packages.get_mut("rust-a").unwrap().distgit = Some(d);
+        let text = render(&ledger, &[]);
+        assert!(
+            text.contains("retired 2026-06-09: replaced by uutils-coreutils"),
+            "{text}"
+        );
     }
 
     #[test]

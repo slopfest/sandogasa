@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### ebranch: check-wip on retired packages — why, when, and whether anyone is re-reviewing
+
+A retired package kept its dist-git repository, so the report could
+only say it was retired, leaving the reader to work out whether it
+should come back and whether anyone was already on it.
+
+Three things now answer that. The `dead.package` reason is shown, which
+is usually decisive — `rust-uu_touch` reads "rust-coreutils internal
+dependency; replaced by uutils-coreutils", meaning it should not come
+back at all. It costs nothing extra: `is_retired` was already fetching
+that file and discarding the body, so `retired_reason` returns the
+content and its absence is the not-retired answer.
+
+The retirement date is shown when it can be established: 2026-06-09 for
+that package. Pagure has no commit-log endpoint that could be found,
+but a branch's HEAD is reachable — `git/branches?with_commits=1` gives
+the hash and `c/<hash>/info` its `commit_time`. For a retired package
+HEAD is normally the retirement commit, since nothing follows a
+retirement, and the check that it *is* is its subject matching
+`dead.package`. Without that match no date is claimed: it would be the
+last time anyone touched the repo, later than the retirement, and too
+optimistic for judging how long a package has been dead.
+
+Whether a review is open is reported rather than guessed at. The search
+prefers the newest open Review Request, so finding only a closed one
+means nothing is in progress: `retired, no open review` versus
+`retired, review in progress`. Deliberately not phrased as "its
+original review" — a package can be retired more than once, so the
+newest closed review need not be the first.
+
+New in `sandogasa-distgit`: `retired_reason`, `branch_heads` and
+`commit_info`.
+
+
 ### ebranch: check-wip asks Koji and Bodhi, not just the repositories
 
 "Not in the repos" had more than one cause and only one name. A build is

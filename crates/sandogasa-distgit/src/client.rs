@@ -214,6 +214,93 @@ impl DistGitClient {
     /// Fedora uses to mark a retired branch. Returns `Ok(true)`
     /// when the file is present, `Ok(false)` on 404 (no marker,
     /// i.e. live), and surfaces other HTTP errors.
+    /// Each branch's HEAD commit hash.
+    ///
+    /// `None` when the package has no repository. No commit-log
+    /// endpoint was found on Pagure (`git/log`, `log`, `commits` and
+    /// `git/log/<branch>` all 404), so a branch's HEAD is the way in:
+    /// pair it with [`Self::commit_info`] to date the most recent
+    /// change on a branch.
+    pub async fn branch_heads(
+        &self,
+        package: &str,
+    ) -> Result<Option<std::collections::BTreeMap<String, String>>, Box<dyn std::error::Error>>
+    {
+        validate_segment(package, "package name")?;
+        let url = format!(
+            "{}/api/0/rpms/{}/git/branches?with_commits=1",
+            self.base_url, package
+        );
+        let resp = self.client.get(&url).send().await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let resp = resp.error_for_status()?;
+        #[derive(serde::Deserialize)]
+        struct Branches {
+            branches: std::collections::BTreeMap<String, String>,
+        }
+        let body: Branches = resp.json().await?;
+        Ok(Some(body.branches))
+    }
+
+    /// A commit's Unix timestamp and first message line.
+    ///
+    /// Returns `None` for an unknown hash. The timestamp is left raw
+    /// rather than parsed, so this crate needs no date library for
+    /// what is a formatting concern of its callers.
+    pub async fn commit_info(
+        &self,
+        package: &str,
+        hash: &str,
+    ) -> Result<Option<(i64, String)>, Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
+        validate_segment(hash, "commit hash")?;
+        let url = format!("{}/api/0/rpms/{}/c/{}/info", self.base_url, package, hash);
+        let resp = self.client.get(&url).send().await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let resp = resp.error_for_status()?;
+        #[derive(serde::Deserialize)]
+        struct Info {
+            commit_time: i64,
+            #[serde(default)]
+            message: String,
+        }
+        let body: Info = resp.json().await?;
+        let subject = body.message.lines().next().unwrap_or_default().to_string();
+        Ok(Some((body.commit_time, subject)))
+    }
+
+    /// The reason a package is retired, from its `dead.package`, or
+    /// `None` when it is not retired on `branch`.
+    ///
+    /// Retirement tooling writes a one-line explanation there —
+    /// "replaced by uutils-coreutils", "orphaned, FTBFS for two
+    /// cycles" — which is usually what a reader needs in order to
+    /// decide whether the package should come back at all. To date the
+    /// retirement as well, see [`Self::branch_heads`] and
+    /// [`Self::commit_info`].
+    pub async fn retired_reason(
+        &self,
+        package: &str,
+        branch: &str,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
+        validate_segment(branch, "branch name")?;
+        let url = format!(
+            "{}/rpms/{}/raw/{}/f/dead.package",
+            self.base_url, package, branch
+        );
+        let resp = self.client.get(&url).send().await?;
+        match resp.status().as_u16() {
+            200 => Ok(Some(resp.text().await?.trim().to_string())),
+            404 => Ok(None),
+            other => Err(format!("dist-git GET {url} returned {other}").into()),
+        }
+    }
+
     pub async fn is_retired(
         &self,
         package: &str,
