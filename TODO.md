@@ -655,6 +655,18 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   for its saved agenda), and an effort file is something you may
   want to keep beside the work rather than under `~/.local/state`.
 
+  CentOS SIG efforts are not supported, and would not be a small
+  addition. `check-wip` takes each branch's Koji tag from Bodhi's
+  release list and asks Bodhi which update carries a build — neither
+  exists for CBS, where content moves by tagging rather than through
+  updates, and `product_version_for_branch` has no Bugzilla product
+  for a `c*s` branch either. A `--koji-profile` flag was added and
+  then removed: with no tag source for those branches it had nothing
+  to act on, and a flag that looks like it enables something it
+  cannot is worse than its absence. Doing it properly means a
+  per-target notion of how content reaches a release — Bodhi for
+  Fedora and EPEL, tagging for CBS — settled before any lookup runs.
+
   Tying a package to its review bug has three ways in, in order of
   how much they cost the user: set it directly in the ledger; scan
   the ledger for packages whose review bug is unknown and, for each,

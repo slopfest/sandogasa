@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### ebranch: check-wip asks Koji and Bodhi, not just the repositories
+
+"Not in the repos" had more than one cause and only one name. A build is
+tagged in Koji the moment it succeeds and reaches repodata only at the
+next compose — or, on a branched release, only once an update is pushed
+— so a package could be reported as needing a build when the build was
+already done and waiting.
+
+Koji is now asked for the latest build tagged for each branch, and on a
+branched release Bodhi for the update carrying it. The states separate
+accordingly: `needs building for rawhide`, `built for rawhide, not yet
+in the repos`, and `built, update pending` / `in testing` / `pushed`.
+
+Each branch's Koji tag comes from Bodhi's release list rather than being
+constructed, so no release number is hardcoded and Rawhide is followed
+as it moves — `f45` today. Only packages whose staged version is ahead
+of what the branch ships are queried, since for anything current the
+question is settled and Koji costs a subprocess per package. Rawhide
+skips the Bodhi step, having no updates.
+
+An absent record never implies a build: `built_at_least` is false when
+Koji was not asked, so a package with no Koji record reads as needing a
+build rather than as one mysteriously waiting.
+
+A `--koji-profile` flag was added for CentOS SIG work and then removed
+before release. The Koji tag comes from Bodhi, which knows only Fedora
+and EPEL, so the flag had no tag to act on for a CBS branch — a flag
+that looks like it enables something it cannot is worse than its
+absence. What CentOS support actually needs is recorded in `TODO.md`.
+
+
 ### Config defaults cannot authorize a write, and booleans can be overridden
 
 Two gaps in the `[defaults]` mechanism, found by asking how to override

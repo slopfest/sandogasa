@@ -123,6 +123,37 @@ pub struct Review {
     pub seen: String,
 }
 
+/// The latest build Koji has tagged for a branch.
+///
+/// Distinct from what the repositories ship: a build is tagged the
+/// moment it succeeds, and only reaches repodata once a compose runs
+/// (or, on a branched release, once an update is pushed). Without
+/// this, "not in the repos" cannot tell a package that was never
+/// built from one that is built and waiting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Built {
+    /// Name-version-release of the latest tagged build.
+    pub nvr: String,
+    /// The Koji tag it was found in.
+    pub tag: String,
+    /// When this was last observed, `YYYY-MM-DD`.
+    pub seen: String,
+}
+
+/// The Bodhi update carrying a build for a branch.
+///
+/// On a branched release a build reaches the repositories only via an
+/// update, so "built but not shipped" has two very different causes:
+/// an update is working its way through, or nobody has submitted one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateRef {
+    pub alias: String,
+    /// `pending`, `testing`, `stable`, and so on.
+    pub status: String,
+    /// When this was last observed, `YYYY-MM-DD`.
+    pub seen: String,
+}
+
 /// One package in the effort.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Package {
@@ -146,6 +177,13 @@ pub struct Package {
     /// What the package's review request says, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<Review>,
+    /// The latest build Koji has for each branch, keyed by branch.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub built: BTreeMap<String, Built>,
+    /// The Bodhi update carrying each branch's build, keyed by
+    /// branch. Rawhide has none — its builds need no update.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub update: BTreeMap<String, UpdateRef>,
     /// What each branch already ships, keyed by branch. Absent for a
     /// branch means the package is not in it — or that the query
     /// failed, which is why a failure records nothing rather than an
@@ -354,6 +392,13 @@ pub fn run(opts: &Options) -> Result<(), String> {
         branches.extend(ledger.targets.iter().filter(|t| *t != "rawhide").cloned());
         refresh_shipped(&mut ledger, &branches, &today, &opts.packages);
         refresh_reviews_blocking(&mut ledger, &today, opts.rescan_reviews, &opts.packages);
+        let (tags, releases) = stable_tags(&branches);
+        if sandogasa_koji::is_available() {
+            refresh_built(&mut ledger, &tags, &today, &opts.packages);
+        } else {
+            eprintln!("warning: koji is not installed; skipping build lookups");
+        }
+        refresh_updates_blocking(&mut ledger, &releases, &today, &opts.packages);
         dirty = true;
     }
 
@@ -391,6 +436,175 @@ pub fn run(opts: &Options) -> Result<(), String> {
         print!("{}", render(&ledger, &opts.packages));
     }
     Ok(())
+}
+
+/// Ask Koji for the latest build tagged for each branch.
+///
+/// Only packages whose staged version is ahead of what the branch
+/// ships are asked about: for anything already current in the repos
+/// the question is settled, and Koji is one subprocess per package.
+/// The tag comes from Bodhi's release list (`stable_tag`), so no
+/// release number is hardcoded and it follows Rawhide as it moves.
+fn refresh_built(
+    ledger: &mut Ledger,
+    tags: &BTreeMap<String, String>,
+    today: &str,
+    only: &[String],
+) {
+    for (branch, tag) in tags {
+        let wanted: Vec<String> = ledger
+            .packages
+            .iter()
+            .filter(|(name, p)| selected(only, name) && ahead_of_repos(p, branch))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in wanted {
+            // No Koji profile is threaded through: the tag comes from
+            // Bodhi's release list, which only knows Fedora and EPEL,
+            // so a non-default profile would have no tag to query.
+            // CentOS SIG support needs a different tag source and no
+            // Bodhi step at all — see TODO.md.
+            match sandogasa_koji::latest_tagged(tag, &name, None) {
+                Ok(Some(build)) => {
+                    if let Some(package) = ledger.packages.get_mut(&name) {
+                        package.built.insert(
+                            branch.clone(),
+                            Built {
+                                nvr: build.nvr,
+                                tag: tag.clone(),
+                                seen: today.to_string(),
+                            },
+                        );
+                    }
+                }
+                // Nothing tagged: a real answer, so any stale record
+                // goes.
+                Ok(None) => {
+                    if let Some(package) = ledger.packages.get_mut(&name) {
+                        package.built.remove(branch);
+                    }
+                }
+                Err(e) => eprintln!("warning: koji {tag} {name}: {e}"),
+            }
+        }
+    }
+}
+
+/// Ask Bodhi which update carries each branch's build.
+///
+/// Only for branches that have updates — Rawhide's builds go straight
+/// into the next compose — and only for packages whose build is ahead
+/// of what the branch ships, which is exactly when the question "is
+/// an update in flight, or does one need submitting?" arises.
+async fn refresh_updates(
+    ledger: &mut Ledger,
+    releases: &BTreeMap<String, String>,
+    today: &str,
+    only: &[String],
+) {
+    let client = sandogasa_bodhi::BodhiClient::new();
+    for (branch, release) in releases {
+        if branch == "rawhide" {
+            continue;
+        }
+        let wanted: Vec<String> = ledger
+            .packages
+            .iter()
+            .filter(|(name, p)| selected(only, name) && ahead_of_repos(p, branch))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in wanted {
+            // Newest first, so a superseded older update does not
+            // mask the one in flight.
+            let statuses = ["pending", "testing", "stable"];
+            match client.updates_for_package(&name, release, &statuses).await {
+                Ok(updates) => {
+                    let package = ledger.packages.get_mut(&name);
+                    match (updates.first(), package) {
+                        (Some(update), Some(package)) => {
+                            package.update.insert(
+                                branch.clone(),
+                                UpdateRef {
+                                    alias: update.alias.clone(),
+                                    status: update.status.clone(),
+                                    seen: today.to_string(),
+                                },
+                            );
+                        }
+                        // No update: a real answer, so a stale record
+                        // goes rather than being left to mislead.
+                        (None, Some(package)) => {
+                            package.update.remove(branch);
+                        }
+                        _ => {}
+                    }
+                }
+                Err(e) => eprintln!("warning: bodhi {release} {name}: {e}"),
+            }
+        }
+    }
+}
+
+/// Whether Koji has a build for `branch` at least as new as what is
+/// staged. `false` when nothing was found, since an absent record is
+/// not evidence of a build.
+fn built_at_least(package: &Package, branch: &str, staged: Option<&Staged>) -> bool {
+    match (package.built.get(branch), staged) {
+        (Some(built), Some(s)) => sandogasa_koji::parse_nvr(&built.nvr).is_some_and(|(_, v, r)| {
+            sandogasa_rpmvercmp::rpmvercmp(&format!("{v}-{r}"), &s.version)
+                != std::cmp::Ordering::Less
+        }),
+        _ => false,
+    }
+}
+
+/// Whether a package's staged version is ahead of what `branch`
+/// ships, which is what makes its build and update state interesting.
+fn ahead_of_repos(package: &Package, branch: &str) -> bool {
+    match (package.staged.as_ref(), package.shipped.get(branch)) {
+        (Some(s), Some(shipped)) => {
+            sandogasa_rpmvercmp::rpmvercmp(&s.version, &shipped.version)
+                == std::cmp::Ordering::Greater
+        }
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+/// The Koji tag that carries each branch's content, from Bodhi's
+/// release list. Branches Bodhi does not know are skipped rather
+/// than guessed at — the tag naming is release-engineering's to
+/// change, not ours to infer.
+fn stable_tags(branches: &[String]) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("warning: Koji lookups skipped ({e})");
+            return (BTreeMap::new(), BTreeMap::new());
+        }
+    };
+    let releases = match rt.block_on(sandogasa_bodhi::BodhiClient::new().active_releases()) {
+        Ok(releases) => releases,
+        Err(e) => {
+            eprintln!("warning: could not list Bodhi releases ({e}); skipping Koji lookups");
+            return (BTreeMap::new(), BTreeMap::new());
+        }
+    };
+    let mut tags = BTreeMap::new();
+    let mut names = BTreeMap::new();
+    for branch in branches {
+        match releases
+            .iter()
+            .find(|r| &r.branch == branch && !r.stable_tag.is_empty())
+        {
+            Some(release) => {
+                tags.insert(branch.clone(), release.stable_tag.clone());
+                names.insert(branch.clone(), release.name.clone());
+            }
+            None => eprintln!("warning: no Bodhi release for {branch}; skipping its Koji lookup"),
+        }
+    }
+    (tags, names)
 }
 
 /// Look up the review request for packages that look like they still
@@ -482,6 +696,22 @@ async fn refresh_reviews(
                 seen: today.to_string(),
             });
         }
+    }
+}
+
+/// Run the Bodhi lookups on their own runtime, since `run` is sync.
+fn refresh_updates_blocking(
+    ledger: &mut Ledger,
+    releases: &BTreeMap<String, String>,
+    today: &str,
+    only: &[String],
+) {
+    if releases.keys().all(|b| b == "rawhide") {
+        return;
+    }
+    match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt.block_on(refresh_updates(ledger, releases, today, only)),
+        Err(e) => eprintln!("warning: Bodhi lookups skipped ({e})"),
     }
 }
 
@@ -731,17 +961,32 @@ fn state(package: &Package, targets: &[String]) -> &'static str {
                 // filed.
                 return "retired in rawhide, needs unretiring";
             }
-            match (package.shipped.get("rawhide"), staged) {
-                // The staged build is newer than what Rawhide has,
-                // so the work has not landed there yet.
-                (Some(shipped), Some(s))
-                    if sandogasa_rpmvercmp::rpmvercmp(&s.version, &shipped.version)
-                        == std::cmp::Ordering::Greater =>
-                {
-                    "in dist-git, newer build staged"
+            let ahead_of_repos = match (package.shipped.get("rawhide"), staged) {
+                (Some(shipped), Some(s)) => {
+                    sandogasa_rpmvercmp::rpmvercmp(&s.version, &shipped.version)
+                        == std::cmp::Ordering::Greater
                 }
-                (Some(_), _) => "in rawhide",
-                (None, _) => "in dist-git, not built for rawhide",
+                (None, Some(_)) => true,
+                _ => false,
+            };
+            if !ahead_of_repos {
+                return if package.shipped.contains_key("rawhide") {
+                    "in rawhide"
+                } else {
+                    "in dist-git, not built for rawhide"
+                };
+            }
+            // Ahead of the repos. Koji says whether that is work
+            // still to do or a build already made, and on a branched
+            // release Bodhi says whether an update is carrying it.
+            if !built_at_least(package, "rawhide", staged.as_ref()) {
+                return "in dist-git, needs building for rawhide";
+            }
+            match package.update.get("rawhide") {
+                Some(u) if u.status == "pending" => "built, update pending",
+                Some(u) if u.status == "testing" => "built, update in testing",
+                Some(_) => "built, update pushed",
+                None => "built for rawhide, not yet in the repos",
             }
         }
     }
@@ -834,6 +1079,20 @@ pub fn render(ledger: &Ledger, only: &[String]) -> String {
                     r.status.to_ascii_lowercase()
                 };
                 let _ = writeln!(out, "    review: rhbz#{} {state} (as of {})", r.bug, r.seen);
+            }
+            for (branch, built) in &package.built {
+                let _ = writeln!(
+                    out,
+                    "    koji {branch}: {} in {} (as of {})",
+                    built.nvr, built.tag, built.seen
+                );
+            }
+            for (branch, update) in &package.update {
+                let _ = writeln!(
+                    out,
+                    "    update {branch}: {} {} (as of {})",
+                    update.alias, update.status, update.seen
+                );
             }
             for (branch, shipped) in &package.shipped {
                 let _ = writeln!(
@@ -1075,11 +1334,15 @@ mod tests {
             staged: Some(staged_at("0.13.0-1")),
             ..Package::default()
         };
-        // Rawhide is behind: the staged work has not landed.
+        // Rawhide is behind and Koji has nothing newer, so the build
+        // is the outstanding work.
         package
             .shipped
             .insert("rawhide".to_string(), shipped_at("0.12.0-7.fc45"));
-        assert_eq!(state(&package, &[]), "in dist-git, newer build staged");
+        assert_eq!(
+            state(&package, &[]),
+            "in dist-git, needs building for rawhide"
+        );
 
         // Rawhide has caught up — the release differs, but the
         // version does not, so nothing is outstanding.
@@ -1089,13 +1352,122 @@ mod tests {
         assert_eq!(state(&package, &[]), "in rawhide");
     }
 
+    fn built_at(nvr: &str) -> Built {
+        Built {
+            nvr: nvr.to_string(),
+            tag: "f45".to_string(),
+            seen: "2026-08-10".to_string(),
+        }
+    }
+
+    #[test]
+    fn state_separates_needing_a_build_from_awaiting_a_compose() {
+        let mut package = Package {
+            distgit: Some(distgit(true, &["rawhide"])),
+            staged: Some(staged_at("0.13.0-1")),
+            ..Package::default()
+        };
+        package
+            .shipped
+            .insert("rawhide".to_string(), shipped_at("0.12.0-7.fc45"));
+
+        // Koji has only the old build, so this is work to do.
+        package
+            .built
+            .insert("rawhide".to_string(), built_at("rust-a-0.12.0-7.fc45"));
+        assert_eq!(
+            state(&package, &[]),
+            "in dist-git, needs building for rawhide"
+        );
+
+        // Koji has the staged version but the repos do not: built and
+        // waiting on a compose, which is not the same as unbuilt.
+        package
+            .built
+            .insert("rawhide".to_string(), built_at("rust-a-0.13.0-1.fc45"));
+        assert_eq!(
+            state(&package, &[]),
+            "built for rawhide, not yet in the repos"
+        );
+    }
+
+    #[test]
+    fn state_reports_an_update_carrying_the_build() {
+        // On a branched release a build reaches the repos only via an
+        // update, so "built but not shipped" has to say whether one is
+        // in flight or still needs submitting.
+        let mut package = Package {
+            distgit: Some(distgit(true, &["rawhide"])),
+            staged: Some(staged_at("0.13.0-1")),
+            ..Package::default()
+        };
+        package
+            .shipped
+            .insert("rawhide".to_string(), shipped_at("0.12.0-7.fc45"));
+        package
+            .built
+            .insert("rawhide".to_string(), built_at("rust-a-0.13.0-1.fc45"));
+
+        // Built with no update: submitting one is the next step.
+        assert_eq!(
+            state(&package, &[]),
+            "built for rawhide, not yet in the repos"
+        );
+
+        for (status, expected) in [
+            ("pending", "built, update pending"),
+            ("testing", "built, update in testing"),
+            ("stable", "built, update pushed"),
+        ] {
+            package.update.insert(
+                "rawhide".to_string(),
+                UpdateRef {
+                    alias: "FEDORA-2026-abc".to_string(),
+                    status: status.to_string(),
+                    seen: "2026-08-11".to_string(),
+                },
+            );
+            assert_eq!(state(&package, &[]), expected, "status {status}");
+        }
+    }
+
+    #[test]
+    fn state_needs_a_build_when_koji_was_not_asked() {
+        // No Koji record at all — the honest reading is that the work
+        // is outstanding, not that a build is waiting somewhere.
+        let mut package = Package {
+            distgit: Some(distgit(true, &["rawhide"])),
+            staged: Some(staged_at("0.13.0-1")),
+            ..Package::default()
+        };
+        package
+            .shipped
+            .insert("rawhide".to_string(), shipped_at("0.12.0-7.fc45"));
+        assert_eq!(
+            state(&package, &[]),
+            "in dist-git, needs building for rawhide"
+        );
+    }
+
     #[test]
     fn state_notices_a_package_never_built_for_rawhide() {
-        // Imported but never built: dist-git has it, the repos do
-        // not.
+        // Imported but in neither the repos nor Koji: the build is
+        // what is outstanding.
         let package = Package {
             distgit: Some(distgit(true, &["rawhide"])),
             staged: Some(staged_at("0.1.0-1")),
+            ..Package::default()
+        };
+        assert_eq!(
+            state(&package, &[]),
+            "in dist-git, needs building for rawhide"
+        );
+
+        // Nothing staged either — it has left the COPR — so there is
+        // no version to compare and all that can be said is that the
+        // repos do not carry it.
+        let package = Package {
+            distgit: Some(distgit(true, &["rawhide"])),
             ..Package::default()
         };
         assert_eq!(state(&package, &[]), "in dist-git, not built for rawhide");
@@ -1208,7 +1580,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("in dist-git, newer build staged (1)"),
+            text.contains("in dist-git, needs building for rawhide (1)"),
             "{text}"
         );
     }

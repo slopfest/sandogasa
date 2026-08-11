@@ -194,6 +194,29 @@ service can report, such as which route a package is taking and which
 review bug or pull request is landing it. It remembers its COPRs too,
 so `--copr` is only needed to seed the ledger or add another.
 
+Being absent from a branch's repositories has more than one cause, so
+Koji and Bodhi are asked too. Koji says whether a build exists at all —
+a build is tagged the moment it succeeds and only reaches repodata at
+the next compose — and on a branched release Bodhi says which update is
+carrying it. That separates work still to do from work already done and
+waiting:
+
+```console
+  rust-exacl 0.13.0-1 (as of 2026-08-11)
+    dist-git: f44, rawhide (as of 2026-08-11)
+    koji f44: rust-exacl-0.12.0-6.fc44 in f44-updates (as of 2026-08-11)
+    koji rawhide: rust-exacl-0.12.0-7.fc45 in f45 (as of 2026-08-11)
+    update f44: FEDORA-2026-62c8a3ebba stable (as of 2026-08-11)
+    f44: 0.12.0-6.fc44 (as of 2026-08-11)
+```
+
+Each branch's Koji tag comes from Bodhi's release list, so no release
+number is hardcoded and Rawhide is followed as it moves. Only packages
+whose staged version is ahead of what a branch ships are asked about,
+since for anything already current the question is settled — and Koji
+is one subprocess per package. Rawhide is skipped for the Bodhi step:
+its builds need no update.
+
 A retired package keeps its dist-git repository, so retirement is
 reported ahead of anything about builds — otherwise "in dist-git, not
 built for rawhide" would describe a dead package as work waiting to be

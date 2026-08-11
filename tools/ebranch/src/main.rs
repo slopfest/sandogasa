@@ -651,7 +651,7 @@ struct CheckWipArgs {
     #[arg(long, value_name = "BRANCH,...", value_delimiter = ',')]
     target: Vec<String>,
 
-    /// Report from the ledger without contacting anything.
+    /// Report from the ledger, contacting nothing.
     #[arg(long)]
     offline: bool,
 
@@ -666,7 +666,7 @@ struct CheckWipArgs {
     #[arg(long, conflicts_with = "offline")]
     no_offline: bool,
 
-    /// Forget packages that are no longer staged anywhere.
+    /// Forget packages no longer staged anywhere.
     #[arg(long)]
     prune: bool,
 
