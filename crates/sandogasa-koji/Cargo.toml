@@ -8,3 +8,4 @@ repository.workspace = true
 
 [dependencies]
 chrono = { workspace = true }
+wait-timeout = { workspace = true }

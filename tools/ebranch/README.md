@@ -267,6 +267,12 @@ Each run reconciles rather than rebuilds:
   being counted as staged, since it has finished or moved on. Use
   `--prune` to forget those.
 
+When Koji is unreachable — mass branching, an unplanned outage — the
+first query gives up after 30 seconds (`SANDOGASA_KOJI_TIMEOUT` in
+seconds overrides it), the rest are skipped, and the report comes from
+the ledger with one warning rather than a query per tag each waiting its
+own timeout.
+
 Every observation is dated, so `--offline` can report from the ledger
 without contacting anything and still be honest about the age of what
 it shows. Refreshing writes the ledger back even though the command

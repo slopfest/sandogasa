@@ -673,6 +673,13 @@ fn side_tag_builds(
             }
             Err(e) => eprintln!("warning: koji {tag}: {e}"),
         }
+        // One report for a hub that is not answering, not one per tag:
+        // the remaining queries would each say the same thing, and the
+        // ledger already holds what was known.
+        if sandogasa_koji::hub_unresponsive(None) {
+            eprintln!("warning: koji is not answering; keeping the builds the ledger has");
+            break;
+        }
     }
     found
 }
@@ -692,6 +699,9 @@ fn refresh_built(
     only: &[String],
 ) {
     let from_side_tags = side_tag_builds(&ledger.side_tags, aliases);
+    if sandogasa_koji::hub_unresponsive(None) {
+        return;
+    }
     for (branch, branch_tags) in tags {
         let wanted: Vec<String> = ledger
             .packages
@@ -752,6 +762,13 @@ fn refresh_built(
                 }
             }
             if failed {
+                // A hub that stopped answering will not answer for the
+                // branches and packages still to come, and each would
+                // cost another timeout.
+                if sandogasa_koji::hub_unresponsive(None) {
+                    eprintln!("warning: koji is not answering; keeping the builds the ledger has");
+                    return;
+                }
                 continue;
             }
             if let Some(package) = ledger.packages.get_mut(&name) {

@@ -6,7 +6,70 @@
 //! out to the `koji` CLI. Supports multiple Koji profiles (e.g.
 //! `cbs` for CentOS Build System).
 
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+use wait_timeout::ChildExt;
+
+/// How long a koji call may take before it is treated as a hub that is
+/// not answering.
+///
+/// The koji CLI waits indefinitely, so a hub outage — mass branching,
+/// an unplanned one — hung every caller with no output at all rather
+/// than degrading to what was already known. Thirty seconds is well
+/// above a slow-but-working hub: `list-builds` on a long-lived package
+/// answers in a few.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Environment variable overriding [`DEFAULT_TIMEOUT`], in seconds. A
+/// value of `0` waits forever, which is the old behaviour and what a
+/// caller genuinely willing to block should ask for.
+pub const TIMEOUT_ENV: &str = "SANDOGASA_KOJI_TIMEOUT";
+
+/// Profiles whose hub has already failed to answer in this process.
+///
+/// A hub that did not answer once will not answer the next call either,
+/// and every caller here asks many times — one query per tag, per
+/// package. Paying the timeout for each turned a 30-second bound into
+/// minutes of waiting for a report that was always going to come from
+/// the ledger. So the first timeout stands for the rest of the run.
+static UNRESPONSIVE: std::sync::Mutex<Option<std::collections::BTreeSet<String>>> =
+    std::sync::Mutex::new(None);
+
+fn profile_key(profile: Option<&str>) -> String {
+    profile.unwrap_or_default().to_string()
+}
+
+/// Whether this profile's hub has already failed to answer, so a caller
+/// with many queries left can stop and report from what it has instead
+/// of timing out once per query.
+pub fn hub_unresponsive(profile: Option<&str>) -> bool {
+    UNRESPONSIVE
+        .lock()
+        .map(|set| {
+            set.as_ref()
+                .is_some_and(|set| set.contains(&profile_key(profile)))
+        })
+        .unwrap_or(false)
+}
+
+fn mark_unresponsive(profile: Option<&str>) {
+    if let Ok(mut set) = UNRESPONSIVE.lock() {
+        set.get_or_insert_with(Default::default)
+            .insert(profile_key(profile));
+    }
+}
+
+fn timeout() -> Option<Duration> {
+    match std::env::var(TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+    {
+        Some(0) => None,
+        Some(secs) => Some(Duration::from_secs(secs)),
+        None => Some(DEFAULT_TIMEOUT),
+    }
+}
 
 /// A build found in a Koji tag.
 #[derive(Debug, Clone)]
@@ -58,11 +121,93 @@ pub fn parse_nvr_name(nvr: &str) -> Option<&str> {
 /// it's the offline no-op — `--version` doesn't exist (exit 2)
 /// and `koji version` contacts the hub.
 pub fn is_available() -> bool {
-    Command::new("koji")
-        .arg("help")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let mut cmd = Command::new("koji");
+    cmd.arg("help");
+    // `koji help` is offline, so a failure here means koji is missing
+    // rather than that the hub is unreachable — it must not latch.
+    run_bounded_with(cmd, "help", timeout()).is_ok()
+}
+
+/// Run `cmd`, returning its stdout, and give up on it if it outlasts
+/// [`timeout`].
+///
+/// Both streams are drained on their own threads rather than read after
+/// the wait: a pipe holds 64 KiB, and `list-tagged` on a release tag
+/// runs to megabytes, so a child blocked writing to a full pipe would
+/// be indistinguishable from a hung hub and killed as one.
+fn run_bounded(cmd: Command, label: &str, profile: Option<&str>) -> Result<String, String> {
+    if hub_unresponsive(profile) {
+        return Err(format!(
+            "koji {label} skipped: the hub did not answer an earlier call in this run"
+        ));
+    }
+    let result = run_bounded_with(cmd, label, timeout());
+    if let Err(e) = &result
+        && e.contains("did not answer within")
+    {
+        mark_unresponsive(profile);
+    }
+    result
+}
+
+/// [`run_bounded`] with the limit passed in rather than read from the
+/// environment, so a test can set one without racing every other test
+/// in the process.
+fn run_bounded_with(
+    mut cmd: Command,
+    label: &str,
+    limit: Option<Duration>,
+) -> Result<String, String> {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to run koji: {e}"))?;
+    let drain = |stream: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut stream) = stream {
+                let _ = stream.read_to_string(&mut text);
+            }
+            text
+        })
+    };
+    let out = drain(
+        child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    );
+    let err = drain(
+        child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    );
+
+    let status = match limit {
+        Some(limit) => match child.wait_timeout(limit).map_err(|e| e.to_string())? {
+            Some(status) => status,
+            None => {
+                // Killed rather than left behind: the caller is going to
+                // report and carry on, and an abandoned koji process
+                // would go on holding a connection nobody is waiting for.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "koji {label} did not answer within {}s; the hub may be down (override with {TIMEOUT_ENV})",
+                    limit.as_secs()
+                ));
+            }
+        },
+        None => child.wait().map_err(|e| e.to_string())?,
+    };
+    let stdout = out.join().unwrap_or_default();
+    let stderr = err.join().unwrap_or_default();
+    if !status.success() {
+        return Err(format!("koji {label} failed: {}", stderr.trim()));
+    }
+    Ok(stdout)
 }
 
 /// Run a koji command with optional profile and return stdout.
@@ -72,18 +217,7 @@ fn run_koji(profile: Option<&str>, args: &[&str]) -> Result<String, String> {
         cmd.args(["--profile", p]);
     }
     cmd.args(args);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run koji: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "koji {} failed: {}",
-            args.first().unwrap_or(&""),
-            stderr.trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    run_bounded(cmd, args.first().unwrap_or(&""), profile)
 }
 
 /// List builds in a Koji tag with their owners.
@@ -512,5 +646,51 @@ Mon May 18 15:35:11 2026 ethtool-6.14-1.hs.el10 untagged from hyperscale10s-pack
         let events = parse_tag_history(stdout);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].nvr, "foo-1-1.el10");
+    }
+
+    /// The bounded runner is exercised through `sh`, not `koji`: the
+    /// tests have to pass in a packaging sandbox with no hub to talk to
+    /// and no koji installed.
+    #[test]
+    fn bounded_run_returns_stdout() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "printf 'one\ntwo\n'"]);
+        let out = run_bounded_with(cmd, "test", Some(Duration::from_secs(20))).unwrap();
+        assert_eq!(out, "one\ntwo\n");
+    }
+
+    #[test]
+    fn bounded_run_reports_a_failure_with_its_stderr() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo 'no such tag' >&2; exit 1"]);
+        let err = run_bounded_with(cmd, "list-tagged", Some(Duration::from_secs(20))).unwrap_err();
+        assert!(err.contains("list-tagged failed"), "{err}");
+        assert!(err.contains("no such tag"), "{err}");
+    }
+
+    #[test]
+    fn bounded_run_gives_up_on_a_command_that_does_not_answer() {
+        // What a hung hub looks like: koji itself waits forever.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 30"]);
+        let started = std::time::Instant::now();
+        let err = run_bounded_with(cmd, "list-tagged", Some(Duration::from_secs(1))).unwrap_err();
+        assert!(err.contains("did not answer within 1s"), "{err}");
+        assert!(err.contains(TIMEOUT_ENV), "{err}");
+        // Returned on the timeout rather than after the child's own
+        // 30 seconds, so the caller really is released.
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn bounded_run_survives_more_output_than_a_pipe_holds() {
+        // A pipe holds 64 KiB. Read after the wait rather than during
+        // it, a child blocked writing this would look exactly like a
+        // hub that never answered, and be killed as one.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "seq 1 200000"]);
+        let out = run_bounded_with(cmd, "list-tagged", Some(Duration::from_secs(20))).unwrap();
+        assert!(out.len() > 1_000_000, "{} bytes", out.len());
+        assert!(out.ends_with("200000\n"));
     }
 }

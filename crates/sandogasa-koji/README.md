@@ -21,6 +21,21 @@ CentOS Build System).
 - `build_rpms(nvr, profile)` — list binary RPM names from buildinfo
 - `parse_nvr(nvr)` — split NVR into (name, version, release)
 - `parse_nvr_name(nvr)` — extract just the package name from an NVR
+- `hub_unresponsive(profile)` — whether this profile's hub has already
+  failed to answer in this process, so a caller with many queries left
+  can stop asking
+
+## Timeouts
+
+Every call is bounded at 30 seconds; `SANDOGASA_KOJI_TIMEOUT` overrides
+that in seconds, and `0` waits indefinitely. The koji CLI has no timeout
+of its own, so an unreachable hub would otherwise block a caller with no
+output.
+
+The first timeout latches per profile: later calls fail immediately
+rather than each paying the full bound, since a hub that did not answer
+one query will not answer the next. Callers that query per tag and per
+package should check `hub_unresponsive` and report from what they have.
 
 ## License
 

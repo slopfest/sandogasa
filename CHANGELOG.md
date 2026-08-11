@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### sandogasa-koji: a hub that is not answering no longer hangs the caller
+
+Found during F45's mass branching, with the hub down: `ebranch
+check-wip` printed one line and then blocked indefinitely — the koji CLI
+waits forever, and nothing here bounded it. Ten minutes in there was
+still no output and no way to tell what it was waiting on.
+
+Every koji call is now bounded, 30 seconds by default, overridable with
+`SANDOGASA_KOJI_TIMEOUT` (`0` waits forever, the old behaviour). The
+child is killed rather than abandoned, and both its streams are drained
+on their own threads: a pipe holds 64 KiB and `list-tagged` on a release
+tag runs to megabytes, so reading after the wait would make a child
+blocked on a full pipe indistinguishable from a hung hub.
+
+One timeout is enough for a run. A hub that did not answer will not
+answer the next query either, and these callers ask once per tag per
+package — so the first timeout latches per profile, later calls fail
+immediately, and `hub_unresponsive` lets a caller with queries left stop
+and report from what it already has. check-wip now finishes in under a
+minute against a down hub, warning once and serving the report from the
+ledger, instead of hanging.
+
+New public surface: `hub_unresponsive`, `TIMEOUT_ENV`.
+
 ## v0.19.2
 
 ### Dependencies
