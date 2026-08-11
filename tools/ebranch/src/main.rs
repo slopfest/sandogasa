@@ -674,6 +674,18 @@ struct CheckWipArgs {
     #[arg(long)]
     rescan_reviews: bool,
 
+    /// Koji side tags built into (repeated or CSV).
+    #[arg(long, value_name = "TAG,...", value_delimiter = ',')]
+    side_tag: Vec<String>,
+
+    /// Track packages no COPR staged (repeated or CSV).
+    #[arg(long, value_name = "NAME,...", value_delimiter = ',')]
+    add: Vec<String>,
+
+    /// Set a route: review:BUG, pr:ID, or direct
+    #[arg(long, value_name = "PKG=ROUTE")]
+    set: Vec<String>,
+
     /// Limit to these packages (repeated or CSV).
     #[arg(long, value_name = "NAME,...", value_delimiter = ',')]
     package: Vec<String>,
@@ -817,6 +829,9 @@ fn main() -> ExitCode {
             prune: a.prune,
             rescan_reviews: a.rescan_reviews,
             packages: a.package.clone(),
+            set: a.set.clone(),
+            add: a.add.clone(),
+            side_tags: a.side_tag.clone(),
             json: a.json,
         }));
     }

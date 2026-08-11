@@ -2,6 +2,82 @@
 
 ## Unreleased
 
+### ebranch: check-wip headings follow the target, and routes can be set
+
+Two gaps that would have shown up the first time an effort targeted
+more than Rawhide.
+
+The state heading was computed against Rawhide alone, so per-target
+facts were gathered and shown in the detail lines but never grouped on.
+Rawhide is still the spine — everything lands there first and is
+branched from it, so while Rawhide is behind that is what the heading
+reports — but once it is current the heading becomes the least advanced
+target's state, and names it: `needs branching for epel9`, `built for
+epel9, needs an update`, `epel9 update in testing`. With every target
+done it says so without naming one, since choosing between equals would
+be arbitrary. Each branch now gets one line rather than three. Shipped, built and
+in-an-update each named a version, which mostly repeated itself — what
+Koji has and what the repositories have are usually identical — while
+the update line gave an alias without saying which version it carried.
+Now a version appears once, a build only when it is ahead of the
+repositories, and the update qualifies the version it carries:
+`f44: 0.12.0-6.fc44 in FEDORA-2026-62c8a3ebba stable`. The date is the
+oldest of the facts shown, so the line never claims more freshness than
+its stalest part.
+
+An update is also only recorded when it actually carries the build in
+question. Bodhi's newest update for a package is often an old one — the
+uutils stack has a 120-package update from four months ago, two versions
+behind. That did not affect the heading, which checks for a current
+build before consulting any update, but it is consulted once the build
+*is* current, where a stale record would claim an update was carrying
+work that nothing carries.
+
+The Koji lookup asked the wrong tag. `stable_tag` sees only stable
+builds, so anything in the candidate or testing window read as unbuilt.
+Both the candidate and testing tags are now queried — neither sees the
+other, though both inherit the stable tag — and the newest answer wins.
+New `--side-tag` (repeated or CSV, like the other multi-value flags)
+records a side tag on the ledger and scans it too,
+since a side-tag build is tagged only there until an update carries it,
+which is most of the window in which the next move is to submit one. One
+query per side tag covers every package in it.
+
+A package with no COPR behind it is now queried at all. The build
+lookup only asked about packages ahead of the repositories, which needs
+a version of interest, which a hand-added package has neither staged nor
+built — so nothing populated `built` and nothing ever would. Verified by
+tracking sandogasa's own update with `--add` and no COPR, which finds
+0.19.1-1.fc43 in testing against 0.18.1 shipped.
+
+Where no build is found the report now says exactly that rather than
+"needs building": a build may exist in a side tag the ledger was never
+told about, so the absence is ours, not the world's.
+
+Several Bodhi releases share a branch — F43, F43C and F43F all report
+`f43` — so the release is now picked by its id prefix rather than by
+whichever Bodhi happened to list first, which could have pulled the
+container or flatpak tags.
+
+Rawhide is not exempt from the update states. A Rawhide build can be
+carried by an update too — automatically, or submitted from a side tag —
+and Bodhi files those under the release name for whatever Rawhide
+currently is, F45 rather than "rawhide". Querying by branch name found
+nothing and made it look as though Rawhide had no updates at all.
+
+Retirement is also now checked before branching. A retired package with
+a target recorded would have read `needs branching`, describing a dead
+package as work waiting to be done.
+
+`--set pkg=review:BUG`, `pkg=pr:ID`, `pkg=direct` records which route a
+package takes, writing the ledger without contacting anything. Until
+now the route was documented but only settable by hand-editing TOML, so
+the field was inert and the README promised more than the tool did.
+Switching route clears the identifier the previous one carried, so a
+stale bug number cannot outlive the route it belonged to. Routes stay a
+decision: no lookup sets one, however suggestive.
+
+
 ### ebranch: check-wip on retired packages — why, when, and whether anyone is re-reviewing
 
 A retired package kept its dist-git repository, so the report could

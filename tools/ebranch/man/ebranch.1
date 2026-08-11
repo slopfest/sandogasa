@@ -254,7 +254,7 @@ The update to check, one of:
   \-b is a base branch like al9 (it picks the
   COPR chroot, e.g. epel9 → epel\-9\-*).
 .SS ebranch check-wip
-\fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-target\fR] [\fB\-\-offline\fR] [\fB\-\-no\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-rescan\-reviews\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR> 
+\fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-target\fR] [\fB\-\-offline\fR] [\fB\-\-no\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-rescan\-reviews\fR] [\fB\-\-side\-tag\fR] [\fB\-\-add\fR] [\fB\-\-set\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR> 
 .PP
 Track packages on their way into the distro
 .TP
@@ -275,6 +275,15 @@ Forget packages no longer staged anywhere
 .TP
 \fB\-\-rescan\-reviews\fR
 Search for review requests again
+.TP
+\fB\-\-side\-tag\fR \fI<TAG,...>\fR
+Koji side tags built into (repeated or CSV)
+.TP
+\fB\-\-add\fR \fI<NAME,...>\fR
+Track packages no COPR staged (repeated or CSV)
+.TP
+\fB\-\-set\fR \fI<PKG=ROUTE>\fR
+Set a route: review:BUG, pr:ID, or direct
 .TP
 \fB\-\-package\fR \fI<NAME,...>\fR
 Limit to these packages (repeated or CSV)

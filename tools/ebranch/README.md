@@ -204,14 +204,31 @@ waiting:
 ```console
   rust-exacl 0.13.0-1 (as of 2026-08-11)
     dist-git: f44, rawhide (as of 2026-08-11)
-    koji f44: rust-exacl-0.12.0-6.fc44 in f44-updates (as of 2026-08-11)
-    koji rawhide: rust-exacl-0.12.0-7.fc45 in f45 (as of 2026-08-11)
-    update f44: FEDORA-2026-62c8a3ebba stable (as of 2026-08-11)
-    f44: 0.12.0-6.fc44 (as of 2026-08-11)
+    f44: 0.12.0-6.fc44 in FEDORA-2026-62c8a3ebba stable (as of 2026-08-11)
+    rawhide: 0.12.0-7.fc45 (as of 2026-08-11)
 ```
 
-Each branch's Koji tag comes from Bodhi's release list, so no release
-number is hardcoded and Rawhide is followed as it moves. Only packages
+One line per branch, and a version is stated once: what Koji has and
+what the repositories have are usually the same, so a build is only
+called out when it is *ahead* of the repositories — which is the
+outstanding work — and an update qualifies the version it carries. The
+date is the oldest of the facts on the line, so it never claims more
+freshness than its stalest part.
+
+Both the candidate and testing tags are queried, since neither sees the
+other: a build with no update yet sits in the candidate tag, one whose
+update is in flight sits in the testing tag, and both inherit the stable
+tag. Add `--side-tag f43-build-side-145899` for a side-tag build, which
+is tagged only there until an update carries it — one query per side tag
+covers every package in it, and the tag is recorded in the ledger so
+later runs need not repeat it. Where no build is found the report says
+so rather than claiming the package needs building: a build can exist in
+a side tag the ledger has not been told about.
+
+Each branch's Koji tags come from Bodhi's release list, so no release
+number is hardcoded and Rawhide is followed as it moves. The RPM release
+is picked by its id prefix, since F43, F43C and F43F all report branch
+`f43` and the container and flatpak variants carry different tags. Only packages
 whose staged version is ahead of what a branch ships are asked about,
 since for anything already current the question is settled — and Koji
 is one subprocess per package. Rawhide is skipped for the Bodhi step:
@@ -256,7 +273,28 @@ such rather than guessed at.
 
 Add `--target epel9` to record which releases the effort is for; one
 ledger holds them all, since a package's route and review bug do not
-depend on the release while its branch and build state do.
+depend on the release while its branch and build state do. Rawhide is
+the shared spine — everything lands there first and is branched from it
+— so while Rawhide is behind, that is what the heading reports. Once it
+is current the heading becomes the *least advanced* target's state,
+naming it: `needs branching for epel9`, `built for epel9, needs an
+update`, `epel9 update in testing`. When every target is done the
+heading says so without naming one, since picking between equals would
+be arbitrary.
+
+Which route a package takes is a decision, never inferred from a
+lookup, so it is recorded explicitly:
+
+```sh
+ebranch check-wip uutils.toml --set rust-sponge-cursor=review:2498026
+ebranch check-wip uutils.toml --set rust-fundu=pr:1234
+ebranch check-wip uutils.toml --set rust-exacl=direct
+```
+
+That writes the ledger and needs no network. Switching route clears the
+identifier the previous one carried, so a stale bug number cannot
+outlive the route it belonged to, and `unknown` puts a package back to
+undecided.
 
 ### Check if an update would break reverse dependencies
 

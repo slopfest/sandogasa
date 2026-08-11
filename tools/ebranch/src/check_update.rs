@@ -1482,7 +1482,7 @@ fn epel_guard_error(branch: &str) -> String {
 /// The prefix of a Koji side-tag name before `-build-side-` (e.g.
 /// `f43-build-side-12345` ⇒ `f43`, `epel9-build-side-1` ⇒ `epel9`).
 /// Returns None when the tag doesn't match that shape.
-fn branch_from_side_tag(tag: &str) -> Option<String> {
+pub fn branch_from_side_tag(tag: &str) -> Option<String> {
     let end = tag.find("-build-side-")?;
     let prefix = &tag[..end];
     (!prefix.is_empty()).then(|| prefix.to_string())

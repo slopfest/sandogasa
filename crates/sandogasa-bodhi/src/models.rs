@@ -212,6 +212,16 @@ pub struct BodhiRelease {
     /// fixtures without the field keep deserializing.
     #[serde(default)]
     pub stable_tag: String,
+    /// Koji tag a build sits in once built but before any update
+    /// carries it (e.g. `f43-updates-candidate`). Inherits the stable
+    /// tag but *not* the testing one.
+    #[serde(default)]
+    pub candidate_tag: String,
+    /// Koji tag a build sits in while its update is in testing (e.g.
+    /// `f43-updates-testing`). Inherits the stable tag but *not* the
+    /// candidate one — so seeing every built state takes both.
+    #[serde(default)]
+    pub testing_tag: String,
 }
 
 #[derive(Debug, Deserialize)]
