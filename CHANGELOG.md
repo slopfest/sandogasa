@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## v0.19.2
+
+### Dependencies
+
+`emojis` 0.8 to 0.9. Fedora carries one dependent — this workspace — so
+`rust-emojis` needs bumping to 0.9 alongside this release for the
+package build to resolve.
+
+### hs-relmon: wprof is packaged now
+
+Its manifest entry tracked upstream releases because nothing packaged it.
+It is in Rawhide, so it tracks `fedora-rawhide` across `fedora,hs9`
+like every other packaged entry.
 
 ### ebranch: check-wip — a branch, a target and a release are three different names
 
