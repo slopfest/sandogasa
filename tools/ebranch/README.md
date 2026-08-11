@@ -221,7 +221,9 @@ update is in flight sits in the testing tag, and both inherit the stable
 tag. Add `--side-tag f43-build-side-145899` for a side-tag build, which
 is tagged only there until an update carries it — one query per side tag
 covers every package in it, and the tag is recorded in the ledger so
-later runs need not repeat it. Where no build is found the report says
+later runs need not repeat it. A name that is not
+`<branch>-build-side-<id>`, with a numeric Koji task id, is refused
+rather than recorded, since it could only fail on every later run. Where no build is found the report says
 so rather than claiming the package needs building: a build can exist in
 a side tag the ledger has not been told about.
 
@@ -231,8 +233,10 @@ is picked by its id prefix, since F43, F43C and F43F all report branch
 `f43` and the container and flatpak variants carry different tags. Only packages
 whose staged version is ahead of what a branch ships are asked about,
 since for anything already current the question is settled — and Koji
-is one subprocess per package. Rawhide is skipped for the Bodhi step:
-its builds need no update.
+is one subprocess per package. Rawhide is not exempt from the Bodhi
+step: its builds can be carried by an update too, automatically or
+submitted from a side tag, and Bodhi files those under the release name
+for whatever Rawhide currently is.
 
 A retired package keeps its dist-git repository, so retirement is
 reported ahead of anything about builds — otherwise "in dist-git, not
@@ -276,11 +280,36 @@ ledger holds them all, since a package's route and review bug do not
 depend on the release while its branch and build state do. Rawhide is
 the shared spine — everything lands there first and is branched from it
 — so while Rawhide is behind, that is what the heading reports. Once it
-is current the heading becomes the *least advanced* target's state,
-naming it: `needs branching for epel9`, `built for epel9, needs an
-update`, `epel9 update in testing`. When every target is done the
-heading says so without naming one, since picking between equals would
+is current the heading becomes the *least advanced* state, naming every
+target in it: `needs a branch for epel9`, `needs an update for f44`,
+`update in testing for f44, f43, epel9`. When every target is done the
+heading says so without naming any, since picking between equals would
 be arbitrary.
+
+Passing `--side-tag` also records that tag's branch as a target:
+building into a side tag is saying the branch is in scope. Targets are
+matched against Bodhi's release list by branch or by name, because
+neither alone is enough — F45's branch is `rawhide` and EPEL-10.3's is
+`epel10` — and two targets that resolve to the same release are
+collapsed to one, Rawhide winning since it is always examined. Fedora
+names Rawhide's side tags after its version, so `f45-build-side-*`
+builds are attributed to Rawhide rather than to a second target for the
+same release.
+
+Branches are listed newest release first — Rawhide, then Fedora by
+version, then EPEL — and per package the ordering leads with what each
+release ships, newest version first, so the releases already carrying
+the new version group above the ones still to do. One ledger can
+therefore follow two rollouts at once: a version reaching Rawhide and
+EPEL 10 while the older branches wait for their updates to go stable
+reads as two groups rather than as one interleaved list.
+
+Whether a target already carries the version is settled before asking
+whether dist-git has a branch of that name, since the names need not
+agree: EPEL 10's minor releases all ship from the `epel10` branch, and a
+package shipped for `epel10.3` does not need a branch called that. The
+dist-git line lists every branch the repository has, not only the ones
+this effort targets.
 
 Which route a package takes is a decision, never inferred from a
 lookup, so it is recorded explicitly:

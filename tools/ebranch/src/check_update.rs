@@ -1485,7 +1485,13 @@ fn epel_guard_error(branch: &str) -> String {
 pub fn branch_from_side_tag(tag: &str) -> Option<String> {
     let end = tag.find("-build-side-")?;
     let prefix = &tag[..end];
-    (!prefix.is_empty()).then(|| prefix.to_string())
+    // The id is the Koji task number, so it must be digits and only
+    // digits: without that a comma-joined list of tags parses as its
+    // first branch, and a name that can never be queried gets treated
+    // as a real tag.
+    let id = &tag[end + "-build-side-".len()..];
+    (!prefix.is_empty() && !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| prefix.to_string())
 }
 
 /// Infer the fedrq branch for a side tag when `--branch` is omitted.
@@ -2900,6 +2906,14 @@ mod tests {
         assert_eq!(branch_from_side_tag("rawhide"), None);
         // Empty prefix isn't a usable branch.
         assert_eq!(branch_from_side_tag("-build-side-1"), None);
+        // The id is a task number, so these can never be queried.
+        assert_eq!(branch_from_side_tag("f43-build-side-"), None);
+        assert_eq!(branch_from_side_tag("f43-build-side-1x"), None);
+        // A comma-joined list must not parse as its first branch.
+        assert_eq!(
+            branch_from_side_tag("f44-build-side-146827,f43-build-side-146829"),
+            None
+        );
     }
 
     #[test]

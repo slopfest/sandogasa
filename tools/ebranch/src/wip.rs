@@ -246,12 +246,6 @@ pub struct Ledger {
     pub packages: BTreeMap<String, Package>,
 }
 
-/// Whether a branch is one the effort targets, for deciding which of
-/// a package's many branches are worth printing.
-fn ledger_target(ledger: &Ledger, branch: &str) -> bool {
-    ledger.targets.iter().any(|t| t == branch)
-}
-
 fn schema_version() -> u32 {
     1
 }
@@ -403,11 +397,45 @@ pub fn run(opts: &Options) -> Result<(), String> {
     // before the effort began. Adding it makes the ledger the record
     // of the effort rather than of one COPR's contents.
     for tag in &opts.side_tags {
+        // Rejected rather than stored: a name that is not a side tag
+        // can never be queried, and keeping it means warning about it
+        // on every future run.
+        if crate::check_update::branch_from_side_tag(tag).is_none() {
+            return Err(format!(
+                "{tag} is not a side tag name (<branch>-build-side-<id>)"
+            ));
+        }
         if !ledger.side_tags.iter().any(|t| t == tag) {
             ledger.side_tags.push(tag.clone());
             eprintln!("tracking side tag {tag}");
             dirty = true;
         }
+        // Building into a side tag says that branch is a target, so
+        // it is recorded as one rather than having to be given twice.
+        // Recording it, rather than inferring it per run, keeps one
+        // source of truth for what the report groups on.
+        if let Some(branch) = crate::check_update::branch_from_side_tag(tag)
+            && branch != "rawhide"
+            && !ledger.targets.contains(&branch)
+        {
+            ledger.targets.push(branch.clone());
+            eprintln!("targeting {branch}, from its side tag");
+            dirty = true;
+        }
+    }
+    // Drop anything unusable a previous run may have stored.
+    let unusable: Vec<String> = ledger
+        .side_tags
+        .iter()
+        .filter(|t| crate::check_update::branch_from_side_tag(t).is_none())
+        .cloned()
+        .collect();
+    if !unusable.is_empty() {
+        eprintln!("dropping unusable side tag(s): {}", unusable.join(", "));
+        ledger
+            .side_tags
+            .retain(|t| crate::check_update::branch_from_side_tag(t).is_some());
+        dirty = true;
     }
 
     for name in &opts.add {
@@ -459,11 +487,90 @@ pub fn run(opts: &Options) -> Result<(), String> {
         // branches as well.
         let mut branches = vec!["rawhide".to_string()];
         branches.extend(ledger.targets.iter().filter(|t| *t != "rawhide").cloned());
+        // Side-tag branches join the release lookup even though they
+        // are not examined in their own right: it is what makes an
+        // alias like f45 -> rawhide available on every run, not only on
+        // the run whose --side-tag recorded the target.
+        let mut lookup = branches.clone();
+        for branch in ledger
+            .side_tags
+            .iter()
+            .filter_map(|t| crate::check_update::branch_from_side_tag(t))
+        {
+            if !lookup.contains(&branch) {
+                lookup.push(branch);
+            }
+        }
+        let (mut tags, mut releases) = release_tags(&lookup);
+        // Two targets resolving to one Bodhi release are one release
+        // under two names, and every fact about it would be reported
+        // twice. Fedora names rawhide's side tags after its version, so
+        // a rawhide side tag records "f45" as a target — the same
+        // release as rawhide, which wins because it is always examined.
+        let mut kept: BTreeMap<&String, &String> = BTreeMap::new();
+        let mut duplicates: Vec<(String, String, String)> = Vec::new();
+        for branch in &lookup {
+            let Some(release) = releases.get(branch) else {
+                continue;
+            };
+            match kept.get(release) {
+                Some(first) => duplicates.push((branch.clone(), (*first).clone(), release.clone())),
+                None => {
+                    kept.insert(release, branch);
+                }
+            }
+        }
+        let mut aliases: BTreeMap<String, String> = BTreeMap::new();
+        for (dup, first, release) in duplicates {
+            // Reported only when it was a target, because that is the
+            // only case where something is being dropped. A duplicate
+            // reached through a side tag's name is just an alias, and
+            // saying so every run would be noise about nothing.
+            if ledger.targets.contains(&dup) {
+                eprintln!("dropping target {dup}: the same Bodhi release as {first} ({release})");
+            }
+            drop_target(&mut ledger, &dup);
+            branches.retain(|b| *b != dup);
+            tags.remove(&dup);
+            releases.remove(&dup);
+            // Kept as an alias rather than only dropped: a side tag
+            // named for the duplicate — Fedora's rawhide side tags are
+            // named "f45-build-side-*" — holds real builds, and
+            // without the alias they belong to no examined branch and
+            // go unnoticed.
+            aliases.insert(dup, first);
+        }
+        // Only examined branches are asked about: a side tag's branch
+        // that survived as its own name is a target too, and anything
+        // else here would collect facts nothing reports on.
+        tags.retain(|branch, _| branches.contains(branch));
+        // Facts about a branch no longer examined would go on being
+        // reported with nothing ever refreshing them — an untracked
+        // branch reads exactly like a tracked one in the output.
+        let mut stale: Vec<String> = ledger
+            .packages
+            .values()
+            .flat_map(|p| {
+                p.shipped
+                    .keys()
+                    .chain(p.built.keys())
+                    .chain(p.update.keys())
+                    .cloned()
+            })
+            .filter(|b| !branches.contains(b))
+            .collect();
+        stale.sort();
+        stale.dedup();
+        if !stale.is_empty() {
+            eprintln!("forgetting untracked branch(es): {}", stale.join(", "));
+            for branch in &stale {
+                drop_target(&mut ledger, branch);
+            }
+        }
         refresh_shipped(&mut ledger, &branches, &today, &opts.packages);
         refresh_reviews_blocking(&mut ledger, &today, opts.rescan_reviews, &opts.packages);
-        let (tags, releases) = release_tags(&branches);
         if sandogasa_koji::is_available() {
-            refresh_built(&mut ledger, &tags, &today, &opts.packages);
+            refresh_built(&mut ledger, &tags, &aliases, &today, &opts.packages);
         } else {
             eprintln!("warning: koji is not installed; skipping build lookups");
         }
@@ -539,13 +646,21 @@ async fn retirement_date(
 /// tag holds only the effort's builds, so a single call answers for all
 /// of them. The branch comes from the tag's name, the same derivation
 /// `check-update` uses.
-fn side_tag_builds(side_tags: &[String]) -> BTreeMap<String, BTreeMap<String, (String, String)>> {
+fn side_tag_builds(
+    side_tags: &[String],
+    aliases: &BTreeMap<String, String>,
+) -> BTreeMap<String, BTreeMap<String, (String, String)>> {
     let mut found: BTreeMap<String, BTreeMap<String, (String, String)>> = BTreeMap::new();
     for tag in side_tags {
-        let Some(branch) = crate::check_update::branch_from_side_tag(tag) else {
+        let Some(mut branch) = crate::check_update::branch_from_side_tag(tag) else {
             eprintln!("warning: {tag} is not a side tag name; skipping it");
             continue;
         };
+        // A branch known under two names is examined under one of
+        // them, so the tag's builds are attributed there.
+        if let Some(kept) = aliases.get(&branch) {
+            branch = kept.clone();
+        }
         // Side tags are standalone, so no inheritance is wanted here.
         match sandogasa_koji::list_tagged(tag, None, None) {
             Ok(builds) => {
@@ -572,10 +687,11 @@ fn side_tag_builds(side_tags: &[String]) -> BTreeMap<String, BTreeMap<String, (S
 fn refresh_built(
     ledger: &mut Ledger,
     tags: &BTreeMap<String, Vec<String>>,
+    aliases: &BTreeMap<String, String>,
     today: &str,
     only: &[String],
 ) {
-    let from_side_tags = side_tag_builds(&ledger.side_tags);
+    let from_side_tags = side_tag_builds(&ledger.side_tags, aliases);
     for (branch, branch_tags) in tags {
         let wanted: Vec<String> = ledger
             .packages
@@ -790,6 +906,53 @@ fn ahead_of_repos(package: &Package, branch: &str) -> bool {
     }
 }
 
+/// How recent a release is, newest first, for ordering branches.
+///
+/// Rawhide leads because it is always ahead. Then Fedora by version and
+/// EPEL by version, Fedora first: alphabetical ordering puts `epel10.3`
+/// before `epel9` and both before every Fedora branch, which is neither
+/// oldest-first nor newest-first — just the order the strings happen to
+/// fall in.
+///
+/// The tuple sorts ascending, so it is negated at the point of use.
+fn release_recency(branch: &str) -> (u8, Vec<u32>) {
+    let parts = |v: &str| {
+        v.split('.')
+            .map(|p| p.parse::<u32>().unwrap_or(0))
+            .collect::<Vec<u32>>()
+    };
+    match branch {
+        // Rawhide leads its own alias: dist-git has both, and "rawhide"
+        // is the name everything else here uses.
+        "rawhide" => (4, Vec::new()),
+        "main" => (3, Vec::new()),
+        b => match b.strip_prefix("epel").or_else(|| b.strip_prefix("el")) {
+            // A bare "epel10" branch builds for whichever minor release
+            // is current, so it is ahead of "epel10.2" rather than
+            // behind it as a plain numeric comparison would have it.
+            Some(v) if !v.contains('.') => (1, vec![parts(v)[0], u32::MAX]),
+            Some(v) => (1, parts(v)),
+            // fNN, and anything unrecognised sorts last rather than
+            // being guessed at.
+            None => match b.strip_prefix('f') {
+                Some(v) if v.bytes().all(|c| c.is_ascii_digit() || c == b'.') => (2, parts(v)),
+                _ => (0, Vec::new()),
+            },
+        },
+    }
+}
+
+/// Forget a target and everything recorded per-branch for it, for when
+/// it turns out to name a branch already covered under another name.
+fn drop_target(ledger: &mut Ledger, target: &str) {
+    ledger.targets.retain(|t| t != target);
+    for package in ledger.packages.values_mut() {
+        package.shipped.remove(target);
+        package.built.remove(target);
+        package.update.remove(target);
+    }
+}
+
 /// The Koji tag that carries each branch's content, from Bodhi's
 /// release list. Branches Bodhi does not know are skipped rather
 /// than guessed at — the tag naming is release-engineering's to
@@ -812,12 +975,24 @@ fn release_tags(branches: &[String]) -> (BTreeMap<String, Vec<String>>, BTreeMap
     let mut tags = BTreeMap::new();
     let mut names = BTreeMap::new();
     for branch in branches {
-        // Several Bodhi releases share a branch — F43, F43C and F43F
-        // all report "f43" — so the RPM one is picked by its id
-        // prefix rather than by taking whichever comes first.
-        match releases.iter().find(|r| {
-            &r.branch == branch && matches!(r.id_prefix.as_str(), "FEDORA" | "FEDORA-EPEL")
-        }) {
+        // Matched by branch or by name, because neither alone
+        // suffices: F45's branch is "rawhide" and EPEL-10.3's is
+        // "epel10", so a target named for the release finds nothing by
+        // branch. And several releases share a branch — F43, F43C and
+        // F43F all report "f43" — so the RPM one is picked by its id
+        // prefix rather than by whichever Bodhi lists first.
+        let rpm_release = |r: &&sandogasa_bodhi::models::BodhiRelease| {
+            matches!(r.id_prefix.as_str(), "FEDORA" | "FEDORA-EPEL")
+        };
+        let as_branch = |name: &str| name.to_ascii_lowercase().replace(['-', '_'], "");
+        match releases
+            .iter()
+            .find(|r| &r.branch == branch && rpm_release(r))
+            .or_else(|| {
+                releases
+                    .iter()
+                    .find(|r| as_branch(&r.name) == as_branch(branch) && rpm_release(r))
+            }) {
             Some(release) => {
                 let branch_tags: Vec<String> = [&release.candidate_tag, &release.testing_tag]
                     .into_iter()
@@ -831,7 +1006,14 @@ fn release_tags(branches: &[String]) -> (BTreeMap<String, Vec<String>>, BTreeMap
                 }
                 names.insert(branch.clone(), release.name.clone());
             }
-            None => eprintln!("warning: no Bodhi release for {branch}; skipping its Koji lookup"),
+            // Says what was looked for, not that the release does not
+            // exist: Bodhi has releases this lookup cannot see, and
+            // reporting the search keeps the reader pointed at the
+            // naming mismatch rather than at a wrong conclusion.
+            None => eprintln!(
+                "warning: no Bodhi release matches {branch} by branch or name; \
+                 skipping its Koji lookup"
+            ),
         }
     }
     (tags, names)
@@ -1278,26 +1460,33 @@ fn state(package: &Package, targets: &[String]) -> String {
 
     // In Rawhide. What is left is per target, and the least advanced
     // one is the effort's real position for this package.
-    let mut states: Vec<(u8, String)> = targets
+    let mut states: Vec<(u8, &str, &str)> = targets
         .iter()
         .filter(|t| *t != "rawhide")
-        .map(|t| target_state(package, d, t))
+        .map(|t| {
+            let (rank, label) = target_state(package, d, t);
+            (rank, label, t.as_str())
+        })
         .collect();
-    states.sort_by_key(|(rank, _)| *rank);
+    states.sort_by_key(|(rank, _, _)| *rank);
     const SHIPPED: u8 = 5;
-    match states.split_first() {
-        None => "in rawhide".to_string(),
-        // Every target done. Naming one of several would be an
-        // arbitrary choice between equals.
-        Some(((SHIPPED, label), rest)) => {
-            if rest.is_empty() {
-                label.clone()
-            } else {
-                "shipped for every target".to_string()
-            }
-        }
-        Some(((_, label), _)) => label.clone(),
+    let Some(&(rank, label, _)) = states.first() else {
+        return "in rawhide".to_string();
+    };
+    // Every target at the least advanced state is named, because
+    // naming one of several equals reads as though the others were
+    // further along — the reason a package sitting in testing for
+    // three branches was reported against only one of them.
+    let mut at_rank: Vec<&str> = states
+        .iter()
+        .filter(|(r, _, _)| *r == rank)
+        .map(|(_, _, target)| *target)
+        .collect();
+    at_rank.sort_by_key(|b| std::cmp::Reverse(release_recency(b)));
+    if rank == SHIPPED && at_rank.len() == states.len() && states.len() > 1 {
+        return "shipped for every target".to_string();
     }
+    format!("{label} for {}", at_rank.join(", "))
 }
 
 /// One line per branch, gathering what is known about it.
@@ -1319,6 +1508,24 @@ fn branch_lines(package: &Package) -> Vec<String> {
         .chain(package.built.keys())
         .chain(package.update.keys())
         .collect();
+    // Ordered by what each release ships, newest version first, and
+    // then by how recent the release is. That puts the releases already
+    // carrying the new version together at the top and the ones still
+    // to do below, which is the question being asked of the line —
+    // rather than alphabetically, where the two are interleaved.
+    let mut branches: Vec<&String> = branches.into_iter().collect();
+    branches.sort_by(|a, b| {
+        let version = |branch: &str| package.shipped.get(branch).map(|s| s.version.clone());
+        match (version(a), version(b)) {
+            (Some(x), Some(y)) => sandogasa_rpmvercmp::rpmvercmp(&y, &x),
+            // A release shipping nothing has not started, so it sorts
+            // below any that has.
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+        .then_with(|| release_recency(b).cmp(&release_recency(a)))
+    });
     branches
         .into_iter()
         .map(|branch| {
@@ -1387,21 +1594,29 @@ fn rawhide_state(package: &Package) -> Option<String> {
 
 /// A target's state and how far along it is, lowest first — the
 /// ranking is what makes "least advanced" meaningful.
-fn target_state(package: &Package, distgit: &DistGit, target: &str) -> (u8, String) {
-    if !distgit.branches.iter().any(|b| b == target) {
-        return (0, format!("needs branching for {target}"));
+fn target_state(package: &Package, distgit: &DistGit, target: &str) -> (u8, &'static str) {
+    // Whether the target already carries the version comes first, but
+    // only once something has actually been seen in its repositories:
+    // branch names do not always match a target — EPEL 10's minor
+    // releases all ship from the "epel10" branch — so a package
+    // present in the target would otherwise be told it needs
+    // branching, which is plainly false. Without a repository fact
+    // there is nothing to conclude from, and the branch check below is
+    // the more useful answer.
+    if package.shipped.contains_key(target) && !ahead_of_repos(package, target) {
+        return (5, "shipped");
     }
-    if !ahead_of_repos(package, target) {
-        return (5, format!("shipped for {target}"));
+    if !distgit.branches.iter().any(|b| b == target) {
+        return (0, "needs a branch");
     }
     if !built_at_least(package, target) {
-        return (1, format!("no {target} build found"));
+        return (1, "needs building");
     }
     match package.update.get(target) {
-        None => (2, format!("built for {target}, needs an update")),
-        Some(u) if u.status == "pending" => (3, format!("{target} update pending")),
-        Some(u) if u.status == "testing" => (4, format!("{target} update in testing")),
-        Some(_) => (5, format!("shipped for {target}")),
+        None => (2, "needs an update"),
+        Some(u) if u.status == "pending" => (3, "update pending"),
+        Some(u) if u.status == "testing" => (4, "update in testing"),
+        Some(_) => (5, "shipped"),
     }
 }
 
@@ -1433,7 +1648,11 @@ pub fn render(ledger: &Ledger, only: &[String]) -> String {
     let targets = if ledger.targets.is_empty() {
         "rawhide".to_string()
     } else {
-        ledger.targets.join(", ")
+        // Newest release first. With no package in hand there is no
+        // version to order by, so recency is the whole key.
+        let mut targets = ledger.targets.clone();
+        targets.sort_by_key(|b| std::cmp::Reverse(release_recency(b)));
+        targets.join(", ")
     };
     let _ = writeln!(out, "targets: {targets}");
 
@@ -1464,12 +1683,6 @@ pub fn render(ledger: &Ledger, only: &[String]) -> String {
             }
             if let Some(d) = &package.distgit {
                 if d.exists {
-                    let shown: Vec<&str> = d
-                        .branches
-                        .iter()
-                        .filter(|b| *b == "rawhide" || ledger_target(ledger, b))
-                        .map(String::as_str)
-                        .collect();
                     if let Some(reason) = &d.retired_reason {
                         match &d.retired_on {
                             Some(on) => {
@@ -1484,10 +1697,18 @@ pub fn render(ledger: &Ledger, only: &[String]) -> String {
                         out,
                         "    dist-git: {}{} (as of {})",
                         if d.retired { "retired, " } else { "" },
-                        if shown.is_empty() {
-                            format!("{} branch(es)", d.branches.len())
-                        } else {
-                            shown.join(", ")
+                        // Ordered like every other branch list here,
+                        // newest release first.
+                        // Every branch the repository has, not the
+                        // subset matching a target: the line reads as
+                        // the branch list, and showing part of it as
+                        // though it were all of it invites the reader
+                        // to conclude a package is unbranched when it
+                        // is branched under another name.
+                        {
+                            let mut branches = d.branches.clone();
+                            branches.sort_by_key(|b| std::cmp::Reverse(release_recency(b)));
+                            branches.join(", ")
                         },
                         d.seen
                     );
@@ -1722,7 +1943,7 @@ mod tests {
         // heading names the target, since with several the reader
         // needs to know which one is behind.
         let targets = vec!["rawhide".to_string(), "epel9".to_string()];
-        assert_eq!(state(&package, &targets), "needs branching for epel9");
+        assert_eq!(state(&package, &targets), "needs a branch for epel9");
     }
 
     fn staged_at(version: &str) -> Staged {
@@ -1823,10 +2044,7 @@ mod tests {
             .insert("epel9".to_string(), built_at("rust-a-0.13.0-1.el9"));
 
         // Built with no update: submitting one is the next step.
-        assert_eq!(
-            state(&package, &targets),
-            "built for epel9, needs an update"
-        );
+        assert_eq!(state(&package, &targets), "needs an update for epel9");
         // Rawhide is not exempt: its builds can be carried by an
         // update too, automatically or from a side tag, so the state
         // reports one when there is one.
@@ -1859,8 +2077,8 @@ mod tests {
         );
 
         for (status, expected) in [
-            ("pending", "epel9 update pending"),
-            ("testing", "epel9 update in testing"),
+            ("pending", "update pending for epel9"),
+            ("testing", "update in testing for epel9"),
             ("stable", "shipped for epel9"),
         ] {
             package.update.insert(
@@ -1896,7 +2114,7 @@ mod tests {
         package
             .shipped
             .insert("epel9".to_string(), shipped_at("0.12.0-7.el9"));
-        assert_eq!(state(&package, &targets), "no epel9 build found");
+        assert_eq!(state(&package, &targets), "needs building for epel9");
 
         // Once epel9 catches up both are done, and neither is named:
         // picking one of two equals would be arbitrary.
@@ -2319,5 +2537,107 @@ mod tests {
     fn render_says_what_to_do_with_an_empty_ledger() {
         let text = render(&Ledger::default(), &[]);
         assert!(text.contains("--copr"), "{text}");
+    }
+
+    #[test]
+    fn side_tag_names_a_target() {
+        let mut ledger = Ledger::default();
+        for tag in [
+            "f43-build-side-146829",
+            "epel10.3-build-side-146831",
+            "rawhide-build-side-1",
+        ] {
+            let branch = crate::check_update::branch_from_side_tag(tag).unwrap();
+            if branch != "rawhide" && !ledger.targets.contains(&branch) {
+                ledger.targets.push(branch);
+            }
+        }
+        // rawhide is always examined, so it is not recorded as a target.
+        assert_eq!(ledger.targets, vec!["f43", "epel10.3"]);
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_side_tag_is_refused() {
+        // The comma-joined form a pre-CSV run would have stored.
+        for bad in [
+            "f44-build-side-1,f43-build-side-2",
+            "f43",
+            "",
+            "f43-build-side-",
+        ] {
+            assert!(
+                crate::check_update::branch_from_side_tag(bad).is_none(),
+                "{bad} should not parse as a side tag"
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_target_is_not_reported_as_unbranched() {
+        let mut package = Package {
+            route: Route::Direct,
+            ..Package::default()
+        };
+        // EPEL 10's minor releases build from the "epel10" branch, so a
+        // package shipped for epel10.3 has no branch of that name.
+        let distgit = DistGit {
+            exists: true,
+            branches: vec!["epel10".into(), "rawhide".into()],
+            retired: false,
+            retired_reason: None,
+            retired_on: None,
+            seen: "2026-08-11".into(),
+        };
+        package.shipped.insert(
+            "epel10.3".into(),
+            Shipped {
+                version: "0.19.1-1.el10_3".into(),
+                seen: "2026-08-11".into(),
+            },
+        );
+        let (_, label) = target_state(&package, &distgit, "epel10.3");
+        assert_eq!(label, "shipped");
+    }
+
+    #[test]
+    fn releases_order_newest_first() {
+        let mut branches = vec![
+            "epel10.3", "epel9", "f43", "f44", "rawhide", "epel10.2", "main", "epel10",
+        ];
+        branches.sort_by_key(|b| std::cmp::Reverse(release_recency(b)));
+        // Alphabetically this is epel10, epel10.2, epel10.3, epel9,
+        // f43, f44, main, rawhide — neither oldest- nor newest-first.
+        // The bare epel10 branch tracks the current minor, so it leads
+        // the numbered ones.
+        assert_eq!(
+            branches,
+            vec![
+                "rawhide", "main", "f44", "f43", "epel10", "epel10.3", "epel10.2", "epel9"
+            ]
+        );
+    }
+
+    #[test]
+    fn branch_lines_lead_with_the_newest_version() {
+        let mut package = Package::default();
+        // Two rollouts at once: 0.19.1 has reached Rawhide and EPEL
+        // 10.3, while the older branches are still on 0.18.1 with a
+        // build waiting in an update.
+        for (branch, version) in [
+            ("epel9", "0.18.1-1.el9"),
+            ("f43", "0.18.1-1.fc43"),
+            ("epel10.3", "0.19.1-1.el10_3"),
+            ("f44", "0.18.1-1.fc44"),
+            ("rawhide", "0.19.1-1.fc45"),
+        ] {
+            package
+                .shipped
+                .insert(branch.to_string(), shipped_at(version));
+        }
+        let lines = branch_lines(&package);
+        let branches: Vec<&str> = lines.iter().map(|l| l.split(':').next().unwrap()).collect();
+        // The releases carrying the new version first, newest release
+        // first within each group.
+        assert_eq!(branches, vec!["rawhide", "epel10.3", "f44", "f43", "epel9"]);
     }
 }

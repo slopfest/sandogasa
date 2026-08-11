@@ -2,6 +2,67 @@
 
 ## Unreleased
 
+### ebranch: check-wip — a branch, a target and a release are three different names
+
+Targeting anything but Rawhide meant naming branches, and Fedora's
+names for a release do not agree with each other. Bodhi's F45 has
+branch `rawhide`; EPEL-10.3 has branch `epel10`, while its archived
+minors have `epel10.0` and `epel10.2`; dist-git has an `epel10` branch
+but never an `epel10.3`; and fedrq answers for `epel10.3`. Matching one
+of those against another produced four wrong answers, all of them
+confident.
+
+Releases are now matched by branch **or** by name, so a target named
+after the release (`f45`, `epel10.3`) finds it. Previously the lookup
+warned "no Bodhi release for f45" and skipped every Koji query for that
+branch — the release exists, and saying otherwise sent the reader
+looking for the wrong problem. The warning now says what was searched:
+no release matches *by branch or name*.
+
+Two targets that resolve to one Bodhi release are one release under two
+names, and every fact about it was reported twice. Fedora names
+Rawhide's side tags after its version, so `--side-tag f45-build-side-146825`
+recorded `f45` as a target alongside `rawhide`. The duplicate is
+dropped, Rawhide winning because it is always examined, and kept as an
+alias so the side tag's builds are attributed to the branch that *is*
+examined rather than going unnoticed. The alias is derived from the side
+tags themselves, not from whichever run happened to record the target.
+
+Whether a target already carries the version is now checked before
+whether dist-git has a branch of that name. EPEL 10's minor releases all
+ship from the `epel10` branch, so a package shipped for `epel10.3` was
+told it needed branching — false, and the one state where the answer was
+already known. Without a repository fact there is nothing to conclude
+from, so the branch check still has the last word there; `needs
+branching` reads `needs a branch` now that it is about a name.
+
+The dist-git line shows every branch. It listed only Rawhide and the
+targets while reading as the repository's branch list, which invites
+exactly the conclusion it caused: sandogasa showed `epel9, f43, f44,
+rawhide` and looked unbranched for EPEL 10, which it is not.
+
+Branches are listed newest release first, and per package the releases
+already carrying the new version come first. Alphabetically `epel10.3`
+sorts before `epel9` and both before every Fedora branch, which is
+neither oldest- nor newest-first — just the order the strings fall in.
+Now the primary key is what each release ships, newest version first, so
+two rollouts at once separate into the releases that are done and the
+ones still to do, and the secondary key is release recency: Rawhide,
+then Fedora by version, then EPEL. A bare `epel10` branch builds for
+whichever minor is current, so it leads `epel10.2`, and Rawhide leads
+its `main` alias.
+
+A side-tag name that can never be queried is refused rather than stored.
+`--side-tag` gained CSV in this release, and a value written by a run
+before that was kept verbatim, so
+`f44-build-side-1,f43-build-side-2` parsed as branch `f44` and warned
+about "No such tag" on every run afterwards. The tag id must now be
+digits — it is a Koji task number — which makes the joined form
+unparseable; anything unusable a previous run stored is dropped on
+sight. Facts recorded for a branch no longer examined are forgotten for
+the same reason: nothing refreshes them, and in the report they are
+indistinguishable from current ones.
+
 ### ebranch: check-wip headings follow the target, and routes can be set
 
 Two gaps that would have shown up the first time an effort targeted
@@ -12,10 +73,13 @@ facts were gathered and shown in the detail lines but never grouped on.
 Rawhide is still the spine — everything lands there first and is
 branched from it, so while Rawhide is behind that is what the heading
 reports — but once it is current the heading becomes the least advanced
-target's state, and names it: `needs branching for epel9`, `built for
-epel9, needs an update`, `epel9 update in testing`. With every target
-done it says so without naming one, since choosing between equals would
-be arbitrary. Each branch now gets one line rather than three. Shipped, built and
+target's state, and names every target in it: `needs a branch for
+epel9`, `needs an update for f44`, `update in testing for f44, f43,
+epel9`. Naming one of several would read as though the others were
+further along — sandogasa's own 0.19.1, sitting in testing for three
+branches, was reported against only one of them. With every target done
+it says so without naming any, since choosing between equals would be
+arbitrary. Each branch now gets one line rather than three. Shipped, built and
 in-an-update each named a version, which mostly repeated itself — what
 Koji has and what the repositories have are usually identical — while
 the update line gave an alias without saying which version it carried.
@@ -38,7 +102,8 @@ builds, so anything in the candidate or testing window read as unbuilt.
 Both the candidate and testing tags are now queried — neither sees the
 other, though both inherit the stable tag — and the newest answer wins.
 New `--side-tag` (repeated or CSV, like the other multi-value flags)
-records a side tag on the ledger and scans it too,
+records a side tag on the ledger, takes its branch as a target — using
+one says that branch is in scope — and scans it too,
 since a side-tag build is tagged only there until an update carries it,
 which is most of the window in which the next move is to submit one. One
 query per side tag covers every package in it.
