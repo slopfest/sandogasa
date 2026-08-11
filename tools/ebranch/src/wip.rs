@@ -410,18 +410,18 @@ pub fn run(opts: &Options) -> Result<(), String> {
             eprintln!("tracking side tag {tag}");
             dirty = true;
         }
-        // Building into a side tag says that branch is a target, so
-        // it is recorded as one rather than having to be given twice.
-        // Recording it, rather than inferring it per run, keeps one
-        // source of truth for what the report groups on.
-        if let Some(branch) = crate::check_update::branch_from_side_tag(tag)
-            && branch != "rawhide"
-            && !ledger.targets.contains(&branch)
-        {
-            ledger.targets.push(branch.clone());
-            eprintln!("targeting {branch}, from its side tag");
-            dirty = true;
-        }
+    }
+    // Every stored side tag names a target, not only the ones given on
+    // this run's command line, because the distro moves under the
+    // ledger. A Rawhide side tag is named for the version Rawhide
+    // currently is, so f45-build-side-* was a duplicate of rawhide and
+    // dropped as one — until mass branching made F45 a release of its
+    // own, at which point the target has to come back or the branch's
+    // facts get forgotten exactly when they start to matter.
+    for branch in implied_targets(&ledger) {
+        eprintln!("targeting {branch}, from its side tag");
+        ledger.targets.push(branch);
+        dirty = true;
     }
     // Drop anything unusable a previous run may have stored.
     let unusable: Vec<String> = ledger
@@ -957,6 +957,26 @@ fn release_recency(branch: &str) -> (u8, Vec<u32>) {
             },
         },
     }
+}
+
+/// Targets a ledger's side tags imply and it does not already record.
+///
+/// Rawhide is left out because it is always examined, and a Rawhide side
+/// tag is named for whatever version Rawhide currently is — which is
+/// why this is recomputed every run rather than recorded once: at mass
+/// branching that name becomes a release of its own.
+fn implied_targets(ledger: &Ledger) -> Vec<String> {
+    let mut implied: Vec<String> = Vec::new();
+    for branch in ledger
+        .side_tags
+        .iter()
+        .filter_map(|t| crate::check_update::branch_from_side_tag(t))
+    {
+        if branch != "rawhide" && !ledger.targets.contains(&branch) && !implied.contains(&branch) {
+            implied.push(branch);
+        }
+    }
+    implied
 }
 
 /// Forget a target and everything recorded per-branch for it, for when
@@ -2554,6 +2574,27 @@ mod tests {
     fn render_says_what_to_do_with_an_empty_ledger() {
         let text = render(&Ledger::default(), &[]);
         assert!(text.contains("--copr"), "{text}");
+    }
+
+    #[test]
+    fn implied_targets_follow_the_side_tags() {
+        let mut ledger = Ledger {
+            side_tags: vec![
+                "f45-build-side-146825".into(),
+                "f43-build-side-146829".into(),
+                "f43-build-side-999".into(),
+                "rawhide-build-side-1".into(),
+            ],
+            targets: vec!["f43".into()],
+            ..Ledger::default()
+        };
+        // f43 is recorded already and rawhide is always examined; two
+        // side tags for one branch imply it once.
+        assert_eq!(implied_targets(&ledger), vec!["f45"]);
+
+        ledger.targets.push("f45".into());
+        // Idempotent: nothing is implied twice, so a run adds nothing.
+        assert!(implied_targets(&ledger).is_empty());
     }
 
     #[test]

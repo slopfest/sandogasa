@@ -26,6 +26,23 @@ ledger, instead of hanging.
 
 New public surface: `hub_unresponsive`, `TIMEOUT_ENV`.
 
+### ebranch: a ledger follows the distro through mass branching
+
+Targets implied by side tags are recomputed every run instead of being
+recorded once. A Rawhide side tag is named for whatever version Rawhide
+currently is, so `f45-build-side-*` implied a target that was then
+dropped as a duplicate of `rawhide` — correct until mass branching made
+F45 a release of its own, at which point the target had to come back or
+the branch's facts would be forgotten precisely when they started to
+matter. Watched happen live: `f45` returned as a target by itself and
+took up its own line, `0.19.1-1.fc45`, next to Rawhide's.
+
+Also observed mid-branching, and reported correctly rather than
+confidently: for a while no Bodhi release has branch `rawhide` at all —
+F45's has already become `f45` and F46 does not exist yet — which reads
+as "no Bodhi release matches rawhide by branch or name" rather than a
+claim that Rawhide is gone.
+
 ## v0.19.2
 
 ### Dependencies
