@@ -866,6 +866,112 @@ fn side_tag_builds(side_tags: &[String], aliases: &BTreeMap<String, String>) -> 
     scan
 }
 
+/// A newer build exists somewhere the release has not taken it up from.
+///
+/// One template for every place it holds, because the reader compares
+/// these lines: whether the build waits in a COPR or in a side tag, "not
+/// landed" has to mean the same thing and read the same way. Written
+/// twice, the two would drift.
+fn not_landed_yet(waiting_in: &str, branch: &str) -> String {
+    format!("newer build in {waiting_in}, not landed in {branch}")
+}
+
+/// Where a newer build is waiting, when the ledger knows.
+///
+/// A COPR is checked first: it is the earliest place a version appears,
+/// so if Koji has no build of it yet that is the honest answer. A side
+/// tag holds one Koji has accepted but that is in no release tag, so no
+/// compose will pick it up either.
+const IN_A_COPR: &str = "a COPR";
+const IN_A_SIDE_TAG: &str = "a side tag";
+
+/// Whether `candidate`'s version-release is newer than `than`'s, both
+/// being NVRs.
+fn newer_nvr(candidate: &str, than: &str) -> bool {
+    let evr = |nvr: &str| sandogasa_koji::parse_nvr(nvr).map(|(_, v, r)| format!("{v}-{r}"));
+    match (evr(candidate), evr(than)) {
+        (Some(candidate), Some(than)) => {
+            sandogasa_rpmvercmp::rpmvercmp(&candidate, &than) == std::cmp::Ordering::Greater
+        }
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+/// From how many packages one bulk query per tag beats one per package.
+///
+/// Measured against the Fedora hub in August 2026: `list-tagged --latest
+/// --inherit` on a release's candidate tag answers in about 8 seconds
+/// with some 24,000 builds, while the same call narrowed to one package
+/// takes about 1.25 seconds. So a handful is cheaper asked one at a time
+/// and a stack is cheaper asked at once.
+const BULK_QUERY_FROM: usize = 7;
+
+/// Newest build of each of `wanted` across `tags`, following
+/// inheritance, as `package -> (nvr, tag)`.
+///
+/// A release's tags hold tens of thousands of builds, so which way round
+/// to ask is a real choice — see [`BULK_QUERY_FROM`]. An effort with no
+/// COPR behind it has to ask about every package it tracks, which is
+/// what made the bulk form necessary: a fifteen-package stack was thirty
+/// subprocesses per branch.
+fn builds_in_tags(
+    tags: &[String],
+    wanted: &[String],
+) -> Result<BTreeMap<String, (String, String)>, String> {
+    let mut newest: BTreeMap<String, (String, String)> = BTreeMap::new();
+    let mut keep = |name: &str, nvr: String, tag: String| match newest.get(name) {
+        Some((known, _)) if !newer_nvr(&nvr, known) => {}
+        _ => {
+            newest.insert(name.to_string(), (nvr, tag));
+        }
+    };
+    if wanted.len() >= BULK_QUERY_FROM {
+        for tag in tags {
+            for build in sandogasa_koji::latest_tagged_all(tag, None)? {
+                if let Some((name, _, _)) = sandogasa_koji::parse_nvr(&build.nvr)
+                    && wanted.iter().any(|w| w == name)
+                {
+                    keep(name, build.nvr.clone(), build.tag.clone());
+                }
+            }
+        }
+    } else {
+        for name in wanted {
+            for tag in tags {
+                if let Some(build) = sandogasa_koji::latest_tagged(tag, name, None)? {
+                    keep(name, build.nvr.clone(), build.tag.clone());
+                }
+            }
+        }
+    }
+    Ok(newest)
+}
+
+/// Whether Koji is worth asking about this package on this branch.
+///
+/// The question is settled only by something the ledger did not write
+/// itself. A staged version is such a thing: a COPR says which version
+/// is being pushed, so once a branch's repositories carry it there is
+/// nothing left to find. The recorded build is *not* — measuring
+/// interest against it makes the answer self-confirming, and it did:
+/// once `built` matched what was shipped, the branch was deemed settled
+/// and never asked again, so a newer build could never be found. With no
+/// COPR behind an effort there is no independent version to compare, so
+/// the branch is asked every time.
+fn worth_asking_koji(package: &Package, branch: &str) -> bool {
+    let Some(staged) = package.staged.as_ref() else {
+        return true;
+    };
+    match package.shipped.get(branch) {
+        Some(shipped) => {
+            sandogasa_rpmvercmp::rpmvercmp(&staged.version, &shipped.version)
+                == std::cmp::Ordering::Greater
+        }
+        None => true,
+    }
+}
+
 /// Take into the ledger the packages a side tag holds and it does not.
 ///
 /// The same reasoning as reading a COPR: a registered side tag is a
@@ -890,21 +996,38 @@ fn adopt_side_tag_builds(
     let mut added: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (branch, per_branch) in &scan.builds {
         for (name, (nvr, tag)) in per_branch {
-            if !selected(only, name) || ledger.packages.contains_key(name) || ledger.ignores(name) {
+            if !selected(only, name) || ledger.ignores(name) {
                 continue;
             }
-            let mut package = Package::default();
-            package.built.insert(
-                branch.clone(),
-                Built {
-                    nvr: nvr.clone(),
-                    tag: tag.clone(),
-                    seen: today.to_string(),
-                },
-            );
-            ledger.packages.insert(name.clone(), package);
-            scan.discovered.push(name.clone());
-            added.entry(tag.clone()).or_default().push(name.clone());
+            let record = Built {
+                nvr: nvr.clone(),
+                tag: tag.clone(),
+                seen: today.to_string(),
+            };
+            match ledger.packages.get_mut(name) {
+                // Already tracked: the tag still has the last word on
+                // whether something newer than the record exists there.
+                // Skipping these left a build sitting in a registered
+                // side tag invisible for as long as the ledger held an
+                // older one — rust-emojis 0.9.0 was in five side tags
+                // and reported from none of them.
+                Some(package) => {
+                    let newer = match built_evr(package, branch) {
+                        Some(known) => newer_nvr(nvr, &format!("{name}-{known}")),
+                        None => true,
+                    };
+                    if newer {
+                        package.built.insert(branch.clone(), record);
+                    }
+                }
+                None => {
+                    let mut package = Package::default();
+                    package.built.insert(branch.clone(), record);
+                    ledger.packages.insert(name.clone(), package);
+                    scan.discovered.push(name.clone());
+                    added.entry(tag.clone()).or_default().push(name.clone());
+                }
+            }
         }
     }
     for (tag, names) in added {
@@ -940,65 +1063,24 @@ fn refresh_built(
         let wanted: Vec<String> = ledger
             .packages
             .iter()
-            .filter(|(name, p)| {
-                selected(only, name)
-                    // Ahead of the repositories, so whether a build
-                    // exists is the open question — or nothing is
-                    // known of a version at all, which is the case for
-                    // a package added by hand with no COPR behind it.
-                    // Skipping those would leave nothing to populate
-                    // `built`, so nothing ever would.
-                    && (ahead_of_repos(p, branch) || wanted_version(p, branch).is_none())
-            })
+            .filter(|(name, p)| selected(only, name) && worth_asking_koji(p, branch))
             .map(|(name, _)| name.clone())
             .collect();
-        for name in wanted {
-            // Both the candidate and testing tags are asked, because
-            // neither sees the other: candidate holds a build with no
-            // update yet, testing holds one whose update is in
-            // flight, and both inherit the stable tag. The newest
-            // answer wins.
-            //
-            // No Koji profile is threaded through: the tags come from
-            // Bodhi's release list, which knows only Fedora and EPEL,
-            // so a non-default profile would have nothing to query.
-            // A side tag build is a candidate like any other, and is
-            // often the newest — it is where a build lives before an
-            // update exists.
-            let mut newest: Option<(String, String)> = from_side_tags
-                .get(branch)
-                .and_then(|per_branch| per_branch.get(&name))
-                .cloned();
-            let mut failed = false;
-            for tag in branch_tags {
-                match sandogasa_koji::latest_tagged(tag, &name, None) {
-                    Ok(Some(build)) => {
-                        let evr = sandogasa_koji::parse_nvr(&build.nvr)
-                            .map(|(_, v, r)| format!("{v}-{r}"))
-                            .unwrap_or_default();
-                        let better = newest.as_ref().is_none_or(|(prev, _)| {
-                            sandogasa_koji::parse_nvr(prev)
-                                .map(|(_, v, r)| format!("{v}-{r}"))
-                                .is_some_and(|p| {
-                                    sandogasa_rpmvercmp::rpmvercmp(&evr, &p)
-                                        == std::cmp::Ordering::Greater
-                                })
-                        });
-                        if better {
-                            newest = Some((build.nvr, build.tag));
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        eprintln!("warning: koji {tag} {name}: {e}");
-                        failed = true;
-                    }
-                }
-            }
-            if failed {
-                // A hub that stopped answering will not answer for the
-                // branches and packages still to come, and each would
-                // cost another timeout.
+        // One answer for the whole branch, then read per package —
+        // builds_in_tags decides which way round to ask.
+        //
+        // Both the candidate and testing tags are asked, because neither
+        // sees the other: candidate holds a build with no update yet,
+        // testing holds one whose update is in flight, and both inherit
+        // the stable tag.
+        //
+        // No Koji profile is threaded through: the tags come from
+        // Bodhi's release list, which knows only Fedora and EPEL, so a
+        // non-default profile would have nothing to query.
+        let found = match builds_in_tags(branch_tags, &wanted) {
+            Ok(found) => found,
+            Err(e) => {
+                eprintln!("warning: koji {branch}: {e}");
                 if sandogasa_koji::hub_unresponsive(None) {
                     eprintln!("warning: koji is not answering; keeping the builds the ledger has");
                     return SideTagScan {
@@ -1006,7 +1088,25 @@ fn refresh_built(
                         ..scan
                     };
                 }
+                // The branch keeps what the ledger had: a failed query
+                // is not evidence that a build is gone.
                 continue;
+            }
+        };
+        for name in wanted {
+            // A side tag build is a candidate like any other, and is
+            // often the newest — it is where a build lives before an
+            // update exists.
+            let mut newest: Option<(String, String)> = from_side_tags
+                .get(branch)
+                .and_then(|per_branch| per_branch.get(&name))
+                .cloned();
+            if let Some((nvr, tag)) = found.get(&name)
+                && newest
+                    .as_ref()
+                    .is_none_or(|(known, _)| newer_nvr(nvr, known))
+            {
+                newest = Some((nvr.clone(), tag.clone()));
             }
             if let Some(package) = ledger.packages.get_mut(&name) {
                 match newest {
@@ -1831,12 +1931,24 @@ fn branch_lines(package: &Package) -> Vec<String> {
             }
             // The update qualifies the version rather than being a
             // separate fact, so it joins with a space.
-            let carried = match update {
-                Some(u) => {
+            // With an update, the update is where the build is going.
+            // Without one, a side tag is worth naming: nothing will pick
+            // the build up on its own from there, and that tag is what
+            // `bodhi updates new --from-tag` wants. A release's own tags
+            // are left unsaid — the state already says the build is
+            // waiting on a compose, and the tag name adds nothing.
+            let carried = match (update, built) {
+                (Some(u), _) => {
                     dates.push(&u.seen);
                     format!(" in {} {}", u.alias, u.status)
                 }
-                None => String::new(),
+                (None, Some(b))
+                    if parts.len() > 1
+                        && crate::check_update::branch_from_side_tag(&b.tag).is_some() =>
+                {
+                    format!(" in {}", b.tag)
+                }
+                (None, _) => String::new(),
             };
             let seen = dates.into_iter().min().unwrap_or_default();
             format!("{branch}: {}{carried} (as of {seen})", parts.join(", "))
@@ -1855,16 +1967,32 @@ fn rawhide_state(package: &Package) -> Option<String> {
     // Ahead of the repos. Koji says whether that is work still to do
     // or a build already made and waiting for a compose.
     if !built_at_least(package, "rawhide") {
-        return Some("in dist-git, no rawhide build found".to_string());
+        // Only reachable with something staged: without it the version
+        // of interest *is* the recorded build, which cannot be missing.
+        return Some(match package.staged.is_some() {
+            true => not_landed_yet(IN_A_COPR, "rawhide"),
+            false => "in dist-git, no rawhide build found".to_string(),
+        });
     }
     // Built. An update may be carrying it — Rawhide builds get one
     // automatically, and a side tag is submitted as one — so say which
     // rather than implying the only wait is a compose.
+    //
+    // With no update, where the build sits decides what is true. A build
+    // in a side tag is not tagged for the release at all, so no compose
+    // will ever pick it up: "built for rawhide" claimed something the
+    // tag chain does not say. A build in the candidate tag really is
+    // waiting on a compose.
+    let in_side_tag = package
+        .built
+        .get("rawhide")
+        .is_some_and(|b| crate::check_update::branch_from_side_tag(&b.tag).is_some());
     Some(
         match package.update.get("rawhide") {
             Some(u) if u.status == "pending" => "built, rawhide update pending",
             Some(u) if u.status == "testing" => "built, rawhide update in testing",
             Some(_) => "built for rawhide, update pushed",
+            None if in_side_tag => return Some(not_landed_yet(IN_A_SIDE_TAG, "rawhide")),
             None => "built for rawhide, not yet in the repos",
         }
         .to_string(),
@@ -2253,7 +2381,10 @@ mod tests {
         package
             .shipped
             .insert("rawhide".to_string(), shipped_at("0.12.0-7.fc45"));
-        assert_eq!(state(&package, &[]), "in dist-git, no rawhide build found");
+        assert_eq!(
+            state(&package, &[]),
+            "newer build in a COPR, not landed in rawhide"
+        );
 
         // Rawhide has caught up — the release differs, but the
         // version does not, so nothing is outstanding.
@@ -2286,7 +2417,10 @@ mod tests {
         package
             .built
             .insert("rawhide".to_string(), built_at("rust-a-0.12.0-7.fc45"));
-        assert_eq!(state(&package, &[]), "in dist-git, no rawhide build found");
+        assert_eq!(
+            state(&package, &[]),
+            "newer build in a COPR, not landed in rawhide"
+        );
 
         // Koji has the staged version but the repos do not: built and
         // waiting on a compose, which is not the same as unbuilt.
@@ -2415,7 +2549,10 @@ mod tests {
         package
             .shipped
             .insert("rawhide".to_string(), shipped_at("0.12.0-7.fc45"));
-        assert_eq!(state(&package, &[]), "in dist-git, no rawhide build found");
+        assert_eq!(
+            state(&package, &[]),
+            "newer build in a COPR, not landed in rawhide"
+        );
     }
 
     #[test]
@@ -2427,7 +2564,10 @@ mod tests {
             staged: Some(staged_at("0.1.0-1")),
             ..Package::default()
         };
-        assert_eq!(state(&package, &[]), "in dist-git, no rawhide build found");
+        assert_eq!(
+            state(&package, &[]),
+            "newer build in a COPR, not landed in rawhide"
+        );
 
         // Nothing staged either — it has left the COPR — so there is
         // no version to compare and all that can be said is that the
@@ -2681,7 +2821,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("in dist-git, no rawhide build found (1)"),
+            text.contains("newer build in a COPR, not landed in rawhide (1)"),
             "{text}"
         );
     }
@@ -3022,8 +3162,12 @@ mod tests {
         assert!(new.staged.is_none());
         assert_eq!(new.built["rawhide"].nvr, "rust-new-1.0-1.fc46");
         assert!(!new.seen_in_copr);
-        // A package the ledger already had keeps whatever it had.
-        assert!(ledger.packages["rust-known"].built.is_empty());
+        // A package the ledger already had takes the build too: the
+        // tag has the last word on what exists there.
+        assert_eq!(
+            ledger.packages["rust-known"].built["rawhide"].nvr,
+            "rust-known-1.0-1.fc46"
+        );
     }
 
     #[test]
@@ -3089,7 +3233,9 @@ mod tests {
         );
         assert_eq!(
             branch_lines(&package),
-            vec!["rawhide: 0.19.1-1.fc45, built 0.19.2-1.fc46 (as of 2026-08-11)"]
+            vec![
+                "rawhide: 0.19.1-1.fc45, built 0.19.2-1.fc46 in f46-build-side-1 (as of 2026-08-11)"
+            ]
         );
     }
 
@@ -3146,5 +3292,113 @@ mod tests {
         );
         assert!(changes.added.is_empty());
         assert!(ledger.packages.is_empty());
+    }
+
+    #[test]
+    fn a_newer_side_tag_build_replaces_an_older_record() {
+        let mut ledger = Ledger::default();
+        let mut package = Package::default();
+        package.built.insert(
+            "f44".into(),
+            Built {
+                nvr: "rust-emojis-0.8.2-1.fc44".into(),
+                tag: "f44".into(),
+                seen: "2026-08-12".into(),
+            },
+        );
+        ledger.packages.insert("rust-emojis".into(), package);
+
+        let record = |nvr: &str| {
+            let mut scan = SideTagScan {
+                definite: true,
+                ..SideTagScan::default()
+            };
+            scan.builds.insert(
+                "f44".into(),
+                BTreeMap::from([(
+                    "rust-emojis".to_string(),
+                    (nvr.to_string(), "f44-build-side-1".to_string()),
+                )]),
+            );
+            scan
+        };
+
+        let mut scan = record("rust-emojis-0.9.0-1.fc44");
+        adopt_side_tag_builds(&mut ledger, &mut scan, "2026-08-13", &[]);
+        assert_eq!(
+            ledger.packages["rust-emojis"].built["f44"].nvr,
+            "rust-emojis-0.9.0-1.fc44"
+        );
+
+        // An older build in a side tag does not undo a newer record.
+        let mut scan = record("rust-emojis-0.8.0-1.fc44");
+        adopt_side_tag_builds(&mut ledger, &mut scan, "2026-08-13", &[]);
+        assert_eq!(
+            ledger.packages["rust-emojis"].built["f44"].nvr,
+            "rust-emojis-0.9.0-1.fc44"
+        );
+    }
+
+    #[test]
+    fn koji_is_asked_unless_something_independent_settles_it() {
+        let at = |v: &str| Shipped {
+            version: v.to_string(),
+            seen: "2026-08-12".into(),
+        };
+        // A recorded build must not settle the question: it is what the
+        // ledger wrote itself, and taking it as evidence left a newer
+        // build undiscoverable for good.
+        let mut package = Package::default();
+        package.shipped.insert("f44".into(), at("0.8.2-1.fc44"));
+        package.built.insert(
+            "f44".into(),
+            Built {
+                nvr: "rust-emojis-0.8.2-1.fc44".into(),
+                tag: "f44".into(),
+                seen: "2026-08-12".into(),
+            },
+        );
+        assert!(worth_asking_koji(&package, "f44"));
+
+        let staged_at = |v: &str| {
+            Some(Staged {
+                copr: "@rust/x".into(),
+                version: v.to_string(),
+                failed_chroots: vec![],
+                seen: "2026-08-12".into(),
+            })
+        };
+        // A COPR does settle it: it says which version is being pushed,
+        // so once the repositories carry it there is nothing to find.
+        package.staged = staged_at("0.8.2-1");
+        assert!(!worth_asking_koji(&package, "f44"));
+        // Still staging something newer, so the branch is open.
+        package.staged = staged_at("0.9.0-1");
+        assert!(worth_asking_koji(&package, "f44"));
+        // Nothing known about the branch at all.
+        assert!(worth_asking_koji(&package, "f43"));
+    }
+
+    #[test]
+    fn newer_nvr_compares_version_release() {
+        assert!(newer_nvr(
+            "rust-emojis-0.9.0-1.fc44",
+            "rust-emojis-0.8.2-1.fc44"
+        ));
+        assert!(!newer_nvr(
+            "rust-emojis-0.8.2-1.fc44",
+            "rust-emojis-0.9.0-1.fc44"
+        ));
+        assert!(!newer_nvr(
+            "rust-emojis-0.9.0-1.fc44",
+            "rust-emojis-0.9.0-1.fc44"
+        ));
+        // A release bump counts.
+        assert!(newer_nvr(
+            "rust-emojis-0.9.0-2.fc44",
+            "rust-emojis-0.9.0-1.fc44"
+        ));
+        // Unparseable: no claim either way.
+        assert!(!newer_nvr("nonsense", "rust-emojis-0.9.0-1.fc44"));
     }
 }

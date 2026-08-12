@@ -160,13 +160,16 @@ $ ebranch check-wip uutils.toml --copr @rust/uutils-and-nushell
 15 package(s) tracked in @rust/uutils-and-nushell
 targets: rawhide
 
-in dist-git, newer build staged (12)
-  rust-exacl 0.13.0-1 (as of 2026-08-10)
-    dist-git: rawhide (as of 2026-08-10)
-    rawhide: 0.12.0-7.fc45 (as of 2026-08-10)
+newer build in a COPR, not landed in rawhide (14)
+  rust-exacl 0.13.0-1 (as of 2026-08-12)
+    dist-git: rawhide, f44, f43 (as of 2026-08-12)
+    rawhide: 0.12.0-7.fc45 (as of 2026-08-12)
   ...
 
-in dist-git, not built for rawhide (1)
+newer build in a side tag, not landed in rawhide (1)
+  rust-emojis
+    dist-git: rawhide, f44, f43 (as of 2026-08-12)
+    rawhide: 0.8.2-2.fc45, built 0.9.0-1.fc46 in f46-build-side-146944 (as of 2026-08-12)
   ...
 
 review filed, awaiting approval (2)
@@ -174,6 +177,15 @@ review filed, awaiting approval (2)
     dist-git: no repository (as of 2026-08-10)
     review: rhbz#2498026 new (as of 2026-08-10)
 ```
+
+Where a newer build is waiting is part of the state, from one template
+so the lines stay comparable: `newer build in a COPR, not landed in
+rawhide` when Koji has no build of the staged version, and `newer build
+in a side tag, not landed in rawhide` when it has one that no release tag
+carries — nothing will pick that up on its own, which is why the branch
+line names the side tag. A build in the release's own tags reads `built
+for rawhide, not yet in the repos`, where a compose really is the only
+wait.
 
 Each heading names what stands in the way rather than the state
 alone, and the versions are shown side by side so the comparison

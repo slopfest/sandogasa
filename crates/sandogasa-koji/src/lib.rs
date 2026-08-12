@@ -284,6 +284,22 @@ pub fn latest_tagged(
     Ok(parse_list_tagged(&stdout).into_iter().next())
 }
 
+/// Latest build of *every* package in `tag`, following inheritance.
+///
+/// The bulk form of [`latest_tagged`], for callers asking about enough
+/// packages that one large answer beats many small ones. Measured
+/// against the Fedora hub in August 2026: a release tag's candidate tag
+/// answers in about 8 seconds with some 24,000 builds (1.7MB), while one
+/// package costs about 1.25 seconds — so this pays from roughly seven
+/// packages upward, and the caller is the one who knows how many it has.
+pub fn latest_tagged_all(tag: &str, profile: Option<&str>) -> Result<Vec<TaggedBuild>, String> {
+    let stdout = run_koji(
+        profile,
+        &["list-tagged", "--latest", "--inherit", "--", tag],
+    )?;
+    Ok(parse_list_tagged(&stdout))
+}
+
 /// Parse `koji list-tagged` tabular output (header, separator,
 /// then `NVR TAG OWNER` rows) into builds.
 fn parse_list_tagged(stdout: &str) -> Vec<TaggedBuild> {

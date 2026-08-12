@@ -15,6 +15,9 @@ CentOS Build System).
   right primitive for "does this release actually carry version X"
   checks, since side tags and `-candidate`/`-testing` tags are
   never in a release tag's chain
+- `latest_tagged_all(tag, profile)` — the same for every package in the
+  tag at once, for callers with enough packages that one large answer
+  beats many small ones (measured crossover: about seven)
 - `is_available()` — whether the `koji` CLI is on PATH, for callers
   that degrade gracefully
 - `list_tagged_nvrs(tag, profile)` — list NVRs only (quiet mode)

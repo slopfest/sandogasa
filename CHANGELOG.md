@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+### ebranch: check-wip missed builds that were already in Koji
+
+`check-wip` follows a set of packages on their way into Fedora and keeps
+what it learns in a TOML file, so each run only has to look up what may
+have changed. It stopped noticing new builds. On a real run,
+`rust-emojis 0.9.0` had been built into five Koji side tags and was
+reported from one of them; `sandogasa 0.19.3` sat in two side tags
+without a mention.
+
+The cause was a shortcut that fed on itself. To avoid asking Koji about
+work that is finished, the tool skipped any branch whose repositories
+already carry the version being pushed. But with no COPR behind an
+effort, it had no independent idea of which version that was, and used
+the newest build it had *itself recorded earlier*. So as soon as that
+record matched what the repositories ship, the branch looked finished, it
+was never asked about again, and the record could never change. Deleting
+one such record made the very same run find the build it had been blind
+to.
+
+Only a fact from outside the file can close a branch now: the version
+staged in a COPR, which says what is being pushed regardless of what has
+been built. An effort with no COPR — packages built straight into a side
+tag — has every branch asked about on every run.
+
+A side tag's contents also apply to packages already being tracked, not
+only to ones being discovered for the first time. The tag is the
+authority on what exists in it, and using it costs nothing, because that
+query already happened once for the whole tag. An older build in a side
+tag does not overwrite a newer record.
+
+Asking that much needed a cheaper question. Each branch used to be one
+`koji list-tagged` per package per tag, so fifteen packages meant thirty
+subprocesses per branch. A branch's tags can also be listed whole, once,
+and read for every package at once. Measured against the Fedora hub, a
+release's candidate tag answers in about 8 seconds with some 24,000
+builds, while the same query narrowed to one package takes about 1.25
+seconds — so listing the whole tag pays from roughly seven packages
+upward. Both forms are kept and the package count decides. New in
+`sandogasa-koji`: `latest_tagged_all`.
+
+Two states also described the situation wrongly, and now share one
+phrasing:
+
+- a build in a side tag is in no release tag at all, so no compose will
+  ever pick it up. This read `built for rawhide, not yet in the repos`,
+  as though waiting were enough; it now reads `newer build in a side tag,
+  not landed in rawhide`
+- a version staged in a COPR with no Koji build of it read `in dist-git,
+  no rawhide build found`, which was odd when a build *was* found, just
+  of an older version. It now reads `newer build in a COPR, not landed in
+  rawhide`
+
+`built for rawhide, not yet in the repos` survives for a build in the
+release's own tags, where a compose really is the only wait. The branch
+line names the side tag when no update carries the build yet —
+`rawhide: 0.19.1-1.fc45, built 0.19.3-1.fc46 in f46-build-side-146944` —
+since that tag is what `bodhi updates new --from-tag` needs. A release's
+own tags stay unnamed, because the state already says what is awaited.
+
+The README's example output was two releases stale, showing a heading the
+tool no longer produces.
+
 ### Development: dev builds stop writing tens of gigabytes of debuginfo
 
 `target/` had reached 80GB in `debug` alone and run the machine out of
