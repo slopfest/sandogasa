@@ -92,6 +92,19 @@
 - The root `Makefile` is a discoverable task runner over cargo and `scripts/` — `make help` lists everything, `make check` is the pre-PR gate, `make release-checks` adds audit/semver/coverage. Cargo stays the build system (distro packaging drives it directly), so don't put build logic in the Makefile: a new check belongs in a script or a cargo alias, with a one-line target wrapping it so it shows up in `make help`
 
 ## Documentation
+- **A commit subject and a CHANGELOG entry's first paragraph must read for
+  someone who has never seen this code.** Lead with the symptom as an outsider
+  would meet it — what the tool did or failed to do, ideally with a concrete
+  observation — and only then the mechanism. Internal names (functions, fields,
+  struct members) and terms the code invents belong further down, in the
+  paragraphs that explain the cause; that is where detail is welcome and depth
+  is worth having. Tells that an entry is written for insiders: the subject names
+  a function or a field; the first paragraph uses a phrase that only exists in
+  the source ("the version of interest", "the recorded build"); the reader has to
+  already know what a component does before the sentence parses. Compare
+  "check-wip missed builds that were already in Koji" against "a recorded build
+  must not settle whether to look for a newer one" — the second is accurate and
+  means nothing to a stranger
 - A README describes the tool **as it is now**. Keep out of it: rationale for
   recent changes, comparisons to how something used to behave, and arguments for
   why a default or a number is what it is. Those belong in `CHANGELOG.md` (what
