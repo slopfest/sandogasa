@@ -267,6 +267,22 @@ Each run reconciles rather than rebuilds:
   being counted as staged, since it has finished or moved on. Use
   `--prune` to forget those.
 
+A ledger holds two lists with different lifetimes: the packages an
+effort tracks, which outlast many rollouts, and its side tags, which die
+with the rollout they carried. `--prune` names which to forget —
+`--prune packages` (the default when no value is given), `--prune
+side-tags`, or both as `--prune packages,side-tags`. Because the value
+is optional, give the ledger path before the flag, or write
+`--prune=side-tags`.
+
+Neither prunes on a question that was not answered. A package is
+forgotten only when every COPR the ledger follows answered and the
+package was in none of them; a side tag only when Koji says the tag does
+not exist. A timeout, an unreachable hub, a COPR that failed or an
+`--offline` run all leave the lists alone and say why — during an
+outage, "I could not ask" would otherwise erase exactly the records that
+matter.
+
 When Koji is unreachable — mass branching, an unplanned outage — the
 first query gives up after 30 seconds (`SANDOGASA_KOJI_TIMEOUT` in
 seconds overrides it), the rest are skipped, and the report comes from

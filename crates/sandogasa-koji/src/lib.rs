@@ -53,6 +53,25 @@ pub fn hub_unresponsive(profile: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether an error from this crate says the tag does not exist, as
+/// opposed to saying nothing definite.
+///
+/// The distinction decides whether a caller may act on absence — drop a
+/// side tag from a ledger, say — and only the hub answering "no such
+/// tag" licenses that. A timeout, an unreachable hub or an unparseable
+/// failure must never be read as absence: acting on those would erase
+/// records during an outage, which is when they matter most.
+///
+/// Matched on the CLI's message ("No such tag: <name>", observed
+/// 2026-08-11) because the koji CLI reports it no other way — it exits
+/// non-zero for every kind of failure alike. Kept here so the knowledge
+/// sits in one place rather than at each call site.
+pub fn tag_missing(error: &str) -> bool {
+    !error.contains("did not answer within")
+        && !error.contains("skipped: the hub did not answer")
+        && error.to_ascii_lowercase().contains("no such tag")
+}
+
 fn mark_unresponsive(profile: Option<&str>) {
     if let Ok(mut set) = UNRESPONSIVE.lock() {
         set.get_or_insert_with(Default::default)
@@ -692,5 +711,28 @@ Mon May 18 15:35:11 2026 ethtool-6.14-1.hs.el10 untagged from hyperscale10s-pack
         let out = run_bounded_with(cmd, "list-tagged", Some(Duration::from_secs(20))).unwrap();
         assert!(out.len() > 1_000_000, "{} bytes", out.len());
         assert!(out.ends_with("200000\n"));
+    }
+
+    #[test]
+    fn only_the_hub_saying_so_means_a_tag_is_missing() {
+        assert!(tag_missing(
+            "koji list-tagged failed: No such tag: f43-build-side-1"
+        ));
+        // Case as the hub happens to write it.
+        assert!(tag_missing("no such tag: f43-build-side-1"));
+        // Nothing definite: acting on these would drop a live tag
+        // because the hub was down.
+        assert!(!tag_missing(
+            "koji list-tagged did not answer within 30s; the hub may be down"
+        ));
+        assert!(!tag_missing(
+            "koji list-tagged skipped: the hub did not answer an earlier call in this run"
+        ));
+        assert!(!tag_missing(
+            "koji list-tagged failed: authentication error"
+        ));
+        assert!(!tag_missing(
+            "failed to run koji: No such file or directory"
+        ));
     }
 }

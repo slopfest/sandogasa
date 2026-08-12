@@ -666,9 +666,16 @@ struct CheckWipArgs {
     #[arg(long, conflicts_with = "offline")]
     no_offline: bool,
 
-    /// Forget packages no longer staged anywhere.
-    #[arg(long)]
-    prune: bool,
+    /// Forget what is gone: packages (default), side-tags.
+    #[arg(
+        long,
+        value_name = "WHAT",
+        value_enum,
+        value_delimiter = ',',
+        num_args = 0..=2,
+        default_missing_value = "packages"
+    )]
+    prune: Vec<wip::Prunable>,
 
     /// Search for review requests again.
     #[arg(long)]
@@ -826,7 +833,7 @@ fn main() -> ExitCode {
             coprs: a.copr.clone(),
             targets: a.target.clone(),
             offline: a.offline,
-            prune: a.prune,
+            prune: a.prune.clone(),
             rescan_reviews: a.rescan_reviews,
             packages: a.package.clone(),
             set: a.set.clone(),

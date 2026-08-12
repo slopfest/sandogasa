@@ -270,8 +270,18 @@ Report from the ledger, contacting nothing
 \fB\-\-no\-offline\fR
 Refresh, overriding a config default
 .TP
-\fB\-\-prune\fR
-Forget packages no longer staged anywhere
+\fB\-\-prune\fR [\fI<WHAT>...\fR]
+Forget what is gone: packages (default), side\-tags
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+packages: Packages no longer staged in any COPR the ledger follows
+.IP \(bu 2
+side\-tags: Side tags Koji says no longer exist
+.RE
 .TP
 \fB\-\-rescan\-reviews\fR
 Search for review requests again
@@ -292,7 +302,7 @@ Limit to these packages (repeated or CSV)
 Machine\-readable JSON output
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fILEDGER\fR>
 Ledger file tracking the effort (created if absent)

@@ -21,6 +21,9 @@ CentOS Build System).
 - `build_rpms(nvr, profile)` — list binary RPM names from buildinfo
 - `parse_nvr(nvr)` — split NVR into (name, version, release)
 - `parse_nvr_name(nvr)` — extract just the package name from an NVR
+- `tag_missing(error)` — whether an error from this crate says the tag
+  does not exist, as opposed to saying nothing definite; only that
+  licenses a caller to act on absence
 - `hub_unresponsive(profile)` — whether this profile's hub has already
   failed to answer in this process, so a caller with many queries left
   can stop asking

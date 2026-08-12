@@ -336,6 +336,23 @@ impl Ledger {
         changes
     }
 
+    /// Forget the side tags in `missing`, which the caller has
+    /// established Koji no longer has.
+    ///
+    /// Takes the names rather than deciding for itself, because the
+    /// decision needs an answer from the hub and "the hub did not say"
+    /// must never become "the tag is gone".
+    pub fn prune_side_tags(&mut self, missing: &[String]) -> Vec<String> {
+        let dropped: Vec<String> = self
+            .side_tags
+            .iter()
+            .filter(|t| missing.iter().any(|m| m == *t))
+            .cloned()
+            .collect();
+        self.side_tags.retain(|t| !dropped.contains(t));
+        dropped
+    }
+
     /// Forget packages that are no longer staged anywhere. Only
     /// under `--prune`: dropping an entry silently would lose the
     /// record of finished work.
@@ -351,6 +368,33 @@ impl Ledger {
     }
 }
 
+/// What one pass over the ledger's side tags established.
+#[derive(Debug, Default)]
+struct SideTagScan {
+    /// `branch -> package -> (nvr, tag)` for what the tags hold.
+    builds: BTreeMap<String, BTreeMap<String, (String, String)>>,
+    /// Tags the hub said do not exist.
+    missing: Vec<String>,
+    /// Whether every tag got a definite answer. False after a timeout
+    /// or any failure that says nothing about existence, and it is what
+    /// licenses acting on `missing`.
+    definite: bool,
+}
+
+/// A list in the ledger that `--prune` can act on.
+///
+/// Two, because they live on different timescales: the packages an
+/// effort tracks outlast many rollouts, while a side tag dies with the
+/// one it carried — so which to forget is the caller's to say, not
+/// something to assume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Prunable {
+    /// Packages no longer staged in any COPR the ledger follows.
+    Packages,
+    /// Side tags Koji says no longer exist.
+    SideTags,
+}
+
 /// What `check-wip` was asked to do.
 pub struct Options {
     pub ledger: std::path::PathBuf,
@@ -358,7 +402,7 @@ pub struct Options {
     pub coprs: Vec<String>,
     pub targets: Vec<String>,
     pub offline: bool,
-    pub prune: bool,
+    pub prune: Vec<Prunable>,
     /// Search for a review request again even where one is recorded,
     /// for a package whose retirement means a new one is needed.
     pub rescan_reviews: bool,
@@ -392,6 +436,10 @@ pub fn run(opts: &Options) -> Result<(), String> {
     }
 
     let mut dirty = !opts.targets.is_empty();
+    // What this run established, which is what --prune may act on. An
+    // offline run establishes neither: it asked nothing.
+    let mut copr_absence_established = false;
+    let mut side_tags = SideTagScan::default();
     // A package can belong to an effort without ever being staged in
     // a COPR — built straight into a side tag, or already updated
     // before the effort began. Adding it makes the ledger the record
@@ -470,6 +518,11 @@ pub fn run(opts: &Options) -> Result<(), String> {
             );
         }
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        // Absence from a COPR is only established when every COPR the
+        // ledger follows answered. With none configured, or one
+        // unreachable, a package missing from what came back says
+        // nothing about whether it is still staged.
+        copr_absence_established = !coprs.is_empty();
         for spec in &coprs {
             match staged_in_copr(spec) {
                 Ok(staged) => {
@@ -478,7 +531,10 @@ pub fn run(opts: &Options) -> Result<(), String> {
                 }
                 // One unreachable COPR must not lose the rest of the
                 // report: the ledger still knows what it knew.
-                Err(e) => eprintln!("warning: {spec}: {e}; keeping what the ledger has"),
+                Err(e) => {
+                    eprintln!("warning: {spec}: {e}; keeping what the ledger has");
+                    copr_absence_established = false;
+                }
             }
         }
         refresh_distgit(&mut ledger, &today, &opts.packages);
@@ -570,7 +626,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
         refresh_shipped(&mut ledger, &branches, &today, &opts.packages);
         refresh_reviews_blocking(&mut ledger, &today, opts.rescan_reviews, &opts.packages);
         if sandogasa_koji::is_available() {
-            refresh_built(&mut ledger, &tags, &aliases, &today, &opts.packages);
+            side_tags = refresh_built(&mut ledger, &tags, &aliases, &today, &opts.packages);
         } else {
             eprintln!("warning: koji is not installed; skipping build lookups");
         }
@@ -578,15 +634,34 @@ pub fn run(opts: &Options) -> Result<(), String> {
         dirty = true;
     }
 
-    if opts.prune {
-        let dropped = ledger.prune();
-        if !dropped.is_empty() {
-            eprintln!(
-                "pruned {} package(s): {}",
-                dropped.len(),
-                dropped.join(", ")
-            );
-            dirty = true;
+    if opts.prune.contains(&Prunable::Packages) {
+        if copr_absence_established {
+            let dropped = ledger.prune();
+            if !dropped.is_empty() {
+                eprintln!(
+                    "pruned {} package(s): {}",
+                    dropped.len(),
+                    dropped.join(", ")
+                );
+                dirty = true;
+            }
+        } else {
+            eprintln!("warning: not pruning packages: no COPR established what is still staged");
+        }
+    }
+    if opts.prune.contains(&Prunable::SideTags) {
+        if side_tags.definite {
+            let dropped = ledger.prune_side_tags(&side_tags.missing);
+            if !dropped.is_empty() {
+                eprintln!(
+                    "pruned {} side tag(s): {}",
+                    dropped.len(),
+                    dropped.join(", ")
+                );
+                dirty = true;
+            }
+        } else {
+            eprintln!("warning: not pruning side tags: koji did not establish which are gone");
         }
     }
 
@@ -646,11 +721,12 @@ async fn retirement_date(
 /// tag holds only the effort's builds, so a single call answers for all
 /// of them. The branch comes from the tag's name, the same derivation
 /// `check-update` uses.
-fn side_tag_builds(
-    side_tags: &[String],
-    aliases: &BTreeMap<String, String>,
-) -> BTreeMap<String, BTreeMap<String, (String, String)>> {
-    let mut found: BTreeMap<String, BTreeMap<String, (String, String)>> = BTreeMap::new();
+fn side_tag_builds(side_tags: &[String], aliases: &BTreeMap<String, String>) -> SideTagScan {
+    let mut scan = SideTagScan {
+        definite: true,
+        ..SideTagScan::default()
+    };
+    let found = &mut scan.builds;
     for tag in side_tags {
         let Some(mut branch) = crate::check_update::branch_from_side_tag(tag) else {
             eprintln!("warning: {tag} is not a side tag name; skipping it");
@@ -671,17 +747,33 @@ fn side_tag_builds(
                     }
                 }
             }
-            Err(e) => eprintln!("warning: koji {tag}: {e}"),
+            Err(e) => {
+                // Only the hub saying "no such tag" establishes that
+                // the tag is gone. Anything else leaves the question
+                // open, and pruning on an open question would erase a
+                // live tag during an outage.
+                if sandogasa_koji::tag_missing(&e) {
+                    // Said in one line: koji answers an unknown tag
+                    // through argparse, so the raw error carries three
+                    // lines of usage text around the one fact.
+                    eprintln!("warning: koji {tag}: no such tag");
+                    scan.missing.push(tag.clone());
+                } else {
+                    eprintln!("warning: koji {tag}: {e}");
+                    scan.definite = false;
+                }
+            }
         }
         // One report for a hub that is not answering, not one per tag:
         // the remaining queries would each say the same thing, and the
         // ledger already holds what was known.
         if sandogasa_koji::hub_unresponsive(None) {
             eprintln!("warning: koji is not answering; keeping the builds the ledger has");
+            scan.definite = false;
             break;
         }
     }
-    found
+    scan
 }
 
 /// Ask Koji for the latest build tagged for each branch.
@@ -697,10 +789,11 @@ fn refresh_built(
     aliases: &BTreeMap<String, String>,
     today: &str,
     only: &[String],
-) {
-    let from_side_tags = side_tag_builds(&ledger.side_tags, aliases);
+) -> SideTagScan {
+    let scan = side_tag_builds(&ledger.side_tags, aliases);
+    let from_side_tags = &scan.builds;
     if sandogasa_koji::hub_unresponsive(None) {
-        return;
+        return scan;
     }
     for (branch, branch_tags) in tags {
         let wanted: Vec<String> = ledger
@@ -767,7 +860,10 @@ fn refresh_built(
                 // cost another timeout.
                 if sandogasa_koji::hub_unresponsive(None) {
                     eprintln!("warning: koji is not answering; keeping the builds the ledger has");
-                    return;
+                    return SideTagScan {
+                        definite: false,
+                        ..scan
+                    };
                 }
                 continue;
             }
@@ -794,6 +890,7 @@ fn refresh_built(
             }
         }
     }
+    scan
 }
 
 /// Ask Bodhi which update carries each branch's build.
@@ -2697,5 +2794,37 @@ mod tests {
         // The releases carrying the new version first, newest release
         // first within each group.
         assert_eq!(branches, vec!["rawhide", "epel10.3", "f44", "f43", "epel9"]);
+    }
+
+    #[test]
+    fn prune_side_tags_drops_only_what_the_hub_said_is_gone() {
+        let mut ledger = Ledger {
+            side_tags: vec![
+                "f43-build-side-1".into(),
+                "f44-build-side-2".into(),
+                "epel9-build-side-3".into(),
+            ],
+            ..Ledger::default()
+        };
+        // The hub answered for two of the three; the third said
+        // nothing, so it stays.
+        let dropped =
+            ledger.prune_side_tags(&["f43-build-side-1".into(), "epel9-build-side-3".into()]);
+        assert_eq!(dropped, vec!["f43-build-side-1", "epel9-build-side-3"]);
+        assert_eq!(ledger.side_tags, vec!["f44-build-side-2"]);
+
+        // Nothing established, nothing dropped.
+        assert!(ledger.prune_side_tags(&[]).is_empty());
+        assert_eq!(ledger.side_tags, vec!["f44-build-side-2"]);
+    }
+
+    #[test]
+    fn a_scan_that_established_nothing_licenses_no_pruning() {
+        // The guard `run` applies: `definite` is what separates "the
+        // hub said the tag is gone" from "the hub did not answer", and
+        // a default scan has asked nothing at all.
+        let scan = SideTagScan::default();
+        assert!(!scan.definite);
+        assert!(scan.missing.is_empty());
     }
 }

@@ -26,6 +26,29 @@ ledger, instead of hanging.
 
 New public surface: `hub_unresponsive`, `TIMEOUT_ENV`.
 
+### ebranch: --prune takes what to forget, and never acts on silence
+
+A ledger holds two lists on different timescales — the packages an
+effort tracks outlast many rollouts, while a side tag dies with the one
+it carried, deleted once its update goes stable — and `--prune` was a
+boolean that only ever meant packages. It now names the list:
+`--prune packages`, `--prune side-tags`, or both. A bare `--prune` still
+means packages, so nothing that worked stops working.
+
+Neither list is pruned on a question that went unanswered. A package is
+forgotten only when every COPR the ledger follows answered and the
+package was in none of them; a side tag only when Koji says the tag does
+not exist. A timeout, an unreachable hub, a failed COPR or an `--offline`
+run leaves both lists alone and says which check did not establish
+anything. Today's Koji outage is the case that matters: pruning on
+"could not ask" would have erased every side tag in the ledger, the same
+shape of bug as reporting a build as absent because the query failed.
+
+`sandogasa-koji` gained `tag_missing`, which separates the hub saying a
+tag does not exist from every other failure. The knowledge that this is
+a message match lives there rather than at each call site, because the
+koji CLI exits non-zero for every kind of failure alike.
+
 ### ebranch: a ledger follows the distro through mass branching
 
 Targets implied by side tags are recomputed every run instead of being
