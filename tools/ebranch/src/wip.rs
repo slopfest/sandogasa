@@ -185,6 +185,15 @@ pub struct UpdateRef {
 pub struct Package {
     #[serde(default)]
     pub route: Route,
+    /// Whether a COPR the ledger follows has ever staged this package.
+    ///
+    /// What licenses `--prune packages` to drop it: absence from a COPR
+    /// is evidence only about packages a COPR once had. A package added
+    /// by hand or found in a side tag was never staged anywhere, so
+    /// "not in the COPR" says nothing about it — without this they were
+    /// added by one run and silently deleted by the next prune.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub seen_in_copr: bool,
     /// Review Request bug, when the route is a review.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_bug: Option<u64>,
@@ -303,6 +312,7 @@ impl Ledger {
             match self.packages.get_mut(name) {
                 Some(existing) => {
                     existing.staged = Some(record);
+                    existing.seen_in_copr = true;
                     changes.refreshed.push(name.clone());
                 }
                 None => {
@@ -310,6 +320,7 @@ impl Ledger {
                         name.clone(),
                         Package {
                             staged: Some(record),
+                            seen_in_copr: true,
                             ..Package::default()
                         },
                     );
@@ -357,13 +368,14 @@ impl Ledger {
     /// under `--prune`: dropping an entry silently would lose the
     /// record of finished work.
     pub fn prune(&mut self) -> Vec<String> {
+        let gone = |p: &Package| p.seen_in_copr && p.staged.is_none();
         let dropped: Vec<String> = self
             .packages
             .iter()
-            .filter(|(_, p)| p.staged.is_none())
+            .filter(|(_, p)| gone(p))
             .map(|(name, _)| name.clone())
             .collect();
-        self.packages.retain(|_, p| p.staged.is_some());
+        self.packages.retain(|_, p| !gone(p));
         dropped
     }
 }
@@ -379,6 +391,8 @@ struct SideTagScan {
     /// or any failure that says nothing about existence, and it is what
     /// licenses acting on `missing`.
     definite: bool,
+    /// Packages the tags held that the ledger did not have yet.
+    discovered: Vec<String>,
 }
 
 /// A list in the ledger that `--prune` can act on.
@@ -627,6 +641,16 @@ pub fn run(opts: &Options) -> Result<(), String> {
         refresh_reviews_blocking(&mut ledger, &today, opts.rescan_reviews, &opts.packages);
         if sandogasa_koji::is_available() {
             side_tags = refresh_built(&mut ledger, &tags, &aliases, &today, &opts.packages);
+            // A package discovered in a side tag arrives after the
+            // lookups that would have placed it, so it is caught up
+            // here rather than reported as a lone build line and filled
+            // in on some later run.
+            if !side_tags.discovered.is_empty() {
+                let new = side_tags.discovered.clone();
+                refresh_distgit(&mut ledger, &today, &new);
+                refresh_shipped(&mut ledger, &branches, &today, &new);
+                refresh_reviews_blocking(&mut ledger, &today, opts.rescan_reviews, &new);
+            }
         } else {
             eprintln!("warning: koji is not installed; skipping build lookups");
         }
@@ -776,6 +800,56 @@ fn side_tag_builds(side_tags: &[String], aliases: &BTreeMap<String, String>) -> 
     scan
 }
 
+/// Take into the ledger the packages a side tag holds and it does not.
+///
+/// The same reasoning as reading a COPR: a registered side tag is a
+/// statement about what the effort covers, and its contents were
+/// already fetched — one query per tag answered for every package in
+/// it. What differs is where the version lands. A COPR stages a build
+/// outside the distro; a side tag holds one that Koji has already
+/// accepted, which is further along, so it is recorded as built for
+/// that branch rather than staged.
+///
+/// Nothing here is ever removed by `--prune packages`: these packages
+/// were never in a COPR, so a COPR not having them is no evidence.
+fn adopt_side_tag_builds(
+    ledger: &mut Ledger,
+    scan: &mut SideTagScan,
+    today: &str,
+    only: &[String],
+) {
+    // Reported per tag rather than as a count, because a side tag
+    // shared with a wider effort can hold far more than the ledger is
+    // about, and that should be visible rather than quietly absorbed.
+    let mut added: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (branch, per_branch) in &scan.builds {
+        for (name, (nvr, tag)) in per_branch {
+            if !selected(only, name) || ledger.packages.contains_key(name) {
+                continue;
+            }
+            let mut package = Package::default();
+            package.built.insert(
+                branch.clone(),
+                Built {
+                    nvr: nvr.clone(),
+                    tag: tag.clone(),
+                    seen: today.to_string(),
+                },
+            );
+            ledger.packages.insert(name.clone(), package);
+            scan.discovered.push(name.clone());
+            added.entry(tag.clone()).or_default().push(name.clone());
+        }
+    }
+    for (tag, names) in added {
+        eprintln!(
+            "added {} package(s) from {tag}: {}",
+            names.len(),
+            names.join(", ")
+        );
+    }
+}
+
 /// Ask Koji for the latest build tagged for each branch.
 ///
 /// Only packages whose staged version is ahead of what the branch
@@ -790,7 +864,8 @@ fn refresh_built(
     today: &str,
     only: &[String],
 ) -> SideTagScan {
-    let scan = side_tag_builds(&ledger.side_tags, aliases);
+    let mut scan = side_tag_builds(&ledger.side_tags, aliases);
+    adopt_side_tag_builds(ledger, &mut scan, today, only);
     let from_side_tags = &scan.builds;
     if sandogasa_koji::hub_unresponsive(None) {
         return scan;
@@ -2826,5 +2901,83 @@ mod tests {
         let scan = SideTagScan::default();
         assert!(!scan.definite);
         assert!(scan.missing.is_empty());
+    }
+
+    #[test]
+    fn prune_keeps_what_no_copr_ever_had() {
+        let mut ledger = Ledger::default();
+        // Staged once, gone from the COPR now: real evidence, so it
+        // goes.
+        ledger.packages.insert(
+            "rust-departed".into(),
+            Package {
+                seen_in_copr: true,
+                ..Package::default()
+            },
+        );
+        // Added by hand or found in a side tag. No COPR ever had it, so
+        // a COPR not having it is no evidence at all — this used to be
+        // deleted by the next --prune.
+        ledger
+            .packages
+            .insert("sandogasa".into(), Package::default());
+        assert_eq!(ledger.prune(), vec!["rust-departed"]);
+        assert!(ledger.packages.contains_key("sandogasa"));
+    }
+
+    #[test]
+    fn side_tag_builds_join_the_ledger() {
+        let mut ledger = Ledger::default();
+        ledger
+            .packages
+            .insert("rust-known".into(), Package::default());
+        let mut scan = SideTagScan {
+            definite: true,
+            ..SideTagScan::default()
+        };
+        let mut per_branch = BTreeMap::new();
+        for name in ["rust-known", "rust-new", "rust-elsewhere"] {
+            per_branch.insert(
+                name.to_string(),
+                (format!("{name}-1.0-1.fc46"), "f46-build-side-1".to_string()),
+            );
+        }
+        scan.builds.insert("rawhide".into(), per_branch);
+
+        adopt_side_tag_builds(&mut ledger, &mut scan, "2026-08-12", &[]);
+        assert_eq!(scan.discovered, vec!["rust-elsewhere", "rust-new"]);
+        // Recorded as built for the branch, not staged: Koji has
+        // already accepted it, which a COPR staging has not.
+        let new = &ledger.packages["rust-new"];
+        assert!(new.staged.is_none());
+        assert_eq!(new.built["rawhide"].nvr, "rust-new-1.0-1.fc46");
+        assert!(!new.seen_in_copr);
+        // A package the ledger already had keeps whatever it had.
+        assert!(ledger.packages["rust-known"].built.is_empty());
+    }
+
+    #[test]
+    fn discovery_respects_a_narrowed_run() {
+        let mut ledger = Ledger::default();
+        let mut scan = SideTagScan {
+            definite: true,
+            ..SideTagScan::default()
+        };
+        let mut per_branch = BTreeMap::new();
+        for name in ["rust-wanted", "rust-other"] {
+            per_branch.insert(
+                name.to_string(),
+                (format!("{name}-1.0-1.fc46"), "f46-build-side-1".to_string()),
+            );
+        }
+        scan.builds.insert("rawhide".into(), per_branch);
+        adopt_side_tag_builds(
+            &mut ledger,
+            &mut scan,
+            "2026-08-12",
+            &["rust-wanted".into()],
+        );
+        assert_eq!(scan.discovered, vec!["rust-wanted"]);
+        assert!(!ledger.packages.contains_key("rust-other"));
     }
 }

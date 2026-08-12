@@ -26,6 +26,35 @@ ledger, instead of hanging.
 
 New public surface: `hub_unresponsive`, `TIMEOUT_ENV`.
 
+### ebranch: a side tag seeds the ledger, and prune stops deleting what it never tracked
+
+A registered side tag is a statement about what an effort covers, the
+same as a COPR, and its contents were already being fetched — one query
+per tag, answering for every package in it. Only the packages the ledger
+already knew were read out of that answer; the rest was discarded. Now a
+side tag's builds seed the ledger, which makes the no-COPR route (build
+a stack into a side tag) as self-populating as the COPR route instead of
+needing `--add` per package. Verified against a live tag: from an empty
+ledger, `--side-tag f46-build-side-146944` found `rust-emojis` and
+reported `rawhide: 0.8.2-2.fc45, built 0.9.0-1.fc46` — dist-git and repo
+state filled in during the same run, since a package discovered
+mid-run is caught up rather than left as a lone build line.
+
+The version lands where it belongs: a COPR stages a build outside the
+distro, while a side tag holds one Koji has already accepted, so this is
+recorded as built for the branch rather than staged. Additions are
+reported per tag, because a side tag shared with a wider effort can hold
+far more than the ledger is about and that should be visible.
+
+This required fixing `--prune packages`, which deleted packages it had
+no evidence about. It dropped anything with no staged version, which
+conflates "a COPR had this and no longer does" with "no COPR ever had
+it" — so a package added by `--add` was silently deleted by the next
+prune, and a side-tag-discovered one would have been too. A package is
+now pruned only if a COPR the ledger follows has actually staged it at
+some point. Existing ledgers err toward keeping: an entry that predates
+the flag is not pruned until it appears in a COPR again.
+
 ### ebranch: --prune takes what to forget, and never acts on silence
 
 A ledger holds two lists on different timescales — the packages an

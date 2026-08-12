@@ -267,6 +267,12 @@ Each run reconciles rather than rebuilds:
   being counted as staged, since it has finished or moved on. Use
   `--prune` to forget those.
 
+A registered side tag also seeds the ledger: packages it holds that the
+ledger does not have are added, recorded as built for that branch rather
+than staged, since Koji has already accepted the build. Additions are
+reported per tag. This makes an effort with no COPR behind it — built
+straight into a side tag — as self-populating as one staged in COPR.
+
 A ledger holds two lists with different lifetimes: the packages an
 effort tracks, which outlast many rollouts, and its side tags, which die
 with the rollout they carried. `--prune` names which to forget —
@@ -275,9 +281,11 @@ side-tags`, or both as `--prune packages,side-tags`. Because the value
 is optional, give the ledger path before the flag, or write
 `--prune=side-tags`.
 
-Neither prunes on a question that was not answered. A package is
-forgotten only when every COPR the ledger follows answered and the
-package was in none of them; a side tag only when Koji says the tag does
+Neither prunes on a question that was not answered, and neither touches
+a package no COPR ever staged — one added by hand or found in a side tag
+is not something a COPR's contents can be evidence about. A package is
+forgotten only when a COPR the ledger follows once staged it, every COPR
+answered, and the package was in none of them; a side tag only when Koji says the tag does
 not exist. A timeout, an unreachable hub, a COPR that failed or an
 `--offline` run all leave the lists alone and say why — during an
 outage, "I could not ask" would otherwise erase exactly the records that
