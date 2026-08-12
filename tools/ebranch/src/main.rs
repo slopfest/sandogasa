@@ -689,6 +689,10 @@ struct CheckWipArgs {
     #[arg(long, value_name = "NAME,...", value_delimiter = ',')]
     add: Vec<String>,
 
+    /// Drop packages and stop tracking them (repeated or CSV).
+    #[arg(long, value_name = "NAME,...", value_delimiter = ',')]
+    forget: Vec<String>,
+
     /// Set a route: review:BUG, pr:ID, or direct
     #[arg(long, value_name = "PKG=ROUTE")]
     set: Vec<String>,
@@ -834,6 +838,7 @@ fn main() -> ExitCode {
             targets: a.target.clone(),
             offline: a.offline,
             prune: a.prune.clone(),
+            forget: a.forget.clone(),
             rescan_reviews: a.rescan_reviews,
             packages: a.package.clone(),
             set: a.set.clone(),

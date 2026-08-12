@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.19.3
+## Unreleased
 
 ### sandogasa-koji: a hub that is not answering no longer hangs the caller
 
@@ -25,6 +25,24 @@ minute against a down hub, warning once and serving the report from the
 ledger, instead of hanging.
 
 New public surface: `hub_unresponsive`, `TIMEOUT_ENV`.
+
+### ebranch: --forget, the counterpart to --add
+
+Packages could enter a ledger without anyone typing their name — from a
+COPR, and now from a side tag — but nothing took one out. `--prune
+packages` will not, correctly: it acts only on packages a COPR once
+staged, so a discovered one is beyond its remit, leaving hand-editing
+the TOML as the only way.
+
+`--forget NAME,...` drops them, and records the refusal, because
+deletion alone would be futile: the side tag or COPR that produced the
+package is still registered, so the next run would take it straight back
+up. The ledger keeps an `ignored` list that both discovery paths honour,
+which makes forgetting a standing decision rather than a one-time
+delete. `--add` is its inverse and clears the refusal, so a ledger never
+both tracks and ignores the same package. Forgetting something already
+forgotten is a no-op; forgetting a name that was never tracked is an
+error, so a typo does not read as success.
 
 ### ebranch: check-wip reports the age of what it says
 

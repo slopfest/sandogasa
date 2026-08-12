@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-08-11 "sandogasa 0.19.2" "Sandogasa Manual"
+.TH ebranch 1 2026-08-12 "sandogasa 0.19.2" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -254,7 +254,7 @@ The update to check, one of:
   \-b is a base branch like al9 (it picks the
   COPR chroot, e.g. epel9 → epel\-9\-*).
 .SS ebranch check-wip
-\fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-target\fR] [\fB\-\-offline\fR] [\fB\-\-no\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-rescan\-reviews\fR] [\fB\-\-side\-tag\fR] [\fB\-\-add\fR] [\fB\-\-set\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR> 
+\fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-target\fR] [\fB\-\-offline\fR] [\fB\-\-no\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-rescan\-reviews\fR] [\fB\-\-side\-tag\fR] [\fB\-\-add\fR] [\fB\-\-forget\fR] [\fB\-\-set\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR> 
 .PP
 Track packages on their way into the distro
 .TP
@@ -291,6 +291,9 @@ Koji side tags built into (repeated or CSV)
 .TP
 \fB\-\-add\fR \fI<NAME,...>\fR
 Track packages no COPR staged (repeated or CSV)
+.TP
+\fB\-\-forget\fR \fI<NAME,...>\fR
+Drop packages and stop tracking them (repeated or CSV)
 .TP
 \fB\-\-set\fR \fI<PKG=ROUTE>\fR
 Set a route: review:BUG, pr:ID, or direct

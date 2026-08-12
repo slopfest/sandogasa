@@ -251,6 +251,14 @@ pub struct Ledger {
     /// an update. One query per side tag covers every package in it.
     #[serde(default)]
     pub side_tags: Vec<String>,
+    /// Packages this effort is not about, however they turn up.
+    ///
+    /// A package the ledger discovers — from a COPR, or from a side tag
+    /// it shares with wider work — comes back the next run unless the
+    /// refusal is recorded. So forgetting one is a standing decision,
+    /// not a one-time deletion, and `--add` is what reverses it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored: Vec<String>,
     #[serde(default)]
     pub packages: BTreeMap<String, Package>,
 }
@@ -303,6 +311,10 @@ impl Ledger {
         let seen: BTreeSet<&str> = staged.iter().map(|(name, _, _)| name.as_str()).collect();
 
         for (name, version, failed_chroots) in staged {
+            // A refused package stays refused however it turns up.
+            if self.ignores(name) {
+                continue;
+            }
             let record = Staged {
                 copr: copr.to_string(),
                 version: version.clone(),
@@ -345,6 +357,34 @@ impl Ledger {
             self.coprs.push(copr.to_string());
         }
         changes
+    }
+
+    /// Forget `names`, and stop taking them up again.
+    ///
+    /// A name that is neither tracked nor already ignored is an error
+    /// rather than a silent no-op, so a typo does not look like a
+    /// success. Forgetting something already forgotten is idempotent.
+    pub fn forget(&mut self, names: &[String]) -> Result<Vec<String>, String> {
+        let mut dropped = Vec::new();
+        for name in names {
+            let tracked = self.packages.remove(name).is_some();
+            let ignored = self.ignored.iter().any(|i| i == name);
+            if !tracked && !ignored {
+                return Err(format!("{name} is not tracked"));
+            }
+            if !ignored {
+                self.ignored.push(name.clone());
+            }
+            if tracked {
+                dropped.push(name.clone());
+            }
+        }
+        Ok(dropped)
+    }
+
+    /// Whether a package is one this effort has refused.
+    pub fn ignores(&self, name: &str) -> bool {
+        self.ignored.iter().any(|i| i == name)
     }
 
     /// Forget the side tags in `missing`, which the caller has
@@ -417,6 +457,8 @@ pub struct Options {
     pub targets: Vec<String>,
     pub offline: bool,
     pub prune: Vec<Prunable>,
+    /// Packages to drop and stop taking up again.
+    pub forget: Vec<String>,
     /// Search for a review request again even where one is recorded,
     /// for a package whose retirement means a new one is needed.
     pub rescan_reviews: bool,
@@ -495,7 +537,22 @@ pub fn run(opts: &Options) -> Result<(), String> {
         dirty = true;
     }
 
+    for name in &opts.forget {
+        // Before --add, so `--forget x --add x` in one run ends with x
+        // tracked rather than refused.
+        let dropped = ledger.forget(std::slice::from_ref(name))?;
+        match dropped.is_empty() {
+            false => eprintln!("forgot {name}; it will not be taken up again"),
+            true => eprintln!("{name} was already forgotten"),
+        }
+        dirty = true;
+    }
+
     for name in &opts.add {
+        // Naming a package takes back a refusal: the two flags are
+        // inverses, and a ledger that both tracks and ignores one
+        // would be contradicting itself.
+        ledger.ignored.retain(|i| i != name);
         if ledger.packages.contains_key(name) {
             eprintln!("{name} is already tracked");
         } else {
@@ -833,7 +890,7 @@ fn adopt_side_tag_builds(
     let mut added: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (branch, per_branch) in &scan.builds {
         for (name, (nvr, tag)) in per_branch {
-            if !selected(only, name) || ledger.packages.contains_key(name) {
+            if !selected(only, name) || ledger.packages.contains_key(name) || ledger.ignores(name) {
                 continue;
             }
             let mut package = Package::default();
@@ -3034,5 +3091,60 @@ mod tests {
             branch_lines(&package),
             vec!["rawhide: 0.19.1-1.fc45, built 0.19.2-1.fc46 (as of 2026-08-11)"]
         );
+    }
+
+    #[test]
+    fn forgetting_is_a_standing_refusal() {
+        let mut ledger = Ledger::default();
+        ledger
+            .packages
+            .insert("rust-emojis".into(), Package::default());
+
+        assert_eq!(
+            ledger.forget(&["rust-emojis".into()]).unwrap(),
+            vec!["rust-emojis"]
+        );
+        assert!(!ledger.packages.contains_key("rust-emojis"));
+        assert!(ledger.ignores("rust-emojis"));
+
+        // Idempotent: forgetting it again drops nothing and is not an
+        // error, since the refusal already stands.
+        assert!(ledger.forget(&["rust-emojis".into()]).unwrap().is_empty());
+        // A typo is an error rather than a silent success.
+        assert!(ledger.forget(&["rust-emojos".into()]).is_err());
+    }
+
+    #[test]
+    fn a_refused_package_is_not_taken_up_again() {
+        let mut ledger = Ledger::default();
+        ledger.ignored.push("rust-emojis".into());
+
+        // Not from a side tag it shares with wider work.
+        let mut scan = SideTagScan {
+            definite: true,
+            ..SideTagScan::default()
+        };
+        scan.builds.insert(
+            "rawhide".into(),
+            BTreeMap::from([(
+                "rust-emojis".to_string(),
+                (
+                    "rust-emojis-0.9.0-1.fc46".to_string(),
+                    "f46-build-side-1".to_string(),
+                ),
+            )]),
+        );
+        adopt_side_tag_builds(&mut ledger, &mut scan, "2026-08-12", &[]);
+        assert!(scan.discovered.is_empty());
+        assert!(ledger.packages.is_empty());
+
+        // Nor from a COPR.
+        let changes = ledger.reconcile(
+            "@rust/x",
+            &[("rust-emojis".into(), "0.9.0-1".into(), vec![])],
+            "2026-08-12",
+        );
+        assert!(changes.added.is_empty());
+        assert!(ledger.packages.is_empty());
     }
 }

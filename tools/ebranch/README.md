@@ -273,6 +273,13 @@ than staged, since Koji has already accepted the build. Additions are
 reported per tag. This makes an effort with no COPR behind it — built
 straight into a side tag — as self-populating as one staged in COPR.
 
+`--forget NAME,...` is the counterpart to `--add`: it drops packages and
+records the refusal in the ledger's `ignored` list, so neither a COPR nor
+a side tag takes them up again — deleting alone would not last, since
+whatever produced the package is usually still registered. `--add`
+reverses it. This is separate from pruning, which acts only on packages
+a COPR once staged.
+
 A ledger holds two lists with different lifetimes: the packages an
 effort tracks, which outlast many rollouts, and its side tags, which die
 with the rollout they carried. `--prune` names which to forget —
