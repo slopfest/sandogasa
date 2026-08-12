@@ -480,11 +480,6 @@ pub fn run(opts: &Options) -> Result<(), String> {
     // dropped as one — until mass branching made F45 a release of its
     // own, at which point the target has to come back or the branch's
     // facts get forgotten exactly when they start to matter.
-    for branch in implied_targets(&ledger) {
-        eprintln!("targeting {branch}, from its side tag");
-        ledger.targets.push(branch);
-        dirty = true;
-    }
     // Drop anything unusable a previous run may have stored.
     let unusable: Vec<String> = ledger
         .side_tags
@@ -609,6 +604,20 @@ pub fn run(opts: &Options) -> Result<(), String> {
             // without the alias they belong to no examined branch and
             // go unnoticed.
             aliases.insert(dup, first);
+        }
+        // Targets a side tag implies are taken up here, once Bodhi has
+        // said which branches are distinct releases — recorded before
+        // that, a Rawhide side tag (named f46-build-side-* for whatever
+        // Rawhide currently is) was added as a target and dropped again
+        // as a duplicate on every single run.
+        for branch in implied_targets(&ledger) {
+            if aliases.contains_key(&branch) {
+                continue;
+            }
+            eprintln!("targeting {branch}, from its side tag");
+            ledger.targets.push(branch.clone());
+            branches.push(branch);
+            // No `dirty` here: a refreshing run always writes.
         }
         // Only examined branches are asked about: a side tag's branch
         // that survived as its own name is a target too, and anything
@@ -1745,30 +1754,34 @@ fn branch_lines(package: &Package) -> Vec<String> {
                 sandogasa_koji::parse_nvr(&b.nvr).map(|(_, v, r)| format!("{v}-{r}"))
             });
 
+            // Dates are collected alongside the parts, so the line
+            // ages by what it says and nothing else.
+            let mut dates: Vec<&str> = Vec::new();
             let mut parts = vec![match shipped {
-                Some(s) => s.version.clone(),
+                Some(s) => {
+                    dates.push(&s.seen);
+                    s.version.clone()
+                }
                 None => "not shipped".to_string(),
             }];
             if let Some(evr) = &built_evr
                 && shipped.map(|s| s.version.as_str()) != Some(evr.as_str())
             {
                 parts.push(format!("built {evr}"));
+                if let Some(b) = built {
+                    dates.push(&b.seen);
+                }
             }
             // The update qualifies the version rather than being a
             // separate fact, so it joins with a space.
             let carried = match update {
-                Some(u) => format!(" in {} {}", u.alias, u.status),
+                Some(u) => {
+                    dates.push(&u.seen);
+                    format!(" in {} {}", u.alias, u.status)
+                }
                 None => String::new(),
             };
-            let seen = [
-                shipped.map(|s| s.seen.as_str()),
-                built.map(|b| b.seen.as_str()),
-                update.map(|u| u.seen.as_str()),
-            ]
-            .into_iter()
-            .flatten()
-            .min()
-            .unwrap_or_default();
+            let seen = dates.into_iter().min().unwrap_or_default();
             format!("{branch}: {}{carried} (as of {seen})", parts.join(", "))
         })
         .collect()
@@ -2979,5 +2992,47 @@ mod tests {
         );
         assert_eq!(scan.discovered, vec!["rust-wanted"]);
         assert!(!ledger.packages.contains_key("rust-other"));
+    }
+
+    #[test]
+    fn a_line_ages_by_what_it_says() {
+        let mut package = Package::default();
+        // A build matching what is shipped is not printed, and once a
+        // branch is current nothing re-asks Koji about it, so its
+        // record stays old. The line must not age to that: every fact
+        // it does show was seen today.
+        package.shipped.insert(
+            "rawhide".into(),
+            Shipped {
+                version: "0.19.1-1.fc45".into(),
+                seen: "2026-08-12".into(),
+            },
+        );
+        package.built.insert(
+            "rawhide".into(),
+            Built {
+                nvr: "sandogasa-0.19.1-1.fc45".into(),
+                tag: "f45".into(),
+                seen: "2026-08-11".into(),
+            },
+        );
+        assert_eq!(
+            branch_lines(&package),
+            vec!["rawhide: 0.19.1-1.fc45 (as of 2026-08-12)"]
+        );
+
+        // A build that *is* shown brings its own date with it.
+        package.built.insert(
+            "rawhide".into(),
+            Built {
+                nvr: "sandogasa-0.19.2-1.fc46".into(),
+                tag: "f46-build-side-1".into(),
+                seen: "2026-08-11".into(),
+            },
+        );
+        assert_eq!(
+            branch_lines(&package),
+            vec!["rawhide: 0.19.1-1.fc45, built 0.19.2-1.fc46 (as of 2026-08-11)"]
+        );
     }
 }

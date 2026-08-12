@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.19.3
 
 ### sandogasa-koji: a hub that is not answering no longer hangs the caller
 
@@ -25,6 +25,22 @@ minute against a down hub, warning once and serving the report from the
 ledger, instead of hanging.
 
 New public surface: `hub_unresponsive`, `TIMEOUT_ENV`.
+
+### ebranch: check-wip reports the age of what it says
+
+A branch line dated itself by the oldest fact *known* about the branch,
+including facts it was not showing. A build matching what is shipped is
+deliberately not printed, and once a branch is current nothing re-asks
+Koji about it, so that hidden record keeps an older date — and dragged
+the line back to it. sandogasa's Rawhide line read "as of 2026-08-11"
+with every fact on it seen that morning. The date now comes from the
+parts actually rendered, which is what the line always claimed to mean.
+
+A target a side tag implies is taken up after Bodhi has said which
+branches are distinct releases, rather than before. Rawhide's side tags
+are named for whatever version Rawhide currently is, so registering
+`f46-build-side-146944` added `f46` as a target and dropped it again as
+a duplicate of Rawhide — on every run, announcing both halves each time.
 
 ### ebranch: a side tag seeds the ledger, and prune stops deleting what it never tracked
 
