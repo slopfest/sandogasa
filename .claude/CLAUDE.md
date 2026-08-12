@@ -27,6 +27,7 @@
 - **Do not mutate `Cargo.toml` while a background gate is running.** Bumping the version under a running `cargo semver-checks` invalidates it — the baseline it is resolving disappears (`package ID specification sandogasa-x@<old> did not match any packages`) and the whole run has to be repeated. Order: audit and semver-checks first, *then* bump, then man pages, then the test/clippy/fmt/coverage gates
 - **Publishing rewrites `Cargo.lock`** — packaging each crate resolves it without the workspace's dev-dependencies, and `--allow-dirty` lets that be written back, so `git status` afterwards shows a lockfile with entries like `tempfile` and `wiremock` removed. Discard it (`git checkout Cargo.lock`) and confirm a plain `cargo build --workspace` leaves the tree clean; do not commit the stripped version
 - After publishing and tagging, push with `git push --follow-tags`
+- **After pushing, run `make sweep`.** A just-published version makes the baseline `cargo semver-checks` cached useless, so the gate trees (19GB and 6.5GB at 0.19.3) are provably disposable at exactly that moment. It leaves `target/debug` alone and costs nothing — the next build is still incremental. See DEVELOPMENT.md, "The release gates fill target/, not day-to-day builds", for when *not* to run it
 - Before committing, check `git status` for untracked files that should be staged (e.g. `Cargo.lock` after dependency changes). Use `scratch/` for temporary working files — it is in `.gitignore`
 
 ## Code Style

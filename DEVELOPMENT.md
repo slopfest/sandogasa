@@ -89,6 +89,40 @@ report something indistinguishable from a genuine negative? If so, the
 absence needs its own representation — `Option`, a separate variant, or
 a timestamp recording *when* the answer was last actually obtained.
 
+## The release gates fill target/, not day-to-day builds
+
+`target/` reached 80GB in `debug` alone here and ran a machine out of
+disk more than once. The instinct is to blame ordinary development, but
+measurement said otherwise: at 0.19.3 the gates held 19GB
+(`target/semver-checks`) and 6.5GB (`target/llvm-cov-target`) against
+6.3GB for a complete cold `cargo build --workspace --tests`. Two rules
+follow.
+
+**Dev builds carry line tables, not full DWARF.** `[profile.dev] debug =
+"line-tables-only"` took that 6.3GB to 3.3GB. Backtraces keep file and
+line — check the binary, not the flag name: `.debug_line` is present and
+`readelf --debug-dump=decodedline` still resolves our own sources. What
+is given up is variable inspection under a debugger, which is not how
+anything here gets diagnosed. Do not extend this to `[profile.release]`:
+that is what distro packaging builds, and its debuginfo is packaged.
+
+**Incremental compilation stays on.** It is 1.3GB of the 3.3GB, and it is
+what makes the edit loop fast. Disk is cheaper to reclaim than time is;
+if a build tree has to shrink further, delete it rather than crippling
+it.
+
+**Reclaiming is two tools, chosen by what it costs, not by what it
+frees.** `make sweep` removes only caches whose baseline has already
+moved on — the gate trees, `target/package`, stray `*.profraw` — so it
+frees less than `cargo clean` but bills nothing: the next build is still
+incremental. Run it after a release (the checklist ends there, since a
+just-published version makes the cached semver baseline useless), when
+the disk is tight mid-work, or after a one-off `make cov`. Do not run it
+while iterating on coverage or a suspected semver break with the same
+gate over and over, because then those trees are live caches and each
+iteration becomes a full instrumented rebuild. `cargo clean` is for
+stepping away from the repo, or for running out of space for real.
+
 ## Config files layer: /etc, then ~/.config, then the command line
 
 Every tool's config is read in layers: an optional system-wide

@@ -60,6 +60,10 @@ packaging-test: ## Run the tests as a distro build does (offline, no distro tool
 check-published: ## Verify every crate reached crates.io (run after publishing)
 	./scripts/check-published.sh
 
+.PHONY: sweep
+sweep: ## Delete the release gates' build trees (keeps target/debug)
+	./scripts/sweep.sh
+
 .PHONY: srht-schemas
 srht-schemas: ## Refresh the vendored sr.ht GraphQL schemas (needs network)
 	./scripts/update-srht-schemas.sh

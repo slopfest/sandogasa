@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Development: dev builds stop writing tens of gigabytes of debuginfo
+
+`target/` had reached 80GB in `debug` alone and run the machine out of
+disk more than once. Two changes, both measured rather than assumed.
+
+`[profile.dev] debug = "line-tables-only"` halves what a dev build
+writes: a cold `cargo build --workspace --tests` went from 6.3GB to
+3.3GB. Backtraces keep their file and line numbers — verified in the
+built binary, whose `.debug_line` still decodes to `wip.rs:1578` — and
+what is given up is variable inspection under a debugger, which is not
+how anything here gets diagnosed. Release builds, which is what distro
+packaging drives, are untouched.
+
+`make sweep` (`scripts/sweep.sh`) deletes the trees the release gates
+leave behind: `cargo semver-checks` builds rustdoc for the current *and*
+the published version of every library crate, and `cargo cov` builds a
+separately instrumented copy of the workspace — 19GB and 6.5GB
+respectively at 0.19.3 — plus `target/package` and stray `*.profraw`.
+They are caches keyed on versions that just changed, so a release is
+exactly when they are provably disposable, and the release checklist now
+ends there. `target/debug` is deliberately left alone: it is what makes
+day-to-day builds fast, and `cargo clean` already says what it removed.
+
 ## v0.19.3
 
 ### sandogasa-koji: a hub that is not answering no longer hangs the caller

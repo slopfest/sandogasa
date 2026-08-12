@@ -53,6 +53,15 @@ edition = "2024"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/slopfest/sandogasa"
 
+# Dev builds carry line tables instead of full DWARF. A workspace of
+# this size wrote tens of gigabytes of debuginfo into target/debug,
+# enough to run a machine out of disk, and what it bought was variable
+# inspection under a debugger — not how anything here gets diagnosed.
+# Backtraces keep their file and line numbers. Release builds, which is
+# what distro packaging drives, are untouched.
+[profile.dev]
+debug = "line-tables-only"
+
 [workspace.dependencies]
 anstream = "1"
 anstyle = "1"

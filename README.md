@@ -98,7 +98,15 @@ generation, and the release gates:
 make check          # fmt, clippy, tests, and the packaging-build test
 make man            # regenerate the man pages after a CLI change
 make release-checks # the above plus audit, semver-checks and coverage
+make sweep          # delete the release gates' build trees afterwards
 ```
+
+`make sweep` exists because the gates are what fill `target/`:
+`semver-checks` builds rustdoc for both the current and the published
+version of every library crate, and coverage builds a separately
+instrumented copy of the workspace. Both are caches keyed on versions
+that just changed, so they are dead weight once a release is out. It
+leaves `target/debug` alone — `cargo clean` is the tool for that.
 
 The Makefile is a task runner over cargo and `scripts/`; cargo remains
 the build system, and distro packaging drives it directly.
