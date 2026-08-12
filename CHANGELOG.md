@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.19.4
 
 ### ebranch: check-wip missed builds that were already in Koji
 
@@ -10,6 +10,11 @@ have changed. It stopped noticing new builds. On a real run,
 `rust-emojis 0.9.0` had been built into five Koji side tags and was
 reported from one of them; `sandogasa 0.19.3` sat in two side tags
 without a mention.
+
+This affects every `check-wip` released so far — 0.19.2, where the Koji
+lookup arrived, and 0.19.3. No cleanup is needed: the stale records those
+versions wrote are corrected on the next run, because the branches they
+had written off are asked about again.
 
 The cause was a shortcut that fed on itself. To avoid asking Koji about
 work that is finished, the tool skipped any branch whose repositories
