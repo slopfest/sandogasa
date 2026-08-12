@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.19.3
 
 ### sandogasa-koji: a hub that is not answering no longer hangs the caller
 
