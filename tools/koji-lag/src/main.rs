@@ -189,7 +189,7 @@ fn cmd_fetch(args: &FetchArgs) -> Result<(), Box<dyn Error>> {
     };
     let report = fetch::run(&opts, &args.output)?;
     eprintln!(
-        "swept {} build(s), {} buildArch task(s); {} added, \
+        "swept {} build(s), {} child task(s); {} added, \
          {} refreshed -> {}",
         report.builds_swept,
         report.tasks_swept,

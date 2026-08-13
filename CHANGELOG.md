@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### koji-lag: the SRPM rebuild, and each shape of build, reported separately
+
+Every Koji build starts by rebuilding the source package on a host the hub
+picks — independently of what the build targets, so a package can queue
+behind a machine it does not build for. Those `rebuildSRPM` tasks were
+never collected, so that part of a build's wall clock was invisible. They
+are now swept alongside the per-arch builds (one query per batch either
+way, since the method filter was what excluded them), and `TaskRecord`
+records which method a task is.
+
+Attribution deliberately ignores them. The source rebuild runs *before*
+the per-arch builds rather than racing them, so counting it as an arch
+would make every real arch look like the bottleneck by a margin including
+work nothing waited on in parallel.
+
+Per-arch wait and run times are now reported for each shape of build,
+because the questions differ:
+
+- `Multi-arch builds` — two or more arches raced, so one finished last and
+  a delay can be attributed to it. These are the only builds attribution
+  applies to.
+- `Single-arch builds` — nothing to be slower than, so wait and run time
+  stand alone. This is where July 3rd's single-arch s390x p90 wait of
+  three hours became visible.
+- `noarch builds` — a portable payload built once on a machine that is not
+  portable at all, so these are keyed by the arch of the *host* that took
+  them.
+- `SRPM rebuild` — likewise keyed by host arch.
+
+Each section carries median and p90 for both the queue wait and the run,
+so a slow queue stays distinguishable from a slow machine.
+
+Host arches come from `listHosts` and are stored per instance, because the
+hub's host names do not carry them reliably — Fedora has builders called
+`xenbuilder3` and `ppc1`. Datasets swept before this still report: their
+`noarch` rows read `noarch (host unknown)` rather than guessing an arch or
+dropping the tasks.
+
+New in `sandogasa-kojihub`: `list_hosts_with_arches`. The dataset schema
+gains `TaskRecord::method` (defaulting to `buildArch`, so older files load
+unchanged) and a `host_arches` map; the report JSON gains `srpm`,
+`multi_arch`, `single_arch` and `noarch_by_host`.
+
 ### koji-lag: progress through the children sweep, and what a bottleneck count is out of
 
 The per-parent sweep of `buildArch` children reported `batch 47 (40

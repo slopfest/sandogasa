@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::dataset::{Dataset, FetchWindow, TaskRecord};
+use crate::dataset::{BUILD_ARCH, Dataset, FetchWindow, REBUILD_SRPM, TaskRecord};
 use crate::stats::{
     CriticalPath, DistSummary, critical_path, in_build_time_population, in_queue_wait_population,
     median, summarize,
@@ -37,6 +37,18 @@ pub struct ReportOpts {
     pub scratch: Option<bool>,
     /// Human output withholds stats below this sample count.
     pub min_samples: usize,
+}
+
+/// How many arches a build was built for, which decides what can be
+/// asked of its tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuildShape {
+    /// Two or more arches raced, so one of them finished last.
+    Multi,
+    /// One arch, with nothing to compare it against.
+    Single,
+    /// A `noarch` package: one build, on a machine of the hub's choosing.
+    NoArch,
 }
 
 /// Per-arch statistics for one population class.
@@ -78,6 +90,21 @@ pub struct ReportOutput {
     /// Tasks with no captured parent build: counted, excluded
     /// from the scratch split, included in the combined stats.
     pub unattributed_tasks: usize,
+    /// The source rebuild that starts every build, by the arch of the
+    /// host that ran it. Koji picks that host independently of what the
+    /// build targets, so a package can wait on a machine it does not
+    /// even build for.
+    pub srpm: Vec<ArchStats>,
+    /// Per-arch builds of packages built for two or more arches — the
+    /// only ones a bottleneck can be attributed to.
+    pub multi_arch: Vec<ArchStats>,
+    /// Per-arch builds of packages built for exactly one arch. Nothing
+    /// to be slower than, so wait and run time stand alone.
+    pub single_arch: Vec<ArchStats>,
+    /// Builds of `noarch` packages, by the arch of the host that took
+    /// them: the payload runs anywhere, but the machine that builds it
+    /// is a real one and its speed is what the package waits on.
+    pub noarch_by_host: Vec<ArchStats>,
     /// Builds counted for critical-path attribution.
     pub bottlenecked_builds: usize,
     /// Builds that completed in the window, whatever came of them.
@@ -181,7 +208,78 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
             .push(cp.marginal_delay);
     }
 
-    let arches = arch_stats(&selected, &bottleneck_delays, opts.include_failed);
+    // The existing tables describe per-arch builds, so the source
+    // rebuild stays out of them: it is one task per build on an arch of
+    // the hub's choosing, and folding it in would move every arch's
+    // numbers for reasons that have nothing to do with that arch.
+    let per_arch: Vec<&TaskRecord> = selected
+        .iter()
+        .copied()
+        .filter(|t| t.method == BUILD_ARCH)
+        .collect();
+    let srpm_tasks: Vec<&TaskRecord> = selected
+        .iter()
+        .copied()
+        .filter(|t| t.method == REBUILD_SRPM)
+        .collect();
+
+    // How many arches each build was built for decides which questions
+    // can be asked of it.
+    let mut arches_per_build: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    for task in &per_arch {
+        if let Some(parent) = task.parent {
+            arches_per_build
+                .entry(format!("{}:{parent}", task.instance))
+                .or_default()
+                .insert(&task.arch);
+        }
+    }
+    let class_of = |task: &TaskRecord| -> Option<BuildShape> {
+        let parent = task.parent?;
+        let arches = arches_per_build.get(&format!("{}:{parent}", task.instance))?;
+        Some(match (arches.len(), arches.iter().next()) {
+            (1, Some(&"noarch")) => BuildShape::NoArch,
+            (1, _) => BuildShape::Single,
+            _ => BuildShape::Multi,
+        })
+    };
+    let of_shape = |shape: BuildShape| -> Vec<&TaskRecord> {
+        per_arch
+            .iter()
+            .copied()
+            .filter(|t| class_of(t) == Some(shape))
+            .collect()
+    };
+
+    let no_delays: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
+    let host_arch = |task: &TaskRecord| -> String {
+        // Falling back to the task's own arch rather than inventing one:
+        // a dataset swept before host arches were recorded has nothing to
+        // say about where a task ran, and should not pretend otherwise.
+        task.host_id
+            .and_then(|id| dataset.host_arches.get(&format!("{}:{id}", task.instance)))
+            .cloned()
+            .unwrap_or_else(|| format!("{} (host unknown)", task.arch))
+    };
+    let srpm = arch_stats_by(&srpm_tasks, &no_delays, opts.include_failed, host_arch);
+    let multi_arch = arch_stats(
+        &of_shape(BuildShape::Multi),
+        &bottleneck_delays,
+        opts.include_failed,
+    );
+    let single_arch = arch_stats(
+        &of_shape(BuildShape::Single),
+        &no_delays,
+        opts.include_failed,
+    );
+    let noarch_by_host = arch_stats_by(
+        &of_shape(BuildShape::NoArch),
+        &no_delays,
+        opts.include_failed,
+        host_arch,
+    );
+
+    let arches = arch_stats(&per_arch, &bottleneck_delays, opts.include_failed);
     let (official, scratch) = if opts.scratch.is_some() {
         (None, None)
     } else {
@@ -238,6 +336,10 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
         arches,
         official,
         scratch,
+        srpm,
+        multi_arch,
+        single_arch,
+        noarch_by_host,
         unattributed_tasks: unattributed,
         bottlenecked_builds,
         builds_in_window,
@@ -253,27 +355,43 @@ fn arch_stats(
     bottleneck_delays: &BTreeMap<&str, Vec<f64>>,
     include_failed: bool,
 ) -> Vec<ArchStats> {
-    let mut queue: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
-    let mut build: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
+    arch_stats_by(tasks, bottleneck_delays, include_failed, |t| t.arch.clone())
+}
+
+/// [`arch_stats`] with the row label chosen by the caller.
+///
+/// A `buildArch` task's own arch is the useful label — it is what was
+/// compiled. A `noarch` task's is not: it says the payload runs anywhere,
+/// while the question is which machine took it, so those rows are keyed
+/// by the host's arch instead.
+fn arch_stats_by(
+    tasks: &[&TaskRecord],
+    bottleneck_delays: &BTreeMap<&str, Vec<f64>>,
+    include_failed: bool,
+    label: impl Fn(&TaskRecord) -> String,
+) -> Vec<ArchStats> {
+    let mut queue: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut build: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     for task in tasks {
         if in_queue_wait_population(task)
             && let Some(wait) = task.queue_wait()
         {
-            queue.entry(&task.arch).or_default().push(wait);
+            queue.entry(label(task)).or_default().push(wait);
         }
         if in_build_time_population(task, include_failed)
             && let Some(time) = task.build_time()
         {
-            build.entry(&task.arch).or_default().push(time);
+            build.entry(label(task)).or_default().push(time);
         }
     }
-    let mut all_arches: std::collections::BTreeSet<&str> = queue.keys().copied().collect();
-    all_arches.extend(build.keys().copied());
-    all_arches.extend(bottleneck_delays.keys().copied());
+    let mut all_arches: std::collections::BTreeSet<String> = queue.keys().cloned().collect();
+    all_arches.extend(build.keys().cloned());
+    all_arches.extend(bottleneck_delays.keys().map(|a| a.to_string()));
 
     let mut rows: Vec<ArchStats> = all_arches
         .into_iter()
         .map(|arch| {
+            let arch = arch.as_str();
             let delays = bottleneck_delays.get(arch);
             let mut sorted_delays = delays.cloned().unwrap_or_default();
             sorted_delays.sort_by(|a, b| a.total_cmp(b));
@@ -355,6 +473,41 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
     );
 
     render_rows(&mut o, "All builds", &output.arches, min_samples);
+    // Every stage of a build gets its wait and run time reported, whether
+    // or not a bottleneck can be pinned on it: attribution needs two
+    // arches racing, but a slow queue or a slow machine costs time
+    // regardless, and those cases were previously visible only as part of
+    // the combined rows.
+    render_table(
+        &mut o,
+        "SRPM rebuild (by host arch)",
+        &output.srpm,
+        min_samples,
+        "host arch",
+        false,
+    );
+    render_rows(
+        &mut o,
+        "Multi-arch builds (attribution applies)",
+        &output.multi_arch,
+        min_samples,
+    );
+    render_table(
+        &mut o,
+        "Single-arch builds",
+        &output.single_arch,
+        min_samples,
+        "arch",
+        false,
+    );
+    render_table(
+        &mut o,
+        "noarch builds (by host arch)",
+        &output.noarch_by_host,
+        min_samples,
+        "host arch",
+        false,
+    );
     if let Some(official) = &output.official {
         render_rows(&mut o, "Official builds", official, min_samples);
     }
@@ -382,6 +535,21 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
          - `unattributed tasks` — per-arch tasks whose parent build was \
          not swept, so\n  their scratch-ness is unknown; they are \
          counted in the combined stats only.\n\
+         \nSection legend:\n\
+         - `All builds` — every per-arch build in the window, whatever \
+         shape of build it\n  came from.\n\
+         - `SRPM rebuild` — the source rebuild each build starts with, \
+         keyed by the arch\n  of the host that ran it: the hub picks \
+         that host regardless of what the\n  build targets, so a \
+         package can queue behind a machine it does not build\n  for.\n\
+         - `Multi-arch builds` — builds made for two or more arches. \
+         Only these can\n  have a bottleneck, since attribution needs a \
+         runner-up to measure against.\n\
+         - `Single-arch builds` — built for one arch, so wait and run \
+         time stand alone.\n\
+         - `noarch builds` — packages that build once for every arch, \
+         keyed by the host\n  that took them: the payload is portable, \
+         the machine is not.\n\
          \nColumn legend:\n\
          - `queued` / `built` — tasks counted in the wait/time stats.\n\
          - `med-wait`, `p90-wait` — task creation until a builder \
@@ -403,22 +571,38 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
 /// anything that renders Markdown. Rows below the sample guard
 /// are pulled out into a footnote (Markdown cells can't span).
 fn render_rows(o: &mut String, title: &str, rows: &[ArchStats], min_samples: usize) {
+    render_table(o, title, rows, min_samples, "arch", true)
+}
+
+/// [`render_rows`] with the first column named, and the attribution
+/// columns omitted where they would be meaningless — a single-arch build
+/// has nothing to be slower than, and the source rebuild races nothing.
+fn render_table(
+    o: &mut String,
+    title: &str,
+    rows: &[ArchStats],
+    min_samples: usize,
+    first_column: &str,
+    with_attribution: bool,
+) {
     use std::fmt::Write as _;
     if rows.is_empty() {
         return;
     }
-    const HEADERS: [&str; 10] = [
-        "arch",
-        "queued",
-        "med-wait",
-        "p90-wait",
-        "built",
-        "med-time",
-        "p90-time",
-        "bottleneck",
-        "med-delay",
-        "tot-delay",
+    let columns = if with_attribution { 10 } else { 7 };
+    let headers: [String; 10] = [
+        first_column.to_string(),
+        "queued".to_string(),
+        "med-wait".to_string(),
+        "p90-wait".to_string(),
+        "built".to_string(),
+        "med-time".to_string(),
+        "p90-time".to_string(),
+        "bottleneck".to_string(),
+        "med-delay".to_string(),
+        "tot-delay".to_string(),
     ];
+    let headers = &headers[..columns];
 
     let mut cells: Vec<[String; 10]> = Vec::new();
     let mut thin: Vec<String> = Vec::new();
@@ -463,12 +647,12 @@ fn render_rows(o: &mut String, title: &str, rows: &[ArchStats], min_samples: usi
 
     let _ = writeln!(o, "\n{title}:\n");
     if !cells.is_empty() {
-        let widths: Vec<usize> = (0..HEADERS.len())
+        let widths: Vec<usize> = (0..columns)
             .map(|col| {
                 cells
                     .iter()
                     .map(|row| row[col].chars().count())
-                    .chain([HEADERS[col].len()])
+                    .chain([headers[col].len()])
                     .max()
                     .unwrap_or(0)
             })
@@ -485,7 +669,7 @@ fn render_rows(o: &mut String, title: &str, rows: &[ArchStats], min_samples: usi
             }
             let _ = writeln!(o, "{out}");
         };
-        line(o, &HEADERS.map(String::from));
+        line(o, headers);
         let mut sep = String::from("|");
         for (col, width) in widths.iter().enumerate() {
             if col == 0 {
@@ -496,7 +680,7 @@ fn render_rows(o: &mut String, title: &str, rows: &[ArchStats], min_samples: usi
         }
         let _ = writeln!(o, "{sep}");
         for row in &cells {
-            line(o, row);
+            line(o, &row[..columns]);
         }
     }
     if !thin.is_empty() {
@@ -506,6 +690,111 @@ fn render_rows(o: &mut String, title: &str, rows: &[ArchStats], min_samples: usi
 
 #[cfg(test)]
 mod tests {
+
+    /// A dataset holding one build of each shape, plus the source
+    /// rebuilds, with hosts of known arches.
+    fn shaped_dataset() -> Dataset {
+        let mut ds = Dataset::new();
+        let on_host = |mut t: TaskRecord, host: i64, method: &str| {
+            t.host_id = Some(host);
+            t.method = method.to_string();
+            t
+        };
+        // Two arches raced: attribution applies.
+        ds.builds.insert("fedora:1".into(), build(1, false));
+        for t in [
+            on_host(task(11, 1, "x86_64", 10.0, 100.0), 1, BUILD_ARCH),
+            on_host(task(12, 1, "s390x", 10.0, 400.0), 3, BUILD_ARCH),
+            on_host(task(13, 1, "noarch", 5.0, 40.0), 3, REBUILD_SRPM),
+        ] {
+            ds.tasks.insert(t.key(), t);
+        }
+        // One arch only.
+        ds.builds.insert("fedora:2".into(), build(2, false));
+        {
+            let t = on_host(task(21, 2, "ppc64le", 10.0, 200.0), 2, BUILD_ARCH);
+            ds.tasks.insert(t.key(), t);
+        }
+        // A noarch package, built on an s390x machine.
+        ds.builds.insert("fedora:3".into(), build(3, false));
+        {
+            let t = on_host(task(31, 3, "noarch", 10.0, 70.0), 3, BUILD_ARCH);
+            ds.tasks.insert(t.key(), t);
+        }
+        ds.host_arches
+            .insert("fedora:1".into(), "x86_64 i386".into());
+        ds.host_arches.insert("fedora:2".into(), "ppc64le".into());
+        ds.host_arches.insert("fedora:3".into(), "s390x".into());
+        ds
+    }
+
+    #[test]
+    fn builds_are_reported_by_the_shape_they_have() {
+        let out = run(&shaped_dataset(), &ReportOpts::default());
+        let arches =
+            |rows: &[ArchStats]| -> Vec<String> { rows.iter().map(|r| r.arch.clone()).collect() };
+
+        // Only the build with two arches can have a bottleneck.
+        assert_eq!(arches(&out.multi_arch), vec!["s390x", "x86_64"]);
+        let s390x = &out.multi_arch[0];
+        assert_eq!(s390x.builds_bottlenecked, 1);
+        // One arch has nothing to be slower than, so it is reported
+        // apart, with its raw wait and run time.
+        assert_eq!(arches(&out.single_arch), vec!["ppc64le"]);
+        assert_eq!(
+            out.single_arch[0].build_time.as_ref().unwrap().median,
+            190.0
+        );
+        assert_eq!(out.single_arch[0].builds_bottlenecked, 0);
+
+        // A noarch package says nothing about where it ran, so it is
+        // keyed by the machine that took it.
+        assert_eq!(arches(&out.noarch_by_host), vec!["s390x"]);
+        assert_eq!(
+            out.noarch_by_host[0].build_time.as_ref().unwrap().median,
+            60.0
+        );
+
+        // The source rebuild is its own stage, on a host of the hub's
+        // choosing — here an s390x one, for a build that also targets
+        // x86_64.
+        assert_eq!(arches(&out.srpm), vec!["s390x"]);
+        assert_eq!(out.srpm[0].queue_wait.as_ref().unwrap().median, 5.0);
+    }
+
+    #[test]
+    fn the_srpm_step_is_not_treated_as_a_racing_arch() {
+        // The rebuild finishes before both arches. Counted as one, it
+        // would be the earliest "arch" and would inflate the marginal
+        // delay attributed to the real bottleneck.
+        let out = run(&shaped_dataset(), &ReportOpts::default());
+        let s390x = out
+            .multi_arch
+            .iter()
+            .find(|r| r.arch == "s390x")
+            .expect("s390x row");
+        // 400 - 100, the gap to the runner-up arch, not to the rebuild.
+        assert_eq!(s390x.bottleneck_total_delay, 300.0);
+        // And the rebuild is absent from the per-arch tables.
+        assert!(!out.multi_arch.iter().any(|r| r.arch == "noarch"));
+    }
+
+    #[test]
+    fn a_dataset_without_host_arches_says_so() {
+        // Datasets swept before host arches were recorded can still be
+        // reported on; the row admits what it does not know rather than
+        // guessing an arch or dropping the tasks.
+        let mut ds = shaped_dataset();
+        ds.host_arches.clear();
+        let out = run(&ds, &ReportOpts::default());
+        assert_eq!(
+            out.noarch_by_host
+                .iter()
+                .map(|r| r.arch.clone())
+                .collect::<Vec<_>>(),
+            vec!["noarch (host unknown)"]
+        );
+    }
     use super::*;
     use crate::dataset::{BuildRecord, Dataset};
 
@@ -514,6 +803,7 @@ mod tests {
             instance: "fedora".to_string(),
             task_id: id,
             parent: Some(parent),
+            method: "buildArch".to_string(),
             arch: arch.to_string(),
             package: Some("foo".to_string()),
             state: 2,

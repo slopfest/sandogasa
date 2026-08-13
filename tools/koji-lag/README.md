@@ -69,6 +69,31 @@ saved, coverage is never overclaimed). Re-fetching an overlapping
 window into the same file refreshes still-running tasks and
 coalesces the coverage windows.
 
+#### Reading the report
+
+Per-arch wait and run times are reported for the whole window (`All
+builds`) and then again for each shape of build, because the questions
+differ. A build made for several arches has one that finished last, so
+its delay can be attributed; a single-arch build has nothing to be slower
+than; and a `noarch` package builds once on a machine the hub chooses,
+where the arch that matters is the host's rather than the package's. Each
+section carries median and p90 for both the queue wait and the run, so a
+slow queue and a slow machine stay distinguishable.
+
+The source rebuild every build begins with (`rebuildSRPM`) is reported as
+its own section, keyed by host arch. Koji picks that host independently of
+what the build targets, so a package can wait on a machine it does not
+build for — and that wait is part of its wall clock either way.
+
+Attribution deliberately ignores the source rebuild: it runs before the
+per-arch builds rather than racing them, so counting it as an arch would
+make every real arch look like the bottleneck by a margin that includes
+work nothing waited on in parallel.
+
+Datasets swept before host arches were recorded still report: their
+`noarch` rows read `noarch (host unknown)` rather than guessing an arch or
+dropping the tasks.
+
 #### Reading the progress output
 
 `-v` narrates both halves of a sweep. Fedora's hub carries several

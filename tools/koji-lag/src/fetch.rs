@@ -285,14 +285,16 @@ pub fn run(opts: &FetchOpts, out_path: &Path) -> Result<FetchReport, String> {
     dataset.save(out_path)?;
 
     let hub = HubClient::new(&opts.hub_url);
-    let hosts = retry(opts.retries, || hub.list_hosts())
+    let hosts = retry(opts.retries, || hub.list_hosts_with_arches())
         .map_err(|e| format!("cannot reach the hub at {}: {e}", opts.hub_url))?;
     let channels =
         retry(opts.retries, || hub.list_channels()).map_err(|e| format!("listChannels: {e}"))?;
-    for (id, name) in hosts {
-        dataset
-            .hosts
-            .insert(format!("{}:{id}", opts.instance_key), name);
+    for (id, name, arches) in hosts {
+        let key = format!("{}:{id}", opts.instance_key);
+        dataset.hosts.insert(key.clone(), name);
+        if !arches.is_empty() {
+            dataset.host_arches.insert(key, arches);
+        }
     }
     for (id, name) in channels {
         dataset
@@ -417,8 +419,12 @@ fn fetch_children(
     let mut chunks: Vec<Vec<i64>> = parents.chunks(PARENT_CHUNK).map(<[i64]>::to_vec).collect();
     let mut progress = BatchProgress::new(parents.len(), PARENT_CHUNK);
     while let Some(chunk) = chunks.pop() {
+        // No method filter: one query per batch returns every child, and
+        // the SRPM rebuild that precedes the per-arch builds is wanted
+        // too — its own scheduling decides part of a build's wall clock.
+        // Children this tool has nothing to say about (tagBuild,
+        // buildNotification) are dropped below.
         let list_opts = ListTasksOpts {
-            method: Some("buildArch".to_string()),
             parent: Some(chunk.clone()),
             decode: true,
             ..Default::default()
@@ -444,6 +450,13 @@ fn fetch_children(
             chunks.push(chunk[mid..].to_vec());
             continue;
         }
+        // Only the two methods that make up a build's wall clock. The
+        // rest of a build's children (tagging, notification) say nothing
+        // about how long the machines took.
+        let page: Vec<_> = page
+            .into_iter()
+            .filter(|t| matches!(t.method.as_str(), "buildArch" | "rebuildSRPM"))
+            .collect();
         if overflowed {
             eprintln!(
                 "warning: build task {} has {}+ child tasks; some may be missed",
@@ -564,13 +577,16 @@ fn build_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> BuildRecor
 /// record is unusable for lag analysis.
 fn task_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> Option<TaskRecord> {
     let Some(arch) = task.arch.clone() else {
-        eprintln!("warning: buildArch task {} has no arch; skipped", task.id);
+        eprintln!(
+            "warning: {} task {} has no arch; skipped",
+            task.method, task.id
+        );
         return None;
     };
     let Some(create_ts) = task.create_ts else {
         eprintln!(
-            "warning: buildArch task {} has no create_ts; skipped",
-            task.id
+            "warning: {} task {} has no create_ts; skipped",
+            task.method, task.id
         );
         return None;
     };
@@ -579,6 +595,7 @@ fn task_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> Option<Task
         task_id: task.id,
         parent: task.parent,
         arch,
+        method: task.method.clone(),
         package: task.request.as_ref().and_then(package_from_request),
         state: task.state,
         create_ts,
@@ -877,6 +894,7 @@ mod tests {
             instance: "fedora".to_string(),
             task_id: id,
             parent: Some(parent),
+            method: "buildArch".to_string(),
             arch: "x86_64".to_string(),
             package: None,
             state: 2,

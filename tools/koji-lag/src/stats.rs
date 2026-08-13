@@ -87,6 +87,14 @@ pub struct CriticalPath {
 /// `None` when fewer than two children, any child not CLOSED, or
 /// timestamps are missing.
 pub fn critical_path(children: &[&TaskRecord]) -> Option<CriticalPath> {
+    // Only the per-arch builds race each other. The SRPM rebuild runs
+    // before them and would otherwise be read as an arch that finished
+    // early, making every real arch look like the bottleneck by a margin
+    // that includes work nobody waited on in parallel.
+    let children: Vec<&&TaskRecord> = children
+        .iter()
+        .filter(|t| t.method == crate::dataset::BUILD_ARCH)
+        .collect();
     if children.len() < 2 {
         return None;
     }
@@ -115,6 +123,7 @@ mod tests {
             instance: "fedora".to_string(),
             task_id: 1,
             parent: Some(1),
+            method: "buildArch".to_string(),
             arch: arch.to_string(),
             package: None,
             state,

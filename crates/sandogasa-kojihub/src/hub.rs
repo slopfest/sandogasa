@@ -268,6 +268,36 @@ impl HubClient {
         self.list_id_names("listHosts", "name")
     }
 
+    /// `listHosts()` — host `(id, name, arches)` triples.
+    ///
+    /// The arches string is the hub's own (`x86_64 i386`, `s390x`), left
+    /// as reported: which of a pair is "the" arch of a host is the
+    /// caller's question, not this crate's.
+    pub fn list_hosts_with_arches(&self) -> Result<Vec<(i64, String, String)>, Error> {
+        let result = self.client.call("listHosts", &[])?;
+        let items = result
+            .as_array()
+            .ok_or_else(|| Error::Parse("listHosts did not return an array".to_string()))?;
+        let mut hosts = Vec::with_capacity(items.len());
+        for item in items {
+            let Some(id) = item.get("id").and_then(Value::as_int) else {
+                continue;
+            };
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let arches = item
+                .get("arches")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            hosts.push((id, name, arches));
+        }
+        Ok(hosts)
+    }
+
     /// `listChannels()` — channel `(id, name)` pairs.
     pub fn list_channels(&self) -> Result<Vec<(i64, String)>, Error> {
         self.list_id_names("listChannels", "name")

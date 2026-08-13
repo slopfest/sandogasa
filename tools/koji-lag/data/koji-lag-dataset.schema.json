@@ -20,6 +20,14 @@
       },
       "default": {}
     },
+    "host_arches": {
+      "description": "`\"<instance>:<host_id>\"` → the arches that host serves, as the\nhub reports them (`x86_64 i386`, `s390x`).\n\nWhat answers \"where did this actually run\" for a `noarch` task,\nwhose own arch says only that it could have gone anywhere. The\nhub's host names do not carry it reliably — Fedora has builders\ncalled `xenbuilder3` and `ppc1` — so it comes from `listHosts`.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
     "hosts": {
       "description": "`\"<instance>:<host_id>\"` → builder hostname.",
       "type": "object",
@@ -32,7 +40,7 @@
       "$ref": "#/$defs/DatasetMeta"
     },
     "tasks": {
-      "description": "`buildArch` tasks, keyed `\"<instance>:<task_id>\"`.",
+      "description": "Child tasks of the builds, keyed `\"<instance>:<task_id>\"` — the\nper-arch `buildArch` builds and the `rebuildSRPM` that precedes\nthem. See `TaskRecord::method`.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/TaskRecord"
@@ -183,7 +191,7 @@
       ]
     },
     "TaskRecord": {
-      "description": "A per-arch `buildArch` task.",
+      "description": "One child task of a build: an architecture's build, or the source\nrebuild that precedes them.",
       "type": "object",
       "properties": {
         "arch": {
@@ -216,6 +224,11 @@
         },
         "instance": {
           "type": "string"
+        },
+        "method": {
+          "description": "Koji task method. `buildArch` is one architecture's build;\n`rebuildSRPM` is the source rebuild that precedes them all, on\nwhichever arch the hub happened to pick. Defaults to `buildArch`\nfor datasets written before the SRPM step was collected.",
+          "type": "string",
+          "default": "buildArch"
         },
         "package": {
           "type": [

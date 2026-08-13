@@ -35,7 +35,9 @@ pub struct Dataset {
     /// Parent `build` tasks, keyed `"<instance>:<task_id>"`.
     #[serde(default)]
     pub builds: BTreeMap<String, BuildRecord>,
-    /// `buildArch` tasks, keyed `"<instance>:<task_id>"`.
+    /// Child tasks of the builds, keyed `"<instance>:<task_id>"` — the
+    /// per-arch `buildArch` builds and the `rebuildSRPM` that precedes
+    /// them. See `TaskRecord::method`.
     #[serde(default)]
     pub tasks: BTreeMap<String, TaskRecord>,
     /// `"<instance>:<host_id>"` → builder hostname.
@@ -44,7 +46,30 @@ pub struct Dataset {
     /// `"<instance>:<channel_id>"` → channel name.
     #[serde(default)]
     pub channels: BTreeMap<String, String>,
+    /// `"<instance>:<host_id>"` → the arches that host serves, as the
+    /// hub reports them (`x86_64 i386`, `s390x`).
+    ///
+    /// What answers "where did this actually run" for a `noarch` task,
+    /// whose own arch says only that it could have gone anywhere. The
+    /// hub's host names do not carry it reliably — Fedora has builders
+    /// called `xenbuilder3` and `ppc1` — so it comes from `listHosts`.
+    #[serde(default)]
+    pub host_arches: BTreeMap<String, String>,
 }
+
+/// Datasets written before the SRPM step was collected hold only
+/// `buildArch` tasks.
+fn buildarch_method() -> String {
+    BUILD_ARCH.to_string()
+}
+
+/// One architecture's build. These are what race each other, so they are
+/// the only tasks a bottleneck can be attributed to.
+pub const BUILD_ARCH: &str = "buildArch";
+
+/// The source rebuild every build starts with, on whichever arch the hub
+/// picked. It precedes the per-arch builds rather than racing them.
+pub const REBUILD_SRPM: &str = "rebuildSRPM";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DatasetMeta {
@@ -93,7 +118,8 @@ pub struct BuildRecord {
     pub priority: Option<i64>,
 }
 
-/// A per-arch `buildArch` task.
+/// One child task of a build: an architecture's build, or the source
+/// rebuild that precedes them.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskRecord {
     pub instance: String,
@@ -102,6 +128,12 @@ pub struct TaskRecord {
     /// wasn't captured are reported as unattributed.
     pub parent: Option<i64>,
     pub arch: String,
+    /// Koji task method. `buildArch` is one architecture's build;
+    /// `rebuildSRPM` is the source rebuild that precedes them all, on
+    /// whichever arch the hub happened to pick. Defaults to `buildArch`
+    /// for datasets written before the SRPM step was collected.
+    #[serde(default = "buildarch_method")]
+    pub method: String,
     pub package: Option<String>,
     pub state: i64,
     pub create_ts: f64,
@@ -162,6 +194,7 @@ impl Dataset {
             tasks: BTreeMap::new(),
             hosts: BTreeMap::new(),
             channels: BTreeMap::new(),
+            host_arches: BTreeMap::new(),
         }
     }
 
@@ -226,6 +259,7 @@ impl Dataset {
             }
         }
         self.hosts.extend(other.hosts);
+        self.host_arches.extend(other.host_arches);
         self.channels.extend(other.channels);
         self.meta.windows.extend(other.meta.windows);
         coalesce_windows(&mut self.meta.windows);
@@ -299,6 +333,7 @@ mod tests {
             instance: instance.to_string(),
             task_id: id,
             parent: Some(1),
+            method: "buildArch".to_string(),
             arch: arch.to_string(),
             package: Some("foo".to_string()),
             state: 2,
