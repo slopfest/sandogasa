@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### koji-lag: a fetch says how far back it has got
+
+`fetch` walks every `build` task newest-first — `listTasks` has no
+completion filter that survives a loaded hub, so the window is applied
+client-side afterwards — and reported its position as a bare page number.
+A busy month runs to hundreds of pages, and "page 219 (1000 task(s))"
+says nothing about whether that is nearly done.
+
+The line now reports what the walk is doing, which is marching backwards
+in time: tasks seen, the creation time reached, how much of the window
+that covers, and roughly how many pages remain.
+
+```
+[koji-lag] build walk: page 3 (1000 task(s), 3000 so far),
+    back to 2026-08-13 00:53 — 11% of the window, ~24 page(s) to go
+```
+
+Remaining pages are estimated from the density observed so far rather
+than from a count query. A filtered count is not affordable: `listTasks`
+with `countOnly` over a three-day creation window measured 83 seconds
+against Fedora's hub, the same index problem that rules out server-side
+completion filtering, while an unfiltered count answers in 3 seconds and
+says only that the hub holds 24,047,128 build tasks in all. So the
+estimate costs nothing, is marked `~`, and refines every page. It assumes
+an even spread, which weekends and mass rebuilds break — a jump is the
+walk learning, not a fault.
+
+The reached time includes the hour, because inside a short window the
+date never changes, and a line that never changes reads as a walk that is
+stuck.
+
 ### ebranch: check-wip's summary hid work left on the target branches
 
 Rawhide is the shared spine — packages land there first and every other

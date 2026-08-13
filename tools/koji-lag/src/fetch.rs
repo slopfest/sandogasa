@@ -120,6 +120,90 @@ const CREATE_GRACE_SECS: f64 = 3.0 * 86_400.0;
 /// response comfortably under any page size.
 const PARENT_CHUNK: usize = 40;
 
+/// Progress through the newest-first walk of `build` tasks.
+///
+/// A page number alone says nothing: "page 219" gives no idea whether
+/// that is nearly done or barely started, and a busy month runs to
+/// hundreds of pages. What the walk is actually doing is marching
+/// backwards in time towards the start of the window, so how far back it
+/// has reached is the honest measure, and it is already in hand — every
+/// task on a page carries its creation time.
+///
+/// The remaining pages are estimated from the density observed so far
+/// (tasks per second of history) rather than from a count query. Asking
+/// the hub how many tasks a window holds means a filtered count, which
+/// measured 83 seconds against Fedora's hub for a three-day window —
+/// the same index problem that rules out server-side completion
+/// filtering. So the estimate is free, marked with a `~`, and improves
+/// with every page. It assumes tasks are spread evenly, which they are
+/// not: weekends and mass rebuilds skew it, and a jump is the walk
+/// learning rather than a fault.
+#[derive(Debug)]
+pub struct WalkProgress {
+    /// Where the walk stops: the oldest creation time it needs.
+    target_ts: f64,
+    /// Newest creation time seen, from the first page.
+    newest_ts: Option<f64>,
+    /// Oldest creation time seen so far.
+    oldest_ts: Option<f64>,
+    pub pages: usize,
+    pub tasks: usize,
+    page_size: usize,
+}
+
+impl WalkProgress {
+    pub fn new(target_ts: f64, page_size: usize) -> Self {
+        Self {
+            target_ts,
+            newest_ts: None,
+            oldest_ts: None,
+            pages: 0,
+            tasks: 0,
+            page_size: page_size.max(1),
+        }
+    }
+
+    /// Record a page and describe where the walk has got to.
+    pub fn note(&mut self, created: impl IntoIterator<Item = f64>, len: usize) -> String {
+        self.pages += 1;
+        self.tasks += len;
+        for ts in created {
+            self.newest_ts = Some(self.newest_ts.map_or(ts, |n: f64| n.max(ts)));
+            self.oldest_ts = Some(self.oldest_ts.map_or(ts, |o: f64| o.min(ts)));
+        }
+        let Some((newest, oldest)) = self.newest_ts.zip(self.oldest_ts) else {
+            return format!("page {} ({} task(s))", self.pages, len);
+        };
+        let day = |ts: f64| {
+            chrono::DateTime::from_timestamp(ts as i64, 0)
+                // The hour matters: inside a short window the date
+                // never changes, and a line that never changes reads as
+                // a walk that is not moving.
+                .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "?".to_string())
+        };
+        let whole = newest - self.target_ts;
+        let covered = newest - oldest;
+        let mut line = format!(
+            "page {} ({} task(s), {} so far), back to {}",
+            self.pages,
+            len,
+            self.tasks,
+            day(oldest)
+        );
+        if whole > 0.0 && covered > 0.0 {
+            let done = (covered / whole * 100.0).min(100.0);
+            // Density so far, projected over what is left. Only worth
+            // saying while there is something left to project.
+            let left = (whole - covered).max(0.0);
+            let rate = self.tasks as f64 / covered;
+            let pages_left = (rate * left / self.page_size as f64).ceil() as usize;
+            line += &format!(" — {done:.0}% of the window, ~{pages_left} page(s) to go");
+        }
+        line
+    }
+}
+
 /// Counts for the CLI summary line.
 #[derive(Debug, Default)]
 pub struct FetchReport {
@@ -171,14 +255,15 @@ pub fn run(opts: &FetchOpts, out_path: &Path) -> Result<FetchReport, String> {
         decode: true,
         ..Default::default()
     };
-    let mut pages = 0usize;
+    let mut progress = WalkProgress::new(
+        opts.after - CREATE_GRACE_SECS,
+        opts.page_size.max(1) as usize,
+    );
     let mut on_page = |page: &[sandogasa_kojihub::HubTask]| {
-        pages += 1;
+        let created = page.iter().filter_map(|t| t.create_ts);
+        let where_it_is = progress.note(created, page.len());
         if opts.verbose {
-            eprintln!(
-                "[koji-lag] build walk: page {pages} ({} task(s))",
-                page.len()
-            );
+            eprintln!("[koji-lag] build walk: {where_it_is}");
         }
         std::thread::sleep(std::time::Duration::from_millis(opts.sleep_ms));
     };
@@ -449,6 +534,48 @@ fn task_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> Option<Task
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn walk_progress_says_how_far_back_it_has_reached() {
+        let day = 86_400.0;
+        let now = 1_780_000_000.0;
+        // A ten-day window, 1000 tasks per page.
+        let mut progress = WalkProgress::new(now - 10.0 * day, 1000);
+
+        // First page covers one day: 1000 tasks in a day means about
+        // nine more days and nine more pages to go.
+        let first = progress.note([now, now - day], 1000);
+        assert!(
+            first.contains("page 1 (1000 task(s), 1000 so far)"),
+            "{first}"
+        );
+        assert!(first.contains("10% of the window"), "{first}");
+        assert!(first.contains("~9 page(s) to go"), "{first}");
+
+        // Five days in, the count and the estimate move together.
+        let fifth = progress.note([now - 5.0 * day], 1000);
+        assert!(
+            fifth.contains("page 2 (1000 task(s), 2000 so far)"),
+            "{fifth}"
+        );
+        assert!(fifth.contains("50% of the window"), "{fifth}");
+        assert!(fifth.contains("~2 page(s) to go"), "{fifth}");
+
+        // At the target there is nothing left to project.
+        let last = progress.note([now - 10.0 * day], 40);
+        assert!(last.contains("100% of the window"), "{last}");
+        assert!(last.contains("~0 page(s) to go"), "{last}");
+    }
+
+    #[test]
+    fn walk_progress_without_timestamps_still_counts_pages() {
+        // Tasks the hub sent without a creation time say nothing about
+        // position, so the line claims nothing about it.
+        let mut progress = WalkProgress::new(0.0, 1000);
+        let line = progress.note([], 7);
+        assert_eq!(line, "page 1 (7 task(s))");
+        assert!(!line.contains('%'));
+    }
     use std::collections::HashMap;
 
     use super::*;
