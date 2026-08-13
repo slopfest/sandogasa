@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### ebranch: check-wip says what a build is waiting behind
+
+A branch can have a new build ready and still have nothing to do, because
+the previous version is serving out its time in testing. Bodhi requires
+seven days for a branched Fedora release, and editing the pending update
+to carry the new build restarts that clock and discards the karma it has
+collected — so the wait is real and worth seeing.
+
+`check-wip` was hiding it. An update was recorded only when it carried
+the newest build; an update for an older version was discarded as
+irrelevant. It is not irrelevant, it is the thing in the way. On a live
+ledger, three branches showed `built 0.19.4-1.fc44 in
+f44-build-side-146827` and nothing else, which reads as ready to submit,
+while an update carrying 0.19.1 sat in testing on each of them.
+
+An in-flight update is now kept whatever version it carries, and the
+version is recorded with it so the two can be told apart. The branch line
+shows both, with how long the older one has served:
+
+```
+f44: 0.18.1-1.fc44, built 0.19.4-1.fc44 in f44-build-side-146827;
+     0.19.1-1.fc44 in FEDORA-2026-2134e68e6e testing (7 of 7 days)
+```
+
+The state says it too — `waiting on an earlier update` — and ranks below
+`needs an update`, because there is nothing to do but wait. A finished
+update for an older version is still dropped: that one really has nothing
+to say.
+
+The days come from the date the update entered testing, which the ledger
+stores, with the elapsed time worked out when the report is written. A
+stored count would go stale; a date cannot. The requirement comes from
+Bodhi per update rather than being assumed to be seven, since a release
+sets its own. Where Bodhi reports no requirement the count is still
+shown.
+
+
 ### sandogasa-koji: a repo regeneration is not a hung hub
 
 The 30-second bound added in 0.19.3 was applied to every koji call,

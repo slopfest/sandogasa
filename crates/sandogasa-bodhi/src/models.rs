@@ -55,6 +55,12 @@ pub struct Update {
     pub date_testing: Option<String>,
     #[serde(default)]
     pub date_stable: Option<String>,
+    /// Days in testing this release requires before an update may go
+    /// stable — 7 for a branched Fedora release, fewer for Rawhide.
+    /// Reported by Bodhi per update, since a release's policy can change
+    /// and an update carries the one it was created under.
+    #[serde(default)]
+    pub stable_days: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

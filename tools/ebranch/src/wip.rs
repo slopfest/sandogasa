@@ -176,6 +176,22 @@ pub struct UpdateRef {
     pub alias: String,
     /// `pending`, `testing`, `stable`, and so on.
     pub status: String,
+    /// Version-release this update carries for the package.
+    ///
+    /// Not necessarily the newest build: an update carries whatever was
+    /// current when it was submitted, and a stack often has something
+    /// newer waiting in a side tag while the previous version serves out
+    /// its time in testing. Recording the version is what lets the two
+    /// be told apart instead of the older update being dropped as
+    /// irrelevant — it is not irrelevant, it is the thing in the way.
+    #[serde(default)]
+    pub version: String,
+    /// When it entered testing, `YYYY-MM-DD`, if it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub testing_since: Option<String>,
+    /// Days in testing the release requires before it may go stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stable_days: Option<u32>,
     /// When this was last observed, `YYYY-MM-DD`.
     pub seen: String,
 }
@@ -492,6 +508,9 @@ pub fn run(opts: &Options) -> Result<(), String> {
     }
 
     let mut dirty = !opts.targets.is_empty();
+    // Needed by the report as well as by the lookups: an offline run
+    // still says how long an update has been in testing.
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     // What this run established, which is what --prune may act on. An
     // offline run establishes neither: it asked nothing.
     let mut copr_absence_established = false;
@@ -583,7 +602,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
                 opts.ledger.display()
             );
         }
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
         // Absence from a COPR is only established when every COPR the
         // ledger follows answered. With none configured, or one
         // unreachable, a package missing from what came back says
@@ -774,7 +793,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
             serde_json::to_string_pretty(&ledger).map_err(|e| e.to_string())?
         );
     } else {
-        print!("{}", render(&ledger, &opts.packages));
+        print!("{}", render(&ledger, &opts.packages, &today));
     }
     Ok(())
 }
@@ -866,6 +885,31 @@ fn side_tag_builds(side_tags: &[String], aliases: &BTreeMap<String, String>) -> 
     scan
 }
 
+/// How an update in testing is doing against the time it has to serve.
+///
+/// Bodhi requires a number of days in testing before an update may go
+/// stable — seven for a branched Fedora release — and that wait is the
+/// thing standing in the way when a newer build is already built and
+/// waiting. Editing the update to carry the newer build would restart
+/// the clock and discard its karma, so the days already served are worth
+/// knowing rather than guessing.
+///
+/// The day it entered testing is stored and the elapsed time worked out
+/// at reporting time, so the ledger holds a fact that cannot go stale
+/// rather than a countdown that can.
+fn testing_progress(update: &UpdateRef, today: &str) -> Option<String> {
+    if update.status != "testing" {
+        return None;
+    }
+    let since = update.testing_since.as_deref()?;
+    let day = |d: &str| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok();
+    let days = (day(today)? - day(since)?).num_days();
+    Some(match update.stable_days {
+        Some(needed) => format!(" ({days} of {needed} days)"),
+        None => format!(" ({days} days in testing)"),
+    })
+}
+
 /// A newer build exists somewhere the release has not taken it up from.
 ///
 /// One template for every place it holds, because the reader compares
@@ -884,6 +928,11 @@ fn not_landed_yet(waiting_in: &str, branch: &str) -> String {
 /// compose will pick it up either.
 const IN_A_COPR: &str = "a COPR";
 const IN_A_SIDE_TAG: &str = "a side tag";
+
+/// Whether version-release `candidate` is newer than `than`.
+fn newer_evr(candidate: &str, than: &str) -> bool {
+    sandogasa_rpmvercmp::rpmvercmp(candidate, than) == std::cmp::Ordering::Greater
+}
 
 /// Whether `candidate`'s version-release is newer than `than`'s, both
 /// being NVRs.
@@ -1171,31 +1220,55 @@ async fn refresh_updates(
                         .packages
                         .get(&name)
                         .and_then(|p| wanted_version(p, branch));
-                    // Only an update that carries the build in
-                    // question counts. A package's newest update is
-                    // often an old one — the uutils stack has a
-                    // 120-package update from four months ago — and
-                    // showing that beside "needs building" reads as
-                    // though the work were done.
-                    let carrying = updates.iter().find(|u| {
-                        u.builds.iter().any(|b| {
-                            sandogasa_koji::parse_nvr(&b.nvr).is_some_and(|(n, v, r)| {
-                                n == name
-                                    && want.as_deref().is_some_and(|want| {
-                                        sandogasa_rpmvercmp::rpmvercmp(&format!("{v}-{r}"), want)
-                                            != std::cmp::Ordering::Less
-                                    })
+                    // The version an update carries for this package,
+                    // when it carries one at all.
+                    let carries = |u: &sandogasa_bodhi::models::Update| {
+                        u.builds.iter().find_map(|b| {
+                            sandogasa_koji::parse_nvr(&b.nvr)
+                                .filter(|(n, _, _)| *n == name)
+                                .map(|(_, v, r)| format!("{v}-{r}"))
+                        })
+                    };
+                    // An update carrying the version of interest is the
+                    // one to report. Failing that, an update still in
+                    // flight for an *older* version is not irrelevant —
+                    // it is what stands between a build waiting in a
+                    // side tag and an update of its own, since editing
+                    // it would restart its time in testing. A finished
+                    // update for an older version is dropped: that one
+                    // really has nothing to say.
+                    let chosen = updates
+                        .iter()
+                        .find(|u| {
+                            carries(u).zip(want.as_deref()).is_some_and(|(has, want)| {
+                                sandogasa_rpmvercmp::rpmvercmp(&has, want)
+                                    != std::cmp::Ordering::Less
                             })
                         })
-                    });
+                        .or_else(|| {
+                            updates.iter().find(|u| {
+                                matches!(u.status.as_str(), "pending" | "testing")
+                                    && carries(u).is_some()
+                            })
+                        });
                     let package = ledger.packages.get_mut(&name);
-                    match (carrying, package) {
+                    match (chosen, package) {
                         (Some(update), Some(package)) => {
                             package.update.insert(
                                 branch.clone(),
                                 UpdateRef {
                                     alias: update.alias.clone(),
                                     status: update.status.clone(),
+                                    version: carries(update).unwrap_or_default(),
+                                    // Dates arrive as "YYYY-MM-DD
+                                    // HH:MM:SS"; the day is the useful
+                                    // part and matches every other date
+                                    // in the ledger.
+                                    testing_since: update
+                                        .date_testing
+                                        .as_ref()
+                                        .map(|d| d.chars().take(10).collect()),
+                                    stable_days: update.stable_days,
                                     seen: today.to_string(),
                                 },
                             );
@@ -1844,7 +1917,7 @@ fn state(package: &Package, targets: &[String]) -> String {
         })
         .collect();
     states.sort_by_key(|(rank, _, _)| *rank);
-    const SHIPPED: u8 = 5;
+    const SHIPPED: u8 = 6;
     let Some(&(rank, label, _)) = states.first() else {
         return "in rawhide".to_string();
     };
@@ -1854,7 +1927,7 @@ fn state(package: &Package, targets: &[String]) -> String {
     // three branches was reported against only one of them.
     let mut at_rank: Vec<&str> = states
         .iter()
-        .filter(|(r, _, _)| *r == rank)
+        .filter(|(r, phrase, _)| *r == rank && *phrase == label)
         .map(|(_, _, target)| *target)
         .collect();
     at_rank.sort_by_key(|b| std::cmp::Reverse(release_recency(b)));
@@ -1876,7 +1949,7 @@ fn state(package: &Package, targets: &[String]) -> String {
 ///
 /// The date is the oldest of the facts shown, since "as of" must not
 /// claim more freshness than the stalest part of the line.
-fn branch_lines(package: &Package) -> Vec<String> {
+fn branch_lines(package: &Package, today: &str) -> Vec<String> {
     let branches: BTreeSet<&String> = package
         .shipped
         .keys()
@@ -1931,16 +2004,52 @@ fn branch_lines(package: &Package) -> Vec<String> {
             }
             // The update qualifies the version rather than being a
             // separate fact, so it joins with a space.
-            // With an update, the update is where the build is going.
-            // Without one, a side tag is worth naming: nothing will pick
-            // the build up on its own from there, and that tag is what
-            // `bodhi updates new --from-tag` wants. A release's own tags
-            // are left unsaid — the state already says the build is
-            // waiting on a compose, and the tag name adds nothing.
+            // An update carrying the version on this line is where that
+            // version is going, so it attaches to it. One carrying an
+            // *older* version is a separate fact and reads as its own
+            // clause: it is not moving this build anywhere, it is the
+            // wait in front of it.
+            //
+            // Without any update, a side tag is worth naming: nothing
+            // will pick the build up on its own from there, and that tag
+            // is what `bodhi updates new --from-tag` wants. A release's
+            // own tags are left unsaid — the state already says the
+            // build is waiting on a compose.
+            let newest_shown = built_evr
+                .clone()
+                .or_else(|| shipped.map(|s| s.version.clone()));
             let carried = match (update, built) {
+                (Some(u), _)
+                    if !u.version.is_empty()
+                        && newest_shown
+                            .as_deref()
+                            .is_some_and(|shown| newer_evr(shown, &u.version)) =>
+                {
+                    dates.push(&u.seen);
+                    // Where the newer build waits still matters — it is
+                    // what an update would be submitted from — so the
+                    // side tag keeps its mention and the update in front
+                    // of it follows as its own clause.
+                    let waiting_in = built
+                        .filter(|b| crate::check_update::branch_from_side_tag(&b.tag).is_some())
+                        .map(|b| format!(" in {}", b.tag))
+                        .unwrap_or_default();
+                    format!(
+                        "{waiting_in}; {} in {} {}{}",
+                        u.version,
+                        u.alias,
+                        u.status,
+                        testing_progress(u, today).unwrap_or_default()
+                    )
+                }
                 (Some(u), _) => {
                     dates.push(&u.seen);
-                    format!(" in {} {}", u.alias, u.status)
+                    format!(
+                        " in {} {}{}",
+                        u.alias,
+                        u.status,
+                        testing_progress(u, today).unwrap_or_default()
+                    )
                 }
                 (None, Some(b))
                     if parts.len() > 1
@@ -2011,7 +2120,7 @@ fn target_state(package: &Package, distgit: &DistGit, target: &str) -> (u8, &'st
     // there is nothing to conclude from, and the branch check below is
     // the more useful answer.
     if package.shipped.contains_key(target) && !ahead_of_repos(package, target) {
-        return (5, "shipped");
+        return (6, "shipped");
     }
     if !distgit.branches.iter().any(|b| b == target) {
         return (0, "needs a branch");
@@ -2019,11 +2128,25 @@ fn target_state(package: &Package, distgit: &DistGit, target: &str) -> (u8, &'st
     if !built_at_least(package, target) {
         return (1, "needs building");
     }
+    // An update in flight for an *older* version is the wait in front of
+    // this build, not progress for it. Submitting is not the next move:
+    // the previous update has to finish first, and editing it to carry
+    // this build would restart its time in testing and discard its
+    // karma. So it ranks below "needs an update" — there is nothing to
+    // do yet — and says what is being waited on.
     match package.update.get(target) {
-        None => (2, "needs an update"),
-        Some(u) if u.status == "pending" => (3, "update pending"),
-        Some(u) if u.status == "testing" => (4, "update in testing"),
-        Some(_) => (5, "shipped"),
+        Some(u)
+            if !u.version.is_empty()
+                && matches!(u.status.as_str(), "pending" | "testing")
+                && built_evr(package, target)
+                    .is_some_and(|built| newer_evr(&built, &u.version)) =>
+        {
+            (2, "waiting on an earlier update")
+        }
+        None => (3, "needs an update"),
+        Some(u) if u.status == "pending" => (4, "update pending"),
+        Some(u) if u.status == "testing" => (5, "update in testing"),
+        Some(_) => (6, "shipped"),
     }
 }
 
@@ -2035,7 +2158,7 @@ fn target_state(package: &Package, distgit: &DistGit, target: &str) -> (u8, &'st
 /// than presenting an old reading as current.
 /// Renders only the named packages, or all of them when none are
 /// named.
-pub fn render(ledger: &Ledger, only: &[String]) -> String {
+pub fn render(ledger: &Ledger, only: &[String], today: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     if ledger.packages.is_empty() {
@@ -2140,7 +2263,7 @@ pub fn render(ledger: &Ledger, only: &[String]) -> String {
                     r.bug, r.seen
                 );
             }
-            for line in branch_lines(package) {
+            for line in branch_lines(package, today) {
                 let _ = writeln!(out, "    {line}");
             }
             if package.route != Route::Unknown {
@@ -2288,7 +2411,7 @@ mod tests {
             "2026-08-10",
         );
         ledger.packages.get_mut("rust-a").unwrap().route = Route::Direct;
-        let text = render(&ledger, &[]);
+        let text = render(&ledger, &[], "2026-08-13");
         // Nothing has been looked up beyond the COPR yet, and the
         // heading says so rather than implying the package is
         // absent from dist-git.
@@ -2481,6 +2604,9 @@ mod tests {
             UpdateRef {
                 alias: "FEDORA-2026-6239fda063".to_string(),
                 status: "testing".to_string(),
+                version: String::new(),
+                testing_since: None,
+                stable_days: None,
                 seen: "2026-08-11".to_string(),
             },
         );
@@ -2499,6 +2625,9 @@ mod tests {
                 UpdateRef {
                     alias: "FEDORA-EPEL-2026-abc".to_string(),
                     status: status.to_string(),
+                    version: String::new(),
+                    testing_since: None,
+                    stable_days: None,
                     seen: "2026-08-11".to_string(),
                 },
             );
@@ -2640,7 +2769,7 @@ mod tests {
         let mut ledger = Ledger::default();
         ledger.reconcile("@rust/uutils", &[staged("rust-a", "0.9.0-1")], "2026-08-10");
         ledger.packages.get_mut("rust-a").unwrap().review = Some(review(2258203, "CLOSED", true));
-        let text = render(&ledger, &[]);
+        let text = render(&ledger, &[], "2026-08-13");
         assert!(text.contains("filed 2024-01-13"), "{text}");
     }
 
@@ -2664,7 +2793,7 @@ mod tests {
         let package = ledger.packages.get_mut("rust-a").unwrap();
         package.distgit = Some(distgit(false, &[]));
         package.review = Some(review(2498026, "NEW", true));
-        let text = render(&ledger, &[]);
+        let text = render(&ledger, &[], "2026-08-13");
         assert!(
             text.contains("review approved, needs importing (1)"),
             "{text}"
@@ -2703,7 +2832,7 @@ mod tests {
 
         // Without a date, the reason still shows — but no date is
         // invented for it.
-        let text = render(&ledger, &[]);
+        let text = render(&ledger, &[], "2026-08-13");
         assert!(
             text.contains("retired: replaced by uutils-coreutils"),
             "{text}"
@@ -2714,7 +2843,7 @@ mod tests {
         // is what the reader is weighing.
         d.retired_on = Some("2026-06-09".to_string());
         ledger.packages.get_mut("rust-a").unwrap().distgit = Some(d);
-        let text = render(&ledger, &[]);
+        let text = render(&ledger, &[], "2026-08-13");
         assert!(
             text.contains("retired 2026-06-09: replaced by uutils-coreutils"),
             "{text}"
@@ -2728,7 +2857,7 @@ mod tests {
         let mut d = distgit(true, &["rawhide"]);
         d.retired = true;
         ledger.packages.get_mut("rust-a").unwrap().distgit = Some(d);
-        let text = render(&ledger, &[]);
+        let text = render(&ledger, &[], "2026-08-13");
         assert!(text.contains("dist-git: retired, rawhide"), "{text}");
     }
 
@@ -2744,7 +2873,7 @@ mod tests {
             .built
             .insert("rawhide".to_string(), built_at("rust-a-0.7.0-2.fc45"));
         assert_eq!(
-            branch_lines(&package),
+            branch_lines(&package, "2026-08-13"),
             vec!["rawhide: 0.7.0-2.fc45 (as of 2026-08-10)"]
         );
 
@@ -2754,7 +2883,7 @@ mod tests {
             .built
             .insert("rawhide".to_string(), built_at("rust-a-0.9.0-1.fc45"));
         assert_eq!(
-            branch_lines(&package),
+            branch_lines(&package, "2026-08-13"),
             vec!["rawhide: 0.7.0-2.fc45, built 0.9.0-1.fc45 (as of 2026-08-10)"]
         );
 
@@ -2764,10 +2893,13 @@ mod tests {
             UpdateRef {
                 alias: "FEDORA-2026-abc".to_string(),
                 status: "testing".to_string(),
+                version: String::new(),
+                testing_since: None,
+                stable_days: None,
                 seen: "2026-08-11".to_string(),
             },
         );
-        let line = &branch_lines(&package)[0];
+        let line = &branch_lines(&package, "2026-08-13")[0];
         assert_eq!(
             line,
             "rawhide: 0.7.0-2.fc45, built 0.9.0-1.fc45 \
@@ -2792,10 +2924,13 @@ mod tests {
             UpdateRef {
                 alias: "FEDORA-EPEL-2026-x".to_string(),
                 status: "testing".to_string(),
+                version: String::new(),
+                testing_since: None,
+                stable_days: None,
                 seen: "2026-08-11".to_string(),
             },
         );
-        let line = &branch_lines(&package)[0];
+        let line = &branch_lines(&package, "2026-08-13")[0];
         assert!(line.contains("as of 2026-08-01"), "{line}");
     }
 
@@ -2812,7 +2947,7 @@ mod tests {
         package
             .shipped
             .insert("rawhide".to_string(), shipped_at("0.12.0-7.fc45"));
-        let text = render(&ledger, &[]);
+        let text = render(&ledger, &[], "2026-08-13");
         // Both versions are visible, so the comparison the heading
         // makes can be checked by eye.
         assert!(text.contains("rust-a 0.13.0-1"), "{text}");
@@ -2831,7 +2966,7 @@ mod tests {
         let mut ledger = Ledger::default();
         ledger.reconcile("@rust/uutils", &[staged("rust-a", "1-1")], "2026-08-10");
         ledger.packages.get_mut("rust-a").unwrap().distgit = Some(distgit(false, &[]));
-        let text = render(&ledger, &[]);
+        let text = render(&ledger, &[], "2026-08-13");
         assert!(text.contains("staged, no review filed (1)"), "{text}");
         assert!(
             text.contains("dist-git: no repository (as of 2026-08-10)"),
@@ -2874,11 +3009,16 @@ mod tests {
             UpdateRef {
                 alias: "FEDORA-2026-6239fda063".to_string(),
                 status: "stable".to_string(),
+                version: String::new(),
+                testing_since: None,
+                stable_days: None,
                 seen: "2026-08-11".to_string(),
             },
         );
         assert_eq!(state(&package, &[]), "built for rawhide, update pushed");
-        assert!(branch_lines(&package)[0].contains("in FEDORA-2026-6239fda063 stable"));
+        assert!(
+            branch_lines(&package, "2026-08-13")[0].contains("in FEDORA-2026-6239fda063 stable")
+        );
     }
 
     #[test]
@@ -2944,7 +3084,7 @@ mod tests {
             &[staged("rust-a", "1-1"), staged("rust-b", "1-1")],
             "2026-08-10",
         );
-        let text = render(&ledger, &["rust-b".to_string()]);
+        let text = render(&ledger, &["rust-b".to_string()], "2026-08-13");
         assert!(text.contains("rust-b"), "{text}");
         assert!(!text.contains("rust-a"), "{text}");
         // The header still describes the whole effort, so the report
@@ -2954,7 +3094,7 @@ mod tests {
 
     #[test]
     fn render_says_what_to_do_with_an_empty_ledger() {
-        let text = render(&Ledger::default(), &[]);
+        let text = render(&Ledger::default(), &[], "2026-08-13");
         assert!(text.contains("--copr"), "{text}");
     }
 
@@ -3074,7 +3214,7 @@ mod tests {
                 .shipped
                 .insert(branch.to_string(), shipped_at(version));
         }
-        let lines = branch_lines(&package);
+        let lines = branch_lines(&package, "2026-08-13");
         let branches: Vec<&str> = lines.iter().map(|l| l.split(':').next().unwrap()).collect();
         // The releases carrying the new version first, newest release
         // first within each group.
@@ -3218,7 +3358,7 @@ mod tests {
             },
         );
         assert_eq!(
-            branch_lines(&package),
+            branch_lines(&package, "2026-08-13"),
             vec!["rawhide: 0.19.1-1.fc45 (as of 2026-08-12)"]
         );
 
@@ -3232,7 +3372,7 @@ mod tests {
             },
         );
         assert_eq!(
-            branch_lines(&package),
+            branch_lines(&package, "2026-08-13"),
             vec![
                 "rawhide: 0.19.1-1.fc45, built 0.19.2-1.fc46 in f46-build-side-1 (as of 2026-08-11)"
             ]
@@ -3400,5 +3540,107 @@ mod tests {
         ));
         // Unparseable: no claim either way.
         assert!(!newer_nvr("nonsense", "rust-emojis-0.9.0-1.fc44"));
+    }
+
+    fn in_testing_since(version: &str, since: &str, needed: Option<u32>) -> UpdateRef {
+        UpdateRef {
+            alias: "FEDORA-2026-2134e68e6e".into(),
+            status: "testing".into(),
+            version: version.into(),
+            testing_since: Some(since.into()),
+            stable_days: needed,
+            seen: "2026-08-13".into(),
+        }
+    }
+
+    #[test]
+    fn testing_progress_counts_days_served() {
+        let update = in_testing_since("0.19.1-1.fc44", "2026-08-06", Some(7));
+        assert_eq!(
+            testing_progress(&update, "2026-08-13").unwrap(),
+            " (7 of 7 days)"
+        );
+        assert_eq!(
+            testing_progress(&update, "2026-08-09").unwrap(),
+            " (3 of 7 days)"
+        );
+        // No requirement known: the count still helps.
+        let no_policy = in_testing_since("0.19.1-1.fc44", "2026-08-06", None);
+        assert_eq!(
+            testing_progress(&no_policy, "2026-08-13").unwrap(),
+            " (7 days in testing)"
+        );
+        // Nothing to say about an update that is not in testing, or one
+        // whose entry date was never recorded.
+        let mut stable = in_testing_since("0.19.1-1.fc44", "2026-08-06", Some(7));
+        stable.status = "stable".into();
+        assert!(testing_progress(&stable, "2026-08-13").is_none());
+        let mut undated = in_testing_since("0.19.1-1.fc44", "2026-08-06", Some(7));
+        undated.testing_since = None;
+        assert!(testing_progress(&undated, "2026-08-13").is_none());
+    }
+
+    #[test]
+    fn an_earlier_update_is_the_wait_in_front_of_a_build() {
+        let mut package = Package::default();
+        package.shipped.insert(
+            "f44".into(),
+            Shipped {
+                version: "0.18.1-1.fc44".into(),
+                seen: "2026-08-13".into(),
+            },
+        );
+        // Newer build waiting in a side tag...
+        package.built.insert(
+            "f44".into(),
+            Built {
+                nvr: "sandogasa-0.19.4-1.fc44".into(),
+                tag: "f44-build-side-146827".into(),
+                seen: "2026-08-13".into(),
+            },
+        );
+        // ...behind an update carrying the previous version.
+        package.update.insert(
+            "f44".into(),
+            in_testing_since("0.19.1-1.fc44", "2026-08-06", Some(7)),
+        );
+
+        // Submitting is not the next move, and it ranks below needing an
+        // update because there is nothing to do but wait.
+        let distgit = DistGit {
+            exists: true,
+            branches: vec!["f44".into()],
+            retired: false,
+            retired_reason: None,
+            retired_on: None,
+            seen: "2026-08-13".into(),
+        };
+        let (rank, phrase) = target_state(&package, &distgit, "f44");
+        assert_eq!(phrase, "waiting on an earlier update");
+        assert!(rank < 3, "should rank below needing an update, got {rank}");
+
+        // The line keeps both facts: where the build waits, and what is
+        // in front of it with how long it has served.
+        assert_eq!(
+            branch_lines(&package, "2026-08-13"),
+            vec![
+                "f44: 0.18.1-1.fc44, built 0.19.4-1.fc44 in f44-build-side-146827; \
+                 0.19.1-1.fc44 in FEDORA-2026-2134e68e6e testing (7 of 7 days) \
+                 (as of 2026-08-13)"
+                    .replace("                 ", "")
+            ]
+        );
+
+        // Once the update carries the build, it attaches to it instead.
+        package.update.insert(
+            "f44".into(),
+            in_testing_since("0.19.4-1.fc44", "2026-08-13", Some(7)),
+        );
+        assert!(
+            branch_lines(&package, "2026-08-13")[0]
+                .contains("built 0.19.4-1.fc44 in FEDORA-2026-2134e68e6e testing (0 of 7 days)"),
+            "{:?}",
+            branch_lines(&package, "2026-08-13")
+        );
     }
 }

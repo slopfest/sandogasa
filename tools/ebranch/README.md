@@ -178,6 +178,15 @@ review filed, awaiting approval (2)
     review: rhbz#2498026 new (as of 2026-08-10)
 ```
 
+An update in flight for an *earlier* version is reported too, because it
+is what stands between a finished build and an update of its own: Bodhi
+requires days in testing before an update can go stable, and editing that
+update to carry the new build would restart the clock and discard its
+karma. The branch line shows the older update, the alias, and how long it
+has served — `0.19.1-1.fc44 in FEDORA-2026-2134e68e6e testing (7 of 7
+days)` — and the state reads `waiting on an earlier update`, ranked below
+`needs an update` since there is nothing to do but wait.
+
 Where a newer build is waiting is part of the state, from one template
 so the lines stay comparable: `newer build in a COPR, not landed in
 rawhide` when Koji has no build of the staged version, and `newer build
