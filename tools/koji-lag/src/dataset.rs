@@ -67,9 +67,25 @@ fn buildarch_method() -> String {
 /// the only tasks a bottleneck can be attributed to.
 pub const BUILD_ARCH: &str = "buildArch";
 
-/// The source rebuild every build starts with, on whichever arch the hub
-/// picked. It precedes the per-arch builds rather than racing them.
+/// The source rebuild for a scratch build submitted as an SRPM: the hub
+/// rebuilds what it was handed. Precedes the per-arch builds rather than
+/// racing them, on whichever arch the hub picked.
 pub const REBUILD_SRPM: &str = "rebuildSRPM";
+
+/// The same stage for a build from dist-git, where the source is checked
+/// out and packaged rather than uploaded.
+///
+/// Both names are in use — the flow decides which — so a tool that knows
+/// only one reports on part of the population without being able to say
+/// which part. Scratch builds dominate by volume, so knowing only
+/// `rebuildSRPM` would have looked like near-complete coverage while
+/// missing every dist-git build.
+pub const BUILD_SRPM_FROM_SCM: &str = "buildSRPMFromSCM";
+
+/// Whether a method is the source-rebuild stage under either name.
+pub fn is_srpm_step(method: &str) -> bool {
+    method == REBUILD_SRPM || method == BUILD_SRPM_FROM_SCM
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DatasetMeta {
@@ -116,6 +132,14 @@ pub struct BuildRecord {
     pub start_ts: Option<f64>,
     pub completion_ts: Option<f64>,
     pub priority: Option<i64>,
+    /// Builder the parent task itself was scheduled on.
+    ///
+    /// The `build` task coordinates rather than compiles, but it holds a
+    /// slot on a real machine while it waits for its children — one was
+    /// seen occupying an s390x builder for five minutes to produce a
+    /// noarch package whose actual work ran on x86.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<i64>,
 }
 
 /// One child task of a build: an architecture's build, or the source

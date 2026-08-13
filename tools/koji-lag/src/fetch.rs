@@ -100,10 +100,26 @@ pub struct FetchOpts {
     pub page_size: i64,
     pub sleep_ms: u64,
     pub retries: u32,
+    /// Share of one connection to aim for; see [`Pace`].
+    pub duty_percent: u32,
     pub verbose: bool,
+    /// Skip build tasks with this id or above, when known.
+    ///
+    /// A dataset covering a later window supplies it: the oldest build it
+    /// holds is newer than anything wanted here, so the walk may begin
+    /// below it. Makes the seek exact — an id comparison rather than a
+    /// creation time against a grace margin.
+    pub start_below: Option<i64>,
 }
 
 impl FetchOpts {
+    fn pace(&self) -> Pace {
+        Pace {
+            percent: self.duty_percent,
+            floor: std::time::Duration::from_millis(self.sleep_ms),
+        }
+    }
+
     /// Whether this fetch is scoped (not full coverage).
     fn filtered(&self) -> bool {
         self.owner.is_some() || self.packages.is_some()
@@ -119,6 +135,148 @@ const CREATE_GRACE_SECS: f64 = 3.0 * 86_400.0;
 /// Parents per child-fetch batch: ~5 arches per build keeps the
 /// response comfortably under any page size.
 const PARENT_CHUNK: usize = 40;
+
+/// How much of one connection's capacity a sweep may use.
+///
+/// A fixed pause between requests paces backwards under load: at 500ms
+/// between half-second queries the hub sees us half the time, but when it
+/// is struggling and the same query takes eight seconds we occupy it 94%
+/// of the time — leaning hardest exactly when we should ease off. Pausing
+/// in proportion to how long the last request took inverts that, and it
+/// speeds up again by itself when the hub does.
+///
+/// `percent` is the share of one connection to aim for: 50 means pause as
+/// long as the request took. `floor` applies regardless, so quick answers
+/// do not become a tight loop.
+#[derive(Debug, Clone, Copy)]
+pub struct Pace {
+    pub percent: u32,
+    pub floor: std::time::Duration,
+}
+
+impl Pace {
+    /// How long to wait after a request that took `latency`.
+    pub fn after(&self, latency: std::time::Duration) -> std::time::Duration {
+        let percent = self.percent.clamp(1, 100);
+        // duty = latency / (latency + wait), so wait = latency * (100 - duty) / duty.
+        let wait = latency.mul_f64((100 - percent) as f64 / percent as f64);
+        wait.max(self.floor)
+    }
+
+    /// Wait, having just spent `latency` on a request.
+    pub fn rest(&self, latency: std::time::Duration) {
+        std::thread::sleep(self.after(latency));
+    }
+}
+
+/// How deep an offset the seek will probe.
+///
+/// Offsets are cheap until they are not: measured against Fedora's hub,
+/// a one-row probe costs 0.6s at offset 0, 1.6s at 50,000 and 2.8s at
+/// 300,000 — then 81s at a million, where the query plan evidently
+/// changes. Past this bound the walk is left to page, which is slow but
+/// steady, rather than trading it for a stall.
+const SEEK_OFFSET_CAP: i64 = 500_000;
+
+/// Where in the newest-first order the wanted window begins.
+///
+/// Walking from the newest task to a window a month old costs hundreds of
+/// paged requests. The same position can be found with a handful of
+/// one-row probes: task ids only grow, so "is this row still too new?" is
+/// monotonic in the offset, and a binary search lands on the boundary.
+///
+/// `too_new` decides that per row. Given a build id to stay below it is an
+/// exact test; otherwise it compares creation time against the window,
+/// which needs the same grace margin the walk uses.
+fn seek_start_offset(
+    hub: &HubClient,
+    opts: &FetchOpts,
+    list_opts: &ListTasksOpts,
+    too_new: impl Fn(&sandogasa_kojihub::HubTask) -> bool,
+) -> Result<i64, String> {
+    let probe = |offset: i64| -> Result<Option<sandogasa_kojihub::HubTask>, String> {
+        let query = sandogasa_kojihub::QueryOpts {
+            limit: Some(1),
+            offset: Some(offset),
+            order: Some("-id".to_string()),
+        };
+        let started = std::time::Instant::now();
+        let page = retry(opts.retries, || hub.list_tasks(list_opts, &query))
+            .map_err(|e| format!("seek probe at offset {offset} failed: {e}"))?;
+        opts.pace().rest(started.elapsed());
+        Ok(page.into_iter().next())
+    };
+
+    // Nothing to skip if the newest task is already within the window.
+    match probe(0)? {
+        Some(newest) if !too_new(&newest) => return Ok(0),
+        None => return Ok(0),
+        Some(_) => {}
+    }
+
+    // Reach for the boundary before bisecting towards it. A plain binary
+    // search over the whole range costs the same twenty probes whether
+    // the window starts one page down or three hundred thousand rows
+    // down, which for a one-day fetch spent thirty seconds to save seven.
+    // Galloping outwards from one page makes a shallow boundary cheap and
+    // leaves a deep one no worse.
+    let page = opts.page_size.max(1);
+    let mut probes = 1;
+    let mut low = 0i64;
+    let high;
+    let mut reach = page;
+    loop {
+        let at = reach.min(SEEK_OFFSET_CAP);
+        probes += 1;
+        match probe(at)? {
+            Some(task) if too_new(&task) => {
+                low = at;
+                if at == SEEK_OFFSET_CAP {
+                    // Still too new as deep as this will look, so
+                    // skipping to the cap is safe — the boundary is
+                    // deeper, and the walk pages on from there.
+                    if opts.verbose {
+                        eprintln!(
+                            "[koji-lag] seek: window starts deeper than offset \
+                             {SEEK_OFFSET_CAP} ({probes} probe(s)); walking from there"
+                        );
+                    }
+                    return Ok(SEEK_OFFSET_CAP);
+                }
+                reach = at.saturating_mul(4);
+            }
+            // Either the boundary or the end of the tasks: both mean the
+            // window does not begin deeper than here.
+            _ => {
+                high = at;
+                break;
+            }
+        }
+    }
+    let mut high = high;
+
+    // Bisect only until the bracket is within a page or two. The probe
+    // answers for one row while the walk reads a page at a time, so
+    // finding the exact row would buy nothing.
+    while high - low > 2 * page {
+        let mid = low + (high - low) / 2;
+        probes += 1;
+        match probe(mid)? {
+            Some(task) if too_new(&task) => low = mid,
+            _ => high = mid,
+        }
+    }
+    // A page back from the bracket, so the walk cannot start inside the
+    // window and miss its first page.
+    let start = (low - page).max(0);
+    if opts.verbose {
+        eprintln!(
+            "[koji-lag] seek: window begins near offset {low} ({probes} probe(s)); \
+             walking from {start}"
+        );
+    }
+    Ok(start)
+}
 
 /// Progress through the newest-first walk of `build` tasks.
 ///
@@ -319,19 +477,44 @@ pub fn run(opts: &FetchOpts, out_path: &Path) -> Result<FetchReport, String> {
         opts.after - CREATE_GRACE_SECS,
         opts.page_size.max(1) as usize,
     );
+    // The walk does nothing between calling this back and asking for the
+    // next page, so the gap since this returned is the request's own time.
+    let mut last_returned: Option<std::time::Instant> = None;
     let mut on_page = |page: &[sandogasa_kojihub::HubTask]| {
+        let latency = last_returned
+            .map(|t| t.elapsed())
+            .unwrap_or(std::time::Duration::ZERO);
         let created = page.iter().filter_map(|t| t.create_ts);
         let where_it_is = progress.note(created, page.len());
         if opts.verbose {
             eprintln!("[koji-lag] build walk: {where_it_is}");
         }
-        std::thread::sleep(std::time::Duration::from_millis(opts.sleep_ms));
+        opts.pace().rest(latency);
+        last_returned = Some(std::time::Instant::now());
     };
-    let build_tasks = match hub.walk_tasks_desc(
+    // Skip whatever is newer than the window before paging through it.
+    // No grace margin on this side: a task created after the window ends
+    // completed after it too, so it is out of scope whatever it did. The
+    // margin below is the one that matters, for builds that started
+    // before the window and finished inside it.
+    //
+    // A window running to now has nothing newer than itself, so the probe
+    // is skipped rather than asked and answered.
+    let seek_needed = opts.start_below.is_some() || opts.before < Utc::now().timestamp() as f64;
+    let start_offset = if seek_needed {
+        seek_start_offset(&hub, opts, &list_opts, |task| match opts.start_below {
+            Some(id) => task.id >= id,
+            None => task.create_ts.is_some_and(|ts| ts > opts.before),
+        })?
+    } else {
+        0
+    };
+    let build_tasks = match hub.walk_tasks_desc_from(
         &list_opts,
         opts.page_size,
         opts.retries,
         opts.after - CREATE_GRACE_SECS,
+        start_offset,
         &mut on_page,
     ) {
         Ok(tasks) => tasks
@@ -433,8 +616,10 @@ fn fetch_children(
             limit: Some(opts.page_size),
             ..Default::default()
         };
+        let started = std::time::Instant::now();
         let page = retry(opts.retries, || hub.list_tasks(&list_opts, &query))
-            .map_err(|e| format!("listTasks(buildArch, parent batch) failed: {e}"))?;
+            .map_err(|e| format!("listTasks(parent batch) failed: {e}"))?;
+        let latency = started.elapsed();
         // Whether this batch stands decides what the line may claim, so
         // it is settled before the line is written.
         let overflowed = (page.len() as i64) >= opts.page_size;
@@ -443,7 +628,7 @@ fn fetch_children(
         if opts.verbose {
             eprintln!("[koji-lag] children: {where_it_is}");
         }
-        std::thread::sleep(std::time::Duration::from_millis(opts.sleep_ms));
+        opts.pace().rest(latency);
         if splitting {
             let mid = chunk.len() / 2;
             chunks.push(chunk[..mid].to_vec());
@@ -455,7 +640,9 @@ fn fetch_children(
         // about how long the machines took.
         let page: Vec<_> = page
             .into_iter()
-            .filter(|t| matches!(t.method.as_str(), "buildArch" | "rebuildSRPM"))
+            .filter(|t| {
+                t.method == crate::dataset::BUILD_ARCH || crate::dataset::is_srpm_step(&t.method)
+            })
             .collect();
         if overflowed {
             eprintln!(
@@ -570,6 +757,7 @@ fn build_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> BuildRecor
         start_ts: task.start_ts,
         completion_ts: task.completion_ts,
         priority: task.priority,
+        host_id: task.host_id,
     }
 }
 
@@ -609,6 +797,43 @@ fn task_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> Option<Task
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn pacing_follows_how_slow_the_hub_is() {
+        use std::time::Duration;
+        let pace = Pace {
+            percent: 50,
+            floor: Duration::from_millis(500),
+        };
+        // Half of one connection: pause as long as the request took.
+        assert_eq!(pace.after(Duration::from_secs(8)), Duration::from_secs(8));
+        // A hub that answers quickly is asked again sooner, down to the
+        // floor — so throughput rises by itself when load drops.
+        assert_eq!(
+            pace.after(Duration::from_millis(100)),
+            Duration::from_millis(500)
+        );
+
+        // A gentler share waits proportionally longer.
+        let quarter = Pace {
+            percent: 25,
+            floor: Duration::from_millis(0),
+        };
+        assert_eq!(
+            quarter.after(Duration::from_secs(2)),
+            Duration::from_secs(6)
+        );
+
+        // The whole connection: only the floor applies.
+        let flat = Pace {
+            percent: 100,
+            floor: Duration::from_millis(200),
+        };
+        assert_eq!(
+            flat.after(Duration::from_secs(5)),
+            Duration::from_millis(200)
+        );
+    }
 
     #[test]
     fn batch_progress_counts_parents_not_batches() {
@@ -808,7 +1033,7 @@ mod tests {
                 .and(body_string_contains("<methodName>listTasks</methodName>"))
                 .and(body_string_contains("-id"))
                 .respond_with(ResponseTemplate::new(200).set_body_string(builds_page))
-                .expect(1)
+                .expect(2)
                 .mount(&server),
         );
         // Children come back via the indexed parent-batch query.
@@ -840,6 +1065,8 @@ mod tests {
             sleep_ms: 0,
             retries: 0,
             verbose: false,
+            duty_percent: 100,
+            start_below: None,
         };
         let report = run(&opts, &out).unwrap();
         assert_eq!(report.tasks_swept, 3);
@@ -889,6 +1116,7 @@ mod tests {
             start_ts: None,
             completion_ts: None,
             priority: None,
+            host_id: None,
         };
         let task = |id: i64, parent: i64| TaskRecord {
             instance: "fedora".to_string(),
@@ -929,6 +1157,8 @@ mod tests {
             sleep_ms: 0,
             retries: 0,
             verbose: false,
+            duty_percent: 100,
+            start_below: None,
         };
         apply_filters(&mut incoming, &opts);
         assert_eq!(incoming.builds.len(), 1);

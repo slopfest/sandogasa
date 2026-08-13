@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::dataset::{BUILD_ARCH, Dataset, FetchWindow, REBUILD_SRPM, TaskRecord};
+use crate::dataset::{BUILD_ARCH, Dataset, FetchWindow, TaskRecord};
 use crate::stats::{
     CriticalPath, DistSummary, critical_path, in_build_time_population, in_queue_wait_population,
     median, summarize,
@@ -220,7 +220,7 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
     let srpm_tasks: Vec<&TaskRecord> = selected
         .iter()
         .copied()
-        .filter(|t| t.method == REBUILD_SRPM)
+        .filter(|t| crate::dataset::is_srpm_step(&t.method))
         .collect();
 
     // How many arches each build was built for decides which questions
@@ -690,6 +690,26 @@ fn render_table(
 
 #[cfg(test)]
 mod tests {
+    use crate::dataset::{BUILD_SRPM_FROM_SCM, REBUILD_SRPM};
+
+    #[test]
+    fn both_names_for_the_source_rebuild_are_counted() {
+        // rebuildSRPM is a scratch build submitted as an SRPM;
+        // buildSRPMFromSCM is a build from dist-git. Knowing only one
+        // reports on part of the population without saying which part.
+        let mut ds = shaped_dataset();
+        let mut from_scm = task(41, 1, "noarch", 8.0, 60.0);
+        from_scm.method = BUILD_SRPM_FROM_SCM.to_string();
+        from_scm.host_id = Some(2);
+        ds.tasks.insert(from_scm.key(), from_scm);
+
+        let out = run(&ds, &ReportOpts::default());
+        let rows: Vec<&str> = out.srpm.iter().map(|r| r.arch.as_str()).collect();
+        assert!(rows.contains(&"ppc64le"), "{rows:?}");
+        assert!(rows.contains(&"s390x"), "{rows:?}");
+        // And neither name is mistaken for a racing arch.
+        assert!(!out.multi_arch.iter().any(|r| r.arch == "noarch"));
+    }
 
     /// A dataset holding one build of each shape, plus the source
     /// rebuilds, with hosts of known arches.
@@ -830,6 +850,7 @@ mod tests {
             start_ts: Some(0.0),
             completion_ts: Some(1000.0),
             priority: None,
+            host_id: None,
         }
     }
 

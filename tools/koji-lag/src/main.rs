@@ -77,9 +77,18 @@ struct FetchArgs {
     #[arg(long, default_value_t = 1000)]
     page_size: i64,
 
-    /// Pause between hub requests, in milliseconds.
+    /// Minimum pause between hub requests, in milliseconds.
     #[arg(long, default_value_t = 500)]
     sleep_ms: u64,
+
+    /// Share of one connection to use, as a percentage.
+    ///
+    /// Each pause is scaled to how long the last request took, so a
+    /// hub under load is asked less often and a hub that speeds up
+    /// is asked more. 50 means pause as long as the request took;
+    /// 100 paces by --sleep-ms alone.
+    #[arg(long, value_name = "PERCENT", default_value_t = 50)]
+    duty_cycle: u32,
 
     /// Retries per failed hub request.
     #[arg(long, default_value_t = 3)]
@@ -88,6 +97,16 @@ struct FetchArgs {
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
+
+    /// Start below this build task id, or below the oldest in a
+    /// dataset file.
+    ///
+    /// A backfill knows the answer: a dataset covering a later
+    /// window holds nothing this one wants, so the sweep can begin
+    /// below the oldest build in it. Given a number, that id is
+    /// used directly.
+    #[arg(long, value_name = "ID|FILE")]
+    start_below: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -185,7 +204,12 @@ fn cmd_fetch(args: &FetchArgs) -> Result<(), Box<dyn Error>> {
         page_size: args.page_size,
         sleep_ms: args.sleep_ms,
         retries: args.retries,
+        duty_percent: args.duty_cycle,
         verbose: args.verbose,
+        start_below: match args.start_below.as_deref() {
+            None => None,
+            Some(spec) => Some(oldest_build_id(spec)?),
+        },
     };
     let report = fetch::run(&opts, &args.output)?;
     eprintln!(
@@ -198,6 +222,26 @@ fn cmd_fetch(args: &FetchArgs) -> Result<(), Box<dyn Error>> {
         args.output.display()
     );
     Ok(())
+}
+
+/// Resolve `--start-below`: a build task id, or the oldest one in a
+/// dataset.
+///
+/// Taking a file is the useful form during a backfill — the answer is
+/// already sitting in the dataset for the window after this one, and
+/// reading it beats copying an id by hand.
+fn oldest_build_id(spec: &str) -> Result<i64, Box<dyn Error>> {
+    if let Ok(id) = spec.trim().parse::<i64>() {
+        return Ok(id);
+    }
+    let dataset = koji_lag::dataset::Dataset::load(std::path::Path::new(spec))
+        .map_err(|e| format!("--start-below {spec}: {e}"))?;
+    dataset
+        .builds
+        .values()
+        .map(|b| b.task_id)
+        .min()
+        .ok_or_else(|| format!("--start-below {spec}: the dataset holds no builds").into())
 }
 
 fn cmd_merge(args: &MergeArgs) -> Result<(), Box<dyn Error>> {

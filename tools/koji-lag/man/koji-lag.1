@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH koji-lag 1 2026-08-12 "sandogasa 0.19.4" "Sandogasa Manual"
+.TH koji-lag 1 2026-08-13 "sandogasa 0.19.4" "Sandogasa Manual"
 .SH NAME
 koji\-lag \- Quantify Koji build queue lag and per\-arch build\-time drag
 .SH SYNOPSIS
@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS koji-lag fetch
-\fBkoji\-lag fetch\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] [\fB\-\-owner\fR] [\fB\-\-package\fR] [\fB\-i\fR|\fB\-\-inventory\fR] <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-retries\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBkoji\-lag fetch\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] [\fB\-\-owner\fR] [\fB\-\-package\fR] [\fB\-i\fR|\fB\-\-inventory\fR] <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-start\-below\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Sweep a Koji completion window into a local dataset
 .TP
@@ -51,7 +51,12 @@ Dataset file to create or merge into
 Tasks per listTasks page
 .TP
 \fB\-\-sleep\-ms\fR \fI<SLEEP_MS>\fR [default: 500]
-Pause between hub requests, in milliseconds
+Minimum pause between hub requests, in milliseconds
+.TP
+\fB\-\-duty\-cycle\fR \fI<PERCENT>\fR [default: 50]
+Share of one connection to use, as a percentage.
+
+Each pause is scaled to how long the last request took, so a hub under load is asked less often and a hub that speeds up is asked more. 50 means pause as long as the request took; 100 paces by \-\-sleep\-ms alone.
 .TP
 \fB\-\-retries\fR \fI<RETRIES>\fR [default: 3]
 Retries per failed hub request
@@ -59,8 +64,13 @@ Retries per failed hub request
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
 .TP
+\fB\-\-start\-below\fR \fI<ID|FILE>\fR
+Start below this build task id, or below the oldest in a dataset file.
+
+A backfill knows the answer: a dataset covering a later window holds nothing this one wants, so the sweep can begin below the oldest build in it. Given a number, that id is used directly.
+.TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag merge
 \fBkoji\-lag merge\fR <\fB\-o\fR|\fB\-\-output\fR> [\fB\-h\fR|\fB\-\-help\fR] <\fIFILE\fR> 
 .PP

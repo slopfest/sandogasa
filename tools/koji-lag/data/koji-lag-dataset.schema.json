@@ -67,6 +67,14 @@
           "type": "number",
           "format": "double"
         },
+        "host_id": {
+          "description": "Builder the parent task itself was scheduled on.\n\nThe `build` task coordinates rather than compiles, but it holds a\nslot on a real machine while it waits for its children — one was\nseen occupying an s390x builder for five minutes to produce a\nnoarch package whose actual work ran on x86.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "instance": {
           "type": "string"
         },

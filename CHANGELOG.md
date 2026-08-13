@@ -2,7 +2,46 @@
 
 ## Unreleased
 
-### koji-lag: the SRPM rebuild, and each shape of build, reported separately
+### koji-lag: a backfill no longer walks from today to reach last month
+
+Fetching a past window paged through everything newer first — for a June
+window in August, three hundred requests before reaching any wanted data,
+and a day-at-a-time backfill paid that over again for every day. Task ids
+only grow, so a handful of one-row probes can find where the window begins
+instead: galloping outwards from one page, then bisecting until the bracket
+is within a page or two, since landing early costs nothing (the walk
+filters client-side regardless). A one-day fetch spends four probes; a
+window six weeks back, fourteen.
+
+A count query would have been the obvious way to size the job and is not
+affordable — `listTasks` with `countOnly` over a three-day creation window
+measured 83 seconds — and offsets themselves stop being cheap past a few
+hundred thousand rows (2.8s at 300,000, 81s at a million), so the search is
+bounded and falls back to plain paging beyond that.
+
+`--start-below <ID|FILE>` makes the boundary exact rather than inferred
+from creation times: a dataset covering the window *after* this one holds
+nothing wanted here, so the sweep may begin below the oldest build in it.
+
+Requests are now paced by how long the hub takes. `--duty-cycle` (default
+50) names the share of one connection to aim for, and each pause is scaled
+to the last request's latency, so a loaded hub is asked less often and one
+that recovers is asked more, down to the `--sleep-ms` floor. The fixed
+pause it replaces paced backwards under load: 500ms between half-second
+queries used half a connection, but the same 500ms between eight-second
+queries used 94% of one — leaning hardest exactly when the hub could bear
+it least.
+
+Also corrected: the source-rebuild stage has two names, `rebuildSRPM` for a
+scratch build submitted as an SRPM and `buildSRPMFromSCM` for a build from
+dist-git. Only the first was collected, which looked like near-complete
+coverage while missing every dist-git build. And the parent `build` task's
+own host is now recorded: it coordinates rather than compiles, but it holds
+a slot on a real machine while it waits — one was seen occupying an s390x
+builder for five minutes to produce a noarch package whose work all ran on
+x86.
+
+
 
 Every Koji build starts by rebuilding the source package on a host the hub
 picks — independently of what the build targets, so a package can queue

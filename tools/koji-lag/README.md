@@ -80,8 +80,11 @@ where the arch that matters is the host's rather than the package's. Each
 section carries median and p90 for both the queue wait and the run, so a
 slow queue and a slow machine stay distinguishable.
 
-The source rebuild every build begins with (`rebuildSRPM`) is reported as
-its own section, keyed by host arch. Koji picks that host independently of
+The source rebuild every build begins with is reported as its own
+section, keyed by host arch. Koji names it `rebuildSRPM` when a scratch
+build was submitted as an SRPM and `buildSRPMFromSCM` when the source
+comes from dist-git; both are the same stage and are reported together,
+with the official/scratch split telling the flows apart. Koji picks that host independently of
 what the build targets, so a package can wait on a machine it does not
 build for — and that wait is part of its wall clock either way.
 
@@ -125,8 +128,30 @@ of the total the walk found. A batch whose answer fills a page is split in
 half and retried, which says `splitting` and finishes no parents — so the
 parent count, not the batch count, is the one that measures progress.
 
-Because the walk always starts at now, one wide window costs far less
-than many narrow ones: `--since 2026-06-01 --until 2026-07-31` walks the
+A sweep no longer walks from *now* to reach a window in the past. Task
+ids only grow, so "is this row newer than the window?" is monotonic in the
+page offset, and a handful of one-row probes find where the window begins:
+a galloping search outwards from one page, then bisection until the
+bracket is within a page or two — landing early is harmless, since the
+walk filters client-side anyway. A one-day fetch spends four probes; a
+window six weeks back, fourteen, instead of three hundred paged requests.
+
+`--start-below` makes it exact. During a backfill the answer is already to
+hand: pass the dataset for the window *after* this one and the sweep skips
+everything at or above the oldest build id in it. Give the adjacent window
+rather than a distant one — bounding June by a July file still leaves all
+of June to page through.
+
+Requests are paced by how long the hub takes to answer them. `--duty-cycle`
+(default 50) is the share of one connection to aim for, so each pause is
+scaled to the last request's latency: a hub under load is asked less often,
+and one that speeds up is asked more, down to the `--sleep-ms` floor. A
+fixed pause did the opposite — at 500ms between half-second queries the hub
+saw us half the time, but when the same query took eight seconds we occupied
+it 94% of the time, leaning hardest exactly when we should have eased off.
+
+Because the walk always starts at now for a window that reaches it, one
+wide window costs far less than many narrow ones: `--since 2026-06-01 --until 2026-07-31` walks the
 history once, where fetching those days one at a time walks it again for
 every day. Coverage windows coalesce on merge either way.
 

@@ -228,8 +228,34 @@ impl HubClient {
         min_create_ts: f64,
         on_page: &mut impl FnMut(&[HubTask]),
     ) -> Result<Vec<HubTask>, Error> {
+        self.walk_tasks_desc_from(opts, page_size, retries, min_create_ts, 0, on_page)
+    }
+
+    /// [`walk_tasks_desc`] beginning at `start_offset` rather than at the
+    /// newest task.
+    ///
+    /// For a window well in the past, walking from the newest task means
+    /// paging through everything more recent first — hundreds of requests
+    /// to reach a month ago. A caller that can establish where the window
+    /// begins (see the offset probes in koji-lag's `fetch`) skips straight
+    /// to it.
+    ///
+    /// Starting deeper is safe against tasks arriving mid-sweep in the
+    /// same way the walk itself is: new tasks take lower offsets, so an
+    /// offset established a moment ago now points at something *newer*
+    /// than it did. The walk therefore re-covers a little ground rather
+    /// than skipping any, and the id-keyed dedupe absorbs the overlap.
+    pub fn walk_tasks_desc_from(
+        &self,
+        opts: &ListTasksOpts,
+        page_size: i64,
+        retries: u32,
+        min_create_ts: f64,
+        start_offset: i64,
+        on_page: &mut impl FnMut(&[HubTask]),
+    ) -> Result<Vec<HubTask>, Error> {
         let mut by_id: BTreeMap<i64, HubTask> = BTreeMap::new();
-        let mut offset = 0i64;
+        let mut offset = start_offset.max(0);
         loop {
             let query = QueryOpts {
                 limit: Some(page_size),
