@@ -204,6 +204,64 @@ impl WalkProgress {
     }
 }
 
+/// Progress through the per-parent sweep of `buildArch` children.
+///
+/// Unlike the build walk, the size of this job *is* known in advance —
+/// the parents were counted by the walk — so progress is reported
+/// against it. Batches alone would not do: a batch whose answer fills a
+/// page is split in two and re-queued, so the batch count can rise
+/// without any parent being finished, and a reader watching only batches
+/// would see motion without progress. Parents are therefore counted as
+/// done when a batch is accepted, and a split says so.
+#[derive(Debug)]
+pub struct BatchProgress {
+    total_parents: usize,
+    done_parents: usize,
+    chunk: usize,
+    pub batches: usize,
+}
+
+impl BatchProgress {
+    pub fn new(total_parents: usize, chunk: usize) -> Self {
+        Self {
+            total_parents,
+            done_parents: 0,
+            chunk: chunk.max(1),
+            batches: 0,
+        }
+    }
+
+    /// Record a batch and describe the position. `split` means its
+    /// answer overflowed the page, so it will be retried in halves and
+    /// its parents are not done.
+    pub fn note(&mut self, parents: usize, tasks: usize, split: bool) -> String {
+        self.batches += 1;
+        if !split {
+            self.done_parents += parents;
+        }
+        let mut line = format!(
+            "batch {} ({parents} parent(s), {tasks} task(s))",
+            self.batches
+        );
+        if split {
+            line += " — too many children for one page, splitting";
+            return line;
+        }
+        let left = self.total_parents.saturating_sub(self.done_parents);
+        let pct = match self.total_parents {
+            0 => 100.0,
+            total => self.done_parents as f64 / total as f64 * 100.0,
+        };
+        line += &format!(
+            " — {} of {} parent(s), {pct:.0}%, ~{} batch(es) to go",
+            self.done_parents,
+            self.total_parents,
+            left.div_ceil(self.chunk)
+        );
+        line
+    }
+}
+
 /// Counts for the CLI summary line.
 #[derive(Debug, Default)]
 pub struct FetchReport {
@@ -357,7 +415,7 @@ fn fetch_children(
 ) -> Result<Vec<sandogasa_kojihub::HubTask>, String> {
     let mut all = Vec::new();
     let mut chunks: Vec<Vec<i64>> = parents.chunks(PARENT_CHUNK).map(<[i64]>::to_vec).collect();
-    let mut batches = 0usize;
+    let mut progress = BatchProgress::new(parents.len(), PARENT_CHUNK);
     while let Some(chunk) = chunks.pop() {
         let list_opts = ListTasksOpts {
             method: Some("buildArch".to_string()),
@@ -371,22 +429,22 @@ fn fetch_children(
         };
         let page = retry(opts.retries, || hub.list_tasks(&list_opts, &query))
             .map_err(|e| format!("listTasks(buildArch, parent batch) failed: {e}"))?;
-        batches += 1;
+        // Whether this batch stands decides what the line may claim, so
+        // it is settled before the line is written.
+        let overflowed = (page.len() as i64) >= opts.page_size;
+        let splitting = overflowed && chunk.len() > 1;
+        let where_it_is = progress.note(chunk.len(), page.len(), splitting);
         if opts.verbose {
-            eprintln!(
-                "[koji-lag] children: batch {batches} ({} parent(s), {} task(s))",
-                chunk.len(),
-                page.len()
-            );
+            eprintln!("[koji-lag] children: {where_it_is}");
         }
         std::thread::sleep(std::time::Duration::from_millis(opts.sleep_ms));
-        if (page.len() as i64) >= opts.page_size && chunk.len() > 1 {
+        if splitting {
             let mid = chunk.len() / 2;
             chunks.push(chunk[..mid].to_vec());
             chunks.push(chunk[mid..].to_vec());
             continue;
         }
-        if (page.len() as i64) >= opts.page_size {
+        if overflowed {
             eprintln!(
                 "warning: build task {} has {}+ child tasks; some may be missed",
                 chunk[0], opts.page_size
@@ -534,6 +592,37 @@ fn task_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> Option<Task
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn batch_progress_counts_parents_not_batches() {
+        let mut progress = BatchProgress::new(100, 40);
+
+        let first = progress.note(40, 812, false);
+        assert!(
+            first.contains("batch 1 (40 parent(s), 812 task(s))"),
+            "{first}"
+        );
+        assert!(first.contains("40 of 100 parent(s), 40%"), "{first}");
+        assert!(first.contains("~2 batch(es) to go"), "{first}");
+
+        // A batch whose answer overflowed is retried in halves, so no
+        // parent finished and the line says why rather than implying
+        // progress.
+        let split = progress.note(40, 1000, true);
+        assert!(
+            split.contains("batch 2 (40 parent(s), 1000 task(s))"),
+            "{split}"
+        );
+        assert!(split.contains("splitting"), "{split}");
+        assert!(!split.contains('%'), "{split}");
+
+        // The halves then land.
+        let half = progress.note(20, 400, false);
+        assert!(half.contains("60 of 100 parent(s), 60%"), "{half}");
+        let rest = progress.note(20, 400, false);
+        assert!(rest.contains("80 of 100 parent(s), 80%"), "{rest}");
+        assert_eq!(progress.batches, 4);
+    }
 
     #[test]
     fn walk_progress_says_how_far_back_it_has_reached() {

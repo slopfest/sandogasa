@@ -69,6 +69,42 @@ saved, coverage is never overclaimed). Re-fetching an overlapping
 window into the same file refreshes still-running tasks and
 coalesces the coverage windows.
 
+#### Reading the progress output
+
+`-v` narrates both halves of a sweep. Fedora's hub carries several
+thousand `build` tasks a day — around 7,700 measured in August 2026,
+counting every branch, every side tag and every scratch build — so a
+month-long window runs to hundreds of pages, and the lines are written to
+show where in that a run has got to.
+
+```
+[koji-lag] build walk: page 3 (1000 task(s), 3000 so far),
+    back to 2026-08-13 00:53 — 11% of the window, ~24 page(s) to go
+[koji-lag] children: batch 47 (40 parent(s), 812 task(s))
+    — 1880 of 5082 parent(s), 37%, ~80 batch(es) to go
+```
+
+For the **build walk**: the page number and the tasks on it, the running
+total of tasks examined, and the creation time the walk has reached. The
+walk runs newest-first from *now*, so a window in the past is reached only
+after walking through everything more recent — fetching July while it is
+August means walking August first, which is why the reached time can be
+outside the window. The percentage is of the distance from the newest task
+to the window's start, and the page estimate comes from the task density
+seen so far, so it shifts as the walk crosses quiet weekends and busy mass
+rebuilds.
+
+For the **children**: the batch number, the parents asked about together
+and the child tasks that came back, then how many parents are finished out
+of the total the walk found. A batch whose answer fills a page is split in
+half and retried, which says `splitting` and finishes no parents — so the
+parent count, not the batch count, is the one that measures progress.
+
+Because the walk always starts at now, one wide window costs far less
+than many narrow ones: `--since 2026-06-01 --until 2026-07-31` walks the
+history once, where fetching those days one at a time walks it again for
+every day. Coverage windows coalesce on merge either way.
+
 ### Merge
 
 Pool independently collected datasets (records dedupe by

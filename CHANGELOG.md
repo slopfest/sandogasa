@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### koji-lag: progress through the children sweep, and what a bottleneck count is out of
+
+The per-parent sweep of `buildArch` children reported `batch 47 (40
+parent(s), 812 task(s))`, with no sense of the total — though the total
+is known, since the walk counted the parents. It now reports parents
+finished against parents found. Batches would not do: a batch whose
+answer fills a page is split in half and retried, so the batch count can
+rise while nothing finishes, and the line now says `splitting` in that
+case rather than implying progress.
+
+A `report`'s header said `Bottlenecked builds: 5082` with nothing to read
+it against — five thousand out of what? It now gives the day's builds and
+accounts for the difference, with the figures summing to the total:
+
+```
+Builds completed: 7377; with an arch on the critical path: 5082 (69%);
+single-arch, failed or untimed: 2252; no per-arch tasks swept: 43;
+unattributed tasks: 0
+```
+
+The 2252 are not a data problem: attribution needs two arches to compare,
+and a failed or untimed task offers no completion. A `Header legend`
+section defines each figure, and `builds_in_window` and
+`builds_with_tasks` join the JSON.
+
+Counting those builds turned up a fault in the obvious implementation:
+the parents named by tasks are not the same set as the builds in the
+window, because a task whose parent was never swept names a build that
+is not there. Those are already reported as unattributed tasks, and are
+no longer counted as builds too.
+
+The README now explains every figure in both progress lines, and why one
+wide window costs far less than many narrow ones: the walk starts at now
+whatever the window, so fetching a month a day at a time walks the same
+history thirty times.
+
 ### koji-lag: a fetch says how far back it has got
 
 `fetch` walks every `build` task newest-first — `listTasks` has no

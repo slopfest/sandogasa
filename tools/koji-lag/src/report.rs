@@ -11,7 +11,7 @@
 //! output withholds statistics for thin rows, JSON always carries
 //! the numbers plus counts so pooled datasets can re-filter.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -80,6 +80,17 @@ pub struct ReportOutput {
     pub unattributed_tasks: usize,
     /// Builds counted for critical-path attribution.
     pub bottlenecked_builds: usize,
+    /// Builds that completed in the window, whatever came of them.
+    ///
+    /// The denominator the attributed count needs: "5082 bottlenecked"
+    /// says nothing about severity without knowing whether the day held
+    /// five thousand builds or fifty thousand.
+    pub builds_in_window: usize,
+    /// Builds in the window with at least one per-arch task selected —
+    /// the ones attribution could even be attempted on. Lower than
+    /// `builds_in_window` when a build's children fall outside an arch
+    /// filter, were never swept, or the build had none.
+    pub builds_with_tasks: usize,
 }
 
 /// Compute the report over a (merged) dataset.
@@ -131,6 +142,29 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
                 .push(task);
         }
     }
+    // Every build that finished in the window, which is what makes the
+    // attributed count legible as a proportion.
+    let counted_builds: BTreeSet<&String> = dataset
+        .builds
+        .iter()
+        .filter(|(_, b)| {
+            let ts = b.completion_ts.unwrap_or(b.create_ts);
+            opts.since.is_none_or(|s| ts >= s) && opts.until.is_none_or(|u| ts < u)
+        })
+        .filter(|(_, b)| match opts.scratch {
+            Some(want) => want == b.scratch,
+            None => true,
+        })
+        .map(|(key, _)| key)
+        .collect();
+    let builds_in_window = counted_builds.len();
+    // Counted over the builds themselves, not over the parent ids the
+    // tasks mention: a task whose parent was never swept points at no
+    // build here, and is reported as an unattributed task instead.
+    let builds_with_tasks = by_parent
+        .keys()
+        .filter(|key| counted_builds.contains(key))
+        .count();
     let mut bottlenecked_builds = 0usize;
     let mut bottleneck_delays: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
     let mut paths: Vec<CriticalPath> = Vec::new();
@@ -206,6 +240,8 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
         scratch,
         unattributed_tasks: unattributed,
         bottlenecked_builds,
+        builds_in_window,
+        builds_with_tasks,
     }
 }
 
@@ -289,11 +325,33 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
              unix {from:.0} and {to:.0}"
         );
     }
+    // A bottleneck count alone says nothing about how much of the day it
+    // covers, so the day's builds are given with it — and the difference
+    // is accounted for rather than left as a puzzle. The three build
+    // figures sum to the total.
+    let share = match output.builds_in_window {
+        0 => String::new(),
+        total => format!(
+            " ({:.0}%)",
+            output.bottlenecked_builds as f64 / total as f64 * 100.0
+        ),
+    };
+    let unattributable = output
+        .builds_with_tasks
+        .saturating_sub(output.bottlenecked_builds);
+    let no_tasks = output
+        .builds_in_window
+        .saturating_sub(output.builds_with_tasks);
     let _ = writeln!(
         o,
-        "Bottlenecked builds: {} (critical-path attribution); \
+        "Builds completed: {}; with an arch on the critical path: {}{share}; \
+         single-arch, failed or untimed: {}; no per-arch tasks swept: {}; \
          unattributed tasks: {}",
-        output.bottlenecked_builds, output.unattributed_tasks
+        output.builds_in_window,
+        output.bottlenecked_builds,
+        unattributable,
+        no_tasks,
+        output.unattributed_tasks
     );
 
     render_rows(&mut o, "All builds", &output.arches, min_samples);
@@ -309,7 +367,22 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
     // `*` would italicize).
     let _ = writeln!(
         o,
-        "\nColumn legend:\n\
+        "\nHeader legend:\n\
+         - `Builds completed` — parent build tasks that finished in the \
+         window; the\n  three figures after it sum to this.\n\
+         - `with an arch on the critical path` — builds where one arch \
+         finished last,\n  so an arch can be held responsible for the \
+         wall-clock time.\n\
+         - `single-arch, failed or untimed` — builds attribution cannot \
+         apply to: one\n  arch alone has nothing to be slower than, and \
+         a failed or untimed task\n  gives no completion to compare.\n\
+         - `no per-arch tasks swept` — builds whose children are not in \
+         the dataset,\n  usually an arch filter or a sweep that did not \
+         reach them.\n\
+         - `unattributed tasks` — per-arch tasks whose parent build was \
+         not swept, so\n  their scratch-ness is unknown; they are \
+         counted in the combined stats only.\n\
+         \nColumn legend:\n\
          - `queued` / `built` — tasks counted in the wait/time stats.\n\
          - `med-wait`, `p90-wait` — task creation until a builder \
          picked it up.\n\
@@ -501,6 +574,10 @@ mod tests {
         let out = run(&ds, &ReportOpts::default());
         assert_eq!(out.bottlenecked_builds, 2);
         assert_eq!(out.unattributed_tasks, 1);
+        // The denominator a bottleneck count needs, and the figures
+        // that account for the difference.
+        assert_eq!(out.builds_in_window, 2);
+        assert_eq!(out.builds_with_tasks, 2);
         // s390x tops the ordering with 300s total bottleneck delay.
         assert_eq!(out.arches[0].arch, "s390x");
         assert_eq!(out.arches[0].bottleneck_total_delay, 300.0);
