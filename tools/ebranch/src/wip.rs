@@ -259,6 +259,13 @@ pub struct Ledger {
     /// is where every package starts.
     #[serde(default)]
     pub targets: Vec<String>,
+    /// Dist-git branch each target builds from, where it differs from
+    /// the target's own name — `epel10.3` builds from `epel10`, and
+    /// before mass branching Rawhide's release built from `rawhide`.
+    /// Bodhi is the authority, so this is filled in from its release
+    /// list rather than inferred from the name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub target_branches: BTreeMap<String, String>,
     /// Koji side tags the effort builds into.
     ///
     /// A build made in a side tag is tagged there and nowhere else
@@ -642,7 +649,13 @@ pub fn run(opts: &Options) -> Result<(), String> {
                 lookup.push(branch);
             }
         }
-        let (mut tags, mut releases) = release_tags(&lookup);
+        let (mut tags, mut releases, dist_git_branches) = release_tags(&lookup);
+        // Recorded so the report can tell a target that needs branching
+        // from one whose branch simply has another name, without asking
+        // Bodhi again on an offline run.
+        for (target, branch) in dist_git_branches {
+            ledger.target_branches.insert(target, branch);
+        }
         // Two targets resolving to one Bodhi release are one release
         // under two names, and every fact about it would be reported
         // twice. Fedora names rawhide's side tags after its version, so
@@ -932,6 +945,16 @@ const IN_A_SIDE_TAG: &str = "a side tag";
 /// Whether version-release `candidate` is newer than `than`.
 fn newer_evr(candidate: &str, than: &str) -> bool {
     sandogasa_rpmvercmp::rpmvercmp(candidate, than) == std::cmp::Ordering::Greater
+}
+
+/// What Rawhide wants, when it is not already current.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RawhideNeeds {
+    /// Something to be done — built, submitted — before anything can be
+    /// branched from it.
+    Doing,
+    /// Only time: an update is in flight, or a compose is pending.
+    Waiting,
 }
 
 /// Whether `candidate`'s version-release is newer than `than`'s, both
@@ -1405,23 +1428,32 @@ fn drop_target(ledger: &mut Ledger, target: &str) {
 /// release list. Branches Bodhi does not know are skipped rather
 /// than guessed at — the tag naming is release-engineering's to
 /// change, not ours to infer.
-fn release_tags(branches: &[String]) -> (BTreeMap<String, Vec<String>>, BTreeMap<String, String>) {
+type ReleaseFacts = (
+    BTreeMap<String, Vec<String>>,
+    BTreeMap<String, String>,
+    BTreeMap<String, String>,
+);
+
+fn release_tags(branches: &[String]) -> ReleaseFacts {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("warning: Koji lookups skipped ({e})");
-            return (BTreeMap::new(), BTreeMap::new());
+            return (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
         }
     };
     let releases = match rt.block_on(sandogasa_bodhi::BodhiClient::new().active_releases()) {
         Ok(releases) => releases,
         Err(e) => {
             eprintln!("warning: could not list Bodhi releases ({e}); skipping Koji lookups");
-            return (BTreeMap::new(), BTreeMap::new());
+            return (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
         }
     };
     let mut tags = BTreeMap::new();
     let mut names = BTreeMap::new();
+    // Which dist-git branch each target builds from, recorded only when
+    // it differs from the target's own name.
+    let mut dist_git = BTreeMap::new();
     for branch in branches {
         // Matched by branch or by name, because neither alone
         // suffices: F45's branch is "rawhide" and EPEL-10.3's is
@@ -1442,6 +1474,9 @@ fn release_tags(branches: &[String]) -> (BTreeMap<String, Vec<String>>, BTreeMap
                     .find(|r| as_branch(&r.name) == as_branch(branch) && rpm_release(r))
             }) {
             Some(release) => {
+                if &release.branch != branch {
+                    dist_git.insert(branch.clone(), release.branch.clone());
+                }
                 let branch_tags: Vec<String> = [&release.candidate_tag, &release.testing_tag]
                     .into_iter()
                     .filter(|t| !t.is_empty())
@@ -1464,7 +1499,7 @@ fn release_tags(branches: &[String]) -> (BTreeMap<String, Vec<String>>, BTreeMap
             ),
         }
     }
-    (tags, names)
+    (tags, names, dist_git)
 }
 
 /// Look up the review request for packages that look like they still
@@ -1851,7 +1886,7 @@ fn report_changes(spec: &str, changes: &Changes) {
 /// Ordered by how far along the package is, and each heading names
 /// the thing standing in the way rather than the state alone — the
 /// question being answered is what to do next.
-fn state(package: &Package, targets: &[String]) -> String {
+fn state(package: &Package, targets: &[String], branch_of: &BTreeMap<String, String>) -> String {
     let Some(d) = &package.distgit else {
         // Nothing looked up yet: say so rather than implying absence.
         return match &package.staged {
@@ -1900,11 +1935,19 @@ fn state(package: &Package, targets: &[String]) -> String {
     }
 
     // Rawhide is the shared spine: everything lands there first and is
-    // branched from it, so until it is current the targets cannot
-    // proceed and their state is not what the reader needs.
-    if let Some(spine) = rawhide_state(package) {
-        return spine;
-    }
+    // branched from it, so while Rawhide has work outstanding the targets
+    // cannot proceed and their state is not what the reader needs.
+    //
+    // Once Rawhide is only *waiting* — an update in flight, a compose
+    // pending — the outstanding work is all on the targets, and saying
+    // "update pushed" while three branches sit behind an earlier update
+    // hides the only thing left to do. So a waiting Rawhide yields to any
+    // target that is not finished, and speaks again when none is.
+    let spine = match rawhide_state(package) {
+        Some((RawhideNeeds::Doing, phrase)) => return phrase,
+        Some((RawhideNeeds::Waiting, phrase)) => Some(phrase),
+        None => None,
+    };
 
     // In Rawhide. What is left is per target, and the least advanced
     // one is the effort's real position for this package.
@@ -1912,14 +1955,15 @@ fn state(package: &Package, targets: &[String]) -> String {
         .iter()
         .filter(|t| *t != "rawhide")
         .map(|t| {
-            let (rank, label) = target_state(package, d, t);
+            let (rank, label) = target_state(package, d, t, branch_of);
             (rank, label, t.as_str())
         })
         .collect();
     states.sort_by_key(|(rank, _, _)| *rank);
     const SHIPPED: u8 = 6;
     let Some(&(rank, label, _)) = states.first() else {
-        return "in rawhide".to_string();
+        // No targets to speak for, so a waiting Rawhide speaks.
+        return spine.unwrap_or_else(|| "in rawhide".to_string());
     };
     // Every target at the least advanced state is named, because
     // naming one of several equals reads as though the others were
@@ -1931,8 +1975,13 @@ fn state(package: &Package, targets: &[String]) -> String {
         .map(|(_, _, target)| *target)
         .collect();
     at_rank.sort_by_key(|b| std::cmp::Reverse(release_recency(b)));
-    if rank == SHIPPED && at_rank.len() == states.len() && states.len() > 1 {
-        return "shipped for every target".to_string();
+    if rank == SHIPPED && at_rank.len() == states.len() {
+        // Every target done. What remains outstanding, if anything, is
+        // Rawhide's own wait, so that is the state again.
+        return spine.unwrap_or_else(|| match states.len() {
+            1 => format!("{label} for {}", at_rank.join(", ")),
+            _ => "shipped for every target".to_string(),
+        });
     }
     format!("{label} for {}", at_rank.join(", "))
 }
@@ -2067,21 +2116,28 @@ fn branch_lines(package: &Package, today: &str) -> Vec<String> {
 
 /// Where a package stands on the Rawhide spine, or `None` once
 /// Rawhide carries the staged version and the targets take over.
-fn rawhide_state(package: &Package) -> Option<String> {
+fn rawhide_state(package: &Package) -> Option<(RawhideNeeds, String)> {
     let ahead = ahead_of_repos(package, "rawhide");
     if !ahead {
-        return (!package.shipped.contains_key("rawhide"))
-            .then(|| "in dist-git, not built for rawhide".to_string());
+        return (!package.shipped.contains_key("rawhide")).then(|| {
+            (
+                RawhideNeeds::Doing,
+                "in dist-git, not built for rawhide".to_string(),
+            )
+        });
     }
     // Ahead of the repos. Koji says whether that is work still to do
     // or a build already made and waiting for a compose.
     if !built_at_least(package, "rawhide") {
         // Only reachable with something staged: without it the version
         // of interest *is* the recorded build, which cannot be missing.
-        return Some(match package.staged.is_some() {
-            true => not_landed_yet(IN_A_COPR, "rawhide"),
-            false => "in dist-git, no rawhide build found".to_string(),
-        });
+        return Some((
+            RawhideNeeds::Doing,
+            match package.staged.is_some() {
+                true => not_landed_yet(IN_A_COPR, "rawhide"),
+                false => "in dist-git, no rawhide build found".to_string(),
+            },
+        ));
     }
     // Built. An update may be carrying it — Rawhide builds get one
     // automatically, and a side tag is submitted as one — so say which
@@ -2096,21 +2152,35 @@ fn rawhide_state(package: &Package) -> Option<String> {
         .built
         .get("rawhide")
         .is_some_and(|b| crate::check_update::branch_from_side_tag(&b.tag).is_some());
-    Some(
+    // Nothing here is Rawhide's to do: an update exists, or a compose is
+    // pending. Only a build sitting in a side tag with no update still
+    // needs a hand.
+    Some((
+        RawhideNeeds::Waiting,
         match package.update.get("rawhide") {
             Some(u) if u.status == "pending" => "built, rawhide update pending",
             Some(u) if u.status == "testing" => "built, rawhide update in testing",
             Some(_) => "built for rawhide, update pushed",
-            None if in_side_tag => return Some(not_landed_yet(IN_A_SIDE_TAG, "rawhide")),
+            None if in_side_tag => {
+                return Some((
+                    RawhideNeeds::Doing,
+                    not_landed_yet(IN_A_SIDE_TAG, "rawhide"),
+                ));
+            }
             None => "built for rawhide, not yet in the repos",
         }
         .to_string(),
-    )
+    ))
 }
 
 /// A target's state and how far along it is, lowest first — the
 /// ranking is what makes "least advanced" meaningful.
-fn target_state(package: &Package, distgit: &DistGit, target: &str) -> (u8, &'static str) {
+fn target_state(
+    package: &Package,
+    distgit: &DistGit,
+    target: &str,
+    branch_of: &BTreeMap<String, String>,
+) -> (u8, &'static str) {
     // Whether the target already carries the version comes first, but
     // only once something has actually been seen in its repositories:
     // branch names do not always match a target — EPEL 10's minor
@@ -2122,7 +2192,17 @@ fn target_state(package: &Package, distgit: &DistGit, target: &str) -> (u8, &'st
     if package.shipped.contains_key(target) && !ahead_of_repos(package, target) {
         return (6, "shipped");
     }
-    if !distgit.branches.iter().any(|b| b == target) {
+    // A target's dist-git branch need not share its name: EPEL 10's
+    // minor releases all build from "epel10", and before mass branching
+    // Rawhide's release built from "rawhide". Bodhi says which branch a
+    // release uses, and that is recorded on the ledger; failing that, a
+    // version seen in the target's repositories is itself proof that the
+    // package is branched somewhere, since it could not have been built
+    // otherwise.
+    let branch_name = branch_of.get(target).map(String::as_str).unwrap_or(target);
+    let branched =
+        distgit.branches.iter().any(|b| b == branch_name) || package.shipped.contains_key(target);
+    if !branched {
         return (0, "needs a branch");
     }
     if !built_at_least(package, target) {
@@ -2192,7 +2272,7 @@ pub fn render(ledger: &Ledger, only: &[String], today: &str) -> String {
             continue;
         }
         group
-            .entry(state(package, &ledger.targets))
+            .entry(state(package, &ledger.targets, &ledger.target_branches))
             .or_default()
             .push((name, package));
     }
@@ -2448,12 +2528,18 @@ mod tests {
             }),
             ..Package::default()
         };
-        assert_eq!(state(&package, &[]), "staged, dist-git not checked");
+        assert_eq!(
+            state(&package, &[], &BTreeMap::new()),
+            "staged, dist-git not checked"
+        );
 
         // With dist-git answered, the next question is the review —
         // and no review record means none was found.
         package.distgit = Some(distgit(false, &[]));
-        assert_eq!(state(&package, &[]), "staged, no review filed");
+        assert_eq!(
+            state(&package, &[], &BTreeMap::new()),
+            "staged, no review filed"
+        );
     }
 
     #[test]
@@ -2467,13 +2553,19 @@ mod tests {
             .shipped
             .insert("rawhide".to_string(), shipped_at("1.0-1.fc46"));
         // Targeting Rawhide only, a rawhide branch is all it needs.
-        assert_eq!(state(&package, &[]), "in rawhide");
-        assert_eq!(state(&package, &["rawhide".to_string()]), "in rawhide");
+        assert_eq!(state(&package, &[], &BTreeMap::new()), "in rawhide");
+        assert_eq!(
+            state(&package, &["rawhide".to_string()], &BTreeMap::new()),
+            "in rawhide"
+        );
         // Targeting epel9 as well, it is not branched yet — and the
         // heading names the target, since with several the reader
         // needs to know which one is behind.
         let targets = vec!["rawhide".to_string(), "epel9".to_string()];
-        assert_eq!(state(&package, &targets), "needs a branch for epel9");
+        assert_eq!(
+            state(&package, &targets, &BTreeMap::new()),
+            "needs a branch for epel9"
+        );
     }
 
     fn staged_at(version: &str) -> Staged {
@@ -2505,7 +2597,7 @@ mod tests {
             .shipped
             .insert("rawhide".to_string(), shipped_at("0.12.0-7.fc45"));
         assert_eq!(
-            state(&package, &[]),
+            state(&package, &[], &BTreeMap::new()),
             "newer build in a COPR, not landed in rawhide"
         );
 
@@ -2514,7 +2606,7 @@ mod tests {
         package
             .shipped
             .insert("rawhide".to_string(), shipped_at("0.13.0-1.fc46"));
-        assert_eq!(state(&package, &[]), "in rawhide");
+        assert_eq!(state(&package, &[], &BTreeMap::new()), "in rawhide");
     }
 
     fn built_at(nvr: &str) -> Built {
@@ -2541,7 +2633,7 @@ mod tests {
             .built
             .insert("rawhide".to_string(), built_at("rust-a-0.12.0-7.fc45"));
         assert_eq!(
-            state(&package, &[]),
+            state(&package, &[], &BTreeMap::new()),
             "newer build in a COPR, not landed in rawhide"
         );
 
@@ -2551,7 +2643,7 @@ mod tests {
             .built
             .insert("rawhide".to_string(), built_at("rust-a-0.13.0-1.fc45"));
         assert_eq!(
-            state(&package, &[]),
+            state(&package, &[], &BTreeMap::new()),
             "built for rawhide, not yet in the repos"
         );
     }
@@ -2580,7 +2672,10 @@ mod tests {
             .insert("epel9".to_string(), built_at("rust-a-0.13.0-1.el9"));
 
         // Built with no update: submitting one is the next step.
-        assert_eq!(state(&package, &targets), "needs an update for epel9");
+        assert_eq!(
+            state(&package, &targets, &BTreeMap::new()),
+            "needs an update for epel9"
+        );
         // Rawhide is not exempt: its builds can be carried by an
         // update too, automatically or from a side tag, so the state
         // reports one when there is one.
@@ -2596,7 +2691,7 @@ mod tests {
             .built
             .insert("rawhide".to_string(), built_at("rust-a-0.13.0-1.fc45"));
         assert_eq!(
-            state(&rawhide_only, &[]),
+            state(&rawhide_only, &[], &BTreeMap::new()),
             "built for rawhide, not yet in the repos"
         );
         rawhide_only.update.insert(
@@ -2611,7 +2706,7 @@ mod tests {
             },
         );
         assert_eq!(
-            state(&rawhide_only, &[]),
+            state(&rawhide_only, &[], &BTreeMap::new()),
             "built, rawhide update in testing"
         );
 
@@ -2631,7 +2726,11 @@ mod tests {
                     seen: "2026-08-11".to_string(),
                 },
             );
-            assert_eq!(state(&package, &targets), expected, "status {status}");
+            assert_eq!(
+                state(&package, &targets, &BTreeMap::new()),
+                expected,
+                "status {status}"
+            );
         }
     }
 
@@ -2656,14 +2755,20 @@ mod tests {
         package
             .shipped
             .insert("epel9".to_string(), shipped_at("0.12.0-7.el9"));
-        assert_eq!(state(&package, &targets), "needs building for epel9");
+        assert_eq!(
+            state(&package, &targets, &BTreeMap::new()),
+            "needs building for epel9"
+        );
 
         // Once epel9 catches up both are done, and neither is named:
         // picking one of two equals would be arbitrary.
         package
             .shipped
             .insert("epel9".to_string(), shipped_at("0.13.0-1.el9"));
-        assert_eq!(state(&package, &targets), "shipped for every target");
+        assert_eq!(
+            state(&package, &targets, &BTreeMap::new()),
+            "shipped for every target"
+        );
     }
 
     #[test]
@@ -2679,7 +2784,7 @@ mod tests {
             .shipped
             .insert("rawhide".to_string(), shipped_at("0.12.0-7.fc45"));
         assert_eq!(
-            state(&package, &[]),
+            state(&package, &[], &BTreeMap::new()),
             "newer build in a COPR, not landed in rawhide"
         );
     }
@@ -2694,7 +2799,7 @@ mod tests {
             ..Package::default()
         };
         assert_eq!(
-            state(&package, &[]),
+            state(&package, &[], &BTreeMap::new()),
             "newer build in a COPR, not landed in rawhide"
         );
 
@@ -2705,7 +2810,10 @@ mod tests {
             distgit: Some(distgit(true, &["rawhide"])),
             ..Package::default()
         };
-        assert_eq!(state(&package, &[]), "in dist-git, not built for rawhide");
+        assert_eq!(
+            state(&package, &[], &BTreeMap::new()),
+            "in dist-git, not built for rawhide"
+        );
     }
 
     fn review(bug: u64, status: &str, approved: bool) -> Review {
@@ -2726,15 +2834,24 @@ mod tests {
             ..Package::default()
         };
         // No review found: the first thing to do is file one.
-        assert_eq!(state(&package, &[]), "staged, no review filed");
+        assert_eq!(
+            state(&package, &[], &BTreeMap::new()),
+            "staged, no review filed"
+        );
 
         package.review = Some(review(2498026, "NEW", false));
-        assert_eq!(state(&package, &[]), "review filed, awaiting approval");
+        assert_eq!(
+            state(&package, &[], &BTreeMap::new()),
+            "review filed, awaiting approval"
+        );
 
         // Approval is the fedora-review+ flag, not the status, and
         // it moves the package on to needing an SCM request.
         package.review = Some(review(2498026, "ASSIGNED", true));
-        assert_eq!(state(&package, &[]), "review approved, needs importing");
+        assert_eq!(
+            state(&package, &[], &BTreeMap::new()),
+            "review approved, needs importing"
+        );
     }
 
     #[test]
@@ -2754,11 +2871,17 @@ mod tests {
         // not "its original review" — a package can be retired more
         // than once, so the newest closed review need not be the
         // first, and the report should not claim otherwise.
-        assert_eq!(state(&package, &[]), "retired, no open review");
+        assert_eq!(
+            state(&package, &[], &BTreeMap::new()),
+            "retired, no open review"
+        );
 
         // An open one means someone is already reviewing it.
         package.review = Some(review(2500000, "NEW", false));
-        assert_eq!(state(&package, &[]), "retired, review in progress");
+        assert_eq!(
+            state(&package, &[], &BTreeMap::new()),
+            "retired, review in progress"
+        );
     }
 
     #[test]
@@ -2783,7 +2906,10 @@ mod tests {
             staged: Some(staged_at("0.1.0-1")),
             ..Package::default()
         };
-        assert_eq!(state(&package, &[]), "review closed, not imported");
+        assert_eq!(
+            state(&package, &[], &BTreeMap::new()),
+            "review closed, not imported"
+        );
     }
 
     #[test]
@@ -2818,7 +2944,10 @@ mod tests {
             staged: Some(staged_at("0.1.0-1")),
             ..Package::default()
         };
-        assert_eq!(state(&package, &[]), "retired in rawhide, needs unretiring");
+        assert_eq!(
+            state(&package, &[], &BTreeMap::new()),
+            "retired in rawhide, needs unretiring"
+        );
     }
 
     #[test]
@@ -3000,7 +3129,7 @@ mod tests {
         assert!(ahead_of_repos(&package, "rawhide"));
         assert!(built_at_least(&package, "rawhide"));
         assert_eq!(
-            state(&package, &[]),
+            state(&package, &[], &BTreeMap::new()),
             "built for rawhide, not yet in the repos"
         );
 
@@ -3015,7 +3144,10 @@ mod tests {
                 seen: "2026-08-11".to_string(),
             },
         );
-        assert_eq!(state(&package, &[]), "built for rawhide, update pushed");
+        assert_eq!(
+            state(&package, &[], &BTreeMap::new()),
+            "built for rawhide, update pushed"
+        );
         assert!(
             branch_lines(&package, "2026-08-13")[0].contains("in FEDORA-2026-6239fda063 stable")
         );
@@ -3175,7 +3307,7 @@ mod tests {
                 seen: "2026-08-11".into(),
             },
         );
-        let (_, label) = target_state(&package, &distgit, "epel10.3");
+        let (_, label) = target_state(&package, &distgit, "epel10.3", &BTreeMap::new());
         assert_eq!(label, "shipped");
     }
 
@@ -3615,7 +3747,7 @@ mod tests {
             retired_on: None,
             seen: "2026-08-13".into(),
         };
-        let (rank, phrase) = target_state(&package, &distgit, "f44");
+        let (rank, phrase) = target_state(&package, &distgit, "f44", &BTreeMap::new());
         assert_eq!(phrase, "waiting on an earlier update");
         assert!(rank < 3, "should rank below needing an update, got {rank}");
 

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### ebranch: check-wip's summary hid work left on the target branches
+
+Rawhide is the shared spine — packages land there first and every other
+branch is cut from it — so the summary reported Rawhide's state and left
+the targets to the detail lines. That is right while Rawhide has work
+outstanding, and wrong once it does not. A ledger read `built for
+rawhide, update pushed` while four branches were waiting for updates to
+be submitted, which is the only thing anyone could have acted on.
+
+Rawhide now keeps the summary only when something is to be *done* there —
+nothing built, or a build sitting in a side tag with no update. When it
+is merely waiting, with an update in flight or a compose pending, the
+targets speak instead, and Rawhide speaks again once every target is
+finished. Note that "waiting" is not the same as "current": an update can
+be pushed to stable while the repositories still show the older version,
+and there is nothing left to do about it.
+
+Reporting the targets promptly exposed a claim that had been hiding
+behind the spine: `needs a branch for epel10.3`, when dist-git has an
+`epel10` branch and EPEL 10's minor releases all build from it. Bodhi
+records which branch each release uses, so that is now kept on the ledger
+(`"epel10.3" = "epel10"`) and the branch check consults it rather than
+assuming a target and its branch share a name. A version already seen in
+a target's repositories also counts as proof of branching, since a
+package cannot be built for a release it has no branch in — which covers
+targets Bodhi has no release for.
+
 ### ebranch: check-wip says what a build is waiting behind
 
 A branch can have a new build ready and still have nothing to do, because

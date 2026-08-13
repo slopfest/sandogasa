@@ -338,8 +338,8 @@ ledger holds them all, since a package's route and review bug do not
 depend on the release while its branch and build state do. Rawhide is
 the shared spine — everything lands there first and is branched from it
 — so while Rawhide is behind, that is what the heading reports. Once it
-is current the heading becomes the *least advanced* state, naming every
-target in it: `needs a branch for epel9`, `needs an update for f44`,
+is only *waiting* — an update in flight, a compose pending — the heading
+becomes the *least advanced* state, naming every target in it: `needs a branch for epel9`, `needs an update for f44`,
 `update in testing for f44, f43, epel9`. When every target is done the
 heading says so without naming any, since picking between equals would
 be arbitrary.
