@@ -21,7 +21,8 @@ automates the repetitive loops across them:
   backport** when it is `debian/<codename>-backports` — a `~bpo<N>+<M>`
   entry via `gbp dch --bpo`; both built on a Debian host.
 - **`update`** — update the Debian branch itself to a **new upstream**
-  release (`gbp import-orig --uscan`), then build/lint/push/upload/tag.
+  release (`gbp import-orig --uscan`), then
+  source/build/lint/push/upload/tag.
 
 It is also a **learning tool**: `--explain` runs the workflow while
 narrating each step and the exact command it uses, so you can follow
@@ -38,8 +39,8 @@ stages you run need:
 
 - `git` — always
 - `gbp` (`git-buildpackage`) — `merge` stage
-- `debuild` (`devscripts`) and `pbuilder-dist` (`ubuntu-dev-tools`) —
-  `build` stage
+- `debuild` (`devscripts`) — `source` stage
+- `pbuilder-dist` (`ubuntu-dev-tools`) — `build` stage
 - `lintian` (`lintian`) — `lint` stage
 - `glab` (the [GitLab CLI](https://gitlab.com/gitlab-org/cli)) —
   `push` stage CI watch and `watch-ci` (skip with `--nowait`).
@@ -80,8 +81,8 @@ branch).
 `update [<branch>]` updates the **Debian** branch (`master`/`main`/
 `debian/unstable`, default the current branch) to a new upstream:
 `gbp import-orig --uscan --pristine-tar` then `gbp dch -c -R -D
-unstable`, then the same `build → lint → push → upload → tag` tail as
-`rebuild`. Unlike a rebuild the changelog is left as gbp writes it (a
+unstable`, then the same `source → build → lint → push → upload → tag`
+tail as `rebuild`. Unlike a rebuild the changelog is left as gbp writes it (a
 real new-upstream entry — your other commits since the last release
 show up as bullets, nothing is normalized away); the distribution is
 pinned to `unstable` so dch's release heuristic can't substitute the
@@ -195,8 +196,33 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   a Debusine personal repository, publishing to the **base** release's
   suite (`publish-to-trixie-<srcpkg>`, the official backports pattern) —
   and requires a **Debian host** (`--dry-run` exempt).
-- **`build`** — `debuild -S -sa -d` then
-  `pbuilder-dist <codename> ../<dsc>`.
+- **`source`** — `debuild -S -d` the source package into the parent
+  directory: the `.dsc` the `build` stage scratch-builds and the
+  `.changes` the `upload` stage dputs.
+
+  Whether the orig tarball is offered for upload depends on where the
+  package is going. Uploads to the Debian archive — `update` to
+  unstable, proposed-updates and backports, which share one pool — use
+  dpkg's own rule (`-si`): the orig ships with a new upstream version
+  and is left out for the revisions after it, which the archive
+  resolves from what it already has. Everywhere else it is included
+  (`-sa`): a PPA, a dput host such as `mentors`, a Debusine personal
+  repository. None of those can fall back on that pool, and the rebuild
+  versions dbranch generates reuse the upstream version, so dpkg would
+  otherwise leave the tarball out. The flag is always in the narrated
+  command, so you can see which one a run chose.
+- **`build`** — `pbuilder-dist <codename> ../<dsc>` — scratch-build
+  the source package in the codename's chroot.
+
+  `build` and `upload` consume what `source` produced. When `source`
+  isn't part of the same run, dbranch checks the file first: if it was
+  built before the current commit — or, for an upload, offers no orig
+  tarball where one is needed — it offers to rerun `source` (default
+  **yes**), and going ahead without it uses what is on disk. If it is
+  missing altogether, dbranch instead offers to build it (default
+  **no**) and otherwise stops, naming the stage to run. `--yes` accepts
+  all of these, a non-interactive run takes the default (so a missing
+  source package fails), and `--dry-run` skips the check.
 - **`lint`** — `lintian -I` on the built **`.deb`s** in
   `~/pbuilder/<codename>_result/` (`-I` surfaces info-level tags too;
   linting the binaries directly, rather than the `.changes`, avoids

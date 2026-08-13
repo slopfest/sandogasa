@@ -222,9 +222,25 @@ pub fn gbp_dch_release_argv(urgency: &str) -> Vec<String> {
     ])
 }
 
-/// `debuild -S -sa -d` — build the source package.
-pub fn debuild_argv() -> Vec<String> {
-    argv(&["debuild", "-S", "-sa", "-d"])
+/// `debuild -S {-sa|-si} -d` — build the source package. The `-s`
+/// option decides what the `.changes` *offers for upload*, not what the
+/// `.dsc` references (that always names the orig tarball): `-sa` forces
+/// the orig tarball into the upload, `-si` — dpkg's default — includes
+/// it only when the upstream version differs from the previous
+/// changelog entry's. Both are passed explicitly so the narrated
+/// command records which one this run decided on.
+pub fn debuild_argv(include_orig: bool) -> Vec<String> {
+    let source = if include_orig { "-sa" } else { "-si" };
+    argv(&["debuild", "-S", source, "-d"])
+}
+
+/// Whether a `.changes` file offers an orig tarball for upload. Matches
+/// any mention of a `.orig.tar` file, which is loose — the `Changes:`
+/// field could in principle name one in prose. That bias is deliberate:
+/// a false positive leaves the upload alone, while a false negative
+/// would nag about rebuilding a source package that is already right.
+pub fn changes_includes_orig(contents: &str) -> bool {
+    contents.contains(".orig.tar")
 }
 
 /// `dh clean` — run the package's clean target, removing build cruft
@@ -563,6 +579,23 @@ mod tests {
     }
 
     #[test]
+    fn changes_includes_orig_reads_the_files_stanza() {
+        // A `-sa` upload: the orig tarball is offered alongside the
+        // .dsc and the debian tarball.
+        let full = "Files:\n \
+                    a1 12 devel optional damo_3.2.8-1~questing+1.dsc\n \
+                    b2 34 devel optional damo_3.2.8.orig.tar.gz\n \
+                    c3 56 devel optional damo_3.2.8-1~questing+1.debian.tar.xz\n";
+        assert!(changes_includes_orig(full));
+        // A `-si`/`-sd` upload of a later revision: no orig on offer,
+        // which an archive that doesn't already have it will reject.
+        let diff_only = "Files:\n \
+                         a1 12 devel optional damo_3.2.8-1~questing+1.dsc\n \
+                         c3 56 devel optional damo_3.2.8-1~questing+1.debian.tar.xz\n";
+        assert!(!changes_includes_orig(diff_only));
+    }
+
+    #[test]
     fn changes_filename_and_dput_and_ppa() {
         assert_eq!(
             changes_filename("damo", "1:3.2.8-1~questing+1"),
@@ -703,7 +736,8 @@ mod tests {
                 "--spawn-editor=never"
             ]
         );
-        assert_eq!(debuild_argv(), ["debuild", "-S", "-sa", "-d"]);
+        assert_eq!(debuild_argv(true), ["debuild", "-S", "-sa", "-d"]);
+        assert_eq!(debuild_argv(false), ["debuild", "-S", "-si", "-d"]);
         assert_eq!(dh_clean_argv(), ["dh", "clean"]);
         assert_eq!(gbp_tag_argv(), ["gbp", "tag"]);
         assert_eq!(

@@ -49,11 +49,16 @@ pub enum ChrootRefresh {
 
 /// Which workflow stages to run. The head stage differs by command —
 /// `rebuild` uses `merge`, `update` uses `import` — and both share the
-/// `build`/`lint`/`push`/`upload`/`tag` tail.
+/// `source`/`build`/`lint`/`push`/`upload`/`tag` tail. `source`
+/// (`debuild -S`) is separate from `build` (the pbuilder scratch
+/// build) because it is what `upload` publishes: the two consume
+/// different artifacts, and the source package can need rebuilding
+/// without the chroot build being redone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Stages {
     pub merge: bool,
     pub import: bool,
+    pub source: bool,
     pub build: bool,
     pub lint: bool,
     pub push: bool,
@@ -63,19 +68,20 @@ pub struct Stages {
 
 impl Stages {
     fn any(&self) -> bool {
-        self.merge || self.import || self.build || self.lint || self.push || self.upload || self.tag
+        self.merge || self.import || self.any_tail()
     }
 
-    /// The build/lint/push/upload/tag tail — true if any is selected.
+    /// The source/build/lint/push/upload/tag tail — true if any is
+    /// selected.
     fn any_tail(&self) -> bool {
-        self.build || self.lint || self.push || self.upload || self.tag
+        self.source || self.build || self.lint || self.push || self.upload || self.tag
     }
 }
 
 /// Shared core of [`parse_stages`] / [`parse_update_stages`] — the two
 /// selectors differ only in the head stage: its token (`head`) and
 /// which flag it sets (`set_head`). Empty defaults to the head only;
-/// `all` is head + build + lint + push.
+/// `all` is head + source + build + lint + push.
 fn parse_stages_with(
     tokens: &[String],
     head: &str,
@@ -89,6 +95,7 @@ fn parse_stages_with(
     for token in tokens {
         match token.trim() {
             t if t == head => set_head(&mut s),
+            "source" => s.source = true,
             "build" => s.build = true,
             "lint" => s.lint = true,
             "push" => s.push = true,
@@ -98,6 +105,7 @@ fn parse_stages_with(
                 // `all` is the build-and-verify flow; `upload` and `tag`
                 // (deliberate publish/release steps) stay opt-in.
                 set_head(&mut s);
+                s.source = true;
                 s.build = true;
                 s.lint = true;
                 s.push = true;
@@ -105,7 +113,7 @@ fn parse_stages_with(
             other => {
                 return Err(format!(
                     "unknown stage '{other}' \
-                     (valid: {head}, build, lint, push, upload, tag, all)"
+                     (valid: {head}, source, build, lint, push, upload, tag, all)"
                 ));
             }
         }
@@ -576,9 +584,14 @@ pub fn update(
         opts.stages,
         opts.nowait,
         &upload,
+        // The Debian branch uploads to unstable, which already holds
+        // the package's history — unless it is being sent somewhere
+        // else (mentors, Debusine).
+        orig_required(None, &upload),
         opts.chroot_refresh,
-        // `update` never uploads to a PPA, so the PPA pre-check (the only
-        // consumer of this flag) can't fire; value is irrelevant.
+        // `update` has no `--yes`: the PPA pre-check can't fire (it
+        // never uploads to a PPA) and its source-package prompts are
+        // interactive, warning or failing on a non-tty as usual.
         false,
     )
 }
@@ -843,9 +856,45 @@ fn rebuild_one(
         stages,
         nowait,
         &upload,
+        orig_required(Some(target_type), &upload),
         chroot_refresh,
         assume_yes,
     )
+}
+
+/// Whether the source package must carry the orig tarball
+/// (`debuild -S -sa`) for where this run is sending it.
+///
+/// What decides it is whether the destination is backed by the Debian
+/// archive's pool. dak resolves a file the `.dsc` names but the
+/// `.changes` doesn't offer by looking it up **pool-wide**, so an
+/// upload whose orig is already in the archive is accepted without it —
+/// and unstable, proposed-updates and backports are all that one pool
+/// (backports has been in the main archive, on the regular upload
+/// queue, since wheezy-backports). There dpkg's own `-si` rule is
+/// exactly right: the orig ships with a new upstream version and is
+/// skipped for the revisions after it.
+///
+/// Anywhere else has no such pool to fall back on and may be meeting
+/// this upstream version for the first time — a PPA, mentors, a
+/// Debusine personal repository — while the rebuild versions dbranch
+/// generates reuse the upstream version, so `-si` would leave the
+/// tarball out and the upload would be rejected for a file it can't
+/// find. The same reasoning covers a security upload, which the
+/// developer's reference says to build `-sa`: security.debian.org is
+/// its own archive, so it is not the pool either.
+///
+/// `target` is `None` for `update`'s Debian branch, an unstable upload.
+fn orig_required(target: Option<TargetType>, dest: &UploadDest) -> bool {
+    match target {
+        // A PPA branch never uploads to the Debian archive, whether or
+        // not this run has been told which PPA yet.
+        Some(TargetType::Ppa) => true,
+        // Unstable, a proposed-update or a backport: dput's default
+        // target is the archive that already holds the orig; being
+        // sent anywhere else means the full source.
+        _ => !matches!(dest, UploadDest::Dput(None)),
+    }
 }
 
 /// The `pbuilder-dist` distribution for a target: the codename itself,
@@ -928,11 +977,13 @@ fn build_pipeline(
     stages: Stages,
     nowait: bool,
     upload: &UploadDest,
+    include_orig: bool,
     chroot_refresh: ChrootRefresh,
     assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // The package/version are needed by build, lint, and upload; compute
-    // them once (preferring the version the head stage just produced).
+    // The package/version are needed by build, lint, and upload (the
+    // source stage names no files itself); compute them once,
+    // preferring the version the head stage just produced.
     let pkg_ver = if stages.build || stages.lint || stages.upload {
         let (package, top_version) = top_package_version(repo)?;
         Some((package, rebuilt_version.unwrap_or(top_version)))
@@ -940,8 +991,18 @@ fn build_pipeline(
         None
     };
 
+    if stages.source {
+        source_stage(ui, repo, include_orig)?;
+    }
     if stages.build {
         let (package, version) = pkg_ver.as_ref().unwrap();
+        // The chroot build feeds on the `.dsc`. When the source stage
+        // ran just now it is fresh by construction; otherwise check
+        // what is lying there before spending a chroot build on it.
+        if !stages.source {
+            let dsc = format!("../{}", plan::dsc_filename(package, version));
+            ensure_source(ui, repo, &dsc, false, include_orig, assume_yes)?;
+        }
         build_stage(ui, repo, build_suite, package, version, chroot_refresh)?;
     }
     if stages.lint {
@@ -953,6 +1014,12 @@ fn build_pipeline(
     }
     if stages.upload {
         let (package, version) = pkg_ver.as_ref().unwrap();
+        // Likewise for the `.changes` — and here the orig tarball has
+        // to be on offer if the destination can't supply it.
+        if !stages.source {
+            let changes = format!("../{}", plan::changes_filename(package, version));
+            ensure_source(ui, repo, &changes, include_orig, include_orig, assume_yes)?;
+        }
         upload_stage(ui, repo, package, version, upload, assume_yes)?;
     }
     if stages.tag {
@@ -1018,6 +1085,111 @@ fn upload_stage(
             )
         }
     }
+}
+
+/// What is sitting where a stage expects a source package built from
+/// the current commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceState {
+    /// Built from this commit, carrying what the destination needs.
+    Ready,
+    /// Nothing there — `debuild -S` hasn't run for this version.
+    Missing,
+    /// Older than the current commit: built from a tree that has since
+    /// moved on, so it holds different code under this version's name.
+    Stale,
+    /// Fresh, but offering no orig tarball to a destination that can't
+    /// supply one itself.
+    NoOrig,
+}
+
+/// Classify the source-package file at `file` (a `../`-prefixed name,
+/// where `debuild -S` writes). `need_orig` additionally asks a
+/// `.changes` to be offering an orig tarball; pass `false` for the
+/// `.dsc`, which references it either way. Anything unreadable that
+/// isn't outright absent counts as [`SourceState::Ready`] —
+/// uncertainty must not invent a rebuild.
+fn source_state(repo: &Path, file: &str, need_orig: bool) -> SourceState {
+    let path = repo.join(file);
+    if !path.exists() {
+        return SourceState::Missing;
+    }
+    if git::commit_time(repo, "HEAD").is_some_and(|head| built_before(&path, head)) {
+        return SourceState::Stale;
+    }
+    let no_orig =
+        need_orig && std::fs::read_to_string(&path).is_ok_and(|c| !plan::changes_includes_orig(&c));
+    if no_orig {
+        SourceState::NoOrig
+    } else {
+        SourceState::Ready
+    }
+}
+
+/// Whether `path`'s mtime predates `commit_time` (epoch seconds).
+/// `false` when the mtime can't be read, and the comparison is strict
+/// so a build in the same second as the commit — the normal order —
+/// never reads as stale.
+fn built_before(path: &Path, commit_time: u64) -> bool {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|mtime| mtime.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .is_some_and(|built| built.as_secs() < commit_time)
+}
+
+/// Make sure the source package a stage is about to consume is the one
+/// this run means to consume, offering to (re)run the source stage when
+/// it isn't. Called only when the source stage didn't already run.
+///
+/// The two failings ask different questions. A **stale** or orig-less
+/// package is a refresh: offered by default (yes), and declining — or a
+/// non-interactive run — carries on with what is there, since it does
+/// exist and the user may know something we don't. A **missing** one is
+/// a sequencing mistake: the offer defaults to no and a non-interactive
+/// run fails outright, naming the stage to run, rather than quietly
+/// doing a step the caller didn't ask for. `--yes` answers yes
+/// throughout, and `--dry-run` skips the check — nothing has been built
+/// for it to look at.
+fn ensure_source(
+    ui: &Ui,
+    repo: &Path,
+    file: &str,
+    need_orig: bool,
+    include_orig: bool,
+    assume_yes: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if ui.dry_run {
+        return Ok(());
+    }
+    let state = source_state(repo, file, need_orig);
+    let reason = match state {
+        SourceState::Ready => return Ok(()),
+        SourceState::Missing => format!("there is no {file}"),
+        SourceState::Stale => format!("{file} was built before the current commit"),
+        SourceState::NoOrig => {
+            format!("{file} offers no orig tarball, which this destination needs")
+        }
+    };
+    let missing = state == SourceState::Missing;
+
+    let rebuild = if assume_yes {
+        true
+    } else if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        false
+    } else if missing {
+        ui.confirm_default_no(&format!("{reason} — build the source package now?"))
+    } else {
+        ui.confirm(&format!("{reason} — rebuild the source package first?"))
+    };
+    if rebuild {
+        return source_stage(ui, repo, include_orig);
+    }
+    if missing {
+        return Err(format!("{reason}: run the source stage first (--stage source)").into());
+    }
+    eprintln!("warning: {reason}; using it as it is");
+    Ok(())
 }
 
 /// Pre-flight a PPA upload: query Launchpad for `package` in
@@ -1469,8 +1641,25 @@ fn edit_file(
     }
 }
 
-/// The build stage: build the source package and scratch-build it in
-/// the codename's pbuilder chroot.
+/// The source stage: `debuild -S` the source package into the parent
+/// directory — the `.dsc` the build stage scratch-builds and the
+/// `.changes` the upload stage dputs. `include_orig` picks `-sa` over
+/// dpkg's `-si` (see [`orig_required`]).
+fn source_stage(
+    ui: &Ui,
+    repo: &Path,
+    include_orig: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ui.step(if include_orig {
+        "Build the source package, orig tarball included (-sa)"
+    } else {
+        "Build the source package, orig tarball as dpkg decides (-si)"
+    });
+    ui.run_required(&plan::debuild_argv(include_orig), repo)
+}
+
+/// The build stage: scratch-build the source package the source stage
+/// produced in the codename's pbuilder chroot.
 fn build_stage(
     ui: &Ui,
     repo: &Path,
@@ -1479,9 +1668,6 @@ fn build_stage(
     version: &str,
     chroot_refresh: ChrootRefresh,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    ui.step("Build the source package");
-    ui.run_required(&plan::debuild_argv(), repo)?;
-
     // The chroot's base tarball: create it the first time, otherwise
     // refresh it (per the policy) so the build isn't against stale
     // packages. A missing/locatable check first ($HOME may be unset).
@@ -1784,6 +1970,7 @@ mod tests {
     const MERGE: Stages = Stages {
         merge: true,
         import: false,
+        source: false,
         build: false,
         lint: false,
         push: false,
@@ -1793,6 +1980,7 @@ mod tests {
     const BUILD: Stages = Stages {
         merge: false,
         import: false,
+        source: false,
         build: true,
         lint: false,
         push: false,
@@ -1808,6 +1996,7 @@ mod tests {
             Stages {
                 merge: true,
                 import: false,
+                source: true,
                 build: true,
                 lint: true,
                 push: true,
@@ -1850,7 +2039,8 @@ mod tests {
 
     #[test]
     fn parse_update_stages_defaults_and_values() {
-        // Defaults to import; `all` is import + build + lint + push.
+        // Defaults to import; `all` is import + source + build + lint
+        // + push.
         assert_eq!(
             parse_update_stages(&[]).unwrap(),
             Stages {
@@ -1862,6 +2052,7 @@ mod tests {
             parse_update_stages(&["all".to_string()]).unwrap(),
             Stages {
                 import: true,
+                source: true,
                 build: true,
                 lint: true,
                 push: true,
@@ -2481,6 +2672,31 @@ mod tests {
     }
 
     #[test]
+    fn source_stage_dry_run_runs_without_the_chroot_build() {
+        // The source stage on its own: `debuild -S` and nothing else,
+        // so a user can produce a source package without waiting for
+        // (or having) a pbuilder chroot.
+        let dir = setup();
+        let opts = Options {
+            branches: vec!["noble".to_string()],
+            stages: Stages {
+                source: true,
+                ..Stages::default()
+            },
+            nowait: false,
+            upload_target: None,
+            debusine: None,
+            debusine_project: None,
+            source: None,
+            chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
+            assume_yes: false,
+            include_eol: false,
+        };
+        run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
     fn debusine_upload_dry_run_narrates_dput_overrides() {
         // The Debusine upload path end to end under --dry-run: the
         // preconditions (Debian host, debusine profile/token) are
@@ -2529,6 +2745,130 @@ mod tests {
             urgency: "medium".to_string(),
         };
         update(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    /// Write `file` in `repo` with an mtime `offset` seconds from
+    /// HEAD's committer date — negative for a build that predates the
+    /// commit, positive for the normal build-after-commit order.
+    fn build_artifact(repo: &Path, file: &str, contents: &str, offset: i64) {
+        let path = repo.join(file);
+        std::fs::write(&path, contents).unwrap();
+        let head = git::commit_time(repo, "HEAD").unwrap() as i64;
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs((head + offset) as u64))
+            .unwrap();
+    }
+
+    const FULL_CHANGES: &str = "Files:\n a1 1 d o damo_3.2.8-1.dsc\n \
+                                b2 2 d o damo_3.2.8.orig.tar.gz\n";
+
+    #[test]
+    fn source_state_reads_what_is_on_disk() {
+        let dir = setup();
+        let changes = "damo_3.2.8-1_source.changes";
+
+        // Nothing built yet.
+        assert_eq!(
+            source_state(dir.path(), changes, false),
+            SourceState::Missing
+        );
+
+        // Built after the commit, orig tarball included: ready either way.
+        build_artifact(dir.path(), changes, FULL_CHANGES, 60);
+        assert_eq!(source_state(dir.path(), changes, false), SourceState::Ready);
+        assert_eq!(source_state(dir.path(), changes, true), SourceState::Ready);
+
+        // Built before it — a leftover from a tree that has since moved on.
+        build_artifact(dir.path(), changes, FULL_CHANGES, -60);
+        assert_eq!(source_state(dir.path(), changes, true), SourceState::Stale);
+
+        // Fresh, but `-si` left the orig tarball out: fine for the
+        // Debian archive, not for a PPA.
+        build_artifact(
+            dir.path(),
+            changes,
+            "Files:\n a1 1 d o damo_3.2.8-1.dsc\n",
+            60,
+        );
+        assert_eq!(source_state(dir.path(), changes, false), SourceState::Ready);
+        assert_eq!(source_state(dir.path(), changes, true), SourceState::NoOrig);
+    }
+
+    #[test]
+    fn ensure_source_is_a_no_op_under_dry_run() {
+        // --dry-run built nothing, so the check must not fire on
+        // whatever happens to be lying next to the repo — nor prompt,
+        // nor shell out to debuild.
+        let dir = setup();
+        let changes = "damo_3.2.8-1_source.changes";
+        build_artifact(dir.path(), changes, FULL_CHANGES, -60);
+        assert_eq!(source_state(dir.path(), changes, true), SourceState::Stale);
+        ensure_source(&ui_dry(), dir.path(), changes, true, true, true).unwrap();
+    }
+
+    #[test]
+    fn ensure_source_fails_on_a_missing_one_without_a_terminal() {
+        // The sequencing mistake: a non-interactive run must not
+        // silently build what it wasn't asked to, and must not go on
+        // to hand dput a file that isn't there.
+        let dir = setup();
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: false,
+        };
+        let err = ensure_source(&ui, dir.path(), "nope_1_source.changes", true, true, false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--stage source"), "{err}");
+    }
+
+    #[test]
+    fn orig_is_forced_everywhere_the_archive_isnt() {
+        // A PPA rebuild reuses the upstream version, so `-si` would
+        // leave the tarball out and Launchpad would reject it — and
+        // that holds before a --ppa has even been named.
+        assert!(orig_required(
+            Some(TargetType::Ppa),
+            &UploadDest::Dput(Some("ppa:m/x".to_string()))
+        ));
+        assert!(orig_required(
+            Some(TargetType::Ppa),
+            &UploadDest::Dput(None)
+        ));
+        // A backport, a proposed-update and an `update` to unstable all
+        // go to the one Debian archive, whose pool already holds the
+        // orig; dak resolves it there without it being uploaded again.
+        assert!(!orig_required(
+            Some(TargetType::Backports { major: 13 }),
+            &UploadDest::Dput(None)
+        ));
+        assert!(!orig_required(
+            Some(TargetType::Proposed { major: 13 }),
+            &UploadDest::Dput(None)
+        ));
+        assert!(!orig_required(None, &UploadDest::Dput(None)));
+        // Sending a backport somewhere that isn't that pool does need it.
+        assert!(orig_required(
+            Some(TargetType::Backports { major: 13 }),
+            &UploadDest::Dput(Some("mentors".into()))
+        ));
+        // Anywhere else may be meeting this upstream for the first time.
+        assert!(orig_required(
+            None,
+            &UploadDest::Dput(Some("mentors".into()))
+        ));
+        assert!(orig_required(
+            None,
+            &UploadDest::Debusine {
+                name: "michelin".to_string(),
+                suite: "sid".to_string(),
+                project: None,
+            }
+        ));
     }
 
     #[test]

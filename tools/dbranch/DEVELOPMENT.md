@@ -164,6 +164,99 @@ the `curl`. A missing `curl` (`tool_exists`) skips the check rather than
 blocking — it's a safety nicety, not essential to the upload, so it isn't
 in `ensure_tools`.
 
+### `source` is a stage of its own (`debuild -S` vs pbuilder)
+
+`source` (`debuild -S`) and `build` (`pbuilder-dist`) are separate
+stages, like `fedpkg srpm` against `fedpkg mockbuild`. They produce and
+consume different things: `build` scratch-builds the `.dsc`, `upload`
+dputs the `.changes`, and the source package can need rebuilding —
+because the tree moved on, or because the destination needs the orig
+tarball — without the chroot build being redone. Keep the source build
+out of `build_stage`; `all` runs both, so the everyday path is
+unchanged.
+
+### What the source stage puts in the `.changes` (`-sa` / `-si`)
+
+`-si`/`-sa`/`-sd` are **`dpkg-genchanges`** options and decide what the
+`.changes` *offers for upload*. They do not touch the `.dsc`, which
+references the orig tarball either way, so they never affect the local
+pbuilder build. Read them from `dpkg-genchanges(1)`, not
+`dpkg-buildpackage(1)`: the current rule for `-si` is "include the orig
+if the upstream version differs from the **previous changelog
+entry's**", not the older "Debian revision is 0 or 1" wording.
+
+`orig_required` decides, and the question is **whether the destination
+is backed by the Debian archive's pool** — not which suite it is:
+
+- dak resolves a file the `.dsc` names but the `.changes` doesn't offer
+  by looking it up **pool-wide** (`_add_dsc_files` → `get_file` by
+  filename, then `_copy_file` into the target archive/component). An
+  upload whose orig is already in the archive with a matching checksum
+  is accepted without it.
+- Unstable, proposed-updates **and backports** are all that one pool.
+  Backports has been in the main archive, going through the regular
+  upload queue with packages in the regular pool, since
+  wheezy-backports in 2013 — the separate backports archive and its
+  special dput host are long gone. All three get `-si`.
+- Anywhere with no such pool to fall back on gets `-sa`: a PPA,
+  mentors, a Debusine personal repository. A PPA is the sharp case —
+  the rebuild version reuses the upstream version, so `-si` omits the
+  tarball and Launchpad rejects an upload for a file it can't find.
+- A **security** upload is the same rule, not an exception to it: the
+  developer's reference says to build `-sa` because security.debian.org
+  is its own archive, so it isn't that pool either. Reaching it via
+  `--upload-target` lands in the `-sa` arm on its own.
+
+Do **not** "play it safe" by forcing `-sa` everywhere: an orig that
+doesn't match the archive's byte for byte is itself a reject, so
+including a locally regenerated tarball where the archive already has
+one adds a failure mode rather than removing one.
+
+Watch the reasoning, not just the conclusion, if this is revisited:
+"backports needs `-sa`" is widespread advice that was true before 2013
+and is repeated in plenty of still-published guides.
+
+**Not documented, reasoned:** mentors and Debusine. Neither's docs
+mention `-sa` or the orig tarball — the `-sa` there follows from the
+repository having no Debian pool to resolve against, so a sponsor
+`dget`ing the `.dsc` would find a file that isn't there. Confirm
+against a real upload before treating either as settled.
+
+Both flags are passed explicitly rather than letting `-si` be implicit,
+so the narrated command records what the run decided — the tool teaches
+the command, and an invisible default teaches nothing.
+
+### The source package a stage is about to consume (`ensure_source`)
+
+Stages are independently selectable, so `--stage build` or `--stage
+upload` can find a source package built from a tree that has since
+moved on — or none at all. `source_state` classifies what is on disk
+before either stage spends anything on it, and `ensure_source` offers
+the source stage as the fix. Rules for anything touching this:
+
+- Compare mtime against the **committer** date (`git log -1
+  --format=%ct`, `git::commit_time`), not the author date: the question
+  is when this tree state came into being, and an amend or a rebase
+  makes the author date older than the files legitimately are. Strict
+  `<`, so a build in the same second as the commit — the normal order —
+  never reads as stale.
+- Uncertainty must not invent work: an unreadable mtime, an
+  unresolvable HEAD, or a `.changes` that can't be read all count as
+  `Ready`. `changes_includes_orig` is deliberately loose for the same
+  reason — its false positives leave the upload alone.
+- Only the `.changes` is stamped for staleness. `debuild -S` writes it
+  together with every file it lists, so it stands for all of them;
+  don't parse the `Files:` stanza to check each one's mtime.
+- **Missing and stale are different questions.** Stale (or orig-less)
+  is a refresh: default yes, and declining or running non-interactively
+  carries on with what is there. Missing is a sequencing mistake:
+  default **no**, and a non-interactive run *fails*, naming the stage
+  to run. An automated workflow that reaches `upload` without a source
+  package has its stages in the wrong order, and quietly building one
+  hides that; `--yes` is still an explicit yes to both.
+- Skip the check entirely when the source stage ran in the same
+  invocation — the artifact is fresh by construction.
+
 ### Debusine uploads (`--debusine`)
 
 Uploading to a [Debusine personal

@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+### dbranch: an upload could send a package built from an older tree (breaking CLI)
+
+Uploading is its own stage, so `dbranch rebuild --stage upload` sends
+whatever `.changes` is sitting next to the repository — including one
+built before the last few commits. The archive then takes the old
+contents under the new version's name, and since a version can only be
+uploaded once, fixing that means another changelog entry.
+
+Making the source package is now its own stage too, `source`, split out
+of `build` the way `fedpkg srpm` is separate from `fedpkg mockbuild`.
+`source` runs `debuild -S`; `build` is now only the `pbuilder-dist`
+scratch build of the resulting `.dsc`. `all` runs both, so the everyday
+path is unchanged, but **`--stage build` on its own no longer produces
+the source package first** — pass `--stage source,build` (or `all`) if
+that is what you meant.
+
+With a stage that produces it, `build` and `upload` can check what they
+are about to consume when they run without it. A source package built
+before the current commit is a refresh: dbranch offers to rerun
+`source` (default yes) and carries on with what is on disk if you
+decline, or if nothing is on a terminal to ask. A *missing* one is a
+sequencing mistake rather than a stale artifact, so it asks separately,
+defaults to no, and a non-interactive run fails outright naming the
+stage to run — an automated workflow that reaches `upload` without a
+source package should have its stages fixed, not silently patched up.
+`--yes` accepts either offer, and `--dry-run` skips the check since it
+built nothing.
+
+Uncertainty never triggers a rebuild: an unreadable timestamp or a
+repository whose HEAD won't resolve read as fresh. The comparison uses
+the committer date, so an amend or a rebase doesn't make a genuinely
+current build look stale.
+
+### dbranch: uploads to a PPA no longer risk being rejected for a missing tarball
+
+The source package was always built `debuild -S -sa`, forcing the
+upstream tarball into every upload. That is required for a PPA — the
+rebuild versions dbranch generates reuse the upstream version, so
+dpkg's own rule would leave the tarball out and Launchpad would reject
+the upload — but it is redundant for the Debian archive, which already
+has the tarball for anything past the first revision, and a tarball
+that doesn't match the archive's byte for byte is itself grounds for
+rejection.
+
+The source stage now picks per destination, on whether the destination
+can fall back on the Debian archive's pool: dak resolves a file the
+`.dsc` names but the `.changes` doesn't offer by searching that pool,
+so `update` to unstable, proposed-updates and backports — one archive
+between them — are built `-si` and let dpkg decide from the changelog.
+A PPA, a dput host such as `mentors` and a Debusine personal repository
+have no such fallback and are built `-sa`. The flag appears in the
+narrated command either way, so a run says which it chose.
+
+An upload that runs without the source stage checks the `.changes` for
+the tarball when the destination needs one, and offers to rebuild the
+source package if it isn't there.
+
 ### koji-lag: backfill a long window a day at a time
 
 `koji-lag backfill --since D --until D --root DIR` sweeps a range one UTC

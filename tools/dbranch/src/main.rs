@@ -76,7 +76,9 @@ upstream / pristine-tar branches are rebuilt."
 Stages to run, repeatable or comma-separated:
   merge   merge the Debian branch + write the rebuild
           changelog entry
-  build   debuild + pbuilder-dist
+  source  debuild -S the source package (-sa unless
+          uploading to the Debian archive)
+  build   pbuilder-dist scratch build of the .dsc
   lint    lintian on the built source package (warns,
           does not fail the run)
   push    git push the branch, then watch its CI
@@ -84,7 +86,7 @@ Stages to run, repeatable or comma-separated:
   upload  dput the built package (needs --ppa or
           --upload-target)
   tag     dh clean + gbp tag the release
-  all     merge + build + lint + push
+  all     merge + source + build + lint + push
           (upload and tag are opt-in)
 Defaults to `merge` (the others are opt-in for now)."
         )]
@@ -203,12 +205,14 @@ names its project here. Requires --debusine."
             long_help = "\
 Stages to run, repeatable or comma-separated:
   import  gbp import-orig --uscan + gbp dch -c -R
-  build   debuild + pbuilder-dist
+  source  debuild -S the source package (-si for the
+          Debian archive, -sa for anywhere else)
+  build   pbuilder-dist scratch build of the .dsc
   lint    lintian on the built source package
   push    git push the branch, then watch its CI
   upload  dput the built package
   tag     dh clean + gbp tag the release
-  all     import + build + lint + push
+  all     import + source + build + lint + push
 Defaults to `import`."
         )]
         stage: Vec<String>,

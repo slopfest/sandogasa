@@ -132,6 +132,22 @@ pub fn rev_parse(repo: &Path, rev: &str) -> Option<String> {
     (!sha.is_empty()).then_some(sha)
 }
 
+/// The committer date of `rev` as seconds since the epoch
+/// (`git log -1 --format=%ct <rev>`) — when that tree state came into
+/// being, which is what a build artifact's mtime is compared against.
+/// `None` if the revision can't be resolved (an empty repository, etc.).
+pub fn commit_time(repo: &Path, rev: &str) -> Option<u64> {
+    let out = Command::new("git")
+        .args(["log", "-1", "--format=%ct", rev])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
 /// The host of a remote's URL (e.g. `origin` →
 /// `git@salsa.debian.org:…` → `salsa.debian.org`). `None` if the
 /// remote is unset or the URL can't be parsed.
