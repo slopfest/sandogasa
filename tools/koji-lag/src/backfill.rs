@@ -36,6 +36,15 @@ pub enum Existing {
     Ask,
 }
 
+/// Which collations a run may break off after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum PauseAt {
+    /// After a week's days are folded together.
+    Weekly,
+    /// After a month's weeks are folded together.
+    Monthly,
+}
+
 /// How a period is stored: the directory under the root, and how a
 /// period's first day names its file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +159,22 @@ pub fn weeks_of_month(day: NaiveDate) -> Vec<Chunk> {
     weeks
 }
 
+/// Whether `day` is already swept, at any grain.
+///
+/// Collation removes a day's own file once its week holds it, so asking
+/// only about `daily/` would call a collated day unfetched and sweep it
+/// again — the more galling for having thrown the evidence away itself.
+/// The coarser files are the record once they exist.
+pub fn already_swept(root: &Path, day: NaiveDate, file: &str) -> bool {
+    [
+        Grain::Daily.path(day),
+        week_of(day).path(),
+        month_of(day).path(),
+    ]
+    .iter()
+    .any(|p| root.join(p).join(file).exists())
+}
+
 /// Whether every day of `chunk` has a dataset under `root`.
 pub fn complete(root: &Path, chunk: &Chunk, file: &str, grain: Grain) -> bool {
     let present: BTreeSet<NaiveDate> = chunk
@@ -210,6 +235,36 @@ pub fn collate(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_collated_day_is_not_swept_again() {
+        let root = tempfile::tempdir().unwrap();
+        let file = "fedora.json";
+        let d = day(2026, 8, 12);
+        assert!(!already_swept(root.path(), d, file));
+
+        // Its own file counts...
+        let daily = root.path().join(Grain::Daily.path(d));
+        std::fs::create_dir_all(&daily).unwrap();
+        one_build(1).save(&daily.join(file)).unwrap();
+        assert!(already_swept(root.path(), d, file));
+
+        // ...and so does the week that swallowed it, which is the case
+        // that matters: collation deletes the daily file.
+        std::fs::remove_file(daily.join(file)).unwrap();
+        assert!(!already_swept(root.path(), d, file));
+        let weekly = root.path().join(week_of(d).path());
+        std::fs::create_dir_all(&weekly).unwrap();
+        one_build(1).save(&weekly.join(file)).unwrap();
+        assert!(already_swept(root.path(), d, file));
+
+        // As does the month.
+        std::fs::remove_file(weekly.join(file)).unwrap();
+        let monthly = root.path().join(month_of(d).path());
+        std::fs::create_dir_all(&monthly).unwrap();
+        one_build(1).save(&monthly.join(file)).unwrap();
+        assert!(already_swept(root.path(), d, file));
+    }
 
     /// A dataset holding one build, so merges can be told apart.
     fn one_build(id: i64) -> Dataset {

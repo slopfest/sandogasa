@@ -103,13 +103,6 @@ pub struct FetchOpts {
     /// Share of one connection to aim for; see [`Pace`].
     pub duty_percent: u32,
     pub verbose: bool,
-    /// Skip build tasks with this id or above, when known.
-    ///
-    /// A dataset covering a later window supplies it: the oldest build it
-    /// holds is newer than anything wanted here, so the walk may begin
-    /// below it. Makes the seek exact — an id comparison rather than a
-    /// creation time against a grace margin.
-    pub start_below: Option<i64>,
 }
 
 impl FetchOpts {
@@ -343,7 +336,7 @@ impl WalkProgress {
         let whole = newest - self.target_ts;
         let covered = newest - oldest;
         let mut line = format!(
-            "page {} ({} task(s), {} so far), back to {}",
+            "page {} ({} task(s), {} so far), created back to {}",
             self.pages,
             len,
             self.tasks,
@@ -356,7 +349,11 @@ impl WalkProgress {
             let left = (whole - covered).max(0.0);
             let rate = self.tasks as f64 / covered;
             let pages_left = (rate * left / self.page_size as f64).ceil() as usize;
-            line += &format!(" — {done:.0}% of the window, ~{pages_left} page(s) to go");
+            // "of the span", not "of the window": the walk reads by
+            // creation time and goes back further than the window it
+            // serves, so calling this the window made a one-day fetch
+            // look as though it were sweeping four.
+            line += &format!(" — {done:.0}% of the span, ~{pages_left} page(s) to go");
         }
         line
     }
@@ -431,7 +428,122 @@ pub struct FetchReport {
 
 /// Run a fetch into the dataset at `out_path` (created if
 /// missing, merged into if present).
+/// Walk the parent `build` tasks whose creation could matter to this
+/// window, newest first, without filtering by completion.
+///
+/// Separated from [`run`] so a caller sweeping several windows out of one
+/// range can walk once and slice the result. A day-at-a-time backfill
+/// otherwise re-lists three quarters of the same rows for every day: the
+/// walk must reach back past each window by the grace margin, so
+/// consecutive days overlap by most of their pages.
+pub fn walk_builds(opts: &FetchOpts) -> Result<Vec<sandogasa_kojihub::HubTask>, String> {
+    walk_builds_below(opts, None)
+}
+
+/// [`walk_builds`], skipping what the caller already holds.
+///
+/// `have_above` is a creation time above which the caller has every build
+/// task already — the floor of a previous walk. A backfill moving
+/// backwards through weeks has exactly that: each walk reaches three days
+/// past its own window, which is three days into the next one, so without
+/// this each week re-lists the tail of the week before. Carrying those
+/// rows over and starting below them walks every creation once.
+///
+/// Unsound to pass anything but a previous walk's floor: it is the claim
+/// "nothing above this is missing", and a bound taken from, say, a
+/// neighbouring dataset's oldest *kept* build is not that — its walk
+/// reached further back than the builds it kept.
+pub fn walk_builds_below(
+    opts: &FetchOpts,
+    have_above: Option<f64>,
+) -> Result<Vec<sandogasa_kojihub::HubTask>, String> {
+    let hub = HubClient::new(&opts.hub_url);
+    let list_opts = ListTasksOpts {
+        method: Some("build".to_string()),
+        decode: true,
+        ..Default::default()
+    };
+    // Said once, so the dates on the walk lines are not a puzzle: the walk
+    // reads by creation time and reaches back past the window, because a
+    // build created earlier can finish inside it.
+    if opts.verbose {
+        let day = |ts: f64| {
+            chrono::DateTime::from_timestamp(ts as i64, 0)
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| "?".to_string())
+        };
+        eprintln!(
+            "[koji-lag] walk: build tasks created back to {} — {} days before the window, \
+             for builds that started earlier and finish inside it",
+            day(opts.after - CREATE_GRACE_SECS),
+            (CREATE_GRACE_SECS / 86_400.0) as i64,
+        );
+    }
+    let mut progress = WalkProgress::new(
+        opts.after - CREATE_GRACE_SECS,
+        opts.page_size.max(1) as usize,
+    );
+    // The walk does nothing between calling this back and asking for the
+    // next page, so the gap since this returned is the request's own time.
+    let mut last_returned: Option<std::time::Instant> = None;
+    let mut on_page = |page: &[sandogasa_kojihub::HubTask]| {
+        let latency = last_returned
+            .map(|t| t.elapsed())
+            .unwrap_or(std::time::Duration::ZERO);
+        let created = page.iter().filter_map(|t| t.create_ts);
+        let where_it_is = progress.note(created, page.len());
+        if opts.verbose {
+            eprintln!("[koji-lag] build walk: {where_it_is}");
+        }
+        opts.pace().rest(latency);
+        last_returned = Some(std::time::Instant::now());
+    };
+
+    // Skip whatever is newer than the window before paging through it.
+    // No grace margin on this side: a task created after the window ends
+    // completed after it too, so it is out of scope whatever it did. The
+    // margin below is the one that matters, for builds that started
+    // before the window and finished inside it.
+    //
+    // A window running to now has nothing newer than itself, so the probe
+    // is skipped rather than asked and answered.
+    // Skip what is already held, or failing that what the window cannot
+    // want. The window's own end is the only bound derivable from the
+    // window itself: a task created after it completed after it too.
+    let skip_above = have_above.unwrap_or(opts.before);
+    let start_offset = if skip_above < Utc::now().timestamp() as f64 {
+        seek_start_offset(&hub, opts, &list_opts, |task| {
+            task.create_ts.is_some_and(|ts| ts > skip_above)
+        })?
+    } else {
+        0
+    };
+    hub.walk_tasks_desc_from(
+        &list_opts,
+        opts.page_size,
+        opts.retries,
+        opts.after - CREATE_GRACE_SECS,
+        start_offset,
+        &mut on_page,
+    )
+    .map_err(|e| format!("listTasks(build) walk failed: {e}"))
+}
+
+/// Run a fetch, walking the hub for the parent builds.
 pub fn run(opts: &FetchOpts, out_path: &Path) -> Result<FetchReport, String> {
+    run_with_builds(opts, out_path, None)
+}
+
+/// [`run`] over builds already walked.
+///
+/// `prewalked` is any range of build tasks covering this window; the
+/// completion filter picks out the ones that belong. Passing `None` walks
+/// the hub for them.
+pub fn run_with_builds(
+    opts: &FetchOpts,
+    out_path: &Path,
+    prewalked: Option<&[sandogasa_kojihub::HubTask]>,
+) -> Result<FetchReport, String> {
     // Cheap preconditions first: an unreadable/unwritable dataset
     // or an unreachable hub must fail in seconds, not after a long
     // sweep.
@@ -462,75 +574,24 @@ pub fn run(opts: &FetchOpts, out_path: &Path) -> Result<FetchReport, String> {
 
     let mut report = FetchReport::default();
 
-    // Find the parent `build` tasks by walking newest-first and
-    // windowing on completion time client-side (no server-side
-    // completion filter — see the module docs). A failure
-    // mid-walk still merges what was fetched (without recording
-    // the coverage window — coverage must not be overclaimed) so
-    // a re-run resumes instead of starting over.
-    let list_opts = ListTasksOpts {
-        method: Some("build".to_string()),
-        decode: true,
-        ..Default::default()
+    // The window is on completion time: a build counts for the day it
+    // finished, whoever walked it up.
+    let in_window = |t: &sandogasa_kojihub::HubTask| {
+        t.completion_ts
+            .is_some_and(|ts| ts >= opts.after && ts < opts.before)
     };
-    let mut progress = WalkProgress::new(
-        opts.after - CREATE_GRACE_SECS,
-        opts.page_size.max(1) as usize,
-    );
-    // The walk does nothing between calling this back and asking for the
-    // next page, so the gap since this returned is the request's own time.
-    let mut last_returned: Option<std::time::Instant> = None;
-    let mut on_page = |page: &[sandogasa_kojihub::HubTask]| {
-        let latency = last_returned
-            .map(|t| t.elapsed())
-            .unwrap_or(std::time::Duration::ZERO);
-        let created = page.iter().filter_map(|t| t.create_ts);
-        let where_it_is = progress.note(created, page.len());
-        if opts.verbose {
-            eprintln!("[koji-lag] build walk: {where_it_is}");
-        }
-        opts.pace().rest(latency);
-        last_returned = Some(std::time::Instant::now());
-    };
-    // Skip whatever is newer than the window before paging through it.
-    // No grace margin on this side: a task created after the window ends
-    // completed after it too, so it is out of scope whatever it did. The
-    // margin below is the one that matters, for builds that started
-    // before the window and finished inside it.
-    //
-    // A window running to now has nothing newer than itself, so the probe
-    // is skipped rather than asked and answered.
-    let seek_needed = opts.start_below.is_some() || opts.before < Utc::now().timestamp() as f64;
-    let start_offset = if seek_needed {
-        seek_start_offset(&hub, opts, &list_opts, |task| match opts.start_below {
-            Some(id) => task.id >= id,
-            None => task.create_ts.is_some_and(|ts| ts > opts.before),
-        })?
-    } else {
-        0
-    };
-    let build_tasks = match hub.walk_tasks_desc_from(
-        &list_opts,
-        opts.page_size,
-        opts.retries,
-        opts.after - CREATE_GRACE_SECS,
-        start_offset,
-        &mut on_page,
-    ) {
-        Ok(tasks) => tasks
-            .into_iter()
-            .filter(|t| {
-                t.completion_ts
-                    .is_some_and(|ts| ts >= opts.after && ts < opts.before)
-            })
-            .collect::<Vec<_>>(),
-        Err(e) => {
-            dataset.save(out_path)?;
-            return Err(format!(
-                "listTasks(build) walk failed: {e}\n\
-                 (partial data saved; re-run to resume)"
-            ));
-        }
+    let build_tasks: Vec<sandogasa_kojihub::HubTask> = match prewalked {
+        Some(tasks) => tasks.iter().filter(|t| in_window(t)).cloned().collect(),
+        None => match walk_builds(opts) {
+            Ok(tasks) => tasks.into_iter().filter(in_window).collect(),
+            Err(e) => {
+                // A failure mid-walk still merges what was fetched,
+                // without recording the coverage window — coverage must
+                // not be overclaimed — so a re-run resumes.
+                dataset.save(out_path)?;
+                return Err(format!("{e}\n(partial data saved; re-run to resume)"));
+            }
+        },
     };
     report.builds_swept = build_tasks.len();
 
@@ -880,7 +941,7 @@ mod tests {
             first.contains("page 1 (1000 task(s), 1000 so far)"),
             "{first}"
         );
-        assert!(first.contains("10% of the window"), "{first}");
+        assert!(first.contains("10% of the span"), "{first}");
         assert!(first.contains("~9 page(s) to go"), "{first}");
 
         // Five days in, the count and the estimate move together.
@@ -889,12 +950,12 @@ mod tests {
             fifth.contains("page 2 (1000 task(s), 2000 so far)"),
             "{fifth}"
         );
-        assert!(fifth.contains("50% of the window"), "{fifth}");
+        assert!(fifth.contains("50% of the span"), "{fifth}");
         assert!(fifth.contains("~2 page(s) to go"), "{fifth}");
 
         // At the target there is nothing left to project.
         let last = progress.note([now - 10.0 * day], 40);
-        assert!(last.contains("100% of the window"), "{last}");
+        assert!(last.contains("100% of the span"), "{last}");
         assert!(last.contains("~0 page(s) to go"), "{last}");
     }
 
@@ -1066,7 +1127,6 @@ mod tests {
             retries: 0,
             verbose: false,
             duty_percent: 100,
-            start_below: None,
         };
         let report = run(&opts, &out).unwrap();
         assert_eq!(report.tasks_swept, 3);
@@ -1158,7 +1218,6 @@ mod tests {
             retries: 0,
             verbose: false,
             duty_percent: 100,
-            start_below: None,
         };
         apply_filters(&mut incoming, &opts);
         assert_eq!(incoming.builds.len(), 1);

@@ -136,12 +136,6 @@ bracket is within a page or two — landing early is harmless, since the
 walk filters client-side anyway. A one-day fetch spends four probes; a
 window six weeks back, fourteen, instead of three hundred paged requests.
 
-`--start-below` makes it exact. During a backfill the answer is already to
-hand: pass the dataset for the window *after* this one and the sweep skips
-everything at or above the oldest build id in it. Give the adjacent window
-rather than a distant one — bounding June by a July file still leaves all
-of June to page through.
-
 Requests are paced by how long the hub takes to answer them. `--duty-cycle`
 (default 50) is the share of one connection to aim for, so each pause is
 scaled to the last request's latency: a hub under load is asked less often,
@@ -170,8 +164,19 @@ instance, so one tree can hold Fedora's and CentOS's sweeps side by side.
 Each day bounds the next: the oldest build just written is a ceiling for
 the day before it, so no day walks history a previous one already crossed.
 
-A day at a time costs no more than one wide window, because the per-parent
-children queries dominate and they scale with builds rather than windows.
+The hub is walked once per week, not once per day, and consecutive weeks
+carry their overlap between them. A walk must reach back past its window
+by three days — a build created earlier can finish inside it — so
+day-at-a-time re-lists most of the same rows every time, and even
+week-at-a-time would re-list three days per week. Rows a walk finds
+outside the day being written are kept for the chunk that wants them, and
+the next walk starts below what is already held, so every creation is
+listed once across the whole backfill. Days are still *written* one at a
+time, so an interruption still costs at most the day in flight.
+
+A day at a time costs little more than one wide window, because the
+per-parent children queries dominate and they scale with builds rather
+than windows.
 What it buys is that an interruption loses the day in flight instead of
 the run. Re-running resumes from what is on disk; `--if-exists` says what
 to do about a day already there — `merge` (sweep again and fold in),

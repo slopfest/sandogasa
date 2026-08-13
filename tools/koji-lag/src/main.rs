@@ -72,6 +72,15 @@ struct BackfillArgs {
     #[arg(long, value_name = "WHAT", value_enum, default_value = "ask")]
     if_exists: koji_lag::backfill::Existing,
 
+    /// Stop after collating at these grains (repeated or CSV).
+    ///
+    /// A collation is a natural place to break off: everything
+    /// before it is compacted and on disk, so a run resumed later
+    /// picks up cleanly. With a terminal it asks whether to carry
+    /// on; without one it stops, since nobody can answer.
+    #[arg(long, value_name = "GRAIN,...", value_delimiter = ',', value_enum)]
+    pause_at: Vec<koji_lag::backfill::PauseAt>,
+
     /// Tasks per listTasks page.
     #[arg(long, default_value_t = 1000)]
     page_size: i64,
@@ -160,16 +169,6 @@ struct FetchArgs {
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
-
-    /// Start below this build task id, or below the oldest in a
-    /// dataset file.
-    ///
-    /// A backfill knows the answer: a dataset covering a later
-    /// window holds nothing this one wants, so the sweep can begin
-    /// below the oldest build in it. Given a number, that id is
-    /// used directly.
-    #[arg(long, value_name = "ID|FILE")]
-    start_below: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -302,10 +301,6 @@ fn cmd_fetch(args: &FetchArgs) -> Result<(), Box<dyn Error>> {
         retries: args.retries,
         duty_percent: args.duty_cycle,
         verbose: args.verbose,
-        start_below: match args.start_below.as_deref() {
-            None => None,
-            Some(spec) => Some(oldest_build_id(spec)?),
-        },
     };
     let report = fetch::run(&opts, &args.output)?;
     eprintln!(
@@ -320,26 +315,6 @@ fn cmd_fetch(args: &FetchArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Resolve `--start-below`: a build task id, or the oldest one in a
-/// dataset.
-///
-/// Taking a file is the useful form during a backfill — the answer is
-/// already sitting in the dataset for the window after this one, and
-/// reading it beats copying an id by hand.
-fn oldest_build_id(spec: &str) -> Result<i64, Box<dyn Error>> {
-    if let Ok(id) = spec.trim().parse::<i64>() {
-        return Ok(id);
-    }
-    let dataset = koji_lag::dataset::Dataset::load(std::path::Path::new(spec))
-        .map_err(|e| format!("--start-below {spec}: {e}"))?;
-    dataset
-        .builds
-        .values()
-        .map(|b| b.task_id)
-        .min()
-        .ok_or_else(|| format!("--start-below {spec}: the dataset holds no builds").into())
-}
-
 /// Sweep a window a day at a time, collating finished periods.
 ///
 /// Days are swept newest-first so each one can bound the next: the oldest
@@ -349,8 +324,10 @@ fn oldest_build_id(spec: &str) -> Result<i64, Box<dyn Error>> {
 fn cmd_backfill(args: &BackfillArgs) -> Result<(), Box<dyn Error>> {
     use chrono::{Duration, NaiveDate};
     use koji_lag::backfill::{
-        Existing, Grain, collate, complete, month_of, week_of, weeks_of_month,
+        Existing, Grain, PauseAt, already_swept, collate, complete, month_of, week_of,
+        weeks_of_month,
     };
+    use std::collections::BTreeMap;
 
     let (instance_key, hub_url) = instance::resolve(&args.instance, args.hub_url.as_deref())?;
     // The file is named for the instance, so a pooled tree can hold
@@ -365,55 +342,84 @@ fn cmd_backfill(args: &BackfillArgs) -> Result<(), Box<dyn Error>> {
             .ok_or_else(|| format!("cannot read {ts} as a date"))
     };
     let (first, last) = (day_of(after)?, day_of(before - 1.0)?);
+    let midnight = |d: NaiveDate| d.and_hms_opt(0, 0, 0).expect("midnight exists").and_utc();
+    let opts_for = |from: NaiveDate, to: NaiveDate| fetch::FetchOpts {
+        instance_key: instance_key.clone(),
+        hub_url: hub_url.clone(),
+        after: midnight(from).timestamp() as f64,
+        before: (midnight(to) + Duration::days(1)).timestamp() as f64,
+        owner: None,
+        packages: None,
+        page_size: args.page_size,
+        sleep_ms: args.sleep_ms,
+        retries: args.retries,
+        duty_percent: args.duty_cycle,
+        verbose: args.verbose,
+    };
 
-    let mut bound: Option<i64> = None;
-    let mut day = last;
     let mut swept = 0usize;
-    while day >= first {
-        let dir = args.root.join(Grain::Daily.path(day));
-        // Before the sweep, so a tree that cannot be written fails in
-        // seconds rather than after the day's requests.
-        std::fs::create_dir_all(&dir)?;
-        let out = dir.join(&file);
-        let mut skip = false;
-        if out.exists() {
-            match args.if_exists {
-                Existing::Replace => std::fs::remove_file(&out)?,
-                Existing::Merge => {}
-                // Nobody to ask in a cron job, and merging cannot lose
-                // what is already there, so that is what an unattended
-                // run does.
-                Existing::Ask => {
-                    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                        let again = sandogasa_cli::confirm(
-                            &format!("{} exists; sweep it again and merge?", out.display()),
-                            true,
-                        )?;
-                        skip = !again;
-                    } else {
-                        eprintln!("note: {} exists; merging into it", out.display());
-                    }
+    // Build tasks walked for one chunk that a later (older) chunk will
+    // want: the walk reaches three days past its window, and those rows
+    // belong to the week before. Carrying them means every creation is
+    // listed once across the whole backfill instead of once per week.
+    let mut carried: Vec<sandogasa_kojihub::HubTask> = Vec::new();
+    // The creation time above which `carried` holds everything, which is
+    // where the next walk may start.
+    let mut floor: Option<f64> = None;
+    let mut cursor = last;
+    while cursor >= first {
+        // One walk per week rather than per day. The walk must reach back
+        // past each window by the grace margin, so day-at-a-time re-lists
+        // most of the same rows every time: seven days of a week cost
+        // about 250 pages fetched separately against about 90 shared.
+        // Days are still written one at a time, so an interruption still
+        // costs at most the day in flight.
+        let week = week_of(cursor);
+        let chunk_end = cursor.min(week.end);
+        let chunk_start = week.start.max(first);
+        let chunk_opts = opts_for(chunk_start, chunk_end);
+        let wanted: Vec<NaiveDate> = week
+            .days()
+            .filter(|d| *d >= chunk_start && *d <= chunk_end)
+            .filter(|d| match args.if_exists {
+                // Only a sweep that means to redo the work looks past
+                // what is already on disk.
+                Existing::Replace => true,
+                _ => !already_swept(&args.root, *d, &file),
+            })
+            .collect();
+
+        let builds = if wanted.is_empty() {
+            eprintln!("[koji-lag] {chunk_start}..{chunk_end}: already swept");
+            carried.clone()
+        } else {
+            eprintln!(
+                "[koji-lag] walking {chunk_start}..{chunk_end} for {} day(s){}",
+                wanted.len(),
+                match carried.len() {
+                    0 => String::new(),
+                    n => format!(" ({n} build(s) carried over)"),
                 }
+            );
+            let fresh = fetch::walk_builds_below(&chunk_opts, floor)?;
+            // Keyed by id, so a row seen by both walks counts once.
+            let mut all: BTreeMap<i64, sandogasa_kojihub::HubTask> =
+                carried.iter().cloned().map(|t| (t.id, t)).collect();
+            all.extend(fresh.into_iter().map(|t| (t.id, t)));
+            all.into_values().collect()
+        };
+
+        for day in wanted.iter().rev() {
+            let dir = args.root.join(Grain::Daily.path(*day));
+            // Before the sweep, so a tree that cannot be written fails in
+            // seconds rather than after the day's requests.
+            std::fs::create_dir_all(&dir)?;
+            let out = dir.join(&file);
+            if out.exists() && args.if_exists == Existing::Replace {
+                std::fs::remove_file(&out)?;
             }
-        }
-        if !skip {
-            let day_start = day.and_hms_opt(0, 0, 0).expect("midnight exists").and_utc();
-            let opts = fetch::FetchOpts {
-                instance_key: instance_key.clone(),
-                hub_url: hub_url.clone(),
-                after: day_start.timestamp() as f64,
-                before: (day_start + Duration::days(1)).timestamp() as f64,
-                owner: None,
-                packages: None,
-                page_size: args.page_size,
-                sleep_ms: args.sleep_ms,
-                retries: args.retries,
-                duty_percent: args.duty_cycle,
-                verbose: args.verbose,
-                start_below: bound,
-            };
             eprintln!("[koji-lag] backfill: {day}");
-            let report = fetch::run(&opts, &out)?;
+            let report = fetch::run_with_builds(&opts_for(*day, *day), &out, Some(&builds))?;
             eprintln!(
                 "  {} build(s), {} task(s) -> {}",
                 report.builds_swept,
@@ -421,15 +427,12 @@ fn cmd_backfill(args: &BackfillArgs) -> Result<(), Box<dyn Error>> {
                 out.display()
             );
             swept += 1;
+            report_for(args, &Grain::Daily.path(*day), std::slice::from_ref(&out))?;
         }
-        // Whether swept or skipped, the day on disk bounds the next one.
-        bound = oldest_build_id(&out.display().to_string()).ok();
-        report_for(args, &Grain::Daily.path(day), std::slice::from_ref(&out))?;
 
-        // A day completing its week (and a week completing its month)
-        // happens on the oldest day of that period, which is the one just
-        // done, since the sweep runs backwards.
-        let week = week_of(day);
+        // A week completes on its oldest day, which is the one just done,
+        // since the sweep runs backwards.
+        let mut paused = None;
         if complete(&args.root, &week, &file, Grain::Daily) {
             let parts: Vec<_> = week.days().map(|d| Grain::Daily.path(d)).collect();
             let n = collate(&args.root, &week, Grain::Daily, &parts, &file)?;
@@ -439,9 +442,12 @@ fn cmd_backfill(args: &BackfillArgs) -> Result<(), Box<dyn Error>> {
                 &week.path(),
                 &[args.root.join(week.path()).join(&file)],
             )?;
+            if args.pause_at.contains(&PauseAt::Weekly) {
+                paused = Some(week.path());
+            }
         }
-        let month = month_of(day);
-        let weeks = weeks_of_month(day);
+        let month = month_of(cursor);
+        let weeks = weeks_of_month(cursor);
         if weeks
             .iter()
             .all(|w| args.root.join(w.path()).join(&file).exists())
@@ -454,15 +460,55 @@ fn cmd_backfill(args: &BackfillArgs) -> Result<(), Box<dyn Error>> {
                 &month.path(),
                 &[args.root.join(month.path()).join(&file)],
             )?;
+            if args.pause_at.contains(&PauseAt::Monthly) {
+                paused = Some(month.path());
+            }
+        }
+        if let Some(at) = paused
+            && !carry_on(&at)?
+        {
+            eprintln!(
+                "backfill: stopped after {}; re-run the same command to carry on",
+                at.display()
+            );
+            return Ok(());
         }
 
-        day -= Duration::days(1);
+        // Keep what the next chunk may want: anything created before this
+        // chunk began can still complete in an earlier week, while
+        // anything created inside it cannot — completion never precedes
+        // creation. That bounds what is held to the grace margin.
+        let chunk_began = midnight(chunk_start).timestamp() as f64;
+        carried = builds
+            .into_iter()
+            .filter(|t| t.create_ts.is_some_and(|ts| ts < chunk_began))
+            .collect();
+        floor = carried.iter().filter_map(|t| t.create_ts).reduce(f64::min);
+
+        cursor = week.start - Duration::days(1);
     }
     eprintln!(
         "backfill: swept {swept} day(s) into {}",
         args.root.display()
     );
     Ok(())
+}
+
+/// Ask whether to keep going after a collation, or stop if nobody can be
+/// asked.
+///
+/// A collation is the natural place to break off — everything before it is
+/// compacted and on disk — so this is where a run offers the choice. With
+/// no terminal there is nobody to answer and the point of asking was to
+/// stop, so it stops.
+fn carry_on(at: &std::path::Path) -> Result<bool, Box<dyn Error>> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Ok(false);
+    }
+    Ok(sandogasa_cli::confirm(
+        &format!("collated {}; carry on?", at.display()),
+        true,
+    )?)
 }
 
 /// Write a chunk's reports, when a reports root was given.

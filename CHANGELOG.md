@@ -13,8 +13,7 @@ its first day and its dailies are removed, a complete month becomes
 A day at a time rather than one wide sweep, because the per-parent
 children queries dominate and scale with builds, not windows — so days
 cost the same in total, while an interruption loses the day in flight
-instead of five hours. Each day bounds the next through `--start-below`,
-so none walks history a previous one already crossed. Re-running resumes
+instead of five hours. Re-running resumes
 from what is on disk, and `--if-exists merge|replace|ask` says what to do
 about a day already there; `ask` is the default and merges when there is
 nobody to ask, since merging cannot lose data.
@@ -60,10 +59,6 @@ affordable — `listTasks` with `countOnly` over a three-day creation window
 measured 83 seconds — and offsets themselves stop being cheap past a few
 hundred thousand rows (2.8s at 300,000, 81s at a million), so the search is
 bounded and falls back to plain paging beyond that.
-
-`--start-below <ID|FILE>` makes the boundary exact rather than inferred
-from creation times: a dataset covering the window *after* this one holds
-nothing wanted here, so the sweep may begin below the oldest build in it.
 
 Requests are now paced by how long the hub takes. `--duty-cycle` (default
 50) names the share of one connection to aim for, and each pause is scaled

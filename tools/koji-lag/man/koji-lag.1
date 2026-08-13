@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS koji-lag backfill
-\fBkoji\-lag backfill\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] <\fB\-\-root\fR> [\fB\-\-reports\-root\fR] [\fB\-\-if\-exists\fR] [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-\-min\-samples\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBkoji\-lag backfill\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] <\fB\-\-root\fR> [\fB\-\-reports\-root\fR] [\fB\-\-if\-exists\fR] [\fB\-\-pause\-at\fR] [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-\-min\-samples\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Sweep a long window a day at a time, collating as it goes
 .TP
@@ -56,6 +56,21 @@ replace: Sweep again and write over it
 ask: Ask, and merge when nobody can be asked
 .RE
 .TP
+\fB\-\-pause\-at\fR \fI<GRAIN,...>\fR
+Stop after collating at these grains (repeated or CSV).
+
+A collation is a natural place to break off: everything before it is compacted and on disk, so a run resumed later picks up cleanly. With a terminal it asks whether to carry on; without one it stops, since nobody can answer.
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+weekly: After a week\*(Aqs days are folded together
+.IP \(bu 2
+monthly: After a month\*(Aqs weeks are folded together
+.RE
+.TP
 \fB\-\-page\-size\fR \fI<PAGE_SIZE>\fR [default: 1000]
 Tasks per listTasks page
 .TP
@@ -77,7 +92,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag fetch
-\fBkoji\-lag fetch\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] [\fB\-\-owner\fR] [\fB\-\-package\fR] [\fB\-i\fR|\fB\-\-inventory\fR] <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-start\-below\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBkoji\-lag fetch\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] [\fB\-\-owner\fR] [\fB\-\-package\fR] [\fB\-i\fR|\fB\-\-inventory\fR] <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Sweep a Koji completion window into a local dataset
 .TP
@@ -124,11 +139,6 @@ Retries per failed hub request
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
-.TP
-\fB\-\-start\-below\fR \fI<ID|FILE>\fR
-Start below this build task id, or below the oldest in a dataset file.
-
-A backfill knows the answer: a dataset covering a later window holds nothing this one wants, so the sweep can begin below the oldest build in it. Given a number, that id is used directly.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
