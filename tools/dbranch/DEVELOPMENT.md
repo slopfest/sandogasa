@@ -216,6 +216,16 @@ Watch the reasoning, not just the conclusion, if this is revisited:
 "backports needs `-sa`" is widespread advice that was true before 2013
 and is repeated in plenty of still-published guides.
 
+**Confirmed against real archives**, both on 2026-08-13: a `-2`
+revision uploaded to unstable with no `.orig.tar` line in its
+`.changes` was accepted by ftp-master, so dak does resolve the tarball
+from the pool as the `-si` arm assumes; and a `resolute` PPA rebuild
+built `-sa` was accepted by Launchpad, exercising the `-sa` arm and the
+source/`ensure_source`/upload flow end to end. What that establishes is
+that what dbranch sends is accepted — not that `-si` would be refused
+by a PPA, which is the claim the `-sa` arm rests on and which nothing
+here tests.
+
 **Not documented, reasoned:** mentors and Debusine. Neither's docs
 mention `-sa` or the orig tarball — the `-sa` there follows from the
 repository having no Debian pool to resolve against, so a sponsor

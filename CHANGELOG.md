@@ -1,14 +1,18 @@
 # Changelog
 
-## Unreleased
+## v0.20.0
 
-### dbranch: an upload could send a package built from an older tree (breaking CLI)
+### dbranch: an upload could send a package built from an older tree (breaking CLI and API)
 
 Uploading is its own stage, so `dbranch rebuild --stage upload` sends
 whatever `.changes` is sitting next to the repository — including one
 built before the last few commits. The archive then takes the old
 contents under the new version's name, and since a version can only be
 uploaded once, fixing that means another changelog entry.
+
+Breaking in the library too, for anyone using dbranch's crate rather than
+its command: `Stages` gains a `source` field, and `plan::debuild_argv`
+takes an argument where it took none.
 
 Making the source package is now its own stage too, `source`, split out
 of `build` the way `fedpkg srpm` is separate from `fedpkg mockbuild`.
@@ -137,6 +141,8 @@ x86.
 
 
 
+### koji-lag: the SRPM rebuild, and each shape of build, reported separately (breaking API)
+
 Every Koji build starts by rebuilding the source package on a host the hub
 picks — independently of what the build targets, so a package can queue
 behind a machine it does not build for. Those `rebuildSRPM` tasks were
@@ -177,6 +183,13 @@ New in `sandogasa-kojihub`: `list_hosts_with_arches`. The dataset schema
 gains `TaskRecord::method` (defaulting to `buildArch`, so older files load
 unchanged) and a `host_arches` map; the report JSON gains `srpm`,
 `multi_arch`, `single_arch` and `noarch_by_host`.
+
+Breaking for anyone constructing `koji-lag`'s library types in Rust, which
+is part of why this release takes a minor bump: `Dataset` gains
+`host_arches`, `TaskRecord` gains `method`, and `FetchOpts` gains
+`duty_percent`, so struct literals over them need the new fields. Datasets
+written by earlier versions still load — every added field has a serde
+default — and the command line is unchanged.
 
 ### koji-lag: progress through the children sweep, and what a bottleneck count is out of
 
