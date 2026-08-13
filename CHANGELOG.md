@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### koji-lag: backfill a long window a day at a time
+
+`koji-lag backfill --since D --until D --root DIR` sweeps a range one UTC
+day at a time, writing `daily/YYYY/MM/DD/<instance>.json` and collating
+finished periods: a complete week becomes `weekly/YYYY/MM/DD/` dated from
+its first day and its dailies are removed, a complete month becomes
+`monthly/YYYY/MM/` and its weeklies are removed.
+
+A day at a time rather than one wide sweep, because the per-parent
+children queries dominate and scale with builds, not windows — so days
+cost the same in total, while an interruption loses the day in flight
+instead of five hours. Each day bounds the next through `--start-below`,
+so none walks history a previous one already crossed. Re-running resumes
+from what is on disk, and `--if-exists merge|replace|ask` says what to do
+about a day already there; `ask` is the default and merges when there is
+nobody to ask, since merging cannot lose data.
+
+Weeks run Monday to Sunday but never cross a month boundary, so a month's
+figures are exactly the sum of its weeks with no week counted against two
+months. A clipped week keeps its first day as its name: August 2026 opens
+on a Saturday, so `weekly/2026/08/01` covers the 1st and 2nd. Collation
+writes the merged file before deleting the parts, so an interruption
+leaves both rather than neither, and it prunes the dated directories it
+empties — an empty `daily/2026/08/03/` reads as coverage that is not
+there.
+
+`--reports-root` writes a report for each period as it completes. Reports
+are deliberately *not* collated away: they are kilobytes against the
+datasets' megabytes, and a daily report answers questions a monthly one
+has already averaged out.
+
+`koji-lag reports --root DIR --reports-root DIR` renders reports for a
+tree already swept, since changing what a report says should not mean
+asking Koji for the data again. It leaves existing reports alone unless
+`--force` is given.
+
+`report --out DIR` writes `report.txt` and `report.json` together in one
+pass. Getting both previously meant running the report twice, reading the
+dataset twice, and a report that exists in one form but not the other is
+the kind of difference nobody notices until a script needs the missing
+one.
+
 ### koji-lag: a backfill no longer walks from today to reach last month
 
 Fetching a past window paged through everything newer first — for a June

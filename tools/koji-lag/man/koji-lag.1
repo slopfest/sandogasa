@@ -15,6 +15,67 @@ Print help
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
+.SS koji-lag backfill
+\fBkoji\-lag backfill\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] <\fB\-\-root\fR> [\fB\-\-reports\-root\fR] [\fB\-\-if\-exists\fR] [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-\-min\-samples\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Sweep a long window a day at a time, collating as it goes
+.TP
+\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
+Known Koji instance (cbs, fedora, stream). Names the files
+.TP
+\fB\-\-hub\-url\fR \fI<URL>\fR
+Explicit hub URL (overrides \-\-instance; https only)
+.TP
+\fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
+Window start date (UTC midnight, inclusive)
+.TP
+\fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
+Window end date, inclusive
+.TP
+\fB\-\-days\fR \fI<N>\fR
+Sweep the last N complete UTC days
+.TP
+\fB\-\-root\fR \fI<DIR>\fR
+Directory to write the dataset tree into
+.TP
+\fB\-\-reports\-root\fR \fI<DIR>\fR
+Also write reports, into this directory tree
+.TP
+\fB\-\-if\-exists\fR \fI<WHAT>\fR [default: ask]
+What to do when a day\*(Aqs dataset is already there
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+merge: Sweep again and fold the result into what is there
+.IP \(bu 2
+replace: Sweep again and write over it
+.IP \(bu 2
+ask: Ask, and merge when nobody can be asked
+.RE
+.TP
+\fB\-\-page\-size\fR \fI<PAGE_SIZE>\fR [default: 1000]
+Tasks per listTasks page
+.TP
+\fB\-\-sleep\-ms\fR \fI<SLEEP_MS>\fR [default: 500]
+Minimum pause between hub requests, in milliseconds
+.TP
+\fB\-\-duty\-cycle\fR \fI<PERCENT>\fR [default: 50]
+Share of one connection to use, as a percentage
+.TP
+\fB\-\-retries\fR \fI<RETRIES>\fR [default: 3]
+Retries per failed hub request
+.TP
+\fB\-\-min\-samples\fR \fI<MIN_SAMPLES>\fR [default: 5]
+Withhold report stats below this sample count
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag fetch
 \fBkoji\-lag fetch\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] [\fB\-\-owner\fR] [\fB\-\-package\fR] [\fB\-i\fR|\fB\-\-inventory\fR] <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-start\-below\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
@@ -85,7 +146,7 @@ Print help
 <\fIFILE\fR>
 Dataset files to union
 .SS koji-lag report
-\fBkoji\-lag report\fR [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIFILE\fR> 
+\fBkoji\-lag report\fR [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIFILE\fR> 
 .PP
 Per\-arch queue\-wait / build\-time / bottleneck report
 .TP
@@ -107,6 +168,11 @@ Only official (non\-scratch) builds
 \fB\-\-include\-failed\fR
 Include FAILED tasks in build\-time statistics
 .TP
+\fB\-\-out\fR \fI<DIR>\fR
+Write report.txt and report.json into this directory.
+
+Both forms in one pass, since a reader wants the table and a machine wants the fields, and running the report twice to get both would read the dataset twice. Without it the report goes to stdout, as text or as JSON with \-\-json.
+.TP
 \fB\-\-min\-samples\fR \fI<MIN_SAMPLES>\fR [default: 5]
 Withhold human\-output stats below this sample count
 .TP
@@ -114,7 +180,28 @@ Withhold human\-output stats below this sample count
 Output machine\-readable JSON instead of tables
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIFILE\fR>
 Dataset file(s) to report over (merged in memory)
+.SS koji-lag reports
+\fBkoji\-lag reports\fR <\fB\-\-root\fR> <\fB\-\-reports\-root\fR> [\fB\-\-min\-samples\fR] [\fB\-\-force\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Render reports for every dataset in a tree, without fetching
+.TP
+\fB\-\-root\fR \fI<DIR>\fR
+Dataset tree to read (as written by `backfill`)
+.TP
+\fB\-\-reports\-root\fR \fI<DIR>\fR
+Directory tree to write reports into
+.TP
+\fB\-\-min\-samples\fR \fI<MIN_SAMPLES>\fR [default: 5]
+Withhold report stats below this sample count
+.TP
+\fB\-\-force\fR
+Re\-render reports that already exist.
+
+Off by default, so re\-running after an interruption costs nothing; pass it after changing what a report says.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)

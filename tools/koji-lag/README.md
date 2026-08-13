@@ -31,7 +31,7 @@ No external tools required.
 
 ### Fetch
 
-Sweep a completion-time window into a local dataset:
+For one window at a time (see `backfill` below for long ranges):
 
 ```sh
 koji-lag fetch --days 7 -o week.json
@@ -154,6 +154,56 @@ Because the walk always starts at now for a window that reaches it, one
 wide window costs far less than many narrow ones: `--since 2026-06-01 --until 2026-07-31` walks the
 history once, where fetching those days one at a time walks it again for
 every day. Coverage windows coalesce on merge either way.
+
+### Backfill
+
+Sweep a long window a day at a time, collating as it goes:
+
+```sh
+koji-lag backfill --since 2026-06-01 --until 2026-07-31 \
+    --root raw_data --reports-root reports
+```
+
+Days are swept newest-first, each writing
+`<root>/daily/YYYY/MM/DD/<instance>.json` — the file is named for the
+instance, so one tree can hold Fedora's and CentOS's sweeps side by side.
+Each day bounds the next: the oldest build just written is a ceiling for
+the day before it, so no day walks history a previous one already crossed.
+
+A day at a time costs no more than one wide window, because the per-parent
+children queries dominate and they scale with builds rather than windows.
+What it buys is that an interruption loses the day in flight instead of
+the run. Re-running resumes from what is on disk; `--if-exists` says what
+to do about a day already there — `merge` (sweep again and fold in),
+`replace`, or `ask`, which is the default and merges when there is nobody
+to ask, since merging cannot lose data.
+
+Finished periods are collated. A complete week becomes
+`weekly/YYYY/MM/DD/<instance>.json`, dated from its first day, and its
+dailies are removed; a complete month becomes
+`monthly/YYYY/MM/<instance>.json` and its weeklies are removed. Weeks run
+Monday to Sunday but never cross a month boundary, so a month's figures
+are exactly the sum of its weeks and no week is counted against two
+months — August 2026 opens on a Saturday, so `weekly/2026/08/01` covers
+just the 1st and 2nd. The merged file is written before anything is
+deleted, so an interruption leaves both rather than neither.
+
+With `--reports-root`, a report is written for each period as it
+completes, at the matching path. Reports are *not* collated away: they are
+kilobytes against the datasets' megabytes, and a daily report answers
+questions a monthly one has already averaged out.
+
+### Reports
+
+Render reports for a tree that has already been swept:
+
+```sh
+koji-lag reports --root raw_data --reports-root reports
+```
+
+Rendering is cheap and sweeping is not, so changing what a report says
+should not mean asking Koji again. Existing reports are left alone unless
+`--force` is passed.
 
 ### Merge
 
