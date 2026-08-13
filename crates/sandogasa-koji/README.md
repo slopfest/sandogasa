@@ -33,10 +33,20 @@ CentOS Build System).
 
 ## Timeouts
 
-Every call is bounded at 30 seconds; `SANDOGASA_KOJI_TIMEOUT` overrides
+Queries are bounded at 30 seconds; `SANDOGASA_KOJI_TIMEOUT` overrides
 that in seconds, and `0` waits indefinitely. The koji CLI has no timeout
 of its own, so an unreachable hub would otherwise block a caller with no
 output.
+
+Operations that are *meant* to block — `regen_repo` and `tag_build`, both
+of which pass `--wait` — get a separate bound of 30 minutes,
+`SANDOGASA_KOJI_WAIT_TIMEOUT`. A repo regeneration runs for minutes by
+design; one measured against Fedora's hub took 4m43s. Before starting
+one, `hub_responds` asks `koji version`, a sub-second round trip needing
+no authentication, so an unreachable hub costs the query timeout instead
+of the wait bound. A wait that outruns its own bound does not mark the
+hub unresponsive: that says the work is slow, not that the hub has
+stopped answering.
 
 The first timeout latches per profile: later calls fail immediately
 rather than each paying the full bound, since a hub that did not answer

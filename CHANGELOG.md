@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### sandogasa-koji: a repo regeneration is not a hung hub
+
+The 30-second bound added in 0.19.3 was applied to every koji call,
+including the ones whose whole purpose is to block. `koji regen-repo
+--wait` runs for minutes on a large tag — one measured against Fedora's
+hub took 4m43s — so `ebranch check-update` offered to regenerate a stale
+side tag repo, started, and then aborted itself half a minute later with
+"the hub may be down". The hub was fine. The code even said so: the
+comment above the call read "repo regeneration can take several minutes
+on large tags".
+
+Waiting operations now have their own bound, 30 minutes, overridable
+with `SANDOGASA_KOJI_WAIT_TIMEOUT`. Queries keep the 30-second one,
+because a hub that has not answered a question in that time is not going
+to.
+
+A cap alone would trade a wrong abort for a long hang when the hub
+really is down, so before starting a wait the hub is asked `koji
+version` — a sub-second round trip needing no authentication. An
+unreachable hub costs the query timeout, not the wait bound. And a wait
+that outruns its bound no longer marks the hub unresponsive for the rest
+of the run: slow work is not a dead hub.
+
+New in `sandogasa-koji`: `hub_responds`, `WAIT_TIMEOUT_ENV`.
+
 ## v0.19.4
 
 ### ebranch: check-wip missed builds that were already in Koji

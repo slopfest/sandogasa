@@ -26,6 +26,24 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// caller genuinely willing to block should ask for.
 pub const TIMEOUT_ENV: &str = "SANDOGASA_KOJI_TIMEOUT";
 
+/// How long an operation that is *meant* to block may take.
+///
+/// [`DEFAULT_TIMEOUT`] is a query bound: a hub that has not answered a
+/// question in thirty seconds is not going to. Some koji commands are
+/// not questions — `regen-repo --wait` and `tag-build --wait` block
+/// until work finishes, and a repo regeneration on a large tag runs for
+/// minutes by design. Bounding those at the query timeout aborted them
+/// as failures while they were working exactly as documented.
+///
+/// A cap remains, because a wait that never ends is still a hang, and
+/// [`hub_responds`] is checked first so an unreachable hub costs the
+/// query timeout rather than this one.
+const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// Environment variable overriding [`DEFAULT_WAIT_TIMEOUT`], in
+/// seconds. `0` waits indefinitely.
+pub const WAIT_TIMEOUT_ENV: &str = "SANDOGASA_KOJI_WAIT_TIMEOUT";
+
 /// Profiles whose hub has already failed to answer in this process.
 ///
 /// A hub that did not answer once will not answer the next call either,
@@ -80,14 +98,38 @@ fn mark_unresponsive(profile: Option<&str>) {
 }
 
 fn timeout() -> Option<Duration> {
-    match std::env::var(TIMEOUT_ENV)
+    configured_timeout(TIMEOUT_ENV, DEFAULT_TIMEOUT)
+}
+
+fn wait_timeout() -> Option<Duration> {
+    configured_timeout(WAIT_TIMEOUT_ENV, DEFAULT_WAIT_TIMEOUT)
+}
+
+fn configured_timeout(var: &str, default: Duration) -> Option<Duration> {
+    match std::env::var(var)
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
     {
         Some(0) => None,
         Some(secs) => Some(Duration::from_secs(secs)),
-        None => Some(DEFAULT_TIMEOUT),
+        None => Some(default),
     }
+}
+
+/// Whether the hub answers at all, cheaply.
+///
+/// `koji version` is a hub round trip needing no authentication and
+/// answers in well under a second, which makes it the right thing to ask
+/// before starting something that will legitimately block for minutes:
+/// an unreachable hub then costs the query timeout instead of the wait
+/// bound. It is a query, so a timeout here latches like any other.
+pub fn hub_responds(profile: Option<&str>) -> bool {
+    let mut cmd = Command::new("koji");
+    if let Some(p) = profile {
+        cmd.args(["--profile", p]);
+    }
+    cmd.arg("version");
+    run_bounded(cmd, "version", profile).is_ok()
 }
 
 /// A build found in a Koji tag.
@@ -237,6 +279,27 @@ fn run_koji(profile: Option<&str>, args: &[&str]) -> Result<String, String> {
     }
     cmd.args(args);
     run_bounded(cmd, args.first().unwrap_or(&""), profile)
+}
+
+/// Run a koji command that is expected to block until work completes.
+///
+/// The hub is pinged first so that a dead one fails in seconds rather
+/// than tying the caller up until the wait bound. The wait itself does
+/// not latch the hub as unresponsive: an operation outrunning its bound
+/// says the work is slow, not that the hub has stopped answering.
+fn run_koji_waiting(profile: Option<&str>, args: &[&str]) -> Result<String, String> {
+    let label = args.first().unwrap_or(&"");
+    if !hub_responds(profile) {
+        return Err(format!(
+            "koji {label} not started: the hub did not answer a version query"
+        ));
+    }
+    let mut cmd = Command::new("koji");
+    if let Some(p) = profile {
+        cmd.args(["--profile", p]);
+    }
+    cmd.args(args);
+    run_bounded_with(cmd, label, wait_timeout())
 }
 
 /// List builds in a Koji tag with their owners.
@@ -444,7 +507,7 @@ pub fn check_auth(profile: Option<&str>) -> Result<(), String> {
 /// koji stderr otherwise. Koji tolerates re-tagging a build
 /// already in the tag, so this is effectively idempotent.
 pub fn tag_build(tag: &str, nvr: &str, profile: Option<&str>) -> Result<(), String> {
-    run_koji(profile, &["tag-build", "--wait", "--", tag, nvr])?;
+    run_koji_waiting(profile, &["tag-build", "--wait", "--", tag, nvr])?;
     Ok(())
 }
 
@@ -463,10 +526,13 @@ pub fn untag_build(tag: &str, nvr: &str, profile: Option<&str>) -> Result<(), St
 /// `--wait` is explicit because koji defaults to `--nowait` when
 /// its stdout isn't a TTY (as when run as a subprocess): callers
 /// re-query the regenerated repo immediately after this returns,
-/// so the regen must actually have completed. Repo regeneration
-/// can take several minutes on large tags.
+/// so the regen must actually have completed. Repo regeneration can take
+/// several minutes on large tags, so this is bounded by
+/// [`WAIT_TIMEOUT_ENV`] rather than the query timeout — bounding it at
+/// the latter aborted regens that were working exactly as this comment
+/// describes.
 pub fn regen_repo(tag: &str, profile: Option<&str>) -> Result<(), String> {
-    run_koji(profile, &["regen-repo", "--wait", "--", tag])?;
+    run_koji_waiting(profile, &["regen-repo", "--wait", "--", tag])?;
     Ok(())
 }
 
@@ -750,5 +816,50 @@ Mon May 18 15:35:11 2026 ethtool-6.14-1.hs.el10 untagged from hyperscale10s-pack
         assert!(!tag_missing(
             "failed to run koji: No such file or directory"
         ));
+    }
+
+    #[test]
+    fn a_wait_may_outlive_the_query_bound() {
+        // The point of the second bound: work that is meant to block is
+        // not a hub that has stopped answering.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 2; echo done"]);
+        let out = run_bounded_with(cmd, "regen-repo", Some(Duration::from_secs(60))).unwrap();
+        assert_eq!(out.trim(), "done");
+    }
+
+    #[test]
+    fn timeouts_come_from_the_environment_or_a_default() {
+        // A variable of its own per case, because tests share one
+        // process environment and run in parallel.
+        let default = Duration::from_secs(42);
+        assert_eq!(
+            configured_timeout("SANDOGASA_TEST_TIMEOUT_UNSET", default),
+            Some(default)
+        );
+        unsafe { std::env::set_var("SANDOGASA_TEST_TIMEOUT_SET", "90") };
+        assert_eq!(
+            configured_timeout("SANDOGASA_TEST_TIMEOUT_SET", default),
+            Some(Duration::from_secs(90))
+        );
+        // Zero is "wait as long as it takes".
+        unsafe { std::env::set_var("SANDOGASA_TEST_TIMEOUT_ZERO", "0") };
+        assert_eq!(
+            configured_timeout("SANDOGASA_TEST_TIMEOUT_ZERO", default),
+            None
+        );
+        // Nonsense falls back rather than failing the run.
+        unsafe { std::env::set_var("SANDOGASA_TEST_TIMEOUT_JUNK", "soon") };
+        assert_eq!(
+            configured_timeout("SANDOGASA_TEST_TIMEOUT_JUNK", default),
+            Some(default)
+        );
+    }
+
+    #[test]
+    fn a_wait_is_bounded_far_above_a_query() {
+        // Both are bounded; what differs is by how much, and that a
+        // regen taking minutes is expected rather than a failure.
+        assert!(DEFAULT_WAIT_TIMEOUT > DEFAULT_TIMEOUT * 10);
     }
 }
