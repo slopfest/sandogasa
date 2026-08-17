@@ -106,7 +106,7 @@ pub struct FetchOpts {
 }
 
 impl FetchOpts {
-    fn pace(&self) -> Pace {
+    pub(crate) fn pace(&self) -> Pace {
         Pace {
             percent: self.duty_percent,
             floor: std::time::Duration::from_millis(self.sleep_ms),
@@ -123,11 +123,30 @@ impl FetchOpts {
 /// catch builds created before the window that completed inside
 /// it. Three days comfortably exceeds any real build duration
 /// (chromium on s390x included) at the cost of a few extra pages.
-const CREATE_GRACE_SECS: f64 = 3.0 * 86_400.0;
+pub(crate) const CREATE_GRACE_SECS: f64 = 3.0 * 86_400.0;
 
-/// Parents per child-fetch batch: ~5 arches per build keeps the
-/// response comfortably under any page size.
-const PARENT_CHUNK: usize = 40;
+/// Parents per child-fetch batch.
+///
+/// Almost all of a batch's cost is the round trip, not the rows: measured
+/// against Fedora's hub, 40 parents cost 28ms each, 100 cost 5.5ms, 200
+/// cost 3.8ms and 400 cost 4.2ms. Since a build has four children on
+/// average, the flat part dominates until a batch is in the hundreds —
+/// and this is the expensive half of a sync, so the difference is a day's
+/// children in a minute rather than eight.
+///
+/// 200 rather than 400 because a batch whose answer fills the page has to
+/// be split and refetched: at 200 the response is around 800 rows, which
+/// leaves [`CHILD_PAGE_LIMIT`] several times the headroom an arch-heavy
+/// build needs.
+pub(crate) const PARENT_CHUNK: usize = 200;
+
+/// Rows one child batch may return.
+///
+/// Not `--page-size`, which sizes the build listing: a batch of parents
+/// answers with several times as many rows as it has parents, and tying
+/// the two together would make a larger listing page silently raise the
+/// overflow threshold for children.
+const CHILD_PAGE_LIMIT: i64 = 5_000;
 
 /// How much of one connection's capacity a sweep may use.
 ///
@@ -660,6 +679,32 @@ fn fetch_children(
     opts: &FetchOpts,
 ) -> Result<Vec<sandogasa_kojihub::HubTask>, String> {
     let mut all = Vec::new();
+    fetch_children_batched(hub, parents, opts, &mut |_, tasks| {
+        all.extend(tasks);
+        Ok(())
+    })?;
+    Ok(all)
+}
+
+/// What a caller does with each batch of children: store them, and take
+/// the parents they settled as done.
+pub(crate) type OnBatch<'a> =
+    &'a mut dyn FnMut(&[i64], Vec<sandogasa_kojihub::HubTask>) -> Result<(), String>;
+
+/// [`fetch_children`], handing each accepted batch to `on_batch` instead
+/// of collecting the lot.
+///
+/// A sweep that stores and marks per batch keeps its progress when
+/// interrupted, which matters because this is the expensive half of a
+/// sync: several hundred queries for a day. `on_batch` is given the
+/// parents the batch settled — after any splitting, so every id in it has
+/// had its children returned in full.
+pub(crate) fn fetch_children_batched(
+    hub: &HubClient,
+    parents: &[i64],
+    opts: &FetchOpts,
+    on_batch: OnBatch<'_>,
+) -> Result<(), String> {
     let mut chunks: Vec<Vec<i64>> = parents.chunks(PARENT_CHUNK).map(<[i64]>::to_vec).collect();
     let mut progress = BatchProgress::new(parents.len(), PARENT_CHUNK);
     while let Some(chunk) = chunks.pop() {
@@ -674,7 +719,7 @@ fn fetch_children(
             ..Default::default()
         };
         let query = sandogasa_kojihub::QueryOpts {
-            limit: Some(opts.page_size),
+            limit: Some(CHILD_PAGE_LIMIT),
             ..Default::default()
         };
         let started = std::time::Instant::now();
@@ -683,7 +728,7 @@ fn fetch_children(
         let latency = started.elapsed();
         // Whether this batch stands decides what the line may claim, so
         // it is settled before the line is written.
-        let overflowed = (page.len() as i64) >= opts.page_size;
+        let overflowed = (page.len() as i64) >= CHILD_PAGE_LIMIT;
         let splitting = overflowed && chunk.len() > 1;
         let where_it_is = progress.note(chunk.len(), page.len(), splitting);
         if opts.verbose {
@@ -708,12 +753,12 @@ fn fetch_children(
         if overflowed {
             eprintln!(
                 "warning: build task {} has {}+ child tasks; some may be missed",
-                chunk[0], opts.page_size
+                chunk[0], CHILD_PAGE_LIMIT
             );
         }
-        all.extend(page);
+        on_batch(&chunk, page)?;
     }
-    Ok(all)
+    Ok(())
 }
 
 /// Drop builds (and their child tasks) not matching the fetch
@@ -794,7 +839,7 @@ pub fn scratch_from_request(request: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn build_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> BuildRecord {
+pub(crate) fn build_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> BuildRecord {
     let (package, nvr) = match &task.request {
         Some(req) => {
             let nvr = nvr_from_request(req);
@@ -824,7 +869,7 @@ fn build_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> BuildRecor
 
 /// Convert a buildArch task; `None` (with a warning) when the
 /// record is unusable for lag analysis.
-fn task_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> Option<TaskRecord> {
+pub(crate) fn task_record(instance: &str, task: &sandogasa_kojihub::HubTask) -> Option<TaskRecord> {
     let Some(arch) = task.arch.clone() else {
         eprintln!(
             "warning: {} task {} has no arch; skipped",

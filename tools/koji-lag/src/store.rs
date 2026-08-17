@@ -531,7 +531,12 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT t.task_id, t.parent, t.method, t.arch, t.package, t.state,
+                // A child's package falls back to its parent's: the
+                // child's own request often carries no parseable srpm,
+                // and the two halves may have been fetched by different
+                // runs, so the join is the only place both are in hand.
+                "SELECT t.task_id, t.parent, t.method, t.arch,
+                        COALESCE(t.package, b.package), t.state,
                         t.create_ts, t.start_ts, t.completion_ts, t.host_id,
                         t.channel_id, t.weight
                  FROM tasks t JOIN builds b

@@ -36,6 +36,14 @@ pub struct ListTasksOpts {
     pub complete_after: Option<f64>,
     /// Only tasks completed at/before this UTC unix timestamp.
     pub complete_before: Option<f64>,
+    /// Only tasks *created* strictly before this UTC unix timestamp.
+    ///
+    /// Unlike the completion filters this one is indexed, so it costs the
+    /// same wherever in history it points (measured 7–10s a page against
+    /// Fedora's hub, at any depth). It is therefore how a caller walks
+    /// backwards through a long history: ask for the newest tasks created
+    /// before a cursor, then move the cursor to where the page ended.
+    pub created_before: Option<f64>,
     /// Only children of these parent task IDs. This filter hits
     /// koji's `task(parent)` index, so it stays fast (measured
     /// ~0.5s) even when completion-window filtering is melting
@@ -364,6 +372,13 @@ impl ListTasksOpts {
         if let Some(ts) = self.complete_before {
             map.insert("completeBefore".to_string(), Value::Double(ts));
         }
+        if let Some(ts) = self.created_before {
+            // An epoch double, not a formatted string: both are accepted
+            // and return identical rows at identical cost, but a bare
+            // "YYYY-MM-DD HH:MM:SS" carries no zone and would depend on
+            // how the server reads it.
+            map.insert("createdBefore".to_string(), Value::Double(ts));
+        }
         if let Some(parents) = &self.parent {
             map.insert(
                 "parent".to_string(),
@@ -522,6 +537,37 @@ mod tests {
         // Nil completion decodes as None.
         assert_eq!(tasks[1].completion_ts, None);
         assert_eq!(tasks[1].owner_name.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn created_before_is_sent_as_an_epoch_double() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = block_on(MockServer::start());
+        block_on(
+            Mock::given(method("POST"))
+                .and(path("/"))
+                // The name and the type both matter: a hub given a string
+                // would read it in whatever zone it runs in, and callers
+                // position a whole walk with this value.
+                .and(body_string_contains("createdBefore"))
+                .and(body_string_contains("<double>1776988800</double>"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_string(response(&task_xml(7, "noarch", None))),
+                )
+                .mount(&server),
+        );
+
+        let hub = HubClient::new(&server.uri());
+        let opts = ListTasksOpts {
+            method: Some("build".to_string()),
+            created_before: Some(1_776_988_800.0),
+            ..Default::default()
+        };
+        let tasks = hub.list_tasks(&opts, &QueryOpts::default()).unwrap();
+        assert_eq!(tasks.len(), 1);
     }
 
     #[test]

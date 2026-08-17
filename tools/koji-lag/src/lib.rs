@@ -20,6 +20,7 @@ pub mod report;
 pub mod stats;
 pub mod store;
 pub mod sweep;
+pub mod sync;
 
 /// JSON Schema for the dataset format, for external consumers.
 pub fn json_schema() -> String {

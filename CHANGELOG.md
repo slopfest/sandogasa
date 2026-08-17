@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+### koji-lag: `sync` fetches only what the store is missing
+
+Sweeping a window used to cost the same whether or not the data was
+already on disk, and windows more than about six weeks old could not be
+swept at all: the walk positioned itself by paging from the newest task
+and gave up past half a million rows. `koji-lag sync --store` replaces it
+with a walk that positions itself by creation time — the hub answers such
+a page in the same 7–10 seconds wherever in history it points — and that
+asks only for spans the store has never listed.
+
+```sh
+koji-lag sync --store lag.sqlite --days 7 -v
+koji-lag sync --store lag.sqlite --since 2026-04-01 --until 2026-04-30
+```
+
+A day of April, into a store that held nothing older than June, took 18
+minutes 52 seconds: 31 listing pages for the four days of creations a
+one-day window needs, then 8,147 builds' children. Syncing the day before
+it listed one day rather than four — the other three were already
+covered, by the margin the first run walked through and kept.
+
+Re-running a covered window costs two calls, for the hub's current hosts
+and channels; a window inside a covered stretch costs the same even if it
+was never asked for by name. An interrupted run keeps everything it
+fetched: the listing records each page's span as it lands, and the
+children stage marks each batch of parents as it is stored, so a sync
+resumed after a crash asks only for the remainder. The two stages are
+tracked apart, so children can be fetched for a window an earlier run
+listed and never finished.
+
+A sync takes no `--owner` or `--package`: everything the hub reports is
+stored, and narrowing is a query over the store rather than a decision
+made while fetching. See the tool's DEVELOPMENT.md for why coverage is
+recorded as what was *listed* rather than what was kept.
+
+Two details of the cursor worth recording. It steps five seconds past the
+oldest creation a page returned rather than one, because pages come back
+in task-id order and Koji assigns ids and creation times together but not
+atomically — a row committed a moment late would otherwise be stepped
+over. And a page whose rows span less than that margin is drained by
+offset instead of by cursor: a mass rebuild submits hundreds of builds at
+once, and moving the cursor five seconds back would return the same rows
+for ever.
+
+### koji-lag: a day's child tasks in a minute rather than eight
+
+Child tasks are fetched 200 builds to a query instead of 40. Almost all of
+a query's cost is the round trip — measured against Fedora's hub, 40
+parents cost 28ms each, 100 cost 5.5ms and 200 cost 3.8ms — and since a
+build has about four children, the flat part dominates until a batch is in
+the hundreds. This is the expensive half of any sweep, so a day of Fedora
+went from around eight minutes of it to about one.
+
+The row limit for those queries is now its own number rather than
+`--page-size`, which sizes the build listing: a batch answers with several
+times as many rows as it has parents, and tying the two together meant a
+larger listing page silently raised the threshold at which a batch is
+judged to have overflowed. Batches that do overflow are still split and
+refetched.
+
+The measurements behind this, and the rest of what the hub costs, are now
+recorded in the tool's DEVELOPMENT.md.
+
 ### koji-lag: a SQLite store, and `import` to fill it from existing datasets
 
 Backfilling a month cost far more than the month: a sweep for May reached

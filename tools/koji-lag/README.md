@@ -29,9 +29,59 @@ No external tools required.
 
 ## Usage
 
+### Backfill
+
+Sweep a long window a day at a time, collating as it goes:
+
+```sh
+koji-lag backfill --since 2026-06-01 --until 2026-07-31 \
+    --root raw_data --reports-root reports
+```
+
+Days are swept newest-first, each writing
+`<root>/daily/YYYY/MM/DD/<instance>.json` — the file is named for the
+instance, so one tree can hold Fedora's and CentOS's sweeps side by side.
+Each day bounds the next: the oldest build just written is a ceiling for
+the day before it, so no day walks history a previous one already crossed.
+
+The hub is walked once per week, not once per day, and consecutive weeks
+carry their overlap between them. A walk must reach back past its window
+by three days — a build created earlier can finish inside it — so
+day-at-a-time re-lists most of the same rows every time, and even
+week-at-a-time would re-list three days per week. Rows a walk finds
+outside the day being written are kept for the chunk that wants them, and
+the next walk starts below what is already held, so every creation is
+listed once across the whole backfill. Days are still *written* one at a
+time, so an interruption still costs at most the day in flight.
+
+A day at a time costs little more than one wide window, because the
+per-parent children queries dominate and they scale with builds rather
+than windows.
+What it buys is that an interruption loses the day in flight instead of
+the run. Re-running resumes from what is on disk; `--if-exists` says what
+to do about a day already there — `merge` (sweep again and fold in),
+`replace`, or `ask`, which is the default and merges when there is nobody
+to ask, since merging cannot lose data.
+
+Finished periods are collated. A complete week becomes
+`weekly/YYYY/MM/DD/<instance>.json`, dated from its first day, and its
+dailies are removed; a complete month becomes
+`monthly/YYYY/MM/<instance>.json` and its weeklies are removed. Weeks run
+Monday to Sunday but never cross a month boundary, so a month's figures
+are exactly the sum of its weeks and no week is counted against two
+months — August 2026 opens on a Saturday, so `weekly/2026/08/01` covers
+just the 1st and 2nd. The merged file is written before anything is
+deleted, so an interruption leaves both rather than neither.
+
+With `--reports-root`, a report is written for each period as it
+completes, at the matching path. Reports are *not* collated away: they are
+kilobytes against the datasets' megabytes, and a daily report answers
+questions a monthly one has already averaged out.
+
 ### Fetch
 
-For one window at a time (see `backfill` below for long ranges):
+For one window at a time, into a JSON dataset (`backfill` for a long
+range of them, `sync` for a store):
 
 ```sh
 koji-lag fetch --days 7 -o week.json
@@ -149,66 +199,25 @@ wide window costs far less than many narrow ones: `--since 2026-06-01 --until 20
 history once, where fetching those days one at a time walks it again for
 every day. Coverage windows coalesce on merge either way.
 
-### Backfill
+### Import
 
-Sweep a long window a day at a time, collating as it goes:
-
-```sh
-koji-lag backfill --since 2026-06-01 --until 2026-07-31 \
-    --root raw_data --reports-root reports
-```
-
-Days are swept newest-first, each writing
-`<root>/daily/YYYY/MM/DD/<instance>.json` — the file is named for the
-instance, so one tree can hold Fedora's and CentOS's sweeps side by side.
-Each day bounds the next: the oldest build just written is a ceiling for
-the day before it, so no day walks history a previous one already crossed.
-
-The hub is walked once per week, not once per day, and consecutive weeks
-carry their overlap between them. A walk must reach back past its window
-by three days — a build created earlier can finish inside it — so
-day-at-a-time re-lists most of the same rows every time, and even
-week-at-a-time would re-list three days per week. Rows a walk finds
-outside the day being written are kept for the chunk that wants them, and
-the next walk starts below what is already held, so every creation is
-listed once across the whole backfill. Days are still *written* one at a
-time, so an interruption still costs at most the day in flight.
-
-A day at a time costs little more than one wide window, because the
-per-parent children queries dominate and they scale with builds rather
-than windows.
-What it buys is that an interruption loses the day in flight instead of
-the run. Re-running resumes from what is on disk; `--if-exists` says what
-to do about a day already there — `merge` (sweep again and fold in),
-`replace`, or `ask`, which is the default and merges when there is nobody
-to ask, since merging cannot lose data.
-
-Finished periods are collated. A complete week becomes
-`weekly/YYYY/MM/DD/<instance>.json`, dated from its first day, and its
-dailies are removed; a complete month becomes
-`monthly/YYYY/MM/<instance>.json` and its weeklies are removed. Weeks run
-Monday to Sunday but never cross a month boundary, so a month's figures
-are exactly the sum of its weeks and no week is counted against two
-months — August 2026 opens on a Saturday, so `weekly/2026/08/01` covers
-just the 1st and 2nd. The merged file is written before anything is
-deleted, so an interruption leaves both rather than neither.
-
-With `--reports-root`, a report is written for each period as it
-completes, at the matching path. Reports are *not* collated away: they are
-kilobytes against the datasets' megabytes, and a daily report answers
-questions a monthly one has already averaged out.
-
-### Reports
-
-Render reports for a tree that has already been swept:
+Read datasets collected before the store existed, so nothing already
+fetched has to be fetched again:
 
 ```sh
-koji-lag reports --root raw_data --reports-root reports
+koji-lag import raw_data --store lag.sqlite
+koji-lag import week.json month.json --store lag.sqlite
 ```
 
-Rendering is cheap and sweeping is not, so changing what a report says
-should not mean asking Koji again. Existing reports are left alone unless
-`--force` is passed.
+Each argument is a JSON dataset or a directory tree of them. Rows are
+deduplicated by task id, so importing the same dataset twice changes
+nothing and overlapping windows import cleanly.
+
+An import claims the window each dataset covers, but not the three days
+before it that the dataset's sweep also read: a build created in those
+days and finishing after the window is not in the file, so a later sync
+re-lists them. A dataset from a scoped fetch (`--owner`, `--package`)
+contributes its rows and no coverage at all.
 
 ### Merge
 
@@ -262,6 +271,45 @@ Discourse). Column glossary (also printed under every report):
 Human output withholds statistics for rows with fewer than
 `--min-samples` (default 5) samples; `--json` always carries the
 full numbers plus counts so pooled data can be re-filtered.
+
+### Reports
+
+Render reports for a tree that has already been swept:
+
+```sh
+koji-lag reports --root raw_data --reports-root reports
+```
+
+Rendering is cheap and sweeping is not, so changing what a report says
+should not mean asking Koji again. Existing reports are left alone unless
+`--force` is passed.
+
+### Sync
+
+Bring a store up to date with the hub:
+
+```sh
+koji-lag sync --store lag.sqlite --days 7 -v
+koji-lag sync --store lag.sqlite --since 2026-04-01 --until 2026-04-30
+```
+
+A sync fetches only what the store is missing and records what it has
+listed as it goes, so it can be interrupted and re-run freely: a window
+already covered costs no requests, one covered in part costs the
+remainder, and a window in the middle of a covered stretch costs nothing
+even if it was never asked for by name. Reaching a window months old
+costs no more per page than yesterday's — the walk positions itself by
+creation time rather than paging from the newest task.
+
+Two stages, reported separately. First the build tasks created over the
+window, plus the three days before it for builds that started earlier
+and finish inside it; then the child tasks of any build in the
+window that has none, 200 builds to a query.
+
+`--store` names the SQLite database, created if absent; it holds builds,
+child tasks, hosts and channels for any number of instances and periods.
+Nothing is filtered on the way in, so narrowing is something `report`
+does over what is stored.
 
 ## Dataset format
 

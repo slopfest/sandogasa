@@ -142,6 +142,19 @@ Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
+.SS koji-lag import
+\fBkoji\-lag import\fR <\fB\-\-store\fR> [\fB\-h\fR|\fB\-\-help\fR] <\fIPATH\fR> 
+.PP
+Read JSON datasets into the store
+.TP
+\fB\-\-store\fR \fI<FILE>\fR
+Store to read into (created if absent)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIPATH\fR>
+JSON dataset file, or a tree of them
 .SS koji-lag merge
 \fBkoji\-lag merge\fR <\fB\-o\fR|\fB\-\-output\fR> [\fB\-h\fR|\fB\-\-help\fR] <\fIFILE\fR> 
 .PP
@@ -215,16 +228,45 @@ Off by default, so re\-running after an interruption costs nothing; pass it afte
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
-.SS koji-lag import
-\fBkoji\-lag import\fR <\fB\-\-store\fR> [\fB\-h\fR|\fB\-\-help\fR] <\fIPATH\fR> 
+.SS koji-lag sync
+\fBkoji\-lag sync\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] <\fB\-\-store\fR> [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
-Read JSON datasets into the store
+Fetch whatever the store is missing for a window
+.TP
+\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
+Known Koji instance (cbs, fedora, stream)
+.TP
+\fB\-\-hub\-url\fR \fI<URL>\fR
+Explicit hub URL (overrides \-\-instance; https only)
+.TP
+\fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
+Window start date (UTC midnight, inclusive)
+.TP
+\fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
+Window end date, inclusive (default: the last complete UTC day — the running day is never included implicitly)
+.TP
+\fB\-\-days\fR \fI<N>\fR
+Sync the last N complete UTC days
 .TP
 \fB\-\-store\fR \fI<FILE>\fR
-Store to read into (created if absent)
+Store to fill (created if absent)
+.TP
+\fB\-\-page\-size\fR \fI<PAGE_SIZE>\fR [default: 1000]
+Tasks per listTasks page
+.TP
+\fB\-\-sleep\-ms\fR \fI<SLEEP_MS>\fR [default: 500]
+Minimum pause between hub requests, in milliseconds
+.TP
+\fB\-\-duty\-cycle\fR \fI<PERCENT>\fR [default: 50]
+Share of one connection to use, as a percentage.
+
+Each pause is scaled to how long the last request took, so a hub under load is asked less often and a hub that speeds up is asked more. 50 means pause as long as the request took; 100 paces by \-\-sleep\-ms alone.
+.TP
+\fB\-\-retries\fR \fI<RETRIES>\fR [default: 3]
+Retries per failed hub request
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
-.TP
-<\fIPATH\fR>
-JSON dataset file, or a tree of them
+Print help (see a summary with \*(Aq\-h\*(Aq)

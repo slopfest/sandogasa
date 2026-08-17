@@ -30,14 +30,16 @@ enum Command {
     Backfill(BackfillArgs),
     /// Sweep a Koji completion window into a local dataset.
     Fetch(FetchArgs),
+    /// Read JSON datasets into the store.
+    Import(ImportArgs),
     /// Union datasets collected independently into one.
     Merge(MergeArgs),
     /// Per-arch queue-wait / build-time / bottleneck report.
     Report(ReportArgs),
     /// Render reports for every dataset in a tree, without fetching.
     Reports(ReportsArgs),
-    /// Read JSON datasets into the store.
-    Import(ImportArgs),
+    /// Fetch whatever the store is missing for a window.
+    Sync(SyncArgs),
 }
 
 #[derive(clap::Args)]
@@ -185,6 +187,59 @@ struct ImportArgs {
 }
 
 #[derive(clap::Args)]
+struct SyncArgs {
+    /// Known Koji instance (cbs, fedora, stream).
+    #[arg(long, default_value = "fedora")]
+    instance: String,
+
+    /// Explicit hub URL (overrides --instance; https only).
+    #[arg(long, value_name = "URL")]
+    hub_url: Option<String>,
+
+    /// Window start date (UTC midnight, inclusive).
+    #[arg(long, value_name = "YYYY-MM-DD", conflicts_with = "days")]
+    since: Option<String>,
+
+    /// Window end date, inclusive (default: the last complete
+    /// UTC day — the running day is never included implicitly).
+    #[arg(long, value_name = "YYYY-MM-DD")]
+    until: Option<String>,
+
+    /// Sync the last N complete UTC days.
+    #[arg(long, value_name = "N")]
+    days: Option<u32>,
+
+    /// Store to fill (created if absent).
+    #[arg(long, value_name = "FILE")]
+    store: PathBuf,
+
+    /// Tasks per listTasks page.
+    #[arg(long, default_value_t = 1000)]
+    page_size: i64,
+
+    /// Minimum pause between hub requests, in milliseconds.
+    #[arg(long, default_value_t = 500)]
+    sleep_ms: u64,
+
+    /// Share of one connection to use, as a percentage.
+    ///
+    /// Each pause is scaled to how long the last request took, so a
+    /// hub under load is asked less often and a hub that speeds up
+    /// is asked more. 50 means pause as long as the request took;
+    /// 100 paces by --sleep-ms alone.
+    #[arg(long, value_name = "PERCENT", default_value_t = 50)]
+    duty_cycle: u32,
+
+    /// Retries per failed hub request.
+    #[arg(long, default_value_t = 3)]
+    retries: u32,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+#[derive(clap::Args)]
 struct ReportsArgs {
     /// Dataset tree to read (as written by `backfill`).
     #[arg(long, value_name = "DIR")]
@@ -275,6 +330,7 @@ fn main() -> ExitCode {
         Command::Report(args) => cmd_report(&args),
         Command::Reports(args) => cmd_reports(&args),
         Command::Import(args) => cmd_import(&args),
+        Command::Sync(args) => cmd_sync(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -566,6 +622,41 @@ fn report_for(
 /// Cheaper than sweeping them again by hours, and the way a store moves
 /// between machines. What it will not do is claim coverage a dataset
 /// cannot prove: see `import::listed_from_window`.
+fn cmd_sync(args: &SyncArgs) -> Result<(), Box<dyn Error>> {
+    let (instance_key, hub_url) = instance::resolve(&args.instance, args.hub_url.as_deref())?;
+    let now = Utc::now().timestamp() as f64;
+    let (after, before) =
+        fetch::resolve_window(args.since.as_deref(), args.until.as_deref(), args.days, now)?;
+    // Opened before the hub is asked anything: an unwritable store must
+    // fail now rather than after an hour of sweeping.
+    let mut store = koji_lag::store::Store::open(&args.store)?;
+    let opts = fetch::FetchOpts {
+        instance_key,
+        hub_url,
+        after,
+        before,
+        // A sweep is never scoped: everything is stored, and narrowing is
+        // something `report` does over the store. See DEVELOPMENT.md.
+        owner: None,
+        packages: None,
+        page_size: args.page_size,
+        sleep_ms: args.sleep_ms,
+        retries: args.retries,
+        duty_percent: args.duty_cycle,
+        verbose: args.verbose,
+    };
+    let report = koji_lag::sync::run(&mut store, &opts)?;
+    eprintln!(
+        "synced {} page(s): {} build(s), {} child task(s) of {} build(s) -> {}",
+        report.pages,
+        report.builds,
+        report.tasks,
+        report.parents_swept,
+        args.store.display()
+    );
+    Ok(())
+}
+
 fn cmd_import(args: &ImportArgs) -> Result<(), Box<dyn Error>> {
     let mut store = koji_lag::store::Store::open(&args.store)?;
     let mut total = koji_lag::import::Imported::default();
