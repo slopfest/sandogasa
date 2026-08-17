@@ -541,7 +541,9 @@ mod tests {
 
         // What a report will see. Children come by parent, so the s390x
         // task finishing at 500 belongs to build 1 whatever the window.
-        let ds = store.dataset_for("fedora", 0.0, 1000.0).unwrap();
+        let ds = store
+            .dataset_for("fedora", 0.0, 1000.0, crate::fetch::CREATE_GRACE_SECS)
+            .unwrap();
         assert_eq!(ds.builds.len(), 2);
         assert_eq!(ds.tasks.len(), 3);
         assert!(ds.builds["fedora:99"].scratch, "scratch from the request");

@@ -23,7 +23,7 @@ use crate::stats::{
 };
 
 /// Report filters, resolved by the CLI layer.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ReportOpts {
     /// Half-open `[since, until)` UTC unix bounds on task
     /// completion; `None` = unbounded.
@@ -37,6 +37,15 @@ pub struct ReportOpts {
     pub scratch: Option<bool>,
     /// Human output withholds stats below this sample count.
     pub min_samples: usize,
+    /// The period the report is *about*, when that differs from the row
+    /// filter above — a store query has already selected the period, so
+    /// filtering again would split builds across it.
+    ///
+    /// Coverage is judged against this. Without it, only holes *between*
+    /// coverage windows can be found, so a period uncovered at its edges,
+    /// or uncovered entirely, reads as complete: the report warned about
+    /// nothing while saying 33,790 of 51,587 builds had no arch tasks.
+    pub period: Option<(f64, f64)>,
 }
 
 /// How many arches a build was built for, which decides what can be
@@ -121,6 +130,52 @@ pub struct ReportOutput {
 }
 
 /// Compute the report over a (merged) dataset.
+/// The parts of the reported period no coverage window vouches for.
+///
+/// With a period given, this is the period minus the windows, so a range
+/// that is uncovered at either end — or not covered at all — is reported.
+/// Without one, the best that can be said is where the windows fail to
+/// meet, which is what a dataset alone can answer.
+fn uncovered(dataset: &Dataset, opts: &ReportOpts) -> Vec<(String, f64, f64)> {
+    let Some((from, to)) = opts.period else {
+        return dataset.coverage_gaps();
+    };
+    let mut holes = Vec::new();
+    let mut instances: Vec<&str> = dataset.meta.windows.iter().map(|w| &*w.instance).collect();
+    instances.sort_unstable();
+    instances.dedup();
+    // A period with no windows at all belongs to whichever instance the
+    // rows are from, and if there are none either, to nobody: an empty
+    // report needs no warning about coverage it never had.
+    if instances.is_empty() {
+        instances = dataset.builds.values().map(|b| &*b.instance).collect();
+        instances.sort_unstable();
+        instances.dedup();
+    }
+    for instance in instances {
+        let mut spans: Vec<(f64, f64)> = dataset
+            .meta
+            .windows
+            .iter()
+            .filter(|w| w.instance == instance)
+            .map(|w| (w.from.max(from), w.to.min(to)))
+            .filter(|(a, b)| b > a)
+            .collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut at = from;
+        for (start, end) in spans {
+            if start > at {
+                holes.push((instance.to_string(), at, start));
+            }
+            at = at.max(end);
+        }
+        if at < to {
+            holes.push((instance.to_string(), at, to));
+        }
+    }
+    holes
+}
+
 pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
     let in_window = |task: &TaskRecord| -> bool {
         let ts = task.completion_ts.unwrap_or(task.create_ts);
@@ -320,18 +375,22 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
     };
 
     ReportOutput {
+        // From the windows where there are any, and otherwise from the
+        // rows: a period the store holds only in part has no window to
+        // name it, and "Instances:" followed by nothing is no answer.
         instances: dataset
             .meta
             .windows
             .iter()
             .map(|w| w.instance.clone())
+            .chain(dataset.builds.values().map(|b| b.instance.clone()))
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect(),
         since: opts.since,
         until: opts.until,
         coverage: dataset.meta.windows.clone(),
-        gaps: dataset.coverage_gaps(),
+        gaps: uncovered(dataset, opts),
         mixed_filtered_coverage: dataset.mixes_filtered_windows(),
         arches,
         official,
@@ -437,10 +496,21 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
         );
     }
     for (instance, from, to) in &output.gaps {
+        // Dates, not unix seconds: this fires whenever a report covers a
+        // period the store holds only in part, which is a normal thing to
+        // ask for, and "no data between unix 1783036800 and 1783123200"
+        // makes a reader do arithmetic to learn which days are missing.
+        let day = |ts: f64| {
+            chrono::DateTime::from_timestamp(ts as i64, 0)
+                .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| format!("unix {ts:.0}"))
+        };
         let _ = writeln!(
             o,
-            "warning: coverage gap on {instance}: no data between \
-             unix {from:.0} and {to:.0}"
+            "warning: {instance} is not held in full between {} and {} — \
+             those days are excluded from the figures below",
+            day(*from),
+            day(*to)
         );
     }
     // A bottleneck count alone says nothing about how much of the day it

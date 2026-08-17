@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+### koji-lag: `export` writes CSV, and partial days are never analysed
+
+`koji-lag export --store lag.sqlite --since ... -o DIR` writes the store's
+own tables as CSV — `builds.csv`, `tasks.csv`, `hosts.csv`,
+`channels.csv` — which is what the Fedora Data WG asked for. A day of
+Fedora takes under a second. Hosts and channels are easy to overlook and go
+out regardless: without them a `host_id` is a number, and the arch a
+`noarch` build actually ran on cannot be recovered at all.
+
+**Whole days only, everywhere.** A day that was listed but has not had its
+child tasks fetched holds builds with no arch tasks, and statistics over
+those do not read as incomplete — they read as a quiet day. Reporting
+2026-04-26 to 30 mid-sync used to say 36,812 of 36,816 builds had no arch
+tasks swept, and warn about nothing.
+
+So no path analyses a partial day now. `report`, `reports` and `export` all
+take their rows from one place in the store, which yields only whole days
+and names the ones it left out; a range with nothing complete in it is
+refused, with the days to sync in the message, rather than answered with an
+empty file or a report of a tenth of a week. The same range as above now
+reports its three complete days, says which four it excluded, and shows 4
+builds without arch tasks rather than 36,812 — builds that genuinely failed
+before starting one.
+
+`reports` keeps the stricter form of the same rule: a day, week or month is
+written only when the store holds all of it, so a weekly report never
+appears from a partly known week.
+
+CSV rather than JSON, and there is no JSON export. A store already travels
+as itself — one SQLite file — so re-encoding it to import it again bought
+nothing, and it carried a hazard: a dataset's coverage windows are a promise
+a later import acts on, so exporting half-swept days could tell a future
+sweep to skip creations nobody had listed.
+
+Fields are quoted when they would otherwise break a row, which Koji's data
+does not currently need and a writer should not assume: a CSV that parses
+wrongly is worse than one that fails.
+
+Two bugs stood behind that silence. A report over a store recorded the
+*requested* period as its coverage, so a half-synced month claimed to be
+complete; and coverage was only ever checked *between* windows, so a period
+uncovered at its edges, or not covered at all, produced no warning
+whatsoever. Coverage is now what the store holds whole, compared against the
+period asked for, and the report names dates rather than raw unix seconds.
+
+Library API: `Store::dataset_for` takes the creation-grace margin, since
+that is what decides which days count as whole; `Store::whole_days` and
+`Store::analysable` are the primitives behind all three commands; and
+`ReportOpts` gains `period`, the
+period a report is about as distinct from the row filter — a store query has
+already selected the period, and filtering again would split a build that
+finished minutes before midnight.
+
+
 ### koji-lag: the store's schema is versioned, migrated and committed
 
 Adding a column used to have no path: the store recorded a schema version

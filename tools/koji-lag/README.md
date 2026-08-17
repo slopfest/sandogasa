@@ -31,25 +31,40 @@ No external tools required.
 
 ## Usage
 
-### Import
+### Export
 
-Read datasets collected before the store existed, so nothing already
-fetched has to be fetched again:
+Write the store's rows out as CSV, for analysis in other tools:
+
+```sh
+koji-lag export --store lag.sqlite --since 2026-07-01 --until 2026-07-31 -o csv/
+```
+
+Four files, mirroring the store: `builds.csv` (one row per build task),
+`tasks.csv` (one row per child task — the per-arch builds and the source
+rebuild), `hosts.csv` and `channels.csv`. The last two matter more than
+they look: without them a `host_id` is a number, and the arch a `noarch`
+build ran on is unrecoverable.
+
+Whole days only, as with `report` — an incomplete day is left out and named
+rather than written into a file that cannot warn its reader. Sync those days
+and export again.
+
+There is no JSON export. A store travels as itself — one SQLite file — so
+nothing needs re-encoding to move it.
+
+### Import (transitional)
+
+Folds JSON datasets collected before the store existed into one:
 
 ```sh
 koji-lag import raw_data --store lag.sqlite
-koji-lag import week.json month.json --store lag.sqlite
 ```
 
-Each argument is a JSON dataset or a directory tree of them. Rows are
-deduplicated by task id, so importing the same dataset twice changes
-nothing and overlapping windows import cleanly.
-
-An import claims the window each dataset covers, but not the three days
-before it that the dataset's sweep also read: a build created in those
-days and finishing after the window is not in the file, so a later sync
-re-lists them. A dataset from a scoped fetch (`--owner`, `--package`)
-contributes its rows and no coverage at all.
+Hidden from `--help` and scheduled for removal, along with the rest of the
+JSON read path, once the last such dataset is folded in. Don't build on
+it. An import claims coverage per window but never the three days before
+it that the dataset's sweep also read, since a build created then and
+finishing after the window is not in the file.
 
 ### Report
 
@@ -65,6 +80,13 @@ a build's child tasks by the build, so a build finishing minutes before
 midnight keeps its arch tasks instead of being split across two periods.
 Given JSON files instead, they are merged in memory and reported the same
 way.
+
+Only whole days are analysed. A day the store has listed but not finished
+fetching holds builds whose arch tasks have not arrived, and statistics over
+those read as a quiet day rather than an unfinished one — so such days are
+left out, named so they can be synced, and a range with nothing complete in
+it is refused. `reports` applies the same rule per period: it writes nothing
+for a day, week or month until the store holds all of it.
 
 Per architecture, over the selected window:
 

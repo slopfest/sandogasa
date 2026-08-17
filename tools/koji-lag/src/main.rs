@@ -25,7 +25,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Write a store's rows out as CSV, for analysis elsewhere.
+    Export(ExportArgs),
     /// Read JSON datasets into the store.
+    ///
+    /// Transitional and hidden: it exists to fold datasets collected
+    /// before the store into one, and is to be removed once that is done —
+    /// no release should document it. See TODO.md.
+    #[command(hide = true)]
     Import(ImportArgs),
     /// Per-arch queue-wait / build-time / bottleneck report.
     Report(ReportArgs),
@@ -33,6 +40,29 @@ enum Command {
     Reports(ReportsArgs),
     /// Fetch whatever the store is missing for a window.
     Sync(SyncArgs),
+}
+
+#[derive(clap::Args)]
+struct ExportArgs {
+    /// Store to read from.
+    #[arg(long, value_name = "FILE")]
+    store: PathBuf,
+
+    /// Known Koji instance (cbs, fedora, stream).
+    #[arg(long, default_value = "fedora")]
+    instance: String,
+
+    /// Directory to write the CSV files into.
+    #[arg(short, long, value_name = "DIR")]
+    out: PathBuf,
+
+    /// First day to export (default: everything the store holds).
+    #[arg(long, value_name = "YYYY-MM-DD")]
+    since: Option<String>,
+
+    /// Last day to export, inclusive.
+    #[arg(long, value_name = "YYYY-MM-DD")]
+    until: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -200,6 +230,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Report(args) => cmd_report(&args),
         Command::Reports(args) => cmd_reports(&args),
+        Command::Export(args) => cmd_export(&args),
         Command::Import(args) => cmd_import(&args),
         Command::Sync(args) => cmd_sync(&args),
     };
@@ -241,6 +272,61 @@ fn cmd_sync(args: &SyncArgs) -> Result<(), Box<dyn Error>> {
         args.store.display()
     );
     Ok(())
+}
+
+fn cmd_export(args: &ExportArgs) -> Result<(), Box<dyn Error>> {
+    let (instance_key, _) = instance::resolve(&args.instance, None)?;
+    let store = koji_lag::store::Store::open(&args.store)?;
+    let from = match &args.since {
+        Some(date) => fetch::date_to_ts(date)?,
+        None => 0.0,
+    };
+    // Inclusive end date, as everywhere else.
+    let to = match &args.until {
+        Some(date) => fetch::date_to_ts(date)? + 86_400.0,
+        None => f64::MAX,
+    };
+    let exported = koji_lag::export::run(
+        &store,
+        &instance_key,
+        from,
+        to,
+        fetch::CREATE_GRACE_SECS,
+        &args.out,
+    )?;
+    eprintln!(
+        "exported {} build(s), {} task(s), {} host(s), {} channel(s) -> {}",
+        exported.builds,
+        exported.tasks,
+        exported.hosts,
+        exported.channels,
+        args.out.display()
+    );
+    // Whole days only, and which ones were left out: a spreadsheet cannot
+    // warn its reader about partial data, so partial days never go in it.
+    if exported.days_skipped.is_empty() {
+        eprintln!("coverage: {} whole day(s)", exported.days_whole);
+    } else {
+        eprintln!(
+            "coverage: {} whole day(s); left out {} incomplete day(s): {}",
+            exported.days_whole,
+            exported.days_skipped.len(),
+            summarise(&exported.days_skipped),
+        );
+        eprintln!("sync those days to include them.");
+    }
+    Ok(())
+}
+
+/// A few names, then a count: a month of missing days should not print
+/// thirty dates.
+fn summarise(days: &[String]) -> String {
+    const SHOWN: usize = 5;
+    match days.len() {
+        0 => String::new(),
+        n if n <= SHOWN => days.join(", "),
+        n => format!("{}, +{} more", days[..SHOWN].join(", "), n - SHOWN),
+    }
 }
 
 fn cmd_import(args: &ImportArgs) -> Result<(), Box<dyn Error>> {
@@ -356,15 +442,31 @@ fn cmd_report(args: &ReportArgs) -> Result<(), Box<dyn Error>> {
             let (instance_key, _) = instance::resolve(&args.instance, None)?;
             let store = koji_lag::store::Store::open(path)?;
             let (from, to) = (opts.since.unwrap_or(0.0), opts.until.unwrap_or(f64::MAX));
-            let dataset = store.dataset_for(&instance_key, from, to)?;
+            // Whole days only, as everywhere else: statistics over a day
+            // whose arch tasks have not arrived read as a quiet day rather
+            // than an unfinished one.
+            let selection = store.analysable(&instance_key, from, to, fetch::CREATE_GRACE_SECS)?;
+            if selection.whole.is_empty() {
+                return Err(koji_lag::export::refuse(&selection).into());
+            }
+            if !selection.skipped.is_empty() {
+                eprintln!(
+                    "note: {} incomplete day(s) left out of this report: {}",
+                    selection.skipped.len(),
+                    summarise(&selection.skipped_dates()),
+                );
+            }
             // The store applied the window already, selecting a build's
             // children by the build rather than by their own clocks.
             // Applying it again here would drop the arch tasks of a build
             // that finished just before midnight and split it across two
-            // periods — the thing the store query exists to avoid.
+            // periods — the thing the store query exists to avoid. The
+            // period moves to `period`, which is what the report states it
+            // covers and judges its coverage against.
+            opts.period = Some((from, to));
             opts.since = None;
             opts.until = None;
-            dataset
+            selection.dataset
         }
         None => {
             let mut dataset = Dataset::new();

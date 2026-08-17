@@ -148,6 +148,36 @@ pub const LISTING_GEN: i64 = 1;
 /// asked for".
 pub const CHILDREN_GEN: i64 = 1;
 
+/// Rows worth analysing, and what was left out of them.
+#[derive(Debug)]
+pub struct Selection {
+    pub dataset: Dataset,
+    /// The whole days these rows come from, merged.
+    pub whole: Vec<Span>,
+    /// Days in range with rows that were left out for being incomplete,
+    /// as UTC midnights.
+    pub skipped: Vec<f64>,
+}
+
+impl Selection {
+    /// Whole days covered, for a summary line.
+    pub fn days(&self) -> usize {
+        (self.whole.iter().map(|s| s.to - s.from).sum::<f64>() / 86_400.0).round() as usize
+    }
+
+    /// The skipped days as dates, for saying which to sync.
+    pub fn skipped_dates(&self) -> Vec<String> {
+        self.skipped
+            .iter()
+            .map(|ts| {
+                chrono::DateTime::from_timestamp(*ts as i64, 0)
+                    .map(|d| d.format("%Y-%m-%d").to_string())
+                    .unwrap_or_else(|| format!("unix {ts:.0}"))
+            })
+            .collect()
+    }
+}
+
 /// A half-open span of creation time, `[from, to)`, that has been listed
 /// in full.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -551,25 +581,135 @@ impl Store {
         Ok(ids)
     }
 
+    /// The whole UTC days in `[from, to)` the store holds completely, as
+    /// merged contiguous spans.
+    ///
+    /// Complete means both halves: the creation span the day depends on is
+    /// listed (which reaches `grace` before it, for builds that started
+    /// earlier and finished inside it), and every build completing in it
+    /// has had its children fetched. This is the only honest basis for
+    /// saying a period is covered — a report, a pooled report and an
+    /// export all ask it rather than deciding for themselves.
+    ///
+    /// Candidate days come from what has been listed, so a request with no
+    /// lower bound costs a query per day of *data* rather than per day
+    /// since 1970.
+    pub fn whole_days(
+        &self,
+        instance: &str,
+        from: f64,
+        to: f64,
+        grace: f64,
+    ) -> Result<Vec<Span>, String> {
+        let days: Vec<f64> = self
+            .listed_days(instance)?
+            .into_iter()
+            .filter(|d| *d >= from && *d < to)
+            .collect();
+
+        let mut whole: Vec<Span> = Vec::new();
+        for day in days {
+            let end = day + 86_400.0;
+            let listed = self.gaps(
+                instance,
+                Span {
+                    from: day - grace,
+                    to: end,
+                },
+            )?;
+            if !listed.is_empty() || !self.builds_needing_children(instance, day, end)?.is_empty() {
+                continue;
+            }
+            match whole.last_mut() {
+                // Contiguous days join, so a month reads as one span
+                // rather than thirty.
+                Some(last) if last.to >= day => last.to = end,
+                _ => whole.push(Span { from: day, to: end }),
+            }
+        }
+        Ok(whole)
+    }
+
+    /// The rows of `[from, to)` worth analysing, and the days left out.
+    ///
+    /// Only whole days go in. A day listed but not yet finished holds
+    /// builds whose arch tasks have not arrived, and statistics over those
+    /// do not read as incomplete — they read as a quiet day. Every consumer
+    /// of this store analyses the same way as a result: `report`, `reports`
+    /// and `export` all take their rows from here.
+    pub fn analysable(
+        &self,
+        instance: &str,
+        from: f64,
+        to: f64,
+        grace: f64,
+    ) -> Result<Selection, String> {
+        let whole = self.whole_days(instance, from, to, grace)?;
+        let mut dataset = Dataset::new();
+        for span in &whole {
+            dataset.merge(self.dataset_for(instance, span.from, span.to, grace)?);
+        }
+        let mut skipped = Vec::new();
+        for day in self.listed_days(instance)? {
+            if day < from || day >= to {
+                continue;
+            }
+            if !whole
+                .iter()
+                .any(|s| s.from <= day && s.to >= day + 86_400.0)
+            {
+                skipped.push(day);
+            }
+        }
+        Ok(Selection {
+            dataset,
+            whole,
+            skipped,
+        })
+    }
+
+    /// Every whole UTC day any listed span touches, oldest first.
+    pub fn listed_days(&self, instance: &str) -> Result<Vec<f64>, String> {
+        let mut days = Vec::new();
+        for span in self.listed(instance)? {
+            let mut day = (span.from / 86_400.0).floor() * 86_400.0;
+            while day < span.to {
+                days.push(day);
+                day += 86_400.0;
+            }
+        }
+        days.sort_by(f64::total_cmp);
+        days.dedup();
+        Ok(days)
+    }
+
     /// Everything needed to report on `[from, to)`, as the in-memory
     /// shape the report code already speaks.
     ///
     /// Reports select by completion time, so this is a window query
     /// rather than a file to find: the period a report covers is a
     /// `WHERE` clause, which is why raw data no longer needs collating.
-    pub fn dataset_for(&self, instance: &str, from: f64, to: f64) -> Result<Dataset, String> {
+    pub fn dataset_for(
+        &self,
+        instance: &str,
+        from: f64,
+        to: f64,
+        grace: f64,
+    ) -> Result<Dataset, String> {
         let mut dataset = Dataset::new();
-        // The period this answer covers, which is what a report names as
-        // its instance and window. It is recorded as unfiltered coverage
-        // because that is what the store holds: a caller that wants a
-        // subset filters the report, not the query.
-        dataset.meta.windows.push(crate::dataset::FetchWindow {
-            instance: instance.to_string(),
-            from,
-            to,
-            fetched: chrono::Utc::now(),
-            filtered: false,
-        });
+        // Coverage is what the store holds whole, never the period asked
+        // for. Claiming the request would tell a report that a half-synced
+        // month was complete, and the report would say so in its header.
+        // The holes between these spans are what it warns about instead.
+        for span in self.whole_days(instance, from, to, grace)? {
+            dataset.meta.windows.push(crate::dataset::FetchWindow {
+                instance: instance.to_string(),
+                from: span.from,
+                to: span.to,
+                fetched: chrono::Utc::now(),
+                filtered: false,
+            });
+        }
         let mut stmt = self
             .conn
             .prepare(
@@ -1033,7 +1173,9 @@ mod tests {
             )
             .unwrap();
 
-        let ds = store.dataset_for("fedora", 0.0, 1000.0).unwrap();
+        let ds = store
+            .dataset_for("fedora", 0.0, 1000.0, 3.0 * 86_400.0)
+            .unwrap();
         assert_eq!(
             ds.builds.len(),
             1,

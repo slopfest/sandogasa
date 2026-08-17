@@ -63,19 +63,10 @@ pub fn bounds(chunk: &Chunk) -> (f64, f64) {
 /// all rather than as data that has not arrived.
 pub fn covered(store: &Store, instance: &str, chunk: &Chunk, grace: f64) -> Result<bool, String> {
     let (from, to) = bounds(chunk);
-    let listed = store.gaps(
-        instance,
-        Span {
-            from: from - grace,
-            to,
-        },
-    )?;
-    if !listed.is_empty() {
-        return Ok(false);
-    }
-    Ok(store
-        .builds_needing_children(instance, from, to)?
-        .is_empty())
+    // Whole means every day of it is whole, which is the same question the
+    // store answers for a report or an export. Asking it here rather than
+    // repeating the rule keeps the three from ever disagreeing.
+    Ok(store.whole_days(instance, from, to, grace)? == [Span { from, to }])
 }
 
 /// Write every report the store can answer for over `days`.
@@ -129,8 +120,14 @@ pub fn run(
             continue;
         }
         let (from, to) = bounds(chunk);
-        let dataset = store.dataset_for(instance, from, to)?;
-        let output = report::run(&dataset, &opts.report);
+        let dataset = store.dataset_for(instance, from, to, grace)?;
+        let output = report::run(
+            &dataset,
+            &report::ReportOpts {
+                period: Some((from, to)),
+                ..opts.report.clone()
+            },
+        );
         pooled
             .written
             .extend(write(&dir, &output, opts.min_samples)?);

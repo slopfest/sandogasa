@@ -10,11 +10,25 @@
   rust-libsqlite3-sys 0.36 are already packaged on rawhide, f43 and
   epel9.
 
-- (2026-08-17) Export to CSV as well as JSON, requested by the Fedora
-  Data WG. The export layer should stay format-agnostic — one query
-  over the store, several writers — so this is a writer plus a flag
-  rather than a second code path. JSON lands with the store refactor;
-  CSV follows.
+- (2026-08-17) Remove `import` and the JSON dataset read path once the
+  last pre-store dataset is folded in (May 2026, kept on another
+  machine). It is hidden from `--help` in the meantime and must not
+  appear in a release: strip its paragraphs from the Unreleased
+  CHANGELOG entries at the same time, so no published version
+  documents a command that never shipped. Going with it: `report`'s
+  file arguments, `Dataset::load`/`save`, `json_schema()`, the
+  committed `data/koji-lag-dataset.schema.json` and its snapshot test,
+  and the serde/schemars derives that exist only to serialise a
+  dataset — a store travels as itself, one SQLite file, and CSV serves
+  everyone who wants the rows elsewhere.
+
+- (2026-08-17) Ask the Fedora Data WG whether they also want a
+  flattened CSV: `export` writes the store's own tables (one row per
+  build, one per task, plus hosts and channels), which is lossless and
+  joinable but leaves the join to them. One row per build with its
+  arch stages spread across columns is what a spreadsheet user
+  usually wants, and is a second writer over the same query rather
+  than a second code path.
 
 - (2026-07-22) DB-dump ingestion: for whole-history analysis, an
   extraction script over a Koji database dump (SELECT just the task

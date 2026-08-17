@@ -15,19 +15,28 @@ Print help
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
-.SS koji-lag import
-\fBkoji\-lag import\fR <\fB\-\-store\fR> [\fB\-h\fR|\fB\-\-help\fR] <\fIPATH\fR> 
+.SS koji-lag export
+\fBkoji\-lag export\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-o\fR|\fB\-\-out\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
-Read JSON datasets into the store
+Write a store\*(Aqs rows out as CSV, for analysis elsewhere
 .TP
 \fB\-\-store\fR \fI<FILE>\fR
-Store to read into (created if absent)
+Store to read from
+.TP
+\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
+Known Koji instance (cbs, fedora, stream)
+.TP
+\fB\-o\fR, \fB\-\-out\fR \fI<DIR>\fR
+Directory to write the CSV files into
+.TP
+\fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
+First day to export (default: everything the store holds)
+.TP
+\fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
+Last day to export, inclusive
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
-.TP
-<\fIPATH\fR>
-JSON dataset file, or a tree of them
 .SS koji-lag report
 \fBkoji\-lag report\fR [\fB\-\-store\fR] [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILE\fR] 
 .PP
