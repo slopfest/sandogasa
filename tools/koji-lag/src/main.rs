@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use koji_lag::dataset::Dataset;
+use koji_lag::pool::Format;
 use koji_lag::{fetch, instance, report};
 
 #[derive(Parser)]
@@ -163,9 +164,20 @@ struct ReportsArgs {
     #[arg(long)]
     force: bool,
 
-    /// Also write one CSV per table, per period.
-    #[arg(long)]
-    csv: bool,
+    /// Output forms: text, json, csv (comma-separated or repeated).
+    ///
+    /// Writing to a directory defaults to text,json. `csv` is one file
+    /// per table, because a CSV holds one table where the other two
+    /// carry every table for the period together.
+    // The three are named in the description, so clap's own list of them
+    // would only push the line further past 80 columns.
+    #[arg(
+        long,
+        value_name = "FORM,...",
+        value_delimiter = ',',
+        hide_possible_values = true
+    )]
+    format: Vec<koji_lag::pool::Format>,
 
     /// Print each period as it is considered.
     #[arg(short, long)]
@@ -223,17 +235,27 @@ struct ReportArgs {
     #[arg(long, default_value_t = 5)]
     min_samples: usize,
 
-    /// Output machine-readable JSON instead of tables.
-    #[arg(long)]
+    /// Print JSON instead of tables: shorthand for --format json.
+    ///
+    /// Every tool here takes --json, so it stays as the conventional way
+    /// to ask, and means the same thing.
+    #[arg(long, conflicts_with = "format")]
     json: bool,
 
-    /// Also write one CSV per table into --out.
+    /// Output forms: text, json, csv (comma-separated or repeated).
     ///
-    /// A CSV holds one table, so this is a file per table rather than one
-    /// file: report.txt and report.json carry every table for the period
-    /// together, and CSV cannot.
-    #[arg(long, requires = "out")]
-    csv: bool,
+    /// Writing to a directory defaults to text,json. `csv` is one file
+    /// per table, because a CSV holds one table where the other two
+    /// carry every table for the period together.
+    // The three are named in the description, so clap's own list of them
+    // would only push the line further past 80 columns.
+    #[arg(
+        long,
+        value_name = "FORM,...",
+        value_delimiter = ',',
+        hide_possible_values = true
+    )]
+    format: Vec<koji_lag::pool::Format>,
 }
 
 fn main() -> ExitCode {
@@ -397,7 +419,7 @@ fn cmd_reports(args: &ReportsArgs) -> Result<(), Box<dyn Error>> {
     let opts = koji_lag::pool::PoolOpts {
         report: report::ReportOpts::default(),
         min_samples: args.min_samples,
-        csv: args.csv,
+        formats: Format::for_files(&args.format),
         force: args.force,
         verbose: args.verbose,
     };
@@ -493,7 +515,8 @@ fn cmd_report(args: &ReportArgs) -> Result<(), Box<dyn Error>> {
     let output = report::run(&dataset, &opts);
     match &args.out {
         Some(dir) => {
-            let written = koji_lag::pool::write(dir, &output, args.min_samples, args.csv)?;
+            let formats = Format::for_files(&args.format);
+            let written = koji_lag::pool::write(dir, &output, args.min_samples, &formats)?;
             // The directory and a count: nine absolute paths on one line is
             // not something anyone reads.
             let names: Vec<&str> = written
@@ -502,8 +525,12 @@ fn cmd_report(args: &ReportArgs) -> Result<(), Box<dyn Error>> {
                 .collect();
             eprintln!("wrote {} into {}", names.join(", "), dir.display());
         }
-        None if args.json => println!("{}", serde_json::to_string_pretty(&output)?),
-        None => print!("{}", report::render(&output, args.min_samples)),
+        // One form to stdout, since a stream is one file. Anything else
+        // needs --out, and says so rather than guessing which to print.
+        None => match Format::for_stdout(&args.format, args.json)? {
+            Format::Json => println!("{}", serde_json::to_string_pretty(&output)?),
+            _ => print!("{}", report::render(&output, args.min_samples)),
+        },
     }
     Ok(())
 }

@@ -20,6 +20,65 @@ use crate::periods::{Chunk, Grain, month_of, week_of};
 use crate::report;
 use crate::store::{Span, Store};
 
+/// An output form a report can take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+pub enum Format {
+    /// Padded tables for a person, `report.txt`.
+    Text,
+    /// The whole report as one document, `report.json`.
+    Json,
+    /// One file per table, since a CSV holds one table.
+    Csv,
+}
+
+impl Format {
+    /// The default set when writing to a directory: what was written
+    /// before a choice existed.
+    pub fn written_by_default() -> Vec<Self> {
+        vec![Self::Text, Self::Json]
+    }
+
+    /// Whether this form can go to stdout at all. CSV cannot: a report is
+    /// several tables and a stream is one file.
+    pub fn suits_stdout(self) -> bool {
+        !matches!(self, Self::Csv)
+    }
+
+    /// The forms to write into a directory, given what was asked for.
+    pub fn for_files(asked: &[Self]) -> Vec<Self> {
+        if asked.is_empty() {
+            return Self::written_by_default();
+        }
+        let mut formats = asked.to_vec();
+        // Deduplicated and ordered, so a repeated flag is harmless rather
+        // than writing a file twice, and the summary line reads the same
+        // however the flags were given.
+        formats.sort();
+        formats.dedup();
+        formats
+    }
+
+    /// The single form stdout may have, or why it cannot have one.
+    ///
+    /// `json` is the workspace-wide shorthand every tool here accepts, and
+    /// means exactly `--format json`.
+    pub fn for_stdout(asked: &[Self], json: bool) -> Result<Self, String> {
+        if json {
+            return Ok(Self::Json);
+        }
+        match asked {
+            [] => Ok(Self::Text),
+            [one] if one.suits_stdout() => Ok(*one),
+            [Self::Csv] => {
+                Err("--format csv writes one file per table; pass --out DIR".to_string())
+            }
+            _ => Err("--format takes one form when printing to stdout; \
+                      pass --out DIR for several"
+                .to_string()),
+        }
+    }
+}
+
 /// What a pooling run wrote.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Pooled {
@@ -34,8 +93,8 @@ pub struct Pooled {
 pub struct PoolOpts {
     pub report: report::ReportOpts,
     pub min_samples: usize,
-    /// Also write a CSV per table, per period.
-    pub csv: bool,
+    /// The forms to write.
+    pub formats: Vec<Format>,
     /// Rewrite reports that are already there. Worth it after the store
     /// gains rows for a period — a day listed by one run and given its
     /// children by a later one has a report worth recomputing.
@@ -107,12 +166,17 @@ pub fn run(
     let mut pooled = Pooled::default();
     for chunk in &chunks {
         let dir = reports_root.join(chunk.path());
-        let present = dir.join("report.txt").exists()
-            && dir.join("report.json").exists()
-            // Asking for CSV where only text and JSON exist is a reason to
-            // write, not to skip: the period is "already reported" in one
-            // sense and not in the sense that was asked for.
-            && (!opts.csv || dir.join("all-builds.csv").exists());
+        // Present in the forms asked for, not merely reported: asking for
+        // CSV where only text and JSON exist is a reason to write, since
+        // the period is "already reported" in a sense nobody asked about.
+        let present = opts.formats.iter().all(|f| {
+            dir.join(match f {
+                Format::Text => "report.txt",
+                Format::Json => "report.json",
+                Format::Csv => "all-builds.csv",
+            })
+            .exists()
+        });
         if !opts.force && present {
             pooled.present += 1;
             continue;
@@ -138,7 +202,7 @@ pub fn run(
         );
         pooled
             .written
-            .extend(write(&dir, &output, opts.min_samples, opts.csv)?);
+            .extend(write(&dir, &output, opts.min_samples, &opts.formats)?);
         if opts.verbose {
             eprintln!(
                 "[koji-lag] reports: {} ({} build(s))",
@@ -165,23 +229,27 @@ pub fn write(
     dir: &Path,
     output: &report::ReportOutput,
     min_samples: usize,
-    csv: bool,
+    formats: &[Format],
 ) -> Result<Vec<PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut written = Vec::new();
-    let text = dir.join("report.txt");
-    let json = dir.join("report.json");
-    std::fs::write(&text, report::render(output, min_samples))
-        .map_err(|e| format!("{}: {e}", text.display()))?;
-    let body = serde_json::to_string_pretty(output).map_err(|e| e.to_string())?;
-    std::fs::write(&json, format!("{body}\n")).map_err(|e| format!("{}: {e}", json.display()))?;
-    written.push(text);
-    written.push(json);
-    if csv {
-        for (name, body) in report::csv_tables(output) {
-            let path = dir.join(name);
-            std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
-            written.push(path);
+    let mut put = |path: PathBuf, body: String| -> Result<(), String> {
+        std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+        written.push(path);
+        Ok(())
+    };
+    for format in formats {
+        match format {
+            Format::Text => put(dir.join("report.txt"), report::render(output, min_samples))?,
+            Format::Json => {
+                let body = serde_json::to_string_pretty(output).map_err(|e| e.to_string())?;
+                put(dir.join("report.json"), format!("{body}\n"))?;
+            }
+            Format::Csv => {
+                for (name, body) in report::csv_tables(output) {
+                    put(dir.join(name), body)?;
+                }
+            }
         }
     }
     Ok(written)
@@ -291,10 +359,37 @@ mod tests {
         PoolOpts {
             report: report::ReportOpts::default(),
             min_samples: 1,
-            csv: false,
+            formats: Format::written_by_default(),
             force: false,
             verbose: false,
         }
+    }
+
+    #[test]
+    fn a_directory_gets_what_was_asked_for_or_the_old_pair() {
+        // Nothing asked: what the tool wrote before a choice existed, so
+        // an existing invocation keeps producing existing files.
+        assert_eq!(Format::for_files(&[]), vec![Format::Text, Format::Json]);
+        assert_eq!(Format::for_files(&[Format::Json]), vec![Format::Json]);
+        // A repeated form writes one file, not two.
+        assert_eq!(
+            Format::for_files(&[Format::Csv, Format::Text, Format::Csv]),
+            vec![Format::Text, Format::Csv]
+        );
+    }
+
+    #[test]
+    fn stdout_takes_one_form_and_says_so_when_it_cannot() {
+        assert_eq!(Format::for_stdout(&[], false), Ok(Format::Text));
+        // --json is the conventional shorthand and keeps working.
+        assert_eq!(Format::for_stdout(&[], true), Ok(Format::Json));
+        assert_eq!(Format::for_stdout(&[Format::Json], false), Ok(Format::Json));
+        // A stream is one file, so CSV needs somewhere to put its tables,
+        // and two forms have no order to be printed in.
+        let csv = Format::for_stdout(&[Format::Csv], false).unwrap_err();
+        assert!(csv.contains("--out"), "{csv}");
+        let both = Format::for_stdout(&[Format::Text, Format::Json], false).unwrap_err();
+        assert!(both.contains("one form"), "{both}");
     }
 
     #[test]
@@ -395,7 +490,7 @@ mod tests {
         let store = store_with(&[d]);
         let root = tempfile::tempdir().unwrap();
         let opts = PoolOpts {
-            csv: true,
+            formats: vec![Format::Text, Format::Json, Format::Csv],
             ..opts()
         };
         run(&store, "fedora", root.path(), &[d], GRACE, &opts).unwrap();
@@ -447,7 +542,7 @@ mod tests {
         assert!(!root.path().join("daily/2026/08/12/all-builds.csv").exists());
 
         let with_csv = PoolOpts {
-            csv: true,
+            formats: vec![Format::Text, Format::Json, Format::Csv],
             ..opts()
         };
         let again = run(&store, "fedora", root.path(), &[d], GRACE, &with_csv).unwrap();

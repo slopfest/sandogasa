@@ -103,14 +103,26 @@ Per architecture, over the selected window:
 - the same stats split **scratch vs official**, quantifying the
   PR-CI pain specifically.
 
-With `--out DIR`, `report.txt` and `report.json` are both written — a
-reader wants the table, a machine wants the fields, and computing the
-report twice to get them separately reads the store twice. Adding `--csv`
-writes one CSV per table beside them (`all-builds.csv`,
-`srpm-rebuild.csv`, `multi-arch.csv`, `single-arch.csv`,
-`noarch-by-host.csv`, and `official.csv`/`scratch.csv` when the split
-applies), because a CSV holds one table where the text and JSON forms carry
-them all together.
+`--format` chooses the output forms, and takes the same values on `report`
+and `reports`: `text`, `json`, `csv`, comma-separated or repeated.
+
+```sh
+koji-lag report --store lag.sqlite --since 2026-07-03 --out day/ --format text,json,csv
+koji-lag report --store lag.sqlite --since 2026-07-03 --out day/ --format json
+```
+
+Writing to a directory defaults to `text,json` — a reader wants the table,
+a machine wants the fields, and computing the report twice to get them
+separately reads the store twice. `csv` is one file per table
+(`all-builds.csv`, `srpm-rebuild.csv`, `multi-arch.csv`,
+`single-arch.csv`, `noarch-by-host.csv`, and `official.csv`/`scratch.csv`
+when the split applies), because a CSV holds one table where the other two
+carry every table for the period together.
+
+Printing to stdout takes one form: `--format text` (the default) or
+`--format json`, for which `--json` is the shorthand every tool here
+accepts. `--format csv` needs `--out`, having several tables to write, and
+says so rather than picking one.
 
 Those CSVs differ from the printed tables in three ways, all for a machine's
 benefit: durations are plain seconds to the millisecond rather than `2.6m`,
@@ -187,8 +199,11 @@ never instead of them, and each grain is computed from that period's own
 rows rather than averaged up from the finer grain, because percentiles do
 not compose.
 
-`--csv` works here too, writing the per-table CSVs into each period's
-directory alongside `report.txt` and `report.json`.
+`--format` works here too, and identically: `--format text,json,csv`
+writes all three forms into every period's directory, `--format csv` only
+the per-table CSVs. A period counts as already reported when the forms
+asked for are there, so adding `csv` to a tree that has text and JSON
+writes the CSVs rather than skipping the period.
 
 Rendering is cheap and sweeping is not, so existing reports are left alone
 unless `--force` is passed — worth passing after a sync has filled in rows

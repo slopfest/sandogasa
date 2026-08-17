@@ -38,7 +38,7 @@ Last day to export, inclusive
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS koji-lag report
-\fBkoji\-lag report\fR [\fB\-\-store\fR] [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-\-csv\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILE\fR] 
+\fBkoji\-lag report\fR [\fB\-\-store\fR] [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILE\fR] 
 .PP
 Per\-arch queue\-wait / build\-time / bottleneck report
 .TP
@@ -75,12 +75,14 @@ Both forms in one pass, since a reader wants the table and a machine wants the f
 Withhold human\-output stats below this sample count
 .TP
 \fB\-\-json\fR
-Output machine\-readable JSON instead of tables
-.TP
-\fB\-\-csv\fR
-Also write one CSV per table into \-\-out.
+Print JSON instead of tables: shorthand for \-\-format json.
 
-A CSV holds one table, so this is a file per table rather than one file: report.txt and report.json carry every table for the period together, and CSV cannot.
+Every tool here takes \-\-json, so it stays as the conventional way to ask, and means the same thing.
+.TP
+\fB\-\-format\fR \fI<FORM,...>\fR
+Output forms: text, json, csv (comma\-separated or repeated).
+
+Writing to a directory defaults to text,json. `csv` is one file per table, because a CSV holds one table where the other two carry every table for the period together.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
@@ -88,7 +90,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 [\fIFILE\fR]
 Dataset file(s) to report over (merged in memory)
 .SS koji-lag reports
-\fBkoji\-lag reports\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-\-reports\-root\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-min\-samples\fR] [\fB\-\-force\fR] [\fB\-\-csv\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBkoji\-lag reports\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-\-reports\-root\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-min\-samples\fR] [\fB\-\-force\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Write reports for every period the store covers
 .TP
@@ -115,8 +117,10 @@ Re\-render reports that already exist.
 
 Off by default, so re\-running after an interruption costs nothing; pass it after changing what a report says, or after a sync has filled in rows a period was missing.
 .TP
-\fB\-\-csv\fR
-Also write one CSV per table, per period
+\fB\-\-format\fR \fI<FORM,...>\fR
+Output forms: text, json, csv (comma\-separated or repeated).
+
+Writing to a directory defaults to text,json. `csv` is one file per table, because a CSV holds one table where the other two carry every table for the period together.
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print each period as it is considered
