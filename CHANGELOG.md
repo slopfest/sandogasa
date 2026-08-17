@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: `retire` offers to take the issue it closes
+
+Any tool here that closes bugs must also offer to reassign them to the
+person running it — triage is work worth crediting, and whoever clears out
+stale issues may want it. The Bugzilla-side tools have done that for a
+while; `retire` closed GitLab tracking issues without ever asking.
+
+It now does, with the same answers: `--claim` takes the issue without
+asking, `--yes` alone declines because an unattended run must not reassign
+work nobody asked it to, and otherwise you are asked. Who "you" are comes
+from the token via `GET /api/v4/user`, since GitLab assigns by numeric id
+and nobody knows their own; if that lookup fails the issue is still closed,
+with a warning, rather than the retire failing over a nicety.
+
+The decision matrix moved from `sandogasa-bugzilla` to
+`sandogasa_cli::claim` so both trackers share one copy and cannot drift —
+what stays per-tracker is only how a claim is applied, `assigned_to` for
+Bugzilla against `assignee_ids` for GitLab. The old path still works:
+`sandogasa_bugzilla::claim::resolve_claim` re-exports it.
+
+One hazard worth naming, since it is now covered by a test: GitLab
+*replaces* an issue's assignees with whatever `assignee_ids` holds, and an
+empty list clears them. So an update that does not mean to touch assignees
+must not mention them at all — serializing `"assignee_ids": []` would have
+unassigned everyone from every issue this tool closes.
+
 ### ebranch: a generated Copr script says why each package is in it
 
 A build script is read again days later, by which point the report that

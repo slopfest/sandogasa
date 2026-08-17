@@ -39,6 +39,14 @@ pub struct RetireArgs {
     #[arg(long)]
     pub force: bool,
 
+    /// Also assign the issue to you as it is closed.
+    ///
+    /// Without this you are asked, unless -y is given: a
+    /// non-interactive run must not reassign work nobody asked
+    /// it to.
+    #[arg(long)]
+    pub claim: bool,
+
     /// Print progress to stderr.
     #[arg(short, long)]
     pub verbose: bool,
@@ -158,17 +166,64 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
         }
     }
 
+    // Whether to take the issue as well as close it. Asked after the
+    // preconditions and the audit note, so the question only arises for an
+    // issue actually being retired.
+    let claim = resolve_issue_claim(args)?;
     if args.verbose {
         eprintln!("[cpu-sig-tracker] closing issue");
     }
     let update = gitlab::IssueUpdate {
         state_event: Some("close".to_string()),
+        // Replaces the assignee set rather than adding to it, which is
+        // what claiming means here: a retired issue's owner is whoever
+        // retired it.
+        assignee_ids: claim.as_ref().map(|(id, _)| vec![*id]),
         ..Default::default()
     };
     client.edit_issue(iid, &update)?;
 
-    eprintln!("closed {}", issue.web_url);
+    match &claim {
+        Some((_, who)) => eprintln!("closed {} (assigned to {who})", issue.web_url),
+        None => eprintln!("closed {}", issue.web_url),
+    }
     Ok(())
+}
+
+/// Whether to assign the issue to the person retiring it, and to whom.
+///
+/// The decision matrix is [`sandogasa_cli::claim::resolve_claim`], shared
+/// with the Bugzilla-side tools so the two cannot drift: `--claim` claims
+/// without asking, `-y` alone declines, and otherwise the user is asked.
+/// The identity comes from the token rather than from configuration —
+/// GitLab assigns by numeric id, which nobody knows offhand, and the token
+/// already says who it belongs to.
+fn resolve_issue_claim(
+    args: &RetireArgs,
+) -> Result<Option<(u64, String)>, Box<dyn std::error::Error>> {
+    // Nothing to ask about, so nothing to look up.
+    if !args.claim && args.yes {
+        return Ok(None);
+    }
+    let token = gitlab::load_token()?;
+    let me = match sandogasa_gitlab::current_user(&crate::utils::gitlab_base(), &token) {
+        Ok(me) => me,
+        Err(e) => {
+            // Not fatal: the issue is still worth closing, and a claim
+            // nobody could resolve is better skipped than guessed at.
+            eprintln!("warning: could not learn who you are on GitLab, not claiming: {e}");
+            return Ok(None);
+        }
+    };
+    let prompt = format!("Also take this issue (assign it to {})?", me.username);
+    let claimed = sandogasa_cli::claim::resolve_claim(
+        args.claim,
+        args.yes,
+        Some(&me.username),
+        &prompt,
+        |p| sandogasa_cli::confirm(p, false).map_err(|e| e.to_string()),
+    )?;
+    Ok(claimed.map(|username| (me.id, username)))
 }
 
 fn check_package_untagged(release: &str, package: &str, verbose: bool) -> Check {
@@ -245,6 +300,26 @@ fn parse_release_from_body(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args(claim: bool, yes: bool) -> RetireArgs {
+        RetireArgs {
+            issue_url: "https://gitlab.example/g/p/-/issues/1".to_string(),
+            yes,
+            force: false,
+            claim,
+            verbose: false,
+        }
+    }
+
+    #[test]
+    fn a_non_interactive_run_does_not_claim_or_even_ask_who_you_are() {
+        // -y without --claim declines, per the shared matrix. Asserted
+        // here because it returns before any network call or token load:
+        // if this regressed, an unattended run would quietly reassign
+        // every issue it retired.
+        let decided = resolve_issue_claim(&args(false, true)).unwrap();
+        assert_eq!(decided, None);
+    }
 
     #[test]
     fn parse_release_from_standard_body() {
@@ -427,6 +502,118 @@ mod tests {
                 .to_string(),
             yes: true,
             force: false,
+            claim: false,
+            verbose: false,
+        };
+        run_inner(&args).expect("retire succeeds");
+    }
+
+    /// The same flow with `--claim`: the close must carry the assignee.
+    ///
+    /// Worth the duplicated mocks. The claim is one field on the last
+    /// request of a long sequence, and the failure mode is silent — an
+    /// issue that closes without being taken looks exactly like a
+    /// successful retire.
+    #[test]
+    #[serial_test::serial]
+    fn retire_with_claim_assigns_the_issue_to_the_caller() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(wiremock_path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fxz/issues/1",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "iid": 1,
+                    "title": "xz retire test",
+                    "description": RETIRE_ISSUE_BODY,
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1",
+                    "assignees": []
+                })))
+                .mount(&server)
+                .await;
+            // Who the token belongs to — GitLab assigns by id.
+            Mock::given(method("GET"))
+                .and(wiremock_path("/api/v4/user"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": 4242, "username": "michel"
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(wiremock_path("/rest/api/2/issue/RHEL-1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "key": "RHEL-1",
+                    "fields": {
+                        "summary": "s",
+                        "status": { "name": "Closed" },
+                        "resolution": { "name": "Done" },
+                        "resolutiondate": "2026-06-01T10:00:00.000+0000"
+                    }
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(wiremock_path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fxz/issues/1/notes",
+                ))
+                .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 1 })))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(wiremock_path("/api/graphql"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": { "workItemUpdate": { "errors": [] } }
+                })))
+                .mount(&server)
+                .await;
+            // The point of the test: closing carries assignee_ids.
+            Mock::given(method("PUT"))
+                .and(wiremock_path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fxz/issues/1",
+                ))
+                .and(body_partial_json(json!({
+                    "state_event": "close",
+                    "assignee_ids": [4242]
+                })))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "iid": 1, "title": "t", "state": "closed",
+                    "web_url": "https://gitlab.example/…", "assignees": []
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+
+        let dir = tempdir().unwrap();
+        install_fake_bin(
+            dir.path(),
+            "koji",
+            &[(
+                "list-tagged --quiet -- proposed_updates10s-packages-main-release",
+                &koji_empty_list_tagged(),
+            )],
+        );
+        let existing_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{existing_path}", dir.path().display());
+        let _guard = EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
+            ("PATH", &new_path),
+        ]);
+
+        // --claim with -y: the flag claims without prompting, which is
+        // what makes this testable without a terminal.
+        let args = RetireArgs {
+            issue_url: "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1"
+                .to_string(),
+            yes: true,
+            force: false,
+            claim: true,
             verbose: false,
         };
         run_inner(&args).expect("retire succeeds");

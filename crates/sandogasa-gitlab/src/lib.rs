@@ -605,6 +605,35 @@ pub struct IssueUpdate {
     /// on the issue as its due date.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub due_date: Option<String>,
+    /// Who the issue is assigned to. GitLab replaces the whole set
+    /// rather than adding to it, and an empty vector clears it — so a
+    /// caller that means "leave the assignees alone" must send `None`,
+    /// which is what `skip_serializing_if` guarantees here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee_ids: Option<Vec<u64>>,
+}
+
+/// Whoever a token belongs to, from `GET /api/v4/user`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CurrentUser {
+    pub id: u64,
+    pub username: String,
+}
+
+/// Who the token belongs to, for tools that assign work to the person
+/// running them: GitLab takes numeric ids, and nobody knows their own.
+pub fn current_user(
+    base_url: &str,
+    token: &str,
+) -> Result<CurrentUser, Box<dyn std::error::Error>> {
+    sandogasa_cli::ensure_secure_url(base_url)?;
+    let client = build_http_client(token)?;
+    let url = format!("{}/api/v4/user", base_url.trim_end_matches('/'));
+    let resp = client.get(&url).send()?;
+    if !resp.status().is_success() {
+        return Err(format!("GET /api/v4/user failed: HTTP {}", resp.status()).into());
+    }
+    Ok(resp.json()?)
 }
 
 /// Check whether a token is valid by calling `GET /api/v4/user`.
@@ -1509,6 +1538,60 @@ mod tests {
         let issue = client.edit_issue(5, &updates).unwrap();
         assert_eq!(issue.state, "closed");
         mock.assert();
+    }
+
+    #[test]
+    fn closing_an_issue_leaves_its_assignees_alone() {
+        // The dangerous shape: GitLab replaces the assignee set with
+        // whatever `assignee_ids` holds, and an empty list clears it. So an
+        // update that does not mean to touch assignees must not mention
+        // them at all — a serialized `"assignee_ids": []` would unassign
+        // everyone from every issue this tool closes.
+        let closing = IssueUpdate {
+            state_event: Some("close".into()),
+            ..Default::default()
+        };
+        let body = serde_json::to_string(&closing).unwrap();
+        assert!(!body.contains("assignee_ids"), "{body}");
+
+        let claiming = IssueUpdate {
+            state_event: Some("close".into()),
+            assignee_ids: Some(vec![4242]),
+            ..Default::default()
+        };
+        let body = serde_json::to_string(&claiming).unwrap();
+        assert!(body.contains(r#""assignee_ids":[4242]"#), "{body}");
+    }
+
+    #[test]
+    fn current_user_names_the_token_holder() {
+        // Tools assign work to the person running them, and GitLab assigns
+        // by numeric id — which nobody knows offhand, so it comes from the
+        // token.
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/user")
+            .match_header("private-token", "tok")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id":4242,"username":"michel","name":"Michel","extra":"ignored"}"#)
+            .create();
+        let me = current_user(&server.url(), "tok").unwrap();
+        assert_eq!(me.id, 4242);
+        assert_eq!(me.username, "michel");
+        mock.assert();
+    }
+
+    #[test]
+    fn current_user_reports_a_rejected_token() {
+        let mut server = mockito::Server::new();
+        let _mock = server
+            .mock("GET", "/api/v4/user")
+            .with_status(401)
+            .with_body("unauthorized")
+            .create();
+        let err = current_user(&server.url(), "tok").unwrap_err().to_string();
+        assert!(err.contains("401"), "{err}");
     }
 
     #[test]

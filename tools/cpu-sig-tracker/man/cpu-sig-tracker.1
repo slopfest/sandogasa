@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cpu-sig-tracker 1 2026-08-13 "sandogasa 0.20.0" "Sandogasa Manual"
+.TH cpu-sig-tracker 1 2026-08-17 "sandogasa 0.20.0" "Sandogasa Manual"
 .SH NAME
 cpu\-sig\-tracker \- Track CentOS Proposed Updates (CPU) SIG package state across Koji, GitLab, and JIRA
 .SH SYNOPSIS
@@ -93,7 +93,7 @@ Print help
 <\fIMR_URL\fR>
 Full Merge Request URL to track, e.g. `https://gitlab.com/redhat/centos\-stream/rpms/xz/\-/merge_requests/42`
 .SS cpu-sig-tracker retire
-\fBcpu\-sig\-tracker retire\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE_URL\fR> 
+\fBcpu\-sig\-tracker retire\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-\-claim\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE_URL\fR> 
 .PP
 Close a tracking issue (retire\-issue suggestion) after verifying JIRA is resolved and the build is untagged
 .TP
@@ -103,11 +103,16 @@ Skip the interactive confirmation prompt
 \fB\-\-force\fR
 Skip the retire\-issue precondition checks (JIRA resolved, build untagged). Use when the tool can\*(Aqt reach JIRA/Koji or when you\*(Aqre sure the conditions hold
 .TP
+\fB\-\-claim\fR
+Also assign the issue to you as it is closed.
+
+Without this you are asked, unless \-y is given: a non\-interactive run must not reassign work nobody asked it to.
+.TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIISSUE_URL\fR>
 Full tracking issue URL (either `/\-/issues/<n>` or `/\-/work_items/<n>` form)

@@ -1,23 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Shared "claim ownership" mechanics for bug-closing tools.
+//! Bugzilla's half of the "claim ownership" mechanics.
 //!
-//! Project rule: any tool that closes bugs must also offer to
-//! reassign them (`assigned_to`) to the person running the
-//! command — triaging is a benefit in itself, and the person
-//! cleaning up stale bugs may want the credit. This module holds
-//! the single decision matrix and body mutation so every tool
-//! behaves identically:
-//!
-//! - an explicit claim flag (`--claim`) claims without prompting
-//!   (the caller should reject the flag up front when no email is
-//!   configured);
-//! - `-y`/`--yes` without the flag does **not** claim — a
-//!   non-interactive run must not reassign bugs nobody asked it
-//!   to;
-//! - no configured email skips silently (nothing to assign to);
-//! - otherwise the user is prompted via the caller-supplied
-//!   `confirm` closure, keeping terminal I/O out of this crate.
+//! Project rule: any tool that closes bugs must also offer to reassign
+//! them to the person running the command. The decision matrix moved to
+//! [`sandogasa_cli::claim`] when GitLab-side tools needed the same rule,
+//! and is re-exported here; what stays is Bugzilla-specific — the
+//! `assigned_to` body field, and the prompt naming a count of bugs.
 
 /// The standard prompt for claiming bugs that are about to be
 /// closed. Callers with a broader reassignment scope (e.g. also
@@ -26,32 +15,10 @@ pub fn close_claim_prompt(count: usize, email: &str) -> String {
     format!("Also claim ownership of the {count} bug(s) being closed (assigned_to = {email})?")
 }
 
-/// Decide whether to claim, per the matrix above. Returns the
-/// email to assign to when claiming, `None` otherwise. `confirm`
-/// is only invoked when an interactive prompt is actually needed.
-pub fn resolve_claim<F>(
-    claim_flag: bool,
-    yes: bool,
-    email: Option<&str>,
-    prompt: &str,
-    confirm: F,
-) -> Result<Option<String>, String>
-where
-    F: FnOnce(&str) -> Result<bool, String>,
-{
-    let email = match email {
-        Some(e) if !e.is_empty() => e,
-        _ => return Ok(None),
-    };
-    let want = if claim_flag {
-        true
-    } else if yes {
-        false
-    } else {
-        confirm(prompt)?
-    };
-    Ok(want.then(|| email.to_string()))
-}
+/// Re-exported from [`sandogasa_cli::claim`], where the matrix now lives
+/// so GitLab-side tools share it. Kept at this path because callers use
+/// it and the rule is the same one.
+pub use sandogasa_cli::claim::resolve_claim;
 
 /// Add `assigned_to` to a Bugzilla update body when claiming.
 /// A `None` email leaves the body untouched, so callers can

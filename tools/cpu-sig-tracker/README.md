@@ -91,7 +91,7 @@ The issue body follows a canonical format that `status` parses back
 ### `retire`
 
 ```sh
-cpu-sig-tracker retire <issue-url> [--yes] [--force]
+cpu-sig-tracker retire <issue-url> [--yes] [--force] [--claim]
 ```
 
 Closes a tracking issue after verifying the linked JIRA is resolved
@@ -101,6 +101,12 @@ resolution), stamps `due_date` from JIRA's `resolutiondate`, leaves
 an audit-trail comment, and transitions the issue to closed.
 `--yes` skips the prompt; `--force` bypasses the precondition
 checks.
+
+It also offers to assign the issue to you as it closes it — triage is
+work worth crediting. `--claim` takes it without asking; `--yes` alone
+declines, since an unattended run must not reassign work nobody asked
+it to; otherwise you are asked. Who "you" are comes from the token
+(`GET /api/v4/user`), because GitLab assigns by numeric id.
 
 ### `status`
 

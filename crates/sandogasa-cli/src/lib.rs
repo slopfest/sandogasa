@@ -2,6 +2,7 @@
 
 //! Shared CLI utilities for sandogasa tools.
 
+pub mod claim;
 pub mod date;
 pub mod defaults;
 #[cfg(feature = "http")]
