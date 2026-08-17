@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### sandogasa-fasjson: identify itself to FASJSON
+
+Fedora's infrastructure tarpits requests that arrive without a
+User-Agent, which is why every HTTP client here sets one. This crate was
+the exception: it shells out to `curl --negotiate`, because FASJSON needs
+GSSAPI and there is no pure-Rust GSSAPI that avoids a build-time krb5
+dependency, so it inherited curl's default and was the one client a server
+log could not identify. It now sends `sandogasa-fasjson/<version>`, the
+same string the reqwest-based crates send.
+
+The curl arguments moved into a function so they can be asserted. A
+user-agent is invisible when it works and costs a tarpitted request when it
+is missing, which is not a thing to leave to inspection — the test also
+pins the URL behind `--`, where it cannot be read as an option.
+
 ### koji-lag: three output forms, chosen the same way by `report` and `reports`
 
 The statistics a report computes are now available as CSV, which is what

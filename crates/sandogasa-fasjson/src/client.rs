@@ -6,6 +6,38 @@ use crate::models::{FasUser, FasjsonResponse};
 
 const FASJSON_BASE: &str = "https://fasjson.fedoraproject.org";
 
+/// What this crate calls itself to a server, matching the string the
+/// reqwest-based crates here send through `sandogasa_cli::http`.
+const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+
+/// How this crate invokes curl.
+///
+/// Separate from the call so the arguments can be asserted: the
+/// user-agent in particular is invisible when it works and costs a
+/// tarpitted request when it is missing, which is not a thing to leave to
+/// inspection.
+///
+/// `--` so the URL can never be read as a curl option. `--max-time` so a
+/// hung connection cannot block forever, at the same 120s bound the
+/// reqwest-based sibling crates use. `--user-agent` because Fedora's
+/// infrastructure tarpits requests that arrive without one, and inheriting
+/// curl's default would leave this crate the only client here that a
+/// server log cannot identify.
+fn curl_args(url: &str) -> Vec<&str> {
+    vec![
+        "--negotiate",
+        "-u",
+        ":",
+        "-sf",
+        "--max-time",
+        "120",
+        "--user-agent",
+        USER_AGENT,
+        "--",
+        url,
+    ]
+}
+
 pub struct FasjsonClient {
     base_url: String,
 }
@@ -36,20 +68,8 @@ impl FasjsonClient {
     /// that avoids a build-time dependency on system krb5 libraries.
     pub fn user(&self, username: &str) -> Result<FasUser, FasjsonError> {
         let url = format!("{}/v1/users/{}/", self.base_url, username);
-        // `--` so the URL can never be read as a curl option;
-        // `--max-time` so a hung connection can't block forever (the
-        // same 120s bound the reqwest-based sibling crates use).
         let output = Command::new("curl")
-            .args([
-                "--negotiate",
-                "-u",
-                ":",
-                "-sf",
-                "--max-time",
-                "120",
-                "--",
-                &url,
-            ])
+            .args(curl_args(&url))
             .output()
             .map_err(|e| FasjsonError::Curl(format!("failed to run curl: {e}")))?;
 
@@ -99,6 +119,31 @@ impl std::error::Error for FasjsonError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn curl_is_told_who_is_calling() {
+        // Fedora's infrastructure tarpits requests without a user-agent,
+        // and this crate is the one that shells out rather than using
+        // reqwest, so nothing else would supply it.
+        let args = curl_args("https://example.invalid/v1/users/alice/");
+        let at = args
+            .iter()
+            .position(|a| *a == "--user-agent")
+            .expect("no user-agent passed to curl");
+        let sent = args[at + 1];
+        assert!(sent.starts_with("sandogasa-fasjson/"), "{sent}");
+        assert!(
+            sent.len() > "sandogasa-fasjson/".len(),
+            "no version in {sent}"
+        );
+        // The URL stays last, behind `--`, so it can never be read as an
+        // option however it is spelled.
+        assert_eq!(args[args.len() - 2], "--");
+        assert_eq!(
+            *args.last().unwrap(),
+            "https://example.invalid/v1/users/alice/"
+        );
+    }
 
     #[test]
     fn new_uses_default_base_url() {

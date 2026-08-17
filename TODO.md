@@ -56,14 +56,6 @@
 
 ## Cross-cutting
 
-- (2026-07-22, mostly done) Send a User-Agent from every HTTP client
-  crate: Fedora's infrastructure tarpits UA-less requests (see
-  DEVELOPMENT.md; discovered via koji-lag). All the reqwest-based
-  crates now set one, most via `sandogasa_cli::http`'s builders.
-  Remaining: `sandogasa-fasjson` shells out to `curl --negotiate`
-  rather than using reqwest, so it inherits curl's UA — pass
-  `--user-agent` there if the tarpit ever reaches it.
-
 ## poi-tracker / sandogasa-pkg-health seam
 
 Decision (2026-07-21): keep both tools — pkg-health **observes**
