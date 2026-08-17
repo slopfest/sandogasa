@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### koji-lag: a store can be copied while a sync is writing to it
+
+`scripts/backup-store.sh SOURCE DEST` (also `make backup-store STORE=…
+DEST=…`) copies a store through SQLite's `VACUUM INTO` rather than `cp`.
+
+The distinction is not pedantry. The store is in WAL mode, so at any moment
+committed data lives partly in `lag.sqlite` and partly in
+`lag.sqlite-wal`: copying the main file alone can capture a database
+missing its most recent transactions, and copying all three while a writer
+is mid-commit can capture an inconsistent set. Neither failure announces
+itself — the copy opens and queries fine, with rows quietly missing — and
+the thing being copied is hours of hub time that cannot be reconstructed
+from anywhere except Koji.
+
+`VACUUM INTO` reads one consistent snapshot under ordinary read locking,
+writes a fully checkpointed file with no sidecars, and rebuilds it
+compactly. The script refuses to overwrite an existing destination, checks
+there is room before spending minutes finding out there is not, and then
+verifies the copy with `PRAGMA integrity_check` and reports what it holds —
+a copy nobody checked is a hope rather than a backup. Measured on a live
+store mid-sync: 581MB in, 545MB out, eight seconds.
+
 ### koji-lag: `export` writes CSV, and partial days are never analysed
 
 `koji-lag export --store lag.sqlite --since ... -o DIR` writes the store's

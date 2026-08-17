@@ -60,6 +60,10 @@ packaging-test: ## Run the tests as a distro build does (offline, no distro tool
 check-published: ## Verify every crate reached crates.io (run after publishing)
 	./scripts/check-published.sh
 
+.PHONY: backup-store
+backup-store: ## Copy a koji-lag store safely (STORE=... DEST=...)
+	./scripts/backup-store.sh $(STORE) $(DEST)
+
 .PHONY: sweep
 sweep: ## Delete the release gates' build trees (keeps target/debug)
 	./scripts/sweep.sh

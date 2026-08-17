@@ -241,6 +241,27 @@ asked less often, and one that speeds up is asked more, down to the
 One more thing worth expecting: the first page of a run can take over a
 minute while the hub warms up its query plan, after which pages land in
 about ten seconds. A sync that looks stuck on page one usually is not.
+## Backing up the store
+
+```sh
+scripts/backup-store.sh lag.sqlite ~/backups/lag.sqlite   # from a checkout
+```
+
+Not `cp`, if a sync might be running. The store is in WAL mode, so
+committed data lives partly in `lag.sqlite` and partly in `lag.sqlite-wal`
+at any moment: copying the main file alone can produce a database missing
+its most recent transactions, and copying the set mid-commit can produce an
+inconsistent one. Neither failure announces itself — the copy opens and
+queries perfectly, with rows quietly absent.
+
+The script uses SQLite's `VACUUM INTO`, which reads one consistent snapshot
+under ordinary read locking and writes a fully checkpointed file with no
+sidecars. It verifies the result with `PRAGMA integrity_check` and reports
+what it holds. A 580MB store took eight seconds while a sync was writing to
+it, and came out 545MB for being rebuilt compactly.
+
+Once nothing is writing, a plain `cp` of the single file is fine.
+
 ## Dataset format
 
 The JSON shape `import` reads, and the shape data is shared in
