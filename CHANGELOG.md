@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### koji-lag: the store's schema is versioned, migrated and committed
+
+Adding a column used to have no path: the store recorded a schema version
+and refused anything that did not match it exactly, so a new field would
+have meant every existing store being rebuilt from the hub — days of
+queries for a column.
+
+The schema is now a list of migration steps, one per version, applied in
+order to whatever a store is missing and each in its own transaction. A
+store from an older version is migrated up rather than refused (tested,
+rows intact); one from a newer version is still refused, since rows written
+by a newer binary may mean something an older one would misread.
+
+`data/store-schema.sql` is generated from a fresh store and checked by a
+test, the same way the man pages and the dataset's JSON schema are. A
+schema change therefore shows up as a diff of the schema, and the file
+doubles as documentation for anyone querying a store directly.
+
+What this does *not* do is fill a new column in for rows already stored;
+that is what the two generation constants are for, and DEVELOPMENT.md now
+sets out which bump costs an hour (a field from the build listing, re-list)
+and which costs days (a field from the child queries, re-fetch).
+
 ### koji-lag: the slow paths are gone (breaking CLI and API)
 
 `fetch`, `backfill` and `merge` are removed, along with everything that

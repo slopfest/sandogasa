@@ -135,6 +135,40 @@ off. `--duty-cycle` scales each pause to the last request's latency, so
 the figures above roughly double in a real run and recover by themselves
 when the hub does.
 
+## Changing the schema, and paying for a new field
+
+Two separate problems, with two separate mechanisms. Conflating them is
+how a store ends up with a column nothing ever fills.
+
+**Structure** is `MIGRATIONS` in `store.rs`: a list of DDL steps where the
+index is the version. A step is applied to any store below its version and
+never again, so **the list is append-only** — editing a step that has
+shipped changes what new stores get while leaving existing ones alone, and
+the two then differ with nothing to say so. Whitespace is the only safe
+edit. A store recording a higher version than the binary knows is refused
+rather than opened, because rows written by a newer binary may mean
+something this one would misread; a lower one is migrated up, which is
+tested. `data/store-schema.sql` is generated from a fresh store and
+checked by `store_schema_up_to_date`, so a schema change cannot land
+without appearing as a diff of the schema itself.
+
+**Data** — the values of a new column for rows already stored — is what
+the two generation constants are for, and what they cost differs by orders
+of magnitude:
+
+| the field comes from | bump | what it costs |
+|:--|:--|:--|
+| the build listing | `LISTING_GEN` | re-list: about an hour a year |
+| the child queries | `CHILDREN_GEN` | re-fetch children: days a year |
+| neither — rows are now wrong | `SCHEMA_VERSION`, and rebuild | a full sweep |
+
+A `LISTING_GEN` bump makes every span recorded under an older generation
+read as a gap, so the next sync re-lists it and the column fills itself. A
+`CHILDREN_GEN` bump does the same one level down, per build. Neither
+touches the other's work, which is the entire reason they are separate
+columns rather than one "generation" — a new child method must not cost a
+re-list, and a new listing field must not cost days.
+
 ## A sync is two jobs, and they are tracked apart
 
 Listing the build tasks over a span and fetching their children are

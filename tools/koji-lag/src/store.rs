@@ -22,8 +22,107 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::dataset::{BuildRecord, Dataset, TaskRecord};
 
-/// Bumped when the schema changes in a way an older binary cannot read.
-pub const SCHEMA_VERSION: u32 = 1;
+/// The schema, one step per version.
+///
+/// A step is applied to any store below its version and never again, so
+/// the list is append-only: editing a step that has shipped changes what
+/// new stores get without touching existing ones, and the two then differ
+/// silently. To change something already released, add a step.
+///
+/// The committed `data/store-schema.sql` is what these steps add up to,
+/// checked by a test, so a change to the schema shows up as a diff of the
+/// schema rather than only as a diff of the code that makes it.
+const MIGRATIONS: &[&str] = &[
+    // v1: builds, tasks, hosts, channels, and the two coverage records.
+    r#"
+             CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS builds (
+    instance TEXT NOT NULL,
+    task_id INTEGER NOT NULL,
+    package TEXT,
+    nvr TEXT,
+    target TEXT,
+    owner TEXT,
+    scratch INTEGER NOT NULL DEFAULT 0,
+    state INTEGER NOT NULL,
+    create_ts REAL NOT NULL,
+    start_ts REAL,
+    completion_ts REAL,
+    priority INTEGER,
+    host_id INTEGER,
+    -- The children generation this build was fetched
+    -- under; 0 means its children were never asked for.
+    -- Compared against CHILDREN_GEN so a store that
+    -- predates a newly collected method knows which
+    -- builds are behind, without re-listing anything.
+    children_gen INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (instance, task_id)
+);
+CREATE TABLE IF NOT EXISTS tasks (
+    instance TEXT NOT NULL,
+    task_id INTEGER NOT NULL,
+    parent INTEGER,
+    method TEXT NOT NULL,
+    arch TEXT NOT NULL,
+    package TEXT,
+    state INTEGER NOT NULL,
+    create_ts REAL NOT NULL,
+    start_ts REAL,
+    completion_ts REAL,
+    host_id INTEGER,
+    channel_id INTEGER,
+    weight REAL,
+    PRIMARY KEY (instance, task_id)
+);
+CREATE TABLE IF NOT EXISTS hosts (
+    instance TEXT NOT NULL,
+    host_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    arches TEXT,
+    PRIMARY KEY (instance, host_id)
+);
+CREATE TABLE IF NOT EXISTS channels (
+    instance TEXT NOT NULL,
+    channel_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    PRIMARY KEY (instance, channel_id)
+);
+-- Creation spans enumerated in full. The record a sweep
+-- skips work against; see the module docs.
+CREATE TABLE IF NOT EXISTS listed (
+    instance TEXT NOT NULL,
+    from_ts REAL NOT NULL,
+    to_ts REAL NOT NULL,
+    -- What the rows in this span were listed with. A
+    -- span below LISTING_GEN is treated as a gap, so a
+    -- new listing field refreshes itself.
+    listing_gen INTEGER NOT NULL DEFAULT 1
+);
+-- Reports select by completion; children lookups and
+-- the sweep's own gap arithmetic select by parent and by
+-- creation.
+CREATE INDEX IF NOT EXISTS builds_completion
+    ON builds (instance, completion_ts);
+CREATE INDEX IF NOT EXISTS builds_unswept
+    ON builds (instance, children_gen, completion_ts);
+CREATE INDEX IF NOT EXISTS tasks_completion
+    ON tasks (instance, completion_ts);
+CREATE INDEX IF NOT EXISTS tasks_parent
+    ON tasks (instance, parent);
+CREATE INDEX IF NOT EXISTS listed_span
+    ON listed (instance, from_ts, to_ts);
+"#,
+];
+
+/// The schema version this build speaks: the number of steps it knows.
+///
+/// A store recording a *higher* version is refused, since rows written by
+/// a newer binary may mean something this one would misread. A lower one
+/// is migrated up.
+pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 
 /// Bumped when a *new field* is taken from the build listing.
 ///
@@ -104,92 +203,71 @@ impl Store {
         self.conn
             .busy_timeout(std::time::Duration::from_secs(30))
             .map_err(|e| e.to_string())?;
+        // The version table has to exist before it can be read.
         self.conn
             .execute_batch(
-                "BEGIN;
-                 CREATE TABLE IF NOT EXISTS meta (
+                "CREATE TABLE IF NOT EXISTS meta (
                      key TEXT PRIMARY KEY,
                      value TEXT NOT NULL
-                 );
-                 CREATE TABLE IF NOT EXISTS builds (
-                     instance TEXT NOT NULL,
-                     task_id INTEGER NOT NULL,
-                     package TEXT,
-                     nvr TEXT,
-                     target TEXT,
-                     owner TEXT,
-                     scratch INTEGER NOT NULL DEFAULT 0,
-                     state INTEGER NOT NULL,
-                     create_ts REAL NOT NULL,
-                     start_ts REAL,
-                     completion_ts REAL,
-                     priority INTEGER,
-                     host_id INTEGER,
-                     -- The children generation this build was fetched
-                     -- under; 0 means its children were never asked for.
-                     -- Compared against CHILDREN_GEN so a store that
-                     -- predates a newly collected method knows which
-                     -- builds are behind, without re-listing anything.
-                     children_gen INTEGER NOT NULL DEFAULT 0,
-                     PRIMARY KEY (instance, task_id)
-                 );
-                 CREATE TABLE IF NOT EXISTS tasks (
-                     instance TEXT NOT NULL,
-                     task_id INTEGER NOT NULL,
-                     parent INTEGER,
-                     method TEXT NOT NULL,
-                     arch TEXT NOT NULL,
-                     package TEXT,
-                     state INTEGER NOT NULL,
-                     create_ts REAL NOT NULL,
-                     start_ts REAL,
-                     completion_ts REAL,
-                     host_id INTEGER,
-                     channel_id INTEGER,
-                     weight REAL,
-                     PRIMARY KEY (instance, task_id)
-                 );
-                 CREATE TABLE IF NOT EXISTS hosts (
-                     instance TEXT NOT NULL,
-                     host_id INTEGER NOT NULL,
-                     name TEXT NOT NULL,
-                     arches TEXT,
-                     PRIMARY KEY (instance, host_id)
-                 );
-                 CREATE TABLE IF NOT EXISTS channels (
-                     instance TEXT NOT NULL,
-                     channel_id INTEGER NOT NULL,
-                     name TEXT NOT NULL,
-                     PRIMARY KEY (instance, channel_id)
-                 );
-                 -- Creation spans enumerated in full. The record a sweep
-                 -- skips work against; see the module docs.
-                 CREATE TABLE IF NOT EXISTS listed (
-                     instance TEXT NOT NULL,
-                     from_ts REAL NOT NULL,
-                     to_ts REAL NOT NULL,
-                     -- What the rows in this span were listed with. A
-                     -- span below LISTING_GEN is treated as a gap, so a
-                     -- new listing field refreshes itself.
-                     listing_gen INTEGER NOT NULL DEFAULT 1
-                 );
-                 -- Reports select by completion; children lookups and
-                 -- the sweep's own gap arithmetic select by parent and by
-                 -- creation.
-                 CREATE INDEX IF NOT EXISTS builds_completion
-                     ON builds (instance, completion_ts);
-                 CREATE INDEX IF NOT EXISTS builds_unswept
-                     ON builds (instance, children_gen, completion_ts);
-                 CREATE INDEX IF NOT EXISTS tasks_completion
-                     ON tasks (instance, completion_ts);
-                 CREATE INDEX IF NOT EXISTS tasks_parent
-                     ON tasks (instance, parent);
-                 CREATE INDEX IF NOT EXISTS listed_span
-                     ON listed (instance, from_ts, to_ts);
-                 COMMIT;",
+                 );",
             )
             .map_err(|e| format!("creating the schema: {e}"))?;
 
+        let at = self.schema_version()?;
+        // Refusing is the honest answer for a store from the future: a
+        // newer binary's rows may mean something this one would misread,
+        // and a store is rebuildable from the hub or an import.
+        if at > SCHEMA_VERSION {
+            return Err(format!(
+                "store was written by schema version {at}, this build speaks {SCHEMA_VERSION}"
+            ));
+        }
+        // Each step in its own transaction, with the version bumped
+        // inside it: a migration that fails leaves the store at the last
+        // version it fully reached rather than half-way through one.
+        for (index, step) in MIGRATIONS.iter().enumerate().skip(at as usize) {
+            let version = index + 1;
+            self.conn
+                .execute_batch(&format!(
+                    "BEGIN;
+                     {step}
+                     INSERT INTO meta (key, value) VALUES ('schema_version', '{version}')
+                       ON CONFLICT (key) DO UPDATE SET value = excluded.value;
+                     COMMIT;"
+                ))
+                .map_err(|e| format!("migrating the store to schema version {version}: {e}"))?;
+        }
+        Ok(())
+    }
+
+    /// The schema as SQLite reports it, for the committed snapshot.
+    ///
+    /// Taken from `sqlite_master` rather than from [`MIGRATIONS`] so it
+    /// shows what the steps actually add up to — a column added by a later
+    /// step appears where the table defines it, not as a trailing ALTER.
+    pub fn schema_sql(&self) -> Result<String, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT sql FROM sqlite_master
+                 WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+                 ORDER BY type DESC, name",
+            )
+            .map_err(|e| e.to_string())?;
+        let statements = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(statements
+            .iter()
+            .map(|sql| format!("{};\n", normalize_ddl(sql)))
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+
+    /// The schema version recorded in the store; 0 for a fresh one.
+    fn schema_version(&self) -> Result<u32, String> {
         let found: Option<String> = self
             .conn
             .query_row(
@@ -199,27 +277,12 @@ impl Store {
             )
             .optional()
             .map_err(|e| e.to_string())?;
-        match found.as_deref().map(str::parse::<u32>) {
-            None => {
-                self.conn
-                    .execute(
-                        "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
-                        params![SCHEMA_VERSION.to_string()],
-                    )
-                    .map_err(|e| e.to_string())?;
-            }
-            Some(Ok(v)) if v == SCHEMA_VERSION => {}
-            // Refusing is the honest answer: a newer binary's rows may
-            // mean something this one would misread, and a store is
-            // rebuildable from the hub or an export.
-            Some(Ok(v)) => {
-                return Err(format!(
-                    "store was written by schema version {v}, this build speaks {SCHEMA_VERSION}"
-                ));
-            }
-            Some(Err(e)) => return Err(format!("unreadable schema version: {e}")),
+        match found {
+            None => Ok(0),
+            Some(text) => text
+                .parse()
+                .map_err(|e| format!("unreadable schema version {text:?}: {e}")),
         }
-        Ok(())
     }
 
     /// Record builds, leaving `children_gen` alone for rows already there
@@ -647,6 +710,106 @@ impl Store {
     }
 }
 
+/// One DDL statement, formatted canonically: one column or constraint per
+/// line, four spaces a level, comments on their own lines.
+///
+/// SQLite keeps the *text* a statement was created with, and splices an
+/// `ALTER TABLE ADD COLUMN` into that text with its own spacing. So the
+/// stored schema reflects how a migration happened to be typed, which
+/// would make the committed snapshot churn on whitespace and would leave
+/// an added column formatted unlike its neighbours. Reformatting on the
+/// way out makes the file depend on what the schema *is* and nothing else:
+/// the same statement typed on one line and across twenty produces
+/// identical output.
+fn normalize_ddl(sql: &str) -> String {
+    // "Is this line fresh?" is read off the output rather than tracked, so
+    // the two cannot disagree.
+    fn end_line(out: &mut String) {
+        while out.ends_with(' ') {
+            out.pop();
+        }
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    fn indent(out: &mut String, depth: usize) {
+        if out.is_empty() || out.ends_with('\n') {
+            out.push_str(&"    ".repeat(depth));
+        }
+    }
+
+    // Only a table's column list is worth breaking up. An index's
+    // columns, and a constraint's, read better where they are — and
+    // "break the outermost list of a CREATE TABLE" is a rule that gives
+    // one answer for any input, which is the whole point.
+    let mut words = sql.split_whitespace();
+    let is_table = matches!(
+        (words.next(), words.next()),
+        (Some(first), Some(second))
+            if first.eq_ignore_ascii_case("CREATE") && second.eq_ignore_ascii_case("TABLE")
+    );
+
+    let mut out = String::new();
+    let mut depth = 0usize;
+    let mut chars = sql.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            // A comment runs to the end of its line and takes the line
+            // with it, wherever in the statement it appeared.
+            '-' if chars.peek() == Some(&'-') => {
+                chars.next();
+                let rest: String = chars.by_ref().take_while(|c| *c != '\n').collect();
+                end_line(&mut out);
+                indent(&mut out, depth);
+                out.push_str("--");
+                out.push_str(rest.trim_end());
+                end_line(&mut out);
+            }
+            // Whitespace inside a quoted literal is data, not layout.
+            '\'' => {
+                indent(&mut out, depth);
+                out.push(c);
+                for q in chars.by_ref() {
+                    out.push(q);
+                    if q == '\'' {
+                        break;
+                    }
+                }
+            }
+            '(' => {
+                indent(&mut out, depth);
+                out.push('(');
+                depth += 1;
+                if is_table && depth == 1 {
+                    end_line(&mut out);
+                }
+            }
+            ')' => {
+                if is_table && depth == 1 {
+                    end_line(&mut out);
+                }
+                depth = depth.saturating_sub(1);
+                indent(&mut out, depth);
+                out.push(')');
+            }
+            ',' if is_table && depth == 1 => {
+                out.push(',');
+                end_line(&mut out);
+            }
+            c if c.is_whitespace() => {
+                if !out.is_empty() && !out.ends_with('\n') && !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            }
+            c => {
+                indent(&mut out, depth);
+                out.push(c);
+            }
+        }
+    }
+    out.trim_end().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -885,6 +1048,98 @@ mod tests {
             ds.host_arches.get("fedora:1").map(String::as_str),
             Some("x86_64 i386")
         );
+    }
+
+    #[test]
+    fn formatting_a_statement_does_not_depend_on_how_it_was_typed() {
+        // The same table, typed three ways: across lines with deep
+        // indentation, all on one line, and as SQLite leaves it after an
+        // ALTER. All three must export identically, which is what keeps
+        // the committed schema from churning on whitespace.
+        let sprawling = "CREATE TABLE t (\n                  a TEXT NOT NULL,\n\
+                         \n     -- why b exists\n       b INTEGER DEFAULT 0,\n\
+                         PRIMARY KEY (a)\n)";
+        let one_line = "CREATE TABLE t (a TEXT NOT NULL, -- why b exists\nb INTEGER DEFAULT 0, PRIMARY KEY (a))";
+        let altered = "CREATE TABLE t (a TEXT NOT NULL,   -- why b exists\n b INTEGER DEFAULT 0, PRIMARY KEY (a))";
+        let want = "CREATE TABLE t (\n    a TEXT NOT NULL,\n    -- why b exists\n    \
+                    b INTEGER DEFAULT 0,\n    PRIMARY KEY (a)\n)";
+        assert_eq!(normalize_ddl(sprawling), want);
+        assert_eq!(normalize_ddl(one_line), want);
+        assert_eq!(normalize_ddl(altered), want);
+    }
+
+    #[test]
+    fn only_a_tables_own_column_list_is_broken_up() {
+        // An index stays on one line however it was typed, so the schema
+        // file does not turn five short definitions into thirty lines.
+        assert_eq!(
+            normalize_ddl("CREATE INDEX i\n  ON t (a,\n  b)"),
+            "CREATE INDEX i ON t (a, b)"
+        );
+    }
+
+    #[test]
+    fn formatting_leaves_quoted_text_alone() {
+        // Whitespace inside a literal is data, not layout.
+        let sql = "CREATE TABLE t (a TEXT DEFAULT 'two  words')";
+        assert!(
+            normalize_ddl(sql).contains("'two  words'"),
+            "{}",
+            normalize_ddl(sql)
+        );
+    }
+
+    /// Snapshot test: the committed schema must match what the store
+    /// builds. Regenerate with `UPDATE_SCHEMA=1 cargo test -p koji-lag
+    /// store_schema_up_to_date`.
+    #[test]
+    fn store_schema_up_to_date() {
+        let store = Store::in_memory().unwrap();
+        let expected = store.schema_sql().unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/store-schema.sql");
+        if std::env::var("UPDATE_SCHEMA").is_ok() {
+            let header = "-- Generated by `UPDATE_SCHEMA=1 cargo test -p koji-lag \
+                          store_schema_up_to_date`.\n-- The schema koji-lag's SQLite store \
+                          is migrated to; see src/store.rs MIGRATIONS.\n\n";
+            std::fs::write(&path, format!("{header}{expected}")).unwrap();
+            return;
+        }
+        let on_disk = std::fs::read_to_string(&path)
+            .expect("schema file missing; run UPDATE_SCHEMA=1 cargo test");
+        let body: String = on_disk
+            .lines()
+            .skip_while(|l| l.starts_with("--") || l.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            body.trim(),
+            expected.trim(),
+            "schema drift; run UPDATE_SCHEMA=1 cargo test -p koji-lag store_schema_up_to_date"
+        );
+    }
+
+    #[test]
+    fn a_store_from_an_older_schema_is_migrated_not_refused() {
+        // What every existing store looks like to a build with more
+        // migrations than it was written by: the steps it is missing get
+        // applied, and its rows survive.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lag.sqlite");
+        {
+            let mut store = Store::open(&path).unwrap();
+            store.put_builds("fedora", &[build(7, 200.0)]).unwrap();
+            // Pretend it was written before the current version.
+            store
+                .conn
+                .execute(
+                    "UPDATE meta SET value = '0' WHERE key = 'schema_version'",
+                    [],
+                )
+                .unwrap();
+        }
+        let store = Store::open(&path).expect("an older store must open");
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(store.counts().unwrap()["fedora"].builds, 1, "rows kept");
     }
 
     #[test]
