@@ -15,133 +15,6 @@ Print help
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
-.SS koji-lag backfill
-\fBkoji\-lag backfill\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] <\fB\-\-root\fR> [\fB\-\-reports\-root\fR] [\fB\-\-if\-exists\fR] [\fB\-\-pause\-at\fR] [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-\-min\-samples\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
-.PP
-Sweep a long window a day at a time, collating as it goes
-.TP
-\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
-Known Koji instance (cbs, fedora, stream). Names the files
-.TP
-\fB\-\-hub\-url\fR \fI<URL>\fR
-Explicit hub URL (overrides \-\-instance; https only)
-.TP
-\fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
-Window start date (UTC midnight, inclusive)
-.TP
-\fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
-Window end date, inclusive
-.TP
-\fB\-\-days\fR \fI<N>\fR
-Sweep the last N complete UTC days
-.TP
-\fB\-\-root\fR \fI<DIR>\fR
-Directory to write the dataset tree into
-.TP
-\fB\-\-reports\-root\fR \fI<DIR>\fR
-Also write reports, into this directory tree
-.TP
-\fB\-\-if\-exists\fR \fI<WHAT>\fR [default: ask]
-What to do when a day\*(Aqs dataset is already there
-.br
-
-.br
-\fIPossible values:\fR
-.RS 14
-.IP \(bu 2
-merge: Sweep again and fold the result into what is there
-.IP \(bu 2
-replace: Sweep again and write over it
-.IP \(bu 2
-ask: Ask, and merge when nobody can be asked
-.RE
-.TP
-\fB\-\-pause\-at\fR \fI<GRAIN,...>\fR
-Stop after collating at these grains (repeated or CSV).
-
-A collation is a natural place to break off: everything before it is compacted and on disk, so a run resumed later picks up cleanly. With a terminal it asks whether to carry on; without one it stops, since nobody can answer.
-.br
-
-.br
-\fIPossible values:\fR
-.RS 14
-.IP \(bu 2
-weekly: After a week\*(Aqs days are folded together
-.IP \(bu 2
-monthly: After a month\*(Aqs weeks are folded together
-.RE
-.TP
-\fB\-\-page\-size\fR \fI<PAGE_SIZE>\fR [default: 1000]
-Tasks per listTasks page
-.TP
-\fB\-\-sleep\-ms\fR \fI<SLEEP_MS>\fR [default: 500]
-Minimum pause between hub requests, in milliseconds
-.TP
-\fB\-\-duty\-cycle\fR \fI<PERCENT>\fR [default: 50]
-Share of one connection to use, as a percentage
-.TP
-\fB\-\-retries\fR \fI<RETRIES>\fR [default: 3]
-Retries per failed hub request
-.TP
-\fB\-\-min\-samples\fR \fI<MIN_SAMPLES>\fR [default: 5]
-Withhold report stats below this sample count
-.TP
-\fB\-v\fR, \fB\-\-verbose\fR
-Print progress to stderr
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
-.SS koji-lag fetch
-\fBkoji\-lag fetch\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] [\fB\-\-owner\fR] [\fB\-\-package\fR] [\fB\-i\fR|\fB\-\-inventory\fR] <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
-.PP
-Sweep a Koji completion window into a local dataset
-.TP
-\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
-Known Koji instance (cbs, fedora, stream)
-.TP
-\fB\-\-hub\-url\fR \fI<URL>\fR
-Explicit hub URL (overrides \-\-instance; https only)
-.TP
-\fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
-Window start date (UTC midnight, inclusive)
-.TP
-\fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
-Window end date, inclusive (default: the last complete UTC day — the running day is never included implicitly)
-.TP
-\fB\-\-days\fR \fI<N>\fR
-Sweep the last N complete UTC days
-.TP
-\fB\-\-owner\fR \fI<NAME>\fR
-Keep only builds submitted by this user
-.TP
-\fB\-\-package\fR \fI<NAME,...>\fR
-Keep only these source packages (CSV or repeated)
-.TP
-\fB\-i\fR, \fB\-\-inventory\fR \fI<FILE>\fR
-Keep only packages from these inventory files
-.TP
-\fB\-o\fR, \fB\-\-output\fR \fI<FILE>\fR
-Dataset file to create or merge into
-.TP
-\fB\-\-page\-size\fR \fI<PAGE_SIZE>\fR [default: 1000]
-Tasks per listTasks page
-.TP
-\fB\-\-sleep\-ms\fR \fI<SLEEP_MS>\fR [default: 500]
-Minimum pause between hub requests, in milliseconds
-.TP
-\fB\-\-duty\-cycle\fR \fI<PERCENT>\fR [default: 50]
-Share of one connection to use, as a percentage.
-
-Each pause is scaled to how long the last request took, so a hub under load is asked less often and a hub that speeds up is asked more. 50 means pause as long as the request took; 100 paces by \-\-sleep\-ms alone.
-.TP
-\fB\-\-retries\fR \fI<RETRIES>\fR [default: 3]
-Retries per failed hub request
-.TP
-\fB\-v\fR, \fB\-\-verbose\fR
-Print progress to stderr
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag import
 \fBkoji\-lag import\fR <\fB\-\-store\fR> [\fB\-h\fR|\fB\-\-help\fR] <\fIPATH\fR> 
 .PP
@@ -155,23 +28,16 @@ Print help
 .TP
 <\fIPATH\fR>
 JSON dataset file, or a tree of them
-.SS koji-lag merge
-\fBkoji\-lag merge\fR <\fB\-o\fR|\fB\-\-output\fR> [\fB\-h\fR|\fB\-\-help\fR] <\fIFILE\fR> 
-.PP
-Union datasets collected independently into one
-.TP
-\fB\-o\fR, \fB\-\-output\fR \fI<FILE>\fR
-Merged output file
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help
-.TP
-<\fIFILE\fR>
-Dataset files to union
 .SS koji-lag report
-\fBkoji\-lag report\fR [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIFILE\fR> 
+\fBkoji\-lag report\fR [\fB\-\-store\fR] [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILE\fR] 
 .PP
 Per\-arch queue\-wait / build\-time / bottleneck report
+.TP
+\fB\-\-store\fR \fI<FILE>\fR
+Store to report from, instead of dataset files
+.TP
+\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
+Known Koji instance (cbs, fedora, stream), with \-\-store
 .TP
 \fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
 Only tasks completing on/after this date (UTC midnight)
@@ -205,18 +71,27 @@ Output machine\-readable JSON instead of tables
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fIFILE\fR>
+[\fIFILE\fR]
 Dataset file(s) to report over (merged in memory)
 .SS koji-lag reports
-\fBkoji\-lag reports\fR <\fB\-\-root\fR> <\fB\-\-reports\-root\fR> [\fB\-\-min\-samples\fR] [\fB\-\-force\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBkoji\-lag reports\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-\-reports\-root\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-min\-samples\fR] [\fB\-\-force\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
-Render reports for every dataset in a tree, without fetching
+Write reports for every period the store covers
 .TP
-\fB\-\-root\fR \fI<DIR>\fR
-Dataset tree to read (as written by `backfill`)
+\fB\-\-store\fR \fI<FILE>\fR
+Store to report from
+.TP
+\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
+Known Koji instance (cbs, fedora, stream)
 .TP
 \fB\-\-reports\-root\fR \fI<DIR>\fR
 Directory tree to write reports into
+.TP
+\fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
+First day to consider (default: everything the store holds)
+.TP
+\fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
+Last day to consider, inclusive
 .TP
 \fB\-\-min\-samples\fR \fI<MIN_SAMPLES>\fR [default: 5]
 Withhold report stats below this sample count
@@ -224,7 +99,10 @@ Withhold report stats below this sample count
 \fB\-\-force\fR
 Re\-render reports that already exist.
 
-Off by default, so re\-running after an interruption costs nothing; pass it after changing what a report says.
+Off by default, so re\-running after an interruption costs nothing; pass it after changing what a report says, or after a sync has filled in rows a period was missing.
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print each period as it is considered
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### koji-lag: the slow paths are gone (breaking CLI and API)
+
+`fetch`, `backfill` and `merge` are removed, along with everything that
+existed to make paging by offset bearable. What they did, `sync` does
+without the parts that hurt: no walking from today to reach a window in
+the past, no re-listing three days for every day of a backfill, no
+collating raw data between grains to keep it from filling the disk, and no
+sweep that costs the same when the data is already in hand.
+
+Migration: `koji-lag sync --store lag.sqlite --since X --until Y` in place
+of `fetch` and `backfill`, and `koji-lag import` in place of `merge` —
+datasets union into a store the same way they unioned into each other.
+Existing JSON keeps its value: import it once and it is queryable by
+period without being re-fetched.
+
+`report` and `reports` read the store. `report --store FILE` takes the
+period from `--since`/`--until` (JSON files still work, given instead of
+`--store`), and `reports --store FILE --reports-root DIR` replaces
+`--root DIR`: it writes a report for every day, week and month the store
+holds whole, rather than one per dataset file it finds. A period counts as
+whole only when its creation span is listed *and* every build in it has
+its children — so a weekly report appears when its last day lands, and
+never from a week the store only partly knows.
+
+Breaking API for anyone using the library: `fetch::run`, `run_with_builds`,
+`walk_builds`, `walk_builds_below`, `WalkProgress` and `FetchReport` are
+gone, `FetchOpts` loses `owner` and `packages`, and the `backfill` module
+is gone with the subcommand — its calendar helpers (`Grain`, `Chunk`,
+`week_of`, `month_of`, `weeks_of_month`) live in the new `periods` module,
+and `pool` holds the coverage-driven report writing.
+
+Sweep-time filtering goes with them: everything the hub reports is stored,
+and narrowing is `report --owner`/`--package` over the store. A store
+mixing filtered and unfiltered coverage would under-report silently, with
+nothing in a row to say which sweep put it there.
+
 ### koji-lag: `sync` fetches only what the store is missing
 
 Sweeping a window used to cost the same whether or not the data was

@@ -11,11 +11,12 @@
 //! build-time distributions plus critical-path attribution (which
 //! arch finished last, and how much later than the runner-up).
 
-pub mod backfill;
 pub mod dataset;
 pub mod fetch;
 pub mod import;
 pub mod instance;
+pub mod periods;
+pub mod pool;
 pub mod report;
 pub mod stats;
 pub mod store;

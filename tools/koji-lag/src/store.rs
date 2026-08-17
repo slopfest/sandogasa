@@ -98,6 +98,12 @@ impl Store {
         self.conn
             .pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| e.to_string())?;
+        // Wait rather than fail when another process holds the write
+        // lock: reporting while a sync runs is a normal thing to want,
+        // and a batch of rows takes milliseconds to commit.
+        self.conn
+            .busy_timeout(std::time::Duration::from_secs(30))
+            .map_err(|e| e.to_string())?;
         self.conn
             .execute_batch(
                 "BEGIN;
@@ -490,6 +496,17 @@ impl Store {
     /// `WHERE` clause, which is why raw data no longer needs collating.
     pub fn dataset_for(&self, instance: &str, from: f64, to: f64) -> Result<Dataset, String> {
         let mut dataset = Dataset::new();
+        // The period this answer covers, which is what a report names as
+        // its instance and window. It is recorded as unfiltered coverage
+        // because that is what the store holds: a caller that wants a
+        // subset filters the report, not the query.
+        dataset.meta.windows.push(crate::dataset::FetchWindow {
+            instance: instance.to_string(),
+            from,
+            to,
+            fetched: chrono::Utc::now(),
+            filtered: false,
+        });
         let mut stmt = self
             .conn
             .prepare(

@@ -381,8 +381,6 @@ mod tests {
             hub_url: "https://example.invalid/kojihub".into(),
             after: 0.0,
             before: 10_000.0,
-            owner: None,
-            packages: None,
             page_size,
             sleep_ms: 0,
             retries: 1,
@@ -395,6 +393,191 @@ mod tests {
         from: 1_000.0,
         to: 10_000.0,
     };
+
+    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(fut)
+    }
+
+    /// XML for one buildArch task struct.
+    fn arch_task_xml(id: i64, parent: i64, arch: &str, srpm: &str, completion: f64) -> String {
+        format!(
+            "<value><struct>\
+             <member><name>id</name><value><int>{id}</int></value></member>\
+             <member><name>parent</name><value><int>{parent}</int></value></member>\
+             <member><name>method</name><value><string>buildArch</string></value></member>\
+             <member><name>arch</name><value><string>{arch}</string></value></member>\
+             <member><name>state</name><value><int>2</int></value></member>\
+             <member><name>create_ts</name><value><double>100.0</double></value></member>\
+             <member><name>start_ts</name><value><double>160.0</double></value></member>\
+             <member><name>completion_ts</name><value><double>{completion}</double></value></member>\
+             <member><name>host_id</name><value><int>643</int></value></member>\
+             <member><name>request</name><value><array><data>\
+             <value><string>tasks/1/2/{srpm}</string></value>\
+             <value><int>128157</int></value>\
+             <value><string>{arch}</string></value>\
+             </data></array></value></member>\
+             </struct></value>"
+        )
+    }
+
+    /// XML for one parent build task struct.
+    fn build_task_xml(id: i64, owner: &str, scratch: bool, completion: f64) -> String {
+        let scratch_member = if scratch {
+            "<member><name>scratch</name><value><boolean>1</boolean></value></member>"
+        } else {
+            ""
+        };
+        format!(
+            "<value><struct>\
+             <member><name>id</name><value><int>{id}</int></value></member>\
+             <member><name>method</name><value><string>build</string></value></member>\
+             <member><name>state</name><value><int>2</int></value></member>\
+             <member><name>create_ts</name><value><double>90.0</double></value></member>\
+             <member><name>start_ts</name><value><double>95.0</double></value></member>\
+             <member><name>completion_ts</name><value><double>{completion}</double></value></member>\
+             <member><name>owner_name</name><value><string>{owner}</string></value></member>\
+             <member><name>request</name><value><array><data>\
+             <value><string>git+https://src.fedoraproject.org/rpms/foo.git#abc</string></value>\
+             <value><string>f45-candidate</string></value>\
+             <value><struct>{scratch_member}\
+             <member><name>repo_id</name><value><int>1</int></value></member>\
+             </struct></value>\
+             </data></array></value></member>\
+             </struct></value>"
+        )
+    }
+
+    fn array_response(inner: &str) -> String {
+        format!(
+            "<?xml version='1.0'?><methodResponse><params><param>\
+             <value><array><data>{inner}</data></array></value>\
+             </param></params></methodResponse>"
+        )
+    }
+
+    fn id_name_response(id: i64, name: &str) -> String {
+        array_response(&format!(
+            "<value><struct>\
+             <member><name>id</name><value><int>{id}</int></value></member>\
+             <member><name>name</name><value><string>{name}</string></value></member>\
+             </struct></value>"
+        ))
+    }
+
+    /// The whole flow against a mock hub: the hosts and channels probe,
+    /// one listing page, the children by parent batch, and what all of it
+    /// leaves in the store — including the coverage claim, without which a
+    /// second sync would fetch the lot again.
+    #[test]
+    fn sync_end_to_end() {
+        use wiremock::matchers::{body_string_contains, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = block_on(MockServer::start());
+        block_on(
+            Mock::given(method("POST"))
+                .and(body_string_contains("<methodName>listHosts</methodName>"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_string(id_name_response(643, "buildvm-s390x-01.s390")),
+                )
+                .mount(&server),
+        );
+        block_on(
+            Mock::given(method("POST"))
+                .and(body_string_contains(
+                    "<methodName>listChannels</methodName>",
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_string(id_name_response(1, "default")),
+                )
+                .mount(&server),
+        );
+        // One short page of build tasks: short because fewer rows came
+        // back than were asked for, which is how the walk learns there is
+        // nothing older and claims the gap to its far end.
+        let builds_page = array_response(&format!(
+            "{}{}",
+            build_task_xml(1, "alice", false, 600.0),
+            build_task_xml(99, "bob", true, 250.0)
+        ));
+        block_on(
+            Mock::given(method("POST"))
+                .and(body_string_contains("<methodName>listTasks</methodName>"))
+                .and(body_string_contains("createdBefore"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(builds_page))
+                .expect(1)
+                .mount(&server),
+        );
+        let children_page = array_response(&format!(
+            "{}{}{}",
+            arch_task_xml(11, 1, "x86_64", "foo-1.0-1.fc45.src.rpm", 200.0),
+            arch_task_xml(12, 1, "s390x", "foo-1.0-1.fc45.src.rpm", 500.0),
+            arch_task_xml(21, 99, "aarch64", "bar-2.0-1.fc45.src.rpm", 300.0)
+        ));
+        block_on(
+            Mock::given(method("POST"))
+                .and(body_string_contains("<methodName>listTasks</methodName>"))
+                .and(body_string_contains("<name>parent</name>"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(children_page))
+                .expect(1)
+                .mount(&server),
+        );
+
+        let mut store = Store::in_memory().unwrap();
+        let opts = FetchOpts {
+            hub_url: server.uri(),
+            page_size: 4,
+            ..opts(4)
+        };
+        let report = run(&mut store, &opts).unwrap();
+        assert_eq!(report.builds, 2);
+        assert_eq!(report.tasks, 3);
+        assert_eq!(report.parents_swept, 2);
+
+        // What a report will see. Children come by parent, so the s390x
+        // task finishing at 500 belongs to build 1 whatever the window.
+        let ds = store.dataset_for("fedora", 0.0, 1000.0).unwrap();
+        assert_eq!(ds.builds.len(), 2);
+        assert_eq!(ds.tasks.len(), 3);
+        assert!(ds.builds["fedora:99"].scratch, "scratch from the request");
+        assert!(!ds.builds["fedora:1"].scratch);
+        assert_eq!(ds.tasks["fedora:11"].package.as_deref(), Some("foo"));
+        assert_eq!(ds.tasks["fedora:21"].package.as_deref(), Some("bar"));
+        assert_eq!(
+            ds.hosts.get("fedora:643").map(String::as_str),
+            Some("buildvm-s390x-01.s390")
+        );
+
+        // The window and its three-day margin are claimed, so a second
+        // sync of the same window asks the hub for no pages at all — the
+        // mocks above would fail on a second listing request.
+        assert!(
+            store
+                .gaps(
+                    "fedora",
+                    Span {
+                        from: -crate::fetch::CREATE_GRACE_SECS,
+                        to: 1000.0
+                    }
+                )
+                .unwrap()
+                .is_empty()
+        );
+        let again = run(&mut store, &opts).unwrap();
+        assert_eq!(again.pages, 0, "nothing left to list");
+        assert_eq!(again.parents_swept, 0, "nor any children to fetch");
+
+        // And the report attributes the bottleneck to s390x, which is the
+        // whole point of collecting any of it.
+        let out = crate::report::run(&ds, &crate::report::ReportOpts::default());
+        assert_eq!(out.arches[0].arch, "s390x");
+        assert_eq!(out.bottlenecked_builds, 1);
+    }
 
     #[test]
     fn filling_a_gap_stores_every_build_and_claims_it_whole() {
