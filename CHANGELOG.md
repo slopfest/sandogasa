@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### koji-lag: `report --csv` and `reports --csv`, a file per table
+
+The statistics a report computes are now available as CSV, which is what
+the Fedora Data WG wants to work with. One file per table —
+`all-builds.csv`, `srpm-rebuild.csv`, `multi-arch.csv`, `single-arch.csv`,
+`noarch-by-host.csv`, plus `official.csv` and `scratch.csv` where the split
+applies — because a CSV holds one table, while `report.txt` and
+`report.json` carry every table for a period together. They are written
+beside those, not instead of them, and `reports --csv` does the same for
+every period it pools.
+
+Three deliberate differences from the printed tables. Durations are plain
+seconds, to the millisecond: `2.6m` is for a person, and a column mixing
+minutes and hours cannot be summed, while microseconds are finer than a
+build queue is measured. Nothing is withheld for having few samples —
+`--min-samples` stops a *reader* over-reading three tasks, whereas a
+consumer wants the three and the count beside them. And every row repeats
+its instance and period, so a year of daily files concatenates into
+something that still knows which day each row belongs to.
+
+Empty tables are written rather than skipped: "no noarch builds this week"
+is a finding, and a missing file cannot be told apart from a run that
+failed halfway. Asking for `--csv` over a tree that already has
+`report.txt` and `report.json` writes the CSVs rather than reporting the
+period as already present, which would be true in a sense nobody asked
+about.
+
+While there: a report over a store recorded no period at all in its JSON,
+because the store had already applied it. It now reports the period it
+covers whatever set it.
+
 ### koji-lag: a store can be copied while a sync is writing to it
 
 `scripts/backup-store.sh SOURCE DEST` (also `make backup-store STORE=…

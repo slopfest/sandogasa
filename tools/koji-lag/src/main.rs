@@ -163,6 +163,10 @@ struct ReportsArgs {
     #[arg(long)]
     force: bool,
 
+    /// Also write one CSV per table, per period.
+    #[arg(long)]
+    csv: bool,
+
     /// Print each period as it is considered.
     #[arg(short, long)]
     verbose: bool,
@@ -222,6 +226,14 @@ struct ReportArgs {
     /// Output machine-readable JSON instead of tables.
     #[arg(long)]
     json: bool,
+
+    /// Also write one CSV per table into --out.
+    ///
+    /// A CSV holds one table, so this is a file per table rather than one
+    /// file: report.txt and report.json carry every table for the period
+    /// together, and CSV cannot.
+    #[arg(long, requires = "out")]
+    csv: bool,
 }
 
 fn main() -> ExitCode {
@@ -385,6 +397,7 @@ fn cmd_reports(args: &ReportsArgs) -> Result<(), Box<dyn Error>> {
     let opts = koji_lag::pool::PoolOpts {
         report: report::ReportOpts::default(),
         min_samples: args.min_samples,
+        csv: args.csv,
         force: args.force,
         verbose: args.verbose,
     };
@@ -480,9 +493,14 @@ fn cmd_report(args: &ReportArgs) -> Result<(), Box<dyn Error>> {
     let output = report::run(&dataset, &opts);
     match &args.out {
         Some(dir) => {
-            let written = koji_lag::pool::write(dir, &output, args.min_samples)?;
-            let names: Vec<String> = written.iter().map(|p| p.display().to_string()).collect();
-            eprintln!("wrote {}", names.join(", "));
+            let written = koji_lag::pool::write(dir, &output, args.min_samples, args.csv)?;
+            // The directory and a count: nine absolute paths on one line is
+            // not something anyone reads.
+            let names: Vec<&str> = written
+                .iter()
+                .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+                .collect();
+            eprintln!("wrote {} into {}", names.join(", "), dir.display());
         }
         None if args.json => println!("{}", serde_json::to_string_pretty(&output)?),
         None => print!("{}", report::render(&output, args.min_samples)),

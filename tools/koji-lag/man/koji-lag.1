@@ -38,7 +38,7 @@ Last day to export, inclusive
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS koji-lag report
-\fBkoji\-lag report\fR [\fB\-\-store\fR] [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILE\fR] 
+\fBkoji\-lag report\fR [\fB\-\-store\fR] [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-\-csv\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILE\fR] 
 .PP
 Per\-arch queue\-wait / build\-time / bottleneck report
 .TP
@@ -77,13 +77,18 @@ Withhold human\-output stats below this sample count
 \fB\-\-json\fR
 Output machine\-readable JSON instead of tables
 .TP
+\fB\-\-csv\fR
+Also write one CSV per table into \-\-out.
+
+A CSV holds one table, so this is a file per table rather than one file: report.txt and report.json carry every table for the period together, and CSV cannot.
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 [\fIFILE\fR]
 Dataset file(s) to report over (merged in memory)
 .SS koji-lag reports
-\fBkoji\-lag reports\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-\-reports\-root\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-min\-samples\fR] [\fB\-\-force\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBkoji\-lag reports\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-\-reports\-root\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-min\-samples\fR] [\fB\-\-force\fR] [\fB\-\-csv\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Write reports for every period the store covers
 .TP
@@ -109,6 +114,9 @@ Withhold report stats below this sample count
 Re\-render reports that already exist.
 
 Off by default, so re\-running after an interruption costs nothing; pass it after changing what a report says, or after a sync has filled in rows a period was missing.
+.TP
+\fB\-\-csv\fR
+Also write one CSV per table, per period
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print each period as it is considered

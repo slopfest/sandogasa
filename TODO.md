@@ -22,13 +22,15 @@
   dataset — a store travels as itself, one SQLite file, and CSV serves
   everyone who wants the rows elsewhere.
 
-- (2026-08-17) Ask the Fedora Data WG whether they also want a
-  flattened CSV: `export` writes the store's own tables (one row per
-  build, one per task, plus hosts and channels), which is lossless and
-  joinable but leaves the join to them. One row per build with its
-  arch stages spread across columns is what a spreadsheet user
-  usually wants, and is a second writer over the same query rather
-  than a second code path.
+- (2026-08-17) Ask the Fedora Data WG whether what they have is what
+  they wanted. There are two CSV shapes now: `export` dumps the
+  store's own rows (builds, tasks, hosts, channels) for anyone doing
+  their own analysis, and `report --csv`/`reports --csv` write the
+  computed per-arch tables per period. A third shape — one row per
+  build with its arch stages spread across columns — is what a
+  spreadsheet user often wants and is a writer over the existing
+  query rather than a second code path, but nobody has asked for it
+  yet and guessing would be inventing a requirement.
 
 - (2026-07-22) DB-dump ingestion: for whole-history analysis, an
   extraction script over a Koji database dump (SELECT just the task

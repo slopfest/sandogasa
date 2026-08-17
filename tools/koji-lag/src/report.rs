@@ -387,8 +387,11 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect(),
-        since: opts.since,
-        until: opts.until,
+        // From `period` where the caller gave one: a store query has
+        // already applied it, so `since`/`until` are unset there and the
+        // report would otherwise say it covered no particular period.
+        since: opts.since.or(opts.period.map(|p| p.0)),
+        until: opts.until.or(opts.period.map(|p| p.1)),
         coverage: dataset.meta.windows.clone(),
         gaps: uncovered(dataset, opts),
         mixed_filtered_coverage: dataset.mixes_filtered_windows(),
@@ -472,6 +475,92 @@ fn arch_stats_by(
 }
 
 /// Render seconds as a compact human duration.
+/// The report's tables as CSV, one file per table.
+///
+/// One file each because a CSV holds one table, which is the whole reason
+/// this is not simply "the report, in CSV": the text and JSON forms carry
+/// every table for a period together, and CSV cannot.
+///
+/// Two differences from the human tables, both because a machine is
+/// reading. Durations are plain seconds rather than "2.6m", since a column
+/// mixing minutes and hours cannot be summed. And nothing is withheld for
+/// having few samples — `--min-samples` protects a reader from reading too
+/// much into three tasks, while a consumer wants the three and their count.
+///
+/// Every row carries the instance and the period it belongs to, so a year
+/// of daily files can be concatenated without losing which day each row
+/// came from.
+pub fn csv_tables(output: &ReportOutput) -> Vec<(&'static str, String)> {
+    const HEADER: &[&str] = &[
+        "instance",
+        "period_start",
+        "period_end",
+        "arch",
+        "queued",
+        "wait_median_s",
+        "wait_p90_s",
+        "wait_max_s",
+        "built",
+        "time_median_s",
+        "time_p90_s",
+        "time_max_s",
+        "builds_bottlenecked",
+        "bottleneck_median_delay_s",
+        "bottleneck_total_delay_s",
+    ];
+    let instance = output.instances.join(" ");
+    let start = crate::csv::date(output.since);
+    let end = crate::csv::date(output.until);
+    let rows = |stats: &[ArchStats]| -> Vec<Vec<String>> {
+        stats
+            .iter()
+            .map(|s| {
+                let (wait, time) = (s.queue_wait.as_ref(), s.build_time.as_ref());
+                vec![
+                    instance.clone(),
+                    start.clone(),
+                    end.clone(),
+                    s.arch.clone(),
+                    wait.map(|d| d.count.to_string()).unwrap_or_default(),
+                    crate::csv::secs(wait.map(|d| d.median)),
+                    crate::csv::secs(wait.map(|d| d.p90)),
+                    crate::csv::secs(wait.map(|d| d.max)),
+                    time.map(|d| d.count.to_string()).unwrap_or_default(),
+                    crate::csv::secs(time.map(|d| d.median)),
+                    crate::csv::secs(time.map(|d| d.p90)),
+                    crate::csv::secs(time.map(|d| d.max)),
+                    s.builds_bottlenecked.to_string(),
+                    crate::csv::secs(s.bottleneck_median_delay),
+                    crate::csv::secs(Some(s.bottleneck_total_delay)),
+                ]
+            })
+            .collect()
+    };
+
+    // Named as the sections are titled, so a file can be matched to what a
+    // reader saw in report.txt.
+    let mut tables: Vec<(&'static str, &[ArchStats])> = vec![
+        ("all-builds.csv", &output.arches),
+        ("srpm-rebuild.csv", &output.srpm),
+        ("multi-arch.csv", &output.multi_arch),
+        ("single-arch.csv", &output.single_arch),
+        ("noarch-by-host.csv", &output.noarch_by_host),
+    ];
+    if let Some(official) = &output.official {
+        tables.push(("official.csv", official));
+    }
+    if let Some(scratch) = &output.scratch {
+        tables.push(("scratch.csv", scratch));
+    }
+    // An empty table is still written: "no noarch builds this week" is a
+    // finding, and a missing file is indistinguishable from a run that
+    // failed halfway.
+    tables
+        .into_iter()
+        .map(|(name, stats)| (name, crate::csv::table(HEADER, &rows(stats))))
+        .collect()
+}
+
 pub fn fmt_duration(secs: f64) -> String {
     let secs = secs.max(0.0);
     if secs >= 3600.0 {

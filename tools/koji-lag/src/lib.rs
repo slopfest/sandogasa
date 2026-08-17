@@ -11,6 +11,7 @@
 //! build-time distributions plus critical-path attribution (which
 //! arch finished last, and how much later than the runner-up).
 
+pub mod csv;
 pub mod dataset;
 pub mod export;
 pub mod fetch;

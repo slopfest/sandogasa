@@ -68,8 +68,8 @@ pub fn run(
             std::fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?,
         );
         for row in &rows {
-            let line: Vec<String> = row.iter().map(|f| quote(f)).collect();
-            writeln!(out, "{}", line.join(",")).map_err(|e| format!("{}: {e}", path.display()))?;
+            writeln!(out, "{}", crate::csv::row(row))
+                .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         out.flush()
             .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -216,19 +216,6 @@ pub fn refuse(selection: &crate::store::Selection) -> String {
             None => String::new(),
         }
     )
-}
-
-/// A CSV field, quoted only when it has to be.
-///
-/// Koji's data does not currently contain a comma where it would matter,
-/// and a writer should not assume that: a CSV that parses wrongly is worse
-/// than one that fails.
-fn quote(field: &str) -> String {
-    if field.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", field.replace('"', "\"\""))
-    } else {
-        field.to_string()
-    }
 }
 
 #[cfg(test)]
@@ -398,15 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn fields_that_would_break_a_row_are_quoted() {
-        // A package name with a comma is not something Koji produces, but
-        // a CSV writer that trusts its input produces a file that silently
-        // parses wrong, which is worse than one that fails.
-        assert_eq!(quote("plain"), "plain");
-        assert_eq!(quote("bar, baz"), "\"bar, baz\"");
-        assert_eq!(quote("say \"what\""), "\"say \"\"what\"\"\"");
-        assert_eq!(quote("two\nlines"), "\"two\nlines\"");
-
+    fn a_field_that_would_break_a_row_is_quoted_in_the_file() {
         // A whole day whose package name holds a comma, so the row that
         // gets written has to quote it.
         let mut store = part_finished_store();

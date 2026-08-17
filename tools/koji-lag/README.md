@@ -103,6 +103,21 @@ Per architecture, over the selected window:
 - the same stats split **scratch vs official**, quantifying the
   PR-CI pain specifically.
 
+With `--out DIR`, `report.txt` and `report.json` are both written — a
+reader wants the table, a machine wants the fields, and computing the
+report twice to get them separately reads the store twice. Adding `--csv`
+writes one CSV per table beside them (`all-builds.csv`,
+`srpm-rebuild.csv`, `multi-arch.csv`, `single-arch.csv`,
+`noarch-by-host.csv`, and `official.csv`/`scratch.csv` when the split
+applies), because a CSV holds one table where the text and JSON forms carry
+them all together.
+
+Those CSVs differ from the printed tables in three ways, all for a machine's
+benefit: durations are plain seconds to the millisecond rather than `2.6m`,
+nothing is withheld for having few samples, and every row repeats the
+instance and the period it covers — so a year of daily files concatenates
+into something that still knows which day each row came from.
+
 Report tables are padded Markdown pipe tables: aligned for
 terminal and plain-text reading, and pasteable as-is into
 anything that renders Markdown (Pagure, GitLab, Forgejo,
@@ -171,6 +186,9 @@ running this again. Coarser reports are written *beside* the finer ones,
 never instead of them, and each grain is computed from that period's own
 rows rather than averaged up from the finer grain, because percentiles do
 not compose.
+
+`--csv` works here too, writing the per-table CSVs into each period's
+directory alongside `report.txt` and `report.json`.
 
 Rendering is cheap and sweeping is not, so existing reports are left alone
 unless `--force` is passed — worth passing after a sync has filled in rows

@@ -34,6 +34,8 @@ pub struct Pooled {
 pub struct PoolOpts {
     pub report: report::ReportOpts,
     pub min_samples: usize,
+    /// Also write a CSV per table, per period.
+    pub csv: bool,
     /// Rewrite reports that are already there. Worth it after the store
     /// gains rows for a period — a day listed by one run and given its
     /// children by a later one has a report worth recomputing.
@@ -105,7 +107,13 @@ pub fn run(
     let mut pooled = Pooled::default();
     for chunk in &chunks {
         let dir = reports_root.join(chunk.path());
-        if !opts.force && dir.join("report.txt").exists() && dir.join("report.json").exists() {
+        let present = dir.join("report.txt").exists()
+            && dir.join("report.json").exists()
+            // Asking for CSV where only text and JSON exist is a reason to
+            // write, not to skip: the period is "already reported" in one
+            // sense and not in the sense that was asked for.
+            && (!opts.csv || dir.join("all-builds.csv").exists());
+        if !opts.force && present {
             pooled.present += 1;
             continue;
         }
@@ -130,7 +138,7 @@ pub fn run(
         );
         pooled
             .written
-            .extend(write(&dir, &output, opts.min_samples)?);
+            .extend(write(&dir, &output, opts.min_samples, opts.csv)?);
         if opts.verbose {
             eprintln!(
                 "[koji-lag] reports: {} ({} build(s))",
@@ -142,24 +150,41 @@ pub fn run(
     Ok(pooled)
 }
 
-/// Write both forms of a report into `dir`.
+/// Write a report into `dir`: `report.txt` and `report.json` always, plus
+/// a CSV per table when asked.
 ///
-/// Both, always: a reader wants the table and a machine wants the fields,
-/// and computing the report twice to get them separately reads the store
-/// twice for the same answer.
+/// Both of the first two always, because a reader wants the table and a
+/// machine wants the fields, and computing the report twice to get them
+/// separately reads the store twice for the same answer.
+///
+/// The CSVs are per table rather than one file, since a CSV holds one
+/// table — see [`report::csv_tables`]. They are opt-in because they are
+/// seven more files per period, which is noise for anyone who does not
+/// want them.
 pub fn write(
     dir: &Path,
     output: &report::ReportOutput,
     min_samples: usize,
+    csv: bool,
 ) -> Result<Vec<PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut written = Vec::new();
     let text = dir.join("report.txt");
     let json = dir.join("report.json");
     std::fs::write(&text, report::render(output, min_samples))
         .map_err(|e| format!("{}: {e}", text.display()))?;
     let body = serde_json::to_string_pretty(output).map_err(|e| e.to_string())?;
     std::fs::write(&json, format!("{body}\n")).map_err(|e| format!("{}: {e}", json.display()))?;
-    Ok(vec![text, json])
+    written.push(text);
+    written.push(json);
+    if csv {
+        for (name, body) in report::csv_tables(output) {
+            let path = dir.join(name);
+            std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+            written.push(path);
+        }
+    }
+    Ok(written)
 }
 
 /// Every whole UTC day the store has listed anything for, so a pooling
@@ -266,6 +291,7 @@ mod tests {
         PoolOpts {
             report: report::ReportOpts::default(),
             min_samples: 1,
+            csv: false,
             force: false,
             verbose: false,
         }
@@ -361,6 +387,72 @@ mod tests {
         let pooled = run(&store, "fedora", root.path(), &[d], GRACE, &opts()).unwrap();
         assert_eq!(pooled.incomplete, 3, "day, week and month all unanswerable");
         assert!(pooled.written.is_empty());
+    }
+
+    #[test]
+    fn csv_is_written_per_table_and_carries_the_period() {
+        let d = day(2026, 8, 12);
+        let store = store_with(&[d]);
+        let root = tempfile::tempdir().unwrap();
+        let opts = PoolOpts {
+            csv: true,
+            ..opts()
+        };
+        run(&store, "fedora", root.path(), &[d], GRACE, &opts).unwrap();
+
+        let dir = root.path().join("daily/2026/08/12");
+        for name in [
+            "all-builds.csv",
+            "srpm-rebuild.csv",
+            "multi-arch.csv",
+            "single-arch.csv",
+            "noarch-by-host.csv",
+        ] {
+            assert!(dir.join(name).exists(), "{name} missing");
+        }
+        // The text and JSON forms are still written: CSV adds, it does not
+        // replace.
+        assert!(dir.join("report.txt").exists());
+        assert!(dir.join("report.json").exists());
+
+        let all = std::fs::read_to_string(dir.join("all-builds.csv")).unwrap();
+        let mut lines = all.lines();
+        assert!(
+            lines
+                .next()
+                .unwrap()
+                .starts_with("instance,period_start,period_end,arch,"),
+            "{all}"
+        );
+        // Every row names its period, so a year of dailies concatenates
+        // into something that still knows which day each row is from.
+        let first = lines.next().expect("a row for the build's arch");
+        assert!(
+            first.starts_with("fedora,2026-08-12,2026-08-13,"),
+            "{first}"
+        );
+        // Seconds, not "2.6m": a column mixing units cannot be summed.
+        assert!(!first.contains('m'), "{first}");
+    }
+
+    #[test]
+    fn asking_for_csv_where_only_text_exists_writes_it() {
+        // Otherwise a tree reported before --csv existed could never gain
+        // the CSVs without --force, and "already present" would be true in
+        // a sense nobody asked about.
+        let d = day(2026, 8, 12);
+        let store = store_with(&[d]);
+        let root = tempfile::tempdir().unwrap();
+        run(&store, "fedora", root.path(), &[d], GRACE, &opts()).unwrap();
+        assert!(!root.path().join("daily/2026/08/12/all-builds.csv").exists());
+
+        let with_csv = PoolOpts {
+            csv: true,
+            ..opts()
+        };
+        let again = run(&store, "fedora", root.path(), &[d], GRACE, &with_csv).unwrap();
+        assert!(!again.written.is_empty(), "should have written the CSVs");
+        assert!(root.path().join("daily/2026/08/12/all-builds.csv").exists());
     }
 
     #[test]
