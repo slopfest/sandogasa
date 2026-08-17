@@ -432,10 +432,10 @@ fn cmd_reports(args: &ReportsArgs) -> Result<(), Box<dyn Error>> {
         &opts,
     )?;
     eprintln!(
-        "reports: {} written, {} already present, {} not complete in the store -> {}",
-        // Two files per period, which is not what a reader means by a
-        // report count.
-        pooled.written.len() / 2,
+        "reports: {} period(s) in {} file(s), {} already present, \
+         {} not complete in the store -> {}",
+        pooled.periods,
+        pooled.written.len(),
         pooled.present,
         pooled.incomplete,
         args.reports_root.display()

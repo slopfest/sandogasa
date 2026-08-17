@@ -82,6 +82,9 @@ impl Format {
 /// What a pooling run wrote.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Pooled {
+    /// Periods reported. Not derivable from the file count: a period is
+    /// two files or nine depending on the forms asked for.
+    pub periods: usize,
     pub written: Vec<PathBuf>,
     /// Periods whose reports were already on disk.
     pub present: usize,
@@ -203,6 +206,7 @@ pub fn run(
         pooled
             .written
             .extend(write(&dir, &output, opts.min_samples, &opts.formats)?);
+        pooled.periods += 1;
         if opts.verbose {
             eprintln!(
                 "[koji-lag] reports: {} ({} build(s))",
@@ -409,6 +413,7 @@ mod tests {
         assert!(!root.path().join("weekly/2026/08/10").exists());
         assert!(!root.path().join("monthly/2026/08").exists());
         assert_eq!(pooled.incomplete, 2);
+        assert_eq!(pooled.periods, 1);
         assert_eq!(pooled.written.len(), 2, "text and json");
     }
 
