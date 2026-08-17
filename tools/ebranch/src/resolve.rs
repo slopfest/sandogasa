@@ -1192,9 +1192,90 @@ impl DepResolver for FedrqResolver {
     }
 }
 
+/// Why a package is in a generated build script, as a shell comment.
+///
+/// Here the reason runs the other way from the crate case: a package is in
+/// the script because something *else* could not be built without it, so
+/// the comment names the dependency it provides and who needed it.
+pub fn build_reason(pkg: &str, closure: &Closure) -> Option<String> {
+    let mut needed_by: Vec<(&str, &str)> = closure
+        .closure
+        .iter()
+        .flat_map(|(name, entry)| {
+            entry
+                .missing_deps
+                .iter()
+                .filter(|d| d.provided_by == pkg)
+                .map(move |d| (name.as_str(), d.dep.as_str()))
+        })
+        .collect();
+    if needed_by.is_empty() {
+        return None;
+    }
+    needed_by.sort_unstable();
+    needed_by.dedup();
+    let (first_pkg, dep) = needed_by[0];
+    // One example, then a count: a widely-needed provider would otherwise
+    // print a paragraph into the middle of a shell script.
+    let others = match needed_by.len() {
+        1 => String::new(),
+        n => format!(" (+{} more)", n - 1),
+    };
+    Some(format!(
+        "# {pkg}: provides {dep}, needed by {first_pkg}{others}"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_provider_in_the_script_names_what_needed_it() {
+        let entry = |deps: Vec<(&str, &str)>| ClosureEntry {
+            missing_deps: deps
+                .into_iter()
+                .map(|(dep, provided_by)| MissingDep {
+                    dep: dep.to_string(),
+                    provided_by: provided_by.to_string(),
+                })
+                .collect(),
+        };
+        let closure = Closure {
+            source_branch: "rawhide".to_string(),
+            target_branch: "epel10".to_string(),
+            requested: vec!["nushell".to_string()],
+            closure: [
+                (
+                    "nushell".to_string(),
+                    entry(vec![("pkgconfig(libsystemd) >= 250", "systemd")]),
+                ),
+                ("helix".to_string(), entry(vec![("cmake", "cmake")])),
+                ("zellij".to_string(), entry(vec![("cmake", "cmake")])),
+            ]
+            .into_iter()
+            .collect(),
+            blocked_by_base: Default::default(),
+            overrides: Default::default(),
+            warnings: vec![],
+        };
+
+        // The reason runs the other way here: the provider is in the
+        // script because something else cannot build without it.
+        let systemd = build_reason("systemd", &closure).unwrap();
+        assert!(
+            systemd.starts_with("# systemd: provides pkgconfig(libsystemd) >= 250"),
+            "{systemd}"
+        );
+        assert!(systemd.contains("needed by nushell"), "{systemd}");
+
+        // A widely-needed provider gets one example and a count, not a
+        // paragraph in the middle of a shell script.
+        let cmake = build_reason("cmake", &closure).unwrap();
+        assert!(cmake.contains("+1 more"), "{cmake}");
+
+        assert_eq!(build_reason("nothing-needs-this", &closure), None);
+    }
 
     #[test]
     fn resolve_report_from_closure_drops_empty_edges() {

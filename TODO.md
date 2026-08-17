@@ -289,11 +289,13 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   resolution above lands — flipping it earlier is NOISY (it includes
   optional deps the root doesn't enable). The `--include-unmet` half was
   flipped to `--exclude-unmet` in v0.16.0.
-- (2026-07-02, remaining nicety) check-crate: optionally annotate the
-  `--koji`/`--copr` machine output with needed-version comments (e.g.
-  `# quick-xml: need ^0.39.4, Fedora has 0.40.1`) — pipe-safe as
-  shell/TOML comments. The main ask (human report to stderr alongside
-  machine stdout) shipped 2026-07-02.
+- (2026-07-02, done for `--copr`) check-crate annotates the generated
+  Copr script with why each package is in it. `--koji` deliberately
+  does not: its output is one chain-build argument string, so a
+  comment line lands inside `$(...)` as an argument — the premise
+  that comments are pipe-safe holds for a script and not for that.
+  If the chain output ever needs explaining, the place for it is
+  stderr beside the human report.
 
 - Second-level branch-request escalation: when a `needinfo?` ping
   (the level-1 escalation `escalate` already does) goes unanswered

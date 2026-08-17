@@ -236,6 +236,35 @@ pub fn check_crate(
     })
 }
 
+/// Why a package is in a generated build script, as a shell comment.
+///
+/// A script is read again days later, by which point the report that came
+/// with it on stderr has scrolled away — so what each package is for
+/// travels in the script itself.
+pub fn build_reason(pkg: &str, report: &CheckCrateReport) -> Option<String> {
+    let crate_name = pkg.strip_prefix("rust-").unwrap_or(pkg);
+    if crate_name == report.crate_name {
+        return Some(format!(
+            "# {pkg}: the crate this run is about, {}",
+            report.crate_version
+        ));
+    }
+    let dep = report
+        .transitive_missing
+        .iter()
+        .find(|d| d.name == crate_name)?;
+    let why = match dep.status {
+        TransitiveStatus::Missing => "not packaged".to_string(),
+        TransitiveStatus::Unmet => {
+            format!("packaged, but nothing satisfies {}", dep.version_req)
+        }
+    };
+    Some(format!(
+        "# {pkg}: build {} for {} — {why}, pulled in by {}",
+        dep.version, dep.version_req, dep.pulled_by
+    ))
+}
+
 /// Print the human-readable report to stdout.
 pub fn print_report(report: &CheckCrateReport) {
     print!("{}", render_report(report));
@@ -1022,6 +1051,64 @@ fn extract_crate_versions(provides: &[String], crate_name: &str) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scripted_package_says_why_it_is_there() {
+        let report = CheckCrateReport {
+            crate_name: "arrow".to_string(),
+            crate_version: "57.0.0".to_string(),
+            package: "rust-arrow".to_string(),
+            branch: "rawhide".to_string(),
+            dependencies: vec![],
+            transitive_missing: vec![
+                TransitiveDep {
+                    name: "quick-xml".to_string(),
+                    package: "rust-quick-xml".to_string(),
+                    status: TransitiveStatus::Unmet,
+                    version: "0.40.1".to_string(),
+                    version_req: "^0.39.4".to_string(),
+                    pulled_by: "arrow".to_string(),
+                },
+                TransitiveDep {
+                    name: "brand-new".to_string(),
+                    package: "rust-brand-new".to_string(),
+                    status: TransitiveStatus::Missing,
+                    version: "1.0.0".to_string(),
+                    version_req: "^1".to_string(),
+                    pulled_by: "quick-xml".to_string(),
+                },
+            ],
+            transitive_build_order: vec![],
+            transitive_edges: Default::default(),
+            review_bugs: Default::default(),
+        };
+
+        // Packaged but too old: the requirement is the interesting part.
+        let unmet = build_reason("rust-quick-xml", &report).unwrap();
+        assert!(
+            unmet.starts_with("# rust-quick-xml: build 0.40.1 for ^0.39.4"),
+            "{unmet}"
+        );
+        assert!(unmet.contains("nothing satisfies ^0.39.4"), "{unmet}");
+        assert!(unmet.contains("pulled in by arrow"), "{unmet}");
+
+        // Absent entirely, and pulled in by a dependency rather than the
+        // root — which is the thing a reader cannot reconstruct later.
+        let missing = build_reason("rust-brand-new", &report).unwrap();
+        assert!(missing.contains("not packaged"), "{missing}");
+        assert!(missing.contains("pulled in by quick-xml"), "{missing}");
+
+        // The crate the run is about is named as such, not as a dependency.
+        let root = build_reason("rust-arrow", &report).unwrap();
+        assert!(root.contains("the crate this run is about"), "{root}");
+
+        // Anything else gets no comment rather than a wrong one.
+        assert_eq!(build_reason("rust-unrelated", &report), None);
+        // And every comment is a comment, or it would break the script.
+        for line in [unmet, missing, root] {
+            assert!(line.starts_with("# "), "{line}");
+        }
+    }
 
     #[test]
     fn extract_version_basic() {

@@ -114,7 +114,8 @@ deps. The output includes a phased build order showing which
 - `-j N` / `--jobs N` — number of parallel fedrq queries
   (0 = number of CPUs, the default)
 - `--koji` — output as a Koji chain build string
-- `--copr` — generate a Copr batch build script
+- `--copr` — generate a Copr batch build script, each package
+  commented with why it is in it
 - `--refresh` — clear fedrq repo metadata cache before querying
 - `--json` — machine-readable JSON output
 

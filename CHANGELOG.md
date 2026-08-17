@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### ebranch: a generated Copr script says why each package is in it
+
+A build script is read again days later, by which point the report that
+came with it on stderr has scrolled out of the terminal, leaving a list of
+package names and no way to reconstruct which dependency pulled each one
+in. Every package in a `--copr` script now carries a shell comment saying
+so:
+
+```sh
+# rust-quick-xml: build 0.40.1 for ^0.39.4 — packaged, but nothing
+#   satisfies ^0.39.4, pulled in by arrow
+# systemd: provides pkgconfig(libsystemd) >= 250, needed by nushell (+1 more)
+```
+
+The two forms are different questions, so they get different answers. For a
+crate closure the interesting facts are the version to build, the
+requirement, and which dependency wanted it. For a branch-request closure
+the reason runs the other way — the package is there because something
+*else* cannot build without it — so the comment names the dependency it
+provides and who needed it, with one example and a count where many
+packages need the same provider.
+
+`--koji` deliberately gets no comments. Its output is a single chain-build
+argument string, so a comment line lands inside `$(...)` as an argument —
+the TODO's assumption that comments are pipe-safe holds for a script and
+not for that, and breaking a build invocation to add a note is a poor
+trade.
+
 ### sandogasa-fasjson: identify itself to FASJSON
 
 Fedora's infrastructure tarpits requests that arrive without a
