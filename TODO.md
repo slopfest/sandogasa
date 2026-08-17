@@ -50,10 +50,6 @@
 
 ## hs-relmon
 
-- (2026-07-22) Migrate cbs.rs's hand-rolled XML-RPC client onto
-  sandogasa-kojihub (the crate extracted from koji-diff), so the
-  workspace has one Koji hub client.
-
 ## Cross-cutting
 
 ## poi-tracker / sandogasa-pkg-health seam

@@ -183,6 +183,26 @@ where
                 continue;
             }
         };
+        // How many files came back, not just how many RPMs were asked
+        // about. A conflict needs two sources shipping one path, so file
+        // lists that arrive empty produce "no conflicts found" — the same
+        // answer as a genuinely clean tag. Without this line the two are
+        // indistinguishable, which is a poor property for the only check
+        // standing between a repo and a file conflict.
+        let total_files: usize = files.iter().map(|(_, fs)| fs.len()).sum();
+        if verbose {
+            eprintln!(
+                "[hs-relmon] EL{el}: {total_files} file(s) across {} RPM(s)",
+                files.len()
+            );
+        }
+        if total_files == 0 && !ids.is_empty() {
+            eprintln!(
+                "warning: EL{el}: {} RPM(s) reported no files at all — \
+                 treating as no conflicts, but nothing was actually compared",
+                ids.len()
+            );
+        }
         let per_rpm: Vec<(String, Vec<RpmFile>)> = files
             .into_iter()
             .filter_map(|(rid, fs)| rid_source.get(&rid).map(|s| (s.clone(), fs)))

@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### hs-relmon: one Koji client for the workspace
+
+`cbs.rs` spoke XML-RPC to CBS by hand: request bodies assembled as format
+strings, and 437 lines of quick-xml event handling to read the answers back
+— a second implementation of what `sandogasa-kojihub` already does for
+koji-lag and koji-diff. It now uses that crate, which deletes the parser
+outright and leaves only the part that was ever specific to this tool:
+which fields of which struct make a Build, a TaggedBinary or an RpmFile.
+
+Net 539 lines out, 178 in, and `quick-xml` is no longer a dependency of
+hs-relmon at all.
+
+Three things come free with the shared client. Requests are retried on
+transport failures and 5xx, which the hand-rolled `call` never did. The
+User-Agent is a real one rather than the hardcoded `hs-relmon/0.1.0` that
+had been wrong since 0.2.0 — Fedora and CBS both tarpit requests without
+one, and a stale version in a server log is worse than useless. And a hub
+URL given with a trailing slash is now normalised, which `cbs.rs` did and
+the shared client did not: that difference was caught by an existing
+hs-relmon test, and fixing it in the shared client rather than in the
+caller means koji-lag and koji-diff get it too.
+
+Verified against CBS itself, not only the fixtures: `check-latest` returns
+real NVRs for hs9 and hs10 (`getPackageID`, `listBuilds`, `listTags`),
+`prune-tags --dry-run` reads both release tags (`listTagged`), and
+`file-conflicts --release 10s` fetches 611,576 files across 1,096 RPMs in
+six batched requests (`listTaggedRPMS` and the `system.multicall`).
+
+That last figure is reported now, because it could not be seen before. A
+conflict needs two sources shipping one path, so file lists that arrive
+empty produce "no file conflicts found" — the same answer as a genuinely
+clean tag. `file-conflicts -v` now says how many files came back, and warns
+when every RPM reports none, which is a poor thing to leave invisible in
+the only check standing between a repo and a file conflict.
+
+All 195 hs-relmon tests pass unchanged, recorded CBS fixtures included:
+those now decode through `sandogasa_kojihub::xmlrpc::parse_response` and
+then through this file's field mapping, so the same captured responses
+still assert the same builds, binaries and file lists.
+
 ### cpu-sig-tracker: `retire` offers to take the issue it closes
 
 Any tool here that closes bugs must also offer to reassign them to the

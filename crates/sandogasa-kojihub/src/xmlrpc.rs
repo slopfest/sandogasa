@@ -159,11 +159,20 @@ impl Client {
                 .timeout(std::time::Duration::from_secs(180))
                 .build()
                 .expect("build reqwest client"),
-            hub_url: hub_url.to_string(),
+            // Normalised, so a hub given as ".../kojihub/" is the same
+            // client as one given as ".../kojihub" — the difference is a
+            // typo, not a different hub.
+            hub_url: hub_url.trim_end_matches('/').to_string(),
         }
     }
 
     /// Call an XML-RPC method with the given parameters.
+    /// The hub this client talks to, for callers that report it. Any
+    /// trailing slash has been trimmed.
+    pub fn hub_url(&self) -> &str {
+        &self.hub_url
+    }
+
     pub fn call(&self, method: &str, params: &[Value]) -> Result<Value, Error> {
         let body = build_request(method, params);
         let resp = self

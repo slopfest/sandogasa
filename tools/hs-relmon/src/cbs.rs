@@ -1,16 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use quick_xml::Reader;
-use quick_xml::events::{BytesText, Event};
-use serde::Serialize;
+use std::collections::HashMap;
 
-/// Decode and unescape a quick-xml text node to an owned String.
-///
-/// quick-xml 0.40 made `read_text` and `Event::Text` yield a raw
-/// `BytesText`; decoding and entity-unescaping are now explicit.
-fn decode_text(t: &BytesText) -> Result<String, Box<dyn std::error::Error>> {
-    Ok(quick_xml::escape::unescape(&t.decode()?)?.into_owned())
-}
+use sandogasa_kojihub::Value;
+use serde::Serialize;
 
 /// Build the CBS web URL for a given build ID.
 pub fn build_url(build_id: i64) -> String {
@@ -124,8 +117,7 @@ pub type RpmFileList = Vec<(i64, Vec<RpmFile>)>;
 
 /// Client for the CentOS Build System (CBS) Koji XML-RPC API.
 pub struct Client {
-    http: reqwest::blocking::Client,
-    hub_url: String,
+    hub: sandogasa_kojihub::Client,
 }
 
 impl Default for Client {
@@ -140,35 +132,21 @@ impl Client {
     }
 
     pub fn with_hub_url(hub_url: &str) -> Self {
-        sandogasa_cli::install_crypto_provider();
-        let http = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .user_agent("hs-relmon/0.1.0")
-            .build()
-            .expect("failed to build HTTP client");
         Self {
-            http,
-            hub_url: hub_url.trim_end_matches('/').to_string(),
+            hub: sandogasa_kojihub::Client::new(hub_url),
         }
     }
 
     /// Look up the numeric package ID for a package name.
     pub fn get_package_id(&self, name: &str) -> Result<Option<i64>, Box<dyn std::error::Error>> {
-        let body = format!(
-            r#"<?xml version="1.0"?>
-<methodCall>
-  <methodName>getPackageID</methodName>
-  <params>
-    <param><value><string>{name}</string></value></param>
-  </params>
-</methodCall>"#
-        );
-        let resp = self.call(&body)?;
-        // Response is a single <int> or <nil/>
-        let value = parse_single_value(&resp)?;
-        match value {
-            XmlRpcValue::Int(id) => Ok(Some(id)),
-            XmlRpcValue::Nil => Ok(None),
+        // A package koji has never heard of answers nil, which is not an
+        // error: callers ask about packages that may not be in CBS at all.
+        match self
+            .hub
+            .call("getPackageID", &[Value::String(name.to_string())])?
+        {
+            Value::Int(id) => Ok(Some(id)),
+            Value::Nil => Ok(None),
             other => Err(format!("unexpected response type: {other:?}").into()),
         }
     }
@@ -176,34 +154,16 @@ impl Client {
     /// List completed builds for a package, newest first.
     pub fn list_builds(&self, package_id: i64) -> Result<Vec<Build>, Box<dyn std::error::Error>> {
         // listBuilds(packageID, userID, taskID, prefix, state, ..., queryOpts)
-        // state=1 means COMPLETE
-        // 14 positional params total, last one is queryOpts
-        let body = format!(
-            r#"<?xml version="1.0"?>
-<methodCall>
-  <methodName>listBuilds</methodName>
-  <params>
-    <param><value><int>{package_id}</int></value></param>
-    <param><value><nil/></value></param>
-    <param><value><nil/></value></param>
-    <param><value><nil/></value></param>
-    <param><value><int>1</int></value></param>
-    <param><value><nil/></value></param>
-    <param><value><nil/></value></param>
-    <param><value><nil/></value></param>
-    <param><value><nil/></value></param>
-    <param><value><nil/></value></param>
-    <param><value><nil/></value></param>
-    <param><value><nil/></value></param>
-    <param><value><nil/></value></param>
-    <param><value><struct>
-      <member><name>order</name><value><string>-build_id</string></value></member>
-    </struct></value></param>
-  </params>
-</methodCall>"#
-        );
-        let resp = self.call(&body)?;
-        parse_builds(&resp)
+        // — thirteen positional arguments before the options struct, of
+        // which only the state matters here. state=1 is COMPLETE.
+        let mut params = vec![Value::Int(package_id), Value::Nil, Value::Nil, Value::Nil];
+        params.push(Value::Int(1));
+        params.extend(std::iter::repeat_n(Value::Nil, 8));
+        params.push(Value::Struct(HashMap::from([(
+            "order".to_string(),
+            Value::String("-build_id".to_string()),
+        )])));
+        builds_from(&self.hub.call("listBuilds", &params)?)
     }
 
     /// List builds of `package` currently in `tag`. Equivalent
@@ -224,22 +184,15 @@ impl Client {
     ) -> Result<Vec<Build>, Box<dyn std::error::Error>> {
         // listTagged(tag, event=nil, inherit=False, prefix=nil,
         //   latest=False, package=...)
-        let body = format!(
-            r#"<?xml version="1.0"?>
-<methodCall>
-  <methodName>listTagged</methodName>
-  <params>
-    <param><value><string>{tag}</string></value></param>
-    <param><value><nil/></value></param>
-    <param><value><boolean>0</boolean></value></param>
-    <param><value><nil/></value></param>
-    <param><value><boolean>0</boolean></value></param>
-    <param><value><string>{package}</string></value></param>
-  </params>
-</methodCall>"#
-        );
-        let resp = self.call(&body)?;
-        parse_builds(&resp)
+        let params = [
+            Value::String(tag.to_string()),
+            Value::Nil,
+            Value::Boolean(false),
+            Value::Nil,
+            Value::Boolean(false),
+            Value::String(package.to_string()),
+        ];
+        builds_from(&self.hub.call("listTagged", &params)?)
     }
 
     /// List the binary RPMs currently tagged in `tag`, each joined
@@ -257,20 +210,13 @@ impl Client {
         tag: &str,
     ) -> Result<Vec<TaggedBinary>, Box<dyn std::error::Error>> {
         // listTaggedRPMS(tag, event=nil, inherit=False, latest=True)
-        let body = format!(
-            r#"<?xml version="1.0"?>
-<methodCall>
-  <methodName>listTaggedRPMS</methodName>
-  <params>
-    <param><value><string>{tag}</string></value></param>
-    <param><value><nil/></value></param>
-    <param><value><boolean>0</boolean></value></param>
-    <param><value><boolean>1</boolean></value></param>
-  </params>
-</methodCall>"#
-        );
-        let resp = self.call(&body)?;
-        parse_tagged_binaries(&resp)
+        let params = [
+            Value::String(tag.to_string()),
+            Value::Nil,
+            Value::Boolean(false),
+            Value::Boolean(true),
+        ];
+        tagged_binaries_from(&self.hub.call("listTaggedRPMS", &params)?)
     }
 
     /// List the files of many RPMs in one shot, batching the
@@ -288,28 +234,9 @@ impl Client {
         const BATCH: usize = 200;
         let mut out = Vec::with_capacity(rpm_ids.len());
         for chunk in rpm_ids.chunks(BATCH) {
-            let inner: String = chunk
-                .iter()
-                .map(|id| {
-                    format!(
-                        "<value><struct>\
-                         <member><name>methodName</name>\
-                         <value><string>listRPMFiles</string></value></member>\
-                         <member><name>params</name><value><array><data>\
-                         <value><int>{id}</int></value>\
-                         </data></array></value></member></struct></value>"
-                    )
-                })
-                .collect();
-            let body = format!(
-                r#"<?xml version="1.0"?>
-<methodCall>
-  <methodName>system.multicall</methodName>
-  <params><param><value><array><data>{inner}</data></array></value></param></params>
-</methodCall>"#
-            );
-            let resp = self.call(&body)?;
-            let per_call = parse_multicall_rpmfiles(&resp)?;
+            let calls: Vec<Value> = chunk.iter().map(one_rpm_file_call).collect();
+            let response = self.hub.call("system.multicall", &[Value::Array(calls)])?;
+            let per_call = multicall_rpmfiles_from(&response)?;
             if per_call.len() != chunk.len() {
                 return Err(format!(
                     "multicall returned {} results for {} calls",
@@ -325,19 +252,14 @@ impl Client {
         Ok(out)
     }
 
+    /// The hub this client talks to.
+    pub fn hub_url(&self) -> &str {
+        self.hub.hub_url()
+    }
+
     /// List tag names for a given build ID.
     pub fn list_tags(&self, build_id: i64) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let body = format!(
-            r#"<?xml version="1.0"?>
-<methodCall>
-  <methodName>listTags</methodName>
-  <params>
-    <param><value><int>{build_id}</int></value></param>
-  </params>
-</methodCall>"#
-        );
-        let resp = self.call(&body)?;
-        parse_tag_names(&resp)
+        tag_names_from(&self.hub.call("listTags", &[Value::Int(build_id)])?)
     }
 
     /// Find the latest Hyperscale release and testing builds for an EL version.
@@ -352,17 +274,20 @@ impl Client {
     ) -> Result<HyperscaleSummary, Box<dyn std::error::Error>> {
         resolve_summary(builds, el_version, |build_id| self.list_tags(build_id))
     }
+}
 
-    fn call(&self, body: &str) -> Result<String, Box<dyn std::error::Error>> {
-        let resp = self
-            .http
-            .post(&self.hub_url)
-            .header("Content-Type", "text/xml")
-            .body(body.to_string())
-            .send()?
-            .text()?;
-        Ok(resp)
-    }
+/// One `listRPMFiles` call, as a `system.multicall` member.
+fn one_rpm_file_call(rpm_id: &i64) -> Value {
+    Value::Struct(HashMap::from([
+        (
+            "methodName".to_string(),
+            Value::String("listRPMFiles".to_string()),
+        ),
+        (
+            "params".to_string(),
+            Value::Array(vec![Value::Int(*rpm_id)]),
+        ),
+    ]))
 }
 
 /// Summary of the latest Hyperscale builds for an EL version.
@@ -449,385 +374,91 @@ pub fn tag_stage(tags: &[String]) -> Option<TagStage> {
     stage
 }
 
-// --- XML-RPC response parsing ---
+// --- decoding koji's responses ---
+//
+// The XML-RPC transport, and the decoding of a response into values, are
+// `sandogasa-kojihub`'s — shared with koji-lag and koji-diff. What lives
+// here is only the step after that: which fields of which struct make a
+// Build, a TaggedBinary or an RpmFile, and what to skip.
 
-#[derive(Debug, Clone, PartialEq)]
-enum XmlRpcValue {
-    Int(i64),
-    Str(String),
-    Nil,
-    Array(Vec<XmlRpcValue>),
-    Struct(Vec<(String, XmlRpcValue)>),
-}
-
-/// Parse a methodResponse containing a single return value.
-fn parse_single_value(xml: &str) -> Result<XmlRpcValue, Box<dyn std::error::Error>> {
-    let values = parse_response_values(xml)?;
-    values
-        .into_iter()
-        .next()
-        .ok_or_else(|| "empty response".into())
-}
-
-/// Parse the top-level values from a methodResponse.
-fn parse_response_values(xml: &str) -> Result<Vec<XmlRpcValue>, Box<dyn std::error::Error>> {
-    // Find the <params> section and parse each <param><value>...</value></param>
-    let mut reader = Reader::from_str(xml);
-    let mut values = Vec::new();
-    let mut depth = Vec::<String>::new();
-
-    loop {
-        match reader.read_event()? {
-            Event::Start(e) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                depth.push(tag);
-                if depth == ["methodResponse", "params", "param", "value"] {
-                    let val = parse_value(&mut reader, &mut depth)?;
-                    values.push(val);
-                }
-            }
-            Event::End(_) => {
-                depth.pop();
-            }
-            Event::Empty(e) => {
-                // Handle <fault/> or similar
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if tag == "fault" {
-                    return Err("XML-RPC fault".into());
-                }
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-    Ok(values)
-}
-
-/// Parse a single <value>...</value>. Assumes we just entered <value>.
-fn parse_value(
-    reader: &mut Reader<&[u8]>,
-    depth: &mut Vec<String>,
-) -> Result<XmlRpcValue, Box<dyn std::error::Error>> {
-    loop {
-        match reader.read_event()? {
-            Event::Start(e) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                depth.push(tag.clone());
-                match tag.as_str() {
-                    "int" | "i4" | "i8" => {
-                        let text = decode_text(&reader.read_text(e.name())?)?;
-                        depth.pop();
-                        consume_end_value(reader, depth)?;
-                        return Ok(XmlRpcValue::Int(text.trim().parse()?));
-                    }
-                    "string" => {
-                        let text = decode_text(&reader.read_text(e.name())?)?;
-                        depth.pop();
-                        consume_end_value(reader, depth)?;
-                        return Ok(XmlRpcValue::Str(text));
-                    }
-                    "array" => {
-                        let arr = parse_array(reader, depth)?;
-                        consume_end_value(reader, depth)?;
-                        return Ok(XmlRpcValue::Array(arr));
-                    }
-                    "struct" => {
-                        let members = parse_struct(reader, depth)?;
-                        consume_end_value(reader, depth)?;
-                        return Ok(XmlRpcValue::Struct(members));
-                    }
-                    "nil" => {
-                        let _ = reader.read_text(e.name())?;
-                        depth.pop();
-                        consume_end_value(reader, depth)?;
-                        return Ok(XmlRpcValue::Nil);
-                    }
-                    _ => {
-                        // Unknown type, read as string
-                        let text = decode_text(&reader.read_text(e.name())?)?;
-                        depth.pop();
-                        consume_end_value(reader, depth)?;
-                        return Ok(XmlRpcValue::Str(text));
-                    }
-                }
-            }
-            Event::Empty(e) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if tag == "nil" {
-                    consume_end_value(reader, depth)?;
-                    return Ok(XmlRpcValue::Nil);
-                }
-            }
-            Event::Text(e) => {
-                // Bare text inside <value> without type tag = string
-                let text = decode_text(&e)?;
-                if !text.trim().is_empty() {
-                    consume_end_value(reader, depth)?;
-                    return Ok(XmlRpcValue::Str(text));
-                }
-            }
-            Event::End(_) => {
-                // </value> with no content
-                depth.pop();
-                return Ok(XmlRpcValue::Nil);
-            }
-            Event::Eof => return Err("unexpected EOF in value".into()),
-            _ => {}
-        }
-    }
-}
-
-fn consume_end_value(
-    reader: &mut Reader<&[u8]>,
-    depth: &mut Vec<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Read until we hit </value>
-    loop {
-        match reader.read_event()? {
-            Event::End(e) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                depth.pop();
-                if tag == "value" {
-                    return Ok(());
-                }
-            }
-            Event::Eof => return Err("unexpected EOF waiting for </value>".into()),
-            _ => {}
-        }
-    }
-}
-
-fn parse_array(
-    reader: &mut Reader<&[u8]>,
-    depth: &mut Vec<String>,
-) -> Result<Vec<XmlRpcValue>, Box<dyn std::error::Error>> {
-    let mut items = Vec::new();
-    loop {
-        match reader.read_event()? {
-            Event::Start(e) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                depth.push(tag.clone());
-                if tag == "value" {
-                    items.push(parse_value(reader, depth)?);
-                }
-            }
-            Event::End(e) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if tag == "array" {
-                    depth.pop();
-                    return Ok(items);
-                }
-                depth.pop();
-            }
-            Event::Eof => return Err("unexpected EOF in array".into()),
-            _ => {}
-        }
-    }
-}
-
-fn parse_struct(
-    reader: &mut Reader<&[u8]>,
-    depth: &mut Vec<String>,
-) -> Result<Vec<(String, XmlRpcValue)>, Box<dyn std::error::Error>> {
-    let mut members = Vec::new();
-    let mut current_name: Option<String> = None;
-
-    loop {
-        match reader.read_event()? {
-            Event::Start(e) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                depth.push(tag.clone());
-                match tag.as_str() {
-                    "name" => {
-                        let text = decode_text(&reader.read_text(e.name())?)?;
-                        depth.pop();
-                        current_name = Some(text);
-                    }
-                    "value" => {
-                        let val = parse_value(reader, depth)?;
-                        if let Some(name) = current_name.take() {
-                            members.push((name, val));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Event::End(e) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if tag == "struct" {
-                    depth.pop();
-                    return Ok(members);
-                }
-                depth.pop();
-            }
-            Event::Eof => return Err("unexpected EOF in struct".into()),
-            _ => {}
-        }
-    }
-}
-
-/// Parse a listTags response into tag name strings.
-fn parse_tag_names(xml: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let value = parse_single_value(xml)?;
-    let XmlRpcValue::Array(items) = value else {
-        return Err("expected array response".into());
-    };
-
-    let mut names = Vec::new();
-    for item in items {
-        let XmlRpcValue::Struct(members) = item else {
-            continue;
-        };
-        for (key, val) in &members {
-            if key == "name"
-                && let XmlRpcValue::Str(v) = val
-            {
-                names.push(v.clone());
-            }
-        }
-    }
-    Ok(names)
-}
-
-/// Parse a listBuilds response into Build objects.
-fn parse_builds(xml: &str) -> Result<Vec<Build>, Box<dyn std::error::Error>> {
-    let value = parse_single_value(xml)?;
-    let XmlRpcValue::Array(items) = value else {
-        return Err("expected array response".into());
-    };
-
+/// Every `Build` in a `listBuilds`/`listTagged` response.
+///
+/// A record with no NVR is skipped rather than kept as a half-build: the
+/// NVR is what every caller identifies a build by.
+fn builds_from(value: &Value) -> Result<Vec<Build>, Box<dyn std::error::Error>> {
+    let items = value.as_array().ok_or("expected array response")?;
     let mut builds = Vec::new();
     for item in items {
-        let XmlRpcValue::Struct(members) = item else {
+        let Some(nvr) = string_of(item, "nvr") else {
             continue;
         };
-        let mut build_id = 0i64;
-        let mut name = String::new();
-        let mut version = String::new();
-        let mut release = String::new();
-        let mut nvr = String::new();
-
-        for (key, val) in &members {
-            match key.as_str() {
-                "build_id" => {
-                    if let XmlRpcValue::Int(v) = val {
-                        build_id = *v;
-                    }
-                }
-                "name" | "package_name" => {
-                    if let XmlRpcValue::Str(v) = val
-                        && name.is_empty()
-                    {
-                        name = v.clone();
-                    }
-                }
-                "version" => {
-                    if let XmlRpcValue::Str(v) = val {
-                        version = v.clone();
-                    }
-                }
-                "release" => {
-                    if let XmlRpcValue::Str(v) = val {
-                        release = v.clone();
-                    }
-                }
-                "nvr" => {
-                    if let XmlRpcValue::Str(v) = val {
-                        nvr = v.clone();
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if !nvr.is_empty() {
-            builds.push(Build {
-                build_id,
-                name,
-                version,
-                release,
-                nvr,
-            });
-        }
+        builds.push(Build {
+            build_id: item.get("build_id").and_then(Value::as_int).unwrap_or(0),
+            // Koji calls the source package `name` in one method and
+            // `package_name` in another.
+            name: string_of(item, "name")
+                .or_else(|| string_of(item, "package_name"))
+                .unwrap_or_default(),
+            version: string_of(item, "version").unwrap_or_default(),
+            release: string_of(item, "release").unwrap_or_default(),
+            nvr,
+        });
     }
-
     Ok(builds)
 }
 
-/// Read a string member from an XML-RPC struct's members.
-fn struct_str<'a>(members: &'a [(String, XmlRpcValue)], key: &str) -> Option<&'a str> {
-    members.iter().find_map(|(k, v)| match v {
-        XmlRpcValue::Str(s) if k == key => Some(s.as_str()),
-        _ => None,
-    })
-}
-
-/// Read an int member from an XML-RPC struct's members.
-fn struct_int(members: &[(String, XmlRpcValue)], key: &str) -> Option<i64> {
-    members.iter().find_map(|(k, v)| match v {
-        XmlRpcValue::Int(i) if k == key => Some(*i),
-        _ => None,
-    })
-}
-
-/// Parse a `listTaggedRPMS` response — a two-element array
-/// `[rpms, builds]` — into binary RPMs joined to their source
-/// package. `.src` RPMs are dropped (only binary RPMs are
-/// returned); RPMs whose build is missing from the `builds` array
-/// are skipped.
-fn parse_tagged_binaries(xml: &str) -> Result<Vec<TaggedBinary>, Box<dyn std::error::Error>> {
-    let value = parse_single_value(xml)?;
-    let XmlRpcValue::Array(outer) = value else {
-        return Err("expected [rpms, builds] array response".into());
-    };
-    let mut outer = outer.into_iter();
-    let Some(XmlRpcValue::Array(rpms)) = outer.next() else {
-        return Err("missing rpms array".into());
-    };
-    let Some(XmlRpcValue::Array(builds)) = outer.next() else {
-        return Err("missing builds array".into());
-    };
+/// The binary RPMs of a `listTaggedRPMS` response, joined to the source
+/// package that built each one.
+///
+/// The response is a two-element array — the RPMs, then the builds they
+/// came from — and the join is necessary because an RPM record names its
+/// `build_id` but not its source package.
+fn tagged_binaries_from(value: &Value) -> Result<Vec<TaggedBinary>, Box<dyn std::error::Error>> {
+    let outer = value
+        .as_array()
+        .ok_or("expected [rpms, builds] array response")?;
+    let rpms = outer
+        .first()
+        .and_then(Value::as_array)
+        .ok_or("missing rpms array")?;
+    let builds = outer
+        .get(1)
+        .and_then(Value::as_array)
+        .ok_or("missing builds array")?;
 
     // build_id -> (source package name, nvr)
-    let mut sources: std::collections::HashMap<i64, (String, String)> =
-        std::collections::HashMap::new();
+    let mut sources: HashMap<i64, (String, String)> = HashMap::new();
     for item in builds {
-        let XmlRpcValue::Struct(members) = item else {
-            continue;
-        };
-        // Build structs carry both `id` and `build_id` (equal), and
-        // both `name` and `package_name` (the source name).
-        let Some(id) = struct_int(&members, "id").or_else(|| struct_int(&members, "build_id"))
+        // Build structs carry both `id` and `build_id` (equal), and both
+        // `name` and `package_name` (the source name).
+        let Some(id) = item
+            .get("id")
+            .and_then(Value::as_int)
+            .or_else(|| item.get("build_id").and_then(Value::as_int))
         else {
             continue;
         };
-        let name = struct_str(&members, "package_name")
-            .or_else(|| struct_str(&members, "name"))
-            .unwrap_or("")
-            .to_string();
-        let nvr = struct_str(&members, "nvr").unwrap_or("").to_string();
-        sources.insert(id, (name, nvr));
+        let name = string_of(item, "package_name")
+            .or_else(|| string_of(item, "name"))
+            .unwrap_or_default();
+        sources.insert(id, (name, string_of(item, "nvr").unwrap_or_default()));
     }
 
     let mut out = Vec::new();
     for item in rpms {
-        let XmlRpcValue::Struct(members) = item else {
-            continue;
-        };
-        let arch = struct_str(&members, "arch").unwrap_or("");
-        // Drop source RPMs — we only care about binary RPMs.
+        let arch = string_of(item, "arch").unwrap_or_default();
+        // Only binary RPMs: a source RPM is the input, not the output.
         if arch == "src" {
             continue;
         }
-        let name = struct_str(&members, "name").unwrap_or("");
-        if name.is_empty() {
-            continue;
-        }
-        let Some(build_id) = struct_int(&members, "build_id") else {
+        let Some(name) = string_of(item, "name").filter(|n| !n.is_empty()) else {
             continue;
         };
-        // The RPM's own id (distinct from build_id) keys file lists.
-        let Some(rpm_id) = struct_int(&members, "id") else {
+        let Some(build_id) = item.get("build_id").and_then(Value::as_int) else {
+            continue;
+        };
+        // The RPM's own id, distinct from build_id, is what keys file lists.
+        let Some(rpm_id) = item.get("id").and_then(Value::as_int) else {
             continue;
         };
         let Some((source, source_nvr)) = sources.get(&build_id).cloned() else {
@@ -835,8 +466,8 @@ fn parse_tagged_binaries(xml: &str) -> Result<Vec<TaggedBinary>, Box<dyn std::er
         };
         out.push(TaggedBinary {
             rpm_id,
-            name: name.to_string(),
-            arch: arch.to_string(),
+            name,
+            arch,
             source,
             source_nvr,
             build_id,
@@ -845,50 +476,61 @@ fn parse_tagged_binaries(xml: &str) -> Result<Vec<TaggedBinary>, Box<dyn std::er
     Ok(out)
 }
 
-/// Build an [`RpmFile`] from a `listRPMFiles` struct entry.
-fn rpmfile_from_value(value: XmlRpcValue) -> Option<RpmFile> {
-    let XmlRpcValue::Struct(members) = value else {
-        return None;
-    };
-    let path = struct_str(&members, "name")?.to_string();
-    let mode = struct_int(&members, "mode").unwrap_or(0) as u32;
-    let flags = struct_int(&members, "flags").unwrap_or(0);
-    Some(RpmFile { path, mode, flags })
+/// The tag names of a `listTags` response.
+fn tag_names_from(value: &Value) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let items = value.as_array().ok_or("expected array response")?;
+    Ok(items.iter().filter_map(|t| string_of(t, "name")).collect())
 }
 
-/// Parse a `system.multicall` response wrapping a series of
-/// `listRPMFiles` calls into one file list per call, in order.
+/// An [`RpmFile`] from a `listRPMFiles` entry.
+fn rpmfile_from(value: &Value) -> Option<RpmFile> {
+    Some(RpmFile {
+        path: string_of(value, "name")?,
+        mode: value.get("mode").and_then(Value::as_int).unwrap_or(0) as u32,
+        flags: value.get("flags").and_then(Value::as_int).unwrap_or(0),
+    })
+}
+
+/// One file list per call of a `system.multicall` wrapping `listRPMFiles`.
 ///
-/// Each multicall element is either `[result]` (an array holding
-/// the single return value — here itself an array of file structs)
-/// or a fault struct. Faults and malformed entries become an empty
-/// file list so one bad RPM doesn't sink the batch.
-fn parse_multicall_rpmfiles(xml: &str) -> Result<Vec<Vec<RpmFile>>, Box<dyn std::error::Error>> {
-    let value = parse_single_value(xml)?;
-    let XmlRpcValue::Array(results) = value else {
-        return Err("expected multicall array response".into());
-    };
-    let mut out = Vec::with_capacity(results.len());
-    for item in results {
-        let files = match item {
-            // Success: [ [file, file, ...] ]
-            XmlRpcValue::Array(wrapper) => match wrapper.into_iter().next() {
-                Some(XmlRpcValue::Array(entries)) => {
-                    entries.into_iter().filter_map(rpmfile_from_value).collect()
-                }
-                _ => Vec::new(),
-            },
-            // Fault struct or anything unexpected: no files.
-            _ => Vec::new(),
-        };
-        out.push(files);
-    }
-    Ok(out)
+/// Each element is either `[result]` — an array holding the single return
+/// value, itself an array of file structs — or a fault struct. Faults and
+/// malformed entries become an empty file list so one bad RPM does not sink
+/// the batch.
+fn multicall_rpmfiles_from(value: &Value) -> Result<Vec<Vec<RpmFile>>, Box<dyn std::error::Error>> {
+    let results = value
+        .as_array()
+        .ok_or("expected multicall array response")?;
+    Ok(results
+        .iter()
+        .map(|item| {
+            item.as_array()
+                .and_then(|wrapper| wrapper.first())
+                .and_then(Value::as_array)
+                .map(|entries| entries.iter().filter_map(rpmfile_from).collect())
+                .unwrap_or_default()
+        })
+        .collect())
+}
+
+/// A string member of a struct value, owned: these are short names that
+/// end up in owned fields anyway.
+fn string_of(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A recorded CBS response, decoded the way the client decodes one.
+    ///
+    /// These fixtures are real hub responses, so they are worth keeping
+    /// exactly as captured: what changed under them is the wire layer,
+    /// which is now `sandogasa-kojihub`'s rather than this file's.
+    fn decoded(xml: &str) -> Value {
+        sandogasa_kojihub::xmlrpc::parse_response(xml).expect("fixture decodes")
+    }
 
     #[test]
     fn test_build_is_hyperscale() {
@@ -1089,8 +731,7 @@ mod tests {
 </param>
 </params>
 </methodResponse>"#;
-        let val = parse_single_value(xml).unwrap();
-        assert_eq!(val, XmlRpcValue::Int(8491));
+        assert_eq!(decoded(xml).as_int(), Some(8491));
     }
 
     #[test]
@@ -1103,14 +744,15 @@ mod tests {
 </param>
 </params>
 </methodResponse>"#;
-        let val = parse_single_value(xml).unwrap();
-        assert_eq!(val, XmlRpcValue::Nil);
+        // A package koji does not know answers nil, which decodes to a
+        // value that is neither an int nor an error.
+        assert!(matches!(decoded(xml), Value::Nil));
     }
 
     #[test]
     fn test_parse_builds_response() {
         let xml = include_str!("../tests/fixtures/koji_builds.xml");
-        let builds = parse_builds(xml).unwrap();
+        let builds = builds_from(&decoded(xml)).unwrap();
         assert_eq!(builds.len(), 3);
 
         assert_eq!(builds[0].nvr, "ethtool-6.15-3.hs.el9");
@@ -1128,7 +770,7 @@ mod tests {
     #[test]
     fn test_parse_tagged_binaries_joins_source_and_drops_src() {
         let xml = include_str!("../tests/fixtures/koji_tagged_rpms.xml");
-        let bins = parse_tagged_binaries(xml).unwrap();
+        let bins = tagged_binaries_from(&decoded(xml)).unwrap();
         // 8 RPM structs minus 2 `.src` = 6 binary RPMs.
         assert_eq!(bins.len(), 6);
         // Every binary is joined to its source build's NVR.
@@ -1186,7 +828,7 @@ mod tests {
 <value><array><data></data></array></value>
 </data></array></value>
 </data></array></value></param></params></methodResponse>"#;
-        let per_call = parse_multicall_rpmfiles(xml).unwrap();
+        let per_call = multicall_rpmfiles_from(&decoded(xml)).unwrap();
         assert_eq!(per_call.len(), 2);
         // First call: three entries returned.
         assert_eq!(per_call[0].len(), 3);
@@ -1210,14 +852,14 @@ mod tests {
 </param>
 </params>
 </methodResponse>"#;
-        let builds = parse_builds(xml).unwrap();
+        let builds = builds_from(&decoded(xml)).unwrap();
         assert!(builds.is_empty());
     }
 
     #[test]
     fn test_parse_tag_names() {
         let xml = include_str!("../tests/fixtures/koji_tags.xml");
-        let names = parse_tag_names(xml).unwrap();
+        let names = tag_names_from(&decoded(xml)).unwrap();
         assert_eq!(names.len(), 3);
         assert_eq!(names[0], "hyperscale9s-packages-main-candidate");
         assert_eq!(names[1], "hyperscale9s-packages-main-testing");
@@ -1270,12 +912,12 @@ mod tests {
     #[test]
     fn test_client_new() {
         let client = Client::new();
-        assert_eq!(client.hub_url, "https://cbs.centos.org/kojihub");
+        assert_eq!(client.hub_url(), "https://cbs.centos.org/kojihub");
     }
 
     #[test]
     fn test_client_with_hub_url_trims_slash() {
         let client = Client::with_hub_url("https://example.com/kojihub/");
-        assert_eq!(client.hub_url, "https://example.com/kojihub");
+        assert_eq!(client.hub_url(), "https://example.com/kojihub");
     }
 }
