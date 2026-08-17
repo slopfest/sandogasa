@@ -2,6 +2,20 @@
 
 ## koji-lag
 
+- (2026-08-17) Packaging: koji-lag now links system SQLite through
+  rusqlite, so its Fedora spec needs `BuildRequires: sqlite-devel`
+  (`pkgconfig(sqlite3)`) and Debian's needs `libsqlite3-dev`. The
+  `bundled` feature is deliberately not used — a vendored C SQLite is
+  not acceptable in either archive. rust-rusqlite 0.38 and
+  rust-libsqlite3-sys 0.36 are already packaged on rawhide, f43 and
+  epel9.
+
+- (2026-08-17) Export to CSV as well as JSON, requested by the Fedora
+  Data WG. The export layer should stay format-agnostic — one query
+  over the store, several writers — so this is a writer plus a flag
+  rather than a second code path. JSON lands with the store refactor;
+  CSV follows.
+
 - (2026-07-22) DB-dump ingestion: for whole-history analysis, an
   extraction script over a Koji database dump (SELECT just the task
   columns we store, bounded by completion timestamp, to keep the

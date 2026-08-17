@@ -14,9 +14,12 @@
 pub mod backfill;
 pub mod dataset;
 pub mod fetch;
+pub mod import;
 pub mod instance;
 pub mod report;
 pub mod stats;
+pub mod store;
+pub mod sweep;
 
 /// JSON Schema for the dataset format, for external consumers.
 pub fn json_schema() -> String {

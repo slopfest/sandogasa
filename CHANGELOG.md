@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased
+
+### koji-lag: a SQLite store, and `import` to fill it from existing datasets
+
+Backfilling a month cost far more than the month: a sweep for May reached
+only as far back as June 8th before giving up on positioning, then spent
+minutes re-listing June, which a previous run had already fetched — and
+did it again for every week. Nothing remembered what had been asked for
+across runs, because a run's memory was the JSON file it wrote and those
+files were per-window.
+
+The store is that memory. `builds`, `tasks`, `hosts` and `channels` in one
+SQLite database, plus two records that let a sweep skip work honestly: the
+creation spans it has *listed* in full, and per build whether its children
+have been asked for. A record of what was *stored* cannot serve, which is
+the lesson of the bound removed in 0.20.0 — builds are kept by completion,
+so the oldest in a window sits inside the previous window's margin, and
+sweeping 2026-08-01 against such a bound lost 32 builds created in its
+last few minutes.
+
+Everything the hub reports is kept, whether or not the window being swept
+wants it, because a round trip costs minutes and a row costs bytes. A day
+of Fedora is about 33,000 rows and six minutes of hub time.
+
+`koji-lag import <path> --store <file>` reads the JSON datasets sweeps
+wrote before this, so nothing already collected has to be fetched again.
+Measured on 676MB of existing data: 517,233 builds and 1,801,758 tasks in
+22 seconds, into a 402MB store — 40% smaller than the JSON and queryable.
+An import claims only the *inner* window of each dataset as listed, never
+its three-day margin: a build created in the margin and finishing after
+the window is absent, so claiming it would tell a later sweep those
+creations were enumerated when they were not. A scoped sweep's dataset
+contributes rows but no coverage at all.
+
+Both coverage records carry the generation of the code that wrote them.
+Adding a field taken from the build listing then needs only a re-list, an
+hour for a year's rows; a field from the child queries needs those queries
+again, which is days. Keeping the two apart is what makes a new field a
+refresh rather than a rescan, and it is why a dataset lacking a collected
+method — an older sweep's, or one from a database dump — records its
+builds as never having had children asked for, rather than as current.
+
+The database is not for version control: it is rewritten whole on every
+commit and diffs to noise. `*.sqlite` is ignored, and what gets published
+stays the reports.
+
 ## v0.20.0
 
 ### dbranch: an upload could send a package built from an older tree (breaking CLI and API)

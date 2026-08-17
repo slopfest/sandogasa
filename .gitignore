@@ -24,6 +24,13 @@ target
 # Working files / test outputs
 /scratch/
 
+# koji-lag's local store. One file rewritten whole on every commit
+# diffs to noise, and it is rebuildable from the hub or an export.
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
 # Claude Code runtime state
 .claude/scheduled_tasks.lock
 

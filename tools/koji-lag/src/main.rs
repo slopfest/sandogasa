@@ -36,6 +36,8 @@ enum Command {
     Report(ReportArgs),
     /// Render reports for every dataset in a tree, without fetching.
     Reports(ReportsArgs),
+    /// Read JSON datasets into the store.
+    Import(ImportArgs),
 }
 
 #[derive(clap::Args)]
@@ -172,6 +174,17 @@ struct FetchArgs {
 }
 
 #[derive(clap::Args)]
+struct ImportArgs {
+    /// JSON dataset file, or a tree of them.
+    #[arg(required = true, value_name = "PATH")]
+    inputs: Vec<PathBuf>,
+
+    /// Store to read into (created if absent).
+    #[arg(long, value_name = "FILE")]
+    store: PathBuf,
+}
+
+#[derive(clap::Args)]
 struct ReportsArgs {
     /// Dataset tree to read (as written by `backfill`).
     #[arg(long, value_name = "DIR")]
@@ -261,6 +274,7 @@ fn main() -> ExitCode {
         Command::Merge(args) => cmd_merge(&args),
         Command::Report(args) => cmd_report(&args),
         Command::Reports(args) => cmd_reports(&args),
+        Command::Import(args) => cmd_import(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -547,6 +561,44 @@ fn report_for(
 /// the data again. The tree's shape is the input — whatever
 /// `daily/`, `weekly/` and `monthly/` hold gets a report at the matching
 /// path.
+/// Read JSON datasets into the store.
+///
+/// Cheaper than sweeping them again by hours, and the way a store moves
+/// between machines. What it will not do is claim coverage a dataset
+/// cannot prove: see `import::listed_from_window`.
+fn cmd_import(args: &ImportArgs) -> Result<(), Box<dyn Error>> {
+    let mut store = koji_lag::store::Store::open(&args.store)?;
+    let mut total = koji_lag::import::Imported::default();
+    for input in &args.inputs {
+        let one = koji_lag::import::ingest_path(&mut store, input)?;
+        total.written.builds += one.written.builds;
+        total.written.tasks += one.written.tasks;
+        total.children_current += one.children_current;
+        total.children_behind += one.children_behind;
+    }
+    println!(
+        "imported {} build(s), {} task(s) into {}",
+        total.written.builds,
+        total.written.tasks,
+        args.store.display()
+    );
+    if total.children_behind > 0 {
+        println!(
+            "note: {} build(s) came from a dataset without the SRPM stage, \
+             recorded as an older generation; a sweep will ask for their \
+             children again",
+            total.children_behind
+        );
+    }
+    for (instance, counts) in store.counts()? {
+        println!(
+            "  {instance}: {} build(s), {} task(s) stored",
+            counts.builds, counts.tasks
+        );
+    }
+    Ok(())
+}
+
 fn cmd_reports(args: &ReportsArgs) -> Result<(), Box<dyn Error>> {
     let mut rendered = 0usize;
     let mut skipped = 0usize;

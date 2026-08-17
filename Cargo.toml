@@ -106,6 +106,7 @@ sandogasa-rpmvercmp = { version = "0.20", path = "crates/sandogasa-rpmvercmp" }
 sandogasa-sourcehut = { version = "0.20", path = "crates/sandogasa-sourcehut" }
 semver = "1"
 serde = { version = "1.0", features = ["derive"] }
+rusqlite = "0.38"
 serde_json = "1.0"
 serial_test = "3"
 tempfile = "3"
