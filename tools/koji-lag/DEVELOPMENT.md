@@ -169,6 +169,29 @@ touches the other's work, which is the entire reason they are separate
 columns rather than one "generation" — a new child method must not cost a
 re-list, and a new listing field must not cost days.
 
+## A build's package name comes from its children
+
+Koji answers a `build` task's request with a git URL when the source came
+from dist-git, and with an SRPM path only when someone uploaded one. So a
+package name can be parsed from the request of about 2% of the builds on a
+mass-rebuild day — and those are the days worth analysing. The children are
+different: each was handed a specific SRPM, so 81% of them name their
+package.
+
+`fill_missing_packages` therefore derives a build's name from any child that
+has one, after the children stage of every sync. It is a local `UPDATE`
+against rows already stored — no request to the hub — and on a month of
+Fedora it named 49,438 builds in 0.4s, taking July from 24% unnamed to 3%.
+The remainder are builds whose children name nothing either: they failed
+before a child ran, or their requests do not parse.
+
+Two things follow for anyone extending this. Re-running `sync` over an
+already-covered window is the repair path — it fetches nothing and fills
+what it can, which is why no separate repair command exists. And `nvr`
+cannot be recovered the same way: a child's request carries the full NVR but
+only the package parsed out of it was ever stored, so repairing that would
+mean asking the hub for every child again.
+
 ## A sync is two jobs, and they are tracked apart
 
 Listing the build tasks over a span and fetching their children are

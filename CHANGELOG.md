@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### koji-lag: builds keep the package name only their children knew
+
+A mass-rebuild day's builds came out of the store almost entirely
+anonymous: 95% of the s390x build time on 2026-07-17 belonged to builds with
+no package name, which makes the obvious question — *which packages cost the
+most?* — unanswerable from the build rows.
+
+The cause is in what Koji answers. A `build` task's request is a git URL
+when the source came from dist-git and an SRPM path only when someone
+uploaded one, so a name could be parsed for 2% of that day's builds. Each
+*child* task, though, was handed a specific SRPM, and 81% of them name their
+package. The name was in the store all along, one level down.
+
+A sync now derives it after fetching children — a local `UPDATE`, no request
+to the hub. On July it named 49,438 builds in 0.4 seconds, taking the month
+from 24% unnamed to 3%; what is left are builds whose children name nothing
+either, having failed before one ran. Re-running `sync` over an
+already-covered window is the repair path for a store filled before this
+existed: it fetches nothing and fills what it can.
+
+With that, the question answers itself. On 2026-07-17, `gcc` alone took 48.9
+hours of s390x build time (24.5 hours for its one task), `rust` 24.2h,
+`glibc` 18.0h, `vtk` 14.2h — ten packages for a quarter of the day, against
+a pool with 16 active s390x hosts.
+
+`nvr` stays unrecoverable this way: a child's request holds the full NVR but
+only the package parsed out of it was ever stored, so repairing that would
+mean asking the hub for every child again.
+
 ### koji-lag: `vacuum-store.sh` compacts a store in place
 
 A store accumulates free pages as it is filled: every build is inserted

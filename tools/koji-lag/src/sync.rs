@@ -29,6 +29,8 @@ pub struct SyncReport {
     pub tasks: usize,
     /// Builds whose children were fetched.
     pub parents_swept: usize,
+    /// Builds that gained a package name from their children.
+    pub packages_named: usize,
     /// Creation spans that needed listing, and what they were.
     pub gaps: Vec<Span>,
     /// Seconds of the wanted span the store already covered.
@@ -130,6 +132,19 @@ pub fn run(store: &mut Store, opts: &FetchOpts) -> Result<SyncReport, String> {
     let swept = sweep_children(store, &hub, opts)?;
     report.parents_swept = swept.parents;
     report.tasks = swept.tasks;
+
+    // Now that the children are in, the builds can be given the package
+    // names only the children knew — a dist-git build's own request is a
+    // git URL, so nothing could be parsed from it, while each child carries
+    // the SRPM it was handed. Derived locally: no request to the hub.
+    report.packages_named =
+        store.fill_missing_packages(&opts.instance_key, opts.after, opts.before)?;
+    if opts.verbose && report.packages_named > 0 {
+        eprintln!(
+            "[koji-lag] sync: named {} build(s) from their children",
+            report.packages_named
+        );
+    }
     Ok(report)
 }
 

@@ -425,6 +425,53 @@ impl Store {
         tx.commit().map_err(|e| e.to_string())
     }
 
+    /// Give builds that have no package name one from their children.
+    ///
+    /// Koji answers a `build` task's request with a git URL when the source
+    /// came from dist-git, and only with an SRPM path for a scratch build of
+    /// an uploaded package — so a package name can be parsed from the
+    /// request of 2% of builds. The *children* are different: each carries
+    /// the SRPM it was handed, so 81% of them name their package. The name
+    /// was therefore always in the store, one level down, and nothing but a
+    /// local update was needed to put it where every report and query looks
+    /// for it.
+    ///
+    /// Returns how many builds gained a name. Cheap to re-run: it only
+    /// touches rows that still have none, so it is safe after every sweep
+    /// and as a one-off repair of a store filled before this existed.
+    ///
+    /// `nvr` cannot be recovered the same way. A child's request holds the
+    /// full NVR, but only the package parsed out of it was ever stored, so
+    /// repairing that would mean asking the hub for the children again.
+    pub fn fill_missing_packages(
+        &mut self,
+        instance: &str,
+        from: f64,
+        to: f64,
+    ) -> Result<usize, String> {
+        // Bounded by completion time so a sync pays for its own window
+        // rather than rescanning every build ever stored: `package IS NULL`
+        // is not indexed, but the completion range is.
+        self.conn
+            .execute(
+                "UPDATE builds SET package = (
+                     SELECT t.package FROM tasks t
+                     WHERE t.instance = builds.instance AND t.parent = builds.task_id
+                       AND t.package IS NOT NULL
+                     LIMIT 1
+                 )
+                 WHERE instance = ?1 AND package IS NULL
+                   AND completion_ts >= ?2 AND completion_ts < ?3
+                   AND EXISTS (
+                     SELECT 1 FROM tasks t
+                     WHERE t.instance = builds.instance AND t.parent = builds.task_id
+                       AND t.package IS NOT NULL
+                   )",
+                params![instance, from, to],
+            )
+            .map_err(|e| format!("filling package names: {e}"))
+    }
+
     pub fn put_hosts(
         &mut self,
         instance: &str,
@@ -1234,6 +1281,39 @@ mod tests {
     /// Snapshot test: the committed schema must match what the store
     /// builds. Regenerate with `UPDATE_SCHEMA=1 cargo test -p koji-lag
     /// store_schema_up_to_date`.
+    #[test]
+    fn a_build_takes_its_package_name_from_its_children() {
+        // The shape Koji actually produces: a dist-git build whose request
+        // is a git URL, so nothing parsed a package from it, with children
+        // that were handed the SRPM and did.
+        let mut store = Store::in_memory().unwrap();
+        let mut parent = build(1, 100.0);
+        parent.package = None;
+        let mut orphan = build(2, 100.0);
+        orphan.package = None;
+        store.put_builds("fedora", &[parent, orphan]).unwrap();
+        let mut child = task(11, 1);
+        child.package = Some("gcc".to_string());
+        let mut nameless = task(12, 1);
+        nameless.package = None;
+        store.put_tasks("fedora", &[child, nameless]).unwrap();
+
+        assert_eq!(
+            store.fill_missing_packages("fedora", 0.0, 9999.0).unwrap(),
+            1
+        );
+        let ds = store.dataset_for("fedora", 0.0, 9999.0, 0.0).unwrap();
+        assert_eq!(ds.builds["fedora:1"].package.as_deref(), Some("gcc"));
+        // A build whose children name nothing keeps its absence, rather
+        // than borrowing a name from some other build.
+        assert_eq!(ds.builds["fedora:2"].package, None);
+        // Idempotent: nothing left to fill.
+        assert_eq!(
+            store.fill_missing_packages("fedora", 0.0, 9999.0).unwrap(),
+            0
+        );
+    }
+
     #[test]
     fn store_schema_up_to_date() {
         let store = Store::in_memory().unwrap();
