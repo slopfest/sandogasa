@@ -10,6 +10,15 @@
   rust-libsqlite3-sys 0.36 are already packaged on rawhide, f43 and
   epel9.
 
+- (2026-08-17) Split the store by period *when backups start to hurt*,
+  not when the file gets large — measured, a decade of data still
+  answers a daily report in milliseconds because every query is
+  index-bounded, while `VACUUM INTO` rewrites the whole file on every
+  backup. Deferred deliberately; the design constraints (query each
+  store and merge, never `ATTACH` + `UNION ALL` — 5,600x slower
+  measured; a build and its children stay in one store) are recorded
+  in the tool's DEVELOPMENT.md.
+
 - (2026-08-17) Remove `import` and the JSON dataset read path once the
   last pre-store dataset is folded in (May 2026, kept on another
   machine). It is hidden from `--help` in the meantime and must not

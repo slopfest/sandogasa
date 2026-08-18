@@ -229,6 +229,55 @@ daily report answers questions a monthly one has already averaged away.
 Raw data needs no such pooling any more — one database holds it, and the
 period is just a `WHERE` clause.
 
+## One store, and what would make that stop being true
+
+Measured 2026-08-17 against a 731MB store holding 939,740 builds and
+3,181,577 tasks (March, April, June, July and early August of 2026):
+
+| query | rows | cost |
+|:--|--:|--:|
+| one day's builds | 7,377 | 0.3ms |
+| one day's builds joined to their children | 26,317 | 14.7ms |
+| a month's builds joined to their children | 762,609 | 210ms |
+
+Every one of those is an index `SEARCH`, never a scan, so the cost tracks
+the rows a period holds and not the size of the store. At roughly 165MB a
+month — about 177 bytes a row — a year is 2GB and a decade 20GB, against
+SQLite's 281TB limit and a B-tree that deepens logarithmically. **Do not
+split the store because it is large.** A daily report over a decade of data
+would still take milliseconds.
+
+What will eventually justify splitting is *backup*, not queries.
+`VACUUM INTO` rewrites the whole file, so five years in one store means
+re-uploading five years to capture one new day. Splitting by period would
+make a completed period immutable and uploaded once. The trigger to watch
+is therefore how long a backup takes, not how big the file is.
+
+## If the store is ever split, do not union in SQL
+
+The obvious approach is `ATTACH` plus `UNION ALL` views over the attached
+schemas. Measured on two real shards, one query took **33.8 seconds** where
+a single store answered the same question in 14.7ms: SQLite materialises
+the union and then scans it, so the join loses `tasks_parent` entirely
+(`SCAN b`, `SCAN t` in the plan).
+
+Querying each store separately and merging the results was **5,600 times
+faster** — 6.0ms total, with each store keeping a *covering* index on the
+join — and is also less code: no `ATTACH` (so no ten-database limit), no
+schema-qualified views, no cross-file joins. `Dataset::merge` and
+`add_listed`'s span merging already do the merging half.
+
+Two rules for whoever implements it:
+
+- **A build and its children live in the same store**, whatever their own
+  timestamps say. Children are selected by parent, so splitting a build
+  from its arch tasks loses them from every report. Route by the *build's*
+  completion period and let its children follow.
+- **Coverage is creation time, rows are completion time**, so a listed span
+  crossing a period boundary splits into one row per store. That is benign
+  — spans merge on read — but it means a store's rows and its coverage are
+  keyed differently, which is worth knowing before debugging it.
+
 ## Not in git
 
 The database is a local working store and is ignored. What gets published
