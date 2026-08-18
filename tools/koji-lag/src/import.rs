@@ -43,7 +43,7 @@ pub struct Imported {
 /// tell a later sweep those creations were enumerated when they were not.
 ///
 /// The cost of the conservative claim is that a sweep of the window
-/// before an imported one re-lists three days. The cost of the generous
+/// before an imported one re-lists the margin. The cost of the generous
 /// one is missing builds, which is the mistake this whole design is built
 /// to avoid.
 pub fn listed_from_window(after: f64, before: f64) -> Option<Span> {

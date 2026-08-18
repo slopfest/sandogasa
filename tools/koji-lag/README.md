@@ -62,7 +62,7 @@ koji-lag import raw_data --store lag.sqlite
 
 Hidden from `--help` and scheduled for removal, along with the rest of the
 JSON read path, once the last such dataset is folded in. Don't build on
-it. An import claims coverage per window but never the three days before
+it. An import claims coverage per window but never the margin before
 it that the dataset's sweep also read, since a build created then and
 finishing after the window is not in the file.
 
@@ -227,7 +227,7 @@ costs no more per page than yesterday's — the walk positions itself by
 creation time rather than paging from the newest task.
 
 Two stages, reported separately. First the build tasks created over the
-window, plus the three days before it for builds that started earlier
+window, plus the margin before it for builds that started earlier
 and finish inside it; then the child tasks of any build in the
 window that has none, 200 builds to a query.
 

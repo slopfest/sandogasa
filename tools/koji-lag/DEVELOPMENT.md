@@ -213,8 +213,22 @@ every run, for ever.
 ## The grace margin, and why it is only on one side
 
 A window selects builds by **completion**, so a build created earlier can
-finish inside it: the listing must reach back past the window start by
-more than the longest plausible build (three days, `CREATE_GRACE_SECS`).
+finish inside it: the listing must reach back past the window start by more
+than the longest plausible build (eight days, `CREATE_GRACE_SECS`).
+
+Eight, not the three it began as, because the store eventually grew large
+enough to check. Of 1,220,010 builds, 13 exceeded three days and the
+longest ran **6.76** — `python-dask`, task 146570209. The others over five
+days were `gcc`, `llvm` and `rust`. A margin that misses those misses
+precisely the builds worth studying, and it misses them *silently*: a build
+never listed leaves nothing behind to notice.
+
+The margin is nearly free where coverage is contiguous, since a
+neighbouring period has already listed it and `gaps` subtracts what is
+listed. It costs about 44 pages once, at the leading edge of an isolated
+stretch. Raising it does invalidate completeness at existing edges — a
+period whose margin is only partly listed stops counting as whole, which is
+the honest answer rather than a regression.
 
 There is no margin on the other side. A task created after the window
 ends completed after it too, so nothing newer than the window's end can

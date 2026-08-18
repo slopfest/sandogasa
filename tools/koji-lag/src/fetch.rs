@@ -97,11 +97,23 @@ impl FetchOpts {
     }
 }
 
-/// How far past the window start the id walk keeps going, to
-/// catch builds created before the window that completed inside
-/// it. Three days comfortably exceeds any real build duration
-/// (chromium on s390x included) at the cost of a few extra pages.
-pub const CREATE_GRACE_SECS: f64 = 3.0 * 86_400.0;
+/// How far before a window's start the listing reaches, to catch builds
+/// created earlier that complete inside it.
+///
+/// Eight days, raised from three when the store grew large enough to
+/// check. Of 1,220,010 builds collected, 13 took longer than three days
+/// and the longest took **6.76** — task 146570209, `python-dask`, created
+/// 2026-06-13 06:30 and finished 2026-06-20 00:47. Nothing exceeded seven.
+/// The old margin was not a margin at all for the biggest packages:
+/// `gcc` (5.61d), `llvm` (5.50d), `rust` (5.30d) and `chromium` (4.75d)
+/// would all have been missed at the leading edge of a sweep, and those
+/// are exactly the builds an arch-bottleneck analysis is about.
+///
+/// Nearly free where coverage is contiguous: a neighbouring period has
+/// already listed the margin, so [`crate::store::Store::gaps`] subtracts
+/// it and nothing extra is fetched. It costs about 44 pages once, at the
+/// leading edge of an isolated stretch.
+pub const CREATE_GRACE_SECS: f64 = 8.0 * 86_400.0;
 
 /// Parents per child-fetch batch.
 ///
