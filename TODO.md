@@ -10,6 +10,33 @@
   rust-libsqlite3-sys 0.36 are already packaged on rawhide, f43 and
   epel9.
 
+- (2026-08-18) Write up the arch-bottleneck analysis for FESCo, once two
+  or three full release cycles are collected — one mass rebuild is an
+  anecdote. FESCo's hypothesis (mass-rebuild months worst for s390x,
+  freeze months best through low load) held for 2026/07 but needs
+  restating in two parts, both measured:
+  - s390x pain is **episodic and not load-driven**. July 16-18 produced
+    88% of the month's 65,850 hours of s390x delay on ordinary volume,
+    while July 12 (10,611 builds) and 24 (11,852) were untouched at a
+    50s median. The bad days were 79-95% `releng` (the mass rebuild);
+    the busy fine days were 91-98% `koschei` (steady low-priority
+    scratch rebuilds). July had 23% more builds than March and a 118x
+    worse s390x median wait, with x86_64 unmoved at 52s. Capacity: 35
+    s390x-capable hosts against 190 x86_64 and 114 ppc64le, and the
+    same 16 hosts ran 146 s390x tasks on the 12th and 4,601 on the 16th.
+  - **ppc64le is the chronic tax** and the bigger steady cost: last to
+    finish on 75-86% of attributable builds every month at 33-43s each,
+    losing more total wall-clock than s390x in both freeze months
+    (3,713h vs 2,877h in March; 3,108h vs 2,085h in April). Fixing
+    s390x would not touch it.
+
+  Months held as of 2026-08-18: 2026/01 (collecting), 03, 04, 06, 07,
+  plus 08/01-09. Needed for two full cycles: 2025/11 and /12 and
+  2026/02 (~2.5h each), 2026/05 (import, raw data on the laptop), then
+  2026/09 and /10 once they happen. The per-day and per-submitter
+  tables are what make the case — a monthly summary hides the three
+  days that did the damage.
+
 - (2026-08-17) Split the store by period *when backups start to hurt*,
   not when the file gets large — measured, a decade of data still
   answers a daily report in milliseconds because every query is
