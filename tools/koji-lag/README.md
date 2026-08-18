@@ -295,6 +295,25 @@ it, and came out 545MB for being rebuilt compactly.
 
 Once nothing is writing, a plain `cp` of the single file is fine.
 
+To reclaim that space in the working store rather than only in the copy:
+
+```sh
+scripts/vacuum-store.sh lag.sqlite
+```
+
+A store accumulates free pages because every build is inserted while its
+window is listed and updated again when its children arrive — a row rewrite
+per build, which on a 731MB store came to 48MB, reclaimed in 14 seconds.
+Worth doing occasionally, not routinely.
+
+It refuses if anything has the store open, because `VACUUM` rebuilds under
+an exclusive lock for minutes and a sync running alongside would fail once
+its busy timeout ran out. Three checks, because no one of them suffices: the
+`-wal`/`-shm` sidecars (SQLite removes them when the last connection closes,
+so their presence means one is open), `fuser` where available, and a write
+lock probe — that last one alone would miss a sync, which writes in batches
+and is idle between them.
+
 ## Dataset format
 
 The JSON shape `import` reads, and the shape data is shared in

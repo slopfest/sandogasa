@@ -64,6 +64,10 @@ check-published: ## Verify every crate reached crates.io (run after publishing)
 backup-store: ## Copy a koji-lag store safely (STORE=... DEST=...)
 	./scripts/backup-store.sh $(STORE) $(DEST)
 
+.PHONY: vacuum-store
+vacuum-store: ## Compact a koji-lag store in place (STORE=...)
+	./scripts/vacuum-store.sh $(STORE)
+
 .PHONY: sweep
 sweep: ## Delete the release gates' build trees (keeps target/debug)
 	./scripts/sweep.sh

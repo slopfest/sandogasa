@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### koji-lag: `vacuum-store.sh` compacts a store in place
+
+A store accumulates free pages as it is filled: every build is inserted
+while its creation window is listed, then updated again when its children
+arrive, which is a row rewrite per build — 940,000 of them for five months
+of Fedora, and 48MB of a 731MB store. `scripts/vacuum-store.sh` (also
+`make vacuum-store STORE=…`) reclaims that in 14 seconds and verifies the
+result, which matters more here than for a copy: `VACUUM` replaces the
+original in place.
+
+It refuses to run if anything has the store open, because `VACUUM` rebuilds
+under an exclusive lock for minutes and a concurrent sync would block on
+every batch and then fail when its busy timeout expired — losing an hour of
+hub time to housekeeping. Three checks, and the interesting part is that no
+one of them is sufficient: the `-wal`/`-shm` sidecars (SQLite removes them
+when the last connection closes cleanly, so their presence means one is
+open), `fuser` where it exists, and a `BEGIN IMMEDIATE` probe. That last
+one is what anybody would reach for first, and on its own it would miss a
+sync entirely — a sync writes in batches and is idle between them, so a
+probe landing in a gap sees an unlocked database.
+
 ### hs-relmon: one Koji client for the workspace
 
 `cbs.rs` spoke XML-RPC to CBS by hand: request bodies assembled as format
