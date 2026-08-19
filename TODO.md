@@ -10,31 +10,65 @@
   rust-libsqlite3-sys 0.36 are already packaged on rawhide, f43 and
   epel9.
 
-- (2026-08-19) Auto-tune `--page-size` from how deep a window is, and
-  use the remaining backfills to measure it. `createdBefore` is *not*
-  flat with depth, contrary to what DEVELOPMENT.md claimed from a
-  four-month-old measurement: a 1000-row page costs 3.4-4.0s one month
-  back and 17.7-24.1s at thirteen. But the cost is the seek, not the
-  rows — at thirteen months, 4000 rows cost 20.8s against 18.3s for
-  1000, so quadrupling the page is 14% dearer and cuts the page count
-  fourfold. A five-hour listing became about an hour and a quarter.
-  - **Keep the default as it is and scale up with age.** Near the
-    present page size does not matter: one day back, 1000 rows took
-    0.6-1.6s and 4000 took 1.3s, all inside run-to-run noise. The
-    common case — pulling the latest week or month as soon as it is
-    available — is already fast and should not pay a bigger burst, a
-    bigger allocation, or more lost work per failed page for nothing.
-    Age is what drives the fixed cost, so age is what should pick the
-    size. No probing, predictable, and recent syncs behave exactly as
-    they do today.
-  - Adaptive alternative: the sweep already times every page for
-    pacing, so it could try doubling every N pages and keep the size if
-    per-row cost improves. Costs a page to learn and risks losing more
-    work per failure, since a page is claimed only once complete.
-  - Bound it: 4000 decoded build tasks is already tens of megabytes of
-    XML, and a bigger burst is less polite regardless of duty cycle.
-  - Measure while backfilling the rest of August 2025 and January 2025,
-    rather than as a separate exercise.
+- (2026-08-19) Measure the FTBFS tail as part of the write-up — it may
+  be the strongest thing the store can say about a mass rebuild, and it
+  is invisible in the queue figures everyone looks at.
+
+  The same shape twice, a year apart: F43 (2025-07) built 24,398 packages
+  and 1,410 failed (5.8%), of which 32.3% still had no successful build
+  thirteen months later; F44 built 23,249 and 1,466 failed (6.3%), 34.9%
+  unrepaired after seven. Both repaired about 42% within six weeks and
+  then crawled.
+
+  F44 built 23,249 packages and 1,466 failed (6.3%). Of those failures,
+  counting only successful non-scratch builds afterwards: 25% repaired
+  within two weeks, 43% by six, then a crawl of ten points across four
+  months, leaving **511 packages (35%) with no successful build seven
+  months later**. The jump from 55% to 63% in July is F45's own mass
+  rebuild sweeping some up rather than anyone attending to them.
+
+  So a rebuild's cost has two halves on very different timescales: a
+  queue collapse of ~60,000 s390x delay-hours that resolves within a
+  week, and roughly 1,500 packages needing human repair, a third of
+  which are still broken half a year on.
+
+  Three caveats to carry with any published figure. We hold no data for
+  2025-09 to 2025-11, so an F43 package repaired only in those months and
+  never rebuilt since is miscounted as unrepaired. Retired and orphaned
+  packages are not distinguished from abandoned ones — that needs
+  dist-git or PDC state the store does not hold — and the window ends
+  wherever collection ends, so late repairs are invisible. Both are
+  reasons to report the curve rather than a single number.
+
+  A tested counter-hypothesis worth keeping, since it is the intuitive
+  one: fallout builds in the first days after a rebuild are *not*
+  disproportionately the packages that failed (8.6% of packager builds,
+  against a 10.6% control week before the rebuild). The failed set is
+  simply the large, actively-maintained packages, which are rebuilt
+  constantly anyway. The repair signal only separates from baseline in
+  week two (24.9%) and after.
+
+- (2026-08-19, partly done) `--page-size` now defaults to 4000, which
+  was the whole of the win in practice; what remains is whether deeper
+  windows want more still. The measurements behind the default are in
+  DEVELOPMENT.md: `createdBefore` is not flat with depth (a 1000-row
+  page costs 0.6-1.6s a day back and 17.7-24.1s at thirteen months) but
+  the cost is the seek rather than the rows, so 4000 rows cost 20.8s
+  against 18.3s for 1000 at that depth. July 2025's listing went from an
+  estimated five hours to twenty-one minutes.
+  - Open question: 8000 and 16000 were only measured near the present
+    (3.5s and 5.0s, against 1.3s for 4000), never at depth. If the seek
+    still dominates at thirteen months, a deep window might want 16000
+    and finish in a quarter of the time again. Measure it during the
+    next backfill rather than as a separate exercise.
+  - If it does help, scale by the window's age rather than probing:
+    age is what drives the fixed cost, it needs no learning page, and a
+    predictable size loses less work when a page fails.
+  - Bound whatever it becomes. 4000 decoded build tasks is already tens
+    of megabytes of XML held at once; 16000 is four times that.
+  - Not a politeness question either way: pacing is a duty cycle, so a
+    larger page leaves our share of the hub unchanged while asking it
+    for far fewer of the expensive seeks.
 
 - (2026-08-19) Collect the two 2025 mass rebuilds, so the s390x
   signature can be checked across four consecutive ones rather than the
@@ -79,6 +113,33 @@
     `<Start>`, `<Finish>`, one directory per release back to F10). Read
     it by path with a `--schedule DIR` flag; do not vendor it. Fedora's
     generated HTML works too but is the wrong format to depend on.
+  - Detection is already calibrated, so no threshold guessing is needed.
+    `releng`'s share of a day's builds is sharply bimodal: across 267 days
+    held, 254 sit **under 1%** and eleven sit **above 25%**, with only two
+    days anywhere between. Any cut between about 2% and 25% separates them
+    exactly. Require two consecutive days over the threshold so a small
+    targeted rebuild is not mistaken for a mass one.
+  - Submission takes 3-4 days whatever the schedule allots. F43's window
+    ran 2025-07-23 to 08-12 on paper and the submissions were entirely
+    within 07-23..26 — August 2025 holds none of it. F44 and F45 are the
+    same. The schedule's end date is the branch date, not the rebuild's.
+  - A rebuild has three phases and a report should probably name them,
+    because the middle one is not what it looks like. Submission runs 3-4
+    days (F43 2025-07-23..26, F44 2026-01-16..18, F45 2026-07-15..18) at
+    79-95% `releng`. Then comes the **fallout**: s390x waits stay ruined
+    for another 3-4 days, and that is not a queue draining — it is
+    packagers fixing what the rebuild broke, some retrying transient
+    failures and some dealing with real breakage against newer
+    dependencies. The evidence is the submitter mix: distinct packagers
+    per day go 33 → 42 → 74 → 80 → 78 across F45's aftermath, with
+    individuals reaching 27% of a day's builds (`churchyard` on
+    2026-07-21, `ksurma` 19% on 07-22) which never happens otherwise.
+    Fedora's own schedule marks the phase with a "File FTBFS bugs from
+    mass rebuild" milestone.
+  - Consequence for the eventual write-up: spreading a rebuild would
+    spread the fallout too, since a maintainer cannot start fixing until
+    their package has failed. Four days of submission concentrates the
+    human response into the four days after it.
   - Report the *observed* window beside the announced one. They differ:
     F45's rebuild was scheduled over four weeks and actually burned
     through in six days (2026-07-16..21), F44's likewise
