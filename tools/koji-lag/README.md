@@ -274,6 +274,27 @@ asked less often, and one that speeds up is asked more, down to the
 One more thing worth expecting: the first page of a run can take over a
 minute while the hub warms up its query plan, after which pages land in
 about ten seconds. A sync that looks stuck on page one usually is not.
+## Queries the tool does not run for you
+
+`queries/` holds SQL for analyses that have not (yet) become report
+sections, runnable against any store with nothing but `sqlite3`:
+
+```sh
+sqlite3 lag.sqlite < queries/submitters-by-day.sql
+```
+
+| query | answers |
+|:--|:--|
+| `submitters-by-day.sql` | which accounts submitted a period's builds, per day — how a mass rebuild is dated from evidence rather than from a schedule |
+| `package-build-hours.sql` | which packages consume an architecture's capacity in a window |
+| `arch-load-vs-wait.sql` | how queue wait responds to how much work an architecture is given |
+| `long-builds.sql` | builds that ran longer than the sweep's grace margin, with links |
+
+Each file explains what it is for and what it showed, and carries the
+window or architecture as an editable literal at the top. They also
+document the schema by example — see `data/store-schema.sql` for the
+tables themselves.
+
 ## Backing up the store
 
 ```sh

@@ -10,6 +10,52 @@
   rust-libsqlite3-sys 0.36 are already packaged on rawhide, f43 and
   epel9.
 
+- (2026-08-19) Graduate two analyses from `queries/` into `report`, since
+  they carry the FESCo argument and a published command is a stronger
+  citation than "we ran some SQL":
+  - **Per-day submitter share.** Which accounts submitted a period's
+    builds, per day. This is what dates a mass rebuild from evidence —
+    its days run 79-95% `releng` while a busy continuous-rebuild day is
+    90-98% `koschei` and behaves nothing like it — and the schedule-window
+    work above needs it anyway to report the observed window beside the
+    announced one. `queries/submitters-by-day.sql`.
+  - **Per-package build hours by arch.** Which packages consume an
+    architecture's capacity: on 2026-07-17 `gcc` alone took 48.9 hours of
+    s390x build time against a pool of sixteen active hosts, and ten
+    packages took a quarter of the day. Only possible since builds gained
+    package names from their children.
+    `queries/package-build-hours.sql`.
+
+  The other two queries are diagnostics rather than reports and can stay
+  as SQL: `arch-load-vs-wait.sql` (the capacity curve) and
+  `long-builds.sql` (whether `CREATE_GRACE_SECS` still holds).
+
+- (2026-08-18) Report on schedule windows, not just calendar periods.
+  A mass rebuild or a freeze straddles month boundaries — F44's ran
+  2026-01-14 to 02-03, F45's 2026-07-15 to 08-11 — so monthly reports
+  cut them in half and weekly ones scatter them. `report --since/--until`
+  already covers the ad-hoc case; what is missing is deriving the
+  windows from Fedora's schedule and emitting them as named periods,
+  e.g. `reports/events/f-45/mass-rebuild/`.
+  - Source: the schedule repo (MS Project XML, `<Task>` with `<Name>`,
+    `<Start>`, `<Finish>`, one directory per release back to F10). Read
+    it by path with a `--schedule DIR` flag; do not vendor it. Fedora's
+    generated HTML works too but is the wrong format to depend on.
+  - Report the *observed* window beside the announced one. They differ:
+    F45's rebuild was scheduled over four weeks and actually burned
+    through in six days (2026-07-16..21), F44's likewise
+    (2026-01-16..21). Our own data dates it far better than the
+    schedule does — the days where `releng` submits 79-95% of builds —
+    and the gap between planned and actual is itself a finding. The
+    schedule drifts too, visibly: its git log carries commits like
+    "updating f48 schedule with correct dates".
+  - Completeness already works for arbitrary windows (`Store::analysable`
+    takes any from/to), so an event window that is only partly held will
+    decline to report itself, as a month does.
+
+  Wait until more months are collected — the windows are only worth
+  naming once there are several cycles to compare.
+
 - (2026-08-18) Write up the arch-bottleneck analysis for FESCo, once two
   or three full release cycles are collected — one mass rebuild is an
   anecdote. FESCo's hypothesis (mass-rebuild months worst for s390x,
