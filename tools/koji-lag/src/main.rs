@@ -105,7 +105,12 @@ struct SyncArgs {
     store: PathBuf,
 
     /// Tasks per listTasks page.
-    #[arg(long, default_value_t = 1000)]
+    ///
+    /// A page costs what it costs to *find*, not to send: at thirteen
+    /// months' depth 1000 rows take 18s and 4000 take 21s. Fewer, larger
+    /// pages therefore ask the hub for far fewer expensive seeks, and the
+    /// duty cycle keeps our share of it the same either way.
+    #[arg(long, default_value_t = 4000)]
     page_size: i64,
 
     /// Minimum pause between hub requests, in milliseconds.

@@ -70,10 +70,40 @@ run can take a minute and a half while the hub's query plan warms, and
 every page after it lands in ten seconds. A sync that looks hung on its
 first page probably is not.
 
-`createdBefore` costs the same wherever it points — that is the whole
-reason the walk uses it — and takes either an epoch double or a
-`YYYY-MM-DD HH:MM:SS` string. They returned identical rows at identical
-cost; we send the double, since the string carries no timezone.
+`createdBefore` takes either an epoch double or a `YYYY-MM-DD HH:MM:SS`
+string. They returned identical rows at identical cost; we send the double,
+since the string carries no timezone.
+
+**It is not free with depth, though it was once recorded here as being so.**
+That claim came from probing four months back. Measured again in August 2026
+over a wider range, a 1000-row page costs:
+
+| how far back `createdBefore` points | cost |
+|:--|--:|
+| one day | 0.6–1.6s |
+| one month | 3.4–4.0s |
+| thirteen months | 17.7–24.1s |
+
+**But the cost is the seek, not the rows**, which is what makes deep history
+affordable anyway:
+
+| rows asked for | one day back | thirteen months back |
+|--:|--:|--:|
+| 1000 | 0.6–1.6s | 18.3s |
+| 2000 | 0.8s | 19.8s |
+| 4000 | 1.3s | 20.8s |
+| 8000 | 3.5s | — |
+| 16000 | 5.0s | — |
+
+Four times the rows for 14% more time at depth. So `--page-size` defaults
+to 4000: it cut July 2025's listing from an estimated five hours to
+twenty-one minutes, and because pacing is a duty cycle rather than a fixed
+pause, a larger page does not increase our share of the hub — it just asks
+it to perform a quarter as many of the expensive seeks. The hub honours
+limits up to at least 16,000 without capping, which matters for more than
+speed: [`crate::sweep::step`] reads a short page as "nothing older exists",
+so a silently capped limit would make every page look short and claim a gap
+after one request.
 
 **Positioning by offset**, which is what the walk used to do:
 

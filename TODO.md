@@ -10,6 +10,44 @@
   rust-libsqlite3-sys 0.36 are already packaged on rawhide, f43 and
   epel9.
 
+- (2026-08-19) Auto-tune `--page-size` from how deep a window is, and
+  use the remaining backfills to measure it. `createdBefore` is *not*
+  flat with depth, contrary to what DEVELOPMENT.md claimed from a
+  four-month-old measurement: a 1000-row page costs 3.4-4.0s one month
+  back and 17.7-24.1s at thirteen. But the cost is the seek, not the
+  rows — at thirteen months, 4000 rows cost 20.8s against 18.3s for
+  1000, so quadrupling the page is 14% dearer and cuts the page count
+  fourfold. A five-hour listing became about an hour and a quarter.
+  - **Keep the default as it is and scale up with age.** Near the
+    present page size does not matter: one day back, 1000 rows took
+    0.6-1.6s and 4000 took 1.3s, all inside run-to-run noise. The
+    common case — pulling the latest week or month as soon as it is
+    available — is already fast and should not pay a bigger burst, a
+    bigger allocation, or more lost work per failed page for nothing.
+    Age is what drives the fixed cost, so age is what should pick the
+    size. No probing, predictable, and recent syncs behave exactly as
+    they do today.
+  - Adaptive alternative: the sweep already times every page for
+    pacing, so it could try doubling every N pages and keep the size if
+    per-row cost improves. Costs a page to learn and risks losing more
+    work per failure, since a page is claimed only once complete.
+  - Bound it: 4000 decoded build tasks is already tens of megabytes of
+    XML, and a bigger burst is less polite regardless of duty cycle.
+  - Measure while backfilling the rest of August 2025 and January 2025,
+    rather than as a separate exercise.
+
+- (2026-08-19) Collect the two 2025 mass rebuilds, so the s390x
+  signature can be checked across four consecutive ones rather than the
+  two we have. From the schedule XML — which carries explicit "Mass
+  Rebuild starts"/"ends" milestones, better than inferring a window:
+  F42 2025-01-15 to 02-04, F43 2025-07-23 to 08-12, F44 2026-01-14 to
+  02-03 (held), F45 2026-07-15 to 08-11 (held). Both held rebuilds
+  collapsed s390x identically — median wait 6,777s and 6,141s, 12.3%
+  and 13.0% of attributable builds, ~60,000 hours each — and both burned
+  through in six days rather than the three weeks the schedule allots.
+  Four in a row would settle whether that is the mechanism or a
+  coincidence of two.
+
 - (2026-08-19) Graduate two analyses from `queries/` into `report`, since
   they carry the FESCo argument and a published command is a stronger
   citation than "we ran some SQL":

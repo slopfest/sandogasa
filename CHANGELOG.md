@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### koji-lag: pages of 4000 tasks by default, and a corrected claim about depth
+
+DEVELOPMENT.md said `createdBefore` "costs the same wherever it points",
+which is what makes deep history affordable — and it was measured only four
+months back. Over a wider range it is plainly untrue: a 1000-row page costs
+0.6–1.6s a day back, 3.4–4.0s a month back, and 17.7–24.1s at thirteen
+months. Backfilling July 2025 at that rate was heading for five hours of
+listing alone.
+
+What *is* true is that the cost is the seek and not the rows. At thirteen
+months' depth, 4000 rows take 20.8s against 18.3s for 1000 — four times the
+data for 14% more time — and the hub honours limits to at least 16,000
+without capping. So `--page-size` now defaults to 4000, which took the same
+July 2025 listing to twenty-one minutes.
+
+Larger pages are also *kinder* to the hub rather than rougher, which is not
+obvious. Pacing here is a duty cycle rather than a fixed pause, so the share
+of one connection we occupy is the same whatever the page size; what changes
+is that fetching a month asks for roughly 37 expensive seeks instead of 150.
+
+The no-capping check matters beyond speed. A sweep reads a page shorter than
+the limit it asked for as "nothing older exists" and claims the gap to its
+far end — so a hub that silently capped a large limit would make every page
+look short and lose the rest of the window without any sign of it.
+
 ### koji-lag: builds keep the package name only their children knew
 
 A mass-rebuild day's builds came out of the store almost entirely
