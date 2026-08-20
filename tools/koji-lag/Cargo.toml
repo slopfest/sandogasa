@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 chrono = { workspace = true }
+quick-xml = { workspace = true }
 rusqlite = { workspace = true }
 clap = { workspace = true }
 sandogasa-cli = { workspace = true }

@@ -20,6 +20,7 @@ pub mod instance;
 pub mod periods;
 pub mod pool;
 pub mod report;
+pub mod schedule;
 pub mod stats;
 pub mod store;
 pub mod sweep;

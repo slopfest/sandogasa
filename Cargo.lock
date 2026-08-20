@@ -1192,6 +1192,7 @@ version = "0.20.0"
 dependencies = [
  "chrono",
  "clap",
+ "quick-xml",
  "rusqlite",
  "sandogasa-cli",
  "sandogasa-inventory",
