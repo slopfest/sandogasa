@@ -215,6 +215,14 @@
   comparing against hosts observed serving work *at the same instant*
   rather than over the whole day.
 
+- (2026-08-20, PARTLY DONE) `tools/koji-lag/notebooks/s390x-lag.ipynb`
+  exists and executes, covering the sections listed in the tool README. It
+  lives here rather than in koji-lag-metrics so it stays beside the code and
+  queries it depends on; the fleshed-out narrative version is the metrics
+  repo's, committed there by hand. Still open from the entry below: the
+  publish half — a compressed store with a checksum and a fetch-and-verify
+  helper — so a reader can run the notebook without collecting for a day.
+
 - (2026-08-20, exploration) Emit reports as Jupyter notebooks, so a reader
   can change the question rather than only read our answer. Ship a
   notebook plus a database dump and the queries become a starting point:

@@ -332,6 +332,24 @@ asked less often, and one that speeds up is asked more, down to the
 One more thing worth expecting: the first page of a run can take over a
 minute while the hub warms up its query plan, after which pages land in
 about ten seconds. A sync that looks stuck on page one usually is not.
+## Notebooks
+
+`notebooks/s390x-lag.ipynb` works a store over rather than reporting from it:
+rebuild windows detected from who submitted each day, queue wait per class of
+build, service time per architecture, builder capacity from the hub's
+configuration history, utilisation against the wait actually observed, the
+long-build tail, per-package slowdown grouped by build toolchain, and
+single-architecture stalls labelled congestion or outage.
+
+```sh
+KOJI_LAG_STORE=lag.sqlite jupyter lab notebooks/s390x-lag.ipynb
+```
+
+Needs `jupyterlab`, `python3-pandas` and `python3-matplotlib`; the toolchain
+section also wants a checkout of Fedora's spec files, at `$FEDORA_SPECS` or
+`~/src/fedora/rpm-specs`, and skips itself without one. Outputs are committed,
+so the findings read without a store to hand.
+
 ## Queries the tool does not run for you
 
 `queries/` holds SQL for analyses that have not (yet) become report
