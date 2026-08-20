@@ -10,6 +10,88 @@
   rust-libsqlite3-sys 0.36 are already packaged on rawhide, f43 and
   epel9.
 
+- (2026-08-20) Two report features that follow from the tail finding, and
+  neither singles anybody out.
+  - **`report --owner NAME` and `--package NAME`.** These do not exist,
+    though DEVELOPMENT.md has been claiming "narrowing is `report
+    --owner`/`--package` over the store" since the filters were taken out
+    of the sweep — fix that sentence either way. With them, a maintainer
+    can run a published store and see their own experience directly, which
+    is the right answer to "how badly am I affected" and needs no cohort
+    or naming at all.
+  - **Cohort rows: top N submitters by volume, the next M, and the rest.**
+    Publishable, and it carries the finding without a name. Measured for
+    2026-07, official builds by people (338 submitters), s390x: the top
+    ten hold 10,985 of the month's 14,402 tasks with a p90 of 2.9h and
+    **27.8% of their builds waiting over an hour**, the next forty 8.6%,
+    and the remaining 288 people 4.5%. ppc64le is starker still — top ten
+    at a 1.4h p90 and 18.3% over an hour, everyone else at one minute and
+    0.1%. Every cohort has a one-minute median, which is exactly how this
+    stayed invisible.
+
+- (2026-08-20, exploration) Emit reports as Jupyter notebooks, so a reader
+  can change the question rather than only read our answer. Ship a
+  notebook plus a database dump and the queries become a starting point:
+  someone can re-cut a window, swap the architecture, add a cohort, or
+  test a hypothesis of their own without waiting for us to build a flag
+  for it. Points to settle: whether the notebook embeds SQL against a
+  store path (simple, needs sqlite3 only) or loads an exported CSV
+  (portable, no store needed, stale the moment it is written); how big a
+  dump is reasonable to publish, given 413 days is 2.0GB and a single
+  month around 165MB; and whether `queries/` becomes the notebook's
+  content, which would keep one copy of each query rather than two.
+
+- (2026-08-20) **Correction to the arch-bottleneck story, and the
+  reporting model that follows from it.** Earlier entries here read the
+  s390x collapse during a mass rebuild as system-wide pain. It is not:
+  the rebuild queues behind itself, and the numbers that said otherwise
+  were aggregates across classes of build that should never have been
+  added together.
+
+  Measured for all three rebuilds, official builds only, s390x queue
+  wait: releng's own tasks sat at 2.0h (F43), 4.3h (F44) and 4.2h (F45)
+  medians, while **everyone else's stayed at one minute** through every
+  burst, exactly as in the weeks before and after. Koji priority is why —
+  maintainers submit at 19-20, packit at 20, releng's rebuild at 25,
+  koschei at 50, and lower is served first — so the rebuild is
+  deliberately deprioritised beneath interactive work and absorbs its own
+  delay. The ~60,000 s390x delay-hours per rebuild are a throughput cost
+  to the rebuild's completion, not contributors being blocked. This also
+  contradicts the crate docs' premise that "scratch builds, which gate
+  dist-git PR CI, run at lower priority still": packit CI waited 6m
+  against official's 4.2h in F45's burst.
+
+  **So report per class, always, and never aggregate across them.** The
+  classes differ in priority, in architecture coverage and in meaning:
+
+  | class | priority | s390x tasks/1000 | what it is |
+  |:--|--:|--:|:--|
+  | releng | 25 | 588 | bulk, self-contending, deprioritised |
+  | maintainer official | 19-20 | 588 | the thing that must stay fast, and does |
+  | packit PR CI | 20 | 576 | contributor-facing latency |
+  | scratch by hand | 20-50 | 544 | maintainer testing |
+  | koschei | 50 | 0.1 | dependency canary, skips s390x |
+
+  **And lead with the tail, not the median — the median describes an
+  experience nobody had.** During F44's burst the population median was
+  1 minute and every one of the 74 hour-plus waits belonged to a *single*
+  maintainer, who submitted 75 builds and had a personal median of 8¼
+  hours while 63 colleagues saw one minute. F45 has a build that waited
+  48.7 hours. A heavy maintainer meets the p90 many times over in one
+  session, and bulk work across a dependency set serialises — each build
+  waits on the last — so a tail event compounds into days for exactly the
+  people doing the most. A report should therefore give p90 and max, and
+  ideally per-submitter counts, so it can say "one maintainer absorbed
+  all 74 bad waits" rather than "p90 was 8 hours".
+
+  Behavioural model, all three rebuilds agreeing: maintainers stand down
+  during a burst — non-releng official volume falls to a quarter or a
+  third (1,772→887, 1,911→379, 1,540→379) — and those who keep building
+  are disproportionately fixing what just broke, enriched 2.2x to 5.5x
+  for failed packages (18.3% vs 3.3%, 10.7% vs 4.8%, 8.6% vs 3.2%).
+  That is also why the same test over the *fallout* window came out flat:
+  by then everyone has resumed and repair work is diluted.
+
 - (2026-08-20) Retire "build volume" as a measure, and say why in the
   write-up: Fedora's largest single source of builds is almost invisible
   to the architecture everyone worries about.
