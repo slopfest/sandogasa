@@ -75,12 +75,38 @@
     rho drifts upward unaided; rho <= 0.5 is the option that survives.
 
 - (2026-08-20) **Where the service-time regression actually lives: the
-  tail, and hung builds in particular. It is not Rust.** Rust's share of
-  s390x rebuild tasks did rise as suspected — 18.5% at F42 to 26.1% at F45,
-  COSMIC and its weekly upstream releases included — and it is exonerated
-  anyway: rust packages went 3.3m to 3.8m (1.15x) while **everything else
-  went 3.8m to 10.3m (2.74x)**. Rust now builds faster than the average
-  Fedora package on s390x.
+  tail, and hung builds in particular. It is not Rust — and the regression
+  spares Rust in a way that hints at its cause.** Rust's share of s390x
+  rebuild tasks did rise as suspected, 18.5% at F42 to 26.1% at F45, COSMIC
+  and its weekly upstream releases included.
+
+  A first pass concluded that Rust "builds faster than the average Fedora
+  package", which was **wrong** — it compared means across two populations
+  with different tail shapes. By median the two are indistinguishable at
+  F45: rust 2.2m against everything else 2.3m. The suspicion that raised
+  it was that Fedora's rust library crates might be no-op builds, since
+  their `-devel` subpackages are `noarch` and arch incompatibility is
+  handled by skipping build and test rather than by `ExcludeArch`. Checked
+  against the specs, that is not what is happening: they run `%cargo_build`
+  and `%cargo_test` per architecture, and of 3,376 `rust-*.spec` files only
+  47 carry `ExcludeArch`, 58 `%ifarch`, 24 `%ifnarch`, and none use
+  `__cargo_skip_build`. Nor is there a no-op cluster in the durations —
+  nothing under 30s, and 0.6% under a minute, where a minute is about what
+  buildroot setup costs.
+
+  What the statistics do say, reported properly:
+
+  | population | median | p90 | mean |
+  |:--|--:|--:|--:|
+  | rust, F45 over F42 | 1.24x | 1.23x | 1.15x |
+  | everything else | **1.65x** | **2.63x** | **2.74x** |
+
+  So non-rust builds slowed at every statistic and rust barely moved. That
+  is a diagnostic hint worth handing to infrastructure: cargo and rustc are
+  CPU-bound, spawn few processes and touch little of the filesystem, while
+  autotools and C++ builds fork constantly and hammer it. A regression that
+  spares the former and doubles the latter points at storage, the
+  hypervisor or a kernel change rather than at processor speed.
 
   What grew is the tail. Tasks over six hours took 5.8% of s390x rebuild
   builder-hours at F42 and 23.8% at F45 (4 tasks, then 26), and the top
