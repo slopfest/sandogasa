@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+#
+# What was happening during the windows koji-lag detects.
+#
+# The store can measure that an architecture stopped being served and
+# whether its builders were busy while it did; it cannot know that the
+# cause was a storage failure. This is where that knowledge goes, so a
+# report names the cause instead of leaving a reader to ask again.
+#
+# Notes are matched to detected windows by *overlap* on instance,
+# architecture and dates -- never by equal dates, because a window's edges
+# move when a threshold changes or a day of data arrives. Write the dates
+# of the event as you understand it and let the overlap do the work.
+#
+# Dates are quoted strings, not bare TOML dates.
+# `to` is inclusive: a one-day event has `from` and `to` the same.
+# `arch` may be omitted for something that affected everything.
+# `cause` is free text, but prefer a term already used below.
+
+[[outage]]
+instance = "fedora"
+arch = "s390x"
+from = "2026-05-06"
+to = "2026-05-08"
+cause = "storage"
+ticket = "https://forge.fedoraproject.org/infra/tickets/issues/13326"
+note = """
+All 18 s390x builders stayed enabled at capacity 90 and served nothing at
+all on 05-07; both maintenance groups stopped together, so this was
+site-level rather than one machine. Tasks created 05-06 waited a mean of
+46.0 hours and those created 05-07 waited 38.3, against a fleet serving
+every other architecture in one to two minutes. 129 tasks never ran.
+"""
+
+[[outage]]
+instance = "fedora"
+arch = "ppc64le"
+from = "2025-11-06"
+to = "2025-11-11"
+cause = "datacentre-move"
+note = """
+Half the ppc64le fleet was administratively disabled -- 32 hosts at
+capacity 64 down to 16 at 32 -- and the disabled hosts carry rdu3 names,
+so this is the datacentre migration rather than a failure. Throughput of
+6.7 concurrent tasks against an ordinary 23.1 is what running on half a
+fleet looks like. The hosts were re-enabled at 23:04 on 11-11.
+"""
