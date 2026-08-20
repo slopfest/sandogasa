@@ -745,7 +745,7 @@ impl Store {
                  GROUP BY day, arch ORDER BY day, arch",
             )
             .map_err(|e| e.to_string())?;
-        let days = stmt
+        let mut days = stmt
             .query_map(params![instance, from, to], |r| {
                 Ok(crate::stall::Day {
                     at: r.get::<_, i64>(0)? as f64,
@@ -756,12 +756,98 @@ impl Store {
                     // is all `never_started`, which the rule's floor then
                     // declines to judge rather than treating zero as fast.
                     wait: r.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
+                    running: 0.0,
+                    queued: 0.0,
                 })
             })
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
+        self.add_load(instance, from, to, &mut days)?;
         Ok(days)
+    }
+
+    /// Fill in each day's mean concurrency and queue depth.
+    ///
+    /// Both are time integrals over the day rather than counts, which is
+    /// what makes them comparable between a day of many short tasks and a
+    /// day of few long ones: total seconds spent in the state, divided by
+    /// the length of the day, is the mean number of tasks in it. A task
+    /// contributes to whichever days it overlaps, so work spanning midnight
+    /// is charged to both rather than to the day it happened to start.
+    ///
+    /// Together they separate the two reasons a queue grows, which no wait
+    /// figure can distinguish on its own: during F45's rebuild s390x ran
+    /// 25.9 tasks at once against a queue of 643, while on 2026-05-07 it
+    /// ran *none at all* against a queue of 412, having managed 5.9 the day
+    /// before it. Queue up with throughput up is congestion;
+    /// queue up with throughput down is an outage.
+    fn add_load(
+        &self,
+        instance: &str,
+        from: f64,
+        to: f64,
+        days: &mut [crate::stall::Day],
+    ) -> Result<(), String> {
+        // Integrated in one pass over the overlapping tasks rather than in
+        // SQL: the obvious query joins every day against every task that
+        // spans it, which took 14 seconds for a single week of this store.
+        // A task that completed before the window cannot overlap it, and
+        // one still running has no completion, which is the whole
+        // predicate — and it reads the (instance, completion_ts) index.
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT arch, create_ts, start_ts, completion_ts
+                 FROM tasks
+                 WHERE instance = ?1 AND method = 'buildArch'
+                   AND create_ts < ?3
+                   AND (completion_ts >= ?2 OR completion_ts IS NULL)",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut load: std::collections::HashMap<(i64, String), (f64, f64)> = Default::default();
+        let rows = stmt
+            .query_map(params![instance, from, to], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, f64>(1)?,
+                    r.get::<_, Option<f64>>(2)?,
+                    r.get::<_, Option<f64>>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (arch, create, start, completion) = row.map_err(|e| e.to_string())?;
+            // A task that never started stops queueing when it is closed,
+            // not at the end of the window: cancelled and failed tasks all
+            // carry a completion timestamp, and charging them to the window
+            // edge instead made queue depth accumulate monotonically over
+            // the whole store — 995 on the first stall measured, 5,511 on
+            // the last, which is a bug that reads as a trend.
+            let waited = (create, start.or(completion).unwrap_or(to));
+            let ran = start.map(|s| (s, completion.unwrap_or(to)));
+            for (span, queueing) in [(Some(waited), true), (ran, false)] {
+                let Some((begin, end)) = span else { continue };
+                let mut day = (begin / 86_400.0).floor() * 86_400.0;
+                while day < end.min(to) {
+                    let overlap = (end.min(day + 86_400.0) - begin.max(day)).max(0.0) / 86_400.0;
+                    let slot = load.entry((day as i64, arch.clone())).or_insert((0.0, 0.0));
+                    if queueing {
+                        slot.1 += overlap;
+                    } else {
+                        slot.0 += overlap;
+                    }
+                    day += 86_400.0;
+                }
+            }
+        }
+        for day in days.iter_mut() {
+            if let Some((running, queued)) = load.get(&(day.at as i64, day.arch.clone())) {
+                day.running = *running;
+                day.queued = *queued;
+            }
+        }
+        Ok(())
     }
 
     /// The rows of `[from, to)` worth analysing, and the days left out.
@@ -1122,6 +1208,97 @@ mod tests {
             channel_id: None,
             weight: None,
         }
+    }
+
+    #[test]
+    fn a_days_load_is_the_time_spent_not_the_task_count() {
+        // Three tasks on one day, arranged so counting them and integrating
+        // them give different answers: two ran for a quarter of the day at
+        // the same time, one for half of it.
+        const DAY: f64 = 86_400.0;
+        let mut store = Store::in_memory().unwrap();
+        let at = |id, arch: &str, create: f64, start: f64, done: f64| TaskRecord {
+            arch: arch.into(),
+            create_ts: create,
+            start_ts: Some(start),
+            completion_ts: Some(done),
+            ..task(id, 0)
+        };
+        store
+            .put_tasks(
+                "fedora",
+                &[
+                    at(1, "s390x", DAY, DAY, DAY + DAY / 4.0),
+                    at(2, "s390x", DAY, DAY, DAY + DAY / 4.0),
+                    at(3, "s390x", DAY, DAY + DAY / 2.0, DAY * 2.0),
+                    // Queued a quarter of the day before starting.
+                    at(4, "x86_64", DAY, DAY + DAY / 4.0, DAY + DAY / 2.0),
+                ],
+            )
+            .unwrap();
+        let days = store.arch_wait_by_day("fedora", DAY, DAY * 2.0).unwrap();
+
+        let s390x = days.iter().find(|d| d.arch == "s390x").unwrap();
+        // 0.25 + 0.25 + 0.5 of a day's worth of running.
+        assert!((s390x.running - 1.0).abs() < 1e-9, "{:?}", s390x);
+        // Task 3 waited half a day; the others started at once.
+        assert!((s390x.queued - 0.5).abs() < 1e-9, "{:?}", s390x);
+        assert_eq!(s390x.created, 3);
+
+        let x86 = days.iter().find(|d| d.arch == "x86_64").unwrap();
+        assert!((x86.running - 0.25).abs() < 1e-9, "{x86:?}");
+        assert!((x86.queued - 0.25).abs() < 1e-9, "{x86:?}");
+    }
+
+    #[test]
+    fn work_spanning_midnight_is_charged_to_both_days() {
+        // The reason for integrating rather than grouping by start day: a
+        // task running across midnight was serving both days, and an
+        // outage on the second one must not be hidden by it.
+        const DAY: f64 = 86_400.0;
+        let mut store = Store::in_memory().unwrap();
+        store
+            .put_tasks(
+                "fedora",
+                &[TaskRecord {
+                    arch: "s390x".into(),
+                    create_ts: DAY + DAY / 2.0,
+                    start_ts: Some(DAY + DAY / 2.0),
+                    completion_ts: Some(DAY * 2.0 + DAY / 2.0),
+                    ..task(1, 0)
+                }],
+            )
+            .unwrap();
+        let days = store.arch_wait_by_day("fedora", DAY, DAY * 3.0).unwrap();
+        // Created on day one, so that is the only row — but its second half
+        // day of running belongs to day two, which has no row of its own.
+        let first = days.iter().find(|d| d.at == DAY).unwrap();
+        assert!((first.running - 0.5).abs() < 1e-9, "{first:?}");
+    }
+
+    #[test]
+    fn an_unfinished_task_is_charged_only_to_the_window() {
+        // A task still running when the window ends must not contribute
+        // beyond it, or the last day of any report reads as overloaded.
+        const DAY: f64 = 86_400.0;
+        let mut store = Store::in_memory().unwrap();
+        store
+            .put_tasks(
+                "fedora",
+                &[TaskRecord {
+                    arch: "s390x".into(),
+                    create_ts: DAY,
+                    start_ts: Some(DAY + DAY / 2.0),
+                    completion_ts: None,
+                    ..task(1, 0)
+                }],
+            )
+            .unwrap();
+        let days = store.arch_wait_by_day("fedora", DAY, DAY * 2.0).unwrap();
+        let day = days.iter().find(|d| d.arch == "s390x").unwrap();
+        assert_eq!(day.started, 1);
+        assert!((day.running - 0.5).abs() < 1e-9, "{day:?}");
+        assert!((day.queued - 0.5).abs() < 1e-9, "{day:?}");
     }
 
     #[test]

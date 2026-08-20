@@ -25,12 +25,11 @@
 //! holds — see `queries/arch-load-vs-wait.sql`, where creation-day
 //! bucketing made quiet days look worst.)
 //!
-//! A stall inside a rebuild window is congestion and should be reported as
-//! part of that rebuild; outside one it is an availability failure. This
-//! module does not decide which — it finds the days, and the caller that
-//! knows the rebuild windows says which kind each is.
+//! Why a queue grew is a separate question from whether it grew, and it is
+//! answered by throughput rather than by the schedule: see [`Verdict`].
 
-/// One architecture's day: what arrived, and how long it waited.
+/// One architecture's day: what arrived, how long it waited, and how busy
+/// the builders were while it did.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Day {
     /// UTC midnight of the creation day.
@@ -42,6 +41,28 @@ pub struct Day {
     pub started: usize,
     /// Mean seconds those that started spent queued.
     pub wait: f64,
+    /// Mean number of tasks of this architecture running at once — the
+    /// day's throughput, as a time integral rather than a count.
+    pub running: f64,
+    /// Mean number waiting at once.
+    pub queued: f64,
+}
+
+/// Why an architecture's queue grew.
+///
+/// A wait figure alone cannot tell these apart, and they call for opposite
+/// responses: congestion is capacity being outrun by demand, while an
+/// outage is capacity that exists and is not working.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// The builders were working harder than usual and still fell behind.
+    /// F45's rebuild ran s390x at 25.9 concurrent tasks against a normal
+    /// 6.3, with 643 queued.
+    Congestion,
+    /// The queue grew while throughput *fell*, so the work was not being
+    /// served. May 2026 dropped s390x to 0.0 concurrent tasks — nothing ran
+    /// at all for a day — against a queue of 412.
+    Outage,
 }
 
 /// A stretch where one architecture lagged the rest.
@@ -60,6 +81,14 @@ pub struct Stall {
     /// The other architectures' median daily mean over the same days, in
     /// seconds — the "meanwhile, everything else" figure.
     pub others: f64,
+    /// Mean tasks running at once across the window.
+    pub running: f64,
+    /// Mean tasks queued at once across the window.
+    pub queued: f64,
+    /// The worst single day's throughput in the window.
+    pub trough: f64,
+    /// Days whose throughput fell below the architecture's ordinary rate.
+    pub idle_days: usize,
 }
 
 impl Stall {
@@ -75,6 +104,41 @@ impl Stall {
             self.worst / self.others
         }
     }
+
+    /// Whether the builders were working through this or not serving it.
+    ///
+    /// `baseline` is this architecture's ordinary throughput — see
+    /// [`baseline`] — and one day below it is enough, because a window's
+    /// mean hides the thing being looked for. May 2026 ran 0.5 concurrent
+    /// tasks, then 0.0, then 13.6 as the backlog drained, which averages to
+    /// 4.7 against a baseline of 6.3: a modest shortfall standing for a day
+    /// when nothing ran at all.
+    pub fn verdict(&self, baseline: f64) -> Verdict {
+        if self.idle_days > 0 && self.trough < baseline {
+            Verdict::Outage
+        } else {
+            Verdict::Congestion
+        }
+    }
+}
+
+/// An architecture's ordinary throughput, as the median of its daily means.
+///
+/// The median rather than the mean because the point is to characterise a
+/// normal day, and both rebuild bursts and outages are in the input: a
+/// month holding one four-day rebuild at eight times normal would drag a
+/// mean well above anything typical.
+pub fn baseline(days: &[Day], arch: &str) -> f64 {
+    let mut running: Vec<f64> = days
+        .iter()
+        .filter(|d| d.arch == arch)
+        .map(|d| d.running)
+        .collect();
+    if running.is_empty() {
+        return 0.0;
+    }
+    running.sort_by(|a, b| a.total_cmp(b));
+    running[running.len() / 2]
 }
 
 /// How much worse counts as a stall.
@@ -144,8 +208,10 @@ pub fn stalls(days: &[Day], rule: Rule) -> Vec<Stall> {
     let mut found = Vec::new();
     for (arch, mut marked) in hot {
         marked.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let ordinary = baseline(days, arch);
         let mut current: Option<Stall> = None;
         for (at, day, median) in marked {
+            let idle = usize::from(day.running < ordinary);
             match &mut current {
                 // Consecutive days extend the stretch; a gap closes it.
                 Some(s) if (at - s.to).abs() < 1.0 => {
@@ -154,6 +220,11 @@ pub fn stalls(days: &[Day], rule: Rule) -> Vec<Stall> {
                     s.never_started += day.created - day.started;
                     s.worst = s.worst.max(day.wait);
                     s.others = s.others.min(median);
+                    // Summed here, divided by the day count below.
+                    s.running += day.running;
+                    s.queued += day.queued;
+                    s.trough = s.trough.min(day.running);
+                    s.idle_days += idle;
                 }
                 _ => {
                     if let Some(s) = current.take() {
@@ -167,11 +238,20 @@ pub fn stalls(days: &[Day], rule: Rule) -> Vec<Stall> {
                         never_started: day.created - day.started,
                         worst: day.wait,
                         others: median,
+                        running: day.running,
+                        queued: day.queued,
+                        trough: day.running,
+                        idle_days: idle,
                     });
                 }
             }
         }
         found.extend(current);
+    }
+    for stall in found.iter_mut() {
+        let days = stall.days().max(1) as f64;
+        stall.running /= days;
+        stall.queued /= days;
     }
     found.sort_by(|a, b| a.from.total_cmp(&b.from).then_with(|| a.arch.cmp(&b.arch)));
     found
@@ -184,20 +264,29 @@ mod tests {
     const HOUR: f64 = 3_600.0;
 
     fn day(n: i64, arch: &str, created: usize, started: usize, hours: f64) -> Day {
+        // Load is set by the tests that care; detection does not read it.
         Day {
             at: n as f64 * 86_400.0,
             arch: arch.to_string(),
             created,
             started,
             wait: hours * HOUR,
+            running: 0.0,
+            queued: 0.0,
         }
+    }
+
+    fn loaded(mut d: Day, running: f64, queued: f64) -> Day {
+        d.running = running;
+        d.queued = queued;
+        d
     }
 
     /// A normal day: four architectures within minutes of each other.
     fn calm(n: i64) -> Vec<Day> {
         ["x86_64", "aarch64", "ppc64le", "s390x"]
             .iter()
-            .map(|a| day(n, a, 400, 400, 0.03))
+            .map(|a| loaded(day(n, a, 400, 400, 0.03), 20.0, 10.0))
             .collect()
     }
 
@@ -226,6 +315,69 @@ mod tests {
         assert_eq!(s.never_started, 25);
         assert_eq!(s.worst, 46.0 * HOUR);
         assert!(s.factor() > 100.0, "{}", s.factor());
+    }
+
+    #[test]
+    fn the_verdict_separates_the_two_reasons_a_queue_grows() {
+        // Both are stalls by wait, and they need opposite responses.
+        // s390x's ordinary throughput is 20 concurrent tasks in `calm`.
+        let mut days = calm(1);
+        // Day 2: the May shape — queue of 412 and a fleet doing nothing,
+        // against an ordinary 20.
+        days.extend(
+            ["x86_64", "aarch64", "ppc64le"]
+                .iter()
+                .map(|a| loaded(day(2, a, 4000, 4000, 0.02), 200.0, 20.0)),
+        );
+        days.push(loaded(day(2, "s390x", 371, 358, 46.0), 0.0, 412.0));
+        // Day 4: F45's rebuild — the same architecture far behind, but
+        // running 25.9 at once, four times its normal throughput.
+        days.extend(
+            ["x86_64", "aarch64", "ppc64le"]
+                .iter()
+                .map(|a| loaded(day(4, a, 9000, 9000, 0.03), 400.0, 100.0)),
+        );
+        days.push(loaded(day(4, "s390x", 8212, 8212, 6.7), 25.9, 642.6));
+
+        let base = baseline(&days, "s390x");
+        assert_eq!(base, 20.0, "the median of a normal day, not the burst");
+        let found = stalls(&days, Rule::default());
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!(found[0].verdict(base), Verdict::Outage);
+        assert_eq!(found[1].verdict(base), Verdict::Congestion);
+        // And the load figures survive the window stitching.
+        assert!((found[0].queued - 412.0).abs() < 0.01);
+        assert!((found[1].running - 25.9).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_multi_day_stalls_load_is_a_mean_not_a_sum() {
+        let mut days = Vec::new();
+        for n in [1, 2] {
+            days.extend(
+                ["x86_64", "aarch64", "ppc64le"]
+                    .iter()
+                    .map(|a| loaded(day(n, a, 4000, 4000, 0.02), 200.0, 20.0)),
+            );
+            days.push(loaded(day(n, "s390x", 300, 290, 20.0), 8.0, 300.0));
+        }
+        let found = stalls(&days, Rule::default());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].days(), 2);
+        assert!((found[0].running - 8.0).abs() < 0.01, "{:?}", found[0]);
+        assert!((found[0].queued - 300.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn baseline_ignores_the_other_architectures() {
+        let days = vec![
+            loaded(day(1, "s390x", 400, 400, 0.03), 20.0, 5.0),
+            loaded(day(1, "x86_64", 400, 400, 0.03), 900.0, 5.0),
+            loaded(day(2, "s390x", 400, 400, 0.03), 24.0, 5.0),
+            loaded(day(2, "x86_64", 400, 400, 0.03), 950.0, 5.0),
+        ];
+        assert_eq!(baseline(&days, "s390x"), 24.0);
+        assert_eq!(baseline(&days, "riscv64"), 0.0, "an arch with no days");
     }
 
     #[test]
