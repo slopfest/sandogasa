@@ -113,7 +113,7 @@ Name each page as it is timed
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag report
-\fBkoji\-lag report\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBkoji\-lag report\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-owner\fR] [\fB\-\-package\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Per\-arch queue\-wait / build\-time / bottleneck report
 .TP
@@ -131,6 +131,14 @@ Only tasks completing on/before this date (UTC midnight)
 .TP
 \fB\-\-arch\fR \fI<ARCH,...>\fR
 Restrict to these arches (CSV or repeated)
+.TP
+\fB\-\-owner\fR \fI<NAME,...>\fR
+Restrict to builds by these accounts (CSV or repeated).
+
+The account exactly as Koji records it, which for a service is a long name: `koschei/koschei\-backend01.rdu3.fedoraproject.org` rather than `koschei`. Answers "how did my own builds fare" without anybody having to publish a per\-person report.
+.TP
+\fB\-\-package\fR \fI<NAME,...>\fR
+Restrict to these source packages (CSV or repeated)
 .TP
 \fB\-\-scratch\fR
 Only scratch builds

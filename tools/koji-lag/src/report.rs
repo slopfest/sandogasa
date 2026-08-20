@@ -31,6 +31,15 @@ pub struct ReportOpts {
     pub until: Option<f64>,
     /// Restrict to these arches (empty = all).
     pub arches: Vec<String>,
+    /// Restrict to builds submitted by these accounts (empty = all).
+    ///
+    /// Matched exactly against the build's owner, which for services is a
+    /// long name — `koschei/koschei-backend01.rdu3.fedoraproject.org`, not
+    /// `koschei`. Narrowing by class is [`crate::class`]'s job; this is for
+    /// "how did *my* builds fare", which wants one account.
+    pub owners: Vec<String>,
+    /// Restrict to these source packages (empty = all).
+    pub packages: Vec<String>,
     /// Include FAILED tasks in build-time stats.
     pub include_failed: bool,
     /// `Some(true)` = scratch only, `Some(false)` = official only.
@@ -195,10 +204,40 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
             .map(|b| b.scratch)
     };
 
+    // Owner and package come from the parent build, since a child task
+    // records neither. A task whose parent is absent cannot be shown to
+    // match, so it drops out of a narrowed report rather than being
+    // counted into it — the same rule the scratch filter follows.
+    let attributed_ok = |task: &TaskRecord| -> bool {
+        if opts.owners.is_empty() && opts.packages.is_empty() {
+            return true;
+        }
+        let Some(parent) = task.parent else {
+            return false;
+        };
+        let Some(build) = dataset.builds.get(&format!("{}:{parent}", task.instance)) else {
+            return false;
+        };
+        let owner_ok = opts.owners.is_empty()
+            || build
+                .owner
+                .as_deref()
+                .is_some_and(|o| opts.owners.iter().any(|want| want == o));
+        // A build's own package name is the one to trust; it is filled in
+        // from its children when the build task itself did not name one.
+        let package_ok = opts.packages.is_empty()
+            || build
+                .package
+                .as_deref()
+                .or(task.package.as_deref())
+                .is_some_and(|p| opts.packages.iter().any(|want| want == p));
+        owner_ok && package_ok
+    };
+
     let mut selected: Vec<&TaskRecord> = Vec::new();
     let mut unattributed = 0usize;
     for task in dataset.tasks.values() {
-        if !in_window(task) || !arch_ok(task) {
+        if !in_window(task) || !arch_ok(task) || !attributed_ok(task) {
             continue;
         }
         let class = scratchness(task);
@@ -1073,6 +1112,92 @@ mod tests {
                 .iter()
                 .any(|r| r.arch == "ppc64le" && r.builds_bottlenecked == 1)
         );
+    }
+
+    #[test]
+    fn an_owner_filter_narrows_to_that_account() {
+        // The question a maintainer asks of a published store: how did my
+        // own builds fare. Build 1 is alice's; nothing else is.
+        let mut ds = dataset();
+        let mut mine = build(1, false);
+        mine.owner = Some("alice".into());
+        ds.builds.insert("fedora:1".into(), mine);
+        let mut theirs = build(2, true);
+        theirs.owner = Some("bob".into());
+        ds.builds.insert("fedora:2".into(), theirs);
+
+        let out = run(
+            &ds,
+            &ReportOpts {
+                owners: vec!["alice".into()],
+                ..Default::default()
+            },
+        );
+        let arches: Vec<&str> = out.arches.iter().map(|r| r.arch.as_str()).collect();
+        assert!(arches.contains(&"aarch64"), "{arches:?}"); // alice's build
+        assert!(!arches.contains(&"ppc64le"), "{arches:?}"); // bob's
+
+        // An account nobody used reports nothing rather than everything,
+        // which is the failure mode of an ignored filter.
+        let none = run(
+            &ds,
+            &ReportOpts {
+                owners: vec!["nobody".into()],
+                ..Default::default()
+            },
+        );
+        assert!(none.arches.is_empty(), "{:?}", none.arches);
+    }
+
+    #[test]
+    fn a_package_filter_narrows_and_an_unattributed_task_drops_out() {
+        let mut ds = dataset();
+        let mut b = build(1, false);
+        b.package = Some("foo".into());
+        ds.builds.insert("fedora:1".into(), b);
+        let mut other = build(2, true);
+        other.package = Some("bar".into());
+        ds.builds.insert("fedora:2".into(), other);
+
+        let out = run(
+            &ds,
+            &ReportOpts {
+                packages: vec!["foo".into()],
+                ..Default::default()
+            },
+        );
+        let arches: Vec<&str> = out.arches.iter().map(|r| r.arch.as_str()).collect();
+        assert!(arches.contains(&"aarch64"), "{arches:?}");
+        assert!(!arches.contains(&"ppc64le"), "{arches:?}");
+        // The dataset's unattributed s390x task cannot be shown to belong
+        // to `foo`, so a narrowed report must not count it in.
+        let s390x = out.arches.iter().find(|r| r.arch == "s390x");
+        assert_eq!(
+            s390x.and_then(|r| r.queue_wait.as_ref()).map(|w| w.count),
+            Some(1),
+            "{:?}",
+            out.arches
+        );
+    }
+
+    #[test]
+    fn owner_and_package_together_are_an_intersection() {
+        let mut ds = dataset();
+        let mut b = build(1, false);
+        b.owner = Some("alice".into());
+        b.package = Some("foo".into());
+        ds.builds.insert("fedora:1".into(), b);
+
+        // Right owner, wrong package: nothing.
+        let out = run(
+            &ds,
+            &ReportOpts {
+                owners: vec!["alice".into()],
+                packages: vec!["bar".into()],
+                ..Default::default()
+            },
+        );
+        assert!(out.arches.is_empty(), "{:?}", out.arches);
     }
 
     #[test]

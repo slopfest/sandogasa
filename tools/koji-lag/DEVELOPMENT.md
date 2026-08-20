@@ -352,8 +352,11 @@ asymmetry is what lets a sweep bound its own work.
 ## Filters belong to reports, not to sweeps
 
 A sweep takes no `--owner` or `--package` filter. Everything is stored,
-so narrowing is a query: `report --owner` reads the database and involves
-the hub not at all. This also removes an inconsistency — `fetch` filtered
+so narrowing is a query: `report --owner NAME` and `report --package NAME`
+read the database and involve the hub not at all. A task whose parent build
+is absent from the selection drops out of a narrowed report rather than
+being counted into it — a child task records neither owner nor package, so
+one that cannot be attributed cannot be shown to match. This also removes an inconsistency — `fetch` filtered
 client-side while `backfill` did not — and a hazard: a store holding a
 mixture of filtered and unfiltered coverage silently under-reports, and
 nothing in a row says which sweep put it there.

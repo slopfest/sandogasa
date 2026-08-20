@@ -12,13 +12,11 @@
 
 - (2026-08-20) Two report features that follow from the tail finding, and
   neither singles anybody out.
-  - **`report --owner NAME` and `--package NAME`.** These do not exist,
-    though DEVELOPMENT.md has been claiming "narrowing is `report
-    --owner`/`--package` over the store" since the filters were taken out
-    of the sweep — fix that sentence either way. With them, a maintainer
-    can run a published store and see their own experience directly, which
-    is the right answer to "how badly am I affected" and needs no cohort
-    or naming at all.
+  - ~~**`report --owner NAME` and `--package NAME`.**~~ Done 2026-08-20.
+    Both take a comma-separated or repeated list, filter through the parent
+    build, and drop tasks that cannot be attributed rather than counting
+    them in. DEVELOPMENT.md had been claiming these existed ever since the
+    filters were removed from the sweep; that sentence is now true.
   - **Cohort rows: top N submitters by volume, the next M, and the rest.**
     Publishable, and it carries the finding without a name. Measured for
     2026-07, official builds by people (338 submitters), s390x: the top

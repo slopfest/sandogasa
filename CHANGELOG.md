@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### koji-lag: `report --owner` and `--package`
+
+DEVELOPMENT.md has claimed, ever since the sweep filters were removed, that
+"narrowing is a query: `report --owner` reads the database". It did not
+exist. It does now, along with `--package`, both taking a comma-separated or
+repeated list.
+
+They filter through the parent build, since a child task records neither
+owner nor package, and a task whose build is not in the selection drops out
+rather than being counted in — the rule `--scratch` already follows, for the
+same reason: an unattributable task cannot be shown to match.
+
+The point is that a published store answers "how badly am I affected"
+directly, which is the honest alternative to publishing per-person figures.
+The account is whatever Koji records, so a service wants its full name:
+`koschei/koschei-backend01.rdu3.fedoraproject.org` rather than `koschei`.
+
+### Dependencies: h2 0.4.13 to 0.4.16
+
+RUSTSEC-2026-0258, unbounded empty DATA frames, published 2026-08-17. It
+reaches us only through hyper and reqwest, and the exposure is a
+denial-of-service on data from TLS endpoints we already trust, so by the
+range policy in DEVELOPMENT.md this did not need to be urgent — but the
+advisory's fix is a semver-compatible patch, which is cheaper than reasoning
+about it.
+
+0.4.16 rather than the newest 0.4.18: that is the minimum the advisory names,
+and Fedora currently has 0.4.17, so requiring the minimum keeps the
+requirement satisfiable from what the distro ships.
+
 ### koji-lag: `probe` sizes a backfill before you start one
 
 Deciding whether to collect six months of history meant guessing, and

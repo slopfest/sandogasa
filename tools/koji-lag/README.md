@@ -133,7 +133,17 @@ DEVELOPMENT.md.
 koji-lag report --store lag.sqlite --since 2026-07-15 --until 2026-07-21
 koji-lag report --store lag.sqlite --since 2026-07-15 --arch s390x,ppc64le
 koji-lag report --store lag.sqlite --scratch --json
+koji-lag report --store lag.sqlite --owner yourname --since 2026-07-15
+koji-lag report --store lag.sqlite --package gcc,llvm --arch s390x
 ```
+
+`--owner` and `--package` narrow to particular accounts or source packages,
+comma-separated or repeated. Both come from the parent build, so a task whose
+build is not in the selected period drops out rather than being counted in.
+The account is whatever Koji records, which for a service is a long name:
+`koschei/koschei-backend01.rdu3.fedoraproject.org`, not `koschei`. This is
+what lets a published store answer "how badly am I affected" without anyone
+publishing a per-person report.
 
 `--since`/`--until` choose the period, and the store selects a build's
 child tasks by the build, so a build finishing minutes before midnight

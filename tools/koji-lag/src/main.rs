@@ -311,6 +311,19 @@ struct ReportArgs {
     #[arg(long, value_delimiter = ',', value_name = "ARCH,...")]
     arch: Vec<String>,
 
+    /// Restrict to builds by these accounts (CSV or repeated).
+    ///
+    /// The account exactly as Koji records it, which for a service is a
+    /// long name: `koschei/koschei-backend01.rdu3.fedoraproject.org`
+    /// rather than `koschei`. Answers "how did my own builds fare"
+    /// without anybody having to publish a per-person report.
+    #[arg(long, value_delimiter = ',', value_name = "NAME,...")]
+    owner: Vec<String>,
+
+    /// Restrict to these source packages (CSV or repeated).
+    #[arg(long, value_delimiter = ',', value_name = "NAME,...")]
+    package: Vec<String>,
+
     /// Only scratch builds.
     #[arg(long, conflicts_with = "official")]
     scratch: bool,
@@ -645,6 +658,8 @@ fn cmd_probe(args: &ProbeArgs) -> Result<(), Box<dyn Error>> {
 fn cmd_report(args: &ReportArgs) -> Result<(), Box<dyn Error>> {
     let mut opts = report::ReportOpts {
         arches: args.arch.clone(),
+        owners: args.owner.clone(),
+        packages: args.package.clone(),
         include_failed: args.include_failed,
         min_samples: args.min_samples,
         ..Default::default()
