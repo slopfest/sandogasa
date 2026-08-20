@@ -226,26 +226,65 @@
   against ppc64le's 23.1, and it falls an order of magnitude behind
   roughly monthly because that capacity is thin, not because it fails.
 
-  What did *not* explain anything, recorded so nobody spends the time
-  twice: the count of enabled builders. Koji's hub keeps full
-  `host_config` history — `queryHistory(tables=['host_config'])` returns
-  12,593 revisions with `enabled`, `capacity`, `arches` and validity
-  timestamps, so this is backfillable rather than something to start
-  collecting — and s390x held 18-19 enabled hosts at 90-93 capacity
-  straight through every stall and every calm day alike. During the May
-  outage the only change was a host being *re*-enabled. Configured
-  capacity was present and not serving, so the administrative explanation
-  is ruled out; what is missing from history is `ready`, the live
-  check-in state, which only `listHosts` reports and only for now.
+  **The two outages have different causes, and the hub's own history
+  names one of them.** Koji keeps full `host_config` history —
+  `queryHistory(tables=['host_config'])` returns 12,593 revisions with
+  `enabled`, `capacity`, `arches` and validity timestamps, back to 2020 —
+  so builder capacity is backfillable rather than something to start
+  collecting.
 
-  Worth collecting anyway, for the denominator rather than the diagnosis:
-  capacity per architecture over time turns throughput into utilisation,
-  and would show whether the s390x fleet has been shrinking across
-  releases. Note that a point-in-time reconstruction from those revisions
-  needs care — a first attempt computed 16 enabled ppc64le hosts on a day
-  29 of them demonstrably ran work, so the overlapping-revision logic
-  wants a test against observed hosts before anything is published from
-  it.
+  - **ppc64le, 2025-11-11: administrative.** Half the fleet was disabled
+    from 11-06 to 11-11 — 32 hosts at capacity 64 down to 16 at 32 — and
+    the hosts involved carry `rdu3` names, so this looks like the
+    datacentre move. Throughput of 6.7 against an ordinary 23.1 is what
+    running on half a fleet looks like, and calling it an outage in the
+    sense of a failure overstates it.
+  - **s390x, 2026-05-07: not administrative.** 18 hosts stayed enabled at
+    capacity 90 and *none of them served a single task*. A storage
+    problem, tracked as
+    https://forge.fedoraproject.org/infra/tickets/issues/13326, which is
+    exactly the shape such a failure leaves in this data: capacity
+    present, throughput zero.
+
+  What history does not keep is `ready`, the live check-in state, which
+  distinguishes those two without recourse to memory. Only `listHosts`
+  reports it and only for the present, so that remains the one thing a
+  snapshot collector would genuinely add.
+
+  (An earlier note here claimed the reconstruction was untrustworthy
+  because it found 16 enabled ppc64le hosts on a day 29 served. The
+  reconstruction was right and the check was wrong: it compared a noon
+  snapshot against activity from the whole day, and 15 of those hosts were
+  re-enabled at 23:04. Validated at matching instants, served never
+  exceeds enabled.)
+
+- (2026-08-20) **Which builders share a machine is inferable, and s390x is
+  concentrated enough that it matters.** Hosts on one physical mainframe
+  get maintained together, so simultaneous `host_config` changes cluster
+  them — and for s390x the clusters are unambiguous:
+
+  | group | hosts | changes in the same minute | enabled capacity |
+  |:--|:--|--:|--:|
+  | A | `buildvm-s390x-01..14` | 30 | 75.0 (82%) |
+  | B | `buildvm-s390x-15..24` | 17 | 16.5 (18%) |
+  | C | `buildvm-s390x-25..35` | — | all disabled |
+
+  Fourteen hosts are not disabled together thirty times by coincidence, and
+  group A's members are individually larger too (capacity 6.0 against
+  group B's 3.0). So **82% of Fedora's s390x capacity shares one
+  maintenance group**, and if that group is one physical machine, losing it
+  costs four fifths of the architecture.
+
+  The May outage was *not* that, though: both groups went to zero on the
+  same day, so it was site- or storage-level rather than one mainframe.
+  Which means the concentration is a latent risk the store has not yet
+  seen realised — worth saying plainly in the write-up, and worth
+  confirming against infrastructure rather than asserting from
+  correlation alone, since a shared maintenance window is evidence of
+  shared handling and not proof of shared hardware.
+
+  Same method applies to the other architectures; ppc64le's November
+  grouping (16 disabled at once) suggests it is similarly clustered.
 
   Still to do: label each stall against the rebuild windows in the output,
   which is what `reports --schedule` should emit.
