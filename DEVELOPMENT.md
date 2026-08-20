@@ -123,6 +123,38 @@ gate over and over, because then those trees are live caches and each
 iteration becomes a full instrumented rebuild. `cargo clean` is for
 stepping away from the repo, or for running out of space for real.
 
+## Take a setting and its override together, or neither
+
+If a crate adopts a tuneable that another crate already has — a timeout, a
+retry budget, a page size — it must adopt the *switch* along with the
+value. A hardcoded constant borrowed from a sibling leaves the caller with
+a wall and no door, and the wall is invisible until it is in the way.
+
+`sandogasa-kojihub` did exactly this. `sandogasa-koji` has
+`SANDOGASA_KOJI_TIMEOUT` with a documented convention — seconds, and `0`
+means wait forever — while the hub client carried a bare
+`.timeout(Duration::from_secs(180))`. Both crates talk to the same Koji,
+so anyone who had already raised the limit for one path reasonably
+expected it to apply to the other, and it did not. The cost was not
+theoretical: a deep `koji-lag` sweep abandons a page at the bound and the
+retry pays the hub cost again, so the missing override could stop a
+backfill progressing rather than merely slow it, with no way to say
+otherwise short of editing the source.
+
+Practically:
+
+- **Reuse the sibling's variable name** unless the two really are
+  different questions. One knob for "how long may a Koji request take" is
+  easier to reason about than two that interact.
+- **Reuse its conventions too** — the same units and the same meaning for
+  edge values. `0` meaning unbounded in one crate and one second in
+  another is worse than having no override at all.
+- **Offer the flag as well as the environment** where a caller may know
+  better per-run than per-shell, and let the flag win.
+- **Say where the default came from** in the doc comment. A number with a
+  measurement behind it can be revised by taking a new measurement; a
+  number with nothing behind it never gets revised at all.
+
 ## Config files layer: /etc, then ~/.config, then the command line
 
 Every tool's config is read in layers: an optional system-wide

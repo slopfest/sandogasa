@@ -102,6 +102,16 @@ impl HubClient {
         }
     }
 
+    /// A client whose requests are bound by `timeout` rather than by
+    /// [`crate::xmlrpc::configured_timeout`]; `None` is unbounded.
+    pub fn with_timeout(hub_url: &str, timeout: Option<std::time::Duration>) -> Self {
+        let hub_url = hub_url.trim_end_matches('/').to_string();
+        Self {
+            client: Client::with_timeout(&hub_url, timeout),
+            hub_url,
+        }
+    }
+
     pub fn url(&self) -> &str {
         &self.hub_url
     }

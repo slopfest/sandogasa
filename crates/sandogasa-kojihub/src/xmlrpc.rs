@@ -127,6 +127,47 @@ impl From<quick_xml::Error> for Error {
     }
 }
 
+/// Default bound on a single hub request.
+///
+/// **Sized for the first page into a cold region, not for the steady
+/// state.** Those differ by most of an order of magnitude and the steady
+/// state is what a casual measurement finds: listing January 2025 at
+/// twenty months' depth settled at 27-34s a 4000-row page across nine
+/// consecutive pages, while the first page into that stretch exceeded
+/// 180s and was abandoned there.
+///
+/// The two failure modes are not symmetric, which is why this errs high.
+/// Too low discards work that was nearly done and charges the hub for it
+/// again — three times, with retries — and a deep sweep can stop making
+/// progress rather than merely slow down. Too high only delays noticing a
+/// genuine hang, which the duty-cycle pacing and the retry budget already
+/// tolerate.
+pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Environment variable overriding [`DEFAULT_TIMEOUT`], in seconds.
+///
+/// The same variable `sandogasa-koji` uses for the `koji` CLI,
+/// deliberately: it is one knob for "how long may a Koji request take",
+/// and whoever has had to raise it for one path usually means both. A
+/// value of `0` waits forever, for a caller willing to block.
+///
+/// A setting and its override belong together — a crate that takes the
+/// first without the second leaves the caller with a wall and no door.
+pub const TIMEOUT_ENV: &str = "SANDOGASA_KOJI_TIMEOUT";
+
+/// The configured request bound: the environment if it says so, else
+/// [`DEFAULT_TIMEOUT`]. `None` means no bound at all.
+pub fn configured_timeout() -> Option<std::time::Duration> {
+    match std::env::var(TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+    {
+        Some(0) => None,
+        Some(secs) => Some(std::time::Duration::from_secs(secs)),
+        None => Some(DEFAULT_TIMEOUT),
+    }
+}
+
 /// XML-RPC client that communicates with a hub endpoint.
 pub struct Client {
     http: reqwest::blocking::Client,
@@ -134,31 +175,49 @@ pub struct Client {
 }
 
 impl Client {
+    /// A client bound by [`configured_timeout`].
     pub fn new(hub_url: &str) -> Self {
+        Self::with_timeout(hub_url, configured_timeout())
+    }
+
+    /// A client bound by `timeout`, or unbounded when it is `None`.
+    ///
+    /// For a caller that knows better than the environment does — a deep
+    /// sweep that has measured what its own pages cost, say.
+    pub fn with_timeout(hub_url: &str, timeout: Option<std::time::Duration>) -> Self {
         sandogasa_cli::install_crypto_provider();
+        let builder = reqwest::blocking::Client::builder()
+            // Fedora's infrastructure TARPITS requests without
+            // a User-Agent: the same heavy listTasks query
+            // completes with one and times out without one
+            // (measured live, 2026-07). reqwest sends none by
+            // default — always identify ourselves.
+            .user_agent(concat!("sandogasa-kojihub/", env!("CARGO_PKG_VERSION")))
+            // Match the koji CLI's HTTP/1.1; h2 to the hub
+            // showed additional hangs during the same testing.
+            .http1_only()
+            // Fedora's proxy stack also stalls heavy queries
+            // sent over a REUSED keep-alive connection
+            // (reproduced with curl --next: fresh connection
+            // ~3-90s, reused connection times out), so don't
+            // pool connections at all — the handshake cost is
+            // noise next to the queries and the polite pacing.
+            .pool_max_idle_per_host(0);
+        // Heavy queries (multi-MB decoded task pages) have been observed
+        // taking 90+ seconds on a loaded hub and about 300s at twenty
+        // months' depth. Past the bound the request is abandoned and the
+        // retry pays the hub cost again, so too low a value stops a deep
+        // sweep progressing rather than merely slowing it.
+        //
+        // Unbounded is the *absence* of a bound, not a very large one:
+        // reqwest adds the duration to an `Instant`, and a sentinel near
+        // `u64::MAX` overflows when it does.
+        let builder = match timeout {
+            Some(bound) => builder.timeout(bound),
+            None => builder,
+        };
         Self {
-            http: reqwest::blocking::Client::builder()
-                // Fedora's infrastructure TARPITS requests without
-                // a User-Agent: the same heavy listTasks query
-                // completes with one and times out without one
-                // (measured live, 2026-07). reqwest sends none by
-                // default — always identify ourselves.
-                .user_agent(concat!("sandogasa-kojihub/", env!("CARGO_PKG_VERSION")))
-                // Match the koji CLI's HTTP/1.1; h2 to the hub
-                // showed additional hangs during the same testing.
-                .http1_only()
-                // Fedora's proxy stack also stalls heavy queries
-                // sent over a REUSED keep-alive connection
-                // (reproduced with curl --next: fresh connection
-                // ~3-90s, reused connection times out), so don't
-                // pool connections at all — the handshake cost is
-                // noise next to the queries and the polite pacing.
-                .pool_max_idle_per_host(0)
-                // Heavy queries (multi-MB decoded task pages) have
-                // been observed taking 90+ seconds on a loaded hub.
-                .timeout(std::time::Duration::from_secs(180))
-                .build()
-                .expect("build reqwest client"),
+            http: builder.build().expect("build reqwest client"),
             // Normalised, so a hub given as ".../kojihub/" is the same
             // client as one given as ".../kojihub" — the difference is a
             // typo, not a different hub.
