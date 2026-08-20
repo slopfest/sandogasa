@@ -26,10 +26,10 @@
 //! and both are worth hearing about.
 
 use chrono::NaiveDate;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A curated note about one measured window.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Note {
     /// Instance key the window belongs to, e.g. `fedora`.
     pub instance: String,
@@ -84,6 +84,16 @@ impl Note {
         };
         (day(self.from), day(self.to) + 86_400.0)
     }
+}
+
+/// The annotations shipped with the tool.
+///
+/// Compiled in rather than read from `data/`, because that directory is a
+/// source tree and an installed binary has no access to it. An operator
+/// with more to add passes a file of their own, which is merged with
+/// these.
+pub fn builtin() -> Result<Vec<Note>, String> {
+    parse(include_str!("../data/outages.toml"))
 }
 
 /// Every note in a file, and it is an error for one to be malformed rather

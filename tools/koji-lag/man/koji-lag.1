@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH koji-lag 1 2026-08-19 "sandogasa 0.20.0" "Sandogasa Manual"
+.TH koji-lag 1 2026-08-20 "sandogasa 0.20.0" "Sandogasa Manual"
 .SH NAME
 koji\-lag \- Quantify Koji build queue lag and per\-arch build\-time drag
 .SH SYNOPSIS
@@ -15,6 +15,47 @@ Print help
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
+.SS koji-lag events
+\fBkoji\-lag events\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-o\fR|\fB\-\-out\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-schedule\fR] [\fB\-\-annotations\fR] [\fB\-\-min\-samples\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Report the mass rebuilds and architecture stalls in a store
+.TP
+\fB\-\-store\fR \fI<FILE>\fR
+Store to read from
+.TP
+\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
+Known Koji instance (cbs, fedora, stream)
+.TP
+\fB\-o\fR, \fB\-\-out\fR \fI<DIR>\fR
+Directory to write the events tree into
+.TP
+\fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
+First day to consider (default: everything the store holds)
+.TP
+\fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
+Last day to consider, inclusive
+.TP
+\fB\-\-schedule\fR \fI<DIR>\fR
+Release schedule checkout, for announced dates.
+
+One `f\-NN/Fedora.Schedule.xml` per release. With it, a rebuild reports the dates it was announced for beside the ones it ran on, and every event names the release cycle it fell in.
+.TP
+\fB\-\-annotations\fR \fI<FILE>\fR
+Extra outage causes, merged with the built\-in ones.
+
+Same form as the tool\*(Aqs own `data/outages.toml`. An entry that matches no detected event is reported rather than ignored.
+.TP
+\fB\-\-min\-samples\fR \fI<MIN_SAMPLES>\fR [default: 5]
+Withhold report stats below this sample count
+.TP
+\fB\-\-format\fR \fI<FORM,...>\fR
+Output forms: text, json, csv (comma\-separated or repeated)
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Name each event as it is written
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag export
 \fBkoji\-lag export\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-o\fR|\fB\-\-out\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP

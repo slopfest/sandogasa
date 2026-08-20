@@ -26,6 +26,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Report the mass rebuilds and architecture stalls in a store.
+    Events(EventsArgs),
     /// Write a store's rows out as CSV, for analysis elsewhere.
     Export(ExportArgs),
     /// Read JSON datasets into the store.
@@ -41,6 +43,61 @@ enum Command {
     Reports(ReportsArgs),
     /// Fetch whatever the store is missing for a window.
     Sync(SyncArgs),
+}
+
+#[derive(clap::Args)]
+struct EventsArgs {
+    /// Store to read from.
+    #[arg(long, value_name = "FILE")]
+    store: PathBuf,
+
+    /// Known Koji instance (cbs, fedora, stream).
+    #[arg(long, default_value = "fedora")]
+    instance: String,
+
+    /// Directory to write the events tree into.
+    #[arg(short, long, value_name = "DIR")]
+    out: PathBuf,
+
+    /// First day to consider (default: everything the store holds).
+    #[arg(long, value_name = "YYYY-MM-DD")]
+    since: Option<String>,
+
+    /// Last day to consider, inclusive.
+    #[arg(long, value_name = "YYYY-MM-DD")]
+    until: Option<String>,
+
+    /// Release schedule checkout, for announced dates.
+    ///
+    /// One `f-NN/Fedora.Schedule.xml` per release. With it, a rebuild
+    /// reports the dates it was announced for beside the ones it ran
+    /// on, and every event names the release cycle it fell in.
+    #[arg(long, value_name = "DIR")]
+    schedule: Option<PathBuf>,
+
+    /// Extra outage causes, merged with the built-in ones.
+    ///
+    /// Same form as the tool's own `data/outages.toml`. An entry that
+    /// matches no detected event is reported rather than ignored.
+    #[arg(long, value_name = "FILE")]
+    annotations: Option<PathBuf>,
+
+    /// Withhold report stats below this sample count.
+    #[arg(long, default_value_t = 5)]
+    min_samples: usize,
+
+    /// Output forms: text, json, csv (comma-separated or repeated).
+    #[arg(
+        long,
+        value_name = "FORM,...",
+        value_delimiter = ',',
+        hide_possible_values = true
+    )]
+    format: Vec<koji_lag::pool::Format>,
+
+    /// Name each event as it is written.
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[derive(clap::Args)]
@@ -268,6 +325,7 @@ fn main() -> ExitCode {
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     let result = match cli.command {
         Command::Report(args) => cmd_report(&args),
+        Command::Events(args) => cmd_events(&args),
         Command::Reports(args) => cmd_reports(&args),
         Command::Export(args) => cmd_export(&args),
         Command::Import(args) => cmd_import(&args),
@@ -398,6 +456,100 @@ fn cmd_import(args: &ImportArgs) -> Result<(), Box<dyn Error>> {
             counts.builds, counts.tasks
         );
     }
+    Ok(())
+}
+
+fn cmd_events(args: &EventsArgs) -> Result<(), Box<dyn Error>> {
+    let (instance_key, _) = instance::resolve(&args.instance, None)?;
+    let store = koji_lag::store::Store::open(&args.store)?;
+    // Default to everything listed, so the interesting windows are found
+    // without anybody having to know when they were.
+    let days = koji_lag::pool::days_in_store(&store, &instance_key)?;
+    let midnight = |d: &chrono::NaiveDate| {
+        d.and_hms_opt(0, 0, 0)
+            .expect("midnight")
+            .and_utc()
+            .timestamp() as f64
+    };
+    let (mut from, mut to) = match (days.first(), days.last()) {
+        (Some(a), Some(b)) => (midnight(a), midnight(b) + 86_400.0),
+        _ => return Err("the store holds no listed days".into()),
+    };
+    if let Some(date) = &args.since {
+        from = from.max(fetch::date_to_ts(date)?);
+    }
+    if let Some(date) = &args.until {
+        to = to.min(fetch::date_to_ts(date)? + 86_400.0);
+    }
+
+    let schedule = match &args.schedule {
+        Some(dir) => koji_lag::schedule::events(dir)?,
+        None => Vec::new(),
+    };
+    let mut notes = koji_lag::annotate::builtin()?;
+    if let Some(path) = &args.annotations {
+        notes.extend(koji_lag::annotate::read(path)?);
+    }
+
+    let events = koji_lag::events::assemble(&store, &instance_key, from, to, &schedule, &notes)?;
+    let formats = Format::for_files(&args.format);
+    let mut files = 0;
+    for event in &events {
+        files += koji_lag::events::write(&args.out, event)?.len();
+        // The window's own numbers, beside the summary of it: per-class
+        // figures for a rebuild, per-arch for a stall.
+        let dataset = store.dataset_for(
+            &instance_key,
+            event.from,
+            event.to,
+            fetch::CREATE_GRACE_SECS,
+        )?;
+        let output = report::run(
+            &dataset,
+            &report::ReportOpts {
+                period: Some((event.from, event.to)),
+                ..Default::default()
+            },
+        );
+        files += koji_lag::pool::write(
+            &koji_lag::events::dir(&args.out, event),
+            &output,
+            args.min_samples,
+            &formats,
+        )?
+        .len();
+        if args.verbose {
+            eprintln!("[koji-lag] events: {}", event.slug());
+        }
+    }
+
+    // An annotation matching nothing is a gap in the record or a mistake
+    // in the note, and either way silence would hide it.
+    for note in koji_lag::events::unmatched(&events, &instance_key, &notes) {
+        eprintln!(
+            "warning: annotation for {} {} ({} .. {}) matched no event",
+            note.instance,
+            note.arch.as_deref().unwrap_or("all arches"),
+            note.from,
+            note.to
+        );
+    }
+    let unexplained = events
+        .iter()
+        .filter(|e| e.kind == koji_lag::events::Kind::Outage && e.causes.is_empty())
+        .count();
+    if unexplained > 0 {
+        eprintln!(
+            "note: {unexplained} outage(s) have no recorded cause; \
+             see data/outages.toml"
+        );
+    }
+    eprintln!(
+        "events: {} in {} file(s) -> {}",
+        events.len(),
+        files,
+        args.out.join("events").display()
+    );
     Ok(())
 }
 

@@ -15,6 +15,7 @@ pub mod annotate;
 pub mod class;
 pub mod csv;
 pub mod dataset;
+pub mod events;
 pub mod export;
 pub mod fetch;
 pub mod import;

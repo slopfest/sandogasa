@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### koji-lag: a new `events` command, for the windows nobody scheduled
+
+Reports were written per calendar period, which is the wrong shape for the
+things worth reporting. A three-day s390x failure in May 2026 — every build
+needing that architecture waiting up to two days while the others were served
+in one minute — appeared only as a slightly worse May, and a mass rebuild
+announced across four weeks but submitted in four was reported against the
+four weeks. Anyone wanting either had to know it had happened and go looking.
+
+`koji-lag events` finds them instead, and writes one directory per window
+into a flat chronological `events/` tree. Over fourteen months of Fedora it
+finds 22: the three mass rebuilds, and nineteen days where one architecture
+fell an order of magnitude behind its peers.
+
+Mass rebuilds are dated from who submitted each day rather than from the
+schedule, because the two disagree. releng's share of a day's builds turns
+out to separate cleanly — under 1% on 254 of 267 days measured and above 25%
+on the eleven that were rebuilds — so no threshold needs tuning. Given
+`--schedule`, a rebuild reports the announced dates beside the observed ones.
+
+Stalls are found from queue wait relative to the other architectures, and
+then *explained* from throughput, which distinguishes two things a wait
+figure cannot: 17 of the 19 are congestion, where the architecture ran
+several times its ordinary concurrency and still fell behind, and two are
+outages, where the queue grew while throughput fell. The May window is one of
+those — s390x ran no tasks whatsoever on 05-07 against a queue of 412, having
+managed 5.9 concurrent the day before.
+
+Causes come from a committed `data/outages.toml` and are matched to events by
+overlapping dates rather than exact ones, so a note keeps matching when a
+window's edges move as data arrives. An outage with no recorded cause says
+so, and an annotation matching no event is reported rather than dropped.
+Two are shipped: May's storage failure, and the November 2025 halving of the
+ppc64le fleet for the datacentre move.
+
+Also adds a single place where a build's class is decided, since every
+per-class figure had been computing it at the call site and two of those
+tests silently matched nothing — ELN's sync account was renamed mid-store,
+and koschei's name carries a datacentre that changed, so an equality test on
+it matched none of its 2.3 million builds. Classification now prefers the
+build target, which survives both.
+
 ### koji-lag: pages of 4000 tasks by default, and a corrected claim about depth
 
 DEVELOPMENT.md said `createdBefore` "costs the same wherever it points",

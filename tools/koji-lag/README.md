@@ -31,6 +31,58 @@ No external tools required.
 
 ## Usage
 
+### Events
+
+Find the windows worth looking at and write one directory per window:
+
+```sh
+koji-lag events --store lag.sqlite -o reports/ \
+    --schedule ~/src/fedora-pgm-schedule
+```
+
+Two kinds are detected. A **mass rebuild** is found from who submitted each
+day, so it is dated from what happened rather than from what was announced —
+with `--schedule` both are reported, and they differ: F45's was announced
+across four weeks and submitted in four days. A **stall** is one architecture
+falling an order of magnitude behind the others, and each is labelled from
+throughput: `congestion` when its builders were working harder than usual and
+still fell behind, `outage` when they did less than usual while the queue
+grew.
+
+Output is a flat, chronological `events/` tree, because most stalls belong to
+no release event and a per-release tree has nowhere to put them:
+
+```
+events/2026-05-06-s390x-outage/event.txt      # the summary below
+events/2026-05-06-s390x-outage/event.json     # the same, for machines
+events/2026-05-06-s390x-outage/report.txt     # the window's own report
+events/2026-07-15-mass-rebuild/…
+```
+
+Each `event.txt` gives what was measured and, where somebody has written it
+down, what caused it:
+
+```
+outage on s390x
+============================================================
+
+  when       2026-05-06 .. 2026-05-08 (3 days)
+  release    f44
+  worst wait 46.0h, against 1m for the other architectures (3779x)
+  throughput 4.7 tasks at once, 0.0 at its worst, against 6.3 ordinarily
+  queue      341 tasks waiting
+  tasks      860 created, 129 never ran
+
+  cause      storage
+  ticket     https://forge.fedoraproject.org/infra/tickets/issues/13326
+```
+
+Causes come from `data/outages.toml`, which ships with the tool; `--annotations
+FILE` merges in more. They are matched to events by overlapping dates rather
+than exact ones, so a note keeps matching when a window's edges move. An
+outage with no cause recorded says so, and an annotation matching no event is
+reported rather than dropped.
+
 ### Export
 
 Write the store's rows out as CSV, for analysis in other tools:
