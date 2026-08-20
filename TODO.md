@@ -212,15 +212,43 @@
   May's 46 hours at 3,779x, and 1,600 tasks across those 14 events never
   ran at all.
 
-  Two remaining pieces of work follow from that. The detector reports
-  congestion inside a rebuild window as a stall too, correctly — the five
-  it found there are the rebuilds queueing behind themselves — so the
-  caller has to date each against the rebuild windows and label it, which
-  is what `reports --schedule` should emit. And the recurring ones want a
-  cause: check whether they line up with the s390x builder count, with
-  Fedora infrastructure outage windows, or with the ELN and post-branch
-  bursts that two of them coincide with (2025-08-15 is the F43
-  post-branch spike; 2026-06-24 is an ELN side-tag burst).
+  **Why each one happened is now answered from the store, and the answer
+  is mostly "the builders were working".** Throughput separates the two
+  reasons a queue grows, and it needed no new collection: 17 of the 19 are
+  congestion, where the architecture ran several times its ordinary
+  concurrency and still fell behind, and only **two are outages** — the
+  May event, where s390x ran *nothing at all* on 05-07 against a queue of
+  412 having managed 5.9 the day before, and a single ppc64le day on
+  2025-11-11 at 6.7 against an ordinary 23.1.
+
+  So the recurring monthly stalls are demand, not broken hardware, which
+  reframes them: s390x has an ordinary throughput of 6.3 concurrent tasks
+  against ppc64le's 23.1, and it falls an order of magnitude behind
+  roughly monthly because that capacity is thin, not because it fails.
+
+  What did *not* explain anything, recorded so nobody spends the time
+  twice: the count of enabled builders. Koji's hub keeps full
+  `host_config` history — `queryHistory(tables=['host_config'])` returns
+  12,593 revisions with `enabled`, `capacity`, `arches` and validity
+  timestamps, so this is backfillable rather than something to start
+  collecting — and s390x held 18-19 enabled hosts at 90-93 capacity
+  straight through every stall and every calm day alike. During the May
+  outage the only change was a host being *re*-enabled. Configured
+  capacity was present and not serving, so the administrative explanation
+  is ruled out; what is missing from history is `ready`, the live
+  check-in state, which only `listHosts` reports and only for now.
+
+  Worth collecting anyway, for the denominator rather than the diagnosis:
+  capacity per architecture over time turns throughput into utilisation,
+  and would show whether the s390x fleet has been shrinking across
+  releases. Note that a point-in-time reconstruction from those revisions
+  needs care — a first attempt computed 16 enabled ppc64le hosts on a day
+  29 of them demonstrably ran work, so the overlapping-revision logic
+  wants a test against observed hosts before anything is published from
+  it.
+
+  Still to do: label each stall against the rebuild windows in the output,
+  which is what `reports --schedule` should emit.
 
 - (2026-08-20) Retire "build volume" as a measure, and say why in the
   write-up: Fedora's largest single source of builds is almost invisible
