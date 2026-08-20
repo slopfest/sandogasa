@@ -200,10 +200,27 @@
 
   This matters for how the s390x question gets framed: the architecture's
   worst days in the store are not its mass-rebuild days. 2,243 minutes
-  beats every rebuild day measured, by five times. A detector wants
-  something like "one architecture's wait exceeds the others' by an order
-  of magnitude for a day or more", reported as its own kind of window
-  beside the rebuilds, with the count of tasks that never ran.
+  beats every rebuild day measured, by five times.
+
+  `crate::stall` now finds these — one architecture's daily mean exceeding
+  the median of its peers tenfold, with an hour's floor and a 50-task
+  minimum — and its first run over the store says May was not a freak but
+  the extreme of a recurring pattern. **19 stalls in 14 months, 14 of them
+  outside any rebuild window**, all but two on s390x (ppc64le twice, on
+  2025-09-19 and 2025-11-11). So an ordinary month carries about one
+  single-architecture stall, ranging from 1.3 hours at 31x the fleet up to
+  May's 46 hours at 3,779x, and 1,600 tasks across those 14 events never
+  ran at all.
+
+  Two remaining pieces of work follow from that. The detector reports
+  congestion inside a rebuild window as a stall too, correctly — the five
+  it found there are the rebuilds queueing behind themselves — so the
+  caller has to date each against the rebuild windows and label it, which
+  is what `reports --schedule` should emit. And the recurring ones want a
+  cause: check whether they line up with the s390x builder count, with
+  Fedora infrastructure outage windows, or with the ELN and post-branch
+  bursts that two of them coincide with (2025-08-15 is the F43
+  post-branch spike; 2026-06-24 is an ELN side-tag burst).
 
 - (2026-08-20) Retire "build volume" as a measure, and say why in the
   write-up: Fedora's largest single source of builds is almost invisible
