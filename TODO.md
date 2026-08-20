@@ -263,37 +263,49 @@
     ran 2025-07-23 to 08-12 on paper and the submissions were entirely
     within 07-23..26 — August 2025 holds none of it. F44 and F45 are the
     same. The schedule's end date is the branch date, not the rebuild's.
-  - A rebuild has three phases and a report should probably name them,
-    because the middle one is not what it looks like. Submission runs 3-4
-    days (F43 2025-07-23..26, F44 2026-01-16..18, F45 2026-07-15..18) at
-    79-95% `releng`. Then comes the **fallout**: s390x waits stay ruined
-    for another 3-4 days, and that is not a queue draining — it is
-    packagers fixing what the rebuild broke, some retrying transient
-    failures and some dealing with real breakage against newer
-    dependencies. The evidence is the submitter mix: distinct packagers
-    per day go 33 → 42 → 74 → 80 → 78 across F45's aftermath, with
-    individuals reaching 27% of a day's builds (`churchyard` on
-    2026-07-21, `ksurma` 19% on 07-22) which never happens otherwise.
-    Fedora's own schedule marks the phase with a "File FTBFS bugs from
-    mass rebuild" milestone.
+  - A rebuild has three phases and an event report should name them.
+    **Submission** runs 3-4 days (F43 2025-07-23..26, F44 2026-01-16..18,
+    F45 2026-07-15..18) at 79-95% `releng`, during which releng's own
+    s390x tasks queue behind each other at 2.0-4.3h medians while
+    everyone else's stay at one minute. Maintainers largely stand down —
+    non-releng official volume falls to a quarter or a third — and those
+    who keep building are enriched 2.2x to 5.5x for packages that just
+    failed. **Fallout** runs another 3-4 days: the population returns (33
+    → 42 → 74 → 80 distinct packagers across F45's aftermath) and repair
+    work mixes into resumed ordinary building, which is why the
+    failed-package enrichment washes out in that window even though it is
+    strong during submission and again in week two. Fedora's schedule
+    marks the phase with a "File FTBFS bugs from mass rebuild" milestone.
+    Then a **long tail** of months; see the FTBFS entry.
+  - An event report must apply the per-class model, or it will repeat the
+    mistake corrected on 2026-08-20: aggregating releng's self-contention
+    with everyone else's builds reports a four-hour median that describes
+    only the rebuild waiting for itself. Report releng, maintainer
+    official, packit CI, hand-submitted scratch and koschei separately,
+    and lead with p90 and max rather than the median.
   - Consequence for the eventual write-up: spreading a rebuild would
     spread the fallout too, since a maintainer cannot start fixing until
     their package has failed. Four days of submission concentrates the
-    human response into the four days after it.
+    human response into the four days after it. Note also what spreading
+    would *not* fix — contributor-facing latency is already protected by
+    priority, so the case for spreading rests on the rebuild's own
+    completion time and on the repair burden, not on unblocking anyone.
   - Report the *observed* window beside the announced one. They differ:
-    F45's rebuild was scheduled over four weeks and actually burned
-    through in six days (2026-07-16..21), F44's likewise
-    (2026-01-16..21). Our own data dates it far better than the
-    schedule does — the days where `releng` submits 79-95% of builds —
-    and the gap between planned and actual is itself a finding. The
+    F45's was scheduled over four weeks and submitted in four days
+    (2026-07-15..18), F44's likewise (2026-01-16..18, against a 01-14
+    announced start), F43's exactly on its announced start
+    (2025-07-23..26 against 07-23). Our own data dates it far better than
+    the schedule does — the days where `releng` submits 79-95% of builds
+    — and the gap between planned and actual is itself a finding. The
     schedule drifts too, visibly: its git log carries commits like
     "updating f48 schedule with correct dates".
   - Completeness already works for arbitrary windows (`Store::analysable`
     takes any from/to), so an event window that is only partly held will
     decline to report itself, as a month does.
 
-  Wait until more months are collected — the windows are only worth
-  naming once there are several cycles to compare.
+  Ready to implement: 413 unbroken days are held (2025-06-23 to
+  2026-08-10), covering F43's and F44's full cycles and F45 to branching,
+  with three rebuild windows measured consistently.
 
 - (2026-08-18) Write up the arch-bottleneck analysis for FESCo, once two
   or three full release cycles are collected — one mass rebuild is an
