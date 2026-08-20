@@ -29,6 +29,83 @@
     0.1%. Every cohort has a one-minute median, which is exactly how this
     stayed invisible.
 
+- (2026-08-20) **What to tell the infrastructure team when they ask how
+  much s390x capacity to request.** They have asked, so here is the answer
+  the data supports, with its limits.
+
+  Offered load is measured as builder-hours of work divided by window
+  hours, which for the rebuild windows comes out at 14.6 concurrent tasks
+  (F42), 26.9 (F43), 22.2 (F44) and 25.7 (F45). Offered and delivered are
+  equal in all four to within a percent, so **this is not a throughput
+  deficit** — the fleet does finish the work inside the window. It is a
+  headroom problem: releng submits in bursts, and a queue with no slack
+  turns a burst into hours of waiting.
+
+  Weighted against capacity, the four windows sit at rho 0.54, ~0.72, ~0.79
+  and 1.24, with observed median waits of 53s, 2.0h, 4.2h and 3.8h. Note
+  that F44 at rho 0.79 was *worse* than F45 at 1.24, so the rho estimates
+  carry real error and the M/M/1 formula only half-validates against them
+  (it predicts 4m where 1m was seen at F42, and 854m where 228m was seen at
+  F45). **Quote the measured anchors, not the model**: below about 0.6 the
+  waits are minutes, above about 0.7 they are hours.
+
+  At F45's offered 114 weight, against today's 92:
+
+  | goal | capacity | vs today | extra hosts at 4.9 weight |
+  |:--|--:|--:|--:|
+  | rho <= 0.7, hours become tens of minutes | 162 | 1.8x | +14 |
+  | rho <= 0.6, F42-like, waits in minutes | 190 | 2.1x | +20 |
+  | rho <= 0.5, room for a couple of cycles | 227 | 2.5x | +28 |
+
+  So the ask is **+14 to +20 builders** if today's per-task cost is taken
+  as permanent. Three things should be said with the number rather than
+  after it:
+
+  - **Diagnose before buying.** Returning mean service time to F42's 3.7m
+    from F45's 8.6m drops offered load to 48 weight — rho 0.53 at today's
+    capacity, waits in minutes, no hardware at all. The regression is worth
+    about twice the fleet. And capacity was already raised once, 57 to 96
+    weight across 2024, and the regression consumed all of it inside six
+    months; buying 2x without knowing why risks the same outcome.
+  - **This sizes for two weeks a year.** A rebuild is a batch, so capacity
+    bought for it idles between times. Pacing the rebuild over more days
+    lowers peak rho at no cost, trading rebuild duration for hardware, and
+    belongs on the table beside the purchase.
+  - **The +20 has no growth margin.** Fedora's package count only rises, so
+    rho drifts upward unaided; rho <= 0.5 is the option that survives.
+
+- (2026-08-20) **Where the service-time regression actually lives: the
+  tail, and hung builds in particular. It is not Rust.** Rust's share of
+  s390x rebuild tasks did rise as suspected — 18.5% at F42 to 26.1% at F45,
+  COSMIC and its weekly upstream releases included — and it is exonerated
+  anyway: rust packages went 3.3m to 3.8m (1.15x) while **everything else
+  went 3.8m to 10.3m (2.74x)**. Rust now builds faster than the average
+  Fedora package on s390x.
+
+  What grew is the tail. Tasks over six hours took 5.8% of s390x rebuild
+  builder-hours at F42 and 23.8% at F45 (4 tasks, then 26), and the top
+  twenty tasks alone are 21.8% of the architecture's whole rebuild.
+
+  Much of that tail is not building anything. In F45, four tasks ran to a
+  ceiling near 56 hours and produced nothing: `libredwg` (FAILED, 56.1h)
+  and `libunwind` (FAILED, 56.0h), both of which take 0.0-0.5h on every
+  other architecture and so are genuine s390x faults; and `gnulib`
+  (CANCELED, 52.0h) and `m4` (CANCELED, 50.2h), which hung at 52-56h on
+  *all four* architectures and were cancelled by hand. Those four are 214
+  builder-hours, **11.8% of s390x's entire rebuild capacity**, and neither
+  pair existed as a problem at F42 (m4 took 0.0h, gnulib 0.8h).
+
+  Wasted builder-hours — failed or cancelled — roughly doubled as a share
+  across the four: 6.8%, 12.5%, 9.1%, 12.5%.
+
+  **The cheap lever, then, is a build timeout.** Something around 40-48
+  hours would have reclaimed all 214 hours in F45 while touching nothing
+  that succeeded — `gcc` is the longest legitimate build at 37.5h, with
+  `llvm` and `vtk` at 14.2h. That is roughly a tenth of the architecture's
+  rebuild capacity recovered for the cost of a configuration change, before
+  anybody buys a machine. Worth checking what Fedora's current per-task
+  limit actually is, since these ran past 50 hours.
+
 - (2026-08-20) **ppc64le lost half its capacity in July 2025 and has not
   got it back.** From the `host_config` history now in the store: 132
   weight through 2025-06, then 64 from 2025-07 and 58-62 ever since. The
