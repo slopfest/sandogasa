@@ -23,6 +23,7 @@ pub mod pool;
 pub mod rebuild;
 pub mod report;
 pub mod schedule;
+pub mod stall;
 pub mod stats;
 pub mod store;
 pub mod sweep;

@@ -715,6 +715,55 @@ impl Store {
         Ok(days)
     }
 
+    /// Each architecture's queue wait per UTC day of task *creation*, for
+    /// the days in `[from, to)`.
+    ///
+    /// The basis for finding single-architecture stalls; see
+    /// [`crate::stall`], which explains why creation day rather than start
+    /// day is the honest bucket here. Counts `buildArch` tasks only —
+    /// they are the work that needs a builder of that architecture — and
+    /// includes those that never started, since a stall's clearest symptom
+    /// is work that never ran at all.
+    pub fn arch_wait_by_day(
+        &self,
+        instance: &str,
+        from: f64,
+        to: f64,
+    ) -> Result<Vec<crate::stall::Day>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT cast(create_ts / 86400 AS INTEGER) * 86400 AS day, arch,
+                        count(*),
+                        sum(CASE WHEN start_ts IS NOT NULL THEN 1 ELSE 0 END),
+                        avg(CASE WHEN start_ts IS NOT NULL
+                                 THEN start_ts - create_ts END)
+                 FROM tasks
+                 WHERE instance = ?1 AND method = 'buildArch'
+                   AND arch IS NOT NULL
+                   AND create_ts >= ?2 AND create_ts < ?3
+                 GROUP BY day, arch ORDER BY day, arch",
+            )
+            .map_err(|e| e.to_string())?;
+        let days = stmt
+            .query_map(params![instance, from, to], |r| {
+                Ok(crate::stall::Day {
+                    at: r.get::<_, i64>(0)? as f64,
+                    arch: r.get(1)?,
+                    created: r.get::<_, i64>(2)? as usize,
+                    started: r.get::<_, i64>(3)? as usize,
+                    // No started task means no wait to average; such a day
+                    // is all `never_started`, which the rule's floor then
+                    // declines to judge rather than treating zero as fast.
+                    wait: r.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(days)
+    }
+
     /// The rows of `[from, to)` worth analysing, and the days left out.
     ///
     /// Only whole days go in. A day listed but not yet finished holds
