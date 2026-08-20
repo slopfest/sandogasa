@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### koji-lag: `probe` sizes a backfill before you start one
+
+Deciding whether to collect six months of history meant guessing, and
+guessing badly: the figures in DEVELOPMENT.md were months old, and a
+hand-written probe produced numbers that were wrong twice over — first
+reading a healthy hub as degraded twentyfold, then blaming the query's
+shape a hundredfold. Both were artefacts of the prober, which pooled
+connections. Fedora's proxy stack stalls a heavy query on a reused
+connection and answers it on a fresh one in seconds, which is why
+`HubClient` disables pooling and why a probe has to be the tool rather
+than a script beside it.
+
+`koji-lag probe --depth 1,600` walks the cursor from each depth through
+`sync`'s own code, and reports the first page apart from the steady rate,
+because they differ by most of an order of magnitude: entering January
+2025 cost about seven minutes and the pages behind it settled at 27-34s.
+It warns when a page nears the bound it ran under, where a backfill stops
+progressing rather than merely slowing — the request is abandoned and the
+retry pays the hub cost again.
+
+`sync --verbose` now reports each page's request time too, which is what
+made any of this measurable. The progress line had shown rows and position
+but never cost, so timing a page meant diffing log timestamps and assuming
+the pacing between them was constant — and it is not, since the duty cycle
+scales each pause to the last request. `--timeout SECS` on `sync` and
+`probe` overrides $SANDOGASA_KOJI_TIMEOUT for one run.
+
 ### koji-lag: the JSON dataset format is gone (breaking CLI)
 
 Datasets were how this tool kept data before it had a store: one JSON file

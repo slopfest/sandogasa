@@ -78,6 +78,40 @@ Last day to export, inclusive
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS koji-lag probe
+\fBkoji\-lag probe\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-depth\fR] [\fB\-\-timeout\fR] [\fB\-\-page\-size\fR] [\fB\-\-steps\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Time one listing page, to size a backfill before starting it
+.TP
+\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
+Known Koji instance (cbs, fedora, stream)
+.TP
+\fB\-\-hub\-url\fR \fI<URL>\fR
+Koji hub XML\-RPC URL (overrides \-\-instance)
+.TP
+\fB\-\-depth\fR \fI<DAYS,...>\fR [default: 1,600]
+Depths to time, in days before now (comma\-separated).
+
+Defaults to a recent page and one at twenty months, which is roughly where cost stops being negligible.
+.TP
+\fB\-\-timeout\fR \fI<SECS>\fR
+Seconds a single hub request may take; 0 waits forever.
+
+Defaults to $SANDOGASA_KOJI_TIMEOUT, else 600. Raise it for a deep window: a page that exceeds the bound is abandoned and the retry pays the hub cost again, so too low a value can stop a backfill progressing rather than merely slow it. `probe` says what the depth you are asking for actually costs.
+.TP
+\fB\-\-page\-size\fR \fI<PAGE_SIZE>\fR [default: 4000]
+Rows per page, as `sync \-\-page\-size` would ask for
+.TP
+\fB\-\-steps\fR \fI<STEPS>\fR [default: 3]
+Pages to walk from each depth.
+
+At least two, because the first page into a region nobody has asked about lately costs several times what the ones behind it do — seven minutes against 55s when January 2025 was collected — and both numbers are needed to size a backfill.
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Name each page as it is timed
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag report
 \fBkoji\-lag report\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
@@ -166,7 +200,7 @@ Print each period as it is considered
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag sync
-\fBkoji\-lag sync\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] <\fB\-\-store\fR> [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBkoji\-lag sync\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] <\fB\-\-store\fR> [\fB\-\-timeout\fR] [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Fetch whatever the store is missing for a window
 .TP
@@ -187,6 +221,11 @@ Sync the last N complete UTC days
 .TP
 \fB\-\-store\fR \fI<FILE>\fR
 Store to fill (created if absent)
+.TP
+\fB\-\-timeout\fR \fI<SECS>\fR
+Seconds a single hub request may take; 0 waits forever.
+
+Defaults to $SANDOGASA_KOJI_TIMEOUT, else 600. Raise it for a deep window: a page that exceeds the bound is abandoned and the retry pays the hub cost again, so too low a value can stop a backfill progressing rather than merely slow it. `probe` says what the depth you are asking for actually costs.
 .TP
 \fB\-\-page\-size\fR \fI<PAGE_SIZE>\fR [default: 4000]
 Tasks per listTasks page.

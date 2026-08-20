@@ -85,6 +85,9 @@ pub struct FetchOpts {
     pub retries: u32,
     /// Share of one connection to aim for; see [`Pace`].
     pub duty_percent: u32,
+    /// Bound on a single hub request, or `None` for unbounded. `None` is
+    /// also what `SANDOGASA_KOJI_TIMEOUT=0` asks for.
+    pub timeout: Option<std::time::Duration>,
     pub verbose: bool,
 }
 

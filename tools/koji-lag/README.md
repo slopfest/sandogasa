@@ -104,6 +104,29 @@ and export again.
 There is no JSON export. A store travels as itself — one SQLite file — so
 nothing needs re-encoding to move it.
 
+### Probe
+
+Time what a listing page costs before committing hours to a backfill:
+
+```sh
+koji-lag probe --depth 1,600
+```
+
+It walks the cursor from each depth exactly as `sync` does, and reports the
+first page apart from the rate the walk settles into — because the first page
+into a stretch of history nobody has asked about lately costs several times
+what the ones behind it do. It warns when a page approaches the client's 180s
+timeout, which is the point at which a backfill stops making progress rather
+than merely going slowly: an abandoned request is retried, and the retry pays
+the hub cost again.
+
+Probe with this rather than with a script of your own. Fedora's proxy stack
+answers a heavy query on a fresh connection in seconds and stalls the same
+query on a reused one, so a client that pools connections — which most do,
+including Python's `koji.ClientSession` — produces numbers that say more about
+the client than the hub. `HubClient` disables pooling; see the gotcha in
+DEVELOPMENT.md.
+
 ### Report
 
 ```sh

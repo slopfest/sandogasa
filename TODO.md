@@ -94,6 +94,28 @@
   That is also why the same test over the *fallout* window came out flat:
   by then everyone has resumed and repair work is diluted.
 
+- (2026-08-20) **Backfill floor: F42's mass rebuild (2025-01-15).** The
+  store holds two complete release cycles, F43 and F44; F45's finishes on
+  2026-10-20. A third complete cycle is available now by going backwards
+  rather than waiting, since F42 ran 2025-01-15 to its release on
+  2025-04-15, entirely before the store's first day (2025-06-23). That
+  needs 2024-12-15 .. 2025-06-22, about six months and an estimated 1GB at
+  the store's observed 160MB/month.
+
+  Do not go back further than that. Cost per page grows with depth when
+  the hub is healthy — 0.6-1.6s a day back against 17.7-24.1s at thirteen
+  months — and F42 is already the point where a cycle costs hours; earlier
+  cycles buy less relevant data for more hub time. F42 also gives a fourth
+  mass rebuild, which is the sample that matters.
+
+  Cost at that depth, measured 2026-08-20 with `sync`'s own query shape:
+  about 30-60s per 4000-row page against 7s recently, so roughly 25-40
+  minutes of listing per month of data before pacing doubles it. The
+  children stage dominates the total — around 8 minutes per day of builds
+  — which puts six months at the better part of a day of hub time. That is
+  fine: a sync resumes, so it can run across an outage and be picked up
+  after.
+
 - (2026-08-20) **Identify a service by its build target, not by the
   account that submits it.** Filtering on `owner` alone reported that ELN
   did no building whatsoever before January 2026 — 31 consecutive weeks
@@ -540,17 +562,13 @@
   measured; a build and its children stay in one store) are recorded
   in the tool's DEVELOPMENT.md.
 
-- (2026-08-17) Remove `import` and the JSON dataset read path once the
-  last pre-store dataset is folded in (May 2026, kept on another
-  machine). It is hidden from `--help` in the meantime and must not
-  appear in a release: strip its paragraphs from the Unreleased
-  CHANGELOG entries at the same time, so no published version
-  documents a command that never shipped. Going with it: `report`'s
-  file arguments, `Dataset::load`/`save`, `json_schema()`, the
-  committed `data/koji-lag-dataset.schema.json` and its snapshot test,
-  and the serde/schemars derives that exist only to serialise a
-  dataset — a store travels as itself, one SQLite file, and CSV serves
-  everyone who wants the rows elsewhere.
+- (2026-08-20) Two things left over from removing the JSON dataset path,
+  both now unused outside their own tests: `Dataset::merge` and
+  `DatasetMeta::schema_version`. `merge` is kept deliberately — unioning
+  rows from more than one source is exactly what querying several stores
+  needs, which is recorded above — but a version number for a format with
+  no reader is only misleading, and should go with the next pass that can
+  break the library API.
 
 - (2026-08-17) Ask the Fedora Data WG whether what they have is what
   they wanted. There are two CSV shapes now: `export` dumps the

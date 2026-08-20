@@ -43,23 +43,39 @@ pub struct SyncReport {
 /// the cursor arithmetic and when coverage may be claimed, and neither
 /// needs a network to exercise.
 pub trait Pages {
+    /// How long the last request itself took, where the implementation
+    /// knows — the pacing that follows it is deliberately not counted,
+    /// since this is the figure a `--timeout` has to clear.
+    fn last_request(&self) -> Option<std::time::Duration> {
+        None
+    }
+
     /// Build tasks created before `before`, skipping `offset` of them.
     fn page(&mut self, before: f64, offset: i64) -> Result<Page, String>;
 }
 
 /// Pages from a Koji hub, paced by how long the hub takes to answer.
 pub struct HubPages<'a> {
+    last_request: Option<std::time::Duration>,
     hub: &'a HubClient,
     opts: &'a FetchOpts,
 }
 
 impl<'a> HubPages<'a> {
     pub fn new(hub: &'a HubClient, opts: &'a FetchOpts) -> Self {
-        Self { hub, opts }
+        Self {
+            hub,
+            opts,
+            last_request: None,
+        }
     }
 }
 
 impl Pages for HubPages<'_> {
+    fn last_request(&self) -> Option<std::time::Duration> {
+        self.last_request
+    }
+
     fn page(&mut self, before: f64, offset: i64) -> Result<Page, String> {
         let list_opts = ListTasksOpts {
             method: Some("build".to_string()),
@@ -80,14 +96,16 @@ impl Pages for HubPages<'_> {
             self.hub.list_tasks(&list_opts, &query)
         })
         .map_err(|e| format!("listTasks(build, createdBefore) failed: {e}"))?;
-        self.opts.pace().rest(started.elapsed());
+        let latency = started.elapsed();
+        self.last_request = Some(latency);
+        self.opts.pace().rest(latency);
         Ok(Page { tasks })
     }
 }
 
 /// Sync `[opts.after, opts.before)` into `store`.
 pub fn run(store: &mut Store, opts: &FetchOpts) -> Result<SyncReport, String> {
-    let hub = HubClient::new(&opts.hub_url);
+    let hub = HubClient::with_timeout(&opts.hub_url, opts.timeout);
     // Cheap first: an unreachable hub must fail in seconds. This doubles
     // as the host and channel refresh, which reports need to name arches.
     let hosts = retry(opts.retries, || hub.list_hosts_with_arches())
@@ -193,7 +211,7 @@ pub fn fill_gap(
         if opts.verbose {
             eprintln!(
                 "[koji-lag] sync: {}",
-                progress(&filled, &page, &outcome, gap)
+                progress(&filled, &page, &outcome, gap, pages.last_request())
             );
         }
         match outcome.next {
@@ -210,7 +228,13 @@ pub fn fill_gap(
 /// so how much of it is left is arithmetic, and the pages so far give the
 /// rate. What the previous design could only guess at from task density
 /// (and revised on every page) is now just a subtraction.
-fn progress(filled: &Filled, page: &Page, outcome: &crate::sweep::Step, gap: Span) -> String {
+fn progress(
+    filled: &Filled,
+    page: &Page,
+    outcome: &crate::sweep::Step,
+    gap: Span,
+    request: Option<std::time::Duration>,
+) -> String {
     let reached = outcome
         .listed
         .map(|s| s.from)
@@ -224,9 +248,12 @@ fn progress(filled: &Filled, page: &Page, outcome: &crate::sweep::Step, gap: Spa
     let whole = (gap.to - gap.from).max(1.0);
     let done = ((gap.to - reached) / whole * 100.0).clamp(0.0, 100.0);
     let mut line = format!(
-        "page {} ({} task(s)), listed back to {} — {done:.0}% of the gap",
+        "page {} ({} task(s)) in {}, listed back to {} — {done:.0}% of the gap",
         filled.pages,
         page.tasks.len(),
+        request
+            .map(|d| format!("{:.0}s", d.as_secs_f64()))
+            .unwrap_or_else(|| "?".to_string()),
         day(reached),
     );
     if outcome.next.is_none() {
@@ -400,6 +427,7 @@ mod tests {
             sleep_ms: 0,
             retries: 1,
             duty_percent: 100,
+            timeout: None,
             verbose: false,
         }
     }

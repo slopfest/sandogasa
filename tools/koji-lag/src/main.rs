@@ -29,6 +29,8 @@ enum Command {
     Events(EventsArgs),
     /// Write a store's rows out as CSV, for analysis elsewhere.
     Export(ExportArgs),
+    /// Time one listing page, to size a backfill before starting it.
+    Probe(ProbeArgs),
     /// Per-arch queue-wait / build-time / bottleneck report.
     Report(ReportArgs),
     /// Write reports for every period the store covers.
@@ -142,6 +144,16 @@ struct SyncArgs {
     #[arg(long, value_name = "FILE")]
     store: PathBuf,
 
+    /// Seconds a single hub request may take; 0 waits forever.
+    ///
+    /// Defaults to $SANDOGASA_KOJI_TIMEOUT, else 600. Raise it for a
+    /// deep window: a page that exceeds the bound is abandoned and the
+    /// retry pays the hub cost again, so too low a value can stop a
+    /// backfill progressing rather than merely slow it. `probe` says
+    /// what the depth you are asking for actually costs.
+    #[arg(long, value_name = "SECS")]
+    timeout: Option<u64>,
+
     /// Tasks per listTasks page.
     ///
     /// A page costs what it costs to *find*, not to send: at thirteen
@@ -228,6 +240,56 @@ struct ReportsArgs {
 }
 
 #[derive(clap::Args)]
+struct ProbeArgs {
+    /// Known Koji instance (cbs, fedora, stream).
+    #[arg(long, default_value = "fedora")]
+    instance: String,
+
+    /// Koji hub XML-RPC URL (overrides --instance).
+    #[arg(long, value_name = "URL")]
+    hub_url: Option<String>,
+
+    /// Depths to time, in days before now (comma-separated).
+    ///
+    /// Defaults to a recent page and one at twenty months, which is
+    /// roughly where cost stops being negligible.
+    #[arg(
+        long,
+        value_name = "DAYS,...",
+        value_delimiter = ',',
+        default_value = "1,600"
+    )]
+    depth: Vec<f64>,
+
+    /// Seconds a single hub request may take; 0 waits forever.
+    ///
+    /// Defaults to $SANDOGASA_KOJI_TIMEOUT, else 600. Raise it for a
+    /// deep window: a page that exceeds the bound is abandoned and the
+    /// retry pays the hub cost again, so too low a value can stop a
+    /// backfill progressing rather than merely slow it. `probe` says
+    /// what the depth you are asking for actually costs.
+    #[arg(long, value_name = "SECS")]
+    timeout: Option<u64>,
+
+    /// Rows per page, as `sync --page-size` would ask for.
+    #[arg(long, default_value_t = 4000)]
+    page_size: i64,
+
+    /// Pages to walk from each depth.
+    ///
+    /// At least two, because the first page into a region nobody has
+    /// asked about lately costs several times what the ones behind it
+    /// do — seven minutes against 55s when January 2025 was collected —
+    /// and both numbers are needed to size a backfill.
+    #[arg(long, default_value_t = 3)]
+    steps: usize,
+
+    /// Name each page as it is timed.
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+#[derive(clap::Args)]
 struct ReportArgs {
     /// Store to report from.
     #[arg(long, value_name = "FILE")]
@@ -301,6 +363,7 @@ fn main() -> ExitCode {
     sandogasa_cli::init();
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     let result = match cli.command {
+        Command::Probe(args) => cmd_probe(&args),
         Command::Report(args) => cmd_report(&args),
         Command::Events(args) => cmd_events(&args),
         Command::Reports(args) => cmd_reports(&args),
@@ -333,6 +396,7 @@ fn cmd_sync(args: &SyncArgs) -> Result<(), Box<dyn Error>> {
         sleep_ms: args.sleep_ms,
         retries: args.retries,
         duty_percent: args.duty_cycle,
+        timeout: resolve_timeout(args.timeout),
         verbose: args.verbose,
     };
     let report = koji_lag::sync::run(&mut store, &opts)?;
@@ -540,6 +604,41 @@ fn cmd_reports(args: &ReportsArgs) -> Result<(), Box<dyn Error>> {
         pooled.incomplete,
         args.reports_root.display()
     );
+    Ok(())
+}
+
+/// A `--timeout` flag beats the environment, and `0` means unbounded in
+/// both — one convention, so a caller who has learned it from
+/// `SANDOGASA_KOJI_TIMEOUT` does not have to learn it again here.
+fn resolve_timeout(flag: Option<u64>) -> Option<std::time::Duration> {
+    match flag {
+        Some(0) => None,
+        Some(secs) => Some(std::time::Duration::from_secs(secs)),
+        None => sandogasa_kojihub::xmlrpc::configured_timeout(),
+    }
+}
+
+fn cmd_probe(args: &ProbeArgs) -> Result<(), Box<dyn Error>> {
+    let (instance_key, hub_url) = instance::resolve(&args.instance, args.hub_url.as_deref())?;
+    // No pacing: one page per depth is not a load concern, and pacing
+    // would time our own politeness rather than the hub's answer.
+    let opts = koji_lag::fetch::FetchOpts {
+        instance_key,
+        hub_url,
+        after: 0.0,
+        before: 0.0,
+        page_size: args.page_size,
+        sleep_ms: 0,
+        retries: 0,
+        duty_percent: 0,
+        timeout: resolve_timeout(args.timeout),
+        verbose: args.verbose,
+    };
+    let hub = sandogasa_kojihub::HubClient::with_timeout(&opts.hub_url, opts.timeout);
+    let mut pages = koji_lag::sync::HubPages::new(&hub, &opts);
+    let now = Utc::now().timestamp() as f64;
+    let samples = koji_lag::probe::run(&mut pages, now, &args.depth, args.steps, args.verbose)?;
+    print!("{}", koji_lag::probe::render(&samples, &opts));
     Ok(())
 }
 

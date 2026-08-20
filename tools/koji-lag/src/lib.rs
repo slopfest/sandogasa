@@ -21,6 +21,7 @@ pub mod fetch;
 pub mod instance;
 pub mod periods;
 pub mod pool;
+pub mod probe;
 pub mod rebuild;
 pub mod report;
 pub mod schedule;

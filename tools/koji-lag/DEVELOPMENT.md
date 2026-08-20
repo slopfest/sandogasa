@@ -160,6 +160,54 @@ on 2026-04-15, the remainder being builds that failed before one ran.
   figure is kept as the cost of bulk-inserting rows this tool already has,
   which is what a database-dump ingester would pay.)
 
+**Measure with the tool, never with a hand-written client — and the reason
+is connection reuse, not the query.** Fedora's proxy stack stalls heavy
+queries sent over a reused keep-alive connection while answering the same
+query on a fresh one in seconds; that is why `HubClient` sets
+`pool_max_idle_per_host(0)`, and the comment there records it.
+
+A probe written in Python against `koji.ClientSession` does not know that.
+It pools, and on 2026-08-20 it produced 3.9s and 7.1s on some calls and
+349s, 307s and 303s on others, which is the documented fresh-versus-reused
+split and nothing to do with depth or ordering. Two wrong conclusions were
+drawn from it before the mechanism was spotted — first that the hub was
+degraded twentyfold, then that the query's shape mattered a hundredfold.
+Both were artefacts of the client doing the measuring.
+
+So the rule is narrow and worth keeping: **time `sync`'s own `Pages`
+implementation**, which is what `koji-lag probe` does. Anything else
+measures the prober.
+
+What the tool itself then showed, listing January 2025 at roughly twenty
+months' depth: pages there can exceed the client's fixed **180s timeout**
+(`xmlrpc.rs`), at which point the request is abandoned and retried — and
+the retry pays the hub cost again from scratch. A deep backfill is
+therefore not merely slow but capable of making no progress at all, and
+the fix is smaller pages at depth rather than a longer timeout: a page
+that fits inside the timeout is progress kept, where a page that does not
+is work thrown away three times before the retries run out.
+
+**Size the request timeout for a cold first page, not for the steady
+state.** Measured on the January 2025 backfill at twenty months' depth:
+nine consecutive 4000-row pages took 27, 30, 29, 34, 28, 29, 32, 27 and
+34 seconds — a spread of 1.26x, tight enough to plan against — while the
+first page into that stretch of history exceeded 180s and was abandoned
+there. The steady state is what a casual measurement finds and it is the
+wrong number to bound by; the two differ by most of an order of magnitude.
+
+Depth is not the variable to scale the bound on, tempting though it
+looks. Steady cost does rise with depth (about 7s a page recently against
+30s at twenty months), but that rise is comfortably inside any sane bound.
+What actually exceeds the bound is entering a region nobody has asked
+about lately, and that is a question of what the hub has cached rather
+than of how old the data is. A generous fixed bound plus an override
+handles both; a formula in the age would tune the wrong thing.
+
+The asymmetry is why the default errs high: too low discards work that was
+nearly finished and charges the hub for it again, three times over with
+retries, while too high only delays noticing a real hang — which the duty
+cycle and the retry budget already tolerate.
+
 Pacing is a duty cycle rather than a fixed pause: at 500ms between
 half-second queries the hub sees us half the time, but when it is
 struggling and the same query takes eight seconds a fixed pause means
@@ -167,6 +215,40 @@ occupying it 94% of the time, leaning hardest exactly when we should ease
 off. `--duty-cycle` scales each pause to the last request's latency, so
 the figures above roughly double in a real run and recover by themselves
 when the hub does.
+
+## Gotcha: reusing a connection makes Koji *slower*, not faster
+
+Backwards, and it has now cost two wrong conclusions, so it is written
+here rather than only in the code that works around it.
+
+Fedora's proxy stack stalls a heavy XML-RPC query sent over a **reused**
+keep-alive connection while answering the identical query on a **fresh**
+connection in seconds. Reproduced originally with `curl --next`: fresh
+connection 3-90s, reused connection times out. `HubClient` therefore sets
+`pool_max_idle_per_host(0)` and `http1_only()` — it deliberately throws
+away every connection, because a TCP and TLS handshake per request is
+noise next to a multi-megabyte task page and next to the pacing we do
+anyway.
+
+Everything ordinary about HTTP performance points the other way, which is
+what makes it a trap: keep-alive is the optimisation everywhere else, so
+any client written without knowing this is *fast by accident and slow by
+default* — the first call on a new connection is quick and the ones that
+follow it stall.
+
+**The consequence for measurement.** A probe written against
+`koji.ClientSession` in Python pools connections, so its numbers are a
+mixture of the two regimes with no way to tell which is which. On
+2026-08-20 one produced 3.9s and 7.1s on some calls and 349s, 307s and
+303s on others, and that spread was read first as "the hub is degraded
+twentyfold" and then as "the query's shape matters a hundredfold". Both
+were the prober measuring itself. `koji-lag probe` exists so this cannot
+happen again: it times `sync`'s own `Pages`, on the client that disables
+pooling.
+
+If Fedora's proxy stack is ever fixed, pooling becomes worth having again
+and this section is the record of why it was off — do not turn it back on
+without re-running the `curl --next` comparison.
 
 ## Changing the schema, and paying for a new field
 
