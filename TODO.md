@@ -94,6 +94,79 @@
   That is also why the same test over the *fallout* window came out flat:
   by then everyone has resumed and repair work is diluted.
 
+- (2026-08-20) **Four mass rebuilds measured, and the s390x story is
+  capacity rather than slowness.** F42's window was collected on
+  2026-08-20, which gives a rebuild from before whatever changed and turns
+  the other three from a pattern into a comparison.
+
+  s390x queue wait for the rebuild's *own* tasks, dated from who submitted
+  rather than from the schedule:
+
+  | release | observed window | median | p90 | max | over 1h |
+  |:--|:--|--:|--:|--:|--:|
+  | F42 | 2025-01-16..19 | **53s** | 7m | 56.4h | 1.8% |
+  | F43 | 2025-07-23..26 | 2.0h | 5.1h | 12.1h | 92.6% |
+  | F44 | 2026-01-16..19 | 4.2h | 7.8h | 22.7h | 95.3% |
+  | F45 | 2026-07-15..18 | 3.8h | 8.3h | 18.2h | 95.0% |
+
+  F42 did not queue. The other three queue for hours. The mechanism is
+  measured end to end and each link is a separate observation:
+
+  1. **Nominal capacity never moved**: 19-20 enabled hosts at 92-96 weight
+     across all four windows, per Koji's own `host_config` history.
+  2. **Service time rose, and only on s390x.** `buildArch` duration for
+     rebuild tasks, F42 against F45: median 1.4m to 2.2m (1.56x), p90 5.1m
+     to 10.9m (2.13x), mean 3.7m to 8.6m (2.34x). The control says this is
+     not the toolchain or the package mix: over the same span x86_64 went
+     *faster* (1.5m to 1.2m, 0.78x), aarch64 was flat (1.07x) and ppc64le
+     slightly faster (0.92x).
+  3. **So weighted utilisation climbed** — 54%, 72%, 79%, and over 100% at
+     F45 — and queueing is nonlinear as utilisation approaches one, which
+     is the whole of why seconds became hours.
+  4. **On a shrinking workload.** s390x carried 15,900 rebuild tasks at F42
+     and 12,651 at F45, while x86_64 held near 17,000 throughout. It is
+     being excluded from more packages every cycle and saturates anyway.
+
+  Unchanged across all four, and the thing to lead with when this is
+  written up: **maintainers never feel it.** Official builds sat at a
+  roughly one-minute median in every window, with 0.0%, 0.0%, 0.2% and
+  5.4% of tasks waiting over an hour. The cost falls on the rebuild itself
+  and then on the classes at or below its priority — CI (10-45% over an
+  hour) and ELN's sync (an 8.1h median during F44).
+
+  Three things this cannot yet say. The regression is unbracketed between
+  2025-01-19 and 2025-07-23, since F42 is the only window predating it —
+  **collecting 2025-02 through 2025-04 would date it**, which is now the
+  main reason to finish F42's cycle beyond completing it. Wall-clock
+  service time cannot separate slower hardware from contention or storage;
+  the co-location finding above is a candidate and unproven. And the
+  utilisation figure exceeding 100% means the weight integral over-counts
+  somewhere, so treat the trend as sound and the absolute number as not.
+
+- (2026-08-20) **The SRPM stage ran on s390x for about ten months, and it
+  should never run there at all.** Confirmed as a misconfiguration rather
+  than a design: 112,327 `rebuildSRPM`/`buildSRPMFromSCM` tasks executed on
+  s390x builders between 2024-12-31 and 2025-10-24, costing roughly 1,370
+  builder-hours on the scarcest architecture in the fleet — 621 hours in
+  2025-01, 486 in 2025-07, 266 in 2025-08.
+
+  It is not the mass rebuild's doing, which was the first guess because the
+  bursts line up with F42's and F43's rebuilds. Every submitter class did
+  it, and koschei did most of it: koschei 87,472 tasks, the rebuild 12,164,
+  maintainer official 7,036, hand scratch 4,189, CI 1,466. koschei skips
+  s390x for `buildArch` almost entirely and *still* had its SRPM stage land
+  there, so the cause sits in how the SRPM stage is scheduled — channel or
+  policy — rather than in anyone's submission scripts.
+
+  Two open ends. It stops in the store's data after 2025-10-24, but the
+  report that prompted this was of a recurrence during the F46 cycle, which
+  begins after the store's current last day (2026-08-10) — so re-check once
+  collection passes that. And it barely moves the capacity conclusions
+  above (utilisation reads 54/72/79/123% on `buildArch` alone against
+  56/74/79/123% with the SRPM stage included), because the work is cheap
+  per task; it is worth reporting for its own sake rather than as a
+  correction.
+
 - (2026-08-20) **Backfill floor: F42's mass rebuild (2025-01-15).** The
   store holds two complete release cycles, F43 and F44; F45's finishes on
   2026-10-20. A third complete cycle is available now by going backwards
