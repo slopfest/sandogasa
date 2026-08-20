@@ -74,6 +74,56 @@
   - **The +20 has no growth margin.** Fedora's package count only rises, so
     rho drifts upward unaided; rho <= 0.5 is the option that survives.
 
+- (2026-08-20) **The slowdown is two effects, and separating them changes
+  who owns each.** Suggested hypothesis: Fedora Changes adding hardening
+  would hit C and C++ disproportionately. Tested by classifying every
+  package by the toolchain its spec pulls in and comparing **the same
+  package in both windows** — 9,952 packages that built successfully on
+  s390x in F42 and again in F45, failures excluded so hangs cannot skew it.
+
+  | toolchain | packages | median ratio | slower by >20% |
+  |:--|--:|--:|--:|
+  | c++ | 2,117 | 1.53x | 72% |
+  | c | 2,930 | 1.40x | 69% |
+  | python | 54 | 1.35x | 65% |
+  | perl | 83 | 1.29x | 63% |
+  | other | 2,104 | 1.28x | 57% |
+  | rust | 2,500 | **1.16x** | 46% |
+
+  Everything slowed, so no single toolchain explains it — but the ordering
+  is exactly what compiler-flag changes would produce, with rust least
+  affected because it does not consume Fedora's C flags. Repeating the
+  paired comparison per architecture separates the two effects:
+
+  | arch | rust (baseline) | c++ | c++ / rust |
+  |:--|--:|--:|--:|
+  | s390x | **1.16x** | 1.53x | 1.31x |
+  | aarch64 | 0.94x | 1.13x | 1.20x |
+  | ppc64le | 0.73x | 0.96x | 1.32x |
+  | x86_64 | 0.69x | 0.79x | 1.14x |
+
+  1. **A compile-specific cost, Fedora-wide.** C++ builds cost 1.14x to
+     1.32x more than rust builds did over the same span, on *every*
+     architecture. A platform fault could not do that; compiler flags can,
+     and the hardening Changes are the obvious candidate. This is a
+     deliberate policy cost and worth quantifying for the Changes process
+     rather than treating as an s390x problem.
+  2. **An s390x platform regression.** Its baseline went 1.16x *slower*
+     while every peer got faster (0.69x to 0.94x), so s390x lost roughly
+     1.5x relative to the fleet on work that has nothing to do with
+     compiler flags. That is the part to chase with infrastructure.
+
+  On s390x the two multiply — 1.16 x 1.31 = 1.52, against the 1.53x
+  measured for C++ — which is why that architecture saturated while the
+  others absorbed the same policy cost without queueing.
+
+  Caveats: the specs are current, so a package's toolchain classification
+  may have drifted since January 2025; python and perl samples are small
+  (54 and 83) because most such packages are noarch and never build per
+  architecture; and the c++/c split rests on `BuildRequires` naming
+  `gcc-c++` or `clang++`, which understates C++ in packages that pull it in
+  through cmake macros.
+
 - (2026-08-20) **Where the service-time regression actually lives: the
   tail, and hung builds in particular. It is not Rust — and the regression
   spares Rust in a way that hints at its cause.** Rust's share of s390x
