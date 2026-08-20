@@ -29,17 +29,60 @@
     0.1%. Every cohort has a one-minute median, which is exactly how this
     stayed invisible.
 
+- (2026-08-20) **ppc64le lost half its capacity in July 2025 and has not
+  got it back.** From the `host_config` history now in the store: 132
+  weight through 2025-06, then 64 from 2025-07 and 58-62 ever since. The
+  administrative halving noted above for 2025-11-11 — 32 hosts to 16 — was
+  therefore a further dip on top of a fleet already at half strength, not a
+  fall from full strength. Worth stating whenever ppc64le is compared with
+  s390x, since the two architectures' capacity moved in opposite directions
+  over the same eighteen months: s390x up 57 to 93, ppc64le down 132 to 58.
+
+- (2026-08-20, DONE) **Builder capacity is in the store.** `host_config`
+  holds 12,592 revisions back to 2018-10-03, fetched by `sync` on every run
+  in one call, and `Store::capacity_at` answers "enabled hosts and weight
+  for this architecture at this instant". Validated against the figures
+  previously computed outside the repo: the four rebuild windows read
+  96/93/93/91.5, matching. What follows is why it was worth doing. Everything in the
+  four-rebuild analysis comes from the store except its denominator:
+  enabled hosts and their weight capacity, which came from a live
+  `queryHistory(tables=['host_config'])` call cached outside the repo. So
+  the central claim — capacity flat while service time doubled — is the
+  one nobody else can reproduce, including us once that file is gone.
+
+  `hosts` holds only id, name and arches. What is needed is the history:
+  per host, the spans over which it was enabled and at what capacity,
+  which is exactly what the hub returns. It is backfillable to 2020 in a
+  single call, so this is a migration and one fetch rather than a
+  collection campaign — and it turns "has s390x kept pace with the rest of
+  the fleet?" into a query instead of an afternoon.
+
+  Watch the reconstruction: enabled-at-an-instant from overlapping
+  revisions is easy to get wrong, and the check that caught it was
+  comparing against hosts observed serving work *at the same instant*
+  rather than over the whole day.
+
 - (2026-08-20, exploration) Emit reports as Jupyter notebooks, so a reader
   can change the question rather than only read our answer. Ship a
   notebook plus a database dump and the queries become a starting point:
   someone can re-cut a window, swap the architecture, add a cohort, or
   test a hypothesis of their own without waiting for us to build a flag
-  for it. Points to settle: whether the notebook embeds SQL against a
-  store path (simple, needs sqlite3 only) or loads an exported CSV
-  (portable, no store needed, stale the moment it is written); how big a
-  dump is reasonable to publish, given 413 days is 2.0GB and a single
-  month around 165MB; and whether `queries/` becomes the notebook's
-  content, which would keep one copy of each query rather than two.
+  for it.
+
+  **Publishing the store itself is viable, which settles the question that
+  was blocking this.** zstd at its default setting takes the store to 32%
+  — measured 2026-08-20 at 2,402MB down to 763MB, and independently at
+  1.95GB down to 645MB on an earlier backup. That is a download rather
+  than a dataset release, so the notebook can query the real store and
+  needs no CSV extract that goes stale the moment it is written.
+
+  Decided 2026-08-20: **the notebook is written by hand in the
+  koji-lag-metrics repo; this side supplies the scripts it calls.** So the
+  work here is the publish half — producing the compressed store with a
+  checksum, a helper that fetches and verifies it, and `queries/` content
+  worth embedding — and none of it is notebook authoring. Keeping the
+  notebook out of this repo also keeps a generated artefact out of a tree
+  that would otherwise diff to noise on every re-run.
 
 - (2026-08-20) **Correction to the arch-bottleneck story, and the
   reporting model that follows from it.** Earlier entries here read the
@@ -112,8 +155,9 @@
   F42 did not queue. The other three queue for hours. The mechanism is
   measured end to end and each link is a separate observation:
 
-  1. **Nominal capacity never moved**: 19-20 enabled hosts at 92-96 weight
-     across all four windows, per Koji's own `host_config` history.
+  1. **Capacity was stable across the four windows** — 19-20 enabled hosts
+     at 92-96 weight — but see the correction below: over the longer run it
+     *grew*, and that changes what the figures ask for.
   2. **Service time rose, and only on s390x.** `buildArch` duration for
      rebuild tasks, F42 against F45: median 1.4m to 2.2m (1.56x), p90 5.1m
      to 10.9m (2.13x), mean 3.7m to 8.6m (2.34x). The control says this is
@@ -133,6 +177,24 @@
   5.4% of tasks waiting over an hour. The cost falls on the rebuild itself
   and then on the classes at or below its priority — CI (10-45% over an
   hour) and ELN's sync (an 8.1h median during F44).
+
+  **Correction, from putting capacity in the store (below): Fedora did
+  invest in s390x, and a service-time regression ate the investment.**
+  Capacity rose from 57 weight across 26 hosts in January 2024 to 96 across
+  20 by that December — including a March 2024 consolidation that halved
+  the host count while raising total weight, taking per-host capacity from
+  2.2 to 5.8. F42 in January 2025 was running on exactly that new headroom,
+  which is why it sat at 54% utilisation and never queued. Service time
+  then doubled between January and July 2025 with capacity unchanged at 93,
+  consuming the whole increase.
+
+  That reframes the ask. It is not "s390x has been starved of builders" —
+  builders were added, twelve months before the regression, and it did not
+  hold. The question to put to infrastructure is why per-task wall-clock
+  doubled while the fleet stood still, and the candidates are the March
+  2024 consolidation onto fewer, larger VMs (more concurrent builds per
+  physical machine, hence more contention per build), storage, or the
+  hypervisor — none of which this data can separate.
 
   Three things this cannot yet say. The regression is unbracketed between
   2025-01-19 and 2025-07-23, since F42 is the only window predating it —

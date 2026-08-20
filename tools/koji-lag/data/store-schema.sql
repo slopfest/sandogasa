@@ -31,6 +31,26 @@ CREATE TABLE channels (
     PRIMARY KEY (instance, channel_id)
 );
 
+CREATE TABLE host_config (
+    instance TEXT NOT NULL,
+    host_id INTEGER NOT NULL,
+    name TEXT,
+    -- Space-separated, as the hub reports it. Kept verbatim rather than
+    -- normalised into rows: a handful of revisions carry a Kerberos
+    -- principal here instead of architectures, and inventing structure
+    -- for that would be inventing meaning.
+    arches TEXT,
+    enabled INTEGER NOT NULL,
+    -- Weight the host accepts at once, which is what Koji schedules
+    -- against -- not a task count.
+    capacity REAL,
+    -- The revision is in force over [create_ts, revoke_ts); a NULL
+    -- revoke_ts is the revision still current.
+    create_ts REAL NOT NULL,
+    revoke_ts REAL,
+    PRIMARY KEY (instance, host_id, create_ts)
+);
+
 CREATE TABLE hosts (
     instance TEXT NOT NULL,
     host_id INTEGER NOT NULL,
@@ -74,6 +94,8 @@ CREATE TABLE tasks (
 CREATE INDEX builds_completion ON builds (instance, completion_ts);
 
 CREATE INDEX builds_unswept ON builds (instance, children_gen, completion_ts);
+
+CREATE INDEX host_config_span ON host_config (instance, create_ts, revoke_ts);
 
 CREATE INDEX listed_span ON listed (instance, from_ts, to_ts);
 

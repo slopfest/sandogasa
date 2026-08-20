@@ -115,6 +115,33 @@ CREATE INDEX IF NOT EXISTS tasks_parent
 CREATE INDEX IF NOT EXISTS listed_span
     ON listed (instance, from_ts, to_ts);
 "#,
+    // v2: builder configuration history, which is the denominator every
+    // utilisation figure needs. `hosts` holds a host's name and arches as
+    // they are *now*; this holds what each host was, and when, so
+    // "capacity available on 2025-01-16" is a query rather than a guess.
+    r#"
+CREATE TABLE IF NOT EXISTS host_config (
+    instance TEXT NOT NULL,
+    host_id INTEGER NOT NULL,
+    name TEXT,
+    -- Space-separated, as the hub reports it. Kept verbatim rather than
+    -- normalised into rows: a handful of revisions carry a Kerberos
+    -- principal here instead of architectures, and inventing structure
+    -- for that would be inventing meaning.
+    arches TEXT,
+    enabled INTEGER NOT NULL,
+    -- Weight the host accepts at once, which is what Koji schedules
+    -- against -- not a task count.
+    capacity REAL,
+    -- The revision is in force over [create_ts, revoke_ts); a NULL
+    -- revoke_ts is the revision still current.
+    create_ts REAL NOT NULL,
+    revoke_ts REAL,
+    PRIMARY KEY (instance, host_id, create_ts)
+);
+CREATE INDEX IF NOT EXISTS host_config_span
+    ON host_config (instance, create_ts, revoke_ts);
+"#,
 ];
 
 /// The schema version this build speaks: the number of steps it knows.
@@ -715,6 +742,72 @@ impl Store {
         Ok(days)
     }
 
+    /// Record builder configuration revisions, replacing any already held
+    /// for the same host and creation instant.
+    ///
+    /// Idempotent by `(instance, host_id, create_ts)`: the hub's history is
+    /// append-only in practice, but a revision's `revoke_ts` fills in later
+    /// when it is superseded, so re-fetching has to update rather than
+    /// duplicate.
+    pub fn put_host_config(
+        &mut self,
+        instance: &str,
+        rows: &[sandogasa_kojihub::HostConfig],
+    ) -> Result<usize, String> {
+        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO host_config (instance, host_id, name, arches, enabled,
+                                              capacity, create_ts, revoke_ts)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+                     ON CONFLICT (instance, host_id, create_ts) DO UPDATE SET
+                         name=excluded.name, arches=excluded.arches,
+                         enabled=excluded.enabled, capacity=excluded.capacity,
+                         revoke_ts=excluded.revoke_ts",
+                )
+                .map_err(|e| e.to_string())?;
+            for r in rows {
+                stmt.execute(params![
+                    instance,
+                    r.host_id,
+                    r.name,
+                    r.arches,
+                    r.enabled as i64,
+                    r.capacity,
+                    r.create_ts,
+                    r.revoke_ts,
+                ])
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(rows.len())
+    }
+
+    /// Enabled hosts and their total weight capacity for `arch` at `at`.
+    ///
+    /// A revision counts when it was in force at that instant and its
+    /// architecture list mentions `arch`. Compare against hosts observed
+    /// serving work **at the same instant** when checking this: comparing a
+    /// noon reading against a whole day's activity once suggested 16
+    /// enabled hosts on a day 29 of them ran tasks, which looked like a bug
+    /// here and was a bug in the checking.
+    pub fn capacity_at(&self, instance: &str, arch: &str, at: f64) -> Result<(i64, f64), String> {
+        let pattern = format!("%{arch}%");
+        self.conn
+            .query_row(
+                "SELECT count(*), coalesce(sum(capacity), 0.0)
+                 FROM host_config
+                 WHERE instance = ?1 AND enabled = 1
+                   AND create_ts <= ?2 AND (revoke_ts IS NULL OR revoke_ts > ?2)
+                   AND (' ' || arches || ' ') LIKE ?3",
+                params![instance, at, pattern],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| e.to_string())
+    }
+
     /// Each architecture's queue wait per UTC day of task *creation*, for
     /// the days in `[from, to)`.
     ///
@@ -1208,6 +1301,109 @@ mod tests {
             channel_id: None,
             weight: None,
         }
+    }
+
+    fn cfg(
+        host: i64,
+        arches: &str,
+        enabled: bool,
+        cap: f64,
+        from: f64,
+        to: Option<f64>,
+    ) -> sandogasa_kojihub::HostConfig {
+        sandogasa_kojihub::HostConfig {
+            host_id: host,
+            name: Some(format!("buildvm-{host}.example.org")),
+            arches: Some(arches.to_string()),
+            enabled,
+            capacity: Some(cap),
+            create_ts: from,
+            revoke_ts: to,
+        }
+    }
+
+    #[test]
+    fn capacity_is_what_was_enabled_at_that_instant() {
+        // The denominator every utilisation figure needs: not what the
+        // fleet is now, but what it was during the window being measured.
+        let mut store = Store::in_memory().unwrap();
+        store
+            .put_host_config(
+                "fedora",
+                &[
+                    // Two s390x hosts, one of which is disabled partway.
+                    cfg(1, "s390x", true, 6.0, 1_000.0, None),
+                    cfg(2, "s390x", true, 3.0, 1_000.0, Some(5_000.0)),
+                    cfg(2, "s390x", false, 3.0, 5_000.0, None),
+                    // Another architecture entirely, never counted here.
+                    cfg(3, "x86_64", true, 20.0, 1_000.0, None),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            store.capacity_at("fedora", "s390x", 2_000.0).unwrap(),
+            (2, 9.0)
+        );
+        // After host 2 is disabled, only host 1 remains.
+        assert_eq!(
+            store.capacity_at("fedora", "s390x", 6_000.0).unwrap(),
+            (1, 6.0)
+        );
+        // Before any revision existed there was nothing.
+        assert_eq!(
+            store.capacity_at("fedora", "s390x", 500.0).unwrap(),
+            (0, 0.0)
+        );
+        assert_eq!(
+            store.capacity_at("fedora", "x86_64", 2_000.0).unwrap(),
+            (1, 20.0)
+        );
+    }
+
+    #[test]
+    fn a_multi_arch_host_counts_for_each_of_its_arches() {
+        let mut store = Store::in_memory().unwrap();
+        store
+            .put_host_config("fedora", &[cfg(1, "x86_64 i386", true, 4.0, 0.0, None)])
+            .unwrap();
+        for arch in ["x86_64", "i386"] {
+            assert_eq!(store.capacity_at("fedora", arch, 10.0).unwrap(), (1, 4.0));
+        }
+        // And a substring of an arch name is not that arch: matching on
+        // "386" must not pick up "i386" for a query about "86".
+        assert_eq!(
+            store.capacity_at("fedora", "s390x", 10.0).unwrap(),
+            (0, 0.0)
+        );
+    }
+
+    #[test]
+    fn refetching_the_history_updates_a_revision_rather_than_duplicating_it() {
+        // A revision's revoke_ts is filled in only once it is superseded,
+        // so the same fetch run twice must not double the fleet.
+        let mut store = Store::in_memory().unwrap();
+        store
+            .put_host_config("fedora", &[cfg(1, "s390x", true, 6.0, 1_000.0, None)])
+            .unwrap();
+        assert_eq!(
+            store.capacity_at("fedora", "s390x", 2_000.0).unwrap(),
+            (1, 6.0)
+        );
+        store
+            .put_host_config(
+                "fedora",
+                &[cfg(1, "s390x", true, 6.0, 1_000.0, Some(3_000.0))],
+            )
+            .unwrap();
+        assert_eq!(
+            store.capacity_at("fedora", "s390x", 2_000.0).unwrap(),
+            (1, 6.0)
+        );
+        // Now revoked, so it no longer counts afterwards.
+        assert_eq!(
+            store.capacity_at("fedora", "s390x", 4_000.0).unwrap(),
+            (0, 0.0)
+        );
     }
 
     #[test]

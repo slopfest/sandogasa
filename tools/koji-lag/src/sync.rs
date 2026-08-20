@@ -114,6 +114,22 @@ pub fn run(store: &mut Store, opts: &FetchOpts) -> Result<SyncReport, String> {
         retry(opts.retries, || hub.list_channels()).map_err(|e| format!("listChannels: {e}"))?;
     store.put_hosts(&opts.instance_key, &hosts)?;
     store.put_channels(&opts.instance_key, &channels)?;
+    // Builder configuration *history*, which is the denominator for every
+    // utilisation figure: how much capacity existed during the window being
+    // measured, not how much exists now. One call returns the hub's whole
+    // record — about 12,600 revisions back to 2020 for Fedora — so it is
+    // refreshed on every sync rather than windowed, and a failure here is
+    // not fatal: the tasks are the point of the run, and a stale
+    // denominator is better than no run.
+    match retry(opts.retries, || hub.host_config_history()) {
+        Ok(history) => {
+            let n = store.put_host_config(&opts.instance_key, &history)?;
+            if opts.verbose {
+                eprintln!("[koji-lag] sync: {n} builder config revision(s)");
+            }
+        }
+        Err(e) => eprintln!("warning: builder capacity history unavailable: {e}"),
+    }
 
     // Creation span the completion window needs: back past its start by
     // more than the longest build, since a build created earlier can
