@@ -70,6 +70,8 @@
   | maintainer official | 19-20 | 588 | the thing that must stay fast, and does |
   | packit PR CI | 20 | 576 | contributor-facing latency |
   | scratch by hand | 20-50 | 544 | maintainer testing |
+  | ELN sync | 25 | 504 | bulk, automated, its own calendar |
+  | ELN fix by hand | 20 | 494 | packager repairing an ELN failure |
   | koschei | 50 | 0.1 | dependency canary, skips s390x |
 
   **And lead with the tail, not the median — the median describes an
@@ -91,6 +93,117 @@
   for failed packages (18.3% vs 3.3%, 10.7% vs 4.8%, 8.6% vs 3.2%).
   That is also why the same test over the *fallout* window came out flat:
   by then everyone has resumed and repair work is diluted.
+
+- (2026-08-20) **Identify a service by its build target, not by the
+  account that submits it.** Filtering on `owner` alone reported that ELN
+  did no building whatsoever before January 2026 — 31 consecutive weeks
+  of zero — when in fact it had been running throughout. The account was
+  renamed: `distrobuildsync-eln/jenkins-continuous-infra.apps.ci.centos.org`
+  hands over to `eln-buildsync` on 2026-01-08, with both appearing that
+  day. An owner string is an operational detail that changes without
+  notice, and when it changes a filter built on it reports absence rather
+  than failing, which is the worst way for it to be wrong.
+
+  `target` survives the rename: everything ELN builds goes to `eln`,
+  `eln-candidate` or an `eln-build-side-NNNNNN` side tag. Measured that
+  way the store holds 61,257 ELN sync builds across 14 months, plus 5,838
+  from CI (`packit`, `zuul`) and 2,572 submitted by people — a packager
+  whose package failed in ELN building it by hand rather than waiting for
+  the next sync. Three classes, and the reports must not add them up.
+
+  The same trap caught an earlier reading of the post-branch spike: F44's
+  8,003-build day looked like maintainers racing a deadline and was 91%
+  ELN, because the filter for "not a service account" tested for a `/` in
+  the name and `eln-buildsync` has none. Any such filter needs an
+  explicit list of what the services are, plus a target test.
+
+- (2026-08-20) The branch date is a second cost multiplier, and the
+  reports should treat it as a window in its own right. Once a release
+  branches, a package that still does not build has to be fixed twice —
+  once for Rawhide and once for the new branch — so repair work gets
+  more expensive rather than less as the release approaches.
+
+  The activity follows branch rather than preceding it, so this is not a
+  deadline rush. F43 branched 2025-08-12 and the next weekday brought
+  4,121 builds, then 6,575; F44 branched 2026-02-03 and peaked three days
+  later. Maintainer volume roughly doubles or triples across the branch
+  (5,518→14,563 and 5,131→9,396 in the two months measured), and the
+  share aimed at the new branch rather than Rawhide climbs with it (27%,
+  28%, 34% for F44). F43's spike was 81% one maintainer doing bulk work,
+  split 53% to `f43-candidate` and 46% to `rawhide` — the doubling
+  visible in one account's traffic.
+
+  So the schedule-anchored windows should include branch, and the
+  interesting figure there is the *ratio* of branch-target to Rawhide
+  builds for the same package set, which is what the double cost looks
+  like in data.
+
+- (2026-08-20) ELN is a fourth bulk load source and deserves its own
+  section in the write-up: it is heavy on the architecture the whole
+  question is about, and it bursts on a calendar nobody publishes.
+
+  It rebuilds whatever Rawhide builds that ELN tracks, since ELN becomes
+  the next CentOS release, and s390x is a core architecture for
+  RHEL/CentOS — so unlike koschei it does not skip it: **504 s390x tasks
+  per 1,000 builds**, against 588 for ordinary builds and 0.1 for
+  koschei. A consequence worth stating plainly, since it bears on any
+  proposal to drop s390x from Fedora: ELN and EPEL would still need it.
+
+  Its arrival pattern is the interesting part. ELN stands down while a
+  mass rebuild is submitting and catches up the moment it stops, on all
+  three rebuilds in the store:
+
+  | release | during submission | first catch-up day |
+  |:--|--:|--:|
+  | F43 | 6-39 builds/day | 1,926 (1,133 s390x) |
+  | F44 | 4-83 builds/day | 3,107 (1,697 s390x) |
+  | F45 | 2-23 builds/day | 956, then 3,034 |
+
+  So its catch-up lands *inside* the fallout window, on the bottleneck
+  architecture, at the same time as maintainers repairing what the
+  rebuild broke. Any account of the fallout period that attributes its
+  s390x pressure to repair work alone is wrong by several thousand tasks.
+
+  It also bursts with no rebuild anywhere near it — 3,757 builds into one
+  side tag on 2025-11-27, four more bursts through June 2026 — which is
+  ELN doing a bulk resync of its own. A window detector anchored on the
+  Fedora schedule will not find these, so they have to be found from the
+  data.
+
+  It runs at **priority 25, the same as releng's rebuild**, so it sits
+  beneath maintainer work and absorbs its own delay: mean s390x wait 55
+  min in an ordinary month against 95 min in its own burst, while
+  maintainers stay at one minute throughout. Chronically slow, harmless
+  to everyone else — the releng pattern exactly.
+
+  One hypothesis tested and **not supported**: that ELN gets switched off
+  when Koji is having a bad day. Over 411 fully collected days the only
+  quiet stretch outside a rebuild window is 2025-12-28..31, when s390x
+  waits were 1 minute — that is the holidays, not a response to trouble.
+  Worth re-testing as the store grows, since the absence of an event in
+  14 months is not proof the practice does not exist.
+
+- (2026-08-20) **Detect single-architecture stalls, which are a different
+  event from a busy window and are currently invisible.** For about two
+  days in May 2026 every Fedora build needing s390x waited roughly two
+  days for it, while every other architecture was served in a minute.
+  There was no mass rebuild that month and the load was ordinary.
+
+  Measured by task creation day: s390x `buildArch` tasks created
+  2026-05-06 waited a mean of **46.0 hours** and those created 05-07
+  **38.3 hours**, against 0.1 hours on 05-05 and 1 minute again by 05-10;
+  25 of them never started at all. On 05-08, when the backlog was
+  draining at a 37-hour mean, x86_64, aarch64, ppc64le and i386 all sat
+  at 1-2 minutes. Volume was normal all week (371 s390x tasks created on
+  05-06 against 291 and 260 the days before), so this is availability,
+  not congestion, and it hit ordinary maintainers rather than bulk work.
+
+  This matters for how the s390x question gets framed: the architecture's
+  worst days in the store are not its mass-rebuild days. 2,243 minutes
+  beats every rebuild day measured, by five times. A detector wants
+  something like "one architecture's wait exceeds the others' by an order
+  of magnitude for a day or more", reported as its own kind of window
+  beside the rebuilds, with the count of tasks that never ran.
 
 - (2026-08-20) Retire "build volume" as a measure, and say why in the
   write-up: Fedora's largest single source of builds is almost invisible
