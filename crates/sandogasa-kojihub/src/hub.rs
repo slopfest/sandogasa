@@ -87,6 +87,29 @@ pub struct HubTask {
     pub request: Option<Value>,
 }
 
+/// One revision of a builder's configuration, from the hub's own history.
+///
+/// Koji records every change to a host's config with the event that made it
+/// and the event that superseded it, so a span `[create_ts, revoke_ts)`
+/// describes what the builder was for that stretch of time. `revoke_ts` is
+/// `None` for the revision still in force.
+///
+/// This is how builder *capacity* becomes historical rather than a snapshot:
+/// `capacity` is the weight a host will accept at once, which is what Koji
+/// schedules against, and `enabled` is whether it was accepting anything at
+/// all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HostConfig {
+    pub host_id: i64,
+    pub name: Option<String>,
+    /// Space-separated, as the hub reports it.
+    pub arches: Option<String>,
+    pub enabled: bool,
+    pub capacity: Option<f64>,
+    pub create_ts: f64,
+    pub revoke_ts: Option<f64>,
+}
+
 /// Typed client for the Koji hub.
 pub struct HubClient {
     client: Client,
@@ -340,6 +363,62 @@ impl HubClient {
             hosts.push((id, name, arches));
         }
         Ok(hosts)
+    }
+
+    /// `queryHistory(tables=['host_config'])` — every builder configuration
+    /// the hub remembers, oldest revision first.
+    ///
+    /// The whole history in one call: about 12,600 revisions back to 2020 for
+    /// Fedora, a few megabytes. There is no windowing because there is no
+    /// need — this is small next to a single page of tasks, and a partial
+    /// answer would leave gaps that look like a host never existing.
+    pub fn host_config_history(&self) -> Result<Vec<HostConfig>, Error> {
+        // `tables` is queryHistory's first *positional* argument. Passing a
+        // struct instead makes the hub read its keys as table names --
+        // "No such history table: afterEvent" -- because koji's keyword
+        // arguments travel over XML-RPC only with its own `__starstar`
+        // marker. No filter is needed: the whole history is small.
+        let result = self.client.call(
+            "queryHistory",
+            &[Value::Array(vec![Value::String("host_config".to_string())])],
+        )?;
+        let rows = result
+            .get("host_config")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::Parse("queryHistory returned no host_config".to_string()))?;
+        // The hub sends timestamps as doubles and occasionally as ints; a
+        // capacity of "6" and one of "6.0" mean the same thing.
+        let num = |row: &Value, key: &str| match row.get(key) {
+            Some(Value::Double(d)) => Some(*d),
+            Some(Value::Int(i)) => Some(*i as f64),
+            _ => None,
+        };
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let Some(host_id) = row.get("host_id").and_then(Value::as_int) else {
+                continue;
+            };
+            let Some(create_ts) = num(row, "create_ts") else {
+                // A revision with no creation instant cannot be placed in
+                // time, so it cannot contribute to a capacity-at-an-instant
+                // query either.
+                continue;
+            };
+            out.push(HostConfig {
+                host_id,
+                name: row
+                    .get("host.name")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                arches: row.get("arches").and_then(Value::as_str).map(String::from),
+                enabled: matches!(row.get("enabled"), Some(Value::Boolean(true))),
+                capacity: num(row, "capacity"),
+                create_ts,
+                revoke_ts: num(row, "revoke_ts"),
+            });
+        }
+        out.sort_by(|a, b| a.create_ts.total_cmp(&b.create_ts));
+        Ok(out)
     }
 
     /// `listChannels()` — channel `(id, name)` pairs.

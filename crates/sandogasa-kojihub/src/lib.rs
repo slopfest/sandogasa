@@ -15,7 +15,7 @@
 pub mod hub;
 pub mod xmlrpc;
 
-pub use hub::{HubClient, HubTask, ListTasksOpts, QueryOpts};
+pub use hub::{HostConfig, HubClient, HubTask, ListTasksOpts, QueryOpts};
 pub use xmlrpc::{Client, Error, Value};
 
 /// Retry an operation with exponential backoff on retriable errors
