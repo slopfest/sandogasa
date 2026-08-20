@@ -16,11 +16,8 @@
 //! (`*_ts` fields) — the string `*_time` forms are never stored.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 /// Bump when the on-disk shape changes incompatibly. Loading a
 /// file with a NEWER version errors (old tool, new file); older
@@ -29,22 +26,18 @@ pub const SCHEMA_VERSION: u32 = 1;
 
 /// A pooled collection of build/task records from one or more
 /// Koji instances.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone)]
 pub struct Dataset {
     pub meta: DatasetMeta,
     /// Parent `build` tasks, keyed `"<instance>:<task_id>"`.
-    #[serde(default)]
     pub builds: BTreeMap<String, BuildRecord>,
     /// Child tasks of the builds, keyed `"<instance>:<task_id>"` — the
     /// per-arch `buildArch` builds and the `rebuildSRPM` that precedes
     /// them. See `TaskRecord::method`.
-    #[serde(default)]
     pub tasks: BTreeMap<String, TaskRecord>,
     /// `"<instance>:<host_id>"` → builder hostname.
-    #[serde(default)]
     pub hosts: BTreeMap<String, String>,
     /// `"<instance>:<channel_id>"` → channel name.
-    #[serde(default)]
     pub channels: BTreeMap<String, String>,
     /// `"<instance>:<host_id>"` → the arches that host serves, as the
     /// hub reports them (`x86_64 i386`, `s390x`).
@@ -53,14 +46,7 @@ pub struct Dataset {
     /// whose own arch says only that it could have gone anywhere. The
     /// hub's host names do not carry it reliably — Fedora has builders
     /// called `xenbuilder3` and `ppc1` — so it comes from `listHosts`.
-    #[serde(default)]
     pub host_arches: BTreeMap<String, String>,
-}
-
-/// Datasets written before the SRPM step was collected hold only
-/// `buildArch` tasks.
-fn buildarch_method() -> String {
-    BUILD_ARCH.to_string()
 }
 
 /// One architecture's build. These are what race each other, so they are
@@ -87,20 +73,22 @@ pub fn is_srpm_step(method: &str) -> bool {
     method == REBUILD_SRPM || method == BUILD_SRPM_FROM_SCM
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone)]
 pub struct DatasetMeta {
     pub schema_version: u32,
     /// When this file was last written.
     pub generated: DateTime<Utc>,
     /// Completion-time windows the records were swept from.
-    #[serde(default)]
     pub windows: Vec<FetchWindow>,
 }
 
 /// One fetch's coverage: tasks completing in the half-open
 /// window `[from, to)` on `instance` — adjacent daily windows
 /// share a boundary instant without double-counting it.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+///
+/// Serialisable, unlike the rest of this module: a report states the
+/// coverage it was computed over, so these travel in report JSON.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct FetchWindow {
     pub instance: String,
     /// UTC unix seconds, inclusive lower bound.
@@ -111,12 +99,11 @@ pub struct FetchWindow {
     /// True when the fetch was scoped (--owner/--package/
     /// --inventory) — such a window is NOT full coverage, and
     /// merge/report warn when mixing it with unfiltered ones.
-    #[serde(default)]
     pub filtered: bool,
 }
 
 /// A parent `build` task.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone)]
 pub struct BuildRecord {
     pub instance: String,
     pub task_id: i64,
@@ -125,7 +112,6 @@ pub struct BuildRecord {
     pub nvr: Option<String>,
     pub target: Option<String>,
     pub owner: Option<String>,
-    #[serde(default)]
     pub scratch: bool,
     pub state: i64,
     pub create_ts: f64,
@@ -138,13 +124,12 @@ pub struct BuildRecord {
     /// slot on a real machine while it waits for its children — one was
     /// seen occupying an s390x builder for five minutes to produce a
     /// noarch package whose actual work ran on x86.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_id: Option<i64>,
 }
 
 /// One child task of a build: an architecture's build, or the source
 /// rebuild that precedes them.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone)]
 pub struct TaskRecord {
     pub instance: String,
     pub task_id: i64,
@@ -156,7 +141,6 @@ pub struct TaskRecord {
     /// `rebuildSRPM` is the source rebuild that precedes them all, on
     /// whichever arch the hub happened to pick. Defaults to `buildArch`
     /// for datasets written before the SRPM step was collected.
-    #[serde(default = "buildarch_method")]
     pub method: String,
     pub package: Option<String>,
     pub state: i64,
@@ -220,27 +204,6 @@ impl Dataset {
             channels: BTreeMap::new(),
             host_arches: BTreeMap::new(),
         }
-    }
-
-    pub fn load(path: &Path) -> Result<Self, String> {
-        let contents = std::fs::read_to_string(path)
-            .map_err(|e| format!("could not read {}: {e}", path.display()))?;
-        let ds: Dataset = serde_json::from_str(&contents)
-            .map_err(|e| format!("could not parse {}: {e}", path.display()))?;
-        if ds.meta.schema_version > SCHEMA_VERSION {
-            return Err(format!(
-                "{}: dataset schema v{} is newer than this tool understands \
-                 (v{SCHEMA_VERSION}); upgrade koji-lag",
-                path.display(),
-                ds.meta.schema_version
-            ));
-        }
-        Ok(ds)
-    }
-
-    pub fn save(&self, path: &Path) -> Result<(), String> {
-        let json = serde_json::to_string(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, json).map_err(|e| format!("could not write {}: {e}", path.display()))
     }
 
     /// Union `other` into `self`. Records dedupe by key; on
@@ -391,30 +354,6 @@ mod tests {
         };
         assert_eq!(unstarted.queue_wait(), None);
         assert_eq!(unstarted.build_time(), None);
-    }
-
-    #[test]
-    fn round_trip_via_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ds.json");
-        let mut ds = Dataset::new();
-        let t = task("fedora", 42, "ppc64le", Some(2000.0));
-        ds.tasks.insert(t.key(), t);
-        ds.save(&path).unwrap();
-        let loaded = Dataset::load(&path).unwrap();
-        assert_eq!(loaded.tasks.len(), 1);
-        assert_eq!(loaded.tasks["fedora:42"].arch, "ppc64le");
-    }
-
-    #[test]
-    fn load_rejects_newer_schema() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ds.json");
-        let mut ds = Dataset::new();
-        ds.meta.schema_version = SCHEMA_VERSION + 1;
-        ds.save(&path).unwrap();
-        let err = Dataset::load(&path).unwrap_err();
-        assert!(err.contains("newer than this tool"), "{err}");
     }
 
     #[test]

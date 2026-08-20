@@ -154,8 +154,11 @@ on 2026-04-15, the remainder being builds that failed before one ran.
   window needs (10.8 min at ~21s a page, half of which is deliberate
   pacing), then 8,147 builds' children in 204 batches (8 min). The same
   run at `PARENT_CHUNK` 200 spends about a minute on the children.
-- Importing 676MB of JSON datasets — 517,233 builds and 1,801,758 tasks —
-  took 48s and produced a 402MB store.
+- Folding 676MB of JSON datasets into the store — 517,233 builds and
+  1,801,758 tasks — took 48s and produced a 402MB store, 40% smaller than
+  the JSON. (The `import` command that did it has since been removed; the
+  figure is kept as the cost of bulk-inserting rows this tool already has,
+  which is what a database-dump ingester would pay.)
 
 Pacing is a duty cycle rather than a fixed pause: at 500ms between
 half-second queries the hub sees us half the time, but when it is
@@ -231,9 +234,8 @@ per batch. Either can be interrupted and re-run without re-asking for
 what landed, and the second can be behind the first for a window that was
 listed by an earlier run — which is why the children stage looks at every
 build in the window rather than only the ones this run listed. It is also
-why an imported dataset from before some child method was collected can be
-completed in place: the listing stands, and only the children are asked
-for again.
+why rows listed before some child method was collected can be completed in
+place: the listing stands, and only the children are asked for again.
 
 A parent is marked swept even when nothing came back. A build that failed
 before it started an arch task genuinely has no children, and a sweep

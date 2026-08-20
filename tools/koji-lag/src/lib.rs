@@ -18,7 +18,6 @@ pub mod dataset;
 pub mod events;
 pub mod export;
 pub mod fetch;
-pub mod import;
 pub mod instance;
 pub mod periods;
 pub mod pool;
@@ -30,33 +29,3 @@ pub mod stats;
 pub mod store;
 pub mod sweep;
 pub mod sync;
-
-/// JSON Schema for the dataset format, for external consumers.
-pub fn json_schema() -> String {
-    let schema = schemars::schema_for!(dataset::Dataset);
-    serde_json::to_string_pretty(&schema).expect("schema serializes")
-}
-
-#[cfg(test)]
-mod tests {
-    /// Snapshot test: the checked-in schema must match the code.
-    /// Regenerate with `UPDATE_SCHEMA=1 cargo test -p koji-lag
-    /// schema_up_to_date`.
-    #[test]
-    fn schema_up_to_date() {
-        let expected = super::json_schema();
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("data/koji-lag-dataset.schema.json");
-        if std::env::var("UPDATE_SCHEMA").is_ok() {
-            std::fs::write(&path, format!("{expected}\n")).unwrap();
-            return;
-        }
-        let on_disk = std::fs::read_to_string(&path)
-            .expect("schema file missing; run UPDATE_SCHEMA=1 cargo test");
-        assert_eq!(
-            on_disk.trim_end(),
-            expected,
-            "schema drift; run UPDATE_SCHEMA=1 cargo test -p koji-lag"
-        );
-    }
-}

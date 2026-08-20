@@ -8,7 +8,6 @@ use std::process::ExitCode;
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
-use koji_lag::dataset::Dataset;
 use koji_lag::pool::Format;
 use koji_lag::{fetch, instance, report};
 
@@ -30,13 +29,6 @@ enum Command {
     Events(EventsArgs),
     /// Write a store's rows out as CSV, for analysis elsewhere.
     Export(ExportArgs),
-    /// Read JSON datasets into the store.
-    ///
-    /// Transitional and hidden: it exists to fold datasets collected
-    /// before the store into one, and is to be removed once that is done —
-    /// no release should document it. See TODO.md.
-    #[command(hide = true)]
-    Import(ImportArgs),
     /// Per-arch queue-wait / build-time / bottleneck report.
     Report(ReportArgs),
     /// Write reports for every period the store covers.
@@ -121,17 +113,6 @@ struct ExportArgs {
     /// Last day to export, inclusive.
     #[arg(long, value_name = "YYYY-MM-DD")]
     until: Option<String>,
-}
-
-#[derive(clap::Args)]
-struct ImportArgs {
-    /// JSON dataset file, or a tree of them.
-    #[arg(required = true, value_name = "PATH")]
-    inputs: Vec<PathBuf>,
-
-    /// Store to read into (created if absent).
-    #[arg(long, value_name = "FILE")]
-    store: PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -248,13 +229,9 @@ struct ReportsArgs {
 
 #[derive(clap::Args)]
 struct ReportArgs {
-    /// Dataset file(s) to report over (merged in memory).
-    #[arg(value_name = "FILE", required_unless_present = "store")]
-    inputs: Vec<PathBuf>,
-
-    /// Store to report from, instead of dataset files.
-    #[arg(long, value_name = "FILE", conflicts_with = "inputs")]
-    store: Option<PathBuf>,
+    /// Store to report from.
+    #[arg(long, value_name = "FILE")]
+    store: PathBuf,
 
     /// Known Koji instance (cbs, fedora, stream), with --store.
     #[arg(long, default_value = "fedora")]
@@ -328,7 +305,6 @@ fn main() -> ExitCode {
         Command::Events(args) => cmd_events(&args),
         Command::Reports(args) => cmd_reports(&args),
         Command::Export(args) => cmd_export(&args),
-        Command::Import(args) => cmd_import(&args),
         Command::Sync(args) => cmd_sync(&args),
     };
     match result {
@@ -424,39 +400,6 @@ fn summarise(days: &[String]) -> String {
         n if n <= SHOWN => days.join(", "),
         n => format!("{}, +{} more", days[..SHOWN].join(", "), n - SHOWN),
     }
-}
-
-fn cmd_import(args: &ImportArgs) -> Result<(), Box<dyn Error>> {
-    let mut store = koji_lag::store::Store::open(&args.store)?;
-    let mut total = koji_lag::import::Imported::default();
-    for input in &args.inputs {
-        let one = koji_lag::import::ingest_path(&mut store, input)?;
-        total.written.builds += one.written.builds;
-        total.written.tasks += one.written.tasks;
-        total.children_current += one.children_current;
-        total.children_behind += one.children_behind;
-    }
-    println!(
-        "imported {} build(s), {} task(s) into {}",
-        total.written.builds,
-        total.written.tasks,
-        args.store.display()
-    );
-    if total.children_behind > 0 {
-        println!(
-            "note: {} build(s) came from a dataset without the SRPM stage, \
-             recorded as an older generation; a sweep will ask for their \
-             children again",
-            total.children_behind
-        );
-    }
-    for (instance, counts) in store.counts()? {
-        println!(
-            "  {instance}: {} build(s), {} task(s) stored",
-            counts.builds, counts.tasks
-        );
-    }
-    Ok(())
 }
 
 fn cmd_events(args: &EventsArgs) -> Result<(), Box<dyn Error>> {
@@ -627,47 +570,33 @@ fn cmd_report(args: &ReportArgs) -> Result<(), Box<dyn Error>> {
 
     // The window is applied twice over a store and once over files: the
     // store selects rows by it, and the report filters by it either way.
-    // Loading a whole store to filter it down in memory would defeat the
-    // point of having one.
-    let dataset = match &args.store {
-        Some(path) => {
-            let (instance_key, _) = instance::resolve(&args.instance, None)?;
-            let store = koji_lag::store::Store::open(path)?;
-            let (from, to) = (opts.since.unwrap_or(0.0), opts.until.unwrap_or(f64::MAX));
-            // Whole days only, as everywhere else: statistics over a day
-            // whose arch tasks have not arrived read as a quiet day rather
-            // than an unfinished one.
-            let selection = store.analysable(&instance_key, from, to, fetch::CREATE_GRACE_SECS)?;
-            if selection.whole.is_empty() {
-                return Err(koji_lag::export::refuse(&selection).into());
-            }
-            if !selection.skipped.is_empty() {
-                eprintln!(
-                    "note: {} incomplete day(s) left out of this report: {}",
-                    selection.skipped.len(),
-                    summarise(&selection.skipped_dates()),
-                );
-            }
-            // The store applied the window already, selecting a build's
-            // children by the build rather than by their own clocks.
-            // Applying it again here would drop the arch tasks of a build
-            // that finished just before midnight and split it across two
-            // periods — the thing the store query exists to avoid. The
-            // period moves to `period`, which is what the report states it
-            // covers and judges its coverage against.
-            opts.period = Some((from, to));
-            opts.since = None;
-            opts.until = None;
-            selection.dataset
-        }
-        None => {
-            let mut dataset = Dataset::new();
-            for input in &args.inputs {
-                dataset.merge(Dataset::load(input)?);
-            }
-            dataset
-        }
-    };
+    let (instance_key, _) = instance::resolve(&args.instance, None)?;
+    let store = koji_lag::store::Store::open(&args.store)?;
+    let (from, to) = (opts.since.unwrap_or(0.0), opts.until.unwrap_or(f64::MAX));
+    // Whole days only, as everywhere else: statistics over a day whose arch
+    // tasks have not arrived read as a quiet day rather than an unfinished
+    // one.
+    let selection = store.analysable(&instance_key, from, to, fetch::CREATE_GRACE_SECS)?;
+    if selection.whole.is_empty() {
+        return Err(koji_lag::export::refuse(&selection).into());
+    }
+    if !selection.skipped.is_empty() {
+        eprintln!(
+            "note: {} incomplete day(s) left out of this report: {}",
+            selection.skipped.len(),
+            summarise(&selection.skipped_dates()),
+        );
+    }
+    // The store applied the window already, selecting a build's children by
+    // the build rather than by their own clocks. Applying it again here
+    // would drop the arch tasks of a build that finished just before
+    // midnight and split it across two periods — the thing the store query
+    // exists to avoid. The period moves to `period`, which is what the
+    // report states it covers and judges its coverage against.
+    opts.period = Some((from, to));
+    opts.since = None;
+    opts.until = None;
+    let dataset = selection.dataset;
 
     let output = report::run(&dataset, &opts);
     match &args.out {

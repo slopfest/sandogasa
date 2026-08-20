@@ -104,34 +104,17 @@ and export again.
 There is no JSON export. A store travels as itself — one SQLite file — so
 nothing needs re-encoding to move it.
 
-### Import (transitional)
-
-Folds JSON datasets collected before the store existed into one:
-
-```sh
-koji-lag import raw_data --store lag.sqlite
-```
-
-Hidden from `--help` and scheduled for removal, along with the rest of the
-JSON read path, once the last such dataset is folded in. Don't build on
-it. An import claims coverage per window but never the margin before
-it that the dataset's sweep also read, since a build created then and
-finishing after the window is not in the file.
-
 ### Report
 
 ```sh
 koji-lag report --store lag.sqlite --since 2026-07-15 --until 2026-07-21
 koji-lag report --store lag.sqlite --since 2026-07-15 --arch s390x,ppc64le
 koji-lag report --store lag.sqlite --scratch --json
-koji-lag report shared-dataset.json          # or a JSON dataset
 ```
 
-Over a store, `--since`/`--until` choose the period and the store selects
-a build's child tasks by the build, so a build finishing minutes before
-midnight keeps its arch tasks instead of being split across two periods.
-Given JSON files instead, they are merged in memory and reported the same
-way.
+`--since`/`--until` choose the period, and the store selects a build's
+child tasks by the build, so a build finishing minutes before midnight
+keeps its arch tasks instead of being split across two periods.
 
 Only whole days are analysed. A day the store has listed but not finished
 fetching holds builds whose arch tasks have not arrived, and statistics over
@@ -386,16 +369,6 @@ its busy timeout ran out. Three checks, because no one of them suffices: the
 so their presence means one is open), `fuser` where available, and a write
 lock probe — that last one alone would miss a sync, which writes in batches
 and is idle between them.
-
-## Dataset format
-
-The JSON shape `import` reads, and the shape data is shared in
-(`data/koji-lag-dataset.schema.json`): `meta` (schema version, coverage
-windows with their instance, bounds, and filtered flag), `builds` and
-`tasks` keyed `"<instance>:<task_id>"`, and `hosts`/`channels` id→name
-maps. Build and task IDs are only unique per Koji instance, so records
-from different instances (fedora, stream, cbs) coexist in one document —
-and in one store.
 
 ## System-wide configuration
 

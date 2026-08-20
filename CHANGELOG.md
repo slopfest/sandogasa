@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### koji-lag: the JSON dataset format is gone (breaking CLI)
+
+Datasets were how this tool kept data before it had a store: one JSON file
+per swept window, unioned in memory to report over more than one. The store
+replaced that, and until now both paths existed side by side — two ways to
+hold the same rows, one of them unable to say what it had already fetched.
+
+Removed: the `import` subcommand (added after 0.20.0 and never released),
+`report`'s positional dataset-file arguments, `Dataset::load`/`save`, the
+generated `koji-lag-dataset.schema.json` and its snapshot test, and the
+serde and schemars derives that existed only to write a dataset to disk.
+`FetchWindow` keeps its Serialize, because a report states the coverage it
+was computed over and those travel in report JSON.
+
+Migration: `report` now requires `--store FILE`, so `koji-lag report
+data/*.json` becomes `koji-lag report --store lag.sqlite --since X --until
+Y`. Datasets held from 0.20.x have no reader any more — re-sync the window
+instead, which is one command and costs hub time rather than data, since
+the hub still holds it.
+
 ### koji-lag: a new `events` command, for the windows nobody scheduled
 
 Reports were written per calendar period, which is the wrong shape for the
@@ -323,10 +343,10 @@ written only when the store holds all of it, so a weekly report never
 appears from a partly known week.
 
 CSV rather than JSON, and there is no JSON export. A store already travels
-as itself — one SQLite file — so re-encoding it to import it again bought
-nothing, and it carried a hazard: a dataset's coverage windows are a promise
-a later import acts on, so exporting half-swept days could tell a future
-sweep to skip creations nobody had listed.
+as itself — one SQLite file — so re-encoding it to load it again bought
+nothing, and it carried a hazard: coverage windows are a promise a later
+sweep acts on, so exporting half-swept days could tell a future sweep to
+skip creations nobody had listed.
 
 Fields are quoted when they would otherwise break a row, which Koji's data
 does not currently need and a writer should not assume: a CSV that parses
@@ -381,14 +401,11 @@ collating raw data between grains to keep it from filling the disk, and no
 sweep that costs the same when the data is already in hand.
 
 Migration: `koji-lag sync --store lag.sqlite --since X --until Y` in place
-of `fetch` and `backfill`, and `koji-lag import` in place of `merge` —
-datasets union into a store the same way they unioned into each other.
-Existing JSON keeps its value: import it once and it is queryable by
-period without being re-fetched.
+of `fetch`, `backfill` and `merge` — one command that fetches only what the
+store does not already hold.
 
 `report` and `reports` read the store. `report --store FILE` takes the
-period from `--since`/`--until` (JSON files still work, given instead of
-`--store`), and `reports --store FILE --reports-root DIR` replaces
+period from `--since`/`--until`, and `reports --store FILE --reports-root DIR` replaces
 `--root DIR`: it writes a report for every day, week and month the store
 holds whole, rather than one per dataset file it finds. A period counts as
 whole only when its creation span is listed *and* every build in it has
@@ -470,7 +487,7 @@ refetched.
 The measurements behind this, and the rest of what the hub costs, are now
 recorded in the tool's DEVELOPMENT.md.
 
-### koji-lag: a SQLite store, and `import` to fill it from existing datasets
+### koji-lag: a SQLite store
 
 Backfilling a month cost far more than the month: a sweep for May reached
 only as far back as June 8th before giving up on positioning, then spent
@@ -492,23 +509,19 @@ Everything the hub reports is kept, whether or not the window being swept
 wants it, because a round trip costs minutes and a row costs bytes. A day
 of Fedora is about 33,000 rows and six minutes of hub time.
 
-`koji-lag import <path> --store <file>` reads the JSON datasets sweeps
-wrote before this, so nothing already collected has to be fetched again.
-Measured on 676MB of existing data: 517,233 builds and 1,801,758 tasks in
-22 seconds, into a 402MB store — 40% smaller than the JSON and queryable.
-An import claims only the *inner* window of each dataset as listed, never
-its three-day margin: a build created in the margin and finishing after
-the window is absent, so claiming it would tell a later sweep those
-creations were enumerated when they were not. A scoped sweep's dataset
-contributes rows but no coverage at all.
+Coverage is claimed only for the *inner* window a sweep enumerated, never
+for the margin around it: a build created in the margin and finishing
+after the window is absent, so claiming it would tell a later sweep those
+creations were enumerated when they were not. A scoped sweep contributes
+rows but no coverage at all.
 
 Both coverage records carry the generation of the code that wrote them.
 Adding a field taken from the build listing then needs only a re-list, an
 hour for a year's rows; a field from the child queries needs those queries
 again, which is days. Keeping the two apart is what makes a new field a
-refresh rather than a rescan, and it is why a dataset lacking a collected
-method — an older sweep's, or one from a database dump — records its
-builds as never having had children asked for, rather than as current.
+refresh rather than a rescan, and it is why rows that predate a collected
+method are recorded as never having had children asked for, rather than as
+current.
 
 The database is not for version control: it is rewritten whole on every
 commit and diffs to noise. `*.sqlite` is ignored, and what gets published

@@ -79,12 +79,12 @@ Last day to export, inclusive
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS koji-lag report
-\fBkoji\-lag report\fR [\fB\-\-store\fR] [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILE\fR] 
+\fBkoji\-lag report\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Per\-arch queue\-wait / build\-time / bottleneck report
 .TP
 \fB\-\-store\fR \fI<FILE>\fR
-Store to report from, instead of dataset files
+Store to report from
 .TP
 \fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
 Known Koji instance (cbs, fedora, stream), with \-\-store
@@ -127,9 +127,6 @@ Writing to a directory defaults to text,json. `csv` is one file per table, becau
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
-.TP
-[\fIFILE\fR]
-Dataset file(s) to report over (merged in memory)
 .SS koji-lag reports
 \fBkoji\-lag reports\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-\-reports\-root\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-min\-samples\fR] [\fB\-\-force\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
