@@ -10,6 +10,64 @@
   rust-libsqlite3-sys 0.36 are already packaged on rawhide, f43 and
   epel9.
 
+- (2026-08-20) Retire "build volume" as a measure, and say why in the
+  write-up: Fedora's largest single source of builds is almost invisible
+  to the architecture everyone worries about.
+
+  Measured over 2025-12, the busiest month in the store at 259,062
+  builds: `koschei` submitted 239,188 of them and produced **0.1 s390x
+  tasks per 1,000 builds** (22 `buildArch` tasks in all), against **588
+  per 1,000** for everyone else.
+
+  It is not sampling one architecture for cheapness — it builds x86_64
+  (124,670), aarch64 (123,557) and ppc64le (121,699) in that month and
+  skips s390x and i386 almost entirely. So the asymmetry is a policy
+  fact, and it cuts both ways: s390x is spared several hundred thousand
+  canary tasks a year, and it also gets far less continuous coverage, so
+  dependency breakage there surfaces only when a real build meets it.
+
+  Its builds also carry 2.22 child tasks each against 4.08, which is why
+  that month's ratio looks anomalous, and part of that is builds that
+  never reach an arch task at all: per the wiki, koschei will not attempt
+  a build whose dependencies are Unresolved or whose package is Blocked
+  in Koji.
+
+  What koschei actually does (https://fedoraproject.org/wiki/Koschei) is
+  worth stating in the write-up, because it explains the arrival pattern:
+  it tracks dependency changes in Rawhide and rebuilds packages whose
+  dependencies change too much, from the latest available SRPM, on a
+  priority queue weighted by distance in the dependency graph. Its
+  activity therefore reflects dependency churn rather than anyone
+  updating a package, and it drains on its own schedule — which is how it
+  reached 15,600 builds a day over Christmas with nothing else happening.
+
+  All of it is `scratch=1`, and scratch is 78-95% of every month's builds,
+  so any figure quoted as "builds" is mostly canary traffic unless it says
+  otherwise. The reports already split official from scratch; on official
+  builds only, the s390x median is 47-63s in every ordinary month and
+  4,917s / 7,936s / 8,602s in the three rebuild months.
+
+  So the busiest month in the store is one of the calmest for arch
+  pressure, and the pairs that once looked paradoxical are not:
+  2026-07-12's 10,611 builds ran at a 50s s390x median (98% koschei, about
+  one s390x task in the lot) while 2026-07-17's 9,587 produced a 7.4-hour
+  median (95% releng, which builds everything for everything). The
+  quantity that predicts pain is s390x-bound work, and it barely
+  correlates with total builds.
+
+  Corollary for reading any monthly figure: a busy month can be one
+  service, one week, or one person. December 2025 was koschei running hard
+  over Christmas plus a handful of maintainers doing bulk work — human
+  submitters dropped from ~69 a day to ~23 while each did roughly twice as
+  much — and 2026-01-08's 1,211-build peak was mostly a single account.
+  None of it touched s390x. The submitter breakdown is what makes a
+  monthly number interpretable at all, which is a further argument for
+  graduating `submitters-by-day.sql` into a report section.
+
+  Keep individuals out of anything published: the aggregate ("two thirds
+  of contributors step away over the holidays while the rest double their
+  output") carries the point without profiling volunteers.
+
 - (2026-08-19) Measure the FTBFS tail as part of the write-up — it may
   be the strongest thing the store can say about a mass rebuild, and it
   is invisible in the queue figures everyone looks at.
