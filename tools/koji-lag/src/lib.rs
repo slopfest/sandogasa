@@ -19,6 +19,7 @@ pub mod import;
 pub mod instance;
 pub mod periods;
 pub mod pool;
+pub mod rebuild;
 pub mod report;
 pub mod schedule;
 pub mod stats;

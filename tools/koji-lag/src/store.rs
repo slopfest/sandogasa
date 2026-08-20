@@ -677,6 +677,44 @@ impl Store {
         Ok(whole)
     }
 
+    /// releng's share of each UTC day's builds in `[from, to)`.
+    ///
+    /// The basis for dating a mass rebuild from evidence rather than from a
+    /// schedule; see [`crate::rebuild`]. Selects by completion, matching
+    /// how reports select, and counts every build including scratch —
+    /// what matters here is who was submitting, and koschei's canaries are
+    /// part of the denominator a share is measured against.
+    pub fn releng_share_by_day(
+        &self,
+        instance: &str,
+        from: f64,
+        to: f64,
+    ) -> Result<Vec<crate::rebuild::Day>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT cast(completion_ts / 86400 AS INTEGER) * 86400 AS day,
+                        count(*),
+                        sum(CASE WHEN owner = 'releng' THEN 1 ELSE 0 END)
+                 FROM builds
+                 WHERE instance = ?1 AND completion_ts >= ?2 AND completion_ts < ?3
+                 GROUP BY day ORDER BY day",
+            )
+            .map_err(|e| e.to_string())?;
+        let days = stmt
+            .query_map(params![instance, from, to], |r| {
+                Ok(crate::rebuild::Day {
+                    at: r.get::<_, i64>(0)? as f64,
+                    builds: r.get::<_, i64>(1)? as usize,
+                    releng: r.get::<_, i64>(2)? as usize,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(days)
+    }
+
     /// The rows of `[from, to)` worth analysing, and the days left out.
     ///
     /// Only whole days go in. A day listed but not yet finished holds
