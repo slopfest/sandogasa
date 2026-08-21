@@ -15,6 +15,13 @@ F45's was announced across four weeks and submitted in four days.
 hardware, and because they turn out to be each other's control: they reach the
 same utilisation from opposite directions and only one of them queues.
 
+> **Every figure here is provisional and dated 2026-08-21.** The store has a
+> hole from February to June 2025 that is still being backfilled, so the F42
+> cycle is measured from a partial quarter. The metrics are all computed by
+> `koji-lag report`, `koji-lag events` and their trend files, so regenerating
+> them once the store is whole is a matter of re-running those and pasting the
+> tables back — no queries to reconstruct.
+
 ## 0. The two architectures, side by side
 
 The single most useful table here, because it separates a capacity problem
@@ -290,6 +297,28 @@ are 1.30x, 1.17x and 0.99x, so a fixed-mix comparison is stable to about
 ±15% — against ±40% for an unrestricted month, which is why the automatic
 warning sits at 1.5x and a rebuild-to-rebuild trend could reasonably sit at
 1.25x.
+
+### Which toolchains moved, and which comparisons are not comparable
+
+Build time is split by toolchain family and each is compared only with its
+own earlier self. s390x, F42 to F45, families whose population held steady:
+
+| family | ratio | builds compared |
+|:--|--:|:--|
+| rust | 1.24x | 2,911 → 3,280 |
+| haskell | 1.28x | 601 → 601 |
+| ocaml | 1.38x | 163 → 168 |
+| other (mostly C/C++) | 1.48x | 6,238 → 7,099 |
+| ruby | 1.50x | 49 → 55 |
+| perl | 1.66x | 460 → 479 |
+| python | 1.66x | 298 → 303 |
+
+**Everything got slower on s390x**, and Haskell, OCaml and Rust do not
+consume Fedora's C flags — so this is the platform and not the compiler. The
+gradient is informative: rust and haskell least, perl and python worst, which
+points at process and I/O cost rather than at raw compute. On ppc64le and
+x86_64 over the same range nearly every family got *faster*, with `other`
+lagging at 1.02x and 0.81x.
 
 ## 3. Recommended capacity
 

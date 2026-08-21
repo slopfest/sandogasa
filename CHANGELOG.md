@@ -44,6 +44,46 @@ rather than presentation: one seven-hour build on a quiet day would otherwise
 report a 90% tail and send somebody hunting. The tables themselves respect
 `--min-samples` like every other table in the report.
 
+### koji-lag: build time by toolchain, and noarch builds left out of it
+
+Two populations was the wrong shape. Splitting packages into `rust-` and
+everything else answered "did C and C++ get more expensive" with a single
+derived number, and that number could only be read by dividing one population
+by the other — a comparison between different kinds of package, which is the
+one comparison the data does not support.
+
+Nine toolchain families now, from the package name: golang, haskell, ocaml,
+perl, python, r, ruby, rust, and `other` for what the prefixes do not name,
+mostly C and C++. Each is compared only with its own earlier self. Nothing is
+divided by anything, and `divergence` is gone.
+
+Reading rows instead of a ratio says more, not less. F42 to F45, per rebuild:
+
+| arch | rust | haskell | perl | python | other |
+|:--|--:|--:|--:|--:|--:|
+| s390x | 1.24x | 1.28x | 1.66x | 1.66x | 1.48x |
+| ppc64le | 0.73x | 0.95x | 0.78x | 0.88x | 1.02x |
+| x86_64 | 0.68x | 0.89x | 0.84x | 0.69x | 0.81x |
+
+On s390x *every* toolchain with a comparable population got slower — rust
+1.24x, haskell 1.28x, ocaml 1.38x, other 1.48x, ruby 1.50x, perl and python
+1.66x. Haskell and OCaml do not consume Fedora's C flags at all, so that
+architecture's regression is platform and not compiler, which the old two-way
+split could not establish. The worst hit are the fork- and I/O-heavy families
+and the least is rust, which says something about where to look. Meanwhile on
+the two healthy architectures nearly everything improved while `other` lagged
+at 0.81x and 1.02x.
+
+**Noarch builds are excluded from build time entirely.** Koji records their
+single `buildArch` task against whichever host it picked, so `python-requests`
+appears under aarch64 in one rebuild and elsewhere in the next, having
+compiled nothing either time. s390x hosted 2,291 of them in F42's rebuild at
+a 1.44m mean against 4.15m for real compiles, and 5 in F45's — which is most
+of what remained of the population shrink after the SRPM fix, and with them
+out the two rebuilds compare 9,430 tasks against 9,327. A package with
+`ExclusiveArch` is excluded too, which is a loss, but omitting one
+architecture's work beats mixing another's cheap work into it.
+
 ### koji-lag: `events` compares one mass rebuild with the next
 
 The cross-period trend could only compare calendar months, where the answer

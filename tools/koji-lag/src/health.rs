@@ -81,34 +81,55 @@ pub struct CohortStats {
     pub share_of_tasks: f64,
 }
 
-/// Package-name prefix that picks out the control population.
+/// Build toolchains, guessed from the package name.
 ///
-/// Rust packages are built by a toolchain whose cost is dominated by
-/// rustc rather than by the C and C++ compilers, and the workspace has
-/// thousands of them on every architecture — enough to be a population
-/// rather than a sample, and uniform enough that a change in what they
-/// cost is a change in the *platform* rather than in a compiler flag.
+/// Fedora names most of its language ecosystems by prefix, which makes a
+/// usable toolchain split available in the store with no spec checkout and
+/// no `BuildRequires` scan. Each family is then compared only with *its own*
+/// earlier self, so what the prefix misses matters much less than it would
+/// for a census: `golang-` catches Go libraries and not Go applications, and
+/// a Go application's cost still shows up somewhere, just under `other`.
 ///
-/// A name prefix rather than a `BuildRequires` scan on purpose: it keeps
-/// this self-contained in the store, and a control population does not
-/// need to be exact to be a control.
-pub const CONTROL_PREFIX: &str = "rust-";
+/// Measured on s390x's F45 rebuild, as a share of its 12,612 compiles:
+/// rust 26.0%, other 56.2%, haskell 4.8%, perl 3.8%, golang 3.4%,
+/// python 2.4%, ocaml and r 1.3% each, ruby 0.4%.
+pub const FAMILIES: &[(&str, &[&str])] = &[
+    ("golang", &["golang-"]),
+    ("haskell", &["ghc-"]),
+    ("ocaml", &["ocaml-"]),
+    ("perl", &["perl-"]),
+    ("python", &["python-", "python3-"]),
+    ("r", &["R-"]),
+    ("ruby", &["rubygem-"]),
+    // `cosmic-` is a Rust desktop, published without the prefix.
+    ("rust", &["rust-", "cosmic-"]),
+];
 
-/// How long one population of packages took to build, within one window.
+/// Everything the prefixes do not name, which is mostly C and C++.
+pub const OTHER_FAMILY: &str = "other";
+
+/// Which toolchain a package name suggests.
+pub fn family_of(package: &str) -> &'static str {
+    FAMILIES
+        .iter()
+        .find(|(_, prefixes)| prefixes.iter().any(|p| package.starts_with(p)))
+        .map_or(OTHER_FAMILY, |(name, _)| name)
+}
+
+/// How long one toolchain's packages took to build, within one window.
 ///
-/// Deliberately two plain numbers and **never a ratio between the two
-/// populations**, because within a single window that ratio is package mix
-/// and not cost. On s390x in July 2026 the control population averaged
-/// 3.8 minutes against 8.9 for everything else — a 2.3x gap that says only
-/// that Rust crates are small, since the two *medians* were within seconds
-/// of each other.
+/// Read **down the column across periods, never across the row within
+/// one**. A family's own change over time is a fact about that family; the
+/// gap between two families in the same window is mostly how big their
+/// packages are. On s390x in July 2026 the Rust packages averaged 3.8
+/// minutes against 8.9 for everything else, a 2.3x gap that says only that
+/// crates are small — their *medians* were within seconds of each other.
 ///
-/// The comparison this exists to feed is across windows, where each
-/// population is compared with its own earlier self and the mix cancels.
-/// See [`crate::trend`].
+/// See [`crate::trend`], which compares each family with its own earlier
+/// self and nothing else.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Population {
-    /// `control` for [`CONTROL_PREFIX`] packages, `rest` for the others.
+    /// The toolchain family, from [`family_of`].
     pub name: String,
     pub tasks: usize,
     /// Median and p90 build time in seconds, `None` below a usable count.
@@ -241,8 +262,9 @@ pub fn assess(
     let mut per_class: BTreeMap<(&str, Class), Vec<f64>> = BTreeMap::new();
     // Human official work only, since a cohort of submitters means people.
     let mut per_person: BTreeMap<&str, BTreeMap<&str, Vec<f64>>> = BTreeMap::new();
-    // (arch, is-control) -> build times, for the cross-window comparison.
-    let mut per_pop: BTreeMap<(&str, bool), Vec<f64>> = BTreeMap::new();
+    // Candidate rows for the toolchain split, held until every build's
+    // architecture count is known: (build key, arch, family, secs).
+    let mut candidates: Vec<((&str, i64), &str, &'static str, f64)> = Vec::new();
     // parent build -> (arch, completion) for each architecture it reached.
     let mut per_build: BTreeMap<(&str, i64), Vec<(&str, f64)>> = BTreeMap::new();
 
@@ -299,24 +321,31 @@ pub fn assess(
             // 1.25x. Divergence survived it (1.30x against 1.31x, the
             // ratio of ratios cancelling a common contamination), which is
             // the only reason the conclusion did.
-            if task.method != BUILD_ARCH {
-                continue;
-            }
-            if let Some(parent) = task.parent {
-                per_build
-                    .entry((&task.instance, parent))
-                    .or_default()
-                    .push((&task.arch, done));
-            }
-            if task.state == TASK_CLOSED
-                && let Some(pkg) = build
-                    .and_then(|b| b.package.as_deref())
-                    .or(task.package.as_deref())
-            {
-                per_pop
-                    .entry((&task.arch, pkg.starts_with(CONTROL_PREFIX)))
-                    .or_default()
-                    .push(secs);
+            //
+            // Scoped to these two metrics rather than skipping the task:
+            // utilisation, builder hours, the per-class queue wait and the
+            // cohorts all keep the SRPM work, because it occupies a builder
+            // and waits in a queue whatever it is doing.
+            if task.method == BUILD_ARCH {
+                if let Some(parent) = task.parent {
+                    per_build
+                        .entry((&task.instance, parent))
+                        .or_default()
+                        .push((&task.arch, done));
+                }
+                if task.state == TASK_CLOSED
+                    && let Some(pkg) = build
+                        .and_then(|b| b.package.as_deref())
+                        .or(task.package.as_deref())
+                    && let Some(parent) = task.parent
+                {
+                    candidates.push((
+                        (task.instance.as_str(), parent),
+                        task.arch.as_str(),
+                        family_of(pkg),
+                        secs,
+                    ));
+                }
             }
         }
         let Some(wait) = task.start_ts.map(|s| (s - task.create_ts).max(0.0)) else {
@@ -335,6 +364,46 @@ pub fn assess(
                 .entry(owner)
                 .or_default()
                 .push(wait);
+        }
+    }
+
+    // A build that produced exactly one architecture's task is not that
+    // architecture's work. Koji records a noarch build's `buildArch` task
+    // against whichever host it picked, so `python-requests` appears under
+    // aarch64 in one rebuild and somewhere else in the next -- and it
+    // compiled nothing either time.
+    //
+    // Measured, and this is why it is excluded rather than noted: s390x
+    // hosted 2,291 of them in F42's rebuild at a 1.44m mean against 4.15m
+    // for real compiles, and 5 in F45's. That alone moved its apparent
+    // population by 20% and its median by a fifth. With them out, F42 and
+    // F45 compare 9,430 against 9,327 tasks -- the like-for-like comparison
+    // the metric was supposed to be.
+    //
+    // It over-excludes: a package with `ExclusiveArch: x86_64` also produces
+    // one task and is genuinely that architecture's work. Accepted, because
+    // the error is one of omission rather than of mixing another
+    // architecture's cheap work into this one's compile cost.
+    // Counted over the whole dataset rather than over `selected`, because
+    // whether a build is noarch is a fact about the build and not about
+    // what this report was narrowed to. Counting the selection instead made
+    // `report --arch s390x` see every build as single-architecture and
+    // silently emptied the table.
+    let mut arch_count: BTreeMap<(&str, i64), BTreeSet<&str>> = BTreeMap::new();
+    for task in dataset.tasks.values() {
+        if task.method == BUILD_ARCH
+            && let Some(parent) = task.parent
+        {
+            arch_count
+                .entry((task.instance.as_str(), parent))
+                .or_default()
+                .insert(task.arch.as_str());
+        }
+    }
+    let mut per_pop: BTreeMap<(&str, &'static str), Vec<f64>> = BTreeMap::new();
+    for (key, arch, family, secs) in candidates {
+        if arch_count.get(&key).map_or(0, BTreeSet::len) > 1 {
+            per_pop.entry((arch, family)).or_default().push(secs);
         }
     }
 
@@ -373,17 +442,18 @@ pub fn assess(
                         0.0
                     },
                     tail_tasks: *tail_n,
-                    service: [(false, "rest"), (true, "control")]
-                        .into_iter()
-                        .filter_map(|(is_control, name)| {
-                            let mut xs = per_pop.get(&(*arch, is_control))?.clone();
+                    service: per_pop
+                        .iter()
+                        .filter(|((a, _), _)| a == arch)
+                        .map(|((_, family), xs)| {
+                            let mut xs = xs.clone();
                             xs.sort_by(f64::total_cmp);
-                            Some(Population {
-                                name: name.to_string(),
+                            Population {
+                                name: (*family).to_string(),
                                 tasks: xs.len(),
                                 p50: median(&xs),
                                 p90: percentile(&xs, 0.9),
-                            })
+                            }
                         })
                         .collect(),
                 }
@@ -847,9 +917,9 @@ mod tests {
     fn srpm_work_counts_as_load_but_not_as_an_architectures_compile_cost() {
         let mut ds = Dataset::new();
         for id in 1..=30i64 {
-            // One compile at ten minutes, one SRPM checkout at ten seconds,
-            // both landing on s390x hosts.
-            let (b, mut tasks) = multiarch(id, &[("s390x", 600.0)]);
+            // One compile at ten minutes per architecture, plus an SRPM
+            // checkout at ten seconds landing on an s390x host.
+            let (b, mut tasks) = multiarch(id, &[("s390x", 600.0), ("x86_64", 600.0)]);
             let mut srpm = tasks[0].clone();
             srpm.task_id = id * 1000 + 500;
             srpm.method = "buildSRPMFromSCM".to_string();
@@ -860,25 +930,32 @@ mod tests {
                 ds.tasks.insert(format!("fedora:{}", t.task_id), t);
             }
         }
-        let a = &assess_all(&ds).arches[0];
+        let h = assess_all(&ds);
+        let a = h.arches.iter().find(|a| a.arch == "s390x").expect("s390x");
         // The compile cost is the compiles: thirty of them, ten minutes
         // each. Averaging in a ten-second checkout would report 5m.
-        let rest = a.service.iter().find(|p| p.name == "rest").expect("rest");
-        assert_eq!((rest.tasks, rest.p50), (30, Some(600.0)));
-        // The checkout still occupied a builder, so it is still load.
+        let other = a.service.iter().find(|p| p.name == "other").expect("other");
+        assert_eq!((other.tasks, other.p50), (30, Some(600.0)));
+        // The checkout still occupied a builder, so it is still load, and
+        // it still waited in a queue, so it is still in the class figures.
         assert_eq!(a.tasks, 60);
         assert_eq!(a.builder_hours, 30.0 * 610.0 / 3600.0);
+        assert!(
+            h.classes.iter().any(|c| c.arch == "s390x"),
+            "SRPM work must still reach the per-class wait"
+        );
     }
 
     #[test]
-    fn build_time_splits_on_the_control_prefix() {
+    fn build_time_splits_by_toolchain_family() {
         let mut ds = Dataset::new();
         for id in 1..=30 {
             let control = id % 2 == 0;
-            let (mut b, mut tasks) =
-                multiarch(id, &[("s390x", if control { 60.0 } else { 600.0 })]);
+            let secs = if control { 60.0 } else { 600.0 };
+            // Two architectures, so these are not taken for noarch builds.
+            let (mut b, mut tasks) = multiarch(id, &[("s390x", secs), ("x86_64", secs)]);
             let pkg = if control {
-                format!("{CONTROL_PREFIX}serde")
+                "rust-serde".to_string()
             } else {
                 "gzip".to_string()
             };
@@ -892,10 +969,20 @@ mod tests {
             }
         }
         let health = assess_all(&ds);
-        let s390x = &health.arches[0].service;
+        let s390x = &health
+            .arches
+            .iter()
+            .find(|a| a.arch == "s390x")
+            .expect("s390x")
+            .service;
         let get = |name: &str| s390x.iter().find(|p| p.name == name).expect(name);
-        assert_eq!((get("control").tasks, get("control").p50), (15, Some(60.0)));
-        assert_eq!((get("rest").tasks, get("rest").p50), (15, Some(600.0)));
+        assert_eq!((get("rust").tasks, get("rust").p50), (15, Some(60.0)));
+        assert_eq!((get("other").tasks, get("other").p50), (15, Some(600.0)));
+        // Named by toolchain, so a Go library is not filed under C.
+        assert_eq!(family_of("golang-github-spf13-cobra"), "golang");
+        assert_eq!(family_of("python-requests"), "python");
+        assert_eq!(family_of("cosmic-term"), "rust");
+        assert_eq!(family_of("gzip"), "other");
     }
 
     fn assess_all(ds: &Dataset) -> Health {

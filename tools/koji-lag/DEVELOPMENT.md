@@ -482,6 +482,47 @@ ten submitters on a small instance also all land in the top band and their
 p90 is still a real finding about them. `--class` does not gate it: it narrows
 what was built, not who built it.
 
+## An architecture's task list is not an architecture's work
+
+Koji records two kinds of task against a host's architecture that have
+nothing to do with that architecture:
+
+- **`buildSRPMFromSCM`** — a checkout and a tarball, seconds not minutes.
+- **a noarch build's `buildArch` task** — one task for the whole build,
+  filed under whichever host the hub picked. `python-requests` is aarch64 in
+  one rebuild and something else in the next.
+
+Both were contaminating build time per architecture, and both were found the
+same way: a population that moved when nothing should have moved it. Exclude
+them from anything that means "what compiling costs here" — the noarch test
+being that the build produced tasks for more than one architecture — and keep
+them in anything that means "what occupied a builder", which is utilisation,
+builder hours, queue wait and the cohorts.
+
+**Count the architectures from the dataset, not from the selection.** Whether
+a build is noarch is a fact about the build. Counting the selected tasks made
+`report --arch s390x` see every build as single-architecture and silently
+emptied the whole table — a filter must not change what a build *is*.
+
+## Compare a family with itself, never with another family
+
+Build time is split by toolchain (`FAMILIES`, by package name prefix) and
+each family is only ever compared with its own earlier self. There is no
+cross-family ratio, and the earlier `divergence` metric that provided one has
+been removed.
+
+The reason is that the two comparisons a reader wants are both available by
+reading rows, and neither needs a division. Whether a platform regressed:
+does *every* family move the same way on that architecture. Whether a
+toolchain got more expensive: does one family move differently from the
+others on *every* architecture. Fedora F42 to F45 answers both — s390x has
+every family slower including Go and Haskell, which do not consume Fedora's C
+flags; and `other` lags rust and golang on every architecture.
+
+Nine families also make the prefix inaccuracy tolerable. `golang-` catches Go
+libraries and not Go applications, but a Go application's cost still appears
+somewhere — under `other` — rather than being silently attributed to C.
+
 ## Check the population counts before believing a ratio
 
 A ratio between two periods can only be read once you know the two

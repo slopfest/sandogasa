@@ -834,7 +834,17 @@ fn render_health(o: &mut String, health: &crate::health::Health, min_samples: us
         .collect();
     if !pops.is_empty() {
         let _ = writeln!(o, "\nBuild time by population\n");
-        let _ = writeln!(o, "| arch | population | builds | median | p90 |");
+        // A finer formatter than `dur` here: these medians sit between one
+        // and three minutes, where whole minutes render nine different
+        // families as "2m" and the table says nothing.
+        let fine = |d: f64| {
+            if d >= 3600.0 {
+                format!("{:.1}h", d / 3600.0)
+            } else {
+                format!("{:.1}m", d / 60.0)
+            }
+        };
+        let _ = writeln!(o, "| arch | toolchain | builds | median | p90 |");
         let _ = writeln!(o, "|---|---|---:|---:|---:|");
         for a in &pops {
             for p in a.service.iter().filter(|p| p.tasks >= min_samples) {
@@ -844,22 +854,21 @@ fn render_health(o: &mut String, health: &crate::health::Health, min_samples: us
                     a.arch,
                     p.name,
                     p.tasks,
-                    p.p50.map(dur).unwrap_or_else(|| "-".into()),
-                    p.p90.map(dur).unwrap_or_else(|| "-".into())
+                    p.p50.map(fine).unwrap_or_else(|| "-".into()),
+                    p.p90.map(fine).unwrap_or_else(|| "-".into())
                 );
             }
         }
         let _ = writeln!(
             o,
-            "\n`control` is the packages named `{}*`, whose build cost is \
-             dominated by\nrustc rather than by the C and C++ compilers; \
-             `rest` is every other package\nin this window. Compare each \
-             population with its own earlier self across\nperiods, never \
-             the two with each other within one: the gap between them\nis \
-             package size, not cost, since Rust crates are small. The \
-             comparison\nitself is in the trend files `events` and \
-             `reports` write.",
-            crate::health::CONTROL_PREFIX
+            "\nOne row per build toolchain, guessed from the package name. \
+             Read a column\ndown across periods, never a row across within \
+             one: the gap between two\nfamilies in the same window is mostly \
+             how big their packages are. `other`\nis everything the prefixes \
+             do not name, mostly C and C++.\n\nNoarch builds are left out. \
+             Koji records their one task against whichever\nhost it picked, \
+             so they are no architecture's compile cost — s390x hosted\n2,291 \
+             of them in F42's rebuild and 5 in F45's."
         );
     }
     let stragglers: Vec<_> = health

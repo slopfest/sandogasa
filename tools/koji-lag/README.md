@@ -298,12 +298,17 @@ fleet a median 4.0 hours already finished and 8.6 at the p90.
 A distribution rather than a mean: spreads run out to three days, so a mean
 describes neither the ordinary build nor the bad one.
 
-**Build time by population** splits durations into the `rust-` packages and
-everything else. It is stated as two plain numbers on purpose: compare each
-with its own earlier self across periods, never the two with each other
-within one, since Rust crates are smaller and the gap between the
-populations measures that rather than cost. The comparison itself is in
-`reports`' trend files, below.
+**Build time by population** splits durations by build toolchain, guessed
+from the package name: golang, haskell, ocaml, perl, python, r, ruby, rust,
+and `other` for what the prefixes do not name, mostly C and C++. Read a
+column down across periods, never a row across within one — the gap between
+two families in the same window is mostly how big their packages are. The
+comparison across periods is in the trend files `events` and `reports` write.
+
+Noarch builds are left out of the build-time table. Koji files their single task under
+whichever host built them, so they are no architecture's compile cost. They
+remain in utilisation, builder hours and queue wait, which ask what occupied
+a builder rather than what compiling costs.
 
 ### Reports
 

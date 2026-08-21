@@ -12,20 +12,24 @@
 //! reads as a 2.3x penalty and is only the observation that Rust crates
 //! are small.
 //!
-//! Comparing each population with *its own* earlier self cancels the mix,
-//! and dividing one population's drift by the other's separates two causes
-//! that a single number conflates:
+//! Comparing each family with *its own* earlier self cancels the mix. Two
+//! families are never divided by each other: what that would measure is
+//! mostly how big their packages are.
 //!
-//! | control drift | rest drift | reading |
+//! Reading the resulting rows is the analysis, and it is not hard. Fedora
+//! between F42 and F45, per rebuild and noarch excluded:
+//!
+//! | arch | rust | other |
 //! |---|---|---|
-//! | 1.0 | 1.0 | nothing changed |
-//! | 1.5 | 1.5 | the **platform** got slower — builders, storage, kernel |
-//! | 1.0 | 1.5 | the **toolchain** got more expensive — compiler flags, hardening |
-//! | 1.5 | 1.0 | look again; this ordering has no obvious cause |
+//! | s390x | 1.25x | 1.49x |
+//! | ppc64le | 0.73x | 0.99x |
+//! | x86_64 | 0.68x | 0.82x |
 //!
-//! Fedora between F42 and F45 measured the third row on every
-//! architecture and the second row only on s390x, which is why the capacity
-//! ask and the compiler-flag conversation are separate conversations.
+//! Every architecture's C and C++ work fared worse than its Rust work, which
+//! is a toolchain cost and cannot be a platform fault. Only s390x got slower
+//! at all, which is a platform regression and cannot be a compiler flag. The
+//! two conclusions come from two different comparisons in the table, neither
+//! of which needs the families divided by one another.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -77,9 +81,6 @@ pub struct ArchTrend {
     /// Median build time in the two periods, per population, and the
     /// ratio between them. Keyed by population name.
     pub drift: BTreeMap<String, Drift>,
-    /// Ratio of the non-control drift to the control drift. Above 1 the
-    /// toolchain moved; at 1 with both drifts high, the platform did.
-    pub divergence: Option<f64>,
     pub utilisation_from: Option<f64>,
     pub utilisation_to: Option<f64>,
 }
@@ -236,15 +237,10 @@ pub fn assess(series: &[(String, Health)], drift_warn: f64) -> Trend {
                 },
             );
         }
-        let ratio_of = |name: &str| drift.get(name).and_then(|d| d.ratio);
         let entry = ArchTrend {
             arch: a.arch.clone(),
             from: from_label.clone(),
             to: to_label.clone(),
-            divergence: match (ratio_of("rest"), ratio_of("control")) {
-                (Some(r), Some(c)) if c > 0.0 => Some(r / c),
-                _ => None,
-            },
             drift,
             utilisation_from: b.utilisation,
             utilisation_to: a.utilisation,
@@ -258,7 +254,7 @@ pub fn assess(series: &[(String, Health)], drift_warn: f64) -> Trend {
 /// What crossed a threshold, phrased so it can be pasted into a ticket.
 fn warn(t: &ArchTrend, drift_warn: f64) -> Vec<String> {
     let mut out = Vec::new();
-    let mins = |s: Option<f64>| s.map_or("?".to_string(), |x| format!("{:.1}m", x / 60.0));
+    let mins = |s: Option<f64>| s.map_or("?".to_string(), |x| format!("{:.2}m", x / 60.0));
     for (name, d) in &t.drift {
         if d.ratio.is_some_and(|r| r >= drift_warn) {
             out.push(format!(
@@ -274,17 +270,6 @@ fn warn(t: &ArchTrend, drift_warn: f64) -> Vec<String> {
                 d.tasks_to,
             ));
         }
-    }
-    // Only worth saying once both populations are in hand, and only in the
-    // direction that has a known cause.
-    if let Some(div) = t.divergence
-        && div >= drift_warn
-    {
-        out.push(format!(
-            "{}: non-control build time rose {div:.2}x faster than the \
-             rust control -- a toolchain cost rather than the platform",
-            t.arch
-        ));
     }
     if let (Some(f), Some(to)) = (t.utilisation_from, t.utilisation_to)
         && to >= UTIL_WARN
@@ -308,10 +293,10 @@ pub fn render(t: &Trend) -> String {
     let (from, to) = (&t.arches[0].from, &t.arches[0].to);
     s.push_str(&format!("  {from} -> {to}\n\n"));
     s.push_str(
-        "  arch      population   median then    median now   ratio\n  \
+        "  arch      toolchain    median then    median now   ratio\n  \
          --------  -----------  ------------  ------------  ------\n",
     );
-    let mins = |x: Option<f64>| x.map_or("-".to_string(), |v| format!("{:.1}m", v / 60.0));
+    let mins = |x: Option<f64>| x.map_or("-".to_string(), |v| format!("{:.2}m", v / 60.0));
     for a in &t.arches {
         for (name, d) in &a.drift {
             s.push_str(&format!(
@@ -321,16 +306,6 @@ pub fn render(t: &Trend) -> String {
                 mins(d.from_secs),
                 mins(d.to_secs),
                 d.ratio.map_or("-".to_string(), |r| format!("{r:.2}x"))
-            ));
-        }
-        if let Some(div) = a.divergence {
-            s.push_str(&format!(
-                "  {:<8}  {:<11}  {:>12}  {:>12}  {:>6}\n",
-                a.arch,
-                "divergence",
-                "",
-                "",
-                format!("{div:.2}x")
             ));
         }
         if let (Some(f), Some(t2)) = (a.utilisation_from, a.utilisation_to) {
@@ -344,28 +319,23 @@ pub fn render(t: &Trend) -> String {
     }
     s.push_str(&format!(
         "\n  Legend\n  \
-         - `control` -- packages named `{}*`, whose build cost is dominated \
-         by rustc\n    rather than by the C and C++ compilers. They are the \
-         population held\n    still, so that a change in what they cost is a \
-         change in the machines\n    and not in a compiler flag.\n  \
-         - `rest` -- every other package in the same window.\n  \
+         - each row is one build toolchain, guessed from the package name. \
+         `other` is\n    what the prefixes do not name, mostly C and C++.\n  \
          - `ratio` -- median build time now over median build time then, for \
-         one\n    population against *its own* earlier self. Never one \
-         population against\n    the other: the gap between them is package \
-         size, since Rust crates are\n    small, and reads as a compiler \
-         penalty that is not there.\n  \
-         - `divergence` -- the `rest` ratio over the `control` ratio, which \
-         separates\n    two causes a single number conflates. Both ratios \
-         high with divergence\n    near 1.0 is the platform getting slower; \
-         divergence above 1.0 is the\n    toolchain getting more expensive, \
-         whatever the ratios themselves did.\n  \
+         that\n    family against *its own* earlier self. Families are \
+         never compared with\n    each other: the gap between two of them \
+         in one window is mostly how big\n    their packages are, not what \
+         they cost.\n  \
          - `utilisation` -- offered task weight over enabled builder weight, \
          at each\n    end of the range. Queueing is nonlinear in it.\n\n  \
+         Noarch builds are excluded throughout. Koji records their single \
+         task\n  against whichever host it picked, so they are no \
+         architecture's compile\n  cost -- s390x hosted 2,291 of them in \
+         F42's rebuild and 5 in F45's.\n\n  \
          Below about {:.2}x a ratio is not distinguishable from what people \
          happened\n  to build in that period, which is why the periods \
          compared matter as much as\n  the numbers: two mass rebuilds build \
          nearly the same set of packages, two\n  calendar months need not.\n",
-        crate::health::CONTROL_PREFIX,
         t.drift_warn
     ));
     if !t.warnings.is_empty() {
@@ -533,36 +503,33 @@ mod tests {
     }
 
     #[test]
-    fn both_populations_slowing_equally_reads_as_the_platform() {
+    fn every_family_reports_its_own_drift() {
         let t = assess_default(&series(
             arch("s390x", 0.5, 100.0, 200.0),
             arch("s390x", 0.5, 150.0, 300.0),
         ));
         let a = &t.arches[0];
-        assert_eq!(a.divergence.map(|d| (d * 100.0).round()), Some(100.0));
-        // Both drifts warn; the toolchain line does not, since neither
-        // population moved relative to the other.
+        // Every family's own drift is reported and warned about; nothing
+        // divides one family by another.
         assert_eq!(a.drift["rest"].ratio, Some(1.5));
-        assert!(
-            !t.warnings.iter().any(|w| w.contains("toolchain")),
-            "{:?}",
-            t.warnings
-        );
+        assert_eq!(a.drift["control"].ratio, Some(1.5));
         assert_eq!(t.warnings.len(), 2, "{:?}", t.warnings);
     }
 
     #[test]
-    fn only_the_non_control_slowing_reads_as_the_toolchain() {
+    fn one_family_moving_and_another_not_is_two_rows_not_one_number() {
         let t = assess_default(&series(
             arch("s390x", 0.5, 100.0, 200.0),
             arch("s390x", 0.5, 100.0, 300.0),
         ));
-        assert_eq!(t.arches[0].divergence, Some(1.5));
-        assert!(
-            t.warnings.iter().any(|w| w.contains("toolchain")),
-            "{:?}",
-            t.warnings
+        let d = &t.arches[0].drift;
+        assert_eq!(
+            (d["control"].ratio, d["rest"].ratio),
+            (Some(1.0), Some(1.5))
         );
+        // Only the family that moved is reported as having moved.
+        assert_eq!(t.warnings.len(), 1, "{:?}", t.warnings);
+        assert!(t.warnings[0].contains("rest"), "{:?}", t.warnings);
     }
 
     #[test]
@@ -573,7 +540,8 @@ mod tests {
             arch("s390x", 0.5, 228.0, 534.0),
             arch("s390x", 0.5, 228.0, 534.0),
         ));
-        assert_eq!(t.arches[0].divergence, Some(1.0));
+        assert_eq!(t.arches[0].drift["rest"].ratio, Some(1.0));
+        assert_eq!(t.arches[0].drift["control"].ratio, Some(1.0));
         assert!(t.warnings.is_empty(), "{:?}", t.warnings);
     }
 
