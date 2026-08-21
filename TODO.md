@@ -2,6 +2,36 @@
 
 ## koji-lag
 
+- (2026-08-21) **The next release is 0.21.0, not a patch.** `cargo
+  semver-checks` against the published 0.20.0 finds three breaking changes,
+  and the pre-1.0 rule in the root guidance maps breaking to a minor bump:
+
+  | crate | what broke |
+  |:--|:--|
+  | `sandogasa-bugzilla` | `claim::resolve_claim` removed or renamed |
+  | `sandogasa-gitlab` | `IssueUpdate` gained a public `assignee_ids` field |
+  | `sandogasa-kojihub` | `ListTasksOpts` gained a public `created_before` field |
+
+  All three predate 2026-08-20 — the two struct fields come from the
+  cursor-paging work and the GitLab assignee support, not from anything in
+  the recent koji-lag run. The additions made on 2026-08-20 to
+  `sandogasa-kojihub` (`HostConfig`, `HubClient::with_timeout`,
+  `xmlrpc::configured_timeout`, `TIMEOUT_ENV`, `DEFAULT_TIMEOUT`,
+  `host_config_history`) are purely additive and pass, as does everything in
+  `koji-lag` itself, which is a binary crate and not checked.
+
+  Note what makes this easy to get wrong: `cargo semver-checks` reports
+  "semver requires new major version", which is its post-1.0 reading. At
+  0.x a breaking change is a *minor* bump, so the answer is 0.21.0 rather
+  than 1.0.0. Two of the three are also the kind nobody notices while
+  writing them — adding a public field to a struct that callers construct
+  with a literal is a breaking change, and neither field looked like one
+  going in.
+
+  The other two release gates as of 2026-08-21: `cargo audit` clean (h2 at
+  0.4.16, with the pre-existing allowed unsoundness warnings for anyhow and
+  scc), and coverage 82.32% lines against the 80% floor.
+
 - (2026-08-17) Packaging: koji-lag now links system SQLite through
   rusqlite, so its Fedora spec needs `BuildRequires: sqlite-devel`
   (`pkgconfig(sqlite3)`) and Debian's needs `libsqlite3-dev`. The
