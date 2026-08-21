@@ -25,7 +25,7 @@
 
   | crate | what broke |
   |:--|:--|
-  | `sandogasa-bugzilla` | `claim::resolve_claim` removed or renamed |
+  | `sandogasa-bugzilla` | ~~`claim::resolve_claim` removed~~ — **false positive**: the definition moved to `sandogasa-cli` and `sandogasa_bugzilla::claim` re-exports it, so callers are unaffected. `cargo semver-checks` does not follow cross-crate re-exports |
   | `sandogasa-gitlab` | `IssueUpdate` gained a public `assignee_ids` field |
   | `sandogasa-kojihub` | `ListTasksOpts` gained a public `created_before` field |
 

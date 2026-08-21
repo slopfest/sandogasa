@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+### What breaks for API consumers (breaking API)
+
+`cargo semver-checks` against the published 0.20.0 fails on four crates. Every
+item is listed here so that nobody has to read the source diff to find out
+what they need to change; pre-1.0, the project takes these on a minor bump.
+
+**koji-lag** — the largest set, mostly from work earlier in this cycle that
+was never written down as breaking.
+
+Moved, so the fix is the import and nothing else. The
+`koji_lag::backfill` module is gone and the period arithmetic that lived in
+it is now `koji_lag::periods`, unchanged: the `Grain` enum, the `Chunk`
+struct, and `week_of`, `month_of` and `weeks_of_month`.
+
+Removed outright:
+
+- the rest of `koji_lag::backfill` — the `Existing` and `PauseAt` enums and
+  the `already_swept`, `collate` and `complete` functions. What drove the
+  backfill is `sync`'s own gap detection now, and there is no replacement to
+  call.
+- `koji_lag::fetch::run`, `run_with_builds`, `walk_builds` and
+  `walk_builds_below`, plus the `WalkProgress` and `FetchReport` structs —
+  the JSON dataset path they served is gone.
+- `koji_lag::json_schema`.
+- the `owner` and `packages` fields of `FetchOpts`. Narrowing is a query
+  against the store now, not a filter on the sweep: use `report --owner` and
+  `--package`.
+
+Gained public fields, which breaks literal construction — use
+`..Default::default()`:
+
+- `ReportOpts` gained `owners`, `packages`, `classes` and `period`
+- `ReportOutput` gained `health`
+- `Dataset` gained `capacity` and `pools`
+- `FetchOpts` gained `timeout`
+
+**sandogasa-gitlab** — `IssueUpdate` gained a public `assignee_ids` field.
+
+**sandogasa-kojihub** — `ListTasksOpts` gained a public `created_before`
+field.
+
+Both are additive and break only code that constructs the struct literally,
+which `..Default::default()` fixes.
+
+**sandogasa-bugzilla is a false positive and nothing changed for callers.**
+`cargo semver-checks` reports `claim::resolve_claim` as removed because its
+definition moved to `sandogasa-cli`, but `sandogasa_bugzilla::claim`
+re-exports it — `sandogasa_bugzilla::claim::resolve_claim(..)` still compiles,
+as `fedora-cve-triage` demonstrates. The tool does not follow re-exports
+across crates. Recorded here so the next release does not treat it as real.
+
+
 ### koji-lag: reports carry the signals that found the s390x regression
 
 Every substantive result in that investigation came out of ad-hoc SQL, which
