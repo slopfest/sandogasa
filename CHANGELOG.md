@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### koji-lag: reports carry the signals that found the s390x regression
+
+Every substantive result in that investigation came out of ad-hoc SQL, which
+means none of it was being tracked and none of it would have been noticed by
+anybody who did not go looking. Three of them are now computed for every
+period, with thresholds printed as warnings at the top of the report.
+
+**Queue wait per class of build**, and never summed across classes. Adding a
+mass rebuild's four-hour wait to a maintainer's one minute is what produced
+the "60,000 delay-hours" figure that turned out to describe releng waiting
+for releng.
+
+**Queue wait by submitter volume** — the busiest ten, the next forty, the
+rest. This is the one a population median hid for eighteen months: in July
+2026 ten people carried 59% of s390x's human builds at a 23 minute p90 while
+every band's median sat at about a minute, and inside F45's window 26 of the
+28 hour-plus waits fell on one person. Bands rather than names, so it is
+publishable; `--owner NAME` is how an individual sees their own.
+
+**Where builder time went** — the share lost to failed or cancelled tasks,
+and the share held by tasks over six hours. Four hung builds took 11.8% of
+one rebuild's s390x capacity, which is invisible in a duration median and
+obvious as a share of hours.
+
+No warning fires on fewer than twenty tasks. That is a correctness floor
+rather than presentation: one seven-hour build on a quiet day would otherwise
+report a 90% tail and send somebody hunting. The tables themselves respect
+`--min-samples` like every other table in the report.
+
 ### koji-lag: publish and fetch a store
 
 The notebook added alongside this needs a store, and collecting fourteen

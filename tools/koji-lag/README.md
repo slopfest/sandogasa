@@ -198,6 +198,23 @@ nothing is withheld for having few samples, and every row repeats the
 instance and the period it covers — so a year of daily files concatenates
 into something that still knows which day each row came from.
 
+Every report also carries the health signals — the ones that found the s390x
+regression, and which nobody would have looked for unprompted:
+
+- **queue wait per class of build**, never summed, because adding a mass
+  rebuild's wait to a maintainer's once produced a headline that described
+  releng waiting for releng;
+- **queue wait by submitter volume** — the ten busiest, the next forty, and
+  everyone else. Bands, not names: in July 2026 ten people carried 59% of
+  s390x's human builds at a 23m p90 while every band's median sat at a
+  minute. `--owner NAME` is how one person sees their own;
+- **where builder time went** — the share lost to failed or cancelled tasks,
+  and the share held by tasks over six hours.
+
+Thresholds are printed as warnings at the top of the report rather than left
+for a reader to spot, and none fires on fewer than twenty tasks, so a single
+long build on a quiet day is not an incident.
+
 Report tables are padded Markdown pipe tables: aligned for
 terminal and plain-text reading, and pasteable as-is into
 anything that renders Markdown (Pagure, GitLab, Forgejo,

@@ -108,6 +108,10 @@ pub struct ReportOutput {
     /// Tasks with no captured parent build: counted, excluded
     /// from the scratch split, included in the combined stats.
     pub unattributed_tasks: usize,
+    /// Signals that say an architecture is in trouble, with the thresholds
+    /// they crossed — see [`crate::health`]. Reported per class and per
+    /// cohort of submitter, never summed across either.
+    pub health: crate::health::Health,
     /// The source rebuild that starts every build, by the arch of the
     /// host that ran it. Koji picks that host independently of what the
     /// build targets, so a package can wait on a machine it does not
@@ -414,6 +418,7 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
     };
 
     ReportOutput {
+        health: crate::health::assess(dataset, &selected),
         // From the windows where there are any, and otherwise from the
         // rows: a period the store holds only in part has no window to
         // name it, and "Instances:" followed by nothing is no answer.
@@ -616,6 +621,11 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
     use std::fmt::Write as _;
     let mut o = String::new();
     let _ = writeln!(o, "Instances: {}", output.instances.join(", "));
+    // Warnings first, and unconditionally: a threshold crossed at the foot
+    // of a long report is a threshold nobody read.
+    for w in &output.health.warnings {
+        let _ = writeln!(o, "warning: {}", w.text);
+    }
     if output.mixed_filtered_coverage {
         let _ = writeln!(
             o,
@@ -712,6 +722,7 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
     if let Some(scratch) = &output.scratch {
         render_rows(&mut o, "Scratch builds", scratch, min_samples);
     }
+    render_health(&mut o, &output.health, min_samples);
     // These tables get pasted into tickets and threads, so they
     // must explain themselves. Backticked bullets stay readable in
     // a terminal and render as a list in Markdown (a bare leading
@@ -768,6 +779,98 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
 /// aligned for terminal/plain-text reading, and pasteable into
 /// anything that renders Markdown. Rows below the sample guard
 /// are pulled out into a footnote (Markdown cells can't span).
+/// The health tables: per class, per cohort, and how builder time went.
+///
+/// Per class because summing them produced a headline that described releng
+/// waiting for releng; per cohort because a population median hid, for
+/// eighteen months, that ten people were absorbing most of the delay.
+fn render_health(o: &mut String, health: &crate::health::Health, min_samples: usize) {
+    use std::fmt::Write as _;
+    let dur = |d: f64| {
+        if d >= 3600.0 {
+            format!("{:.1}h", d / 3600.0)
+        } else if d >= 60.0 {
+            format!("{:.0}m", d / 60.0)
+        } else {
+            format!("{d:.0}s")
+        }
+    };
+    if !health.classes.is_empty() {
+        let _ = writeln!(o, "\nQueue wait by class of build (never summed)\n");
+        let _ = writeln!(o, "| arch | class | tasks | median | p90 | max | >1h |");
+        let _ = writeln!(o, "|---|---|---:|---:|---:|---:|---:|");
+        for c in &health.classes {
+            let Some(w) = &c.queue_wait.as_ref().filter(|w| w.count >= min_samples) else {
+                continue;
+            };
+            let _ = writeln!(
+                o,
+                "| {} | {} | {} | {} | {} | {} | {:.1}% |",
+                c.arch,
+                c.class,
+                w.count,
+                dur(w.median),
+                dur(w.p90),
+                dur(w.max),
+                c.over_hour_pct
+            );
+        }
+    }
+    if !health.cohorts.is_empty() {
+        let _ = writeln!(
+            o,
+            "\nQueue wait by submitter volume, official human builds\n\n             Bands are by how much each person submits; nobody is named. Use\n             `report --owner NAME` to see one account.\n"
+        );
+        let _ = writeln!(
+            o,
+            "| arch | cohort | people | tasks | share | median | p90 | >1h |"
+        );
+        let _ = writeln!(o, "|---|---|---:|---:|---:|---:|---:|---:|");
+        for c in &health.cohorts {
+            let Some(w) = &c.queue_wait.as_ref().filter(|w| w.count >= min_samples) else {
+                continue;
+            };
+            let _ = writeln!(
+                o,
+                "| {} | {} | {} | {} | {:.0}% | {} | {} | {:.1}% |",
+                c.arch,
+                c.cohort,
+                c.people,
+                w.count,
+                c.share_of_tasks,
+                dur(w.median),
+                dur(w.p90),
+                c.over_hour_pct
+            );
+        }
+    }
+    if !health.arches.is_empty() {
+        let _ = writeln!(o, "\nWhere builder time went\n");
+        let _ = writeln!(
+            o,
+            "| arch | builder hours | wasted | tail (>6h) | tail tasks |"
+        );
+        let _ = writeln!(o, "|---|---:|---:|---:|---:|");
+        for a in &health.arches {
+            if a.tasks < min_samples {
+                continue;
+            }
+            let _ = writeln!(
+                o,
+                "| {} | {:.0} | {:.1}% | {:.1}% | {} |",
+                a.arch, a.builder_hours, a.wasted_pct, a.tail_pct, a.tail_tasks
+            );
+        }
+        let _ = writeln!(
+            o,
+            "\n- `wasted` — builder time in failed or cancelled tasks: capacity \n\
+             \u{20}\u{20}spent producing nothing, and the cheapest kind to recover.\n\
+             - `tail` — builder time in tasks over six hours. A handful of hung \n\
+             \u{20}\u{20}builds can hold a fifth of an architecture."
+        );
+    }
+}
+
 fn render_rows(o: &mut String, title: &str, rows: &[ArchStats], min_samples: usize) {
     render_table(o, title, rows, min_samples, "arch", true)
 }

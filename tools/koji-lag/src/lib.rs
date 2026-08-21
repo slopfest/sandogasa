@@ -18,6 +18,7 @@ pub mod dataset;
 pub mod events;
 pub mod export;
 pub mod fetch;
+pub mod health;
 pub mod instance;
 pub mod periods;
 pub mod pool;
