@@ -218,8 +218,10 @@
   lives here rather than in koji-lag-metrics so it stays beside the code and
   queries it depends on; the fleshed-out narrative version is the metrics
   repo's, committed there by hand. Still open from the entry below: the
-  publish half — a compressed store with a checksum and a fetch-and-verify
-  helper — so a reader can run the notebook without collecting for a day.
+  ~~publish half~~ — done 2026-08-20: `scripts/publish-store.sh` and
+  `scripts/fetch-store.sh`, 2,462MB to 723MB in forty seconds. What remains
+  is somewhere to put the artefact; the scripts assume only that it is
+  reachable by URL with its `.sha256` beside it.
 
 - (2026-08-20, exploration) Emit reports as Jupyter notebooks, so a reader
   can change the question rather than only read our answer. Ship a

@@ -381,6 +381,28 @@ window or architecture as an editable literal at the top. They also
 document the schema by example — see `data/store-schema.sql` for the
 tables themselves.
 
+## Publishing a store
+
+The store is the thing worth handing over: reports answer the questions we
+thought to ask, a store answers the ones a reader thinks of. It is small
+enough to be a download rather than a data release — zstd takes it to under a
+third, 2,462MB to 723MB measured 2026-08-20, in about forty seconds.
+
+```sh
+make publish-store STORE=lag.sqlite OUTDIR=dist
+scripts/fetch-store.sh https://example.org/lag-2026-08-20.sqlite.zst
+```
+
+`publish-store.sh` snapshots with `VACUUM INTO` so the artefact is consistent
+even if a sync is running, verifies the snapshot before compressing it, and
+writes a `.sha256` beside it. The file is named for the last day it covers
+rather than the day it was packed, so two runs over the same data agree.
+
+`fetch-store.sh` downloads, checks that checksum, and decompresses. It
+*refuses* if the checksum is missing or does not match, rather than warning:
+a truncated store opens and queries perfectly well, with rows quietly absent,
+so an unverified download is a wrong answer waiting to happen.
+
 ## Backing up the store
 
 ```sh

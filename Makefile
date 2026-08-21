@@ -68,6 +68,10 @@ backup-store: ## Copy a koji-lag store safely (STORE=... DEST=...)
 vacuum-store: ## Compact a koji-lag store in place (STORE=...)
 	./scripts/vacuum-store.sh $(STORE)
 
+.PHONY: publish-store
+publish-store: ## Package a store for publication (STORE=..., OUTDIR=...)
+	./scripts/publish-store.sh $(STORE) $(OUTDIR)
+
 .PHONY: sweep
 sweep: ## Delete the release gates' build trees (keeps target/debug)
 	./scripts/sweep.sh

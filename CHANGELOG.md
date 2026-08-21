@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### koji-lag: publish and fetch a store
+
+The notebook added alongside this needs a store, and collecting fourteen
+months out of Koji costs hours of hub time. The same data as a file is a few
+minutes of download: `scripts/publish-store.sh` takes a store to under a
+third of its size — 2,462MB to 723MB in about forty seconds — and
+`scripts/fetch-store.sh` brings it back.
+
+Publishing snapshots with `VACUUM INTO` rather than copying, so the artefact
+is consistent even if a sync is writing, verifies that snapshot before
+compressing it, and writes a `.sha256` beside it. The name carries the last
+day the store covers rather than the day it was packed, so two runs over the
+same data produce the same artefact.
+
+Fetching refuses rather than warns when the checksum is missing or wrong. A
+truncated store opens and queries perfectly well with rows quietly absent, so
+an unverified download is not a smaller dataset, it is a wrong answer.
+
 ### koji-lag: `report --owner` and `--package`
 
 DEVELOPMENT.md has claimed, ever since the sweep filters were removed, that

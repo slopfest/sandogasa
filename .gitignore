@@ -42,3 +42,13 @@ target
 # lockfiles are spurious (and confuse Dependabot).
 tools/*/Cargo.lock
 crates/*/Cargo.lock
+
+# Published stores. `publish-store.sh` writes here by default, and the
+# compressed artefact is not matched by the *.sqlite rules above — it is
+# hundreds of megabytes and rebuildable from the store.
+/dist/
+*.sqlite.zst
+*.sqlite.zst.sha256
+
+# Jupyter's autosaves beside a notebook.
+.ipynb_checkpoints/
