@@ -547,6 +547,35 @@ loosening it admits people with few builds, who add to the count and almost
 nothing to the share. Any statement of the form "N people are affected" is
 really a statement about where the line was drawn.
 
+## The outage record is compiled in, and that is the point
+
+`data/outages.toml` is `include_str!`'d into the binary rather than read from
+disk at runtime. So a cause somebody recorded reaches every reader — including
+one running an installed `koji-lag` against a downloaded store, from a
+directory that has never heard of this repository. The store can measure that
+an architecture served nothing for two days; only a person knows it was a
+storage failure, and that knowledge is worth as little as it is distributable.
+
+Two consequences worth keeping in mind.
+
+**Editing the file changes nothing until the binary is rebuilt.** Cargo tracks
+`include_str!` so a `cargo build` picks it up, but somebody who pastes a
+stanza and then runs an installed binary sees no change and concludes the
+annotation did not work. The README says so at the point where they would do
+it; do not let that instruction drift away from the step.
+
+**`--annotations` adds, it never subtracts.** There is deliberately no flag to
+suppress the built-ins: notes are tagged with their instance and
+`Note::covers` checks that first, so Fedora's outage list cannot match a `cbs`
+or `stream` run anyway. A flag for it would exist only to force the
+unexplained path in a test, which the tests do directly instead.
+
+**What makes a good annotation:** reuse a `cause` term already in the file
+(`storage`, `network`, `datacentre-move`, `capacity-reduction`) so causes
+group, always give the `ticket` as a full URL, and let `note` carry the
+measured facts *and* the reading of them — `write_unexplained` pre-fills the
+facts precisely so the person adds the part only they have.
+
 ## Select on the cheap statistic, confirm on the right one
 
 `stall` picks candidate days by mean wait and then confirms each with an exact

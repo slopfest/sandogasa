@@ -44,8 +44,29 @@ Everything a rendering needs is in each `event.json`, so this is a directory
 walk rather than the minutes of querying that found the windows. `events`
 writes `out/unexplained.toml` whenever an outage has no recorded cause, with
 the dates and measured facts already filled in; add `cause` and `ticket`, then
-either apply it as above or paste the stanza into `data/outages.toml` to
-contribute it. Stanzas still missing a `cause` are ignored.
+either apply it as above or contribute it, below. Stanzas still missing a
+`cause` are ignored.
+
+**Contributing an annotation.** `data/outages.toml` is compiled into the
+binary, so a cause recorded there reaches everyone who runs `koji-lag` without
+their needing this repository or any file alongside it. The cost of that is
+one step people trip over: **editing the file changes nothing until the binary
+is rebuilt.** From a checkout:
+
+```sh
+$EDITOR tools/koji-lag/data/outages.toml   # paste the stanza, fill in the cause
+cargo build --release -p koji-lag          # or `cargo install --path tools/koji-lag`
+koji-lag annotate --events out             # no --annotations needed now
+```
+
+`--annotations` supersedes the built-ins for any window it repeats, so you
+can point it at the very file you are preparing and see exactly what the
+merged result will look like — no duplicate causes, and it says how many
+built-ins it superseded.
+
+Then send the change as a pull request, so the next person to look at that
+window does not have to work it out again. Until it is merged, `--annotations`
+with your own file does the same job locally.
 
 ### Events
 

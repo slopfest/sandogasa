@@ -522,7 +522,15 @@ fn cmd_annotate(args: &AnnotateArgs) -> Result<(), Box<dyn Error>> {
     let (instance_key, _) = instance::resolve(&args.instance, None)?;
     let mut notes = koji_lag::annotate::builtin()?;
     if let Some(path) = &args.annotations {
-        notes.extend(koji_lag::annotate::read(path)?);
+        let (merged, superseded) =
+            koji_lag::annotate::merge(notes, koji_lag::annotate::read(path)?);
+        notes = merged;
+        if superseded > 0 {
+            eprintln!(
+                "note: {superseded} built-in annotation(s) superseded by {}",
+                path.display()
+            );
+        }
     }
     // Stanzas still waiting for a cause are not annotations yet; loading
     // them would file every outage under the empty string.
@@ -587,7 +595,15 @@ fn cmd_events(args: &EventsArgs) -> Result<(), Box<dyn Error>> {
     };
     let mut notes = koji_lag::annotate::builtin()?;
     if let Some(path) = &args.annotations {
-        notes.extend(koji_lag::annotate::read(path)?);
+        let (merged, superseded) =
+            koji_lag::annotate::merge(notes, koji_lag::annotate::read(path)?);
+        notes = merged;
+        if superseded > 0 {
+            eprintln!(
+                "note: {superseded} built-in annotation(s) superseded by {}",
+                path.display()
+            );
+        }
     }
 
     let events = koji_lag::events::assemble(&store, &instance_key, from, to, &schedule, &notes)?;

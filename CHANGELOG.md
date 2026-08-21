@@ -24,6 +24,14 @@ splicing in a cause costs a directory walk: 2 milliseconds against the two
 minutes that found the windows. Nobody annotates an outage if doing so means
 re-running the detection.
 
+`--annotations` supersedes rather than adds. A note for a window already
+compiled in replaces it instead of sitting beside it, which matters because
+the file you prepare for a pull request necessarily repeats those windows —
+before this, every repeat rendered its cause and ticket twice. Superseding is
+by exact window, so two notes describing genuinely different spans are two
+statements and both are kept even where they overlap, and the count of
+superseded notes is reported rather than silently applied.
+
 Stanzas whose `cause` is still blank are ignored rather than filing an outage
 under the empty string, and an annotation matching no window is only reported
 when it overlaps the range that was actually scanned — asking for May and

@@ -86,6 +86,46 @@ impl Note {
     }
 }
 
+/// Combine the built-in notes with somebody's own, later notes winning.
+///
+/// The workflow this exists for is preparing a pull request: copy the stanza
+/// out of `unexplained.toml`, paste it beside the existing ones in the file
+/// you intend to submit, and point `--annotations` at that file to see what
+/// it does. That file necessarily repeats windows already compiled into the
+/// binary, and without this every one of them renders its cause twice.
+///
+/// Superseding is by exact window — instance, architecture and both dates.
+/// Two notes describing genuinely different spans are two statements and
+/// both are kept, even where they overlap; it is only the same window said
+/// twice that is a duplicate.
+///
+/// Returns the merged notes and how many were superseded, which the caller
+/// reports: silently dropping somebody's input would be worse than the
+/// duplication this replaces.
+pub fn merge(builtin: Vec<Note>, extra: Vec<Note>) -> (Vec<Note>, usize) {
+    let key = |n: &Note| (n.instance.clone(), n.arch.clone(), n.from, n.to);
+    let replaced: std::collections::BTreeSet<_> = extra.iter().map(&key).collect();
+    let superseded = builtin
+        .iter()
+        .filter(|n| replaced.contains(&key(n)))
+        .count();
+    let mut out: Vec<Note> = builtin
+        .into_iter()
+        .filter(|n| !replaced.contains(&key(n)))
+        .collect();
+    // Within the extra file too: the last statement of a window wins.
+    let mut seen = std::collections::BTreeSet::new();
+    let mut tail: Vec<Note> = Vec::new();
+    for note in extra.into_iter().rev() {
+        if seen.insert(key(&note)) {
+            tail.push(note);
+        }
+    }
+    tail.reverse();
+    out.extend(tail);
+    (out, superseded)
+}
+
 /// A ready-to-fill annotation for a window nobody has explained.
 ///
 /// Everything the store can know is filled in; what is left blank is what
@@ -261,6 +301,50 @@ from = "2025-11-06"
 to = "2025-11-11"
 cause = "datacentre-move"
 "#;
+
+    #[test]
+    fn a_later_note_supersedes_a_built_in_one_for_the_same_window() {
+        // The pull-request workflow: the file being prepared repeats windows
+        // already compiled into the binary, and each repeat rendered its
+        // cause twice before this.
+        let builtin = parse(FILE).unwrap();
+        let edited = parse(
+            "[[outage]]\n\
+             instance = \"fedora\"\n\
+             arch = \"s390x\"\n\
+             from = \"2026-05-06\"\n\
+             to = \"2026-05-08\"\n\
+             cause = \"storage\"\n\
+             ticket = \"https://example.invalid/1\"\n",
+        )
+        .unwrap();
+        let (merged, superseded) = merge(builtin.clone(), edited);
+        assert_eq!(superseded, 1);
+        assert_eq!(merged.len(), 2, "one statement per window");
+        let s390x: Vec<_> = merged
+            .iter()
+            .filter(|n| n.arch.as_deref() == Some("s390x"))
+            .collect();
+        assert_eq!(s390x.len(), 1);
+        assert_eq!(
+            s390x[0].ticket.as_deref(),
+            Some("https://example.invalid/1")
+        );
+
+        // A different window is a different statement, so both are kept
+        // even though these two overlap.
+        let other = parse(
+            "[[outage]]\n\
+             instance = \"fedora\"\n\
+             arch = \"s390x\"\n\
+             from = \"2026-05-07\"\n\
+             to = \"2026-05-09\"\n\
+             cause = \"network\"\n",
+        )
+        .unwrap();
+        let (merged, superseded) = merge(builtin, other);
+        assert_eq!((merged.len(), superseded), (3, 0));
+    }
 
     fn day(y: i32, m: u32, d: u32) -> f64 {
         NaiveDate::from_ymd_opt(y, m, d)
