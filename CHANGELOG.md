@@ -44,6 +44,30 @@ rather than presentation: one seven-hour build on a quiet day would otherwise
 report a 90% tail and send somebody hunting. The tables themselves respect
 `--min-samples` like every other table in the report.
 
+### koji-lag: a population that changed size is not a drift
+
+A ratio between two periods answers "did this get more expensive" only if the
+thing measured is the same thing at both ends, and this tool had twice
+reported a large drift that was a population change instead —
+`buildSRPMFromSCM` tasks leaving s390x, then noarch builds leaving it. Both
+were visible in the task counts printed beside the ratio. Neither was caught
+by reading the ratio.
+
+So the counts are checked rather than merely printed. A population that moved
+by more than 1.5x either way is reported as not comparable, *in place of* its
+drift and not beside it: a ratio over a population that changed size is not a
+weaker finding, it is a different measurement, and offering both invites the
+reader to believe the one they recognise. The threshold is loose because
+Fedora gains and loses packages legitimately.
+
+It earned its place on the first run. Fedora's Go *library* packages became
+noarch between F42 and F45, so `golang` fell from about 1,420 builds to about
+430 on every architecture — and the 1.46x s390x figure that produced had
+already been written into FINDINGS.md as evidence that the platform regressed.
+The conclusion survives on the families whose populations held — haskell is
+601 builds against 601, rust 2,911 against 3,280 — but on those and not on
+that.
+
 ### koji-lag: build time by toolchain, and noarch builds left out of it
 
 Two populations was the wrong shape. Splitting packages into `rust-` and

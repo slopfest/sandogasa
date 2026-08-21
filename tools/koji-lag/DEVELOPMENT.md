@@ -553,6 +553,15 @@ contamination was common to both populations and cancelled. It meant the
 conclusion survived, but it also meant the error was invisible in the number
 being relied on. Look at the counts.
 
+**The check is in the code, not just in this document.**
+`trend::POPULATION_SHIFT` reports a population that moved by more than 1.5x
+as not comparable, in place of its drift. It caught `golang` falling about
+3.3x on every architecture — Fedora's Go libraries becoming noarch — on the
+first run, against a figure already written up as evidence. Report it
+*instead of* the drift rather than alongside it: two numbers where one is
+unusable is worse than one number, because the reader takes the familiar
+one.
+
 ## A fleet of architectures has a property none of them has
 
 Every architecture can be healthy on its own terms — short queue, busy

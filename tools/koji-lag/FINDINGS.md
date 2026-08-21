@@ -320,6 +320,13 @@ points at process and I/O cost rather than at raw compute. On ppc64le and
 x86_64 over the same range nearly every family got *faster*, with `other`
 lagging at 1.02x and 0.81x.
 
+`golang` is deliberately absent from that table. Fedora's Go library
+packages became noarch between F42 and F45, so the family fell from about
+1,420 builds to about 430 on *every* architecture, and its ratio therefore
+compares two different populations. `koji-lag` now says so rather than
+reporting the number — a check added after this document had already quoted
+the s390x golang figure as evidence.
+
 ## 3. Recommended capacity
 
 Offered load equals delivered load to within a percent in all four windows,

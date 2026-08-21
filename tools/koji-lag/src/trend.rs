@@ -68,6 +68,24 @@ pub const DRIFT_WARN: f64 = 1.5;
 /// deriving that a second time would be deriving it differently.
 pub const REBUILD_DRIFT_WARN: f64 = 1.25;
 
+/// How far a population may change size before its ratio stops meaning
+/// anything.
+///
+/// A ratio between two periods answers "did this get more expensive" only if
+/// the thing measured is the same thing at both ends, and the population
+/// count is where that shows. Twice this tool has reported a large drift that
+/// was a population change: `buildSRPMFromSCM` tasks leaving s390x, and then
+/// noarch builds leaving it. Both were visible in the counts printed beside
+/// the ratio and neither was caught by looking at the ratio.
+///
+/// So the counts are now checked rather than merely printed. 1.5x either way
+/// is loose on purpose — Fedora gains and loses packages, and an
+/// architecture's share of a rebuild moves legitimately — but it catches the
+/// cases that have actually misled: golang on s390x went from 1,419 builds
+/// to 430 between F42 and F45, which is not a population that can be
+/// compared with itself.
+pub const POPULATION_SHIFT: f64 = 1.5;
+
 /// Utilisation above which queueing stops being linear in load.
 pub const UTIL_WARN: f64 = 0.80;
 
@@ -92,6 +110,15 @@ pub struct Drift {
     pub ratio: Option<f64>,
     pub tasks_from: usize,
     pub tasks_to: usize,
+}
+
+impl Drift {
+    /// How much the population changed size, as a factor at least 1.0
+    /// whichever direction it moved. `None` when either end is empty.
+    pub fn population_shift(&self) -> Option<f64> {
+        let (a, b) = (self.tasks_from as f64, self.tasks_to as f64);
+        (a > 0.0 && b > 0.0).then(|| if a > b { a / b } else { b / a })
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, schemars::JsonSchema)]
@@ -256,6 +283,28 @@ fn warn(t: &ArchTrend, drift_warn: f64) -> Vec<String> {
     let mut out = Vec::new();
     let mins = |s: Option<f64>| s.map_or("?".to_string(), |x| format!("{:.2}m", x / 60.0));
     for (name, d) in &t.drift {
+        // Said instead of the drift, not beside it: a ratio over a
+        // population that changed size is not a smaller finding, it is a
+        // different measurement, and reporting both invites the reader to
+        // believe the one they recognise.
+        if let Some(shift) = d.population_shift()
+            && shift >= POPULATION_SHIFT
+        {
+            out.push(format!(
+                "{}: {} population changed {:.2}x between {} and {} ({} -> {} \
+                 builds), so its {:.2}x build-time ratio compares two \
+                 different populations and is not a drift",
+                t.arch,
+                name,
+                shift,
+                t.from,
+                t.to,
+                d.tasks_from,
+                d.tasks_to,
+                d.ratio.unwrap_or_default(),
+            ));
+            continue;
+        }
         if d.ratio.is_some_and(|r| r >= drift_warn) {
             out.push(format!(
                 "{}: {} build time {:.2}x since {} ({} -> {}); \
@@ -450,6 +499,38 @@ mod tests {
         // And nothing is written for an empty trend.
         assert!(write(root.path(), &Trend::default()).unwrap().is_empty());
         assert!(!root.path().join("trend.txt").exists());
+    }
+
+    #[test]
+    fn a_population_that_changed_size_is_reported_as_that_and_not_as_a_drift() {
+        // golang on s390x, F42 to F45: 1,419 builds against 430, with a
+        // build time that looks 1.46x worse. The ratio is real arithmetic
+        // over two different populations.
+        let mut a = arch("s390x", 0.5, 100.0, 100.0);
+        let mut b = arch("s390x", 0.5, 100.0, 200.0);
+        a.service[0].tasks = 1419;
+        b.service[0].tasks = 430;
+        let t = assess_default(&series(a, b));
+        assert_eq!(t.warnings.len(), 1, "{:?}", t.warnings);
+        let w = &t.warnings[0];
+        assert!(w.contains("population changed"), "{w}");
+        assert!(w.contains("not a drift"), "{w}");
+        // And the ratio is still in the data for a reader who wants it.
+        assert_eq!(t.arches[0].drift["rest"].ratio, Some(2.0));
+    }
+
+    #[test]
+    fn a_stable_population_of_a_different_size_is_still_comparable() {
+        // Populations need to be the same size as *each other*, not any
+        // particular size: 601 against 601 is fine, and so is 9,430
+        // against 9,327.
+        let mut a = arch("s390x", 0.5, 100.0, 100.0);
+        let mut b = arch("s390x", 0.5, 100.0, 200.0);
+        a.service[0].tasks = 9430;
+        b.service[0].tasks = 9327;
+        let t = assess_default(&series(a, b));
+        assert_eq!(t.warnings.len(), 1, "{:?}", t.warnings);
+        assert!(t.warnings[0].contains("build time"), "{:?}", t.warnings);
     }
 
     #[test]
