@@ -204,10 +204,15 @@ regression, and which nobody would have looked for unprompted:
 - **queue wait per class of build**, never summed, because adding a mass
   rebuild's wait to a maintainer's once produced a headline that described
   releng waiting for releng;
-- **queue wait by submitter volume** — the ten busiest, the next forty, and
-  everyone else. Bands, not names: in July 2026 ten people carried 59% of
-  s390x's human builds at a 23m p90 while every band's median sat at a
-  minute. `--owner NAME` is how one person sees their own;
+- **queue wait by submitter volume** — the busiest five, then 6-10, 11-20,
+  21-50 and everyone else. Bands, not names: in July 2026 the busiest five
+  carried 51% of s390x's human builds at a 2.2h p90 while every band's median
+  sat under a minute. `--owner NAME` is how one person sees their own;
+- **submitters whose own p90 exceeds an hour**, as a count and as their share
+  of the work. Bands publish a finding without naming anybody, but they do not
+  identify who is affected — volume rank is a leaky proxy, and this does not
+  depend on where the bands fall. Quote the share: the count moves with how
+  many builds it takes to be counted;
 - **where builder time went** — utilisation, the share lost to failed or
   cancelled tasks, and the share held by tasks over six hours.
 

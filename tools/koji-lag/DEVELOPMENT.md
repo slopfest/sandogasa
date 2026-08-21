@@ -523,6 +523,30 @@ Nine families also make the prefix inaccuracy tolerable. `golang-` catches Go
 libraries and not Go applications, but a Go application's cost still appears
 somewhere — under `other` — rather than being silently attributed to C.
 
+## Bands are publishable; they are not a diagnosis
+
+The submitter cohorts exist so a finding about a few people can be published
+without naming them, and they do that well. They do not identify who is
+affected, and it is worth not confusing the two.
+
+Measured on s390x, July 2026: the cliff sits inside the first band (busiest
+five at a 2.2h p90 and 14.5% over an hour, ranks 6 to 10 at 27m and 7.0%),
+which is why `BANDS` is now five entries and not three. But per submitter,
+ranks 1, 4, 5, 10 and 12 were badly hit while 2, 3, 6-9 and 11 were not —
+rank 12 yes, rank 11 no. Volume is not the variable.
+
+So `ArchHealth::submitters_slow` counts people whose *own* p90 exceeds an
+hour, and `submitters_slow_task_pct` gives their share of the work. Two rules
+for that pair:
+
+**Require enough builds per person to have a distribution.** A p90 over three
+builds is noise; the floor is `MIN_FOR_WARNING`.
+
+**Report the share, not the count.** The count moves with the floor —
+loosening it admits people with few builds, who add to the count and almost
+nothing to the share. Any statement of the form "N people are affected" is
+really a statement about where the line was drawn.
+
 ## Check the population counts before believing a ratio
 
 A ratio between two periods can only be read once you know the two
@@ -556,8 +580,12 @@ being relied on. Look at the counts.
 **The check is in the code, not just in this document.**
 `trend::POPULATION_SHIFT` reports a population that moved by more than 1.5x
 as not comparable, in place of its drift. It caught `golang` falling about
-3.3x on every architecture — Fedora's Go libraries becoming noarch — on the
-first run, against a figure already written up as evidence. Report it
+3.3x on every architecture on the first run, against a figure already written
+up as evidence. (The cause is Fedora vendoring Go dependencies from F43, so
+`golang-` libraries are retired and what remains are applications without the
+prefix. The prefix cannot be fixed from the store — it would need
+`BuildRequires: go-vendor-tools` from each spec — and Go compiles fast enough
+that the family is not worth the effort.) Report it
 *instead of* the drift rather than alongside it: two numbers where one is
 unusable is worse than one number, because the reader takes the familiar
 one.

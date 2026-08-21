@@ -44,6 +44,27 @@ rather than presentation: one seven-hour build on a quiet day would otherwise
 report a 90% tail and send somebody hunting. The tables themselves respect
 `--min-samples` like every other table in the report.
 
+### koji-lag: finer cohort bands, and who is affected without ranking them
+
+The cohort bands were top-10, next-40, rest, and measuring them showed the
+cliff falls *inside* the first band: on s390x in July 2026 the busiest five
+had a 2.2h p90 with 14.5% of their builds over an hour, while ranks 6 to 10
+had 27m and 7.0%. Bands are now top-5, 6-10, 11-20, 21-50 and the rest.
+
+More importantly, **volume rank turns out to be a leaky proxy for who is
+affected.** Per submitter, the first, fourth, fifth, tenth and twelfth
+busiest had p90 waits of 211, 213, 84, 153 and 132 minutes, while the second,
+third, sixth through ninth and eleventh sat between 1 and 13. Rank 12 is hit
+and rank 11 is not, so membership is decided by what someone builds rather
+than by how much.
+
+So reports now also count them directly and name nobody: 7 of 47 regular
+s390x submitters have their own p90 over an hour, accounting for 20% of that
+architecture's human builds. ppc64le is 1 of 67 and 7%; x86_64 and aarch64
+have none. Quote the share, not the count — the count depends on how many
+builds it takes to be counted (twenty, here, because a p90 over three builds
+is noise) and the share barely does.
+
 ### koji-lag: where an architecture's builder time went, by distribution
 
 Adding builders and narrowing what an architecture is built for are
@@ -87,13 +108,19 @@ weaker finding, it is a different measurement, and offering both invites the
 reader to believe the one they recognise. The threshold is loose because
 Fedora gains and loses packages legitimately.
 
-It earned its place on the first run. Fedora's Go *library* packages became
-noarch between F42 and F45, so `golang` fell from about 1,420 builds to about
-430 on every architecture — and the 1.46x s390x figure that produced had
-already been written into FINDINGS.md as evidence that the platform regressed.
-The conclusion survives on the families whose populations held — haskell is
-601 builds against 601, rust 2,911 against 3,280 — but on those and not on
-that.
+It earned its place on the first run, on `golang`, which fell from about
+1,420 builds to about 430 on *every* architecture between F42 and F45 — and
+whose resulting 1.46x s390x figure had already been written into FINDINGS.md
+as evidence that the platform regressed. The conclusion survives on the
+families whose populations held (haskell 601 builds against 601, rust 2,911
+against 3,280), but on those and not on that.
+
+The cause is a Fedora policy change: Go packages vendor their dependencies by
+default from F43, so the `golang-` library packages are being retired rather
+than rebuilt, and what is left is Go applications that do not carry the
+prefix. Detecting those needs the spec or `fedrq`, so the family stays as it
+is and the check reports it as incomparable — the right answer without the
+work.
 
 ### koji-lag: build time by toolchain, and noarch builds left out of it
 

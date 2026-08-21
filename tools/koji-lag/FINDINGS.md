@@ -320,12 +320,24 @@ points at process and I/O cost rather than at raw compute. On ppc64le and
 x86_64 over the same range nearly every family got *faster*, with `other`
 lagging at 1.02x and 0.81x.
 
-`golang` is deliberately absent from that table. Fedora's Go library
-packages became noarch between F42 and F45, so the family fell from about
-1,420 builds to about 430 on *every* architecture, and its ratio therefore
-compares two different populations. `koji-lag` now says so rather than
-reporting the number — a check added after this document had already quoted
-the s390x golang figure as evidence.
+`golang` is deliberately absent from that table, and the reason is a
+Fedora policy change rather than anything about the builders. Go packages
+[vendor their dependencies by default from
+F43](https://discussion.fedoraproject.org/t/f43-change-proposal-golang-packages-vendored-by-default-system-wide/154986),
+so the `golang-` *library* packages are being retired rather than rebuilt:
+1,434 of them built in F42's mass rebuild, 1,321 in F43's, 613 in F44's, 435
+in F45's, with the collapse falling exactly where the Change landed. Noarch
+has nothing to do with it — only 11, 11, 4 and 2 of those were noarch-only.
+
+What remains is Go *applications*, which do not carry the prefix, so the
+prefix no longer tracks the language. Finding them properly means reading
+each spec for `BuildRequires: go-vendor-tools` or asking `fedrq`, neither of
+which belongs in a metric computed from the store — and Go compiles fast
+enough that it is an unlikely place for a build-time problem in the first
+place. See the [Go packaging
+guidelines](https://docs.fedoraproject.org/en-US/packaging-guidelines/Golang/).
+The population check reports the family as not comparable, which is the right
+outcome for none of that work.
 
 ### The other lever: what the architecture is built for
 
@@ -354,46 +366,126 @@ and 0.3% now.
 
 ### Who pays for the status quo
 
-Doing nothing is not the neutral option, and a median will never show why.
-Top-10 submitters' queue wait at p90, July 2026, official human builds:
+Doing nothing is not the neutral option, and no median will ever show why.
+Queue wait by submission volume, s390x, July 2026, official human builds:
 
-| arch | top-10 p90 | over 1h | next-40 p90 | everyone else p90 |
-|:--|--:|--:|--:|--:|
-| **s390x** | **109.1m** | **12.8%** | 2.9m | 1.8m |
-| ppc64le | 16.0m | 2.9% | 1.1m | 1.2m |
-| x86_64 | 1.2m | 0.0% | 1.1m | 1.1m |
-| aarch64 | 1.2m | 0.0% | 1.1m | 1.1m |
+| band | people | tasks | median | p90 | >1h |
+|:--|--:|--:|--:|--:|--:|
+| top-5 | 5 | 4,368 | 1m | **2.2h** | **14.5%** |
+| 6-10 | 5 | 1,337 | 54s | 27m | 7.0% |
+| 11-20 | 10 | 721 | 53s | 6m | 4.9% |
+| 21-50 | 30 | 899 | 50s | 1m | 5.9% |
+| everyone else | 241 | 1,202 | 50s | 2m | 4.7% |
 
-Every cohort's median is about one minute on every architecture. The cost of
-the present arrangement therefore falls on roughly ten people, at ninety
-times the x86_64 p90, and inside F45's rebuild window 26 of the 28 hour-plus
-waits fell on a single person. Whichever way the decision goes, it should be
-made knowing that the bill is currently being paid by the busiest
-maintainers rather than spread across the project.
+The cliff is inside the first ten, at about five people, which is why the
+bands are finer than they were. Every band's median is under a minute.
+
+**But volume rank does not identify who is affected.** Per submitter, the
+first, fourth, fifth, tenth and twelfth busiest had p90 waits of 211, 213,
+84, 153 and 132 minutes, while the second, third, sixth through ninth and
+eleventh all sat between 1 and 13. Rank 12 is hit and rank 11 is not, so
+membership is decided by *what* someone builds, not how much.
+
+So the report also counts them directly, naming nobody: **7 of 47 regular
+s390x submitters have their own p90 over an hour, and they account for 20% of
+the architecture's human builds.** On ppc64le it is 1 of 67 and 7%; on x86_64
+and aarch64, none. Quote the share rather than the count — the count moves
+with how many builds it takes to be counted, and the share barely does.
+
+Inside F45's rebuild window, 26 of the 28 hour-plus waits fell on a single
+person.
 
 ## 3. Recommended capacity
 
-Offered load equals delivered load to within a percent in all four windows,
-so this is **headroom rather than throughput** — the fleet finishes the work,
-and the hours of waiting come from releng submitting in bursts against a
-queue with no slack.
+**"Enough capacity" and "no longer the blocker" are two different asks, and
+only the first can be bought.**
 
-At F45's offered 114 weight against today's 92:
+### What it takes to stop having a queue
 
-| goal | capacity | vs today | extra builders (at 4.9 weight each) |
-|:--|--:|--:|--:|
-| utilisation ≤ 0.7 — hours become tens of minutes | 162 | 1.8x | **+14** |
-| utilisation ≤ 0.6 — F42-like, waits in minutes | 190 | 2.1x | **+20** |
-| utilisation ≤ 0.5 — survives a couple of cycles | 227 | 2.5x | +28 |
+s390x's fleet is **91.5 weight units**. Offered load equals delivered load to
+within a percent, so this is headroom and not throughput.
 
-For ppc64le the capacity ask is different in kind: it is not short of
-throughput, it is short of what it used to have. 58 weight against 132 in
-mid-2025 is a 56% reduction that nobody appears to have revisited, and it is
-the reason its utilisation now sits where s390x's does. Restoring even half
-of it would take that architecture back under 0.6 without any change in
-service time.
+| window | offered | utilisation | for 0.70 | for 0.60 |
+|:--|--:|--:|--:|--:|
+| June 2026 | 37.8 | 0.41 | — (37 spare) | — (28 spare) |
+| July 2026 | 45.2 | 0.49 | — (27 spare) | — (16 spare) |
+| **F45 rebuild** | **94.7** | **1.04** | **+44** | **+66** |
 
-**For s390x, three cheaper things come first, in this order.**
+In an ordinary month s390x needs **nothing**: it runs at 0.41 to 0.49, well
+under the knee, and its queue wait is a minute. The queue is a *mass rebuild*
+problem and only that. Clearing it needs +44 weight units to reach 0.70 or
++66 to reach 0.60 — about +48% to +73% of the fleet, or +9 to +13 builders at
+4.9 weight each — which would then sit at 0.4 utilisation for the other
+eleven months.
+
+In machines rather than weight: s390x runs **19 builders averaging 4.82
+weight each** (range 1.5 to 6.0), so 0.70 means going to **28** and 0.60 to
+**33**. For comparison ppc64le runs 29 builders at 2.0 each — Z hosts are
+individually about 2.4x the weight, which is why s390x has more capacity than
+ppc64le from two thirds as many machines.
+
+That makes burst capacity for four days, twice a year, the shape of the ask
+rather than a permanently larger fleet. Pacing the rebuild so it does not
+saturate is the same lever from the other end and costs nothing.
+
+**What this document deliberately does not say is what any of it costs.**
+Price per builder is not in Koji, differs by an order of magnitude between
+architectures, and for Z is likely a partnership or contract matter rather
+than a line item — so any figure here would be the one number a reader could
+not check, could not regenerate, and would be wrong within a year. Everything
+above is stated in builders and weight units so that whoever does know the
+price can do the arithmetic, and so that the arithmetic is visibly theirs.
+The same applies to the reverse suggestion of funding s390x by retiring
+builders elsewhere: this document can say that no s390x capacity is freed
+that way, and should not say whether the money works out.
+
+ppc64le is in the same position for a different reason: 63.5 offered against
+58 capacity in the same week, needing +33 to +48. It is not short of
+throughput but short of what it used to have — 58 weight against 132 in
+mid-2025 is a 56% reduction that nobody appears to have revisited.
+
+### What no amount of capacity will fix
+
+Being the last architecture to finish is a property of **service time**, and
+builders do not make a single build faster. In June 2026, with s390x at 0.41
+utilisation and no queue at all:
+
+| arch | median build | p90 |
+|:--|--:|--:|
+| x86_64 | 1.46m | 6.79m |
+| aarch64 | 1.97m | 9.44m |
+| ppc64le | 2.66m | 11.52m |
+| **s390x** | **4.10m** | **56.27m** |
+
+2.8x the median and 8x the p90, with the fleet idle. So even at 0.60
+utilisation s390x would still finish last on most builds — it would simply
+finish last by minutes instead of by hours, which is the state ppc64le is
+already in: it comes last for 83.6% of builds in a quiet month and nobody
+notices, because the spread is 0.0h at the median.
+
+That is the honest answer to "what makes it stop being the blocker": **for
+the queue, +44 to +66 weight during rebuilds; for the wall clock, nothing you
+can order.** The wall clock needs the 2.8x baseline gap and the 1.24-1.66x
+regression since F42 investigated as platform faults.
+
+### Cheaper than either, and larger
+
+In June 2026, a quiet month, s390x spent **27.2% of its builder time on 140
+tasks that ran over six hours** and **15.3% on tasks that failed or were
+cancelled**. Roughly 43% of the architecture's builder time produced nothing
+or hung — which is *more* than the entire +48% the rebuild queue needs.
+
+**So the order of operations is:**
+
+1. **Hangs and failures.** ~43% of builder time in a quiet month, no hardware
+   required. Details below.
+2. **Rebuild burst capacity**, +44 to +66 weight units for about four days,
+   twice a year — or pace the rebuild instead.
+3. **The service-time regression**, which is what actually makes s390x the
+   blocker and cannot be bought.
+4. **Scope**, which is a policy decision and is covered above.
+
+**On the hangs specifically.**
 
 1. **A per-task time limit, around 40-48 hours.** In F45 four tasks ran past
    50 hours and produced nothing: `libredwg` (FAILED, 56.1h) and `libunwind`
@@ -408,9 +500,8 @@ service time.
 2. **Fix the two s390x-specific package faults** above.
 3. **Diagnose the platform regression.** Returning mean service time to
    F42's level drops offered load to 48 weight — utilisation 0.53 at today's
-   capacity, waits back to minutes, no hardware at all. The regression is
-   worth about twice the fleet, and capacity was already bought once and
-   lost to it.
+   capacity, waits back to minutes, no hardware at all. Capacity was bought
+   once already and lost to this.
 
 Two things to say alongside any purchase: it sizes for two weeks a year, so
 pacing the rebuild over more days lowers peak utilisation at no cost and

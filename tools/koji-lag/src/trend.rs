@@ -412,6 +412,9 @@ mod tests {
             wasted_pct: 0.0,
             tail_pct: 0.0,
             tail_tasks: 0,
+            submitters: 0,
+            submitters_slow: 0,
+            submitters_slow_task_pct: 0.0,
             service: vec![
                 Population {
                     name: "rest".to_string(),

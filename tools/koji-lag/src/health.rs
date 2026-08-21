@@ -41,9 +41,18 @@ use crate::stats::{DistSummary, median, percentile, summarize};
 /// from the thousands that do not.
 pub const TAIL_SECS: f64 = 6.0 * 3600.0;
 
-/// Cohort boundaries, by rank when submitters are ordered by volume.
-const TOP: usize = 10;
-const NEXT: usize = 50;
+/// One submitter and the queue waits they saw, ranked by volume.
+type Submitter<'a> = (&'a &'a str, &'a Vec<f64>);
+
+/// Cohort band edges by submission volume, as `(upper bound, label)`.
+///
+/// Finer than the original top-10/next-40 split, because measuring it
+/// showed the cliff falls *inside* the first band: on s390x in July 2026 the
+/// busiest five had a 189.5m p90 with 31.3% of their builds over an hour
+/// while ranks 6 to 10 had 9.8m and 5.6%.
+///
+/// Rank remains a proxy, and a leaky one — see [`ArchHealth::submitters_slow`].
+const BANDS: &[(usize, &str)] = &[(5, "top-5"), (10, "6-10"), (20, "11-20"), (50, "21-50")];
 
 /// Tasks a population needs before a threshold may fire on it.
 ///
@@ -93,6 +102,20 @@ pub struct CohortStats {
 /// Measured on s390x's F45 rebuild, as a share of its 12,612 compiles:
 /// rust 26.0%, other 56.2%, haskell 4.8%, perl 3.8%, golang 3.4%,
 /// python 2.4%, ocaml and r 1.3% each, ruby 0.4%.
+///
+/// **`golang` is not usable as a population and is expected to keep
+/// shrinking.** Fedora vendors Go dependencies by default from F43, so the
+/// `golang-` library packages are being retired rather than rebuilt: 1,434
+/// of them built in F42's mass rebuild, 1,321 in F43's, 613 in F44's and 435
+/// in F45's. What remains is Go *applications*, which do not carry the
+/// prefix. Detecting those needs the spec — `BuildRequires: go-vendor-tools`
+/// — or a `fedrq` query, neither of which belongs in a metric computed from
+/// the store, and Go's compiler is fast enough that it is an unlikely place
+/// for a build-time problem anyway. The population check in
+/// [`crate::trend`] reports the family as not comparable, which is the
+/// correct outcome without any of that work.
+///
+/// See <https://docs.fedoraproject.org/en-US/packaging-guidelines/Golang/>.
 pub const FAMILIES: &[(&str, &[&str])] = &[
     ("golang", &["golang-"]),
     ("haskell", &["ghc-"]),
@@ -169,6 +192,36 @@ pub struct ArchHealth {
     /// Share of builder time in tasks longer than [`TAIL_SECS`].
     pub tail_pct: f64,
     pub tail_tasks: usize,
+    /// Submitters with at least [`MIN_FOR_WARNING`] official builds here,
+    /// and how many of those had **their own** p90 queue wait over an hour.
+    ///
+    /// The cohort bands rank by volume, and rank is a leaky proxy for who is
+    /// affected: on s390x in July 2026 the submitters at ranks 1, 4, 5, 10
+    /// and 12 had p90 waits of 211, 213, 84, 153 and 132 minutes while ranks
+    /// 2, 3, 6 to 9 and 11 all sat between 1 and 13. Rank 12 is hit and rank
+    /// 11 is not, so the affected set is defined by what people build rather
+    /// than by how much of it.
+    ///
+    /// Counting them directly names nobody, so it stays as publishable as a
+    /// band, and it does not depend on the bands being drawn in the right
+    /// place.
+    #[serde(default)]
+    pub submitters: usize,
+    #[serde(default)]
+    pub submitters_slow: usize,
+    /// Share of this architecture's official human tasks submitted by those
+    /// people. Quote this rather than the count.
+    ///
+    /// The count is sensitive to [`MIN_FOR_WARNING`] in a way the share is
+    /// not, because lowering the floor admits people with few builds — who
+    /// add to the count while contributing almost nothing to the share.
+    /// Over July 2026 on s390x the tool reports 7 of 47 regular submitters
+    /// holding 20% of human builds; a looser floor over a slightly wider
+    /// population puts it nearer half. Both say the same thing about who
+    /// carries the delay, and neither is the "right" count, which is the
+    /// argument for reporting the share.
+    #[serde(default)]
+    pub submitters_slow_task_pct: f64,
     /// Build time split by [`CONTROL_PREFIX`]. An ingredient for
     /// [`crate::trend`]; not interpretable within one window on its own.
     pub service: Vec<Population>,
@@ -448,6 +501,35 @@ pub fn assess(
         n => 100.0 * xs.iter().filter(|w| **w > 3600.0).count() as f64 / n as f64,
     };
 
+    // Per architecture: submitters, and those whose own p90 is over an hour.
+    let slow_submitters: BTreeMap<&str, (usize, usize, f64)> = per_person
+        .iter()
+        .map(|(arch, people)| {
+            // A p90 over three builds is noise, so only submitters with
+            // enough work to have a distribution are judged.
+            let eligible: Vec<&Vec<f64>> = people
+                .values()
+                .filter(|w| w.len() >= MIN_FOR_WARNING)
+                .collect();
+            let slow: Vec<&&Vec<f64>> = eligible
+                .iter()
+                .filter(|waits| {
+                    let mut xs = (**waits).clone();
+                    xs.sort_by(f64::total_cmp);
+                    percentile(&xs, 0.9).is_some_and(|p| p > 3600.0)
+                })
+                .collect();
+            let all: usize = people.values().map(Vec::len).sum();
+            let held: usize = slow.iter().map(|w| w.len()).sum();
+            let pct = if all > 0 {
+                100.0 * held as f64 / all as f64
+            } else {
+                0.0
+            };
+            (*arch, (eligible.len(), slow.len(), pct))
+        })
+        .collect();
+
     let arches: Vec<ArchHealth> = per_arch
         .iter()
         .map(
@@ -478,6 +560,9 @@ pub fn assess(
                         0.0
                     },
                     tail_tasks: *tail_n,
+                    submitters: slow_submitters.get(*arch).map_or(0, |x| x.0),
+                    submitters_slow: slow_submitters.get(*arch).map_or(0, |x| x.1),
+                    submitters_slow_task_pct: slow_submitters.get(*arch).map_or(0.0, |x| x.2),
                     service: per_pop
                         .iter()
                         .filter(|((a, _), _)| a == arch)
@@ -556,19 +641,20 @@ pub fn assess(
     // small instance still all land in the top band, and their p90 is a
     // real finding about them even with no band to compare against.
     for (arch, people) in per_person.iter().filter(|_| cohorts_wanted) {
-        let mut ranked: Vec<(&&str, &Vec<f64>)> = people.iter().collect();
+        let mut ranked: Vec<Submitter> = people.iter().collect();
         // Busiest first, and by name within a tie so the bands are stable
         // between runs over the same data.
         ranked.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(b.0)));
         let total: usize = ranked.iter().map(|(_, w)| w.len()).sum();
-        for (name, band) in [
-            ("top-10", &ranked[..ranked.len().min(TOP)]),
-            (
-                "next-40",
-                &ranked[ranked.len().min(TOP)..ranked.len().min(NEXT)],
-            ),
-            ("rest", &ranked[ranked.len().min(NEXT)..]),
-        ] {
+        let mut bands: Vec<(&str, &[Submitter])> = Vec::new();
+        let mut lo = 0usize;
+        for (hi, name) in BANDS {
+            let (a, b) = (ranked.len().min(lo), ranked.len().min(*hi));
+            bands.push((name, &ranked[a..b]));
+            lo = *hi;
+        }
+        bands.push(("rest", &ranked[ranked.len().min(lo)..]));
+        for (name, band) in bands {
             if band.is_empty() {
                 continue;
             }
@@ -631,6 +717,29 @@ fn warn(arches: &[ArchHealth], cohorts: &[CohortStats], stragglers: &[Straggler]
     // Said once, about the architecture that sets the pace, rather than
     // once per architecture: the interesting fact is that one of them is
     // deciding when everybody's builds finish.
+    for a in arches {
+        if a.submitters_slow > 0 && a.submitters >= MIN_FOR_WARNING {
+            out.push(Warning {
+                metric: "slow-submitters".to_string(),
+                subject: a.arch.clone(),
+                text: format!(
+                    "{}: {} of {} regular submitters (at least {} builds \
+                     each) have their own p90 queue wait over an hour, and \
+                     they account for {:.0}% of this architecture's human \
+                     builds. Quote the share rather than the count, which \
+                     moves with that floor. Volume rank does not identify \
+                     them: on s390x the busiest and the twelfth-busiest \
+                     submitters were both affected and the second and \
+                     eleventh were not",
+                    a.arch,
+                    a.submitters_slow,
+                    a.submitters,
+                    MIN_FOR_WARNING,
+                    a.submitters_slow_task_pct
+                ),
+            });
+        }
+    }
     if let Some(s) = stragglers.first()
         && s.pct >= STRAGGLER_WARN_PCT
         && s.builds >= MIN_FOR_WARNING
@@ -712,7 +821,8 @@ fn warn(arches: &[ArchHealth], cohorts: &[CohortStats], stragglers: &[Straggler]
             });
         }
     }
-    for c in cohorts.iter().filter(|c| c.cohort == "top-10") {
+    let (lead, second) = (BANDS[0].1, BANDS[1].1);
+    for c in cohorts.iter().filter(|c| c.cohort == lead) {
         let Some(top) = &c.queue_wait else { continue };
         if top.count < MIN_FOR_WARNING {
             continue;
@@ -725,7 +835,7 @@ fn warn(arches: &[ArchHealth], cohorts: &[CohortStats], stragglers: &[Straggler]
                 metric: "cohort-p90".into(),
                 subject: format!("{} top-10", c.arch),
                 text: format!(
-                    "{}: the ten busiest submitters have a {:.0}m p90 and carry {:.0}% \
+                    "{}: {lead} submitters have a {:.0}m p90 and carry {:.0}% \
                      of human builds — a population median will not show this",
                     c.arch,
                     top.p90 / 60.0,
@@ -737,7 +847,7 @@ fn warn(arches: &[ArchHealth], cohorts: &[CohortStats], stragglers: &[Straggler]
         // which is the shape that stayed invisible for eighteen months.
         if let Some(next) = cohorts
             .iter()
-            .find(|o| o.arch == c.arch && o.cohort == "next-40")
+            .find(|o| o.arch == c.arch && o.cohort == second)
             .and_then(|o| o.queue_wait.as_ref())
             && next.p90 > 0.0
             && top.p90 > 5.0 * next.p90
@@ -746,7 +856,7 @@ fn warn(arches: &[ArchHealth], cohorts: &[CohortStats], stragglers: &[Straggler]
                 metric: "cohort-divergence".into(),
                 subject: format!("{} top-10", c.arch),
                 text: format!(
-                    "{}: the busiest ten wait {:.0}x the next forty at p90 ({:.0}m against \
+                    "{}: {lead} wait {:.0}x {second} at p90 ({:.0}m against \
                      {:.0}m) — the delay is landing on a few people",
                     c.arch,
                     top.p90 / next.p90,
@@ -905,7 +1015,7 @@ mod tests {
             }
         }
         // Sixty people, asked for: three bands.
-        assert_eq!(assess_all(&with).cohorts.len(), 3);
+        assert_eq!(assess_all(&with).cohorts.len(), 5);
 
         // The same sixty, narrowed: no bands, and no warning derived from
         // them. Not a judgement about the population -- the population is
@@ -1267,11 +1377,10 @@ mod tests {
         let ds = population(&specs);
         let h = assess_all(&ds);
 
-        let top = h.cohorts.iter().find(|c| c.cohort == "top-10").unwrap();
-        // Only ten submitters exist, so all of them land in the top band and
-        // there is no next-40 to diverge from — the median still hides it,
-        // which is why the p90 threshold exists on its own.
-        assert_eq!(top.people, 10);
+        // Ten submitters, so the first two bands hold five each and the
+        // later ones are empty; the p90 threshold still fires on its own.
+        let top = h.cohorts.iter().find(|c| c.cohort == "top-5").unwrap();
+        assert_eq!(top.people, 5);
         assert!(top.queue_wait.as_ref().unwrap().p90 > 20.0 * 60.0);
         let keys: Vec<&str> = h.warnings.iter().map(|w| w.metric.as_str()).collect();
         assert!(keys.contains(&"cohort-p90"), "{keys:?}");
@@ -1279,11 +1388,12 @@ mod tests {
 
     #[test]
     fn divergence_is_measured_against_the_next_band() {
-        // Sixty submitters, so all three bands exist. The busiest ten wait
-        // two hours and everybody else a minute.
+        // Sixty submitters, every band populated. The busiest five wait two
+        // hours and everybody else a minute -- the real shape, where the
+        // cliff falls inside what used to be one ten-person band.
         let mut specs: Vec<(&str, usize, f64)> = Vec::new();
-        let heavy: Vec<String> = (0..10).map(|i| format!("heavy{i}")).collect();
-        let light: Vec<String> = (0..50).map(|i| format!("light{i}")).collect();
+        let heavy: Vec<String> = (0..5).map(|i| format!("heavy{i}")).collect();
+        let light: Vec<String> = (0..55).map(|i| format!("light{i}")).collect();
         for n in &heavy {
             specs.push((n.as_str(), 40, 7200.0));
         }
@@ -1299,13 +1409,15 @@ mod tests {
                 .find(|x| x.cohort == c)
                 .unwrap_or_else(|| panic!("no {c}"))
         };
-        assert_eq!(by("top-10").people, 10);
-        assert_eq!(by("next-40").people, 40);
+        assert_eq!(by("top-5").people, 5);
+        assert_eq!(by("6-10").people, 5);
+        assert_eq!(by("11-20").people, 10);
+        assert_eq!(by("21-50").people, 30);
         assert_eq!(by("rest").people, 10);
         // Ten people carry 400 of 550 tasks.
-        assert!(by("top-10").share_of_tasks > 70.0, "{:?}", by("top-10"));
-        assert_eq!(by("top-10").over_hour_pct, 100.0);
-        assert_eq!(by("next-40").over_hour_pct, 0.0);
+        assert!(by("top-5").share_of_tasks > 30.0, "{:?}", by("top-5"));
+        assert_eq!(by("top-5").over_hour_pct, 100.0);
+        assert_eq!(by("21-50").over_hour_pct, 0.0);
         let keys: Vec<&str> = h.warnings.iter().map(|w| w.metric.as_str()).collect();
         assert!(keys.contains(&"cohort-divergence"), "{keys:?}");
     }
