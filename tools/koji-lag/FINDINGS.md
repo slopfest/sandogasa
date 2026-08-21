@@ -1,8 +1,8 @@
-# Fedora build capacity: what eighteen months of Koji data says
+# Fedora build capacity on the IBM architectures: s390x and ppc64le
 
 Source material for a write-up, not the write-up. Every figure here is
 measured from a `koji-lag` store covering 2024-12-24 onward and is
-reproducible from `notebooks/s390x-lag.ipynb`; the caveats are kept next to
+reproducible from `notebooks/arch-lag.ipynb`; the caveats are kept next to
 the numbers deliberately, because several of the conclusions here replaced
 earlier ones that looked just as solid.
 
@@ -10,6 +10,47 @@ Four mass rebuilds are in scope: F42 (2025-01-16..19), F43 (2025-07-23..26),
 F44 (2026-01-16..19) and F45 (2026-07-15..18). Each window is dated from who
 submitted each day rather than from the schedule, because the two disagree —
 F45's was announced across four weeks and submitted in four days.
+
+**Both architectures are covered together** because both mean asking IBM for
+hardware, and because they turn out to be each other's control: they reach the
+same utilisation from opposite directions and only one of them queues.
+
+## 0. The two architectures, side by side
+
+The single most useful table here, because it separates a capacity problem
+from a speed problem:
+
+| | F42 | F43 | F44 | F45 |
+|:--|--:|--:|--:|--:|
+| s390x utilisation | 0.54 | 0.72 | 0.78 | **1.19** |
+| s390x rebuild wait, median | 0.0h | 1.9h | 4.2h | **3.8h** |
+| ppc64le utilisation | 0.41 | 0.81 | 0.88 | **1.23** |
+| ppc64le rebuild wait, median | 0.0h | 0.0h | 0.1h | **0.1h** |
+
+ppc64le reaches *higher* utilisation than s390x in three of the four windows
+and its rebuild waits never leave single-digit minutes. During F45:
+
+| | mean task weight | mean service time | concurrency sustained | capacity | hosts |
+|:--|--:|--:|--:|--:|--:|
+| ppc64le | 3.01 | **5.6m** | 21.7 | 58 | 29 |
+| s390x | 3.38 | **10.8m** | 26.3 | 92 | 19 |
+
+The weights are nearly the same, so this is not an accounting artefact:
+**ppc64le clears a task in half the time, so the same utilisation drains
+twice as fast and never becomes a queue.** That is the strongest available
+argument that s390x's problem is service time rather than capacity — its own
+peer runs hotter on less hardware without anybody noticing.
+
+It is also a caveat on the utilisation metric, worth stating before somebody
+quotes it: utilisation is comparable **for one architecture over time**, and
+between architectures only when read beside service time. "Above 0.7 means
+hours" holds for s390x and is false for ppc64le.
+
+The two arrived at saturation by different routes. s390x kept its capacity
+and got slower; ppc64le kept its speed and lost more than half its capacity
+— 132 weight in mid-2025 to 64 that July, and 58 since, with a further
+five-day halving for the datacentre move that November. Neither has recovered
+what it lost, and only one of them hurts today.
 
 ## 1. Where the bottleneck is
 
@@ -131,6 +172,18 @@ least. Nor is the workload growing: s390x carried 15,900 rebuild tasks at
 F42 and 12,651 at F45, while x86_64 held near 17,000. The architecture is
 being excluded from more packages each cycle and saturates anyway.
 
+### ppc64le's separate problem: the tail
+
+Outside any rebuild window, ppc64le raises the same tail warning s390x does.
+In March 2026 — an ordinary month, no rebuild — 223 tasks over six hours took
+15.6% of its builder time, against s390x's 155 tasks and 33.2%. Both are
+above the line, and neither is explained by a rebuild.
+
+So the long-build problem is not a rebuild phenomenon, which an earlier
+version of this document implied by only ever measuring inside rebuild
+windows. It is continuous, it affects both architectures, and on s390x it is
+a third of all builder time in a quiet month.
+
 ## 3. Recommended capacity
 
 Offered load equals delivered load to within a percent in all four windows,
@@ -146,7 +199,14 @@ At F45's offered 114 weight against today's 92:
 | utilisation ≤ 0.6 — F42-like, waits in minutes | 190 | 2.1x | **+20** |
 | utilisation ≤ 0.5 — survives a couple of cycles | 227 | 2.5x | +28 |
 
-**But three cheaper things come first, in this order.**
+For ppc64le the capacity ask is different in kind: it is not short of
+throughput, it is short of what it used to have. 58 weight against 132 in
+mid-2025 is a 56% reduction that nobody appears to have revisited, and it is
+the reason its utilisation now sits where s390x's does. Restoring even half
+of it would take that architecture back under 0.6 without any change in
+service time.
+
+**For s390x, three cheaper things come first, in this order.**
 
 1. **A per-task time limit, around 40-48 hours.** In F45 four tasks ran past
    50 hours and produced nothing: `libredwg` (FAILED, 56.1h) and `libunwind`

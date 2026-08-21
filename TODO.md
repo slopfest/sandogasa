@@ -129,7 +129,10 @@
   `report.json` and the `events/` tree instead of computing from raw SQL.
   Nine of the notebook's ten code cells are currently ad-hoc queries, which
   makes it the only home for those metrics — the opposite of what it should
-  be. `events` already emits rebuild windows and stalls as JSON, so those two
+  be. They also hardcode `s390x` in several places, and **do not patch that**:
+  parameterising SQL that is due to be replaced by a `report --json` read is
+  wasted work. The architectures come from the report, which already covers
+  every one of them. `events` already emits rebuild windows and stalls as JSON, so those two
   cells can be converted the moment anybody looks at them.
 
   **The work splits in two, and the tool half comes first.** Promote these
@@ -362,7 +365,7 @@
   comparing against hosts observed serving work *at the same instant*
   rather than over the whole day.
 
-- (2026-08-20, PARTLY DONE) `tools/koji-lag/notebooks/s390x-lag.ipynb`
+- (2026-08-20, PARTLY DONE) `tools/koji-lag/notebooks/arch-lag.ipynb`
   exists and executes, covering the sections listed in the tool README. It
   lives here rather than in koji-lag-metrics so it stays beside the code and
   queries it depends on; the fleshed-out narrative version is the metrics

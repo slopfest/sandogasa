@@ -370,15 +370,18 @@ minute while the hub warms up its query plan, after which pages land in
 about ten seconds. A sync that looks stuck on page one usually is not.
 ## Notebooks
 
-`notebooks/s390x-lag.ipynb` works a store over rather than reporting from it:
+`notebooks/arch-lag.ipynb` works a store over rather than reporting from it:
 rebuild windows detected from who submitted each day, queue wait per class of
 build, service time per architecture, builder capacity from the hub's
 configuration history, utilisation against the wait actually observed, the
 long-build tail, per-package slowdown grouped by build toolchain, and
-single-architecture stalls labelled congestion or outage.
+single-architecture stalls labelled congestion or outage. It covers s390x and
+ppc64le together — both mean asking IBM for hardware, and they are each
+other's control: they reach the same utilisation from opposite directions and
+only one of them queues.
 
 ```sh
-KOJI_LAG_STORE=lag.sqlite jupyter lab notebooks/s390x-lag.ipynb
+KOJI_LAG_STORE=lag.sqlite jupyter lab notebooks/arch-lag.ipynb
 ```
 
 Needs `jupyterlab`, `python3-pandas` and `python3-matplotlib`; the toolchain
