@@ -434,6 +434,55 @@ mod tests {
     }
 
     #[test]
+    fn the_monthly_series_comes_off_disk_in_chronological_order() {
+        let root = tempfile::tempdir().unwrap();
+        let put = |year: &str, month: &str, body: String| {
+            let dir = root.path().join("monthly").join(year).join(month);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("report.json"), body).unwrap();
+        };
+        let with_health = |control: f64| {
+            serde_json::to_string(&serde_json::json!({
+                "health": &Health {
+                    arches: vec![arch("s390x", 0.5, control, control)],
+                    ..Default::default()
+                }
+            }))
+            .unwrap()
+        };
+        // Written out of order, and spanning a year boundary.
+        put("2026", "01", with_health(200.0));
+        put("2025", "03", with_health(100.0));
+        put("2025", "11", with_health(150.0));
+        // A report from before health existed is skipped, not an error.
+        put("2025", "12", "{}".to_string());
+        // So is a directory with no report at all.
+        std::fs::create_dir_all(root.path().join("monthly/2025/06")).unwrap();
+
+        let series = from_reports_root(root.path()).unwrap();
+        let labels: Vec<&str> = series.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, ["2025-03", "2025-11", "2026-01"]);
+
+        // Which makes the comparison first-against-last across the range,
+        // not first-against-whatever-was-written-last.
+        let t = assess(&series, DRIFT_WARN);
+        assert_eq!(t.arches[0].drift["control"].ratio, Some(2.0));
+        assert_eq!(
+            (&*t.arches[0].from, &*t.arches[0].to),
+            ("2025-03", "2026-01")
+        );
+    }
+
+    #[test]
+    fn a_tree_with_no_monthly_reports_is_a_series_of_none() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(from_reports_root(root.path()).unwrap().is_empty());
+        // And nothing is written for an empty trend.
+        assert!(write(root.path(), &Trend::default()).unwrap().is_empty());
+        assert!(!root.path().join("trend.txt").exists());
+    }
+
+    #[test]
     fn a_like_for_like_comparison_warns_where_a_calendar_one_would_not() {
         // 1.30x: the step s390x's control population actually took between
         // two rebuilds. Over unrestricted months that is inside the noise
