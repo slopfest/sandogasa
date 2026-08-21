@@ -39,7 +39,11 @@ pub struct Day {
     pub created: usize,
     /// How many of them ever started.
     pub started: usize,
-    /// Mean seconds those that started spent queued.
+    /// Median seconds those that started spent queued.
+    ///
+    /// Median and not mean, because a mean cannot distinguish a queue from
+    /// a few stuck tasks — see the query in [`crate::store`] for the day
+    /// that proved it.
     pub wait: f64,
     /// Mean number of tasks of this architecture running at once — the
     /// day's throughput, as a time integral rather than a count.
@@ -146,12 +150,29 @@ pub fn baseline(days: &[Day], arch: &str) -> f64 {
 pub struct Rule {
     /// How many times the other architectures' median a day must exceed.
     pub factor: f64,
-    /// Minimum mean wait in seconds, so a fleet running at two seconds
+    /// Minimum median wait in seconds, so a fleet running at two seconds
     /// cannot produce a tenfold "stall" at twenty.
     pub floor: f64,
     /// Minimum tasks created, so an architecture with three tasks that day
     /// is not judged on them.
     pub min_tasks: usize,
+    /// Minimum *median* wait, in seconds, on the window's best day.
+    ///
+    /// The confirming half of the rule. `floor` above applies to a daily
+    /// mean, which is cheap over every day in the store and over-reports:
+    /// a few tasks that sat for days lift a mean over any threshold while
+    /// the typical task waited seconds. This is checked afterwards, on the
+    /// handful of windows the mean selected, with an exact median from
+    /// `Store::median_wait`.
+    ///
+    /// Ten minutes, and it is not a tuned number — the two populations are
+    /// bimodal with an order of magnitude between them. Over twenty months
+    /// the windows the mean selects have median waits of 0.8, 0.9, 0.9,
+    /// 0.9, 1.0, 1.0, 1.0, 1.0, 1.1 and 2.1 minutes, then 20.6, 37.7, 43.0,
+    /// 62.0, 90.3, 103.8, 112.9, 350.8, 365.4 and 2977.4. Eleven of the
+    /// twenty-one were the mean's doing; a day whose typical task waits a
+    /// minute is not a stall, whatever its worst task did.
+    pub median_floor: f64,
 }
 
 impl Default for Rule {
@@ -164,6 +185,7 @@ impl Default for Rule {
             factor: 10.0,
             floor: 3_600.0,
             min_tasks: 50,
+            median_floor: 600.0,
         }
     }
 }

@@ -547,6 +547,33 @@ loosening it admits people with few builds, who add to the count and almost
 nothing to the share. Any statement of the form "N people are affected" is
 really a statement about where the line was drawn.
 
+## Select on the cheap statistic, confirm on the right one
+
+`stall` picks candidate days by mean wait and then confirms each with an exact
+median, and both halves are deliberate.
+
+The median is what the question actually wants: a stall means the typical task
+waited, and a mean cannot distinguish that from a few tasks that got stuck.
+2025-04-30 and F45's rebuild day both average 1.43h on s390x; by median they
+are 47 seconds and 43 minutes. Eleven of twenty-one detected stalls were the
+mean's artifacts, all with median waits under two minutes.
+
+The mean is what is affordable. A median over every day in the store needs a
+window function sorting fourteen million rows, and — oddly — applying the date
+predicate makes the planner an order of magnitude *worse*, past ten minutes
+against the mean's eight seconds. Candidates number about twenty in twenty
+months, so confirming them individually costs nothing.
+
+**The cheap stage must over-report, never under-report.** A false positive is
+filtered by the next stage; a false negative is a stall nobody ever hears
+about. That is the property to preserve if either threshold is ever retuned.
+
+`Rule::median_floor` is ten minutes and is not tuned: the two populations sit
+either side of a tenfold gap (0.8-2.1 minutes against 20.6 minutes and up).
+Do not reuse `Rule::floor` for it — that one is calibrated for a mean, and
+using it as a median floor drops the real 2025-11-11 ppc64le outage, whose
+median is 20.6 minutes.
+
 ## Utilisation has a pool as its denominator, never an architecture
 
 `Store::capacity_at` answers "how much builder weight can serve this

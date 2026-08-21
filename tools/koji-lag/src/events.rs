@@ -181,7 +181,23 @@ pub fn assemble(
     }
 
     let arch_days = store.arch_wait_by_day(instance, from, to)?;
-    for found in stall::stalls(&arch_days, stall::Rule::default()) {
+    let rule = stall::Rule::default();
+    for found in stall::stalls(&arch_days, rule) {
+        // Second stage: the daily means that selected this window are
+        // over-inclusive, so confirm with an exact median on its days. A
+        // window whose best day is under the floor by median was a few
+        // stuck tasks and not a queue -- see `Store::median_wait`.
+        let mut best: Option<f64> = None;
+        let mut day = found.from;
+        while day < found.to {
+            if let Some(m) = store.median_wait(instance, &found.arch, day)? {
+                best = Some(best.map_or(m, |b: f64| b.max(m)));
+            }
+            day += 86_400.0;
+        }
+        if best.is_some_and(|m| m < rule.median_floor) {
+            continue;
+        }
         let ordinary = stall::baseline(&arch_days, &found.arch);
         let verdict = found.verdict(ordinary);
         events.push(Event {

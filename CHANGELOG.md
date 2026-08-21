@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### koji-lag: half the stall events were the mean's doing
+
+Filling the February-to-June 2025 gap turned up a congestion event on
+2025-04-30 that did not survive being looked at: throughput was normal, one
+task was queued, and the day's "1.4h worst wait" came from four `rust-scc`
+builds that were created on 30 April and started on 17 May. Four tasks at 392
+hours each, over 1,110 tasks, contribute exactly 1.41h of mean on their own.
+
+The detector selected days by *mean* wait, and a mean cannot tell a queue from
+a few stuck tasks: 2025-04-30 and F45's rebuild day both average 1.43h, and
+one of them is a thousand tasks queueing while the other is a thousand tasks
+answering in 47 seconds. Checked across every stall the store holds, the two
+populations are bimodal with an order of magnitude between them — median waits
+of 0.8 to 2.1 minutes on one side and 20.6 minutes to 49.6 hours on the other.
+**Eleven of twenty-one stall events were on the wrong side of that gap.**
+
+A median over every day would be the obvious fix and is not affordable: the
+window function needs a sort over fourteen million rows, and with the date
+predicate applied the planner takes over ten minutes against the mean's eight
+seconds. So the mean stays as a first pass, where over-reporting is the right
+failure to have — a false positive gets filtered, a false negative is a stall
+nobody hears about — and each candidate is confirmed with an exact median on
+its own days, one cheap indexed query each. Twenty-one candidates cost about
+two minutes in total.
+
+Fifteen events remain, four mass rebuilds and eleven stalls. Both outages
+survive, every annotation still matches a window, and `koji-lag events` runs
+in two minutes.
+
 ### What breaks for API consumers (breaking API)
 
 `cargo semver-checks` against the published 0.20.0 fails on four crates. Every

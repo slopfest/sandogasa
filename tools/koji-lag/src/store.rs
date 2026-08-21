@@ -845,6 +845,52 @@ impl Store {
         Ok(())
     }
 
+    /// The median queue wait for one architecture on one day.
+    ///
+    /// The confirmation half of a two-stage filter. [`Self::arch_wait_by_day`]
+    /// reports a *mean*, which is cheap to compute across every day the store
+    /// holds and which over-reports: a handful of tasks that sat for days
+    /// drags a day's mean over any threshold while nothing was queueing. On
+    /// 2025-04-30, four `rust-scc` builds waited 392 hours each and lifted
+    /// s390x's daily mean to 1.43h — the same figure F45's rebuild day
+    /// produced with 1,110 tasks genuinely queueing. By median they are 47
+    /// seconds and 43 minutes.
+    ///
+    /// A median over every day is the obvious fix and is not affordable:
+    /// the window function needs a sort over fourteen million rows, and with
+    /// the date predicate applied the planner takes over ten minutes. But
+    /// candidates are few — about twenty days in twenty months — so the mean
+    /// selects them and this confirms them, one cheap indexed query each.
+    ///
+    /// Over-reporting is the right failure for the first stage to have: a
+    /// false positive gets filtered here, while a false negative would be a
+    /// stall nobody ever hears about.
+    pub fn median_wait(&self, instance: &str, arch: &str, day: f64) -> Result<Option<f64>, String> {
+        self.conn
+            .query_row(
+                "SELECT wait FROM (
+                     SELECT start_ts - create_ts AS wait
+                     FROM tasks
+                     WHERE instance = ?1 AND arch = ?2 AND method = 'buildArch'
+                       AND start_ts IS NOT NULL
+                       AND create_ts >= ?3 AND create_ts < ?3 + 86400
+                     ORDER BY wait
+                 )
+                 LIMIT 1 OFFSET (
+                     SELECT count(*) / 2 FROM tasks
+                     WHERE instance = ?1 AND arch = ?2 AND method = 'buildArch'
+                       AND start_ts IS NOT NULL
+                       AND create_ts >= ?3 AND create_ts < ?3 + 86400
+                 )",
+                params![instance, arch, day],
+                |r| r.get::<_, Option<f64>>(0),
+            )
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other.to_string()),
+            })
+    }
+
     /// Builder pools at `at`: sets of architectures that share hosts, with
     /// each host's weight counted once.
     ///
