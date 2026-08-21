@@ -220,8 +220,23 @@ impl Dataset {
     /// conflict the record with a completion timestamp (or the
     /// newer one) wins, so a re-sweep refreshes still-running
     /// tasks. Windows are appended then coalesced per instance.
+    /// Union two selections.
+    ///
+    /// **Capacity does not survive a merge, deliberately.** It is a mean over
+    /// one window, and combining two means correctly needs the window
+    /// lengths to weight them by — which a merge does not have, since either
+    /// side may itself be a merge of several. Carrying one side's figure
+    /// forward, or averaging the two unweighted, would produce a number that
+    /// looks right and is not, and utilisation computed from it would warn or
+    /// stay silent for the wrong reasons.
+    ///
+    /// So the merged result has none, and a caller that needs it refills over
+    /// the range it actually covers — [`crate::store::Store::analysable`]
+    /// does exactly that. An absent denominator reports as absent; a wrong
+    /// one reports as a fact.
     pub fn merge(&mut self, other: Dataset) -> MergeStats {
         let mut stats = MergeStats::default();
+        self.capacity.clear();
         fn newer(a: Option<f64>, b: Option<f64>) -> bool {
             match (a, b) {
                 (Some(x), Some(y)) => x > y,
@@ -404,6 +419,20 @@ mod tests {
         );
         assert_eq!(a.tasks["fedora:1"].completion_ts, Some(1800.0));
         assert_eq!(a.tasks["fedora:2"].completion_ts, Some(1500.0));
+    }
+
+    #[test]
+    fn a_merge_drops_capacity_rather_than_averaging_it() {
+        // Capacity is a mean over one window. Two windows cannot be combined
+        // without their lengths, so the merged result reports none and the
+        // caller refills — an absent denominator is honest, an unweighted
+        // average is a plausible wrong number.
+        let mut a = Dataset::new();
+        a.capacity.insert("s390x".to_string(), 96.0);
+        let mut b = Dataset::new();
+        b.capacity.insert("s390x".to_string(), 58.0);
+        a.merge(b);
+        assert!(a.capacity.is_empty(), "{:?}", a.capacity);
     }
 
     #[test]
