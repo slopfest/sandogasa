@@ -433,9 +433,17 @@ which is why the health types are `Deserialize` as well as `Serialize`.
 draft warned at 1.25x. Run over March to July 2026, with no regression
 anybody knows of, the six architectures' medians moved between 0.63x and
 1.07x — monthly mix is worth about ±40%, so 1.25x reports the calendar. The
-threshold is 1.5x, and the comparison that would justify tightening it is one
-mass rebuild against the next, since a rebuild builds nearly everything and
-its mix is therefore roughly fixed. `events` already finds those windows.
+threshold is 1.5x for an unrestricted period.
+
+The comparison without that problem is one mass rebuild against the next,
+since a rebuild builds nearly everything and its mix is therefore roughly
+fixed. `report --class mass-rebuild` is how to ask, `events` already finds
+the windows, and the noise has since been measured: s390x's control
+population steps 1.30x, 1.17x, 0.99x across F42 to F45, so a fixed-mix
+comparison is stable to about ±15% and a rebuild-to-rebuild trend could
+warn at 1.25x. Trending those windows automatically is not built yet; it
+needs the trend to take its periods from `events` rather than from the
+monthly tree.
 
 ## A fleet of architectures has a property none of them has
 

@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH koji-lag 1 2026-08-20 "sandogasa 0.20.0" "Sandogasa Manual"
+.TH koji-lag 1 2026-08-21 "sandogasa 0.20.0" "Sandogasa Manual"
 .SH NAME
 koji\-lag \- Quantify Koji build queue lag and per\-arch build\-time drag
 .SH SYNOPSIS
@@ -113,7 +113,7 @@ Name each page as it is timed
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag report
-\fBkoji\-lag report\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-owner\fR] [\fB\-\-package\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBkoji\-lag report\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-owner\fR] [\fB\-\-package\fR] [\fB\-\-class\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Per\-arch queue\-wait / build\-time / bottleneck report
 .TP
@@ -139,6 +139,11 @@ The account exactly as Koji records it, which for a service is a long name: `kos
 .TP
 \fB\-\-package\fR \fI<NAME,...>\fR
 Restrict to these source packages (CSV or repeated)
+.TP
+\fB\-\-class\fR \fI<CLASS,...>\fR
+Restrict to these classes of build (CSV or repeated).
+
+One of mass\-rebuild, eln\-sync, eln\-fix, koschei, ci, service, hand\-scratch, official. Restrict to mass\-rebuild before comparing one period with another: an unrestricted window is mostly koschei, whose mix moves with whatever it retried.
 .TP
 \fB\-\-scratch\fR
 Only scratch builds

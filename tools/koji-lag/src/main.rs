@@ -324,6 +324,15 @@ struct ReportArgs {
     #[arg(long, value_delimiter = ',', value_name = "NAME,...")]
     package: Vec<String>,
 
+    /// Restrict to these classes of build (CSV or repeated).
+    ///
+    /// One of mass-rebuild, eln-sync, eln-fix, koschei, ci, service,
+    /// hand-scratch, official. Restrict to mass-rebuild before comparing
+    /// one period with another: an unrestricted window is mostly koschei,
+    /// whose mix moves with whatever it retried.
+    #[arg(long = "class", value_delimiter = ',', value_name = "CLASS,...")]
+    classes: Vec<String>,
+
     /// Only scratch builds.
     #[arg(long, conflicts_with = "official")]
     scratch: bool,
@@ -663,6 +672,18 @@ fn cmd_report(args: &ReportArgs) -> Result<(), Box<dyn Error>> {
         arches: args.arch.clone(),
         owners: args.owner.clone(),
         packages: args.package.clone(),
+        classes: args
+            .classes
+            .iter()
+            .map(|s| {
+                koji_lag::class::Class::from_slug(s).ok_or_else(|| {
+                    format!(
+                        "unknown class {s:?}; one of {}",
+                        koji_lag::class::Class::all().map(|c| c.slug()).join(", ")
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
         include_failed: args.include_failed,
         min_samples: args.min_samples,
         ..Default::default()

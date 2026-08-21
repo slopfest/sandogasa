@@ -213,6 +213,39 @@ version of this document implied by only ever measuring inside rebuild
 windows. It is continuous, it affects both architectures, and on s390x it is
 a third of all builder time in a quiet month.
 
+### The two effects, measured on a fixed population
+
+Restricting to mass-rebuild work — `koji-lag report --class mass-rebuild` —
+holds the package mix roughly fixed, because a rebuild builds nearly
+everything. That turns the four rebuilds into a comparable series where an
+unrestricted window does not (the same measurement over the whole window
+reads 56s, 38s, 3m and 3m, which is the calendar rather than the platform).
+
+s390x, median build time and p90, `rust-` packages against everything else:
+
+| rebuild | control p50 | rest p50 | control p90 | rest p90 |
+|:--|--:|--:|--:|--:|
+| F42 | 1.44m | 1.16m | 4.45m | 3.72m |
+| F43 | 1.87m | 1.67m | 5.30m | 6.68m |
+| F44 | 2.19m | 1.96m | 6.89m | 11.79m |
+| F45 | 2.16m | 2.26m | 6.34m | 13.54m |
+
+F42 to F45: the control population slowed **1.50x** and everything else
+**1.95x**, so the platform accounts for half again on all work and the
+toolchain a further **1.30x** on top of that — the two effects separated
+without a spec checkout or a `BuildRequires` scan.
+
+The p90 says where the second effect lands. The control tail grew 1.42x and
+everything else's **3.64x**, so the compile cost is concentrated in the heavy
+packages rather than spread evenly: the median package pays a little and the
+expensive ones pay a lot.
+
+This also settles what a tight threshold could be. Successive control steps
+are 1.30x, 1.17x and 0.99x, so a fixed-mix comparison is stable to about
+±15% — against ±40% for an unrestricted month, which is why the automatic
+warning sits at 1.5x and a rebuild-to-rebuild trend could reasonably sit at
+1.25x.
+
 ## 3. Recommended capacity
 
 Offered load equals delivered load to within a percent in all four windows,

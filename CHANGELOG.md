@@ -44,6 +44,29 @@ rather than presentation: one seven-hour build on a quiet day would otherwise
 report a 90% tail and send somebody hunting. The tables themselves respect
 `--min-samples` like every other table in the report.
 
+### koji-lag: `report --class`
+
+Comparing two periods' build times gave answers that moved with the calendar,
+because an unrestricted window is mostly koschei and its mix moves with
+whatever it happened to retry: across the four mass rebuilds the same
+measurement reads 56s, 38s, 3m and 3m. There was no way to ask the question
+of a fixed population without writing `b.target LIKE '%-rebuild'` in SQL by
+hand, which `ReportOpts` had been promising was "`class`'s job" for as long
+as the classes have existed.
+
+`--class mass-rebuild` is that filter — any of `mass-rebuild`, `eln-sync`,
+`eln-fix`, `koschei`, `ci`, `service`, `hand-scratch`, `official`, as CSV or
+repeated, rejected with the list of valid names when misspelt. A mass rebuild
+builds nearly everything, so restricting to it holds the mix roughly fixed.
+
+On s390x that turns four incomparable numbers into a series: the Rust control
+population's median goes 1.44m, 1.87m, 2.19m, 2.16m across F42 to F45 while
+everything else goes 1.16m, 1.67m, 1.96m, 2.26m. Which is the two-effect
+split measured cleanly rather than argued: the platform slowed everything by
+1.50x, and non-Rust packages took a further 1.30x on top. At the p90 the
+second effect is much larger — the control population's tail grew 1.42x and
+everything else's 3.64x, so the compiler cost lands on the heavy packages.
+
 ### koji-lag: which architecture everybody else is waiting for
 
 A per-architecture report cannot show the thing that matters most about a

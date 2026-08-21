@@ -71,6 +71,11 @@ impl Class {
     }
 
     /// Human-readable name for report headings.
+    /// The inverse of [`Class::slug`], for a command line.
+    pub fn from_slug(slug: &str) -> Option<Class> {
+        Class::all().into_iter().find(|c| c.slug() == slug)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Class::MassRebuild => "mass rebuild",
@@ -188,6 +193,15 @@ fn service(owner: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_class_survives_a_round_trip_through_its_slug() {
+        for c in Class::all() {
+            assert_eq!(Class::from_slug(c.slug()), Some(c), "{}", c.slug());
+        }
+        assert_eq!(Class::from_slug("mass rebuild"), None);
+        assert_eq!(Class::from_slug(""), None);
+    }
+
     use super::*;
 
     #[test]

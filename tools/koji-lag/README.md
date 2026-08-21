@@ -270,6 +270,15 @@ Datasets swept before host arches were recorded still report: their
 `noarch` rows read `noarch (host unknown)` rather than guessing an arch or
 dropping the tasks.
 
+`--class` restricts to classes of build — `mass-rebuild`, `eln-sync`,
+`eln-fix`, `koschei`, `ci`, `service`, `hand-scratch`, `official`, as CSV or
+repeated. Reach for it before comparing one period with another: an
+unrestricted window is mostly koschei, whose mix moves with whatever it
+happened to retry, so the same window's median build time reads 56s, 38s, 3m
+and 3m across the four rebuilds and means nothing. A mass rebuild builds
+nearly everything, so `--class mass-rebuild` holds the mix roughly fixed and
+a drift is a drift.
+
 Two tables in the report cover the fleet rather than one architecture at a
 time:
 

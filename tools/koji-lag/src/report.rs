@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use crate::class::{self, Class};
 use crate::dataset::{BUILD_ARCH, Dataset, FetchWindow, TaskRecord};
 use crate::stats::{
     CriticalPath, DistSummary, critical_path, in_build_time_population, in_queue_wait_population,
@@ -40,6 +41,15 @@ pub struct ReportOpts {
     pub owners: Vec<String>,
     /// Restrict to these source packages (empty = all).
     pub packages: Vec<String>,
+    /// Restrict to these classes of build (empty = all).
+    ///
+    /// The filter that makes populations comparable across periods. An
+    /// unrestricted window is mostly koschei, whose mix moves with whatever
+    /// it happened to retry, so the same window's median build time reads
+    /// 56s, 38s, 3m and 3m across the four rebuilds and means nothing. A
+    /// mass rebuild builds nearly everything, so restricting to it holds the
+    /// mix roughly fixed and a drift is a drift.
+    pub classes: Vec<Class>,
     /// Include FAILED tasks in build-time stats.
     pub include_failed: bool,
     /// `Some(true)` = scratch only, `Some(false)` = official only.
@@ -238,10 +248,20 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
         owner_ok && package_ok
     };
 
+    let class_ok = |task: &TaskRecord| -> bool {
+        if opts.classes.is_empty() {
+            return true;
+        }
+        task.parent
+            .and_then(|p| dataset.builds.get(&format!("{}:{p}", task.instance)))
+            .map(class::of_build)
+            .is_some_and(|c| opts.classes.contains(&c))
+    };
+
     let mut selected: Vec<&TaskRecord> = Vec::new();
     let mut unattributed = 0usize;
     for task in dataset.tasks.values() {
-        if !in_window(task) || !arch_ok(task) || !attributed_ok(task) {
+        if !in_window(task) || !arch_ok(task) || !attributed_ok(task) || !class_ok(task) {
             continue;
         }
         let class = scratchness(task);
@@ -1434,6 +1454,52 @@ mod tests {
             },
         );
         assert!(out.arches.iter().all(|r| r.arch == "s390x"));
+    }
+
+    #[test]
+    fn the_class_filter_selects_by_what_submitted_the_build() {
+        let mut ds = dataset();
+        // Build 3 is a mass rebuild; the fixture's others are official.
+        let mut b = build(3, false);
+        b.target = Some("f45-rebuild".to_string());
+        b.owner = Some("releng".to_string());
+        ds.builds.insert("fedora:3".into(), b);
+        for t in [
+            task(41, 3, "s390x", 10.0, 500.0),
+            task(42, 3, "x86_64", 10.0, 120.0),
+        ] {
+            ds.tasks.insert(t.key(), t);
+        }
+
+        let rebuild_only = run(
+            &ds,
+            &ReportOpts {
+                classes: vec![Class::MassRebuild],
+                ..Default::default()
+            },
+        );
+        assert_eq!(rebuild_only.bottlenecked_builds, 1);
+
+        let official_only = run(
+            &ds,
+            &ReportOpts {
+                classes: vec![Class::Official],
+                ..Default::default()
+            },
+        );
+        assert_eq!(official_only.bottlenecked_builds, 1);
+
+        // Both together is not the same as no filter: the unattributed
+        // task has no build and so has no class either.
+        let both = run(
+            &ds,
+            &ReportOpts {
+                classes: vec![Class::MassRebuild, Class::Official],
+                ..Default::default()
+            },
+        );
+        assert_eq!(both.unattributed_tasks, 0);
+        assert_eq!(run(&ds, &ReportOpts::default()).unattributed_tasks, 1);
     }
 
     #[test]
