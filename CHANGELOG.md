@@ -44,6 +44,45 @@ rather than presentation: one seven-hour build on a quiet day would otherwise
 report a 90% tail and send somebody hunting. The tables themselves respect
 `--min-samples` like every other table in the report.
 
+### koji-lag: `events` compares one mass rebuild with the next
+
+The cross-period trend could only compare calendar months, where the answer
+moves with what people happened to build: monthly mix is worth about 40%, so
+the threshold had to sit at 1.5x and the interesting changes hid under it. The
+comparison without that problem is one mass rebuild against the next, since a
+rebuild builds nearly everything and its mix is therefore roughly fixed — and
+`events` already knows when the rebuilds were, so nothing needed deriving
+twice.
+
+`koji-lag events` now writes `trend.txt` and `trend.json` beside its event
+tree, measuring each rebuild over mass-rebuild work only and warning at 1.25x,
+which is where a fixed-mix comparison's own noise puts it. Two reports per
+rebuild rather than one: the event's report describes its window as it
+happened, including everything else that ran in it, while the trend needs the
+fixed population.
+
+Both trend files carry a legend defining `control`, `rest`, `ratio`,
+`divergence` and `utilisation`, and saying which way to read each — the
+words were doing real work with nothing in the file explaining them.
+
+Run over F42 to F45 it states the two-effect split without any of the manual
+work that first found it, and states it better, because the other four
+architectures turn out to be the control the argument needed:
+
+| arch | rust control | everything else | divergence | utilisation |
+|:--|--:|--:|--:|--:|
+| aarch64 | 0.91x | 1.09x | 1.19x | 0.30 → 0.40 |
+| i386 | 0.65x | 0.70x | 1.08x | 0.14 → 0.15 |
+| ppc64le | 0.72x | 0.92x | 1.28x | 0.30 → 0.73 |
+| x86_64 | 0.69x | 0.80x | 1.16x | 0.19 → 0.26 |
+| s390x | 1.50x | 1.95x | 1.30x | 0.38 → 0.72 |
+
+Every architecture except s390x got absolutely *faster* over those four
+rebuilds, and every one of them shows a positive divergence. So the toolchain
+cost is Fedora-wide at 1.08x to 1.30x, while the platform regression is
+s390x's alone — 1.50x against everybody else's improvement. Utilisation more
+than doubled on both of the architectures that queue.
+
 ### koji-lag: a narrowed report stops quoting the whole fleet at you
 
 Two things a filtered report got wrong, both of which made it state something

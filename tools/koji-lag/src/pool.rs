@@ -224,7 +224,7 @@ pub fn run(
     // run skipped as already present are exactly the ones a trend most
     // wants, and they are on disk.
     let series = crate::trend::from_reports_root(reports_root)?;
-    pooled.trend = crate::trend::assess(&series);
+    pooled.trend = crate::trend::assess(&series, crate::trend::DRIFT_WARN);
     if !pooled.trend.arches.is_empty() {
         let dir = reports_root.to_path_buf();
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;

@@ -52,6 +52,18 @@ use crate::periods::Grain;
 /// below this.
 pub const DRIFT_WARN: f64 = 1.5;
 
+/// Drift threshold for a comparison of like windows.
+///
+/// A mass rebuild builds nearly everything, so its mix is roughly fixed and
+/// the noise a calendar month carries is largely gone: s390x's control
+/// population steps 1.30x, 1.17x and 0.99x across F42 to F45, so a
+/// rebuild-to-rebuild comparison is stable to about 15% against the 40% an
+/// unrestricted month moves by. Which is why the comparison worth
+/// automating is this one, and why [`crate::events`] rather than the monthly
+/// tree supplies its periods -- it already knows when the rebuilds were, and
+/// deriving that a second time would be deriving it differently.
+pub const REBUILD_DRIFT_WARN: f64 = 1.25;
+
 /// Utilisation above which queueing stops being linear in load.
 pub const UTIL_WARN: f64 = 0.80;
 
@@ -85,6 +97,10 @@ pub struct Drift {
 pub struct Trend {
     pub arches: Vec<ArchTrend>,
     pub warnings: Vec<String>,
+    /// The threshold these warnings were raised against, so a reader of the
+    /// file knows which comparison it is and does not have to guess from
+    /// the labels.
+    pub drift_warn: f64,
 }
 
 /// The monthly series a reports tree already holds, oldest first.
@@ -145,6 +161,38 @@ fn read_dir(dir: &Path) -> Result<Vec<std::path::PathBuf>, String> {
     }
 }
 
+/// Label one event's window for a trend row.
+///
+/// The release when a schedule named one, since "F42 -> F45" is what the
+/// comparison is actually about; otherwise the date the window opened.
+pub fn label_of(event: &crate::events::Event) -> String {
+    match event.release {
+        Some(r) => format!("F{r}"),
+        None => crate::events::day_name(event.from),
+    }
+}
+
+/// Write a trend beside an events tree.
+pub fn write(root: &Path, trend: &Trend) -> Result<Vec<std::path::PathBuf>, String> {
+    if trend.arches.is_empty() {
+        return Ok(Vec::new());
+    }
+    std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let mut written = Vec::new();
+    for (name, body) in [
+        ("trend.txt", render(trend)),
+        (
+            "trend.json",
+            serde_json::to_string_pretty(trend).map_err(|e| e.to_string())? + "\n",
+        ),
+    ] {
+        let path = root.join(name);
+        std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
 /// Compare the first and last period in a series.
 ///
 /// The series is `(label, health)` in the order the periods run. Fewer than
@@ -154,8 +202,11 @@ fn read_dir(dir: &Path) -> Result<Vec<std::path::PathBuf>, String> {
 /// First-against-last, not a fitted slope, because the question is "does
 /// this cost more than it did" and the answer should be arithmetic a reader
 /// can check against two reports they already have.
-pub fn assess(series: &[(String, Health)]) -> Trend {
-    let mut trend = Trend::default();
+pub fn assess(series: &[(String, Health)], drift_warn: f64) -> Trend {
+    let mut trend = Trend {
+        drift_warn,
+        ..Default::default()
+    };
     let (Some((from_label, first)), Some((to_label, last))) = (series.first(), series.last())
     else {
         return trend;
@@ -198,18 +249,18 @@ pub fn assess(series: &[(String, Health)]) -> Trend {
             utilisation_from: b.utilisation,
             utilisation_to: a.utilisation,
         };
-        trend.warnings.extend(warn(&entry));
+        trend.warnings.extend(warn(&entry, drift_warn));
         trend.arches.push(entry);
     }
     trend
 }
 
 /// What crossed a threshold, phrased so it can be pasted into a ticket.
-fn warn(t: &ArchTrend) -> Vec<String> {
+fn warn(t: &ArchTrend, drift_warn: f64) -> Vec<String> {
     let mut out = Vec::new();
     let mins = |s: Option<f64>| s.map_or("?".to_string(), |x| format!("{:.1}m", x / 60.0));
     for (name, d) in &t.drift {
-        if d.ratio.is_some_and(|r| r >= DRIFT_WARN) {
+        if d.ratio.is_some_and(|r| r >= drift_warn) {
             out.push(format!(
                 "{}: {} build time {:.2}x since {} ({} -> {}); \
                  {} and {} builds compared",
@@ -227,7 +278,7 @@ fn warn(t: &ArchTrend) -> Vec<String> {
     // Only worth saying once both populations are in hand, and only in the
     // direction that has a known cause.
     if let Some(div) = t.divergence
-        && div >= DRIFT_WARN
+        && div >= drift_warn
     {
         out.push(format!(
             "{}: non-control build time rose {div:.2}x faster than the \
@@ -292,10 +343,30 @@ pub fn render(t: &Trend) -> String {
         }
     }
     s.push_str(&format!(
-        "\n  A ratio is one population against its own earlier self, never \
-         one\n  population against the other. Below about {DRIFT_WARN:.1}x \
-         it is not distinguishable\n  from what people happened to build \
-         that period.\n"
+        "\n  Legend\n  \
+         - `control` -- packages named `{}*`, whose build cost is dominated \
+         by rustc\n    rather than by the C and C++ compilers. They are the \
+         population held\n    still, so that a change in what they cost is a \
+         change in the machines\n    and not in a compiler flag.\n  \
+         - `rest` -- every other package in the same window.\n  \
+         - `ratio` -- median build time now over median build time then, for \
+         one\n    population against *its own* earlier self. Never one \
+         population against\n    the other: the gap between them is package \
+         size, since Rust crates are\n    small, and reads as a compiler \
+         penalty that is not there.\n  \
+         - `divergence` -- the `rest` ratio over the `control` ratio, which \
+         separates\n    two causes a single number conflates. Both ratios \
+         high with divergence\n    near 1.0 is the platform getting slower; \
+         divergence above 1.0 is the\n    toolchain getting more expensive, \
+         whatever the ratios themselves did.\n  \
+         - `utilisation` -- offered task weight over enabled builder weight, \
+         at each\n    end of the range. Queueing is nonlinear in it.\n\n  \
+         Below about {:.2}x a ratio is not distinguishable from what people \
+         happened\n  to build in that period, which is why the periods \
+         compared matter as much as\n  the numbers: two mass rebuilds build \
+         nearly the same set of packages, two\n  calendar months need not.\n",
+        crate::health::CONTROL_PREFIX,
+        t.drift_warn
     ));
     if !t.warnings.is_empty() {
         s.push_str("\n  Warnings\n");
@@ -339,6 +410,10 @@ mod tests {
         }
     }
 
+    fn assess_default(series: &[(String, Health)]) -> Trend {
+        assess(series, DRIFT_WARN)
+    }
+
     fn series(a: ArchHealth, b: ArchHealth) -> Vec<(String, Health)> {
         vec![
             (
@@ -359,6 +434,44 @@ mod tests {
     }
 
     #[test]
+    fn a_like_for_like_comparison_warns_where_a_calendar_one_would_not() {
+        // 1.30x: the step s390x's control population actually took between
+        // two rebuilds. Over unrestricted months that is inside the noise
+        // and must stay quiet; over two rebuilds it is the finding.
+        let s = series(
+            arch("s390x", 0.5, 100.0, 100.0),
+            arch("s390x", 0.5, 130.0, 130.0),
+        );
+        assert!(assess(&s, DRIFT_WARN).warnings.is_empty());
+        let tight = assess(&s, REBUILD_DRIFT_WARN);
+        assert_eq!(tight.warnings.len(), 2, "{:?}", tight.warnings);
+        // The file records which comparison it was, so a reader does not
+        // have to infer it from the labels.
+        assert_eq!(tight.drift_warn, REBUILD_DRIFT_WARN);
+        assert!(render(&tight).contains("1.25x"));
+    }
+
+    #[test]
+    fn an_events_period_is_named_by_its_release_when_one_is_known() {
+        let mut e = crate::events::Event {
+            kind: crate::events::Kind::MassRebuild,
+            arch: None,
+            from: 1_736_985_600.0,
+            to: 1_737_331_200.0,
+            days: 4,
+            release: Some(42),
+            announced: None,
+            facts: Vec::new(),
+            causes: Vec::new(),
+        };
+        assert_eq!(label_of(&e), "F42");
+        // No schedule supplied, so fall back to the day it opened rather
+        // than leaving the row unlabelled.
+        e.release = None;
+        assert_eq!(label_of(&e), "2025-01-16");
+    }
+
+    #[test]
     fn one_period_has_nothing_to_compare() {
         let s = vec![(
             "2025-01".to_string(),
@@ -367,12 +480,12 @@ mod tests {
                 ..Default::default()
             },
         )];
-        assert!(assess(&s).arches.is_empty());
+        assert!(assess(&s, DRIFT_WARN).arches.is_empty());
     }
 
     #[test]
     fn both_populations_slowing_equally_reads_as_the_platform() {
-        let t = assess(&series(
+        let t = assess_default(&series(
             arch("s390x", 0.5, 100.0, 200.0),
             arch("s390x", 0.5, 150.0, 300.0),
         ));
@@ -391,7 +504,7 @@ mod tests {
 
     #[test]
     fn only_the_non_control_slowing_reads_as_the_toolchain() {
-        let t = assess(&series(
+        let t = assess_default(&series(
             arch("s390x", 0.5, 100.0, 200.0),
             arch("s390x", 0.5, 100.0, 300.0),
         ));
@@ -407,7 +520,7 @@ mod tests {
     fn a_mix_shift_within_a_window_is_not_a_drift() {
         // The trap this module exists for: the two populations are far
         // apart in both periods and neither has changed. Nothing warns.
-        let t = assess(&series(
+        let t = assess_default(&series(
             arch("s390x", 0.5, 228.0, 534.0),
             arch("s390x", 0.5, 228.0, 534.0),
         ));
@@ -417,12 +530,12 @@ mod tests {
 
     #[test]
     fn utilisation_warns_only_when_rising_into_the_nonlinear_range() {
-        let falling = assess(&series(
+        let falling = assess_default(&series(
             arch("s390x", 0.95, 100.0, 200.0),
             arch("s390x", 0.85, 100.0, 200.0),
         ));
         assert!(falling.warnings.is_empty(), "{:?}", falling.warnings);
-        let rising = assess(&series(
+        let rising = assess_default(&series(
             arch("s390x", 0.60, 100.0, 200.0),
             arch("s390x", 0.85, 100.0, 200.0),
         ));
@@ -432,7 +545,7 @@ mod tests {
 
     #[test]
     fn an_architecture_absent_from_the_first_period_is_skipped() {
-        let t = assess(&series(
+        let t = assess_default(&series(
             arch("s390x", 0.5, 100.0, 200.0),
             arch("ppc64le", 0.5, 100.0, 300.0),
         ));

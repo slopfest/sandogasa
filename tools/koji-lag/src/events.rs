@@ -277,7 +277,7 @@ fn midnight(date: NaiveDate) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn day_name(ts: f64) -> String {
+pub fn day_name(ts: f64) -> String {
     chrono::DateTime::from_timestamp(ts as i64, 0)
         .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| format!("unix {ts:.0}"))

@@ -437,13 +437,24 @@ threshold is 1.5x for an unrestricted period.
 
 The comparison without that problem is one mass rebuild against the next,
 since a rebuild builds nearly everything and its mix is therefore roughly
-fixed. `report --class mass-rebuild` is how to ask, `events` already finds
-the windows, and the noise has since been measured: s390x's control
-population steps 1.30x, 1.17x, 0.99x across F42 to F45, so a fixed-mix
-comparison is stable to about ±15% and a rebuild-to-rebuild trend could
-warn at 1.25x. Trending those windows automatically is not built yet; it
-needs the trend to take its periods from `events` rather than from the
-monthly tree.
+fixed. s390x's control population steps 1.30x, 1.17x, 0.99x across F42 to
+F45, so a fixed-mix comparison is stable to about ±15% and warns at 1.25x
+(`REBUILD_DRIFT_WARN`) against 1.5x for a month.
+
+**`events` supplies those periods, not the trend itself.** `events` already
+locates the rebuild windows to write its tree; deriving them a second time
+inside `trend` would mean deriving them differently the first time one of
+them changed. So `trend::assess` takes a labelled series and a threshold and
+knows nothing about where either came from, `pool` feeds it months at 1.5x,
+and `events` feeds it rebuilds at 1.25x.
+
+Each rebuild is measured twice on purpose. The event's own `report.json`
+describes its window as it happened, everything else that ran in it included,
+because that is what the window *was*; the trend takes a second report
+restricted to `Class::MassRebuild`, because a comparison needs the fixed
+population. Only the endpoints are compared, but every intermediate window's
+report is on disk under its event, so checking the shape of the series
+between them costs no recomputation.
 
 ## A filter narrows the denominators too, and silences what it answers wrongly
 

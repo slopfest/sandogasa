@@ -240,6 +240,28 @@ everything else's **3.64x**, so the compile cost is concentrated in the heavy
 packages rather than spread evenly: the median package pays a little and the
 expensive ones pay a lot.
 
+`koji-lag events` now computes this for every rebuild it finds, warning at
+1.25x, and running it over all four adds the part the manual comparison
+missed — the other four architectures are the control this argument needed:
+
+| arch | control | rest | divergence | utilisation |
+|:--|--:|--:|--:|--:|
+| aarch64 | 0.91x | 1.09x | 1.19x | 0.30 → 0.40 |
+| i386 | 0.65x | 0.70x | 1.08x | 0.14 → 0.15 |
+| ppc64le | 0.72x | 0.92x | 1.28x | 0.30 → 0.73 |
+| x86_64 | 0.69x | 0.80x | 1.16x | 0.19 → 0.26 |
+| s390x | **1.50x** | **1.95x** | 1.30x | 0.38 → 0.72 |
+
+Every architecture except s390x got absolutely **faster** across those four
+rebuilds, and every one of them shows a positive divergence. So the two
+effects separate cleanly along different axes: the toolchain cost is
+**Fedora-wide**, 1.08x to 1.30x everywhere, while the platform regression is
+**s390x's alone** — 1.50x against everybody else's improvement. Neither
+conclusion rests on the other, and neither needs a spec checkout.
+
+Utilisation more than doubled on both architectures that queue, ppc64le 0.30
+to 0.73 and s390x 0.38 to 0.72, while the three that do not stayed low.
+
 This also settles what a tight threshold could be. Successive control steps
 are 1.30x, 1.17x and 0.99x, so a fixed-mix comparison is stable to about
 ±15% — against ±40% for an unrestricted month, which is why the automatic

@@ -851,11 +851,14 @@ fn render_health(o: &mut String, health: &crate::health::Health, min_samples: us
         }
         let _ = writeln!(
             o,
-            "\n`control` is the {} packages, whose cost is dominated by \
-             rustc rather\nthan by the C and C++ compilers. Compare each \
-             population with its own\nearlier self across periods, never \
-             the two with each other within one:\nthe gap between them is \
-             package size, not cost.",
+            "\n`control` is the packages named `{}*`, whose build cost is \
+             dominated by\nrustc rather than by the C and C++ compilers; \
+             `rest` is every other package\nin this window. Compare each \
+             population with its own earlier self across\nperiods, never \
+             the two with each other within one: the gap between them\nis \
+             package size, not cost, since Rust crates are small. The \
+             comparison\nitself is in the trend files `events` and \
+             `reports` write.",
             crate::health::CONTROL_PREFIX
         );
     }

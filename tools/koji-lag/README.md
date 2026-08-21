@@ -361,6 +361,14 @@ The series is read from the monthly `report.json` files already in the tree,
 so a run that writes no new reports still refreshes the trend, and there is
 nothing to pass beyond `--reports-root`.
 
+`events` writes the same two files beside its own tree, over the mass rebuild
+windows it has just identified rather than over months. That comparison is
+the one worth trusting — a rebuild builds nearly everything, so its mix is
+roughly fixed — and it warns at 1.25x rather than 1.5x. Each rebuild is
+measured over mass-rebuild work only, which is why an event carries two
+reports: `report.txt` describes its window as it happened, including
+everything else that ran in it, and the trend needs the fixed population.
+
 ### Sync
 
 Bring a store up to date with the hub:

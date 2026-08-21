@@ -523,6 +523,12 @@ fn cmd_events(args: &EventsArgs) -> Result<(), Box<dyn Error>> {
     let events = koji_lag::events::assemble(&store, &instance_key, from, to, &schedule, &notes)?;
     let formats = Format::for_files(&args.format);
     let mut files = 0;
+    // The rebuild windows, each measured over mass-rebuild work only, for
+    // the cross-window comparison below. Two reports per rebuild rather
+    // than one: the event's own report describes the window as it happened,
+    // including everything else that ran in it, while a trend needs a fixed
+    // population or it measures the calendar.
+    let mut rebuilds: Vec<(String, koji_lag::health::Health)> = Vec::new();
     for event in &events {
         files += koji_lag::events::write(&args.out, event)?.len();
         // The window's own numbers, beside the summary of it: per-class
@@ -547,9 +553,28 @@ fn cmd_events(args: &EventsArgs) -> Result<(), Box<dyn Error>> {
             &formats,
         )?
         .len();
+        if event.kind == koji_lag::events::Kind::MassRebuild {
+            let restricted = report::run(
+                &dataset,
+                &report::ReportOpts {
+                    period: Some((event.from, event.to)),
+                    classes: vec![koji_lag::class::Class::MassRebuild],
+                    ..Default::default()
+                },
+            );
+            rebuilds.push((koji_lag::trend::label_of(event), restricted.health));
+        }
         if args.verbose {
             eprintln!("[koji-lag] events: {}", event.slug());
         }
+    }
+
+    // One rebuild against the next, which is the comparison whose mix is
+    // roughly fixed, over the windows this command has just identified.
+    let trend = koji_lag::trend::assess(&rebuilds, koji_lag::trend::REBUILD_DRIFT_WARN);
+    files += koji_lag::trend::write(&args.out, &trend)?.len();
+    for w in &trend.warnings {
+        eprintln!("[koji-lag] trend: {w}");
     }
 
     // An annotation matching nothing is a gap in the record or a mistake
