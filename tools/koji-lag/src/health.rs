@@ -23,14 +23,14 @@
 //!   produced nothing took 11.8% of one rebuild's s390x capacity. They are
 //!   invisible in a duration median and obvious as a share of builder-hours.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use sandogasa_kojihub::hub::{TASK_CANCELED, TASK_FAILED};
-use serde::Serialize;
+use sandogasa_kojihub::hub::{TASK_CANCELED, TASK_CLOSED, TASK_FAILED};
+use serde::{Deserialize, Serialize};
 
 use crate::class::{self, Class};
 use crate::dataset::{BuildRecord, Dataset, TaskRecord};
-use crate::stats::{DistSummary, summarize};
+use crate::stats::{DistSummary, median, percentile, summarize};
 
 /// Builder time in a single task beyond which it is treated as tail rather
 /// than as a build.
@@ -55,7 +55,7 @@ const NEXT: usize = 50;
 const MIN_FOR_WARNING: usize = 20;
 
 /// Queue wait for one class of build on one architecture.
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ClassStats {
     pub arch: String,
     /// [`Class::slug`].
@@ -69,7 +69,7 @@ pub struct ClassStats {
 ///
 /// Bands are by volume, not by identity: nobody is named, which is what
 /// makes this publishable. "How badly am I affected" is `report --owner`.
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CohortStats {
     pub arch: String,
     /// `top-10`, `next-40`, or `rest`.
@@ -81,9 +81,44 @@ pub struct CohortStats {
     pub share_of_tasks: f64,
 }
 
+/// Package-name prefix that picks out the control population.
+///
+/// Rust packages are built by a toolchain whose cost is dominated by
+/// rustc rather than by the C and C++ compilers, and the workspace has
+/// thousands of them on every architecture — enough to be a population
+/// rather than a sample, and uniform enough that a change in what they
+/// cost is a change in the *platform* rather than in a compiler flag.
+///
+/// A name prefix rather than a `BuildRequires` scan on purpose: it keeps
+/// this self-contained in the store, and a control population does not
+/// need to be exact to be a control.
+pub const CONTROL_PREFIX: &str = "rust-";
+
+/// How long one population of packages took to build, within one window.
+///
+/// Deliberately two plain numbers and **never a ratio between the two
+/// populations**, because within a single window that ratio is package mix
+/// and not cost. On s390x in July 2026 the control population averaged
+/// 3.8 minutes against 8.9 for everything else — a 2.3x gap that says only
+/// that Rust crates are small, since the two *medians* were within seconds
+/// of each other.
+///
+/// The comparison this exists to feed is across windows, where each
+/// population is compared with its own earlier self and the mix cancels.
+/// See [`crate::trend`].
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Population {
+    /// `control` for [`CONTROL_PREFIX`] packages, `rest` for the others.
+    pub name: String,
+    pub tasks: usize,
+    /// Median and p90 build time in seconds, `None` below a usable count.
+    pub p50: Option<f64>,
+    pub p90: Option<f64>,
+}
+
 /// How an architecture's builder time was spent, and how close to full it
 /// ran.
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ArchHealth {
     pub arch: String,
     /// Enabled builder weight during the window, from the hub's
@@ -113,10 +148,58 @@ pub struct ArchHealth {
     /// Share of builder time in tasks longer than [`TAIL_SECS`].
     pub tail_pct: f64,
     pub tail_tasks: usize,
+    /// Build time split by [`CONTROL_PREFIX`]. An ingredient for
+    /// [`crate::trend`]; not interpretable within one window on its own.
+    pub service: Vec<Population>,
 }
 
+/// Multi-arch builds are only finished when their slowest architecture is,
+/// and this is the count of times each was the slowest.
+///
+/// The metric a per-architecture view cannot show. Each architecture can
+/// look healthy on its own terms — its own queue short, its own builders
+/// busy — while one of them sets the completion time of nearly every build,
+/// because a build is not output until every architecture it targets has
+/// produced its share. Fedora's F45 mass rebuild had s390x finishing last
+/// for 91.7% of builds, which spent a median 4.0 hours with every other
+/// architecture already finished, so the rest of the fleet was done while
+/// s390x still had some two hundred builds to grind through.
+///
+/// Beware the obvious wrong version of this, which is to read the last
+/// *timestamp* per architecture: in that same rebuild aarch64's final task
+/// landed eight hours after s390x's, on the strength of two builds, one of
+/// which was a six-minute build submitted a day after the rest.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Straggler {
+    pub arch: String,
+    /// Builds this architecture finished last.
+    pub builds: usize,
+    /// Share of the multi-arch builds considered.
+    pub pct: f64,
+    /// Gap between the first and last architecture finishing, over the
+    /// builds this one came last in — what the others spent already
+    /// finished.
+    ///
+    /// Distributed, not averaged. The spread has a long tail and a mean
+    /// sits well above the typical build: over F45's rebuild the builds
+    /// s390x came last in had a median spread of 4.0 hours, a p90 of 8.6
+    /// and a maximum of 63.5, so the mean of 5.1 describes neither the
+    /// ordinary build nor the bad one.
+    pub spread: Option<DistSummary>,
+}
+
+/// Architectures a build must reach before it counts as multi-arch here.
+///
+/// Three rather than two so a package built for one primary architecture
+/// plus one other does not read as the whole fleet waiting on it.
+pub const MULTIARCH_MIN: usize = 3;
+
+/// Share of builds one architecture may finish last before it is worth
+/// saying so. Above half, it is setting the pace for the whole fleet.
+pub const STRAGGLER_WARN_PCT: f64 = 50.0;
+
 /// A threshold that has been crossed, phrased for a reader.
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Warning {
     /// Short machine-readable key, e.g. `wasted-share`.
     pub metric: String,
@@ -126,9 +209,12 @@ pub struct Warning {
 }
 
 /// Everything in this module, for one report.
-#[derive(Debug, Clone, Default, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Health {
     pub arches: Vec<ArchHealth>,
+    /// Which architecture finished each multi-arch build last.
+    #[serde(default)]
+    pub stragglers: Vec<Straggler>,
     pub classes: Vec<ClassStats>,
     pub cohorts: Vec<CohortStats>,
     pub warnings: Vec<Warning>,
@@ -150,6 +236,10 @@ pub fn assess(dataset: &Dataset, selected: &[&TaskRecord], window: Option<(f64, 
     let mut per_class: BTreeMap<(&str, Class), Vec<f64>> = BTreeMap::new();
     // Human official work only, since a cohort of submitters means people.
     let mut per_person: BTreeMap<&str, BTreeMap<&str, Vec<f64>>> = BTreeMap::new();
+    // (arch, is-control) -> build times, for the cross-window comparison.
+    let mut per_pop: BTreeMap<(&str, bool), Vec<f64>> = BTreeMap::new();
+    // parent build -> (arch, completion) for each architecture it reached.
+    let mut per_build: BTreeMap<(&str, i64), Vec<(&str, f64)>> = BTreeMap::new();
 
     for task in selected {
         let build = build_of(task);
@@ -184,6 +274,25 @@ pub fn assess(dataset: &Dataset, selected: &[&TaskRecord], window: Option<(f64, 
             if secs > TAIL_SECS {
                 e.2 += secs;
                 e.3 += 1;
+            }
+            // Successful builds only: a build that failed or was killed
+            // stopped when it stopped, and averaging that with work that
+            // ran to completion measures the failure, not the toolchain.
+            if let Some(parent) = task.parent {
+                per_build
+                    .entry((&task.instance, parent))
+                    .or_default()
+                    .push((&task.arch, done));
+            }
+            if task.state == TASK_CLOSED
+                && let Some(pkg) = build
+                    .and_then(|b| b.package.as_deref())
+                    .or(task.package.as_deref())
+            {
+                per_pop
+                    .entry((&task.arch, pkg.starts_with(CONTROL_PREFIX)))
+                    .or_default()
+                    .push(secs);
             }
         }
         let Some(wait) = task.start_ts.map(|s| (s - task.create_ts).max(0.0)) else {
@@ -240,10 +349,60 @@ pub fn assess(dataset: &Dataset, selected: &[&TaskRecord], window: Option<(f64, 
                         0.0
                     },
                     tail_tasks: *tail_n,
+                    service: [(false, "rest"), (true, "control")]
+                        .into_iter()
+                        .filter_map(|(is_control, name)| {
+                            let mut xs = per_pop.get(&(*arch, is_control))?.clone();
+                            xs.sort_by(f64::total_cmp);
+                            Some(Population {
+                                name: name.to_string(),
+                                tasks: xs.len(),
+                                p50: median(&xs),
+                                p90: percentile(&xs, 0.9),
+                            })
+                        })
+                        .collect(),
                 }
             },
         )
         .collect();
+
+    // Who came last, and what the rest of the fleet spent waiting for it.
+    let mut last: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
+    let mut multiarch = 0usize;
+    for arches_done in per_build.values() {
+        let distinct: BTreeSet<&str> = arches_done.iter().map(|(a, _)| *a).collect();
+        if distinct.len() < MULTIARCH_MIN {
+            continue;
+        }
+        // Last per architecture first: an architecture that built several
+        // subpackages should be judged by when it actually finished.
+        let mut latest: BTreeMap<&str, f64> = BTreeMap::new();
+        for (arch, done) in arches_done {
+            let e = latest.entry(arch).or_insert(*done);
+            *e = e.max(*done);
+        }
+        let Some((arch, max)) = latest.iter().max_by(|a, b| a.1.total_cmp(b.1)) else {
+            continue;
+        };
+        let min = latest.values().copied().fold(f64::INFINITY, f64::min);
+        multiarch += 1;
+        last.entry(arch).or_default().push(max - min);
+    }
+    let mut stragglers: Vec<Straggler> = last
+        .into_iter()
+        .map(|(arch, mut spreads)| Straggler {
+            arch: arch.to_string(),
+            builds: spreads.len(),
+            pct: if multiarch > 0 {
+                100.0 * spreads.len() as f64 / multiarch as f64
+            } else {
+                0.0
+            },
+            spread: summarize(&mut spreads),
+        })
+        .collect();
+    stragglers.sort_by_key(|s| std::cmp::Reverse(s.builds));
 
     let classes: Vec<ClassStats> = per_class
         .into_iter()
@@ -289,9 +448,10 @@ pub fn assess(dataset: &Dataset, selected: &[&TaskRecord], window: Option<(f64, 
         }
     }
 
-    let warnings = warn(&arches, &cohorts);
+    let warnings = warn(&arches, &cohorts, &stragglers);
     Health {
         arches,
+        stragglers,
         classes,
         cohorts,
         warnings,
@@ -303,8 +463,32 @@ pub fn assess(dataset: &Dataset, selected: &[&TaskRecord], window: Option<(f64, 
 /// Every number here comes from a measured contrast rather than from taste,
 /// and the doc comment is the argument — a threshold nobody can justify gets
 /// tuned away the first time it fires.
-fn warn(arches: &[ArchHealth], cohorts: &[CohortStats]) -> Vec<Warning> {
+fn warn(arches: &[ArchHealth], cohorts: &[CohortStats], stragglers: &[Straggler]) -> Vec<Warning> {
     let mut out = Vec::new();
+    // Said once, about the architecture that sets the pace, rather than
+    // once per architecture: the interesting fact is that one of them is
+    // deciding when everybody's builds finish.
+    if let Some(s) = stragglers.first()
+        && s.pct >= STRAGGLER_WARN_PCT
+        && s.builds >= MIN_FOR_WARNING
+    {
+        out.push(Warning {
+            metric: "straggler".to_string(),
+            subject: s.arch.clone(),
+            text: format!(
+                "finished last for {:.1}% of {} multi-arch builds, which \
+                 spent a median {:.1}h and a p90 {:.1}h with every other \
+                 architecture already finished -- none of those builds is \
+                 output until {} lands, however idle the rest of the fleet \
+                 looks",
+                s.pct,
+                s.builds,
+                s.spread.as_ref().map_or(0.0, |d| d.median) / 3600.0,
+                s.spread.as_ref().map_or(0.0, |d| d.p90) / 3600.0,
+                s.arch,
+            ),
+        });
+    }
     for a in arches {
         if a.tasks < MIN_FOR_WARNING {
             continue;
@@ -467,6 +651,121 @@ mod tests {
             }
         }
         ds
+    }
+
+    /// A build whose architectures finish at different times, so the
+    /// straggler is unambiguous.
+    fn multiarch(id: i64, done: &[(&str, f64)]) -> (BuildRecord, Vec<TaskRecord>) {
+        let build = BuildRecord {
+            instance: "fedora".to_string(),
+            task_id: id,
+            package: Some("gzip".to_string()),
+            nvr: None,
+            target: Some("f45-build".to_string()),
+            owner: Some("someone".to_string()),
+            scratch: false,
+            state: 2,
+            create_ts: 0.0,
+            start_ts: Some(0.0),
+            completion_ts: Some(done.iter().map(|(_, d)| *d).fold(0.0, f64::max)),
+            priority: Some(20),
+            host_id: None,
+        };
+        let tasks = done
+            .iter()
+            .enumerate()
+            .map(|(i, (arch, d))| TaskRecord {
+                instance: "fedora".to_string(),
+                task_id: id * 1000 + i as i64,
+                parent: Some(id),
+                arch: (*arch).to_string(),
+                method: "buildArch".to_string(),
+                package: Some("gzip".to_string()),
+                state: 2,
+                create_ts: 0.0,
+                start_ts: Some(0.0),
+                completion_ts: Some(*d),
+                host_id: None,
+                channel_id: None,
+                weight: Some(1.5),
+            })
+            .collect();
+        (build, tasks)
+    }
+
+    #[test]
+    fn the_last_architecture_to_finish_is_the_straggler_and_the_others_wait() {
+        let mut ds = Dataset::new();
+        // Thirty builds, s390x last in every one by an hour.
+        for id in 1..=30 {
+            let (b, tasks) = multiarch(
+                id,
+                &[("x86_64", 600.0), ("aarch64", 900.0), ("s390x", 4200.0)],
+            );
+            ds.builds.insert(format!("fedora:{id}"), b);
+            for t in tasks {
+                ds.tasks.insert(format!("fedora:{}", t.task_id), t);
+            }
+        }
+        let health = assess_all(&ds);
+        assert_eq!(health.stragglers.len(), 1, "{:?}", health.stragglers);
+        let s = &health.stragglers[0];
+        assert_eq!((&*s.arch, s.builds, s.pct), ("s390x", 30, 100.0));
+        // 4200 - 600: what x86_64 and aarch64 spent already finished.
+        let d = s.spread.as_ref().expect("spread");
+        assert_eq!(
+            (d.count, d.median, d.p90, d.max),
+            (30, 3600.0, 3600.0, 3600.0)
+        );
+        assert!(
+            health
+                .warnings
+                .iter()
+                .any(|w| w.metric == "straggler" && w.subject == "s390x"),
+            "{:?}",
+            health.warnings
+        );
+    }
+
+    #[test]
+    fn a_two_architecture_build_is_not_the_fleet_waiting_on_one() {
+        let mut ds = Dataset::new();
+        for id in 1..=30 {
+            let (b, tasks) = multiarch(id, &[("x86_64", 600.0), ("s390x", 4200.0)]);
+            ds.builds.insert(format!("fedora:{id}"), b);
+            for t in tasks {
+                ds.tasks.insert(format!("fedora:{}", t.task_id), t);
+            }
+        }
+        assert!(assess_all(&ds).stragglers.is_empty());
+    }
+
+    #[test]
+    fn build_time_splits_on_the_control_prefix() {
+        let mut ds = Dataset::new();
+        for id in 1..=30 {
+            let control = id % 2 == 0;
+            let (mut b, mut tasks) =
+                multiarch(id, &[("s390x", if control { 60.0 } else { 600.0 })]);
+            let pkg = if control {
+                format!("{CONTROL_PREFIX}serde")
+            } else {
+                "gzip".to_string()
+            };
+            b.package = Some(pkg.clone());
+            for t in &mut tasks {
+                t.package = Some(pkg.clone());
+            }
+            ds.builds.insert(format!("fedora:{id}"), b);
+            for t in tasks {
+                ds.tasks.insert(format!("fedora:{}", t.task_id), t);
+            }
+        }
+        let health = assess_all(&ds);
+        let s390x = &health.arches[0].service;
+        let get = |name: &str| s390x.iter().find(|p| p.name == name).expect(name);
+        assert_eq!((get("control").tasks, get("control").p50), (15, Some(60.0)));
+        assert_eq!((get("rest").tasks, get("rest").p50), (15, Some(600.0)));
     }
 
     fn assess_all(ds: &Dataset) -> Health {

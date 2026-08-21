@@ -19,7 +19,7 @@
 //!   child disqualifies the build — its timing isn't lag.
 
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::dataset::TaskRecord;
 
@@ -40,7 +40,7 @@ pub fn median(sorted: &[f64]) -> Option<f64> {
 }
 
 /// Distribution summary of one population.
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DistSummary {
     pub count: usize,
     pub median: f64,

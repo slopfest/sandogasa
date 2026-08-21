@@ -44,6 +44,70 @@ rather than presentation: one seven-hour build on a quiet day would otherwise
 report a 90% tail and send somebody hunting. The tables themselves respect
 `--min-samples` like every other table in the report.
 
+### koji-lag: which architecture everybody else is waiting for
+
+A per-architecture report cannot show the thing that matters most about a
+fleet of them: every architecture can look healthy on its own terms — short
+queue, busy builders — while one of them decides when nearly every build
+finishes, because a build is not output until every architecture it targets
+has produced its share.
+
+Reports now name it. In F45's mass rebuild s390x finished last for 91.7% of
+builds, which spent a median 4.0 hours and a p90 of 8.6 with every other
+architecture already finished. Across all work in that week the frequency is
+a coin flip — s390x 45%, ppc64le 47% — and the cost is not close: when
+ppc64le comes last the others have been waiting 3 minutes, and when s390x
+does, 3.6 hours.
+
+Reported as a distribution rather than a mean, because the tail is long
+enough to make a mean describe nobody: the same s390x builds have a maximum
+spread of 72 hours, so their mean of 5.1 hours sits 30% above the ordinary
+build and nowhere near the bad one. Quoting the mean would also have
+flattened the gap against ppc64le from 70x to 12x.
+
+Read the last *timestamp* per architecture instead and you get the opposite
+answer, which is the trap this replaces. By that measure aarch64 ended F45's
+rebuild eight hours after s390x — on the strength of two builds, one of them
+a six-minute build submitted a day after everything else, while s390x still
+had 189 tasks finishing in that final day against two for each of the others.
+
+### koji-lag: metrics that only exist across periods, in `reports`
+
+Some of the most useful questions about a build system are not questions
+about a window. "Does a build cost more than it used to" cannot be answered
+by one report however good it is, and the plausible-looking single-window
+answer is wrong: on s390x in July 2026 Rust packages averaged 3.8 minutes
+against 8.9 for everything else, which reads as a 2.3x penalty and is only
+the observation that Rust crates are small — the two medians were within
+seconds of each other.
+
+So `report` now records the ingredient and `reports` does the comparing.
+Each report carries build time for two populations, the `rust-` packages and
+everything else, stated as plain numbers and never as a ratio between them.
+`reports` then writes `trend.txt` and `trend.json` at the root of the tree,
+comparing each population against its own earlier self — which cancels the
+mix — and dividing one drift by the other, which separates two causes a
+single number conflates: both populations slowing means the platform got
+slower, only the non-Rust one slowing means the toolchain got more expensive.
+Fedora between F42 and F45 was the second on every architecture and the first
+only on s390x, which is why the capacity ask and the compiler-flag
+conversation are separate conversations.
+
+The trend is read off the reports tree rather than recomputed, so it covers
+the periods this run skipped as already present — which are exactly the ones
+it wants. It also surfaces the load rise that prompted this: utilisation went
+up on every architecture between March and July 2026, ppc64le 0.43 to 0.61
+and s390x 0.33 to 0.51.
+
+Running it is what set its warning threshold. Over those five months, with no
+regression anybody knows of, the six architectures' medians moved between
+0.63x and 1.07x, so month-to-month package mix is worth about ±40% and
+anything under 1.5x is not distinguishable from what people happened to
+build. The comparison without that problem is one mass rebuild against the
+next, since a rebuild's mix is roughly fixed; `events` already identifies
+those windows, and a trend restricted to them could be tightened a long way
+below 1.5x.
+
 ### koji-lag: publish and fetch a store
 
 The notebook added alongside this needs a store, and collecting fourteen

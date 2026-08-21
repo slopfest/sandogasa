@@ -398,6 +398,75 @@ that rather than re-implementing detection; and `report --json` is the
 machine-readable surface a notebook should prefer over reaching into the
 store.
 
+## A metric measures a window, or a series of them — decide which, and say so
+
+`report` sees one window. That is the whole of what it can state, and a
+metric that needs two periods to mean anything must not be computed from one,
+however easy it looks. The failure is not that such a number is missing — it
+is that it is *available* and wrong.
+
+The worked example is build time by population. A report can honestly say
+that on s390x in July 2026 the `rust-` packages averaged 3.8 minutes against
+8.9 for everything else. Reading that as a 2.3x compiler penalty is wrong:
+the two medians were within seconds of each other, and the gap is entirely
+that Rust crates are small. Package mix, not cost.
+
+So the split is:
+
+- **`report`** states within-window facts, including the raw ingredients a
+  comparison will need later. It records each population's build time as two
+  plain numbers and never as a ratio between them.
+- **`trend`, driven by `reports`**, compares periods. Each population against
+  *its own earlier self*, which cancels the mix, and then one drift divided
+  by the other, which separates a platform regression (both populations slow
+  down) from a toolchain cost (only the non-control one does).
+
+Two rules that fell out of building it:
+
+**Read the series off the reports tree, not out of this run.** `reports`
+skips periods already written, so a trend computed from what this run
+produced covers whatever happened to be rebuilt. The periods it skipped are
+exactly the ones a comparison wants, and they are on disk in `report.json` —
+which is why the health types are `Deserialize` as well as `Serialize`.
+
+**Set a threshold from measured noise, not from a round number.** The first
+draft warned at 1.25x. Run over March to July 2026, with no regression
+anybody knows of, the six architectures' medians moved between 0.63x and
+1.07x — monthly mix is worth about ±40%, so 1.25x reports the calendar. The
+threshold is 1.5x, and the comparison that would justify tightening it is one
+mass rebuild against the next, since a rebuild builds nearly everything and
+its mix is therefore roughly fixed. `events` already finds those windows.
+
+## A fleet of architectures has a property none of them has
+
+Every architecture can be healthy on its own terms — short queue, busy
+builders, unremarkable durations — while one of them decides when nearly
+every build finishes, because a build is not output until every architecture
+it targets has produced its share. Nothing in a per-architecture table shows
+this, which is why `report` counts stragglers: for each multi-arch build,
+which architecture finished last, and the gap between the first finishing and
+the last as a median, p90 and maximum.
+
+**A median and a p90, never a mean.** The spread has a long tail — F45's
+s390x-last builds run to 72 hours — so a mean sits 30% above the ordinary
+build and nowhere near the bad one, and it flattens comparisons: on the mean
+the gap between s390x and ppc64le is 12x, on the median it is 70x, because
+ppc64le's own tail drags its mean from 3 minutes to 21. Reuse
+[`crate::stats::summarize`] like every other table rather than accumulating
+an average, which is also how the tail becomes visible at all.
+
+**Do not measure it as the last timestamp per architecture.** That reads
+backwards. In F45's rebuild aarch64's final task landed eight hours after
+s390x's, which looks like aarch64 setting the pace and is two builds — one a
+six-minute build submitted a day after the rest — while s390x had 189 tasks
+finishing in that last day against two for each of the others. Count builds,
+per build, and take each architecture's own last task within the build so an
+architecture that built several subpackages is judged by when it actually
+finished.
+
+Three architectures minimum before a build counts, so one primary plus one
+other does not read as the whole fleet waiting.
+
 ## Filters belong to reports, not to sweeps
 
 A sweep takes no `--owner` or `--package` filter. Everything is stored,

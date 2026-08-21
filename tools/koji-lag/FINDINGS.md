@@ -67,6 +67,33 @@ than on contributors.
 | F44 | 4.2h / 7.8h | ~1m | 0.2% |
 | F45 | 3.8h / 8.3h | ~1m | 5.4% |
 
+**And it holds up nearly every build, not just the rebuild's own.** A build
+is not output until every architecture it targets has finished, so the fast
+architectures are done and waiting rather than done. In F45's rebuild s390x
+finished last for **91.7%** of builds, against 7.5% for ppc64le and 0.8% for
+the whole rest of the fleet combined, and those builds spent a median **4.0
+hours** — p90 **8.6** — with every other architecture already finished.
+
+Across *all* work in that week, rather than the rebuild alone, how often is a
+coin flip and how much is not close: s390x comes last for 45% of builds and
+ppc64le for 47%, but when ppc64le is last the others have been waiting a
+median **3 minutes**, and when s390x is last, **3.6 hours** — a factor of 70.
+
+Reported as a distribution, not a mean, and the difference is not cosmetic.
+Those s390x builds run out to a 72-hour spread, so the mean of 5.1 hours sits
+30% above the typical build; quoting it would also have shrunk the gap
+against ppc64le from 70x to 12x, because ppc64le's own tail drags its mean
+from 3 minutes to 21.
+
+One measurement to distrust here, because it gives the opposite answer. By
+*last timestamp per architecture*, aarch64 ended F45's rebuild eight hours
+after s390x (4.07 days against 3.74) — which looks like aarch64 setting the
+pace and is two builds: `swift-lang` at 11.4 hours, and `python-metakernel`,
+a six-minute build submitted a day after everything else. In that final day
+s390x had **189** tasks still finishing against two each for ppc64le and
+aarch64. s390x also runs 3,443 fewer tasks than aarch64 because packages
+exclude it, which is what lets a shorter span hold a longer tail.
+
 Koji priority explains it: maintainers submit at 19-20, packit CI at 20,
 releng's rebuild at 25, koschei at 50, and lower is served first. A rebuild
 is deliberately behind interactive work, so it absorbs its own delay. The
@@ -262,18 +289,41 @@ utilisation 0.78, above the 0.7 line" without anybody running a query.
 | weighted utilisation per arch | warn 0.6, act 0.7 | leads everything; nonlinear in wait |
 | service time median / p90 / mean per arch | drift >20% year-on-year | localises a regression to an architecture |
 | the same, against a rust control population | divergence between the two | separates platform from compiler cost |
+| straggler share: which arch finished each multi-arch build last | one arch above 50% | the fleet property no per-arch row shows |
 | wasted builder-hours (failed + cancelled) | above 10% | pure loss, cheapest to recover |
 | long-build tail share (tasks over 6h) | above 15% | catches hangs while they are few |
 | per-class queue wait, never aggregated | maintainer p90 above 10m | the contributor-experience number |
 | the same split by submitter volume (top 10 / next 40 / rest) | top-10 p90 above 20m, or above 5x the next cohort | a population median hid this entirely for eighteen months |
 | single-arch stall events, congestion or outage | any outage | an event, not a trend |
 
-Two implementation notes for whoever builds this. The rust control needs no
-spec checkout if it keys on the `rust-` name prefix rather than on
-`BuildRequires` — accurate enough for a control population, and it keeps the
-report self-contained. And every one of these must be *per class*: a single
-aggregated utilisation figure is how the original "60,000 delay-hours"
-mistake happened.
+Every one of these must be *per class*: a single aggregated utilisation
+figure is how the original "60,000 delay-hours" mistake happened.
+
+**All of the above are now implemented**, with two corrections that only
+appeared once they ran against real data.
+
+The rust control keys on the `rust-` name prefix rather than on
+`BuildRequires`, which keeps the report self-contained and is accurate enough
+for a control population. But *"drift >20% year-on-year"* is not something a
+report can check, because a report sees one window — and the single-window
+version of the comparison is actively misleading. On s390x in July 2026 the
+control population averaged 3.8 minutes against 8.9 for everything else,
+which reads as a 2.3x compiler penalty and is only the observation that Rust
+crates are small: the two medians were within seconds of each other. So
+`report` states each population's build time as a plain number and `reports`
+writes the comparison, each population against its own earlier self.
+
+And 20% is below the noise. Over March to July 2026, with no regression
+anybody knows of, the six architectures' medians moved between 0.63x and
+1.07x — monthly package mix is worth about ±40%, so the warning threshold is
+1.5x. Tightening it means comparing one mass rebuild against the next, whose
+mix is roughly fixed; `koji-lag events` already identifies those windows and
+nothing else needs to be collected to do it.
+
+The same run confirmed the load rise this section was written to ask about:
+utilisation went up on **every** architecture between March and July 2026 —
+ppc64le 0.43 to 0.61, s390x 0.33 to 0.51, aarch64 0.19 to 0.29, x86_64 0.10
+to 0.16.
 
 ### 4b. What infrastructure should watch that a report cannot
 

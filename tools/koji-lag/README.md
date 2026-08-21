@@ -270,6 +270,27 @@ Datasets swept before host arches were recorded still report: their
 `noarch` rows read `noarch (host unknown)` rather than guessing an arch or
 dropping the tasks.
 
+Two tables in the report cover the fleet rather than one architecture at a
+time:
+
+**Which architecture finished last** counts, for every build reaching three
+or more architectures, which one finished last and the gap between the
+first finishing and the last, as a median, p90 and maximum. A build is not
+output until all of them are done, so an architecture can hold up nearly
+every build while its own queue and durations look unremarkable. In F45's
+mass rebuild s390x finished last for 91.7% of builds, with the rest of the
+fleet a median 4.0 hours already finished and 8.6 at the p90.
+
+A distribution rather than a mean: spreads run out to three days, so a mean
+describes neither the ordinary build nor the bad one.
+
+**Build time by population** splits durations into the `rust-` packages and
+everything else. It is stated as two plain numbers on purpose: compare each
+with its own earlier self across periods, never the two with each other
+within one, since Rust crates are smaller and the gap between the
+populations measures that rather than cost. The comparison itself is in
+`reports`' trend files, below.
+
 ### Reports
 
 Write a report for every period the store can answer for:
@@ -302,6 +323,29 @@ writes the CSVs rather than skipping the period.
 Rendering is cheap and sweeping is not, so existing reports are left alone
 unless `--force` is passed — worth passing after a sync has filled in rows
 a period was missing.
+
+`trend.txt` and `trend.json` are written at the root of the tree, comparing
+the first and last month it holds. They carry the things a single report
+cannot state:
+
+- **build time per population, each against its own earlier self** — the
+  `rust-` packages and everything else. Both slowing means the platform got
+  slower; only the non-Rust population slowing means the toolchain got more
+  expensive.
+- **`divergence`**, one drift divided by the other, which is that
+  distinction as a single number.
+- **utilisation at both ends**, so a fleet filling up is visible before it
+  is full.
+
+Ratios compare a population with itself, never with the other population:
+the gap *between* them is package size and not cost. Month to month, mix is
+worth about ±40%, so anything under 1.5x is not distinguishable from what
+people happened to build. Warnings are printed to stderr as well as written
+to the files.
+
+The series is read from the monthly `report.json` files already in the tree,
+so a run that writes no new reports still refreshes the trend, and there is
+nothing to pass beyond `--reports-root`.
 
 ### Sync
 

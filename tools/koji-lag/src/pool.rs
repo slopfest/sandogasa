@@ -80,7 +80,9 @@ impl Format {
 }
 
 /// What a pooling run wrote.
-#[derive(Debug, Default, PartialEq, Eq)]
+// `Eq` is out because the trend carries f64s; nothing compares a Pooled
+// for equality beyond field-by-field assertions in tests.
+#[derive(Debug, Default, PartialEq)]
 pub struct Pooled {
     /// Periods reported. Not derivable from the file count: a period is
     /// two files or nine depending on the forms asked for.
@@ -90,6 +92,9 @@ pub struct Pooled {
     pub present: usize,
     /// Periods the store cannot answer for yet.
     pub incomplete: usize,
+    /// The cross-period comparison, over whatever monthly reports the tree
+    /// now holds. Empty below two months.
+    pub trend: crate::trend::Trend,
 }
 
 /// How to render, and what to do about reports already on disk.
@@ -213,6 +218,26 @@ pub fn run(
                 chunk.path().display(),
                 dataset.builds.len()
             );
+        }
+    }
+    // Last, and over the tree rather than over this run: the periods this
+    // run skipped as already present are exactly the ones a trend most
+    // wants, and they are on disk.
+    let series = crate::trend::from_reports_root(reports_root)?;
+    pooled.trend = crate::trend::assess(&series);
+    if !pooled.trend.arches.is_empty() {
+        let dir = reports_root.to_path_buf();
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        for (name, body) in [
+            ("trend.txt", crate::trend::render(&pooled.trend)),
+            (
+                "trend.json",
+                serde_json::to_string_pretty(&pooled.trend).map_err(|e| e.to_string())? + "\n",
+            ),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+            pooled.written.push(path);
         }
     }
     Ok(pooled)

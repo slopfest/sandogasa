@@ -806,6 +806,76 @@ fn render_health(o: &mut String, health: &crate::health::Health, min_samples: us
             format!("{d:.0}s")
         }
     };
+    let pops: Vec<_> = health
+        .arches
+        .iter()
+        // A median over a handful of builds is noise, and --min-samples
+        // is the reader's statement of how much noise they will look at.
+        .filter(|a| a.service.iter().any(|p| p.tasks >= min_samples))
+        .collect();
+    if !pops.is_empty() {
+        let _ = writeln!(o, "\nBuild time by population\n");
+        let _ = writeln!(o, "| arch | population | builds | median | p90 |");
+        let _ = writeln!(o, "|---|---|---:|---:|---:|");
+        for a in &pops {
+            for p in a.service.iter().filter(|p| p.tasks >= min_samples) {
+                let _ = writeln!(
+                    o,
+                    "| {} | {} | {} | {} | {} |",
+                    a.arch,
+                    p.name,
+                    p.tasks,
+                    p.p50.map(dur).unwrap_or_else(|| "-".into()),
+                    p.p90.map(dur).unwrap_or_else(|| "-".into())
+                );
+            }
+        }
+        let _ = writeln!(
+            o,
+            "\n`control` is the {} packages, whose cost is dominated by \
+             rustc rather\nthan by the C and C++ compilers. Compare each \
+             population with its own\nearlier self across periods, never \
+             the two with each other within one:\nthe gap between them is \
+             package size, not cost.",
+            crate::health::CONTROL_PREFIX
+        );
+    }
+    let stragglers: Vec<_> = health
+        .stragglers
+        .iter()
+        .filter(|s| s.builds >= min_samples)
+        .collect();
+    if !stragglers.is_empty() {
+        let _ = writeln!(
+            o,
+            "\nWhich architecture finished last (multi-arch builds only)\n"
+        );
+        let _ = writeln!(
+            o,
+            "| arch | builds finished last | share | median spread | p90 | max |"
+        );
+        let _ = writeln!(o, "|---|---:|---:|---:|---:|---:|");
+        for s in &stragglers {
+            let Some(d) = &s.spread else { continue };
+            let _ = writeln!(
+                o,
+                "| {} | {} | {:.1}% | {} | {} | {} |",
+                s.arch,
+                s.builds,
+                s.pct,
+                dur(d.median),
+                dur(d.p90),
+                dur(d.max)
+            );
+        }
+        let _ = writeln!(
+            o,
+            "\nSpread is the gap between the first architecture finishing a \
+             build and the\nlast. A build is not output until every one of \
+             them has finished. Distributed\nrather than averaged: the tail \
+             is long, and a mean sits well above the\nordinary build."
+        );
+    }
     if !health.classes.is_empty() {
         let _ = writeln!(o, "\nQueue wait by class of build (never summed)\n");
         let _ = writeln!(o, "| arch | class | tasks | median | p90 | max | >1h |");

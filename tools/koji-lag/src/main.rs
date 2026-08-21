@@ -617,6 +617,9 @@ fn cmd_reports(args: &ReportsArgs) -> Result<(), Box<dyn Error>> {
         pooled.incomplete,
         args.reports_root.display()
     );
+    for w in &pooled.trend.warnings {
+        eprintln!("[koji-lag] trend: {w}");
+    }
     Ok(())
 }
 

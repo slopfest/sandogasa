@@ -31,3 +31,4 @@ pub mod stats;
 pub mod store;
 pub mod sweep;
 pub mod sync;
+pub mod trend;
