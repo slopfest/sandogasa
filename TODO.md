@@ -57,6 +57,96 @@
     0.1%. Every cohort has a one-minute median, which is exactly how this
     stayed invisible.
 
+- (2026-08-21) **What should be tracked long term, and why the current
+  reports would not have caught this.** Every number that mattered in the
+  s390x investigation came from ad-hoc SQL or the notebook. The periodic
+  reports give per-arch queue wait and build time, the scratch/official
+  split, and bottleneck attribution — none of which would have raised a
+  flag before the queue was already hours deep. Worth fixing, because the
+  infrastructure team is unlikely to be tracking the leading indicators
+  either, and the whole value of eighteen months of data is seeing a drift
+  before it becomes an outage.
+
+  **Leading indicators — these move first.**
+
+  1. **Weighted utilisation per architecture**: offered weight over enabled
+     capacity. The single best number in the whole investigation. It read
+     0.54, 0.72, 0.79 and 1.24 across the four rebuilds while the observed
+     wait went 53s, 2.0h, 4.2h, 3.8h. Queueing is nonlinear near
+     saturation, so crossing about 0.6 predicts hours of waiting *before
+     anybody has waited*. Needs capacity, task weights and durations — all
+     already in the store.
+  2. **Per-task service time with a control population**: median, p90 and
+     mean per architecture, plus the same for rust packages as the control,
+     since rust does not consume Fedora's C flags. This is what localised
+     the regression. Tracked monthly, the s390x drift from 1.4m to 2.2m
+     would have been visible by mid-2025 rather than found in August 2026.
+  3. **Enabled capacity per architecture**: hosts and weight, from the
+     hub's `host_config` history. Cheap, and it is the denominator for
+     everything above. It also answers "has this architecture kept pace",
+     which turned out to have a surprising answer — s390x capacity nearly
+     doubled in 2024 and a regression consumed all of it.
+
+  **Loss indicators — cheap to compute, high signal.**
+
+  4. **Wasted builder-hours**: the share of builder time in failed or
+     cancelled tasks. It went 6.8%, 12.5%, 9.1%, 12.5% across the four
+     rebuilds. This is pure loss and it roughly doubled; on a saturated
+     architecture it is the cheapest capacity anybody will ever recover.
+  5. **Long-build tail share**: the share of builder-hours in tasks over
+     six hours, which went 5.8% to 23.8%. Catches hangs while they are
+     still four tasks rather than twenty-six.
+
+  **Lagging, but the one to lead a report with.**
+
+  6. **Per-class queue wait, never aggregated** — and specifically the p90
+     for maintainer official builds. It has stayed at about a minute
+     throughout, which is the finding that keeps this in proportion: the
+     system is fine for contributors even while a rebuild queues for hours.
+     A report that omitted it would invite over-reaction.
+  7. **Single-architecture stall events per month**, with the
+     congestion-or-outage verdict. `crate::stall` already produces these;
+     nothing publishes them periodically.
+
+  Alert thresholds the data supports, rather than invented ones:
+  utilisation above 0.6 warns and above 0.7 acts; service time drifting
+  more than about 20% year-on-year against the rust control; wasted share
+  above 10%; tail share above 15%.
+
+  None of this needs new collection — it is all derivable from what Koji
+  already exposes, and the capacity half exists only because the hub keeps
+  `host_config` history, which is worth telling infrastructure explicitly
+  since it is not obvious that it is queryable.
+
+  **The work splits in two, and the tool half comes first.** Promote these
+  from the notebook into `report`/`reports` with thresholds attached, so a
+  monthly report states "s390x utilisation 0.78, above the 0.7 line" without
+  anybody deciding to look. That also gives infrastructure a reference
+  implementation to replicate rather than thresholds to invent, which is a
+  better handover than a list of metrics. What is left for them is only what
+  a per-period report genuinely cannot see: the `ready` check-in state the
+  hub does not keep in history, storage and hypervisor metrics for the s390x
+  fleet, and confirmation of physical host placement.
+
+  Two implementation notes. The rust control population can key on the
+  `rust-` name prefix rather than on `BuildRequires`, which keeps the report
+  self-contained with no spec checkout — accurate enough for a control. And
+  every metric must be per class: one aggregated utilisation figure is
+  exactly how the original "60,000 delay-hours" mistake happened.
+
+  Add a cohort metric too — queue wait split by submitter volume, top ten
+  against the next forty against the rest. A population median hid the
+  sharpest harm in this data for eighteen months: in July 2026 ten people
+  submitted 67% of the human s390x workload at a 1.83h p90 while every
+  cohort's median stayed at about a minute. Alert on the top-ten p90 passing
+  20 minutes, or on it exceeding the next cohort by 5x.
+
+  Consolidated for the write-up in `tools/koji-lag/FINDINGS.md`, structured
+  as bottlenecks, trend, capacity, monitoring, and a closing set of open
+  questions written as invitations rather than caveats — several of them are
+  answerable in a sentence by somebody who administers the machines, and
+  publishing them is how that person is found.
+
 - (2026-08-20) **What to tell the infrastructure team when they ask how
   much s390x capacity to request.** They have asked, so here is the answer
   the data supports, with its limits.
@@ -133,9 +223,24 @@
   1. **A compile-specific cost, Fedora-wide.** C++ builds cost 1.14x to
      1.32x more than rust builds did over the same span, on *every*
      architecture. A platform fault could not do that; compiler flags can,
-     and the hardening Changes are the obvious candidate. This is a
-     deliberate policy cost and worth quantifying for the Changes process
-     rather than treating as an s390x problem.
+     and the hardening Changes are the obvious candidate.
+
+     **The ask here is process, not reversal.** A hardening Change is a
+     deliberate security trade-off and its cost does not make it wrong —
+     nobody is going to unwind one because builds got slower, and proposing
+     that would waste the finding. What the data supports is a *future*
+     checklist item: a Change that alters compiler flags, or otherwise
+     raises what every package costs to build, should carry an estimate of
+     its build-capacity impact, with the constrained architectures called
+     out. On an architecture already near saturation, a 20% increase in
+     per-package cost is not a rounding error — it is the difference
+     between F42's rebuild queueing for seconds and F45's queueing for
+     hours.
+
+     The method for producing that estimate is in this repo now: a paired
+     per-package comparison across two mass rebuilds, with rust as the
+     control population, since it is the one group that does not consume
+     Fedora's C flags. A proposer would not have to invent it.
   2. **An s390x platform regression.** Its baseline went 1.16x *slower*
      while every peer got faster (0.69x to 0.94x), so s390x lost roughly
      1.5x relative to the fleet on work that has nothing to do with
