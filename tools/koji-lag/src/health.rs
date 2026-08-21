@@ -174,6 +174,25 @@ pub struct ArchHealth {
     pub service: Vec<Population>,
 }
 
+/// How much of an architecture's builder time went to each distribution.
+///
+/// The measure a scope decision needs. Adding builders and narrowing what an
+/// architecture is built for are alternative answers to the same queue, and
+/// they are not comparable until the second one has a number: on s390x, ELN
+/// and EPEL together hold about a fifth of builder hours, so the other four
+/// fifths is what narrowing would free — a bigger change than any plausible
+/// hardware order, and a policy decision rather than an efficiency one.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StreamShare {
+    pub arch: String,
+    /// `fedora`, `eln` or `epel`, from [`Class::stream_of`].
+    pub stream: String,
+    pub tasks: usize,
+    pub builder_hours: f64,
+    /// Share of this architecture's builder hours in the window.
+    pub pct: f64,
+}
+
 /// Multi-arch builds are only finished when their slowest architecture is,
 /// and this is the count of times each was the slowest.
 ///
@@ -236,6 +255,9 @@ pub struct Health {
     /// Which architecture finished each multi-arch build last.
     #[serde(default)]
     pub stragglers: Vec<Straggler>,
+    /// Where each architecture's builder time went, by distribution.
+    #[serde(default)]
+    pub streams: Vec<StreamShare>,
     pub classes: Vec<ClassStats>,
     pub cohorts: Vec<CohortStats>,
     pub warnings: Vec<Warning>,
@@ -262,6 +284,8 @@ pub fn assess(
     let mut per_class: BTreeMap<(&str, Class), Vec<f64>> = BTreeMap::new();
     // Human official work only, since a cohort of submitters means people.
     let mut per_person: BTreeMap<&str, BTreeMap<&str, Vec<f64>>> = BTreeMap::new();
+    // (arch, stream) -> (tasks, builder secs).
+    let mut per_stream: BTreeMap<(&str, &'static str), (usize, f64)> = BTreeMap::new();
     // Candidate rows for the toolchain split, held until every build's
     // architecture count is known: (build key, arch, family, secs).
     let mut candidates: Vec<((&str, i64), &str, &'static str, f64)> = Vec::new();
@@ -322,6 +346,18 @@ pub fn assess(
             // ratio of ratios cancelling a common contamination), which is
             // the only reason the conclusion did.
             //
+            // Every task, whatever its method: this asks where an
+            // architecture's builder time went, and an SRPM checkout spends
+            // builder time like anything else.
+            let e = per_stream
+                .entry((
+                    task.arch.as_str(),
+                    Class::stream_of(build.and_then(|b| b.target.as_deref())),
+                ))
+                .or_default();
+            e.0 += 1;
+            e.1 += secs;
+
             // Scoped to these two metrics rather than skipping the task:
             // utilisation, builder hours, the per-class queue wait and the
             // cohorts all keep the SRPM work, because it occupies a builder
@@ -552,10 +588,33 @@ pub fn assess(
         }
     }
 
+    let streams: Vec<StreamShare> = per_stream
+        .iter()
+        .map(|((arch, stream), (tasks, secs))| {
+            let total: f64 = per_stream
+                .iter()
+                .filter(|((a, _), _)| a == arch)
+                .map(|(_, (_, s))| s)
+                .sum();
+            StreamShare {
+                arch: (*arch).to_string(),
+                stream: (*stream).to_string(),
+                tasks: *tasks,
+                builder_hours: secs / 3600.0,
+                pct: if total > 0.0 {
+                    100.0 * secs / total
+                } else {
+                    0.0
+                },
+            }
+        })
+        .collect();
+
     let warnings = warn(&arches, &cohorts, &stragglers);
     Health {
         arches,
         stragglers,
+        streams,
         classes,
         cohorts,
         warnings,
@@ -911,6 +970,46 @@ mod tests {
             }
         }
         assert!(assess_all(&ds).stragglers.is_empty());
+    }
+
+    #[test]
+    fn builder_time_is_attributed_to_the_distribution_it_was_for() {
+        let mut ds = Dataset::new();
+        // Three ELN builds at an hour, one Fedora build at an hour: ELN
+        // holds three quarters of the hours, whatever the task counts say.
+        for (id, target) in [(1, "eln"), (2, "eln-extras"), (3, "eln"), (4, "f45-build")] {
+            let (mut b, tasks) = multiarch(id, &[("s390x", 3600.0), ("x86_64", 3600.0)]);
+            b.target = Some(target.to_string());
+            ds.builds.insert(format!("fedora:{id}"), b);
+            for t in tasks {
+                ds.tasks.insert(format!("fedora:{}", t.task_id), t);
+            }
+        }
+        // And one EPEL build, to show the third bucket is not a catch-all.
+        let (mut b, tasks) = multiarch(5, &[("s390x", 3600.0), ("x86_64", 3600.0)]);
+        b.target = Some("epel10.3".to_string());
+        ds.builds.insert("fedora:5".into(), b);
+        for t in tasks {
+            ds.tasks.insert(format!("fedora:{}", t.task_id), t);
+        }
+
+        let h = assess_all(&ds);
+        let get = |stream: &str| {
+            h.streams
+                .iter()
+                .find(|s| s.arch == "s390x" && s.stream == stream)
+                .unwrap_or_else(|| panic!("{stream}"))
+        };
+        assert_eq!(get("eln").tasks, 3);
+        assert_eq!(get("eln").builder_hours, 3.0);
+        assert_eq!(get("eln").pct, 60.0);
+        assert_eq!(get("epel").pct, 20.0);
+        assert_eq!(get("fedora").pct, 20.0);
+        // A target nobody set is Fedora's, not a fourth bucket.
+        assert_eq!(Class::stream_of(None), "fedora");
+        assert_eq!(Class::stream_of(Some("f45-rebuild")), "fedora");
+        assert_eq!(Class::stream_of(Some("eln")), "eln");
+        assert_eq!(Class::stream_of(Some("epel9-next")), "epel");
     }
 
     #[test]

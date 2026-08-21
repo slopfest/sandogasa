@@ -44,6 +44,33 @@ rather than presentation: one seven-hour build on a quiet day would otherwise
 report a 90% tail and send somebody hunting. The tables themselves respect
 `--min-samples` like every other table in the report.
 
+### koji-lag: where an architecture's builder time went, by distribution
+
+Adding builders and narrowing what an architecture is built for are
+alternative answers to the same queue, and only the first had a number. So
+reports now break each architecture's builder hours into `fedora`, `eln` and
+`epel`, taken from the build target.
+
+In July 2026 s390x spent 19.7% of its builder hours on ELN and 2.6% on EPEL,
+so 77.7% is Fedora's own and that is what narrowing its scope would free —
+utilisation 0.72 down to roughly 0.15. Reaching the same figure by hardware
+needs about 4.8x the present fleet, 96 units of weight to about 460. ppc64le
+is the mirror image, 5.6% ELN against 14.6% EPEL.
+
+The two options are not close, which is the point: this is a policy decision
+about whether s390x remains a Fedora architecture rather than an efficiency
+measure, and it can now be argued in the same units as a hardware request.
+The Fedora share is also falling on its own — ELN and EPEL together were
+11.9% of s390x's builder hours in 2025-Q1 and 21.3% in 2026-Q3 — and koschei
+has already been dealt with, from 7.3% to 0.3% over the same range.
+
+FINDINGS.md gains that table and the one it has to be read against: who pays
+for the status quo. Top-10 submitters' queue wait at p90 in July 2026 is
+109.1m on s390x against 16.0m on ppc64le and 1.2m on x86_64, with 12.8% of
+their builds waiting over an hour, while *every* cohort's median is about one
+minute on every architecture. Doing nothing is not the neutral option; it
+bills roughly ten people.
+
 ### koji-lag: a population that changed size is not a drift
 
 A ratio between two periods answers "did this get more expensive" only if the

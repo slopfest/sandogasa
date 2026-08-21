@@ -305,6 +305,13 @@ column down across periods, never a row across within one — the gap between
 two families in the same window is mostly how big their packages are. The
 comparison across periods is in the trend files `events` and `reports` write.
 
+**Where builder time went, by distribution** splits each architecture's
+builder hours into `fedora`, `eln` and `epel`, taken from the build target.
+It is the counterpart to a capacity figure: narrowing what an architecture is
+built for and buying more of it are alternative answers to the same queue,
+and they cannot be weighed against each other until both are in the same
+units.
+
 Noarch builds are left out of the build-time table. Koji files their single task under
 whichever host built them, so they are no architecture's compile cost. They
 remain in utilisation, builder hours and queue wait, which ask what occupied

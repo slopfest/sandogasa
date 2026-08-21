@@ -871,6 +871,33 @@ fn render_health(o: &mut String, health: &crate::health::Health, min_samples: us
              of them in F42's rebuild and 5 in F45's."
         );
     }
+    let streams: Vec<_> = health
+        .streams
+        .iter()
+        .filter(|s| s.tasks >= min_samples)
+        .collect();
+    if !streams.is_empty() {
+        let _ = writeln!(o, "\nWhere builder time went, by distribution\n");
+        let _ = writeln!(
+            o,
+            "| arch | distribution | builds | builder hours | share |"
+        );
+        let _ = writeln!(o, "|---|---|---:|---:|---:|");
+        for s in &streams {
+            let _ = writeln!(
+                o,
+                "| {} | {} | {} | {:.0} | {:.1}% |",
+                s.arch, s.stream, s.tasks, s.builder_hours, s.pct
+            );
+        }
+        let _ = writeln!(
+            o,
+            "\nWhat narrowing an architecture's scope would free, against \
+             what adding\nbuilders would. The two are alternative answers to \
+             the same queue and are\nnot comparable until this table has \
+             numbers in it."
+        );
+    }
     let stragglers: Vec<_> = health
         .stragglers
         .iter()

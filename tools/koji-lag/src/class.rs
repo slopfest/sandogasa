@@ -71,6 +71,26 @@ impl Class {
     }
 
     /// Human-readable name for report headings.
+    /// Which distribution a build was for, from its target.
+    ///
+    /// Orthogonal to [`Class`], which says who submitted the work and why.
+    /// This says who the work is *for*, and it is the axis a scope decision
+    /// turns on: an architecture can be kept for ELN and EPEL while being
+    /// dropped from Fedora proper, and the question "how much of this
+    /// architecture's capacity would that free" has no answer without it.
+    ///
+    /// Measured on s390x, share of builder hours: ELN and EPEL together were
+    /// 11.9% in 2025-Q1 and 21.3% in 2026-Q3, so the other four fifths is
+    /// Fedora's own.
+    pub fn stream_of(target: Option<&str>) -> &'static str {
+        match target {
+            // `eln` and `eln-extras`; `epel9`, `epel10.3`, `epel10-infra`.
+            Some(t) if t.starts_with("eln") => "eln",
+            Some(t) if t.starts_with("epel") => "epel",
+            _ => "fedora",
+        }
+    }
+
     /// The inverse of [`Class::slug`], for a command line.
     pub fn from_slug(slug: &str) -> Option<Class> {
         Class::all().into_iter().find(|c| c.slug() == slug)

@@ -327,6 +327,50 @@ compares two different populations. `koji-lag` now says so rather than
 reporting the number — a check added after this document had already quoted
 the s390x golang figure as evidence.
 
+### The other lever: what the architecture is built for
+
+Capacity and scope are alternative answers to the same queue, and only one of
+them had a number until now. `koji-lag report` breaks builder hours down by
+the distribution a build targeted:
+
+| arch | fedora | eln | epel |
+|:--|--:|--:|--:|
+| s390x | 77.7% | 19.7% | 2.6% |
+| ppc64le | 79.9% | 5.6% | 14.6% |
+
+(July 2026. s390x is ELN-heavy and EPEL-light; ppc64le is the reverse.)
+
+So limiting s390x to ELN and EPEL would free **77.7%** of its builder hours
+and take utilisation from 0.72 to roughly 0.15. Reaching the same figure by
+hardware needs about **4.8x** the present fleet — 96 units of weight to
+about 460. The two are not close, and that is the point: this is a policy
+decision about whether s390x remains a Fedora architecture, not an efficiency
+measure, and it should be argued as one.
+
+Trend: ELN and EPEL together were 11.9% of s390x's builder hours in 2025-Q1
+and 21.3% in 2026-Q3, so the Fedora share is falling slowly on its own.
+koschei has already been dealt with — 7.3% of s390x builder hours in 2025-Q1
+and 0.3% now.
+
+### Who pays for the status quo
+
+Doing nothing is not the neutral option, and a median will never show why.
+Top-10 submitters' queue wait at p90, July 2026, official human builds:
+
+| arch | top-10 p90 | over 1h | next-40 p90 | everyone else p90 |
+|:--|--:|--:|--:|--:|
+| **s390x** | **109.1m** | **12.8%** | 2.9m | 1.8m |
+| ppc64le | 16.0m | 2.9% | 1.1m | 1.2m |
+| x86_64 | 1.2m | 0.0% | 1.1m | 1.1m |
+| aarch64 | 1.2m | 0.0% | 1.1m | 1.1m |
+
+Every cohort's median is about one minute on every architecture. The cost of
+the present arrangement therefore falls on roughly ten people, at ninety
+times the x86_64 p90, and inside F45's rebuild window 26 of the 28 hour-plus
+waits fell on a single person. Whichever way the decision goes, it should be
+made knowing that the bill is currently being paid by the busiest
+maintainers rather than spread across the project.
+
 ## 3. Recommended capacity
 
 Offered load equals delivered load to within a percent in all four windows,
