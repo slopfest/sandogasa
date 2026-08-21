@@ -17,7 +17,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::class::{self, Class};
-use crate::dataset::{BUILD_ARCH, Dataset, FetchWindow, TaskRecord};
+use crate::dataset::{BUILD_ARCH, BuildRecord, Dataset, FetchWindow, TaskRecord};
 use crate::stats::{
     CriticalPath, DistSummary, critical_path, in_build_time_population, in_queue_wait_population,
     median, summarize,
@@ -222,16 +222,12 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
     // records neither. A task whose parent is absent cannot be shown to
     // match, so it drops out of a narrowed report rather than being
     // counted into it — the same rule the scratch filter follows.
-    let attributed_ok = |task: &TaskRecord| -> bool {
-        if opts.owners.is_empty() && opts.packages.is_empty() {
-            return true;
-        }
-        let Some(parent) = task.parent else {
-            return false;
-        };
-        let Some(build) = dataset.builds.get(&format!("{}:{parent}", task.instance)) else {
-            return false;
-        };
+    // Whether a build passes the narrowing flags. Shared by the task
+    // filter and by the build count, so a narrowed report's own
+    // denominator is narrowed too: before this, `--owner NAME` reported
+    // the whole fleet's "Builds completed" above that person's rows.
+    let build_ok = |build: &BuildRecord| -> bool {
+        let class_ok = opts.classes.is_empty() || opts.classes.contains(&class::of_build(build));
         let owner_ok = opts.owners.is_empty()
             || build
                 .owner
@@ -243,25 +239,26 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
             || build
                 .package
                 .as_deref()
-                .or(task.package.as_deref())
                 .is_some_and(|p| opts.packages.iter().any(|want| want == p));
-        owner_ok && package_ok
+        owner_ok && package_ok && class_ok
     };
 
-    let class_ok = |task: &TaskRecord| -> bool {
-        if opts.classes.is_empty() {
+    let narrowed = !opts.owners.is_empty() || !opts.packages.is_empty() || !opts.classes.is_empty();
+    let attributed_ok = |task: &TaskRecord| -> bool {
+        if !narrowed {
             return true;
         }
+        // A task whose parent was never swept cannot be shown to match,
+        // so a narrowed report leaves it out rather than guessing.
         task.parent
             .and_then(|p| dataset.builds.get(&format!("{}:{p}", task.instance)))
-            .map(class::of_build)
-            .is_some_and(|c| opts.classes.contains(&c))
+            .is_some_and(build_ok)
     };
 
     let mut selected: Vec<&TaskRecord> = Vec::new();
     let mut unattributed = 0usize;
     for task in dataset.tasks.values() {
-        if !in_window(task) || !arch_ok(task) || !attributed_ok(task) || !class_ok(task) {
+        if !in_window(task) || !arch_ok(task) || !attributed_ok(task) {
             continue;
         }
         let class = scratchness(task);
@@ -300,6 +297,7 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
             Some(want) => want == b.scratch,
             None => true,
         })
+        .filter(|(_, b)| build_ok(b))
         .map(|(key, _)| key)
         .collect();
     let builds_in_window = counted_builds.len();
@@ -449,6 +447,7 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
                 (Some(a), Some(b)) => Some((a, b)),
                 _ => None,
             }),
+            opts.owners.is_empty(),
         ),
         // From the windows where there are any, and otherwise from the
         // rows: a period the store holds only in part has no window to
@@ -1500,6 +1499,49 @@ mod tests {
         );
         assert_eq!(both.unattributed_tasks, 0);
         assert_eq!(run(&ds, &ReportOpts::default()).unattributed_tasks, 1);
+    }
+
+    #[test]
+    fn a_narrowed_report_narrows_its_own_denominator() {
+        // "Builds completed" is the denominator every share above it is
+        // read against, so a report narrowed to one owner that counted the
+        // whole fleet was quoting somebody else's total.
+        let mut ds = dataset();
+        let mut b = build(3, false);
+        b.owner = Some("bob".to_string());
+        b.package = Some("bar".to_string());
+        ds.builds.insert("fedora:3".into(), b);
+        ds.tasks
+            .insert("fedora:43".into(), task(43, 3, "s390x", 10.0, 60.0));
+
+        assert_eq!(run(&ds, &ReportOpts::default()).builds_in_window, 3);
+        for (opts, want) in [
+            (
+                ReportOpts {
+                    owners: vec!["bob".to_string()],
+                    ..Default::default()
+                },
+                1,
+            ),
+            (
+                ReportOpts {
+                    packages: vec!["foo".to_string()],
+                    ..Default::default()
+                },
+                2,
+            ),
+            (
+                ReportOpts {
+                    classes: vec![Class::Official],
+                    ..Default::default()
+                },
+                // Two of the three: the fixture's build 2 is scratch, so
+                // its class is hand-scratch rather than official.
+                2,
+            ),
+        ] {
+            assert_eq!(run(&ds, &opts).builds_in_window, want);
+        }
     }
 
     #[test]

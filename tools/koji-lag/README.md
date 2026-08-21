@@ -270,6 +270,11 @@ Datasets swept before host arches were recorded still report: their
 `noarch` rows read `noarch (host unknown)` rather than guessing an arch or
 dropping the tasks.
 
+Every filter narrows the report's own counts, `Builds completed` included, so
+a narrowed report's shares are read against what it selected. Narrowing by
+`--owner` also drops the submitter-cohort table: it compares submitters with
+each other, and one account's own wait is in the per-arch rows already.
+
 `--class` restricts to classes of build — `mass-rebuild`, `eln-sync`,
 `eln-fix`, `koschei`, `ci`, `service`, `hand-scratch`, `official`, as CSV or
 repeated. Reach for it before comparing one period with another: an

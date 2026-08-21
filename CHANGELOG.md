@@ -44,6 +44,29 @@ rather than presentation: one seven-hour build on a quiet day would otherwise
 report a 90% tail and send somebody hunting. The tables themselves respect
 `--min-samples` like every other table in the report.
 
+### koji-lag: a narrowed report stops quoting the whole fleet at you
+
+Two things a filtered report got wrong, both of which made it state something
+about everybody while claiming to be about one person.
+
+`Builds completed` counted every build in the window regardless of the
+filters, so `report --owner NAME` printed the fleet's 241,772 as the heading
+above that person's rows -- and it is the denominator every share underneath
+is read against. It now counts what was asked for: 1,490 for that account,
+23,144 for `--class mass-rebuild`.
+
+The submitter cohorts are no longer computed for a report narrowed to chosen
+accounts. Asked for one person, they read "the ten busiest submitters have a
+132m p90 and carry 100% of human builds", which is the filter restated as a
+finding about the fleet -- and warned about it. That person's own wait is in
+the per-arch rows, which is what they asked for.
+
+Deliberately not a floor on how many submitters exist. Ten submitters on a
+small instance all land in the top band too, but their p90 is a real finding
+about them with or without a band to compare against; what makes the narrowed
+case different is that nobody asked the comparison. `--class` alone still
+reports cohorts, since it narrows what was built rather than who built it.
+
 ### koji-lag: `report --class`
 
 Comparing two periods' build times gave answers that moved with the calendar,

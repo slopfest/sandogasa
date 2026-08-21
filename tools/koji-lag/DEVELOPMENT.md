@@ -445,6 +445,32 @@ warn at 1.25x. Trending those windows automatically is not built yet; it
 needs the trend to take its periods from `events` rather than from the
 monthly tree.
 
+## A filter narrows the denominators too, and silences what it answers wrongly
+
+Two failures found by running `report --owner NAME` against real data, both
+of which had the report describing the fleet under a heading that said
+otherwise.
+
+**Every count a filter can reach must honour it.** `Builds completed` was
+computed from `dataset.builds` filtered only by window and scratchness, so a
+report narrowed to one account printed 241,772 above that person's 1,490 rows
+— and it is the denominator the attributed share is read against. The
+build-level predicate now lives in one closure used by both the task filter
+and the build count; anything added to `ReportOpts` that selects builds
+belongs in it.
+
+**A metric that answers a question the filter already answered must not
+run.** The submitter cohorts compare submitters with each other. Narrowed to
+one account they reported "the ten busiest submitters have a 132m p90 and
+carry 100% of human builds" and raised a warning about it, which is the
+filter restated as a finding.
+
+Gate that on *the narrowing*, not on the population size — the first attempt
+required more than ten distinct submitters and broke a legitimate case, since
+ten submitters on a small instance also all land in the top band and their
+p90 is still a real finding about them. `--class` does not gate it: it narrows
+what was built, not who built it.
+
 ## A fleet of architectures has a property none of them has
 
 Every architecture can be healthy on its own terms — short queue, busy

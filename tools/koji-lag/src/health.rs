@@ -224,7 +224,12 @@ pub struct Health {
 ///
 /// `selected` is what the report is already reporting on, so a narrowed
 /// report narrows these too rather than quietly widening back to everything.
-pub fn assess(dataset: &Dataset, selected: &[&TaskRecord], window: Option<(f64, f64)>) -> Health {
+pub fn assess(
+    dataset: &Dataset,
+    selected: &[&TaskRecord],
+    window: Option<(f64, f64)>,
+    cohorts_wanted: bool,
+) -> Health {
     let build_of = |task: &TaskRecord| -> Option<&BuildRecord> {
         dataset
             .builds
@@ -415,7 +420,17 @@ pub fn assess(dataset: &Dataset, selected: &[&TaskRecord], window: Option<(f64, 
         .collect();
 
     let mut cohorts = Vec::new();
-    for (arch, people) in &per_person {
+    // Bands compare submitters with each other, which is not a question a
+    // report narrowed to chosen accounts asked. It also answers it wrongly:
+    // `--owner NAME` reported "the ten busiest submitters carry 100% of
+    // human builds" about one person, which is the filter restated as a
+    // finding about the fleet. That person's own wait is in the per-arch
+    // rows already.
+    //
+    // Not a floor on how many submitters there are: ten submitters on a
+    // small instance still all land in the top band, and their p90 is a
+    // real finding about them even with no band to compare against.
+    for (arch, people) in per_person.iter().filter(|_| cohorts_wanted) {
         let mut ranked: Vec<(&&str, &Vec<f64>)> = people.iter().collect();
         // Busiest first, and by name within a tie so the bands are stable
         // between runs over the same data.
@@ -694,6 +709,75 @@ mod tests {
     }
 
     #[test]
+    fn cohort_bands_are_not_computed_for_a_report_narrowed_to_accounts() {
+        // Narrowed to one account, the bands would state that the ten
+        // busiest submitters carry 100% of human builds -- the filter
+        // restated as a finding about the fleet.
+        let build_by = |id: i64, owner: &str| BuildRecord {
+            instance: "fedora".to_string(),
+            task_id: id,
+            package: Some("gzip".to_string()),
+            nvr: None,
+            target: Some("f45-build".to_string()),
+            owner: Some(owner.to_string()),
+            scratch: false,
+            state: 2,
+            create_ts: 0.0,
+            start_ts: Some(0.0),
+            completion_ts: Some(100.0),
+            priority: Some(20),
+            host_id: None,
+        };
+        let mut with = Dataset::new();
+        let mut without = Dataset::new();
+        for id in 1..=60i64 {
+            // `with`: sixty distinct people. `without`: all one person.
+            with.builds
+                .insert(format!("fedora:{id}"), build_by(id, &format!("p{id}")));
+            without
+                .builds
+                .insert(format!("fedora:{id}"), build_by(id, "solo"));
+            for ds in [&mut with, &mut without] {
+                let t = TaskRecord {
+                    instance: "fedora".to_string(),
+                    task_id: 1000 + id,
+                    parent: Some(id),
+                    arch: "s390x".to_string(),
+                    method: "buildArch".to_string(),
+                    package: Some("gzip".to_string()),
+                    state: 2,
+                    create_ts: 0.0,
+                    start_ts: Some(30.0),
+                    completion_ts: Some(100.0),
+                    host_id: None,
+                    channel_id: None,
+                    weight: Some(1.5),
+                };
+                ds.tasks.insert(format!("fedora:{}", t.task_id), t);
+            }
+        }
+        // Sixty people, asked for: three bands.
+        assert_eq!(assess_all(&with).cohorts.len(), 3);
+
+        // The same sixty, narrowed: no bands, and no warning derived from
+        // them. Not a judgement about the population -- the population is
+        // identical -- but about the question having been narrowed away.
+        let selected: Vec<&TaskRecord> = with.tasks.values().collect();
+        let narrowed = assess(&with, &selected, None, false);
+        assert!(narrowed.cohorts.is_empty(), "{:?}", narrowed.cohorts);
+        assert!(
+            !narrowed
+                .warnings
+                .iter()
+                .any(|w| w.metric.starts_with("cohort")),
+            "{:?}",
+            narrowed.warnings
+        );
+        // The rest of the assessment is unaffected.
+        assert_eq!(narrowed.arches.len(), assess_all(&with).arches.len());
+    }
+
+    #[test]
     fn the_last_architecture_to_finish_is_the_straggler_and_the_others_wait() {
         let mut ds = Dataset::new();
         // Thirty builds, s390x last in every one by an hour.
@@ -771,7 +855,7 @@ mod tests {
     fn assess_all(ds: &Dataset) -> Health {
         let selected: Vec<&TaskRecord> = ds.tasks.values().collect();
         // No window: the shares still compute, utilisation does not.
-        assess(ds, &selected, None)
+        assess(ds, &selected, None, true)
     }
 
     /// The same, over a one-day window with a stated capacity — what a real
@@ -780,7 +864,7 @@ mod tests {
         let mut ds = ds.clone();
         ds.capacity.insert(arch.to_string(), capacity);
         let selected: Vec<&TaskRecord> = ds.tasks.values().collect();
-        assess(&ds, &selected, Some((0.0, 86_400.0)))
+        assess(&ds, &selected, Some((0.0, 86_400.0)), true)
     }
 
     #[test]
@@ -896,7 +980,7 @@ mod tests {
             ds.tasks.insert(t.key(), t);
         }
         let selected: Vec<&TaskRecord> = ds.tasks.values().collect();
-        let h = assess(&ds, &selected, Some((0.0, 86_400.0)));
+        let h = assess(&ds, &selected, Some((0.0, 86_400.0)), true);
         let a = &h.arches[0];
         // 24 tasks x 1 weight x 1h over a 24h window = 1.0 in use.
         assert!((a.offered_weight.unwrap() - 1.0).abs() < 0.01, "{a:?}");
