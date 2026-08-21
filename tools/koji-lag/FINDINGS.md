@@ -468,6 +468,52 @@ the queue, +44 to +66 weight during rebuilds; for the wall clock, nothing you
 can order.** The wall clock needs the 2.8x baseline gap and the 1.24-1.66x
 regression since F42 investigated as platform faults.
 
+### On reducing the other architectures' builders
+
+This has been suggested as a way to stop s390x looking like the outlier. It
+does not work, for a structural reason: **a build is finished when its
+slowest architecture finishes**, so completion time is a maximum over
+architectures. Slowing any of them can move that later and can never move it
+earlier. It would narrow the *spread* between architectures, which is the
+comparison, while making every Fedora build take longer, which is the
+outcome. Fedora packagers would wait more, not less.
+
+There is a real observation underneath it, though, and it is worth
+answering properly. At peak — during F45's rebuild, the busiest week of the
+year — the fleets look wildly uneven:
+
+| arch | capacity | peak utilisation | quiet month |
+|:--|--:|--:|--:|
+| ppc64le | 58 | 1.09 | 0.53 |
+| s390x | 91.5 | 1.04 | 0.41 |
+| aarch64 | 106 | 0.57 | 0.22 |
+| x86_64 | 162 | 0.35 | 0.11 |
+| i386 | 136 | 0.19 | 0.05 |
+
+i386 appears to hold more builder weight than s390x's entire fleet at 19%
+utilisation. **That is an artifact and not spare hardware.** Fedora's i386
+builders *are* its x86_64 builders: every one of the 33 hosts that took i386
+work in July 2026 also took x86_64 work, and the hub records them as `i386
+x86_64`. Both rows count the same machines, so both utilisations understate
+the load. Combined, x86 offered 83.6 against a real 162 at peak — about 0.52,
+which is unremarkable.
+
+i386 is also the wrong place to look for savings for a second reason. It is
+[deprecated](https://fedoraproject.org/wiki/Changes/EncourageI686LeafRemoval):
+leaf packages may be dropped by their maintainers at any time, and the
+architecture survives largely because Steam needs it. Its share of the work is
+shrinking on its own, and it has no dedicated hardware to reclaim in the first
+place.
+
+Nor is the hardware fungible. No s390x host is shared with x86_64: Z machines
+build s390x and nothing else. Retiring x86 builders frees rack space, power
+and budget — it does not free a single unit of s390x capacity, and the only
+route from one to the other is a purchase order.
+
+The two architectures with a real problem are exactly the two that run on
+hosts of their own, at 1.04 and 1.09 at peak, and those are the numbers the
+capacity ask should rest on.
+
 ### Cheaper than either, and larger
 
 In June 2026, a quiet month, s390x spent **27.2% of its builder time on 140

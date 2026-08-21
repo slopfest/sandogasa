@@ -894,8 +894,13 @@ fn render_health(o: &mut String, health: &crate::health::Health, min_samples: us
             o,
             "\nWhat narrowing an architecture's scope would free, against \
              what adding\nbuilders would. The two are alternative answers to \
-             the same queue and are\nnot comparable until this table has \
-             numbers in it."
+             the same queue and are\nnot comparable until this table \
+             has numbers in it.\n\nCapacity elsewhere in this report is \
+             builder weight *able to serve* an\narchitecture, not weight \
+             dedicated to it: Fedora's i386 builders are its x86_64\n\
+             builders, so those two rows count the same machines and \
+             neither\nutilisation is the load on the metal. s390x and \
+             ppc64le have hosts of their own."
         );
     }
     let stragglers: Vec<_> = health

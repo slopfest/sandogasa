@@ -168,6 +168,25 @@ pub struct ArchHealth {
     /// Enabled builder weight during the window, from the hub's
     /// configuration history. `None` when the store has no capacity for
     /// this architecture, or the selection has no window.
+    ///
+    /// **This is capacity *able to serve* the architecture, not capacity
+    /// dedicated to it**, and the difference matters wherever hosts serve
+    /// more than one. Fedora's i386 builders are its x86_64 builders — every
+    /// one of the 33 hosts that took i386 work also took x86_64 work, and
+    /// the hub records them as `i386 x86_64` — so both architectures' totals
+    /// include the same machines and both utilisation figures understate how
+    /// busy the hardware is. During F45's rebuild that reads as i386 0.19
+    /// and x86_64 0.35 against a combined 0.52 on the metal.
+    ///
+    /// s390x and ppc64le run on hosts of their own, so for them the two
+    /// readings coincide and a capacity ask computed from this is sound.
+    /// Do not read a low figure on a shared architecture as spare hardware.
+    ///
+    /// The architectures are still reported separately, because a task's
+    /// wait is a fact about that task whoever's machine it ran on. Reporting
+    /// *utilisation* against a denominator shared with another architecture
+    /// is the part that misleads, and grouping hosts by their arch set
+    /// rather than by arch is the fix — not yet done; see TODO.md.
     pub capacity: Option<f64>,
     /// Mean weight in use: task weight integrated over the window and
     /// divided by its length, so it compares with `capacity` directly.
