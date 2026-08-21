@@ -39,6 +39,15 @@ pub struct Dataset {
     pub hosts: BTreeMap<String, String>,
     /// `"<instance>:<channel_id>"` → channel name.
     pub channels: BTreeMap<String, String>,
+    /// Architecture → enabled builder weight during this selection's
+    /// window, from the hub's configuration history.
+    ///
+    /// The denominator utilisation needs, and the one thing a report cannot
+    /// derive from its own rows: how much capacity existed is a property of
+    /// the fleet at the time, not of the tasks that ran. Empty when the
+    /// selection has no window, or when the store predates capacity
+    /// collection.
+    pub capacity: BTreeMap<String, f64>,
     /// `"<instance>:<host_id>"` → the arches that host serves, as the
     /// hub reports them (`x86_64 i386`, `s390x`).
     ///
@@ -202,6 +211,7 @@ impl Dataset {
             tasks: BTreeMap::new(),
             hosts: BTreeMap::new(),
             channels: BTreeMap::new(),
+            capacity: BTreeMap::new(),
             host_arches: BTreeMap::new(),
         }
     }

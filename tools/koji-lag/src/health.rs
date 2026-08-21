@@ -81,10 +81,29 @@ pub struct CohortStats {
     pub share_of_tasks: f64,
 }
 
-/// How an architecture's builder time was spent.
+/// How an architecture's builder time was spent, and how close to full it
+/// ran.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ArchHealth {
     pub arch: String,
+    /// Enabled builder weight during the window, from the hub's
+    /// configuration history. `None` when the store has no capacity for
+    /// this architecture, or the selection has no window.
+    pub capacity: Option<f64>,
+    /// Mean weight in use: task weight integrated over the window and
+    /// divided by its length, so it compares with `capacity` directly.
+    pub offered_weight: Option<f64>,
+    /// `offered_weight / capacity`, counting only work that competes.
+    ///
+    /// Queueing is nonlinear in this, which is why it leads every other
+    /// signal here: across four Fedora mass rebuilds it read 0.56, 0.72,
+    /// 0.78 and 1.19 while the wait those rebuilds actually saw went 53s,
+    /// 2.0h, 4.2h and 3.8h.
+    ///
+    /// It is not sufficient on its own, which is why the wait columns are
+    /// still reported beside it: a fleet can be nominally full of work that
+    /// yields, and then nobody waits. See [`Class::filler`].
+    pub utilisation: Option<f64>,
     /// Tasks with both timestamps, i.e. those the shares are computed over.
     pub tasks: usize,
     pub builder_hours: f64,
@@ -119,26 +138,46 @@ pub struct Health {
 ///
 /// `selected` is what the report is already reporting on, so a narrowed
 /// report narrows these too rather than quietly widening back to everything.
-pub fn assess(dataset: &Dataset, selected: &[&TaskRecord]) -> Health {
+pub fn assess(dataset: &Dataset, selected: &[&TaskRecord], window: Option<(f64, f64)>) -> Health {
     let build_of = |task: &TaskRecord| -> Option<&BuildRecord> {
         dataset
             .builds
             .get(&format!("{}:{}", task.instance, task.parent?))
     };
 
-    // (builder secs, wasted secs, tail secs, tail tasks, tasks)
-    let mut per_arch: BTreeMap<&str, (f64, f64, f64, usize, usize)> = BTreeMap::new();
+    // (builder secs, wasted secs, tail secs, tail tasks, tasks, weight secs)
+    let mut per_arch: BTreeMap<&str, (f64, f64, f64, usize, usize, f64)> = BTreeMap::new();
     let mut per_class: BTreeMap<(&str, Class), Vec<f64>> = BTreeMap::new();
     // Human official work only, since a cohort of submitters means people.
     let mut per_person: BTreeMap<&str, BTreeMap<&str, Vec<f64>>> = BTreeMap::new();
 
     for task in selected {
         let build = build_of(task);
+        let cls = build.map(class::of_build);
         if let (Some(start), Some(done)) = (task.start_ts, task.completion_ts) {
             let secs = (done - start).max(0.0);
             let e = per_arch.entry(&task.arch).or_default();
             e.0 += secs;
             e.4 += 1;
+            // Weight, not task count: Koji schedules against a host's
+            // weight capacity, and a buildArch task weighs anywhere from
+            // 1.5 to 6. Clamped to the window so a build spanning its edge
+            // is charged only for the part inside.
+            //
+            // Filler classes are excluded, and this is the difference
+            // between a useful number and a monthly false alarm. koschei
+            // runs at priority 50 and is *designed* to occupy builders that
+            // would otherwise idle: in March 2026 it was 177,966 of
+            // ppc64le's tasks, which put naive utilisation at 1.39 while
+            // every class on that architecture sat at a one-minute median
+            // and 0.0% of tasks over an hour. Counting work that yields to
+            // everything as pressure measures the opposite of pressure.
+            if let Some((from, to)) = window
+                && !cls.is_some_and(Class::filler)
+            {
+                let overlap = (done.min(to) - start.max(from)).max(0.0);
+                e.5 += overlap * task.weight.unwrap_or(1.0);
+            }
             if task.state == TASK_FAILED || task.state == TASK_CANCELED {
                 e.1 += secs;
             }
@@ -150,8 +189,9 @@ pub fn assess(dataset: &Dataset, selected: &[&TaskRecord]) -> Health {
         let Some(wait) = task.start_ts.map(|s| (s - task.create_ts).max(0.0)) else {
             continue;
         };
-        let Some(build) = build else { continue };
-        let cls = class::of_build(build);
+        let Some((build, cls)) = build.zip(cls) else {
+            continue;
+        };
         per_class.entry((&task.arch, cls)).or_default().push(wait);
         if cls == Class::Official
             && let Some(owner) = build.owner.as_deref()
@@ -172,22 +212,37 @@ pub fn assess(dataset: &Dataset, selected: &[&TaskRecord]) -> Health {
 
     let arches: Vec<ArchHealth> = per_arch
         .iter()
-        .map(|(arch, (total, wasted, tail, tail_n, tasks))| ArchHealth {
-            arch: (*arch).to_string(),
-            tasks: *tasks,
-            builder_hours: total / 3600.0,
-            wasted_pct: if *total > 0.0 {
-                100.0 * wasted / total
-            } else {
-                0.0
+        .map(
+            |(arch, (total, wasted, tail, tail_n, tasks, weight_secs))| {
+                let capacity = dataset.capacity.get(*arch).copied();
+                let offered = window.and_then(|(from, to)| {
+                    let span = to - from;
+                    (span > 0.0).then_some(weight_secs / span)
+                });
+                ArchHealth {
+                    arch: (*arch).to_string(),
+                    capacity,
+                    offered_weight: offered,
+                    utilisation: match (offered, capacity) {
+                        (Some(o), Some(c)) if c > 0.0 => Some(o / c),
+                        _ => None,
+                    },
+                    tasks: *tasks,
+                    builder_hours: total / 3600.0,
+                    wasted_pct: if *total > 0.0 {
+                        100.0 * wasted / total
+                    } else {
+                        0.0
+                    },
+                    tail_pct: if *total > 0.0 {
+                        100.0 * tail / total
+                    } else {
+                        0.0
+                    },
+                    tail_tasks: *tail_n,
+                }
             },
-            tail_pct: if *total > 0.0 {
-                100.0 * tail / total
-            } else {
-                0.0
-            },
-            tail_tasks: *tail_n,
-        })
+        )
         .collect();
 
     let classes: Vec<ClassStats> = per_class
@@ -253,6 +308,31 @@ fn warn(arches: &[ArchHealth], cohorts: &[CohortStats]) -> Vec<Warning> {
     for a in arches {
         if a.tasks < MIN_FOR_WARNING {
             continue;
+        }
+        // Below about 0.6 the observed waits are minutes and above about
+        // 0.7 they are hours — measured across four rebuilds rather than
+        // taken from a formula, which only half-validates against them.
+        // This is the one signal that leads rather than follows, so it
+        // fires at the lower line.
+        if let Some(u) = a.utilisation
+            && u > 0.6
+        {
+            let (line, what) = if u > 0.7 {
+                ("0.7", "act: queueing is nonlinear from here")
+            } else {
+                ("0.6", "watch: the next increment costs more than this one")
+            };
+            out.push(Warning {
+                metric: "utilisation".into(),
+                subject: a.arch.clone(),
+                text: format!(
+                    "{}: utilisation {:.2} ({:.0} of {:.0} weight), above the {line} line — {what}",
+                    a.arch,
+                    u,
+                    a.offered_weight.unwrap_or(0.0),
+                    a.capacity.unwrap_or(0.0)
+                ),
+            });
         }
         // Wasted share ran 6.8% at F42 and 12.5% by F45. Ten percent sits
         // between the two, and this is capacity spent producing nothing —
@@ -391,7 +471,17 @@ mod tests {
 
     fn assess_all(ds: &Dataset) -> Health {
         let selected: Vec<&TaskRecord> = ds.tasks.values().collect();
-        assess(ds, &selected)
+        // No window: the shares still compute, utilisation does not.
+        assess(ds, &selected, None)
+    }
+
+    /// The same, over a one-day window with a stated capacity — what a real
+    /// report has.
+    fn assess_day(ds: &Dataset, arch: &str, capacity: f64) -> Health {
+        let mut ds = ds.clone();
+        ds.capacity.insert(arch.to_string(), capacity);
+        let selected: Vec<&TaskRecord> = ds.tasks.values().collect();
+        assess(&ds, &selected, Some((0.0, 86_400.0)))
     }
 
     #[test]
@@ -421,6 +511,100 @@ mod tests {
         let keys: Vec<&str> = h.warnings.iter().map(|w| w.metric.as_str()).collect();
         assert!(keys.contains(&"wasted-share"), "{keys:?}");
         assert!(keys.contains(&"tail-share"), "{keys:?}");
+    }
+
+    #[test]
+    fn utilisation_is_weight_in_use_over_capacity() {
+        // Twenty tasks, each weighing 6 and running six hours inside a
+        // one-day window: 20 * 6 * 6h / 24h = 30 weight in use. Against a
+        // capacity of 50 that is 0.60 — just at the line, so no warning.
+        let mut ds = Dataset::new();
+        for i in 1..=20 {
+            let b = build(i, "alice", false);
+            ds.builds.insert(b.key(), b);
+            let mut t = task(i + 100, i, "s390x", 1.0, 6.0 * 3600.0, 2);
+            t.weight = Some(6.0);
+            ds.tasks.insert(t.key(), t);
+        }
+        let h = assess_day(&ds, "s390x", 50.0);
+        let a = &h.arches[0];
+        assert_eq!(a.capacity, Some(50.0));
+        assert!((a.offered_weight.unwrap() - 30.0).abs() < 0.1, "{a:?}");
+        assert!((a.utilisation.unwrap() - 0.60).abs() < 0.01, "{a:?}");
+
+        // Halve the capacity and the same work is over the acting line.
+        let h = assess_day(&ds, "s390x", 25.0);
+        assert!((h.arches[0].utilisation.unwrap() - 1.20).abs() < 0.01);
+        let w = h
+            .warnings
+            .iter()
+            .find(|w| w.metric == "utilisation")
+            .expect("a utilisation warning");
+        assert!(w.text.contains("0.7 line"), "{}", w.text);
+        assert!(w.text.contains("act"), "{}", w.text);
+    }
+
+    #[test]
+    fn filler_work_does_not_count_as_pressure() {
+        // The March 2026 ppc64le shape: a fleet full of koschei canaries,
+        // which run at priority 50 and give way to everything. Counting
+        // them put naive utilisation at 1.39 while nobody waited at all.
+        let mut ds = Dataset::new();
+        for i in 1..=40 {
+            let mut b = build(i, "koschei/koschei-backend01.rdu3.example.org", true);
+            b.target = Some("rawhide".into());
+            ds.builds.insert(b.key(), b);
+            let mut t = task(i + 100, i, "ppc64le", 1.0, 6.0 * 3600.0, 2);
+            t.weight = Some(6.0);
+            ds.tasks.insert(t.key(), t);
+        }
+        let h = assess_day(&ds, "ppc64le", 20.0);
+        let a = &h.arches[0];
+        // The hours are still reported — the work did happen.
+        assert!(a.builder_hours > 200.0, "{a:?}");
+        // But none of it is offered load, so there is nothing to warn about.
+        assert_eq!(a.offered_weight, Some(0.0));
+        assert_eq!(a.utilisation, Some(0.0));
+        assert!(
+            h.warnings.iter().all(|w| w.metric != "utilisation"),
+            "{:?}",
+            h.warnings
+        );
+
+        // The same volume from maintainers is pressure, and does warn.
+        let mut ds = Dataset::new();
+        for i in 1..=40 {
+            let b = build(i, "alice", false);
+            ds.builds.insert(b.key(), b);
+            let mut t = task(i + 100, i, "ppc64le", 1.0, 6.0 * 3600.0, 2);
+            t.weight = Some(6.0);
+            ds.tasks.insert(t.key(), t);
+        }
+        let h = assess_day(&ds, "ppc64le", 20.0);
+        assert!(h.arches[0].utilisation.unwrap() > 1.0);
+        assert!(h.warnings.iter().any(|w| w.metric == "utilisation"));
+    }
+
+    #[test]
+    fn a_task_weight_of_none_counts_as_one_and_a_missing_capacity_as_unknown() {
+        // Weight is absent on older rows; treating it as zero would report
+        // an idle fleet, and treating the arch as absent would hide it.
+        let mut ds = Dataset::new();
+        for i in 1..=24 {
+            let b = build(i, "alice", false);
+            ds.builds.insert(b.key(), b);
+            let t = task(i + 100, i, "s390x", 1.0, 3600.0, 2);
+            ds.tasks.insert(t.key(), t);
+        }
+        let selected: Vec<&TaskRecord> = ds.tasks.values().collect();
+        let h = assess(&ds, &selected, Some((0.0, 86_400.0)));
+        let a = &h.arches[0];
+        // 24 tasks x 1 weight x 1h over a 24h window = 1.0 in use.
+        assert!((a.offered_weight.unwrap() - 1.0).abs() < 0.01, "{a:?}");
+        // No capacity known for this arch, so no ratio is invented.
+        assert_eq!(a.capacity, None);
+        assert_eq!(a.utilisation, None);
+        assert!(!h.warnings.iter().any(|w| w.metric == "utilisation"));
     }
 
     #[test]

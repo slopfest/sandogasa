@@ -21,8 +21,21 @@ every band's median sat at about a minute, and inside F45's window 26 of the
 28 hour-plus waits fell on one person. Bands rather than names, so it is
 publishable; `--owner NAME` is how an individual sees their own.
 
-**Where builder time went** — the share lost to failed or cancelled tasks,
-and the share held by tasks over six hours. Four hung builds took 11.8% of
+**Where builder time went** — utilisation, the share lost to failed or
+cancelled tasks, and the share held by tasks over six hours. Utilisation is
+the signal that leads the others, since queueing is nonlinear in it: across
+four mass rebuilds it reads 0.54, 0.72, 0.78 and 1.19 while the wait those
+rebuilds saw went 53s, 2.0h, 4.2h and 3.8h. Capacity comes from the hub's
+configuration history, averaged across the period rather than sampled once,
+because fleets change size mid-month — half of ppc64le's was disabled in the
+middle of July 2025.
+
+Filler work is excluded from offered load, and running the metric on real
+data is what forced that: koschei is 84% of all builds, runs at priority 50,
+and exists to occupy builders that would otherwise idle. Counting it put an
+ordinary month's ppc64le at 1.39 utilisation while every class on that
+architecture answered in about a minute with 0.0% of tasks over an hour. A
+leading indicator that fires every month is not a leading indicator. Four hung builds took 11.8% of
 one rebuild's s390x capacity, which is invisible in a duration median and
 obvious as a share of hours.
 

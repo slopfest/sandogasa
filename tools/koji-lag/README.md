@@ -208,8 +208,17 @@ regression, and which nobody would have looked for unprompted:
   everyone else. Bands, not names: in July 2026 ten people carried 59% of
   s390x's human builds at a 23m p90 while every band's median sat at a
   minute. `--owner NAME` is how one person sees their own;
-- **where builder time went** — the share lost to failed or cancelled tasks,
-  and the share held by tasks over six hours.
+- **where builder time went** — utilisation, the share lost to failed or
+  cancelled tasks, and the share held by tasks over six hours.
+
+`utilisation` is weight in use over enabled builder weight, and it is the
+signal that leads all the others: queueing is nonlinear in it, so below about
+0.6 the waits are minutes and above about 0.7 they are hours. Filler work is
+excluded — koschei runs at priority 50 and exists to occupy builders that
+would otherwise idle, so counting it made an idle ppc64le read 1.39 while
+every class on it answered in a minute. Capacity comes from the hub's own
+configuration history, averaged across the period rather than sampled once,
+since fleets change size mid-month.
 
 Thresholds are printed as warnings at the top of the report rather than left
 for a reader to spot, and none fires on fewer than twenty tasks, so a single

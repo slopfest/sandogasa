@@ -418,7 +418,18 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
     };
 
     ReportOutput {
-        health: crate::health::assess(dataset, &selected),
+        // The period the report is about, which for a store query is
+        // `period` — `since`/`until` are cleared there so a build's children
+        // are not filtered twice. Utilisation needs a window length, so
+        // without one it is simply not computed.
+        health: crate::health::assess(
+            dataset,
+            &selected,
+            opts.period.or(match (opts.since, opts.until) {
+                (Some(a), Some(b)) => Some((a, b)),
+                _ => None,
+            }),
+        ),
         // From the windows where there are any, and otherwise from the
         // rows: a period the store holds only in part has no window to
         // name it, and "Instances:" followed by nothing is no answer.
@@ -848,22 +859,32 @@ fn render_health(o: &mut String, health: &crate::health::Health, min_samples: us
         let _ = writeln!(o, "\nWhere builder time went\n");
         let _ = writeln!(
             o,
-            "| arch | builder hours | wasted | tail (>6h) | tail tasks |"
+            "| arch | builder hours | utilisation | wasted | tail (>6h) | tail tasks |"
         );
-        let _ = writeln!(o, "|---|---:|---:|---:|---:|");
+        let _ = writeln!(o, "|---|---:|---:|---:|---:|---:|");
         for a in &health.arches {
             if a.tasks < min_samples {
                 continue;
             }
             let _ = writeln!(
                 o,
-                "| {} | {:.0} | {:.1}% | {:.1}% | {} |",
-                a.arch, a.builder_hours, a.wasted_pct, a.tail_pct, a.tail_tasks
+                "| {} | {:.0} | {} | {:.1}% | {:.1}% | {} |",
+                a.arch,
+                a.builder_hours,
+                a.utilisation
+                    .map(|u| format!("{u:.2}"))
+                    .unwrap_or_else(|| "—".into()),
+                a.wasted_pct,
+                a.tail_pct,
+                a.tail_tasks
             );
         }
         let _ = writeln!(
             o,
-            "\n- `wasted` — builder time in failed or cancelled tasks: capacity \n\
+            "\n- `utilisation` — weight in use over enabled builder weight. \n\
+             \u{20}\u{20}Queueing is nonlinear in it: below about 0.6 waits are minutes, \n\
+             \u{20}\u{20}above about 0.7 they are hours.\n\
+             - `wasted` — builder time in failed or cancelled tasks: capacity \n\
              \u{20}\u{20}spent producing nothing, and the cheapest kind to recover.\n\
              - `tail` — builder time in tasks over six hours. A handful of hung \n\
              \u{20}\u{20}builds can hold a fifth of an architecture."

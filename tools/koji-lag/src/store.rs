@@ -785,6 +785,48 @@ impl Store {
         Ok(rows.len())
     }
 
+    /// Fill in `dataset.capacity`: enabled builder weight per architecture,
+    /// averaged over `[from, to)` a day at a time.
+    ///
+    /// Averaged rather than sampled once, because a single reading
+    /// misreports any window a change fell inside — and they do: half the
+    /// ppc64le fleet was disabled mid-July 2025 and again for five days that
+    /// November, so a monthly figure taken at the midpoint would be either
+    /// the before or the after and never the truth.
+    ///
+    /// Called again by [`Store::analysable`] over the whole requested range,
+    /// because that merges one dataset per whole day and `Dataset::merge`
+    /// carries no window lengths to weight per-day means by. Recomputing
+    /// once over the range the report actually covers is both simpler and
+    /// the figure a reader wants.
+    fn fill_capacity(
+        &self,
+        instance: &str,
+        from: f64,
+        to: f64,
+        dataset: &mut Dataset,
+    ) -> Result<(), String> {
+        let arches: std::collections::BTreeSet<String> = dataset
+            .tasks
+            .values()
+            .map(|t| t.arch.clone())
+            .filter(|a| a != "noarch")
+            .collect();
+        let days = ((to - from) / 86_400.0).ceil().max(1.0) as usize;
+        for arch in arches {
+            let mut total = 0.0;
+            for day in 0..days {
+                let at = (from + day as f64 * 86_400.0 + 43_200.0).min(to);
+                total += self.capacity_at(instance, &arch, at)?.1;
+            }
+            let mean = total / days as f64;
+            if mean > 0.0 {
+                dataset.capacity.insert(arch, mean);
+            }
+        }
+        Ok(())
+    }
+
     /// Enabled hosts and their total weight capacity for `arch` at `at`.
     ///
     /// A revision counts when it was in force at that instant and its
@@ -962,6 +1004,9 @@ impl Store {
         for span in &whole {
             dataset.merge(self.dataset_for(instance, span.from, span.to, grace)?);
         }
+        // Over the whole requested range, not per merged day: see
+        // `fill_capacity`.
+        self.fill_capacity(instance, from, to, &mut dataset)?;
         let mut skipped = Vec::new();
         for day in self.listed_days(instance)? {
             if day < from || day >= to {
@@ -1131,6 +1176,8 @@ impl Store {
         for (id, name) in channels {
             dataset.channels.insert(format!("{instance}:{id}"), name);
         }
+
+        self.fill_capacity(instance, from, to, &mut dataset)?;
         Ok(dataset)
     }
 

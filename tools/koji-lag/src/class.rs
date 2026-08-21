@@ -95,6 +95,17 @@ impl Class {
         matches!(self, Class::MassRebuild | Class::ElnSync)
     }
 
+    /// Whether this class is filler: work submitted to occupy builders that
+    /// would otherwise idle, and which gives way to everything else.
+    ///
+    /// koschei runs at priority 50 against maintainer work at 19-20, and it
+    /// is enormous — 84% of all builds in this store. Counting it as offered
+    /// load makes an idle fleet look saturated: March 2026 put ppc64le at
+    /// 1.39 utilisation with every class answering in about a minute.
+    pub fn filler(self) -> bool {
+        matches!(self, Class::Koschei)
+    }
+
     /// Every class, for iterating report sections in a stable order.
     pub fn all() -> [Class; 8] {
         [
