@@ -2,6 +2,12 @@
 
 ## koji-lag
 
+- (2026-08-21) **0.21.0 is deliberately held**, not blocked: the choice on
+  2026-08-21 was to wait for the 2025-02..06 backfill and for the report
+  metrics below, rather than ship around work in progress. The metrics are
+  better designed against a store with no hole in it, and the backfill is
+  hours rather than days.
+
 - (2026-08-21) **The next release is 0.21.0, not a patch.** `cargo
   semver-checks` against the published 0.20.0 finds three breaking changes,
   and the pre-1.0 rule in the root guidance maps breaking to a minor bump:
