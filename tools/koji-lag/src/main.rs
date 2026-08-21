@@ -26,6 +26,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Report the mass rebuilds and architecture stalls in a store.
+    Annotate(AnnotateArgs),
     Events(EventsArgs),
     /// Write a store's rows out as CSV, for analysis elsewhere.
     Export(ExportArgs),
@@ -37,6 +38,34 @@ enum Command {
     Reports(ReportsArgs),
     /// Fetch whatever the store is missing for a window.
     Sync(SyncArgs),
+}
+
+/// Apply annotations to an events tree that already exists.
+///
+/// Reads each `event.json`, matches the notes against it again and rewrites
+/// the rendering. The store is never opened, so this costs a directory walk
+/// rather than the minutes of querying that found the windows — which is
+/// what makes annotating an outage worth doing at all.
+#[derive(clap::Args)]
+struct AnnotateArgs {
+    /// Events tree to rewrite, as passed to `events --out`.
+    #[arg(long, value_name = "DIR")]
+    events: PathBuf,
+
+    /// Known Koji instance (cbs, fedora, stream).
+    #[arg(long, default_value = "fedora")]
+    instance: String,
+
+    /// Extra annotations, beyond the ones built in.
+    #[arg(long, value_name = "FILE")]
+    annotations: Option<PathBuf>,
+
+    /// Withhold stats below this sample count in the rewritten reports.
+    #[arg(long, default_value_t = 5)]
+    min_samples: usize,
+
+    #[arg(long, short)]
+    verbose: bool,
 }
 
 #[derive(clap::Args)]
@@ -387,6 +416,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Probe(args) => cmd_probe(&args),
         Command::Report(args) => cmd_report(&args),
+        Command::Annotate(args) => cmd_annotate(&args),
         Command::Events(args) => cmd_events(&args),
         Command::Reports(args) => cmd_reports(&args),
         Command::Export(args) => cmd_export(&args),
@@ -488,6 +518,46 @@ fn summarise(days: &[String]) -> String {
     }
 }
 
+fn cmd_annotate(args: &AnnotateArgs) -> Result<(), Box<dyn Error>> {
+    let (instance_key, _) = instance::resolve(&args.instance, None)?;
+    let mut notes = koji_lag::annotate::builtin()?;
+    if let Some(path) = &args.annotations {
+        notes.extend(koji_lag::annotate::read(path)?);
+    }
+    // Stanzas still waiting for a cause are not annotations yet; loading
+    // them would file every outage under the empty string.
+    let blank = notes.iter().filter(|n| n.cause.trim().is_empty()).count();
+    notes.retain(|n| !n.cause.trim().is_empty());
+    if blank > 0 {
+        eprintln!("note: ignored {blank} stanza(s) with an empty `cause`");
+    }
+
+    let events = koji_lag::events::reannotate(&args.events, &instance_key, &notes)?;
+    let mut files = 0;
+    for event in &events {
+        files += koji_lag::events::write(&args.events, event)?.len();
+        if args.verbose {
+            eprintln!("[koji-lag] annotate: {}", event.slug());
+        }
+    }
+    let explained = events
+        .iter()
+        .filter(|e| e.kind == koji_lag::events::Kind::Outage && !e.causes.is_empty())
+        .count();
+    let left = koji_lag::events::write_unexplained(&args.events, &instance_key, &events)?;
+    eprintln!(
+        "annotate: {} event(s) rewritten in {files} file(s), {explained} outage(s) \
+         with a cause{}",
+        events.len(),
+        match &left {
+            Some(p) => format!("; still unexplained, see {}", p.display()),
+            None => String::new(),
+        }
+    );
+    let _ = args.min_samples;
+    Ok(())
+}
+
 fn cmd_events(args: &EventsArgs) -> Result<(), Box<dyn Error>> {
     let (instance_key, _) = instance::resolve(&args.instance, None)?;
     let store = koji_lag::store::Store::open(&args.store)?;
@@ -579,7 +649,7 @@ fn cmd_events(args: &EventsArgs) -> Result<(), Box<dyn Error>> {
 
     // An annotation matching nothing is a gap in the record or a mistake
     // in the note, and either way silence would hide it.
-    for note in koji_lag::events::unmatched(&events, &instance_key, &notes) {
+    for note in koji_lag::events::unmatched(&events, &instance_key, &notes, (from, to)) {
         eprintln!(
             "warning: annotation for {} {} ({} .. {}) matched no event",
             note.instance,
@@ -588,15 +658,22 @@ fn cmd_events(args: &EventsArgs) -> Result<(), Box<dyn Error>> {
             note.to
         );
     }
-    let unexplained = events
-        .iter()
-        .filter(|e| e.kind == koji_lag::events::Kind::Outage && e.causes.is_empty())
-        .count();
-    if unexplained > 0 {
+    // Hand back a stanza per unexplained outage rather than a pointer to a
+    // file the reader may not have: everything the store can know is already
+    // filled in, and only the cause and the ticket are missing.
+    if let Some(path) = koji_lag::events::write_unexplained(&args.out, &instance_key, &events)? {
+        let n = events
+            .iter()
+            .filter(|e| e.kind == koji_lag::events::Kind::Outage && e.causes.is_empty())
+            .count();
         eprintln!(
-            "note: {unexplained} outage(s) have no recorded cause; \
-             see data/outages.toml"
+            "note: {n} outage(s) have no recorded cause. Fill in {} and apply it \
+             with\n      koji-lag annotate --events {} --annotations {}",
+            path.display(),
+            args.out.display(),
+            path.display()
         );
+        files += 1;
     }
     eprintln!(
         "events: {} in {} file(s) -> {}",

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### koji-lag: an unexplained outage hands you the annotation to fill in
+
+An outage with no recorded cause used to print `see data/outages.toml`, which
+assumes a checkout the reader may not have and leaves them to discover the
+schema, the quoted-date requirement and the overlap matching for themselves.
+Three ways to get it wrong before writing anything.
+
+`events` now writes `unexplained.toml` beside its tree with a ready stanza per
+unexplained outage: instance, architecture and dates filled in, `cause` and
+`ticket` blank with hints, and `note` carrying the measured facts forward so
+nobody retypes figures the tool already computed. The header gives both routes
+— apply it immediately with `--annotations`, or paste it into
+`data/outages.toml` and contribute it — because only one of those works
+without a checkout. The file deletes itself once everything has a cause,
+rather than lingering to be believed.
+
+**`koji-lag annotate --events DIR` applies annotations without opening the
+store.** Everything a rendering needs is already in each `event.json`, so
+splicing in a cause costs a directory walk: 2 milliseconds against the two
+minutes that found the windows. Nobody annotates an outage if doing so means
+re-running the detection.
+
+Stanzas whose `cause` is still blank are ignored rather than filing an outage
+under the empty string, and an annotation matching no window is only reported
+when it overlaps the range that was actually scanned — asking for May and
+being told a November note matched nothing is noise, and noise in a warning
+teaches people to skip warnings.
+
 ### koji-lag: half the stall events were the mean's doing
 
 Filling the February-to-June 2025 gap turned up a congestion event on

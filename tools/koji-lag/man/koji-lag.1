@@ -15,10 +15,31 @@ Print help
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
+.SS koji-lag annotate
+\fBkoji\-lag annotate\fR <\fB\-\-events\fR> [\fB\-\-instance\fR] [\fB\-\-annotations\fR] [\fB\-\-min\-samples\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Report the mass rebuilds and architecture stalls in a store
+.TP
+\fB\-\-events\fR \fI<DIR>\fR
+Events tree to rewrite, as passed to `events \-\-out`
+.TP
+\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
+Known Koji instance (cbs, fedora, stream)
+.TP
+\fB\-\-annotations\fR \fI<FILE>\fR
+Extra annotations, beyond the ones built in
+.TP
+\fB\-\-min\-samples\fR \fI<MIN_SAMPLES>\fR [default: 5]
+Withhold stats below this sample count in the rewritten reports
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS koji-lag events
 \fBkoji\-lag events\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-o\fR|\fB\-\-out\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-schedule\fR] [\fB\-\-annotations\fR] [\fB\-\-min\-samples\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
-Report the mass rebuilds and architecture stalls in a store
 .TP
 \fB\-\-store\fR \fI<FILE>\fR
 Store to read from

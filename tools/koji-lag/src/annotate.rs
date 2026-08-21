@@ -86,6 +86,73 @@ impl Note {
     }
 }
 
+/// A ready-to-fill annotation for a window nobody has explained.
+///
+/// Everything the store can know is filled in; what is left blank is what
+/// only a person knows. `note` carries the measured facts forward so that
+/// whoever writes the cause is not retyping figures the tool already
+/// computed — the same reason the rest of this crate does not make a reader
+/// recompute anything.
+pub fn stub(
+    instance: &str,
+    arch: Option<&str>,
+    from: NaiveDate,
+    to: NaiveDate,
+    facts: &[(String, String)],
+) -> String {
+    let mut out = String::from("[[outage]]\n");
+    out.push_str(&format!("instance = \"{instance}\"\n"));
+    match arch {
+        Some(a) => out.push_str(&format!("arch = \"{a}\"\n")),
+        // Present but commented, so the shape is obvious to anyone editing
+        // a fleet-wide note by hand.
+        None => out.push_str("# arch = \"s390x\"   # omit for something fleet-wide\n"),
+    }
+    out.push_str(&format!("from = \"{from}\"\n"));
+    out.push_str(&format!("to = \"{to}\"\n"));
+    out.push_str("cause = \"\"   # storage, network, datacentre-move, capacity-reduction\n");
+    out.push_str(
+        "ticket = \"\"  # e.g. https://forge.fedoraproject.org/infra/tickets/issues/13326\n",
+    );
+    out.push_str("note = \"\"\"\n");
+    out.push_str("What was happening. Measured, for whoever writes the rest:\n");
+    for (label, value) in facts {
+        out.push_str(&format!("  {label}: {value}\n"));
+    }
+    out.push_str("\"\"\"\n");
+    out
+}
+
+/// The file [`stub`]s are written into, with the instructions that make it
+/// usable from anywhere.
+///
+/// Two routes on purpose. `data/outages.toml` is a path inside a checkout
+/// and means nothing to somebody running an installed binary, which is what
+/// the old "see data/outages.toml" advice assumed of everyone.
+pub fn stub_file(stubs: &[String]) -> String {
+    let mut out = String::from(
+        "# Windows koji-lag detected and nobody has explained.\n\
+         #\n\
+         # Fill in `cause` and `ticket`, then either:\n\
+         #\n\
+         #   - use it here and now, from any directory:\n\
+         #       koji-lag annotate --events <this tree> --annotations <this file>\n\
+         #     which rewrites the events without touching the store, or\n\
+         #\n\
+         #   - contribute it, so everyone gets it: paste the stanza into\n\
+         #     tools/koji-lag/data/outages.toml in a sandogasa checkout.\n\
+         #\n\
+         # Dates are quoted strings; TOML's own date type deserializes as a\n\
+         # table, which will not load. `to` is inclusive.\n\
+         #\n\
+         # Notes match windows by *overlap*, never by equal dates, so write\n\
+         # the dates of the event as you understand it -- the window's edges\n\
+         # move when a threshold changes or a day of data arrives.\n\n",
+    );
+    out.push_str(&stubs.join("\n"));
+    out
+}
+
 /// The annotations shipped with the tool.
 ///
 /// Compiled in rather than read from `data/`, because that directory is a

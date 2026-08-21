@@ -31,6 +31,22 @@ No external tools required.
 
 ## Usage
 
+### Annotate
+
+Apply annotations to an events tree that already exists, without reopening
+the store:
+
+```sh
+koji-lag annotate --events out --annotations out/unexplained.toml
+```
+
+Everything a rendering needs is in each `event.json`, so this is a directory
+walk rather than the minutes of querying that found the windows. `events`
+writes `out/unexplained.toml` whenever an outage has no recorded cause, with
+the dates and measured facts already filled in; add `cause` and `ticket`, then
+either apply it as above or paste the stanza into `data/outages.toml` to
+contribute it. Stanzas still missing a `cause` are ignored.
+
 ### Events
 
 Find the windows worth looking at and write one directory per window:
