@@ -225,20 +225,42 @@ s390x, median build time and p90, `rust-` packages against everything else:
 
 | rebuild | control p50 | rest p50 | control p90 | rest p90 |
 |:--|--:|--:|--:|--:|
-| F42 | 1.44m | 1.16m | 4.45m | 3.72m |
-| F43 | 1.87m | 1.67m | 5.30m | 6.68m |
+| F42 | 1.73m | 1.38m | 5.14m | 5.23m |
+| F43 | 2.09m | 1.99m | 6.31m | 10.19m |
 | F44 | 2.19m | 1.96m | 6.89m | 11.79m |
 | F45 | 2.16m | 2.26m | 6.34m | 13.54m |
 
-F42 to F45: the control population slowed **1.50x** and everything else
-**1.95x**, so the platform accounts for half again on all work and the
-toolchain a further **1.30x** on top of that — the two effects separated
+F42 to F45: the control population slowed **1.25x** and everything else
+**1.63x**, so the platform accounts for a quarter on all work and the
+toolchain a further **1.31x** on top of that — the two effects separated
 without a spec checkout or a `BuildRequires` scan.
 
-The p90 says where the second effect lands. The control tail grew 1.42x and
-everything else's **3.64x**, so the compile cost is concentrated in the heavy
+The p90 says where the second effect lands. The control tail grew 1.23x and
+everything else's **2.59x**, so the compile cost is concentrated in the heavy
 packages rather than spread evenly: the median package pays a little and the
 expensive ones pay a lot.
+
+Two independent methods now agree on this, which is the strongest thing to
+say about it. Section 2 above matches the *same packages* across the two
+rebuilds and classifies them by their specs' `BuildRequires`; the table here
+takes every package and classifies by name prefix. They share no code and
+differ in population, yet land on ppc64le 0.73x against 0.73x, x86_64 0.69x
+against 0.68x, aarch64 0.94x against 0.93x, and an s390x divergence of 1.31x
+against 1.31x.
+
+That agreement is also what should have caught the error below sooner. An
+earlier version of this table reported the platform effect as 1.50x while
+section 2, in the same document, reported 1.16x by a method with no reason to
+be wrong — a disagreement large enough to check and nobody checked it. The population then included
+`buildSRPMFromSCM` tasks, which are a checkout and a tarball rather than a
+compile and take seconds, and whose recorded architecture is the host the hub
+happened to pick rather than anything the build targets. F42's s390x rebuild
+carried 5,980 of them against 14,632 compiles and F45's carried none, because
+the misassignment that produced them was corrected in October 2025 — so the
+early median was dragged down and the ratio inflated by a third. Divergence
+came through it unharmed (1.30x against 1.31x), a ratio of ratios cancelling
+a contamination common to both populations, which is the only reason the
+conclusion below survived the correction.
 
 `koji-lag events` now computes this for every rebuild it finds, warning at
 1.25x, and running it over all four adds the part the manual comparison
@@ -246,17 +268,18 @@ missed — the other four architectures are the control this argument needed:
 
 | arch | control | rest | divergence | utilisation |
 |:--|--:|--:|--:|--:|
-| aarch64 | 0.91x | 1.09x | 1.19x | 0.30 → 0.40 |
+| s390x | **1.25x** | **1.63x** | 1.31x | 0.38 → 0.72 |
+| ppc64le | 0.73x | 0.95x | 1.30x | 0.30 → 0.73 |
+| aarch64 | 0.93x | 1.10x | 1.18x | 0.30 → 0.40 |
+| x86_64 | 0.68x | 0.80x | 1.17x | 0.19 → 0.26 |
 | i386 | 0.65x | 0.70x | 1.08x | 0.14 → 0.15 |
-| ppc64le | 0.72x | 0.92x | 1.28x | 0.30 → 0.73 |
-| x86_64 | 0.69x | 0.80x | 1.16x | 0.19 → 0.26 |
-| s390x | **1.50x** | **1.95x** | 1.30x | 0.38 → 0.72 |
 
 Every architecture except s390x got absolutely **faster** across those four
-rebuilds, and every one of them shows a positive divergence. So the two
+rebuilds, and every one of them shows a positive divergence between 1.08x and
+1.31x. So the two
 effects separate cleanly along different axes: the toolchain cost is
 **Fedora-wide**, 1.08x to 1.30x everywhere, while the platform regression is
-**s390x's alone** — 1.50x against everybody else's improvement. Neither
+**s390x's alone** — 1.25x against everybody else's improvement. Neither
 conclusion rests on the other, and neither needs a spec checkout.
 
 Utilisation more than doubled on both architectures that queue, ppc64le 0.30

@@ -61,6 +61,22 @@ rebuild rather than one: the event's report describes its window as it
 happened, including everything else that ran in it, while the trend needs the
 fixed population.
 
+One correction found by reading the population counts rather than the ratios.
+Build time per population now counts `buildArch` tasks only. It had included
+`buildSRPMFromSCM`, which is a checkout and a tarball rather than a compile
+and takes seconds, and whose recorded architecture is the host the hub picked
+rather than anything the build targets. F42's s390x rebuild carried 5,980 of
+those against 14,632 compiles and F45's carried none, the misassignment having
+been corrected in October 2025 — so s390x's population appeared to fall 45%
+while every other architecture's grew, its early median was dragged down, and
+the platform regression read 1.50x where the compile-only figure is 1.25x.
+Utilisation and builder hours still count the SRPM work, because it occupies a
+builder whatever it is doing.
+
+Divergence came through unharmed at 1.30x against 1.31x, being a ratio of
+ratios and so cancelling a contamination common to both populations. That is
+the only reason the conclusion survived, and not something to rely on twice.
+
 Both trend files carry a legend defining `control`, `rest`, `ratio`,
 `divergence` and `utilisation`, and saying which way to read each — the
 words were doing real work with nothing in the file explaining them.
@@ -71,16 +87,16 @@ architectures turn out to be the control the argument needed:
 
 | arch | rust control | everything else | divergence | utilisation |
 |:--|--:|--:|--:|--:|
-| aarch64 | 0.91x | 1.09x | 1.19x | 0.30 → 0.40 |
+| s390x | 1.25x | 1.63x | 1.31x | 0.38 → 0.72 |
+| ppc64le | 0.73x | 0.95x | 1.30x | 0.30 → 0.73 |
+| aarch64 | 0.93x | 1.10x | 1.18x | 0.30 → 0.40 |
+| x86_64 | 0.68x | 0.80x | 1.17x | 0.19 → 0.26 |
 | i386 | 0.65x | 0.70x | 1.08x | 0.14 → 0.15 |
-| ppc64le | 0.72x | 0.92x | 1.28x | 0.30 → 0.73 |
-| x86_64 | 0.69x | 0.80x | 1.16x | 0.19 → 0.26 |
-| s390x | 1.50x | 1.95x | 1.30x | 0.38 → 0.72 |
 
 Every architecture except s390x got absolutely *faster* over those four
 rebuilds, and every one of them shows a positive divergence. So the toolchain
-cost is Fedora-wide at 1.08x to 1.30x, while the platform regression is
-s390x's alone — 1.50x against everybody else's improvement. Utilisation more
+cost is Fedora-wide at 1.08x to 1.31x, while the platform regression is
+s390x's alone — 1.25x against everybody else's improvement. Utilisation more
 than doubled on both of the architectures that queue.
 
 ### koji-lag: a narrowed report stops quoting the whole fleet at you
@@ -122,12 +138,12 @@ repeated, rejected with the list of valid names when misspelt. A mass rebuild
 builds nearly everything, so restricting to it holds the mix roughly fixed.
 
 On s390x that turns four incomparable numbers into a series: the Rust control
-population's median goes 1.44m, 1.87m, 2.19m, 2.16m across F42 to F45 while
-everything else goes 1.16m, 1.67m, 1.96m, 2.26m. Which is the two-effect
+population's median goes 1.73m, 2.09m, 2.19m, 2.16m across F42 to F45 while
+everything else goes 1.38m, 1.99m, 1.96m, 2.26m. Which is the two-effect
 split measured cleanly rather than argued: the platform slowed everything by
-1.50x, and non-Rust packages took a further 1.30x on top. At the p90 the
-second effect is much larger — the control population's tail grew 1.42x and
-everything else's 3.64x, so the compiler cost lands on the heavy packages.
+1.25x, and non-Rust packages took a further 1.31x on top. At the p90 the
+second effect is much larger — the control population's tail grew 1.23x and
+everything else's 2.59x, so the compiler cost lands on the heavy packages.
 
 ### koji-lag: which architecture everybody else is waiting for
 

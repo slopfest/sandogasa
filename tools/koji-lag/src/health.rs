@@ -29,7 +29,7 @@ use sandogasa_kojihub::hub::{TASK_CANCELED, TASK_CLOSED, TASK_FAILED};
 use serde::{Deserialize, Serialize};
 
 use crate::class::{self, Class};
-use crate::dataset::{BuildRecord, Dataset, TaskRecord};
+use crate::dataset::{BUILD_ARCH, BuildRecord, Dataset, TaskRecord};
 use crate::stats::{DistSummary, median, percentile, summarize};
 
 /// Builder time in a single task beyond which it is treated as tail rather
@@ -283,6 +283,25 @@ pub fn assess(
             // Successful builds only: a build that failed or was killed
             // stopped when it stopped, and averaging that with work that
             // ran to completion measures the failure, not the toolchain.
+            // `buildArch` only, for both of the metrics below. An
+            // architecture's compile cost is what it compiled, and a
+            // `buildSRPMFromSCM` task is not compilation -- it is a
+            // checkout and a tarball, taking seconds. Worse, its `arch` is
+            // the host the hub happened to pick rather than anything the
+            // build targets, so counting it attributes another
+            // architecture's work to this one.
+            //
+            // Measured: F42's s390x rebuild carried 5,980 SRPM tasks
+            // against 14,632 compiles, and F45's carried none, because the
+            // misassignment that produced them was corrected in October
+            // 2025. Including them dragged F42's median down and reported a
+            // 1.50x platform regression where the compile-only figure is
+            // 1.25x. Divergence survived it (1.30x against 1.31x, the
+            // ratio of ratios cancelling a common contamination), which is
+            // the only reason the conclusion did.
+            if task.method != BUILD_ARCH {
+                continue;
+            }
             if let Some(parent) = task.parent {
                 per_build
                     .entry((&task.instance, parent))
@@ -822,6 +841,33 @@ mod tests {
             }
         }
         assert!(assess_all(&ds).stragglers.is_empty());
+    }
+
+    #[test]
+    fn srpm_work_counts_as_load_but_not_as_an_architectures_compile_cost() {
+        let mut ds = Dataset::new();
+        for id in 1..=30i64 {
+            // One compile at ten minutes, one SRPM checkout at ten seconds,
+            // both landing on s390x hosts.
+            let (b, mut tasks) = multiarch(id, &[("s390x", 600.0)]);
+            let mut srpm = tasks[0].clone();
+            srpm.task_id = id * 1000 + 500;
+            srpm.method = "buildSRPMFromSCM".to_string();
+            srpm.completion_ts = Some(10.0);
+            tasks.push(srpm);
+            ds.builds.insert(format!("fedora:{id}"), b);
+            for t in tasks {
+                ds.tasks.insert(format!("fedora:{}", t.task_id), t);
+            }
+        }
+        let a = &assess_all(&ds).arches[0];
+        // The compile cost is the compiles: thirty of them, ten minutes
+        // each. Averaging in a ten-second checkout would report 5m.
+        let rest = a.service.iter().find(|p| p.name == "rest").expect("rest");
+        assert_eq!((rest.tasks, rest.p50), (30, Some(600.0)));
+        // The checkout still occupied a builder, so it is still load.
+        assert_eq!(a.tasks, 60);
+        assert_eq!(a.builder_hours, 30.0 * 610.0 / 3600.0);
     }
 
     #[test]

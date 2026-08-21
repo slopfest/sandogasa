@@ -482,6 +482,36 @@ ten submitters on a small instance also all land in the top band and their
 p90 is still a real finding about them. `--class` does not gate it: it narrows
 what was built, not who built it.
 
+## Check the population counts before believing a ratio
+
+A ratio between two periods can only be read once you know the two
+populations are the same population, and the counts are where that shows.
+`trend` prints `tasks_from` and `tasks_to` beside every ratio for exactly
+this reason.
+
+The case that established it: s390x's F42-to-F45 comparison reported a 1.50x
+platform regression, and its `rest` population had fallen 45% while every
+other architecture's grew 11-12%. That asymmetry was the whole story. The
+population included `buildSRPMFromSCM` tasks — a checkout and a tarball, not
+a compile, taking seconds rather than minutes, and recorded against the host
+the hub happened to pick rather than anything the build targets. F42 carried
+5,980 of them on s390x and F45 none, because the misassignment that produced
+them was corrected in October 2025. The early median was therefore dragged
+down and the ratio inflated by a third: the compile-only figure is 1.25x.
+
+Two rules from it.
+
+**Match the method to the question.** An architecture's compile cost is
+`buildArch` and nothing else. Utilisation and builder hours deliberately keep
+the SRPM work, because it occupies a builder whatever it is doing — the guard
+belongs on the specific metric, not on the loop.
+
+**A ratio of ratios is more robust than either ratio, and that is a trap.**
+Divergence read 1.30x before the fix and 1.31x after, because the
+contamination was common to both populations and cancelled. It meant the
+conclusion survived, but it also meant the error was invisible in the number
+being relied on. Look at the counts.
+
 ## A fleet of architectures has a property none of them has
 
 Every architecture can be healthy on its own terms — short queue, busy
