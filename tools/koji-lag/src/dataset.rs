@@ -24,6 +24,15 @@ use chrono::{DateTime, Utc};
 /// versions are migrated or rejected explicitly.
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// A set of architectures served by the same builders.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Pool {
+    /// The architectures in the pool, sorted.
+    pub arches: Vec<String>,
+    /// Enabled builder weight, each host counted once.
+    pub capacity: f64,
+}
+
 /// A pooled collection of build/task records from one or more
 /// Koji instances.
 #[derive(Debug, Clone)]
@@ -48,6 +57,15 @@ pub struct Dataset {
     /// selection has no window, or when the store predates capacity
     /// collection.
     pub capacity: BTreeMap<String, f64>,
+    /// Builder pools: sets of architectures served by the same hosts, with
+    /// each host's weight counted once.
+    ///
+    /// The denominator utilisation should actually use. `capacity` above is
+    /// weight *able to serve* an architecture, so wherever hosts serve
+    /// several it counts the same machines under each and understates how
+    /// busy they are — Fedora's i386 and x86_64 entries both include all 49
+    /// x86 hosts. Empty for the same reasons `capacity` is.
+    pub pools: Vec<Pool>,
     /// `"<instance>:<host_id>"` → the arches that host serves, as the
     /// hub reports them (`x86_64 i386`, `s390x`).
     ///
@@ -213,6 +231,7 @@ impl Dataset {
             channels: BTreeMap::new(),
             capacity: BTreeMap::new(),
             host_arches: BTreeMap::new(),
+            pools: Vec::new(),
         }
     }
 
@@ -237,6 +256,7 @@ impl Dataset {
     pub fn merge(&mut self, other: Dataset) -> MergeStats {
         let mut stats = MergeStats::default();
         self.capacity.clear();
+        self.pools.clear();
         fn newer(a: Option<f64>, b: Option<f64>) -> bool {
             match (a, b) {
                 (Some(x), Some(y)) => x > y,

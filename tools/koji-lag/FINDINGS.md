@@ -491,12 +491,27 @@ year — the fleets look wildly uneven:
 | i386 | 136 | 0.19 | 0.05 |
 
 i386 appears to hold more builder weight than s390x's entire fleet at 19%
-utilisation. **That is an artifact and not spare hardware.** Fedora's i386
-builders *are* its x86_64 builders: every one of the 33 hosts that took i386
-work in July 2026 also took x86_64 work, and the hub records them as `i386
-x86_64`. Both rows count the same machines, so both utilisations understate
-the load. Combined, x86 offered 83.6 against a real 162 at peak — about 0.52,
-which is unremarkable.
+utilisation. **That was an artifact and not spare hardware**, and the table
+above is the old per-architecture reading, kept to show what the trap looked
+like. Fedora's i386 builders *are* its x86_64 builders: every one of the 33
+hosts that took i386 work in July 2026 also took x86_64 work, and the hub
+records them as `i386 x86_64`.
+
+`koji-lag` now reports utilisation per **builder pool** — the set of
+architectures served by the same hosts, each host's weight counted once — so
+the trap is gone from the tool as well as from this document:
+
+| pool | capacity | offered | utilisation |
+|:--|--:|--:|--:|
+| s390x | 91.5 | 94.7 | **1.04** |
+| ppc64le | 58.0 | 63.5 | **1.09** |
+| aarch64 | 106.0 | 60.4 | 0.57 |
+| i386 i686 x86_64 | 162.0 | 83.6 | 0.52 |
+
+Four pools, not five: x86_64 appears in two different host lists (`x86_64
+i386` and `x86_64 i686`) and pulls both 32-bit names into one component with
+it. The x86 fleet is at 0.52 at peak, which is unremarkable, and the 136
+units of headroom do not exist.
 
 i386 is also the wrong place to look for savings for a second reason. It is
 [deprecated](https://fedoraproject.org/wiki/Changes/EncourageI686LeafRemoval):

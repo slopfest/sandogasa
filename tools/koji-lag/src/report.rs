@@ -871,6 +871,36 @@ fn render_health(o: &mut String, health: &crate::health::Health, min_samples: us
              of them in F42's rebuild and 5 in F45's."
         );
     }
+    // One row per pool, not per architecture: where hosts are shared the
+    // per-architecture figures each describe a slice of the same machines.
+    let mut pools: Vec<(&str, f64, f64, f64)> = Vec::new();
+    for a in &health.arches {
+        if let (Some(p), Some(cap), Some(off), Some(u)) =
+            (&a.pool, a.pool_capacity, a.pool_offered, a.utilisation)
+            && !pools.iter().any(|(name, ..)| *name == p.as_str())
+        {
+            pools.push((p, cap, off, u));
+        }
+    }
+    if !pools.is_empty() {
+        let _ = writeln!(o, "\nBuilder pools\n");
+        let _ = writeln!(o, "| architectures | capacity | offered | utilisation |");
+        let _ = writeln!(o, "|---|---:|---:|---:|");
+        for (name, cap, off, u) in &pools {
+            let _ = writeln!(o, "| {name} | {cap:.1} | {off:.1} | {u:.2} |");
+        }
+        let _ = writeln!(
+            o,
+            "\nA pool is the set of architectures served by the same \
+             builders, with each\nhost's weight counted once. Utilisation \
+             belongs here rather than to an\narchitecture: Fedora's i386 \
+             builders are its x86_64 builders, so counting\nthem under each \
+             separately showed i386 at 0.19 and x86_64 at 0.35 while \
+             the\nmachines they share were at 0.52 — and made 136 weight \
+             units of headroom\nappear that could not be redeployed, being \
+             x86_64's own counted twice."
+        );
+    }
     let streams: Vec<_> = health
         .streams
         .iter()
@@ -895,12 +925,8 @@ fn render_health(o: &mut String, health: &crate::health::Health, min_samples: us
             "\nWhat narrowing an architecture's scope would free, against \
              what adding\nbuilders would. The two are alternative answers to \
              the same queue and are\nnot comparable until this table \
-             has numbers in it.\n\nCapacity elsewhere in this report is \
-             builder weight *able to serve* an\narchitecture, not weight \
-             dedicated to it: Fedora's i386 builders are its x86_64\n\
-             builders, so those two rows count the same machines and \
-             neither\nutilisation is the load on the metal. s390x and \
-             ppc64le have hosts of their own."
+             has numbers in it. See the builder pools above for what \
+             each\narchitecture's capacity is actually shared with."
         );
     }
     let stragglers: Vec<_> = health

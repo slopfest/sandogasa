@@ -824,7 +824,116 @@ impl Store {
                 dataset.capacity.insert(arch, mean);
             }
         }
+
+        // Pools, averaged over the same days for the same reason: a fleet
+        // that changes size mid-window has no single correct reading.
+        let mut totals: BTreeMap<Vec<String>, f64> = BTreeMap::new();
+        for day in 0..days {
+            let at = (from + day as f64 * 86_400.0 + 43_200.0).min(to);
+            for (arches, capacity) in self.pools_at(instance, at)? {
+                *totals.entry(arches).or_default() += capacity;
+            }
+        }
+        dataset.pools = totals
+            .into_iter()
+            .map(|(arches, total)| crate::dataset::Pool {
+                arches,
+                capacity: total / days as f64,
+            })
+            .filter(|p| p.capacity > 0.0)
+            .collect();
         Ok(())
+    }
+
+    /// Builder pools at `at`: sets of architectures that share hosts, with
+    /// each host's weight counted once.
+    ///
+    /// A pool is a connected component of the "some host serves both"
+    /// relation, which is the only grouping that both terminates and stays
+    /// correct as the fleet changes. Fedora's hosts advertise five distinct
+    /// architecture lists — `aarch64`, `x86_64 i386`, `ppc64le`, `s390x`,
+    /// `x86_64 i686` — and those are four pools, not five, because x86_64
+    /// appears in two of them and pulls i386 and i686 into one component
+    /// with it. A grouping by literal arch list would have reported the two
+    /// x86 lists as independent fleets with independent headroom.
+    ///
+    /// Historical revisions carry the same sets in other orders and with
+    /// architectures now gone (`aarch64 armhfp`, `i386 x86_64`), so the
+    /// component walk normalises rather than matching strings.
+    pub fn pools_at(&self, instance: &str, at: f64) -> Result<Vec<(Vec<String>, f64)>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT host_id, arches, capacity
+                 FROM host_config
+                 WHERE instance = ?1 AND enabled = 1
+                   AND create_ts <= ?2 AND (revoke_ts IS NULL OR revoke_ts > ?2)",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![instance, at], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, f64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+
+        // arch -> component id, merged as hosts link architectures together.
+        let mut component: BTreeMap<String, usize> = BTreeMap::new();
+        let mut hosts: Vec<(Vec<String>, f64)> = Vec::new();
+        for row in rows {
+            let (_, arches, capacity) = row.map_err(|e| e.to_string())?;
+            let arches: Vec<String> = arches
+                .split_whitespace()
+                .filter(|a| *a != "noarch")
+                .map(str::to_string)
+                .collect();
+            if !arches.is_empty() {
+                hosts.push((arches, capacity));
+            }
+        }
+        let mut next = 0usize;
+        for (arches, _) in &hosts {
+            // The component this host joins: any its architectures already
+            // belong to, else a fresh one.
+            let id = arches
+                .iter()
+                .find_map(|a| component.get(a).copied())
+                .unwrap_or_else(|| {
+                    next += 1;
+                    next - 1
+                });
+            // Everything this host serves is now in that component, and any
+            // component they came from is absorbed into it.
+            let absorb: Vec<usize> = arches
+                .iter()
+                .filter_map(|a| component.get(a).copied())
+                .filter(|c| *c != id)
+                .collect();
+            for c in absorb {
+                for v in component.values_mut() {
+                    if *v == c {
+                        *v = id;
+                    }
+                }
+            }
+            for a in arches {
+                component.insert(a.clone(), id);
+            }
+        }
+
+        let mut pools: BTreeMap<usize, (Vec<String>, f64)> = BTreeMap::new();
+        for (arches, capacity) in &hosts {
+            let id = component[&arches[0]];
+            let e = pools.entry(id).or_default();
+            e.1 += capacity; // once per host, however many arches it serves
+        }
+        for (arch, id) in &component {
+            pools.entry(*id).or_default().0.push(arch.clone());
+        }
+        Ok(pools.into_values().filter(|(a, _)| !a.is_empty()).collect())
     }
 
     /// Enabled hosts and their total weight capacity for `arch` at `at`.
@@ -1491,6 +1600,54 @@ mod tests {
         let x86 = days.iter().find(|d| d.arch == "x86_64").unwrap();
         assert!((x86.running - 0.25).abs() < 1e-9, "{x86:?}");
         assert!((x86.queued - 0.25).abs() < 1e-9, "{x86:?}");
+    }
+
+    #[test]
+    fn pools_join_architectures_that_share_a_builder() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("s.sqlite")).unwrap();
+        // Fedora's actual shape: x86_64 appears in two different host
+        // lists, which pulls i386 and i686 into one pool with it, while
+        // s390x and ppc64le keep their own.
+        let rows: Vec<sandogasa_kojihub::HostConfig> = [
+            (1i64, "x86_64 i386", 10.0),
+            (2, "i386 x86_64", 10.0), // same set, written the other way
+            (3, "x86_64 i686", 5.0),  // links i686 in through x86_64
+            (4, "s390x", 4.0),
+            (5, "ppc64le", 2.0),
+            (6, "ppc64le", 2.0),
+        ]
+        .into_iter()
+        .map(
+            |(host_id, arches, capacity)| sandogasa_kojihub::HostConfig {
+                host_id,
+                name: Some(format!("buildhw-{host_id}")),
+                arches: Some(arches.to_string()),
+                enabled: true,
+                capacity: Some(capacity),
+                create_ts: 0.0,
+                revoke_ts: None,
+            },
+        )
+        .collect();
+        store.put_host_config("fedora", &rows).unwrap();
+
+        let mut pools = store.pools_at("fedora", 100.0).unwrap();
+        pools.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            pools,
+            vec![
+                (
+                    vec!["i386".to_string(), "i686".into(), "x86_64".into()],
+                    25.0
+                ),
+                (vec!["ppc64le".to_string()], 4.0),
+                (vec!["s390x".to_string()], 4.0),
+            ]
+        );
+        // Each host's weight counts once however many arches it serves, so
+        // the x86 pool is 10 + 10 + 5 and not doubled for i386.
+        assert_eq!(pools[0].1, 25.0);
     }
 
     #[test]

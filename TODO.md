@@ -2,28 +2,16 @@
 
 ## koji-lag
 
-- (2026-08-21) **Utilisation should be computed per host group, not per
-  architecture.** `Store::capacity_at` sums every host whose `arches` list
-  contains the architecture asked for, so a machine recorded as `i386 x86_64`
-  counts fully toward both. Fedora's i386 builders *are* its x86_64 builders
-  — all 33 hosts that took i386 work in July 2026 also took x86_64 work — so
-  during F45's rebuild the report shows i386 at 0.19 and x86_64 at 0.35 while
-  the metal was at about 0.52. Read naively that is 136 weight units of spare
-  hardware which does not exist, and it is exactly the misreading behind the
-  suggestion that builders be moved from x86 to s390x.
-
-  Documented for now, in the `ArchHealth::capacity` doc comment and the
-  report legend. The fix is to group hosts by their arch *set* and report
-  utilisation per group, keeping per-architecture task metrics as they are:
-  a task's wait is a fact about that task whoever's machine ran it, and only
-  the denominator is shared. s390x and ppc64le are single-arch and therefore
-  unaffected, which is why the capacity ask in FINDINGS still stands.
-
-  Note also that i386 is deprecated
-  (<https://fedoraproject.org/wiki/Changes/EncourageI686LeafRemoval>), leaf
-  packages may be dropped at any time, and it is kept alive largely for
-  Steam — so its share should shrink on its own and it owns no hardware to
-  reclaim.
+- (2026-08-21, DONE) **Utilisation is computed per builder pool.**
+  `Store::pools_at` groups architectures into connected components of the
+  "some host serves both" relation and counts each host's weight once;
+  `ArchHealth::utilisation` is the pool's, so architectures sharing hardware
+  report the same figure. Fedora has four pools — `s390x`, `ppc64le`,
+  `aarch64`, and `i386 i686 x86_64` — the last because x86_64 appears in two
+  different host lists and pulls both 32-bit names in with it. During F45's
+  rebuild that reads 0.52 where the per-architecture figures were 0.19 and
+  0.35, and the 136 weight units of i386 headroom that could not be
+  redeployed are gone, having been x86_64's own counted twice.
 
 - (2026-08-21) **0.21.0 is deliberately held**, not blocked: the choice on
   2026-08-21 was to wait for the 2025-02..06 backfill and for the report

@@ -44,6 +44,50 @@ rather than presentation: one seven-hour build on a quiet day would otherwise
 report a 90% tail and send somebody hunting. The tables themselves respect
 `--min-samples` like every other table in the report.
 
+### koji-lag: utilisation belongs to a builder pool, not to an architecture
+
+Reading the per-architecture capacity table for F45's mass rebuild, i386
+appeared to hold 136 weight units at 0.19 utilisation — more idle builder
+weight than s390x's entire fleet, during the busiest week of the year. It was
+not there. Fedora's i386 builders *are* its x86_64 builders: every one of the
+33 hosts that took i386 work in July 2026 also took x86_64 work, so both rows
+counted the same machines and both understated the load on them.
+
+Utilisation is now computed over a **pool**: the set of architectures served
+by the same hosts, with each host's weight counted once. `Store::pools_at`
+finds them as connected components of the "some host serves both" relation,
+which matters because the grouping is not a partition of the architecture
+lists — x86_64 appears in both `x86_64 i386` and `x86_64 i686`, so grouping
+by literal list would have reported two independent x86 fleets with
+independent headroom. Fedora has four pools:
+
+| pool | capacity | offered | utilisation |
+|:--|--:|--:|--:|
+| s390x | 91.5 | 94.7 | 1.04 |
+| ppc64le | 58.0 | 63.5 | 1.09 |
+| aarch64 | 106.0 | 60.4 | 0.57 |
+| i386 i686 x86_64 | 162.0 | 83.6 | 0.52 |
+
+Per-architecture task metrics are unchanged, because a task's wait is a fact
+about that task whoever's machine ran it; only the denominator was ever
+shared. `capacity` is still reported per architecture and still means weight
+*able to serve* it — the two coincide for s390x and ppc64le, which have hosts
+of their own, so the capacity ask in FINDINGS.md is unaffected.
+
+This is not academic. It is exactly the reading behind the suggestion that
+builders be moved from x86 to s390x, and FINDINGS.md now answers that in
+full: a build finishes when its slowest architecture finishes, so completion
+time is a maximum and slowing any architecture can only move it later; the
+apparent x86 slack was this artifact; and no s390x host is shared with x86_64
+in any case, so retiring x86 builders frees rack, power and budget but not a
+unit of Z capacity.
+
+i386 is also
+[deprecated](https://fedoraproject.org/wiki/Changes/EncourageI686LeafRemoval),
+with leaf packages droppable at any time and the architecture surviving
+largely because Steam needs it, so its share shrinks on its own and there is
+no dedicated hardware to reclaim from it either.
+
 ### koji-lag: finer cohort bands, and who is affected without ranking them
 
 The cohort bands were top-10, next-40, rest, and measuring them showed the

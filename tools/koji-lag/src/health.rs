@@ -183,15 +183,33 @@ pub struct ArchHealth {
     /// Do not read a low figure on a shared architecture as spare hardware.
     ///
     /// The architectures are still reported separately, because a task's
-    /// wait is a fact about that task whoever's machine it ran on. Reporting
-    /// *utilisation* against a denominator shared with another architecture
-    /// is the part that misleads, and grouping hosts by their arch set
-    /// rather than by arch is the fix — not yet done; see TODO.md.
+    /// wait is a fact about that task whoever's machine it ran on. It is
+    /// *utilisation* that needs the shared denominator, and it has one: see
+    /// [`ArchHealth::pool`], which is what `utilisation` divides by.
     pub capacity: Option<f64>,
     /// Mean weight in use: task weight integrated over the window and
     /// divided by its length, so it compares with `capacity` directly.
     pub offered_weight: Option<f64>,
-    /// `offered_weight / capacity`, counting only work that competes.
+    /// The builder pool this architecture belongs to, as a space-separated
+    /// list — `s390x`, or `i386 i686 x86_64`. `None` when the store holds no
+    /// host configuration for it.
+    #[serde(default)]
+    pub pool: Option<String>,
+    /// The pool's enabled weight, each host counted once, and the offered
+    /// weight of every architecture in it.
+    #[serde(default)]
+    pub pool_capacity: Option<f64>,
+    #[serde(default)]
+    pub pool_offered: Option<f64>,
+    /// `pool_offered / pool_capacity`, counting only work that competes.
+    ///
+    /// Computed over the *pool* and not this architecture alone, so every
+    /// architecture sharing hosts reports the same figure — which is the
+    /// truth about those machines. Per architecture it read i386 0.19 and
+    /// x86_64 0.35 during F45's rebuild while the hardware they share was at
+    /// 0.52, and 136 weight units of i386 headroom appeared to exist that
+    /// could not be redeployed because it was x86_64's headroom counted
+    /// twice.
     ///
     /// Queueing is nonlinear in this, which is why it leads every other
     /// signal here: across four Fedora mass rebuilds it read 0.56, 0.72,
@@ -549,22 +567,54 @@ pub fn assess(
         })
         .collect();
 
+    // Offered weight per architecture, then summed per pool: the
+    // denominator is shared, so the numerator has to be too.
+    let offered_of = |arch: &str, weight_secs: f64| -> Option<f64> {
+        let _ = arch;
+        window.and_then(|(from, to)| {
+            let span = to - from;
+            (span > 0.0).then_some(weight_secs / span)
+        })
+    };
+    let pool_of: BTreeMap<&str, &crate::dataset::Pool> = dataset
+        .pools
+        .iter()
+        .flat_map(|p| p.arches.iter().map(move |a| (a.as_str(), p)))
+        .collect();
+    let mut pool_offered: BTreeMap<&str, f64> = BTreeMap::new();
+    for (arch, (_, _, _, _, _, weight_secs)) in &per_arch {
+        if let Some(pool) = pool_of.get(*arch)
+            && let Some(o) = offered_of(arch, *weight_secs)
+        {
+            *pool_offered.entry(pool.arches[0].as_str()).or_default() += o;
+        }
+    }
+
     let arches: Vec<ArchHealth> = per_arch
         .iter()
         .map(
             |(arch, (total, wasted, tail, tail_n, tasks, weight_secs))| {
                 let capacity = dataset.capacity.get(*arch).copied();
-                let offered = window.and_then(|(from, to)| {
-                    let span = to - from;
-                    (span > 0.0).then_some(weight_secs / span)
-                });
+                let offered = offered_of(arch, *weight_secs);
+                let pool = pool_of.get(*arch);
+                let pooled = pool.and_then(|p| pool_offered.get(p.arches[0].as_str()).copied());
                 ArchHealth {
                     arch: (*arch).to_string(),
                     capacity,
                     offered_weight: offered,
-                    utilisation: match (offered, capacity) {
+                    pool: pool.map(|p| p.arches.join(" ")),
+                    pool_capacity: pool.map(|p| p.capacity),
+                    pool_offered: pooled,
+                    utilisation: match (pooled, pool.map(|p| p.capacity)) {
                         (Some(o), Some(c)) if c > 0.0 => Some(o / c),
-                        _ => None,
+                        // No host configuration: fall back to this
+                        // architecture's own figures rather than reporting
+                        // nothing, since single-arch fleets are the common
+                        // case and the two agree there.
+                        _ => match (offered, capacity) {
+                            (Some(o), Some(c)) if c > 0.0 => Some(o / c),
+                            _ => None,
+                        },
                     },
                     tasks: *tasks,
                     builder_hours: total / 3600.0,
@@ -1255,6 +1305,52 @@ mod tests {
         let keys: Vec<&str> = h.warnings.iter().map(|w| w.metric.as_str()).collect();
         assert!(keys.contains(&"wasted-share"), "{keys:?}");
         assert!(keys.contains(&"tail-share"), "{keys:?}");
+    }
+
+    #[test]
+    fn shared_builders_are_one_denominator_and_not_two() {
+        // Two architectures on the same 100 units of hardware, each
+        // offering 30. Per architecture that reads 0.30 twice and suggests
+        // 140 units of headroom; the machines are at 0.60.
+        let mut ds = Dataset::new();
+        for (id, arch) in (1..=60i64).map(|i| (i, if i % 2 == 0 { "i386" } else { "x86_64" })) {
+            let (b, tasks) = multiarch(id, &[(arch, 1800.0), ("s390x", 1800.0)]);
+            ds.builds.insert(format!("fedora:{id}"), b);
+            for t in tasks {
+                ds.tasks.insert(format!("fedora:{}", t.task_id), t);
+            }
+        }
+        ds.capacity.insert("i386".into(), 100.0);
+        ds.capacity.insert("x86_64".into(), 100.0);
+        ds.pools.push(crate::dataset::Pool {
+            arches: vec!["i386".into(), "x86_64".into()],
+            capacity: 100.0,
+        });
+        let selected: Vec<&TaskRecord> = ds.tasks.values().collect();
+        let h = assess(&ds, &selected, Some((0.0, 86_400.0)), true);
+        let get = |arch: &str| h.arches.iter().find(|a| a.arch == arch).expect(arch);
+
+        // Both architectures report the pool's utilisation, and it is the
+        // sum of what they offer over what they share.
+        let (a, b) = (get("i386"), get("x86_64"));
+        assert_eq!(a.pool.as_deref(), Some("i386 x86_64"));
+        assert_eq!(a.utilisation, b.utilisation);
+        assert_eq!(a.pool_capacity, Some(100.0));
+        let pooled = a.pool_offered.expect("pool offered");
+        assert!(
+            (pooled - (a.offered_weight.unwrap() + b.offered_weight.unwrap())).abs() < 1e-9,
+            "{pooled} != {:?} + {:?}",
+            a.offered_weight,
+            b.offered_weight
+        );
+        // Each architecture's own capacity is still reported, and still
+        // says what can serve it.
+        assert_eq!(a.capacity, Some(100.0));
+
+        // An architecture with no pool falls back to its own figures
+        // rather than reporting nothing.
+        assert!(get("s390x").pool.is_none());
+        assert!(get("s390x").utilisation.is_none()); // no capacity for it
     }
 
     #[test]

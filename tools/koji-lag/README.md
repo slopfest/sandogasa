@@ -310,6 +310,13 @@ column down across periods, never a row across within one — the gap between
 two families in the same window is mostly how big their packages are. The
 comparison across periods is in the trend files `events` and `reports` write.
 
+**Builder pools** groups architectures served by the same hosts and reports
+utilisation for the group, counting each host's weight once. Fedora has four:
+`s390x`, `ppc64le`, `aarch64`, and `i386 i686 x86_64`. Read utilisation here
+rather than from a single architecture — i386's builders are x86_64's, so per
+architecture they read 0.19 and 0.35 during a mass rebuild while the machines
+they share were at 0.52.
+
 **Where builder time went, by distribution** splits each architecture's
 builder hours into `fedora`, `eln` and `epel`, taken from the build target.
 It is the counterpart to a capacity figure: narrowing what an architecture is

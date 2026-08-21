@@ -547,6 +547,34 @@ loosening it admits people with few builds, who add to the count and almost
 nothing to the share. Any statement of the form "N people are affected" is
 really a statement about where the line was drawn.
 
+## Utilisation has a pool as its denominator, never an architecture
+
+`Store::capacity_at` answers "how much builder weight can serve this
+architecture", which is not "how much does this architecture have" wherever
+hosts serve several. Dividing an architecture's offered weight by it counts
+shared machines once per architecture and understates the load on them.
+
+`Store::pools_at` gives the right denominator: architectures grouped into
+connected components of the "some host serves both" relation, each host's
+weight counted once. Components rather than a grouping by literal architecture
+list, because the lists overlap — Fedora's hosts advertise `x86_64 i386` and
+`x86_64 i686`, which are one fleet and not two, and history adds the same sets
+in other orders and with architectures since retired.
+
+Three things to keep straight when touching this:
+
+**Only the denominator is shared.** Per-architecture waits, build times,
+straggler counts and cohorts stay per architecture, because a task's wait is a
+fact about that task whoever's machine ran it. Utilisation alone moves to the
+pool, so every architecture in a pool reports the same figure.
+
+**Average pools over the window like capacity**, for the same reason: a fleet
+that changes size mid-window has no single correct reading.
+
+**Fall back to the per-architecture figures when there is no pool.** A store
+predating host-configuration collection has none, and reporting nothing there
+would be a regression against single-architecture fleets, where the two agree.
+
 ## Check the population counts before believing a ratio
 
 A ratio between two periods can only be read once you know the two
