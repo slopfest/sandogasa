@@ -118,6 +118,14 @@
   `host_config` history, which is worth telling infrastructure explicitly
   since it is not obvious that it is queryable.
 
+  **Sequencing matters here, per the rule now in DEVELOPMENT.md**: move each
+  metric into `report` first, *then* rewrite the notebook to read
+  `report.json` and the `events/` tree instead of computing from raw SQL.
+  Nine of the notebook's ten code cells are currently ad-hoc queries, which
+  makes it the only home for those metrics — the opposite of what it should
+  be. `events` already emits rebuild windows and stalls as JSON, so those two
+  cells can be converted the moment anybody looks at them.
+
   **The work splits in two, and the tool half comes first.** Promote these
   from the notebook into `report`/`reports` with thresholds attached, so a
   monthly report states "s390x utilisation 0.78, above the 0.7 line" without

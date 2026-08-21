@@ -349,6 +349,55 @@ ends completed after it too, so nothing newer than the window's end can
 belong to it. Anyone tempted to add symmetry here should note that the
 asymmetry is what lets a sweep bound its own work.
 
+## Anything worth reporting belongs in `report`, not in an analysis
+
+**The ordering is an onboarding cost, and every rung up it loses people.**
+Reading a committed report in the metrics repo needs nothing at all. Running
+`koji-lag report` needs no knowledge beyond the command. Running a `.sql`
+file needs a little SQL and a store. A notebook needs Jupyter, pandas,
+matplotlib, a store, and the confidence to edit somebody else's cells — and
+whatever it computes is the hardest thing in the chain for a stranger to
+reuse. So a metric's home should be as far down that ladder as it can go,
+which is also the order below.
+
+Three places a number can live, in strict order of preference:
+
+1. **`report` / `reports` compute it.** Then it is produced every period
+   whether or not anybody thought to ask, it is tested, and a threshold can
+   be attached so the report says "s390x utilisation 0.78, above the 0.7
+   line" rather than leaving a reader to notice.
+2. **A committed query in `queries/`.** For anything the subcommands cannot
+   reasonably carry — a one-off cross-check, something needing data from
+   outside the store. Reproducible by anybody, but only if they run it.
+3. **Ad-hoc SQL in a notebook or a shell.** Fine for exploring. Not fine as
+   the *home* of a finding: the s390x investigation produced nine
+   substantive results this way and not one of them would have been noticed
+   by anybody else, or by us a month later.
+
+**So the notebook should mostly read report output and run canned queries.**
+Its job is to combine, plot and let a reader re-cut a question — not to be
+the only place a metric is computed. A finding that can only be reproduced
+by someone willing to install Jupyter has excluded most of the people who
+might have acted on it, including the infrastructure and release engineers
+this data is meant to inform. Every cell that computes something from
+raw SQL is a metric that exists nowhere else, and a finding that depends on
+somebody re-running a notebook is a finding that will be re-derived from
+scratch or lost.
+
+The notebook committed on 2026-08-20 gets this backwards: nine of its ten
+code cells are ad-hoc SQL. That is the honest starting point, not the target
+shape. The order of work is to move each metric into `report` — utilisation,
+service time against a control population, wasted builder-hours, the
+long-build tail, per-class and per-cohort queue wait — and then rewrite the
+notebook to read `report.json` and the `events/` tree, keeping SQL only for
+what genuinely has no home in the tool.
+
+Two things already point the right way and are worth copying: `events`
+emits detected rebuild windows and stalls as JSON, so a notebook should read
+that rather than re-implementing detection; and `report --json` is the
+machine-readable surface a notebook should prefer over reaching into the
+store.
+
 ## Filters belong to reports, not to sweeps
 
 A sweep takes no `--owner` or `--package` filter. Everything is stored,
