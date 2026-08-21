@@ -28,7 +28,9 @@ from a speed problem:
 | ppc64le rebuild wait, median | 0.0h | 0.0h | 0.1h | **0.1h** |
 
 ppc64le reaches *higher* utilisation than s390x in three of the four windows
-and its rebuild waits never leave single-digit minutes. During F45:
+while its rebuild's **median** wait stays in single-digit minutes. Its p90 is
+not nothing — 54 minutes at F45 against s390x's 8.3 hours — so the contrast is
+an order of magnitude rather than an absence of queueing. During F45:
 
 | | mean task weight | mean service time | concurrency sustained | capacity | hosts |
 |:--|--:|--:|--:|--:|--:|
