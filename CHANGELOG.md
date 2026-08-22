@@ -21,6 +21,19 @@ which is why this was nearly a half-done rename: changing `trend::write`
 alone would have moved `events` and left `reports` writing the old name. Both
 callers go through one path now.
 
+### koji-lag: how to get a store, for people without a checkout
+
+The README told everyone to run `scripts/fetch-store.sh <url>`. That script is
+at the repository root, and `cargo install` places binaries and nothing else —
+so the instruction did not work for anyone who installed the tool the way the
+same README recommends. Verified: the published crate is 40 files and no shell
+scripts.
+
+It now gives the four commands the script wraps, tested by copy-pasting them
+against the live release, and says plainly that a distribution package may
+install the script under a name of its own. Making it a `koji-lag fetch-store`
+subcommand would remove the question entirely, and is recorded in TODO.md.
+
 ### Erratum: the README published in v0.21.0 describes the trend files wrongly
 
 `tools/koji-lag/README.md` at the v0.21.0 tag still documents the

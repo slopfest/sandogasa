@@ -563,13 +563,28 @@ gigabyte belongs on a release rather than in a checkout:
 
 <https://github.com/slopfest/sandogasa/releases>
 
+`fetch-store.sh` does the whole job — download, verify, decompress — if you
+have it:
+
 ```sh
 scripts/fetch-store.sh \
   https://github.com/slopfest/sandogasa/releases/download/koji-lag-store-2026-08-19/lag-2024-12-24-to-2026-08-19-schema2.sqlite.zst
 ```
 
-That verifies the checksum, decompresses, and prints the span the store
-covers. It **refuses** rather than warns when the `.sha256` beside the file
+**It is not shipped by `cargo install`**, which places binaries and nothing
+else, so that invocation assumes a checkout of this repository. A
+distribution package may install it under a name of its own; check what your
+package provides. With neither, the four commands it wraps are no harder:
+
+```sh
+BASE=https://github.com/slopfest/sandogasa/releases/download/koji-lag-store-2026-08-19
+NAME=lag-2024-12-24-to-2026-08-19-schema2.sqlite.zst
+curl -LO "$BASE/$NAME" && curl -LO "$BASE/$NAME.sha256"
+sha256sum --check "$NAME.sha256" && zstd -d "$NAME" -o lag.sqlite
+```
+
+Do not skip the checksum step. Either route verifies it, decompresses, and
+leaves you a store; the script additionally prints the span it covers. It **refuses** rather than warns when the `.sha256` beside the file
 is missing or does not match: a truncated store opens and queries perfectly
 well with rows quietly absent, so an unverified download is not a smaller
 dataset, it is a wrong answer.

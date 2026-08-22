@@ -2,6 +2,27 @@
 
 ## koji-lag
 
+- (2026-08-22) **`fetch-store.sh` reaches only people with a checkout.**
+  `cargo install` places binaries and nothing else, so the README's
+  `scripts/fetch-store.sh <url>` does not exist for anyone who installed the
+  tool the way the README tells them to. Documented for now with the four
+  commands it wraps, verified against the live release.
+
+  Two better answers, in order of preference:
+
+  1. **Make it a subcommand.** `koji-lag fetch-store <url>` works wherever the
+     binary works -- cargo install, an RPM, a checkout -- and removes the
+     question. `reqwest` is already a dependency; it would need sha2 and the
+     zstd crate. The tests must stay off the network, so the download itself
+     wants to be a thin injectable seam with the verification tested against
+     local fixtures, the way the HTTP clients here already are.
+  2. **Ship the scripts in the distribution package.** Fedora packaging is
+     expected to, which covers most of the people who will try this. Prefix
+     the installed names (`koji-lag-fetch-store`) so they do not collide, and
+     say so in the README once the path is decided -- the README currently
+     says only "check what your package provides", because inventing a path
+     before packaging exists would be worse than saying nothing.
+
 - (2026-08-21, DONE) **Utilisation is computed per builder pool.**
   `Store::pools_at` groups architectures into connected components of the
   "some host serves both" relation and counts each host's weight once;
