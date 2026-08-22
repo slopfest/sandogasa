@@ -1,6 +1,111 @@
 # Changelog
 
-## Unreleased
+## v0.21.0
+
+### What breaks for API consumers (breaking API)
+
+`cargo semver-checks` against the published 0.20.0 fails on four crates. Every
+item is listed here so that nobody has to read the source diff to find out
+what they need to change; pre-1.0, the project takes these on a minor bump.
+
+**koji-lag** — the largest set, mostly from work earlier in this cycle that
+was never written down as breaking.
+
+Moved, so the fix is the import and nothing else. The
+`koji_lag::backfill` module is gone and the period arithmetic that lived in
+it is now `koji_lag::periods`, unchanged: the `Grain` enum, the `Chunk`
+struct, and `week_of`, `month_of` and `weeks_of_month`.
+
+Removed outright:
+
+- the rest of `koji_lag::backfill` — the `Existing` and `PauseAt` enums and
+  the `already_swept`, `collate` and `complete` functions. What drove the
+  backfill is `sync`'s own gap detection now, and there is no replacement to
+  call.
+- `koji_lag::fetch::run`, `run_with_builds`, `walk_builds` and
+  `walk_builds_below`, plus the `WalkProgress` and `FetchReport` structs —
+  the JSON dataset path they served is gone.
+- `koji_lag::json_schema`.
+- the `owner` and `packages` fields of `FetchOpts`. Narrowing is a query
+  against the store now, not a filter on the sweep: use `report --owner` and
+  `--package`.
+
+Gained public fields, which breaks literal construction — use
+`..Default::default()`:
+
+- `ReportOpts` gained `owners`, `packages`, `classes` and `period`
+- `ReportOutput` gained `health`
+- `Dataset` gained `capacity` and `pools`
+- `FetchOpts` gained `timeout`
+
+**sandogasa-gitlab** — `IssueUpdate` gained a public `assignee_ids` field.
+
+**sandogasa-kojihub** — `ListTasksOpts` gained a public `created_before`
+field.
+
+Both are additive and break only code that constructs the struct literally,
+which `..Default::default()` fixes.
+
+**sandogasa-bugzilla is a false positive and nothing changed for callers.**
+`cargo semver-checks` reports `claim::resolve_claim` as removed because its
+definition moved to `sandogasa-cli`, but `sandogasa_bugzilla::claim`
+re-exports it — `sandogasa_bugzilla::claim::resolve_claim(..)` still compiles,
+as `fedora-cve-triage` demonstrates. The tool does not follow re-exports
+across crates. Recorded here so the next release does not treat it as real.
+
+
+### koji-lag: the JSON dataset format is gone (breaking CLI)
+
+Datasets were how this tool kept data before it had a store: one JSON file
+per swept window, unioned in memory to report over more than one. The store
+replaced that, and until now both paths existed side by side — two ways to
+hold the same rows, one of them unable to say what it had already fetched.
+
+Removed: the `import` subcommand (added after 0.20.0 and never released),
+`report`'s positional dataset-file arguments, `Dataset::load`/`save`, the
+generated `koji-lag-dataset.schema.json` and its snapshot test, and the
+serde and schemars derives that existed only to write a dataset to disk.
+`FetchWindow` keeps its Serialize, because a report states the coverage it
+was computed over and those travel in report JSON.
+
+Migration: `report` now requires `--store FILE`, so `koji-lag report
+data/*.json` becomes `koji-lag report --store lag.sqlite --since X --until
+Y`. Datasets held from 0.20.x have no reader any more — re-sync the window
+instead, which is one command and costs hub time rather than data, since
+the hub still holds it.
+
+### koji-lag: the slow paths are gone (breaking CLI and API)
+
+`fetch`, `backfill` and `merge` are removed, along with everything that
+existed to make paging by offset bearable. What they did, `sync` does
+without the parts that hurt: no walking from today to reach a window in
+the past, no re-listing three days for every day of a backfill, no
+collating raw data between grains to keep it from filling the disk, and no
+sweep that costs the same when the data is already in hand.
+
+Migration: `koji-lag sync --store lag.sqlite --since X --until Y` in place
+of `fetch`, `backfill` and `merge` — one command that fetches only what the
+store does not already hold.
+
+`report` and `reports` read the store. `report --store FILE` takes the
+period from `--since`/`--until`, and `reports --store FILE --reports-root DIR` replaces
+`--root DIR`: it writes a report for every day, week and month the store
+holds whole, rather than one per dataset file it finds. A period counts as
+whole only when its creation span is listed *and* every build in it has
+its children — so a weekly report appears when its last day lands, and
+never from a week the store only partly knows.
+
+Breaking API for anyone using the library: `fetch::run`, `run_with_builds`,
+`walk_builds`, `walk_builds_below`, `WalkProgress` and `FetchReport` are
+gone, `FetchOpts` loses `owner` and `packages`, and the `backfill` module
+is gone with the subcommand — its calendar helpers (`Grain`, `Chunk`,
+`week_of`, `month_of`, `weeks_of_month`) live in the new `periods` module,
+and `pool` holds the coverage-driven report writing.
+
+Sweep-time filtering goes with them: everything the hub reports is stored,
+and narrowing is `report --owner`/`--package` over the store. A store
+mixing filtered and unfiltered coverage would under-report silently, with
+nothing in a row to say which sweep put it there.
 
 ### koji-lag: an unexplained outage hands you the annotation to fill in
 
@@ -66,58 +171,6 @@ two minutes in total.
 Fifteen events remain, four mass rebuilds and eleven stalls. Both outages
 survive, every annotation still matches a window, and `koji-lag events` runs
 in two minutes.
-
-### What breaks for API consumers (breaking API)
-
-`cargo semver-checks` against the published 0.20.0 fails on four crates. Every
-item is listed here so that nobody has to read the source diff to find out
-what they need to change; pre-1.0, the project takes these on a minor bump.
-
-**koji-lag** — the largest set, mostly from work earlier in this cycle that
-was never written down as breaking.
-
-Moved, so the fix is the import and nothing else. The
-`koji_lag::backfill` module is gone and the period arithmetic that lived in
-it is now `koji_lag::periods`, unchanged: the `Grain` enum, the `Chunk`
-struct, and `week_of`, `month_of` and `weeks_of_month`.
-
-Removed outright:
-
-- the rest of `koji_lag::backfill` — the `Existing` and `PauseAt` enums and
-  the `already_swept`, `collate` and `complete` functions. What drove the
-  backfill is `sync`'s own gap detection now, and there is no replacement to
-  call.
-- `koji_lag::fetch::run`, `run_with_builds`, `walk_builds` and
-  `walk_builds_below`, plus the `WalkProgress` and `FetchReport` structs —
-  the JSON dataset path they served is gone.
-- `koji_lag::json_schema`.
-- the `owner` and `packages` fields of `FetchOpts`. Narrowing is a query
-  against the store now, not a filter on the sweep: use `report --owner` and
-  `--package`.
-
-Gained public fields, which breaks literal construction — use
-`..Default::default()`:
-
-- `ReportOpts` gained `owners`, `packages`, `classes` and `period`
-- `ReportOutput` gained `health`
-- `Dataset` gained `capacity` and `pools`
-- `FetchOpts` gained `timeout`
-
-**sandogasa-gitlab** — `IssueUpdate` gained a public `assignee_ids` field.
-
-**sandogasa-kojihub** — `ListTasksOpts` gained a public `created_before`
-field.
-
-Both are additive and break only code that constructs the struct literally,
-which `..Default::default()` fixes.
-
-**sandogasa-bugzilla is a false positive and nothing changed for callers.**
-`cargo semver-checks` reports `claim::resolve_claim` as removed because its
-definition moved to `sandogasa-cli`, but `sandogasa_bugzilla::claim`
-re-exports it — `sandogasa_bugzilla::claim::resolve_claim(..)` still compiles,
-as `fedora-cve-triage` demonstrates. The tool does not follow re-exports
-across crates. Recorded here so the next release does not treat it as real.
-
 
 ### koji-lag: reports carry the signals that found the s390x regression
 
@@ -563,26 +616,6 @@ the pacing between them was constant — and it is not, since the duty cycle
 scales each pause to the last request. `--timeout SECS` on `sync` and
 `probe` overrides $SANDOGASA_KOJI_TIMEOUT for one run.
 
-### koji-lag: the JSON dataset format is gone (breaking CLI)
-
-Datasets were how this tool kept data before it had a store: one JSON file
-per swept window, unioned in memory to report over more than one. The store
-replaced that, and until now both paths existed side by side — two ways to
-hold the same rows, one of them unable to say what it had already fetched.
-
-Removed: the `import` subcommand (added after 0.20.0 and never released),
-`report`'s positional dataset-file arguments, `Dataset::load`/`save`, the
-generated `koji-lag-dataset.schema.json` and its snapshot test, and the
-serde and schemars derives that existed only to write a dataset to disk.
-`FetchWindow` keeps its Serialize, because a report states the coverage it
-was computed over and those travel in report JSON.
-
-Migration: `report` now requires `--store FILE`, so `koji-lag report
-data/*.json` becomes `koji-lag report --store lag.sqlite --since X --until
-Y`. Datasets held from 0.20.x have no reader any more — re-sync the window
-instead, which is one command and costs hub time rather than data, since
-the hub still holds it.
-
 ### koji-lag: a new `events` command, for the windows nobody scheduled
 
 Reports were written per calendar period, which is the wrong shape for the
@@ -951,39 +984,6 @@ What this does *not* do is fill a new column in for rows already stored;
 that is what the two generation constants are for, and DEVELOPMENT.md now
 sets out which bump costs an hour (a field from the build listing, re-list)
 and which costs days (a field from the child queries, re-fetch).
-
-### koji-lag: the slow paths are gone (breaking CLI and API)
-
-`fetch`, `backfill` and `merge` are removed, along with everything that
-existed to make paging by offset bearable. What they did, `sync` does
-without the parts that hurt: no walking from today to reach a window in
-the past, no re-listing three days for every day of a backfill, no
-collating raw data between grains to keep it from filling the disk, and no
-sweep that costs the same when the data is already in hand.
-
-Migration: `koji-lag sync --store lag.sqlite --since X --until Y` in place
-of `fetch`, `backfill` and `merge` — one command that fetches only what the
-store does not already hold.
-
-`report` and `reports` read the store. `report --store FILE` takes the
-period from `--since`/`--until`, and `reports --store FILE --reports-root DIR` replaces
-`--root DIR`: it writes a report for every day, week and month the store
-holds whole, rather than one per dataset file it finds. A period counts as
-whole only when its creation span is listed *and* every build in it has
-its children — so a weekly report appears when its last day lands, and
-never from a week the store only partly knows.
-
-Breaking API for anyone using the library: `fetch::run`, `run_with_builds`,
-`walk_builds`, `walk_builds_below`, `WalkProgress` and `FetchReport` are
-gone, `FetchOpts` loses `owner` and `packages`, and the `backfill` module
-is gone with the subcommand — its calendar helpers (`Grain`, `Chunk`,
-`week_of`, `month_of`, `weeks_of_month`) live in the new `periods` module,
-and `pool` holds the coverage-driven report writing.
-
-Sweep-time filtering goes with them: everything the hub reports is stored,
-and narrowing is `report --owner`/`--package` over the store. A store
-mixing filtered and unfiltered coverage would under-report silently, with
-nothing in a row to say which sweep put it there.
 
 ### koji-lag: `sync` fetches only what the store is missing
 
