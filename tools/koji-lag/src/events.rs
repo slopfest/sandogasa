@@ -473,6 +473,130 @@ mod tests {
         }
     }
 
+    /// A store holding one releng burst and one architecture left behind
+    /// by it, which is the shape `assemble` exists to recognise.
+    fn store_with_a_rebuild_and_a_stall() -> (tempfile::TempDir, crate::store::Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(&dir.path().join("s.sqlite")).unwrap();
+        let day = 86_400.0;
+        let mut builds = Vec::new();
+        let mut tasks = Vec::new();
+        let mut tid = 1i64;
+        for d in 0..8 {
+            // Every day carries a baseline of ordinary builds, above the
+            // rule's floor of 500 so the day is judged at all; days 2 to 5
+            // add a releng burst on top, which is what a rebuild looks
+            // like as a *share* rather than as a raw count.
+            let rebuilding = (2..6).contains(&d);
+            let ordinary = 600;
+            let burst = if rebuilding { 900 } else { 0 };
+            for i in 0..(ordinary + burst) {
+                let releng = i >= ordinary;
+                let parent = 100_000 + tid;
+                let created = day * d as f64 + (i % 600) as f64;
+                builds.push(crate::dataset::BuildRecord {
+                    instance: "fedora".into(),
+                    task_id: parent,
+                    package: Some(format!("p{i}")),
+                    nvr: None,
+                    target: Some(if releng {
+                        "f45-rebuild".into()
+                    } else {
+                        "f45".into()
+                    }),
+                    owner: Some(if releng {
+                        "releng".into()
+                    } else {
+                        "someone".into()
+                    }),
+                    scratch: false,
+                    state: 2,
+                    create_ts: created,
+                    start_ts: Some(created),
+                    completion_ts: Some(created + 600.0),
+                    priority: Some(if releng { 25 } else { 20 }),
+                    host_id: None,
+                });
+                for arch in ["x86_64", "s390x"] {
+                    tid += 1;
+                    // s390x waits hours while the rebuild runs and seconds
+                    // otherwise; x86_64 always answers at once.
+                    let wait = if arch == "s390x" && rebuilding {
+                        4.0 * 3_600.0
+                    } else {
+                        30.0
+                    };
+                    tasks.push(crate::dataset::TaskRecord {
+                        instance: "fedora".into(),
+                        task_id: 500_000 + tid,
+                        parent: Some(parent),
+                        arch: arch.into(),
+                        method: crate::dataset::BUILD_ARCH.into(),
+                        package: Some(format!("p{i}")),
+                        state: 2,
+                        create_ts: created,
+                        start_ts: Some(created + wait),
+                        completion_ts: Some(created + wait + 600.0),
+                        host_id: Some(1),
+                        channel_id: None,
+                        weight: Some(1.5),
+                    });
+                }
+            }
+        }
+        store.put_builds("fedora", &builds).unwrap();
+        store.put_tasks("fedora", &tasks).unwrap();
+        (dir, store)
+    }
+
+    #[test]
+    fn assemble_finds_the_rebuild_and_the_architecture_it_left_behind() {
+        let (_dir, store) = store_with_a_rebuild_and_a_stall();
+        let events = assemble(&store, "fedora", 0.0, 86_400.0 * 8.0, &[], &[]).unwrap();
+
+        let rebuilds: Vec<&Event> = events
+            .iter()
+            .filter(|e| e.kind == Kind::MassRebuild)
+            .collect();
+        assert_eq!(rebuilds.len(), 1, "{events:#?}");
+        assert!(rebuilds[0].arch.is_none(), "a rebuild is about every arch");
+        assert!(rebuilds[0].days >= 3, "{:?}", rebuilds[0].days);
+
+        // The architecture that queued is named; the one that kept up is not.
+        let stalls: Vec<&Event> = events
+            .iter()
+            .filter(|e| matches!(e.kind, Kind::Congestion | Kind::Outage))
+            .collect();
+        assert!(!stalls.is_empty(), "{events:#?}");
+        assert!(
+            stalls.iter().all(|e| e.arch.as_deref() == Some("s390x")),
+            "{stalls:#?}"
+        );
+
+        // Every event carries the measured facts its stanza and rendering
+        // are built from.
+        assert!(events.iter().all(|e| !e.facts.is_empty()));
+        // Nothing was annotated, so nothing claims a cause.
+        assert!(events.iter().all(|e| e.causes.is_empty()));
+    }
+
+    #[test]
+    fn assemble_attaches_a_cause_to_the_window_it_covers() {
+        let (_dir, store) = store_with_a_rebuild_and_a_stall();
+        // Dated by overlap rather than exactly, which is the point of the
+        // matching: 1970-01-04 falls inside the stall without being its edge.
+        let notes = vec![note("s390x", "1970-01-04", "1970-01-04", "storage")];
+        let events = assemble(&store, "fedora", 0.0, 86_400.0 * 8.0, &[], &notes).unwrap();
+        let stall = events
+            .iter()
+            .find(|e| e.arch.as_deref() == Some("s390x"))
+            .expect("a stall");
+        assert_eq!(stall.causes.len(), 1, "{stall:#?}");
+        assert_eq!(stall.causes[0].cause, "storage");
+        // And the note is not reported as having matched nothing.
+        assert!(unmatched(&events, "fedora", &notes, (0.0, 86_400.0 * 8.0)).is_empty());
+    }
+
     #[test]
     fn a_slug_sorts_by_date_and_names_what_happened() {
         let e = event(Kind::Outage, Some("s390x"), "2026-05-06", 3);
