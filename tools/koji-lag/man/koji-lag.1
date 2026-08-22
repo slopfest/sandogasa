@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH koji-lag 1 2026-08-21 "sandogasa 0.20.0" "Sandogasa Manual"
+.TH koji-lag 1 2026-08-22 "sandogasa 0.20.0" "Sandogasa Manual"
 .SH NAME
 koji\-lag \- Quantify Koji build queue lag and per\-arch build\-time drag
 .SH SYNOPSIS
@@ -38,11 +38,14 @@ Withhold stats below this sample count in the rewritten reports
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS koji-lag events
-\fBkoji\-lag events\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-o\fR|\fB\-\-out\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-schedule\fR] [\fB\-\-annotations\fR] [\fB\-\-min\-samples\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBkoji\-lag events\fR <\fB\-\-store\fR> [\fB\-\-no\-verify\fR] [\fB\-\-instance\fR] <\fB\-o\fR|\fB\-\-out\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-schedule\fR] [\fB\-\-annotations\fR] [\fB\-\-min\-samples\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 .TP
 \fB\-\-store\fR \fI<FILE>\fR
 Store to read from
+.TP
+\fB\-\-no\-verify\fR
+Skip the check for days the store claims and does not hold
 .TP
 \fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
 Known Koji instance (cbs, fedora, stream)
@@ -196,12 +199,15 @@ Writing to a directory defaults to text,json. `csv` is one file per table, becau
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag reports
-\fBkoji\-lag reports\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] <\fB\-\-reports\-root\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-min\-samples\fR] [\fB\-\-force\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBkoji\-lag reports\fR <\fB\-\-store\fR> [\fB\-\-no\-verify\fR] [\fB\-\-instance\fR] <\fB\-\-reports\-root\fR> [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-min\-samples\fR] [\fB\-\-force\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Write reports for every period the store covers
 .TP
 \fB\-\-store\fR \fI<FILE>\fR
 Store to report from
+.TP
+\fB\-\-no\-verify\fR
+Skip the check for days the store claims and does not hold
 .TP
 \fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
 Known Koji instance (cbs, fedora, stream)
@@ -279,6 +285,21 @@ Retries per failed hub request
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SS koji-lag verify
+\fBkoji\-lag verify\fR <\fB\-\-store\fR> [\fB\-\-instance\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Check a store for days it claims to cover and does not hold.
+.PP
+Exits non\-zero when it finds one, so it can gate a publish.
+.TP
+\fB\-\-store\fR \fI<FILE>\fR
+Store to check
+.TP
+\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
+Known Koji instance (cbs, fedora, stream)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

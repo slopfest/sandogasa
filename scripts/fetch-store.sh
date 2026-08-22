@@ -65,7 +65,9 @@ zstd -q -d -o "$DEST" "$WORK/$NAME"
 
 if command -v sqlite3 >/dev/null; then
     echo -n "store: "
+    # `to_ts` is an exclusive midnight bound, so the last day held is the
+    # one before it -- reporting the bound claims a day the store lacks.
     sqlite3 "file:$DEST?mode=ro" "SELECT 'covers ' || date(min(from_ts),'unixepoch')
-        || ' to ' || date(max(to_ts),'unixepoch') FROM listed;"
+        || ' to ' || date(max(to_ts),'unixepoch','-1 day') FROM listed;"
 fi
-printf '\nready:\n  KOJI_LAG_STORE=%s jupyter lab tools/koji-lag/notebooks/s390x-lag.ipynb\n' "$DEST"
+printf '\nready:\n  KOJI_LAG_STORE=%s jupyter lab tools/koji-lag/notebooks/arch-lag.ipynb\n' "$DEST"

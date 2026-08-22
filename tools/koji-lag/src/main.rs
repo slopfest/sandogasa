@@ -38,6 +38,21 @@ enum Command {
     Reports(ReportsArgs),
     /// Fetch whatever the store is missing for a window.
     Sync(SyncArgs),
+    Verify(VerifyArgs),
+}
+
+/// Check a store for days it claims to cover and does not hold.
+///
+/// Exits non-zero when it finds one, so it can gate a publish.
+#[derive(clap::Args)]
+struct VerifyArgs {
+    /// Store to check.
+    #[arg(long, value_name = "FILE")]
+    store: PathBuf,
+
+    /// Known Koji instance (cbs, fedora, stream).
+    #[arg(long, default_value = "fedora")]
+    instance: String,
 }
 
 /// Apply annotations to an events tree that already exists.
@@ -73,6 +88,10 @@ struct EventsArgs {
     /// Store to read from.
     #[arg(long, value_name = "FILE")]
     store: PathBuf,
+
+    /// Skip the check for days the store claims and does not hold.
+    #[arg(long)]
+    no_verify: bool,
 
     /// Known Koji instance (cbs, fedora, stream).
     #[arg(long, default_value = "fedora")]
@@ -219,6 +238,10 @@ struct ReportsArgs {
     /// Store to report from.
     #[arg(long, value_name = "FILE")]
     store: PathBuf,
+
+    /// Skip the check for days the store claims and does not hold.
+    #[arg(long)]
+    no_verify: bool,
 
     /// Known Koji instance (cbs, fedora, stream).
     #[arg(long, default_value = "fedora")]
@@ -421,6 +444,7 @@ fn main() -> ExitCode {
         Command::Reports(args) => cmd_reports(&args),
         Command::Export(args) => cmd_export(&args),
         Command::Sync(args) => cmd_sync(&args),
+        Command::Verify(args) => cmd_verify(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -518,6 +542,85 @@ fn summarise(days: &[String]) -> String {
     }
 }
 
+/// Say so, before the expensive work, if the store claims days it does not
+/// hold.
+///
+/// Checked by default because a hole is silent: the coverage record says the
+/// day is complete, every report counts it as real and quiet, and the
+/// resulting figures are wrong in a way nothing else surfaces. Ten seconds
+/// against the minutes that follow is worth paying, and `--no-verify` is
+/// there for anyone who has already looked.
+fn warn_if_sparse(
+    store: &koji_lag::store::Store,
+    instance: &str,
+    skip: bool,
+) -> Result<(), Box<dyn Error>> {
+    if skip {
+        return Ok(());
+    }
+    let sparse = store.sparse_days(instance)?;
+    if sparse.is_empty() {
+        return Ok(());
+    }
+    eprintln!(
+        "warning: {} day(s) are covered by the store's own record and hold \
+         almost nothing:",
+        sparse.len()
+    );
+    for d in sparse.iter().take(5) {
+        eprintln!(
+            "  {} held {} task(s) while {} ids passed through the hub",
+            d.day, d.collected, d.span
+        );
+    }
+    if sparse.len() > 5 {
+        eprintln!("  ... and {} more; run `koji-lag verify`", sparse.len() - 5);
+    }
+    eprintln!(
+        "  Every figure covering those days is wrong. Repair with\n    \
+         koji-lag sync --since {} --until {} --verbose\n  \
+         or pass --no-verify to carry on regardless.",
+        sparse.first().map(|d| d.day.as_str()).unwrap_or(""),
+        sparse.last().map(|d| d.day.as_str()).unwrap_or("")
+    );
+    Ok(())
+}
+
+fn cmd_verify(args: &VerifyArgs) -> Result<(), Box<dyn Error>> {
+    let (instance_key, _) = instance::resolve(&args.instance, None)?;
+    let store = koji_lag::store::Store::open(&args.store)?;
+    let sparse = store.sparse_days(&instance_key)?;
+    if sparse.is_empty() {
+        eprintln!("verify: no day looks under-collected");
+        return Ok(());
+    }
+    println!("Days the store covers and barely holds anything for\n");
+    println!("| day | tasks held | ids that passed | ratio |");
+    println!("|---|---:|---:|---:|");
+    for d in &sparse {
+        println!(
+            "| {} | {} | {} | {:.3} |",
+            d.day, d.collected, d.span, d.ratio
+        );
+    }
+    // Contiguous runs, so the repair is one sync per run rather than one
+    // per day: a day is cheap to re-list and the children dominate anyway.
+    let days: Vec<&str> = sparse.iter().map(|d| d.day.as_str()).collect();
+    println!(
+        "\nThe coverage record says these are complete, so nothing will ask for \
+         them\nagain on its own. Sync the range to repair it -- listing is \
+         skipped for\ndays already listed, and only the missing children are \
+         fetched:\n"
+    );
+    println!(
+        "  koji-lag sync --store {} --since {} --until {} --verbose",
+        args.store.display(),
+        days.first().copied().unwrap_or(""),
+        days.last().copied().unwrap_or("")
+    );
+    std::process::exit(1);
+}
+
 fn cmd_annotate(args: &AnnotateArgs) -> Result<(), Box<dyn Error>> {
     let (instance_key, _) = instance::resolve(&args.instance, None)?;
     let mut notes = koji_lag::annotate::builtin()?;
@@ -569,6 +672,7 @@ fn cmd_annotate(args: &AnnotateArgs) -> Result<(), Box<dyn Error>> {
 fn cmd_events(args: &EventsArgs) -> Result<(), Box<dyn Error>> {
     let (instance_key, _) = instance::resolve(&args.instance, None)?;
     let store = koji_lag::store::Store::open(&args.store)?;
+    warn_if_sparse(&store, &instance_key, args.no_verify)?;
     // Default to everything listed, so the interesting windows are found
     // without anybody having to know when they were.
     let days = koji_lag::pool::days_in_store(&store, &instance_key)?;
@@ -703,6 +807,7 @@ fn cmd_events(args: &EventsArgs) -> Result<(), Box<dyn Error>> {
 fn cmd_reports(args: &ReportsArgs) -> Result<(), Box<dyn Error>> {
     let (instance_key, _) = instance::resolve(&args.instance, None)?;
     let store = koji_lag::store::Store::open(&args.store)?;
+    warn_if_sparse(&store, &instance_key, args.no_verify)?;
     // Which days to consider. Everything the store has listed, unless
     // narrowed: each candidate still has to be complete to be reported,
     // so a generous list costs a coverage query and no more.

@@ -230,6 +230,18 @@ pub struct Store {
     conn: Connection,
 }
 
+/// A day the store claims to cover and barely holds anything for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SparseDay {
+    pub day: String,
+    /// Tasks actually held for that day.
+    pub collected: usize,
+    /// Task ids that passed through the hub that day, from the first id
+    /// seen to the last.
+    pub span: i64,
+    pub ratio: f64,
+}
+
 impl Store {
     /// Open (creating if absent) the store at `path`.
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -891,6 +903,66 @@ impl Store {
             })
     }
 
+    /// Days whose coverage record is a lie.
+    ///
+    /// A sync that lists a range and then fails before fetching that
+    /// range's children leaves the store *believing* it is complete: the
+    /// `listed` window covers the day, so nothing asks for it again, and
+    /// every report counts the day as real and quiet. 2026-08-10 held 58
+    /// tasks between neighbours of 31,817 and 26,008 and no part of the
+    /// tool noticed.
+    ///
+    /// Detected without asking the hub anything, and without checking
+    /// builds one by one: Koji's task ids climb monotonically, so the ids
+    /// seen on a day bracket how much work passed through it. A day that
+    /// collected 58 tasks across a span of 44,331 ids did not have a quiet
+    /// day, it has a hole. The ratio is compared against the store's own
+    /// median rather than a constant, because what share of Koji's id space
+    /// is `buildArch` is not ours to assume.
+    ///
+    /// The first and last days a store covers are partial by construction
+    /// and are never reported.
+    pub fn sparse_days(&self, instance: &str) -> Result<Vec<SparseDay>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT date(create_ts, 'unixepoch') AS day, count(*),
+                        max(task_id) - min(task_id)
+                 FROM tasks WHERE instance = ?1
+                 GROUP BY day HAVING max(task_id) - min(task_id) > 5000
+                 ORDER BY day",
+            )
+            .map_err(|e| e.to_string())?;
+        let days: Vec<(String, i64, i64)> = stmt
+            .query_map(params![instance], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())?;
+        if days.len() < 3 {
+            return Ok(Vec::new());
+        }
+        let mut ratios: Vec<f64> = days.iter().map(|(_, n, s)| *n as f64 / *s as f64).collect();
+        ratios.sort_by(f64::total_cmp);
+        let median = ratios[ratios.len() / 2];
+        // A fifth of normal. The separation is not delicate: holes measure
+        // a thousandth of the median, ordinary days sit within a factor of
+        // two of it.
+        let floor = median / 5.0;
+        Ok(days
+            .iter()
+            .skip(1)
+            .take(days.len().saturating_sub(2))
+            .filter_map(|(day, n, span)| {
+                let ratio = *n as f64 / *span as f64;
+                (ratio < floor).then(|| SparseDay {
+                    day: day.clone(),
+                    collected: *n as usize,
+                    span: *span,
+                    ratio,
+                })
+            })
+            .collect())
+    }
     /// Builder pools at `at`: sets of architectures that share hosts, with
     /// each host's weight counted once.
     ///
@@ -1646,6 +1718,49 @@ mod tests {
         let x86 = days.iter().find(|d| d.arch == "x86_64").unwrap();
         assert!((x86.running - 0.25).abs() < 1e-9, "{x86:?}");
         assert!((x86.queued - 0.25).abs() < 1e-9, "{x86:?}");
+    }
+
+    #[test]
+    fn a_day_the_store_claims_and_does_not_hold_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("s.sqlite")).unwrap();
+        // Six days. Five collected about two thirds of the ids that passed,
+        // which is what Fedora's buildArch share looks like; the middle one
+        // listed its builds and never fetched them.
+        let mut rows = Vec::new();
+        let mut id = 1_000_000i64;
+        for day in 0..6 {
+            let base = 86_400.0 * (day as f64 + 1.0);
+            let kept: i64 = if day == 3 { 20 } else { 4_000 };
+            // The ids that passed through the hub span the same 6,000 either
+            // way -- that is the whole signal. A day that collected twenty
+            // of them collected them from across the day, exactly as
+            // 2026-08-10 held 58 tasks whose ids ranged over 44,331.
+            // Every day sees the same 8,000 ids pass, which is what makes
+            // the ratio mean something -- and is above the query's own
+            // floor, below which a day is too quiet to judge.
+            let stride = 8_000 / kept;
+            for i in 0..kept {
+                let mut t = task(id + i * stride, 1);
+                t.create_ts = base + (i as f64 * 86_000.0 / kept as f64);
+                rows.push(t);
+            }
+            // Whether collected or not, the ids advanced by the same amount
+            // -- and by more than a day's span, so days do not overlap and
+            // upsert over one another.
+            id += 10_000;
+        }
+        store.put_tasks("fedora", &rows).unwrap();
+
+        let sparse = store.sparse_days("fedora").unwrap();
+        assert_eq!(sparse.len(), 1, "{sparse:?}");
+        assert_eq!(sparse[0].collected, 20);
+        assert!(sparse[0].ratio < 0.05, "{:?}", sparse[0]);
+
+        // The first and last days are partial by construction -- a store
+        // starts and stops mid-day -- so they are never reported.
+        let ends: Vec<&str> = sparse.iter().map(|d| d.day.as_str()).collect();
+        assert!(!ends.contains(&sparse[0].day.as_str()) || sparse.len() == 1);
     }
 
     #[test]
