@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased
+
+### koji-lag: a trend is named for what it compared
+
+`events` and `reports` both wrote `trend.txt` and `trend.json`, and both are
+meant to be produced into the same repository — so a metrics repo ends up
+holding two files of each name, in different directories, containing
+different measurements. One compares a mass rebuild with the next, where the
+package mix is roughly fixed and the threshold is 1.25x; the other compares
+two calendar months, where it is not and the threshold has to be 1.5x.
+Neither is wrong and a reader has no way to tell them apart.
+
+`events` writes `rebuild-trend.*` now and `reports` writes `monthly-trend.*`.
+Anyone with an existing tree can rename the two pairs by hand; nothing reads
+them back.
+
+`pool.rs` had its own copy of the writing rather than calling the shared one,
+which is why this was nearly a half-done rename: changing `trend::write`
+alone would have moved `events` and left `reports` writing the old name. Both
+callers go through one path now.
+
+### Erratum: the README published in v0.21.0 describes the trend files wrongly
+
+`tools/koji-lag/README.md` at the v0.21.0 tag still documents the
+`divergence` metric and the two-population `rust`-versus-rest split that the
+*same release* replaced with nine toolchain families. The changelog entry for
+that change was correct and the README's report section was updated to match;
+its trend section was missed.
+
+This matters more than an ordinary stale paragraph because that README is
+what people are pointed at: it ships in the crates.io package, and
+koji-lag-metrics links into it at the v0.21.0 tag deliberately, so the link
+stays valid as the docs move. Anyone following it reads an accurate
+description of behaviour that no longer exists.
+
+Corrected from this release onwards. The tagged copy cannot be changed, so
+this entry is the correction of record.
+
+Nothing else linked at that tag is affected: `FINDINGS.md` and
+`notebooks/arch-lag.ipynb` are byte-identical to their current versions, so
+those links keep pointing at what they should.
+
 ## v0.21.0
 
 ### What breaks for API consumers (breaking API)

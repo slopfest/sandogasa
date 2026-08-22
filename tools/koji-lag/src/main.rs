@@ -762,7 +762,7 @@ fn cmd_events(args: &EventsArgs) -> Result<(), Box<dyn Error>> {
     // One rebuild against the next, which is the comparison whose mix is
     // roughly fixed, over the windows this command has just identified.
     let trend = koji_lag::trend::assess(&rebuilds, koji_lag::trend::REBUILD_DRIFT_WARN);
-    files += koji_lag::trend::write(&args.out, &trend)?.len();
+    files += koji_lag::trend::write(&args.out, "rebuild-trend", &trend)?.len();
     for w in &trend.warnings {
         eprintln!("[koji-lag] trend: {w}");
     }

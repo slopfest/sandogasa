@@ -200,17 +200,25 @@ pub fn label_of(event: &crate::events::Event) -> String {
     }
 }
 
-/// Write a trend beside an events tree.
-pub fn write(root: &Path, trend: &Trend) -> Result<Vec<std::path::PathBuf>, String> {
+/// Write a trend beside a tree, as `<stem>.txt` and `<stem>.json`.
+///
+/// The stem is the caller's because the two trends are not the same
+/// measurement and must not share a filename. `events` compares one mass
+/// rebuild with the next, where the package mix is roughly fixed and the
+/// threshold can be tight; `reports` compares two calendar months, where it
+/// cannot. Both are worth having and both are legitimately produced into
+/// the same repository -- which is exactly why one of them being called
+/// `trend.txt` and the other also being called `trend.txt` was a mistake.
+pub fn write(root: &Path, stem: &str, trend: &Trend) -> Result<Vec<std::path::PathBuf>, String> {
     if trend.arches.is_empty() {
         return Ok(Vec::new());
     }
     std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
     let mut written = Vec::new();
     for (name, body) in [
-        ("trend.txt", render(trend)),
+        (format!("{stem}.txt"), render(trend)),
         (
-            "trend.json",
+            format!("{stem}.json"),
             serde_json::to_string_pretty(trend).map_err(|e| e.to_string())? + "\n",
         ),
     ] {
@@ -503,8 +511,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         assert!(from_reports_root(root.path()).unwrap().is_empty());
         // And nothing is written for an empty trend.
-        assert!(write(root.path(), &Trend::default()).unwrap().is_empty());
-        assert!(!root.path().join("trend.txt").exists());
+        assert!(
+            write(root.path(), "rebuild-trend", &Trend::default())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!root.path().join("rebuild-trend.txt").exists());
     }
 
     #[test]

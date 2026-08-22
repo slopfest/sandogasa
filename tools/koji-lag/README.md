@@ -406,21 +406,25 @@ Rendering is cheap and sweeping is not, so existing reports are left alone
 unless `--force` is passed — worth passing after a sync has filled in rows
 a period was missing.
 
-`trend.txt` and `trend.json` are written at the root of the tree, comparing
-the first and last month it holds. They carry the things a single report
-cannot state:
+`monthly-trend.txt` and `monthly-trend.json` are written at the root of the
+tree, comparing the first and last month it holds. They carry the things a
+single report cannot state:
 
-- **build time per population, each against its own earlier self** — the
-  `rust-` packages and everything else. Both slowing means the platform got
-  slower; only the non-Rust population slowing means the toolchain got more
-  expensive.
-- **`divergence`**, one drift divided by the other, which is that
-  distinction as a single number.
+- **build time per toolchain, each family against its own earlier self** —
+  golang, haskell, ocaml, perl, python, r, ruby, rust, and `other` for what
+  the prefixes do not name, mostly C and C++. Families are never divided by
+  one another: the gap between two of them in one window is mostly how big
+  their packages are, not what they cost.
 - **utilisation at both ends**, so a fleet filling up is visible before it
   is full.
 
-Ratios compare a population with itself, never with the other population:
-the gap *between* them is package size and not cost. Month to month, mix is
+Reading the rows is the analysis. Every family moving the same way on one
+architecture is that platform regressing; one family moving differently from
+the others on *every* architecture is that toolchain costing more.
+
+A family whose population changed size by more than the threshold is reported
+as not comparable, in place of its ratio: a ratio over a population that
+changed is a different measurement, not a weaker one. Month to month, mix is
 worth about ±40%, so anything under 1.5x is not distinguishable from what
 people happened to build. Warnings are printed to stderr as well as written
 to the files.
@@ -429,13 +433,16 @@ The series is read from the monthly `report.json` files already in the tree,
 so a run that writes no new reports still refreshes the trend, and there is
 nothing to pass beyond `--reports-root`.
 
-`events` writes the same two files beside its own tree, over the mass rebuild
-windows it has just identified rather than over months. That comparison is
-the one worth trusting — a rebuild builds nearly everything, so its mix is
-roughly fixed — and it warns at 1.25x rather than 1.5x. Each rebuild is
-measured over mass-rebuild work only, which is why an event carries two
-reports: `report.txt` describes its window as it happened, including
-everything else that ran in it, and the trend needs the fixed population.
+`events` writes `rebuild-trend.txt` and `rebuild-trend.json` beside its own
+tree, over the mass rebuild windows it has just identified rather than over
+months — named apart because they are different measurements and both belong
+in the same repository. That comparison is the one worth trusting, a rebuild
+building nearly everything so its mix is roughly fixed, and it warns at 1.25x
+rather than 1.5x. Each rebuild is measured over mass-rebuild work only, which
+is why an event carries two reports: `report.txt` describes its window as it
+happened, including everything else that ran in it, and the trend needs the
+fixed population.
+
 
 ### Sync
 

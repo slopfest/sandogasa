@@ -225,21 +225,11 @@ pub fn run(
     // wants, and they are on disk.
     let series = crate::trend::from_reports_root(reports_root)?;
     pooled.trend = crate::trend::assess(&series, crate::trend::DRIFT_WARN);
-    if !pooled.trend.arches.is_empty() {
-        let dir = reports_root.to_path_buf();
-        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        for (name, body) in [
-            ("trend.txt", crate::trend::render(&pooled.trend)),
-            (
-                "trend.json",
-                serde_json::to_string_pretty(&pooled.trend).map_err(|e| e.to_string())? + "\n",
-            ),
-        ] {
-            let path = dir.join(name);
-            std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
-            pooled.written.push(path);
-        }
-    }
+    pooled.written.extend(crate::trend::write(
+        reports_root,
+        "monthly-trend",
+        &pooled.trend,
+    )?);
     Ok(pooled)
 }
 
