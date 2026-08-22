@@ -34,6 +34,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 - **[hs-relmon](tools/hs-relmon/)** — Hyperscale release monitoring via Repology
 - **[koji-diff](tools/koji-diff/)** — compare buildroot and build logs between Koji builds
 - **[koji-lag](tools/koji-lag/)** — quantify Koji build queue lag and per-arch build-time drag
+  ([published reports](https://forge.fedoraproject.org/packaging/koji-lag-metrics))
 - **[poi-tracker](tools/poi-tracker/)** — package-of-interest tracker for Fedora, EPEL, and CentOS SIGs
 - **[sandogasa-hattrack](tools/sandogasa-hattrack/)** — look up a Fedora contributor's activity across services
 - **[sandogasa-pkg-acl](tools/sandogasa-pkg-acl/)** — view and manage Fedora package ACLs via the Pagure dist-git API

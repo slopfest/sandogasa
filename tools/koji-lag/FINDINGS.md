@@ -1,6 +1,10 @@
 # Fedora build capacity on the IBM architectures: s390x and ppc64le
 
-Source material for a write-up, not the write-up. Every figure here is
+Source material for a write-up, not the write-up. The reports these are
+drawn from are published at
+<https://forge.fedoraproject.org/packaging/koji-lag-metrics>, and the store
+they were computed over is attached to a `koji-lag-store-*` release of the
+sandogasa repository. Every figure here is
 measured from a `koji-lag` store covering 2024-12-24 onward and is
 reproducible from `notebooks/arch-lag.ipynb`; the caveats are kept next to
 the numbers deliberately, because several of the conclusions here replaced
@@ -15,12 +19,15 @@ F45's was announced across four weeks and submitted in four days.
 hardware, and because they turn out to be each other's control: they reach the
 same utilisation from opposite directions and only one of them queues.
 
-> **Every figure here is provisional and dated 2026-08-21.** The store has a
-> hole from February to June 2025 that is still being backfilled, so the F42
-> cycle is measured from a partial quarter. The metrics are all computed by
-> `koji-lag report`, `koji-lag events` and their trend files, so regenerating
-> them once the store is whole is a matter of re-running those and pasting the
-> tables back — no queries to reconstruct.
+> **Figures regenerated 2026-08-22 against a complete store**, covering
+> 2024-12-24 to 2026-08-19 with no gaps — `koji-lag verify` finds none. Every
+> one comes from `koji-lag report`, `koji-lag events` or their trend files, so
+> re-running those and pasting the tables back is all it takes to refresh
+> them; there are no queries to reconstruct.
+>
+> Filling the February-to-June 2025 hole moved none of the rebuild figures,
+> since both ends of every comparison were already covered. What did move is
+> noted where it appears.
 
 ## 0. The two architectures, side by side
 
@@ -77,20 +84,21 @@ than on contributors.
 **And it holds up nearly every build, not just the rebuild's own.** A build
 is not output until every architecture it targets has finished, so the fast
 architectures are done and waiting rather than done. In F45's rebuild s390x
-finished last for **91.7%** of builds, against 7.5% for ppc64le and 0.8% for
+finished last for **87.8%** of builds, against 8.5% for ppc64le and 3.6% for
 the whole rest of the fleet combined, and those builds spent a median **4.0
 hours** — p90 **8.6** — with every other architecture already finished.
 
 Across *all* work in that week, rather than the rebuild alone, how often is a
 coin flip and how much is not close: s390x comes last for 45% of builds and
 ppc64le for 47%, but when ppc64le is last the others have been waiting a
-median **3 minutes**, and when s390x is last, **3.6 hours** — a factor of 70.
+median **1.9 minutes**, and when s390x is last, **3.6 hours** — a factor of
+115.
 
-Reported as a distribution, not a mean, and the difference is not cosmetic.
-Those s390x builds run out to a 72-hour spread, so the mean of 5.1 hours sits
-30% above the typical build; quoting it would also have shrunk the gap
-against ppc64le from 70x to 12x, because ppc64le's own tail drags its mean
-from 3 minutes to 21.
+Reported as a distribution, not a mean, and the difference is not cosmetic:
+those s390x builds run out past 70 hours, so a mean sits well above the
+typical one and would shrink the gap against ppc64le by an order of
+magnitude, ppc64le's own tail being the longer of the two relative to its
+median.
 
 One measurement to distrust here, because it gives the opposite answer. By
 *last timestamp per architecture*, aarch64 ended F45's rebuild eight hours

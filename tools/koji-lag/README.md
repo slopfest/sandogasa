@@ -13,6 +13,13 @@ measures the problem from Koji task metadata: how long tasks
 queue, how long they build, and which architecture each build was
 actually bottlenecked on.
 
+**If you only want to read the numbers, you do not need this tool.**
+Generated reports are published to
+<https://forge.fedoraproject.org/packaging/koji-lag-metrics> — per day, week
+and month, as text, JSON and CSV, alongside the detected mass rebuilds and
+architecture stalls. Install koji-lag to ask a question those do not answer,
+or to run it against another Koji.
+
 Everything works anonymously over the hub's XML-RPC API — no Koji
 credentials, no `koji` CLI. What it collects goes into a local SQLite
 store, which remembers what it has already asked the hub for, so a sweep
@@ -537,17 +544,46 @@ window or architecture as an editable literal at the top. They also
 document the schema by example — see `data/store-schema.sql` for the
 tables themselves.
 
-## Publishing a store
+## Getting a published store
 
 The store is the thing worth handing over: reports answer the questions we
-thought to ask, a store answers the ones a reader thinks of. It is small
-enough to be a download rather than a data release — zstd takes it to under a
-third, 2,462MB to 723MB measured 2026-08-20, in about forty seconds.
+thought to ask, a store answers the ones a reader thinks of. The reports
+themselves are at
+<https://forge.fedoraproject.org/packaging/koji-lag-metrics> and need
+nothing installed. Published ones
+are attached to a `koji-lag-store-*` release of this repository, since a
+gigabyte belongs on a release rather than in a checkout:
+
+<https://github.com/slopfest/sandogasa/releases>
+
+```sh
+scripts/fetch-store.sh \
+  https://github.com/slopfest/sandogasa/releases/download/koji-lag-store-2026-08-19/lag-2024-12-24-to-2026-08-19-schema2.sqlite.zst
+```
+
+That verifies the checksum, decompresses, and prints the span the store
+covers. It **refuses** rather than warns when the `.sha256` beside the file
+is missing or does not match: a truncated store opens and queries perfectly
+well with rows quietly absent, so an unverified download is not a smaller
+dataset, it is a wrong answer.
+
+The asset name carries the span it covers and the schema it was written by,
+so you can tell which one your build can read before spending the download.
+`Store::open` refuses a store from a newer schema outright, so a mistake here
+is an error and not a wrong number.
+
+## Publishing a store
 
 ```sh
 make publish-store STORE=lag.sqlite OUTDIR=dist
-scripts/fetch-store.sh https://example.org/lag-2026-08-20.sqlite.zst
 ```
+
+zstd level 9 takes the store to about a quarter — 3,404MB to 915MB measured
+2026-08-22 — in a minute and a half including the snapshot. Higher levels are
+not worth it on this shape of data and the levels between 11 and 15 gain
+nothing at all over 9; see the comments in `scripts/publish-store.sh` for the
+measurements. Decompression is about half a second per gigabyte whatever the
+level, so the choice costs whoever packs it and never whoever downloads it.
 
 `publish-store.sh` snapshots with `VACUUM INTO` so the artefact is consistent
 even if a sync is running, verifies the snapshot before compressing it, and
