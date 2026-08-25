@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a confirmed fix version is recorded as yours, not the profile's
+
+A version confirmed at the prompt was written into whichever run profile the
+run had read. With `--config configs/fedora-cve-triage/run.toml` — the profile
+this repository ships, which a package installs as
+`/etc/fedora-cve-triage/run.toml` — that is a checked-out file, so answering
+one prompt left an edit staged for everybody. It would also grow without
+bound: the table only ever gains CVEs, and none of them is anyone else's
+business.
+
+Recorded versions now go to `fixed-versions.toml`, one CVE per line, found
+the way the tool's own `config.toml` is:
+`/etc/fedora-cve-triage/fixed-versions.toml` merged beneath
+`$XDG_CONFIG_HOME/fedora-cve-triage/fixed-versions.toml`. It is read whatever
+`--config` names, so an answer given while testing a profile is still there
+on the next ordinary run, and no run profile is ever written to. Only the
+user file is written; a package may ship the system one.
+
+A check's own `fixed_versions` table still works and is still the place for a
+version a profile wants to ship. Where both name a CVE, the recorded version
+wins, being the one this user confirmed.
+
 ### fedora-cve-triage: a resolved fix version says which bug it is being used for
 
 `CVE-2026-49854: using confirmed fix version 6.5.6` appeared twice in a row
