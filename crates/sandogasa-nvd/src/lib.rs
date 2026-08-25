@@ -4,4 +4,4 @@ mod client;
 pub mod models;
 
 pub use client::NvdClient;
-pub use models::FixedVersion;
+pub use models::{FixedVersion, VulnerableRange};

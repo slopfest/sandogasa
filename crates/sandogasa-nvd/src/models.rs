@@ -119,6 +119,29 @@ pub struct FixedVersion {
     pub version: String,
 }
 
+/// One range of versions a CVE's CPE data marks vulnerable.
+///
+/// A [`FixedVersion`] alone cannot say which versions it speaks for, and
+/// a CVE fixed in more than one series has more than one: CVE-2026-15337
+/// is fixed in Django 5.2.17 and 6.0.8, so 6.0.5 is above the first fix
+/// and still inside the second range.
+///
+/// `versionStartExcluding` is not parsed, so a range bounded that way
+/// reads as unbounded below. That reports more versions as affected,
+/// which is the safe direction for a caller deciding whether a bug is
+/// fixed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VulnerableRange {
+    /// The product name from the CPE string (e.g. "django").
+    pub product: String,
+    /// Affected from this version on, inclusive; unbounded below if None.
+    pub start_including: Option<String>,
+    /// Affected below this version — the version that fixes it.
+    pub end_excluding: Option<String>,
+    /// Affected up to and including this version, no fix recorded.
+    pub end_including: Option<String>,
+}
+
 impl CveResponse {
     /// Check if any reference URL points to npmjs.com, indicating a JS package.
     pub fn has_npm_references(&self) -> bool {
@@ -199,14 +222,12 @@ impl CveResponse {
             .collect()
     }
 
-    /// Extract fixed versions from CPE match data.
+    /// Every version range this CVE marks vulnerable.
     ///
-    /// Looks for vulnerable CPE matches with `versionEndExcluding` set,
-    /// which indicates the first version that fixes the vulnerability.
     /// A CVE that NVD has not analyzed yet carries no `configurations`
     /// at all, so this is empty — check [`Self::vuln_status`] to tell
-    /// that apart from "analyzed, and nothing fixes it".
-    pub fn fixed_versions(&self) -> Vec<FixedVersion> {
+    /// that apart from "analyzed, and nothing is affected".
+    pub fn vulnerable_ranges(&self) -> Vec<VulnerableRange> {
         self.vulnerabilities
             .iter()
             .flat_map(|v| &v.cve.configurations)
@@ -214,13 +235,48 @@ impl CveResponse {
             .flat_map(|n| &n.cpe_match)
             .filter(|m| m.vulnerable)
             .filter_map(|m| {
-                let fixed = m.version_end_excluding.as_ref()?;
-                // CPE 2.3 format: cpe:2.3:part:vendor:product:...
-                // product is at index 4 (0-based)
-                let product = m.criteria.split(':').nth(4)?;
+                // CPE 2.3 format: cpe:2.3:part:vendor:product:version:...
+                let mut fields = m.criteria.split(':').skip(4);
+                let product = fields.next()?.to_string();
+                let bounded = m.version_start_including.is_some()
+                    || m.version_end_excluding.is_some()
+                    || m.version_end_including.is_some();
+                if bounded {
+                    return Some(VulnerableRange {
+                        product,
+                        start_including: m.version_start_including.clone(),
+                        end_excluding: m.version_end_excluding.clone(),
+                        end_including: m.version_end_including.clone(),
+                    });
+                }
+                // No range at all: a CPE naming a concrete version is a
+                // range of one, and a wildcard means every version.
+                let exact = fields.next().filter(|v| *v != "*" && *v != "-");
+                Some(VulnerableRange {
+                    product,
+                    start_including: exact.map(str::to_string),
+                    end_excluding: None,
+                    end_including: exact.map(str::to_string),
+                })
+            })
+            .collect()
+    }
+
+    /// Extract fixed versions from CPE match data.
+    ///
+    /// Looks for vulnerable CPE matches with `versionEndExcluding` set,
+    /// which indicates the first version that fixes the vulnerability.
+    /// Which versions each one speaks for is in
+    /// [`Self::vulnerable_ranges`]; a caller comparing a build against
+    /// these alone will accept one series' fix for another series'
+    /// build.
+    pub fn fixed_versions(&self) -> Vec<FixedVersion> {
+        self.vulnerable_ranges()
+            .into_iter()
+            .filter_map(|r| {
                 Some(FixedVersion {
-                    product: product.to_string(),
-                    version: fixed.clone(),
+                    product: r.product,
+                    version: r.end_excluding?,
                 })
             })
             .collect()
@@ -462,6 +518,23 @@ mod tests {
             version_end_excluding: Some(fixed.to_string()),
             version_start_including: None,
             version_end_including: None,
+        }
+    }
+
+    fn cve_with_matches(matches: Vec<CpeMatch>) -> CveResponse {
+        CveResponse {
+            vulnerabilities: vec![Vulnerability {
+                cve: CveItem {
+                    id: "CVE-2026-15337".to_string(),
+                    source_identifier: String::new(),
+                    vuln_status: String::new(),
+                    descriptions: vec![],
+                    references: vec![],
+                    configurations: vec![Configuration {
+                        nodes: vec![Node { cpe_match: matches }],
+                    }],
+                },
+            }],
         }
     }
 
@@ -936,6 +1009,55 @@ mod tests {
     #[test]
     fn parse_github_repo_empty_parts() {
         assert_eq!(parse_github_repo("https://github.com//elliptic"), None);
+    }
+
+    // ---- CveResponse::vulnerable_ranges ----
+
+    #[test]
+    fn vulnerable_ranges_keep_their_lower_bound() {
+        // CVE-2026-15337's own shape: Django "5.2 before 5.2.17 and 6.0
+        // before 6.0.8" is two ranges, and only the second one has a
+        // floor. Reading the fix versions alone loses that.
+        let django = "cpe:2.3:a:djangoproject:django:*:*:*:*:*:*:*:*";
+        let mut six = vulnerable_cpe_match(django, "6.0.8");
+        six.version_start_including = Some("6.0".to_string());
+        let resp = cve_with_matches(vec![vulnerable_cpe_match(django, "5.2.17"), six]);
+
+        let ranges = resp.vulnerable_ranges();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].product, "django");
+        assert_eq!(ranges[0].start_including, None);
+        assert_eq!(ranges[0].end_excluding.as_deref(), Some("5.2.17"));
+        assert_eq!(ranges[1].start_including.as_deref(), Some("6.0"));
+        assert_eq!(ranges[1].end_excluding.as_deref(), Some("6.0.8"));
+    }
+
+    #[test]
+    fn vulnerable_range_from_a_concrete_cpe_version() {
+        // No range bounds at all, so the version in the CPE is the range.
+        let resp = cve_with_matches(vec![CpeMatch {
+            vulnerable: true,
+            ..cpe_match("cpe:2.3:a:djangoproject:django:6.0.5:*:*:*:*:*:*:*")
+        }]);
+        let ranges = resp.vulnerable_ranges();
+        assert_eq!(ranges[0].start_including.as_deref(), Some("6.0.5"));
+        assert_eq!(ranges[0].end_including.as_deref(), Some("6.0.5"));
+        assert_eq!(ranges[0].end_excluding, None);
+        // and it contributes no fix version, since none is recorded
+        assert!(resp.fixed_versions().is_empty());
+    }
+
+    #[test]
+    fn vulnerable_range_from_a_wildcard_cpe_is_unbounded() {
+        let resp = cve_with_matches(vec![CpeMatch {
+            vulnerable: true,
+            ..cpe_match("cpe:2.3:a:djangoproject:django:*:*:*:*:*:*:*:*")
+        }]);
+        let r = &resp.vulnerable_ranges()[0];
+        assert_eq!(
+            (&r.start_including, &r.end_including, &r.end_excluding),
+            (&None, &None, &None)
+        );
     }
 
     // ---- CveResponse::fixed_versions ----

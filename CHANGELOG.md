@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### fedora-cve-triage: one series' fix was accepted for another series' build
+
+`bodhi-check` offered to close bug 2512933 as ERRATA against
+`python-django6-6.0.5-1.fc45`. That build is not fixed: CVE-2026-15337 is an
+issue in "Django 5.2 before 5.2.17 and 6.0 before 6.0.8", and 6.0.5 is inside
+the second range. What made it look fixed is that 6.0.5 is greater than
+5.2.17, the fix for a series it has nothing to do with.
+
+NVD records each affected series as a range, and `fixed_versions` kept only
+the end of each one — so a CVE fixed in two series arrived as a bare list of
+two version numbers with nothing to say which versions either spoke for, and
+the comparison accepted a build at or past *any* of them. The new
+`vulnerable_ranges` keeps the lower bound as well, and a build now has to be
+both at or past a fixed version and outside every range the CVE still marks
+vulnerable. `fixed_versions` is derived from the ranges rather than walking
+the CPE data itself, so the two cannot disagree.
+
+Ranges also come from CPEs that carry no bounds at all: one naming a concrete
+version is a range of one, and a bare wildcard means every version, which is
+read as "nothing here is fixed" rather than "everything is".
+
+This affects any package whose CVEs are fixed in several maintained series at
+once — the versioned `python-django*` packages, `nodejs*`, `postgresql*` —
+and the direction of the error was to close a live security bug.
+
 ### fedora-cve-triage: three live Django bugs were proposed for closing over a data format
 
 `unshipped-tools` offered to close the three bugs for CVE-2026-15830 —
