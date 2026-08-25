@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### fedora-cve-triage: keep a fix version once someone has confirmed it
+
+Answering "yes" to `CVE-2026-49854: NVD lists no fixed version (Deferred); an
+advisory says "fixed in 6.5.6". Treat this as fixed in 6.5.6?` settled that
+CVE for one run and no longer. The next run fetched the same advisory, parsed
+the same version out of the same prose, and asked the same question — and
+since NVD leaves a CVE `Deferred` or `Awaiting Analysis` indefinitely, so did
+every run after that.
+
+Confirming a version is now followed by an offer to record it, defaulting to
+yes: `Record CVE-2026-49854 = "6.5.6" in ~/.config/fedora-cve-triage/run.toml
+so this is not asked again?` The answer goes into that check's
+`fixed_versions`, which is where a hand-written entry has always gone, and
+which is consulted only when NVD still has nothing — so a recorded version
+stops mattering the moment NVD analyzes the CVE.
+
+Only that one key is written. The run profile is a file people write and read,
+with comments explaining the queue it sweeps, and serializing the parsed
+config back over it would drop all of that — and would freeze a system-wide
+profile's values into the user's own file. `ConfigFile::edit` in
+`sandogasa-config` does a format-preserving edit for this, and where the
+profile is a root-owned `/etc/fedora-cve-triage/run.toml` the entry lands in
+the user file and merges over it.
+
+Non-interactive runs are unchanged: with no terminal there is no confirmation
+to record, and the candidate is reported as before.
+
 ### fedora-cve-triage: one series' fix was accepted for another series' build
 
 `bodhi-check` offered to close bug 2512933 as ERRATA against

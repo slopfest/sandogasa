@@ -170,6 +170,37 @@ impl ConfigFile {
         }
         Ok(())
     }
+
+    /// Change part of the **user** config file in place, keeping its
+    /// comments and formatting — the system layer is never written.
+    ///
+    /// `edit` receives the parsed document, empty if the file does not
+    /// exist yet. Use this rather than [`Self::save`] whenever the file
+    /// is one a person wrote and still reads: `save` serializes a whole
+    /// struct, which drops every comment and bakes the system layer's
+    /// values into the user file.
+    pub fn edit<F: FnOnce(&mut toml_edit::DocumentMut)>(
+        &self,
+        edit: F,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut doc: toml_edit::DocumentMut = match std::fs::read_to_string(&self.path) {
+            Ok(text) => text.parse()?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml_edit::DocumentMut::new(),
+            Err(e) => return Err(e.into()),
+        };
+        edit(&mut doc);
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+            if self.secure {
+                set_dir_permissions(parent)?;
+            }
+        }
+        std::fs::write(&self.path, doc.to_string())?;
+        if self.secure {
+            set_file_permissions(&self.path)?;
+        }
+        Ok(())
+    }
 }
 
 /// Prompt the user for a config field value.
@@ -591,5 +622,57 @@ mod tests {
     #[test]
     fn validate_email_rejects_domain_without_dot() {
         assert!(validate_email("user@localhost").is_err());
+    }
+
+    // ---- ConfigFile::edit ----
+
+    #[test]
+    fn edit_keeps_comments_and_untouched_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.toml");
+        std::fs::write(
+            &path,
+            "# why this profile exists\nproducts = [\"Fedora\"]\n\n[check.\"bodhi-check\"]\n# the tracker to block\ntracker_bug = \"CVE-Tracker\"\n",
+        )
+        .unwrap();
+
+        let cf = ConfigFile::from_path(path.clone());
+        cf.edit(|doc| {
+            doc["check"]["bodhi-check"]["fixed_versions"]["CVE-2026-49854"] =
+                toml_edit::value("6.5.6");
+        })
+        .unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# why this profile exists"), "{text}");
+        assert!(text.contains("# the tracker to block"), "{text}");
+        assert!(text.contains("CVE-2026-49854"), "{text}");
+        // and it still parses, with both the old and the new value
+        let table: toml::Table = toml::from_str(&text).unwrap();
+        assert_eq!(
+            table["check"]["bodhi-check"]["tracker_bug"].as_str(),
+            Some("CVE-Tracker")
+        );
+        assert_eq!(
+            table["check"]["bodhi-check"]["fixed_versions"]["CVE-2026-49854"].as_str(),
+            Some("6.5.6")
+        );
+    }
+
+    #[test]
+    fn edit_creates_the_file_and_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("run.toml");
+        let cf = ConfigFile::from_path(path.clone());
+        cf.edit(|doc| {
+            doc["check"]["bodhi-check"]["fixed_versions"]["CVE-1"] = toml_edit::value("1")
+        })
+        .unwrap();
+
+        let table: toml::Table = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            table["check"]["bodhi-check"]["fixed_versions"]["CVE-1"].as_str(),
+            Some("1")
+        );
     }
 }

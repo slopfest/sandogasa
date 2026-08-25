@@ -535,6 +535,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "toml_edit",
  "version-compare",
  "wiremock",
 ]
@@ -1953,6 +1954,7 @@ dependencies = [
  "serde",
  "tempfile",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]
