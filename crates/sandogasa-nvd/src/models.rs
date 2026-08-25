@@ -348,6 +348,43 @@ fn parse_github_repo(url: &str) -> Option<(String, String)> {
 /// or "remote server" — only unambiguous nouns that mean "a program you run".
 const TOOL_QUALIFIERS: &[&str] = &["tool", "utility", "binary", "executable"];
 
+/// Words that fill the `{name}` slot without naming anything: `well-known
+/// binary` is a data format, and the `the` in `the tool` is not a program.
+/// A wrong name here reads downstream as "the package doesn't ship it", so
+/// the slot has to hold a name. Some of these are stepped over rather than
+/// simply dropped — see [`TOOL_MODIFIERS`].
+const NOT_TOOL_NAMES: &[&str] = &[
+    "affected",
+    "any",
+    "cli",
+    "command-line",
+    "compiled",
+    "each",
+    "malicious",
+    "resulting",
+    "same",
+    "some",
+    "target",
+    "that",
+    "the",
+    "these",
+    "this",
+    "those",
+    "underlying",
+    "untrusted",
+    "vulnerable",
+    "well-known",
+];
+
+/// Words that sit between a name and its qualifier, modifying the
+/// qualifier rather than naming anything: CVE-2025-6170 is a flaw in
+/// "the xmllint command-line tool".
+///
+/// Only these are stepped over. A determiner or an adjective ends the
+/// walk instead, because "processed by the tool" names nothing and
+/// stepping past `the` would report the preposition as a tool.
+const TOOL_MODIFIERS: &[&str] = &["cli", "command-line"];
+
 /// Extract potential tool/binary names from text.
 ///
 /// Looks for the pattern `{name} tool/utility/binary/executable` where
@@ -360,16 +397,28 @@ fn extract_tool_names_from_text(text: &str) -> Vec<String> {
         let next_lower = words[i + 1].to_lowercase();
         let next_clean = next_lower.trim_matches(|c: char| !c.is_ascii_alphanumeric());
         if TOOL_QUALIFIERS.contains(&next_clean) {
-            let candidate = clean_word(words[i]);
-            if looks_like_binary_name(&candidate) {
-                tools.push(candidate);
-            }
+            tools.extend(name_before(&words[..=i]));
         }
     }
 
     tools.sort();
     tools.dedup();
     tools
+}
+
+/// The name a qualifier is qualifying: the last word of `words`,
+/// stepping back over any [`TOOL_MODIFIERS`] in between.
+fn name_before(words: &[&str]) -> Option<String> {
+    for word in words.iter().rev() {
+        let candidate = clean_word(word);
+        if looks_like_binary_name(&candidate) {
+            return Some(candidate);
+        }
+        if !TOOL_MODIFIERS.contains(&candidate.as_str()) {
+            return None;
+        }
+    }
+    None
 }
 
 /// Clean a word for comparison: strip non-alphanumeric edges, lowercase.
@@ -380,7 +429,7 @@ fn clean_word(word: &str) -> String {
 
 /// Check if a string looks like a plausible Unix binary name.
 fn looks_like_binary_name(s: &str) -> bool {
-    if s.len() < 2 {
+    if s.len() < 2 || NOT_TOOL_NAMES.contains(&s) {
         return false;
     }
     if !s.chars().next().unwrap().is_ascii_alphabetic() {
@@ -1101,6 +1150,34 @@ mod tests {
         let names = extract_tool_names_from_text("A tool for testing");
         // "A" is too short to be a binary name
         assert!(names.is_empty());
+    }
+
+    #[test]
+    fn tool_name_not_from_well_known_binary() {
+        // "well-known binary" (WKB) is a serialisation format, not a program.
+        let names = extract_tool_names_from_text(
+            "denial-of-service when parsing deeply nested GEOMETRYCOLLECTION objects \
+             supplied as well-known text (WKT), well-known binary (WKB), or hex-encoded WKB",
+        );
+        assert!(names.is_empty(), "{names:?}");
+    }
+
+    #[test]
+    fn tool_name_behind_command_line_modifier() {
+        // CVE-2025-6170, verbatim: the qualifier is two words away.
+        let names = extract_tool_names_from_text(
+            "A flaw was found in the interactive shell of the xmllint command-line tool, \
+             used for parsing XML files.",
+        );
+        assert_eq!(names, vec!["xmllint".to_string()]);
+    }
+
+    #[test]
+    fn tool_name_not_from_determiner_or_adjective() {
+        let names = extract_tool_names_from_text(
+            "The affected utility is reachable through the command-line tool",
+        );
+        assert!(names.is_empty(), "{names:?}");
     }
 
     #[test]

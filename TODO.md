@@ -1845,3 +1845,28 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
 
   Write the settled model into ebranch's DEVELOPMENT.md when the
   work starts; it lives here until then because none of it exists.
+
+## fedora-cve-triage: find the affected tool by name, not by position (2026-08-25)
+
+`unshipped-tools` learns the affected tool's name by reading the word
+before `tool`/`utility`/`binary`/`executable` in NVD's prose. Of the
+seven xmllint CVEs on NVD, that phrasing appears in two. The other five
+name xmllint with no positional cue: "as demonstrated by xmllint"
+(2008-4409, 2018-9251, 2018-14567), "libxml2's xmllint" (2021-3516,
+and the possessive form is deliberately excluded as too noisy), "An
+issue was discovered in xmllint (from libxml2)" (2024-34459). No
+amount of widening the qualifier list reaches those.
+
+The other direction would: we already fetch the component's spec and
+its `shipped_binaries`, so ask whether any name the package actually
+ships appears in the description, instead of guessing a name from prose
+and asking whether it is shipped. That inverts the check — it looks for
+a *presence* in a candidate set that is known and small, which is the
+safer shape for something that acts on a negative, and it needs no
+list of English words at all.
+
+Not free: a package whose binary is a common word (`less`, `file`,
+`test`, `sort`) would match prose that never meant the program, so the
+candidate set needs a length or specificity floor, and the two routes
+probably want to run together rather than one replacing the other.
+Worth doing when this check next produces a wrong answer.

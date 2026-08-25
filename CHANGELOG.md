@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### fedora-cve-triage: three live Django bugs were proposed for closing over a data format
+
+`unshipped-tools` offered to close the three bugs for CVE-2026-15830 —
+`python-django4.2`, `python-django5`, `python-django6` — on the grounds that
+none of them ships a program called `well-known`. There is no such program.
+NVD's description says the vulnerable geometry can be "supplied as well-known
+text (WKT), well-known binary (WKB), or hex-encoded WKB", and `binary` is one
+of the four words the tool reads as "the word before me names a program".
+
+The extractor now rejects a slate of words that cannot be a program name —
+determiners, `affected`, `malicious`, `command-line`, `well-known` and the
+like. `the tool` had the same shape and used to yield a tool named `the`.
+
+Rejecting `command-line` would have cost real detections, because "the xmllint
+command-line tool" is how CVE-2025-6170 describes itself — so the search steps
+back over `command-line` and `cli` and reads the word before, recovering
+`xmllint`. It steps over nothing else: a determiner or an adjective ends the
+walk, since "processed by the tool" names nothing and stepping past `the` would
+report the preposition `by` as a tool.
+
+This is the failure direction that matters for this check: it concludes an
+absence, so an invented name is indistinguishable from a package that does not
+ship the thing, and the result is a proposal to close a live security bug.
+
+Checked against prose rather than invented sentences: all seven of NVD's
+xmllint CVEs plus this one. `xmllint` is found in the two that name it next to
+a qualifier (2025-6170, 2026-1757) and nothing is invented for the five that
+mention it with no positional cue at all ("as demonstrated by xmllint",
+"libxml2's xmllint", "discovered in xmllint (from libxml2)"); those need a
+different route, recorded in TODO.md.
+
 ### koji-lag: a trend is named for what it compared
 
 `events` and `reports` both wrote `trend.txt` and `trend.json`, and both are
