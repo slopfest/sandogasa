@@ -1,5 +1,11 @@
 # TODO
 
+Open work only. Findings and their figures live with the tool —
+`tools/koji-lag/FINDINGS.md` for the s390x/ppc64le analysis — and
+completed work lives in `CHANGELOG.md` and the git history. An entry
+here that has stopped asking for something should be removed rather
+than annotated as done.
+
 ## koji-lag
 
 - (2026-08-22) **`fetch-store.sh` reaches only people with a checkout.**
@@ -31,436 +37,13 @@
   rust-libsqlite3-sys 0.36 are already packaged on rawhide, f43 and
   epel9.
 
-- (2026-08-21) **What should be tracked long term, and why the current
-  reports would not have caught this.** Every number that mattered in the
-  s390x investigation came from ad-hoc SQL or the notebook. The periodic
-  reports give per-arch queue wait and build time, the scratch/official
-  split, and bottleneck attribution — none of which would have raised a
-  flag before the queue was already hours deep. Worth fixing, because the
-  infrastructure team is unlikely to be tracking the leading indicators
-  either, and the whole value of eighteen months of data is seeing a drift
-  before it becomes an outage.
-
-  **Leading indicators — these move first.**
-
-  1. **Weighted utilisation per architecture**: offered weight over enabled
-     capacity. The single best number in the whole investigation. It read
-     0.54, 0.72, 0.79 and 1.24 across the four rebuilds while the observed
-     wait went 53s, 2.0h, 4.2h, 3.8h. Queueing is nonlinear near
-     saturation, so crossing about 0.6 predicts hours of waiting *before
-     anybody has waited*. Needs capacity, task weights and durations — all
-     already in the store.
-  2. **Per-task service time with a control population**: median, p90 and
-     mean per architecture, plus the same for rust packages as the control,
-     since rust does not consume Fedora's C flags. This is what localised
-     the regression. Tracked monthly, the s390x drift from 1.4m to 2.2m
-     would have been visible by mid-2025 rather than found in August 2026.
-  3. **Enabled capacity per architecture**: hosts and weight, from the
-     hub's `host_config` history. Cheap, and it is the denominator for
-     everything above. It also answers "has this architecture kept pace",
-     which turned out to have a surprising answer — s390x capacity nearly
-     doubled in 2024 and a regression consumed all of it.
-
-  **Loss indicators — cheap to compute, high signal.**
-
-  4. **Wasted builder-hours**: the share of builder time in failed or
-     cancelled tasks. It went 6.8%, 12.5%, 9.1%, 12.5% across the four
-     rebuilds. This is pure loss and it roughly doubled; on a saturated
-     architecture it is the cheapest capacity anybody will ever recover.
-  5. **Long-build tail share**: the share of builder-hours in tasks over
-     six hours, which went 5.8% to 23.8%. Catches hangs while they are
-     still four tasks rather than twenty-six.
-
-  **Lagging, but the one to lead a report with.**
-
-  6. **Per-class queue wait, never aggregated** — and specifically the p90
-     for maintainer official builds. It has stayed at about a minute
-     throughout, which is the finding that keeps this in proportion: the
-     system is fine for contributors even while a rebuild queues for hours.
-     A report that omitted it would invite over-reaction.
-  7. **Single-architecture stall events per month**, with the
-     congestion-or-outage verdict. `crate::stall` already produces these;
-     nothing publishes them periodically.
-
-  Alert thresholds the data supports, rather than invented ones:
-  utilisation above 0.6 warns and above 0.7 acts; service time drifting
-  more than about 20% year-on-year against the rust control; wasted share
-  above 10%; tail share above 15%.
-
-  None of this needs new collection — it is all derivable from what Koji
-  already exposes, and the capacity half exists only because the hub keeps
-  `host_config` history, which is worth telling infrastructure explicitly
-  since it is not obvious that it is queryable.
-
-  **Sequencing matters here, per the rule now in DEVELOPMENT.md**: move each
-  metric into `report` first, *then* rewrite the notebook to read
-  `report.json` and the `events/` tree instead of computing from raw SQL.
-  Nine of the notebook's ten code cells are currently ad-hoc queries, which
-  makes it the only home for those metrics — the opposite of what it should
-  be. They also hardcode `s390x` in several places, and **do not patch that**:
-  parameterising SQL that is due to be replaced by a `report --json` read is
-  wasted work. The architectures come from the report, which already covers
-  every one of them. `events` already emits rebuild windows and stalls as JSON, so those two
-  cells can be converted the moment anybody looks at them.
-
-  **The work splits in two, and the tool half comes first.** Promote these
-  from the notebook into `report`/`reports` with thresholds attached, so a
-  monthly report states "s390x utilisation 0.78, above the 0.7 line" without
-  anybody deciding to look. That also gives infrastructure a reference
-  implementation to replicate rather than thresholds to invent, which is a
-  better handover than a list of metrics. What is left for them is only what
-  a per-period report genuinely cannot see: the `ready` check-in state the
-  hub does not keep in history, storage and hypervisor metrics for the s390x
-  fleet, and confirmation of physical host placement.
-
-  Two implementation notes. The rust control population can key on the
-  `rust-` name prefix rather than on `BuildRequires`, which keeps the report
-  self-contained with no spec checkout — accurate enough for a control. And
-  every metric must be per class: one aggregated utilisation figure is
-  exactly how the original "60,000 delay-hours" mistake happened.
-
-  Add a cohort metric too — queue wait split by submitter volume, top ten
-  against the next forty against the rest. A population median hid the
-  sharpest harm in this data for eighteen months: in July 2026 ten people
-  submitted 67% of the human s390x workload at a 1.83h p90 while every
-  cohort's median stayed at about a minute. Alert on the top-ten p90 passing
-  20 minutes, or on it exceeding the next cohort by 5x.
-
-  Consolidated for the write-up in `tools/koji-lag/FINDINGS.md`, structured
-  as bottlenecks, trend, capacity, monitoring, and a closing set of open
-  questions written as invitations rather than caveats — several of them are
-  answerable in a sentence by somebody who administers the machines, and
-  publishing them is how that person is found.
-
-- (2026-08-20) **What to tell the infrastructure team when they ask how
-  much s390x capacity to request.** They have asked, so here is the answer
-  the data supports, with its limits.
-
-  Offered load is measured as builder-hours of work divided by window
-  hours, which for the rebuild windows comes out at 14.6 concurrent tasks
-  (F42), 26.9 (F43), 22.2 (F44) and 25.7 (F45). Offered and delivered are
-  equal in all four to within a percent, so **this is not a throughput
-  deficit** — the fleet does finish the work inside the window. It is a
-  headroom problem: releng submits in bursts, and a queue with no slack
-  turns a burst into hours of waiting.
-
-  Weighted against capacity, the four windows sit at rho 0.54, ~0.72, ~0.79
-  and 1.24, with observed median waits of 53s, 2.0h, 4.2h and 3.8h. Note
-  that F44 at rho 0.79 was *worse* than F45 at 1.24, so the rho estimates
-  carry real error and the M/M/1 formula only half-validates against them
-  (it predicts 4m where 1m was seen at F42, and 854m where 228m was seen at
-  F45). **Quote the measured anchors, not the model**: below about 0.6 the
-  waits are minutes, above about 0.7 they are hours.
-
-  At F45's offered 114 weight, against today's 92:
-
-  | goal | capacity | vs today | extra hosts at 4.9 weight |
-  |:--|--:|--:|--:|
-  | rho <= 0.7, hours become tens of minutes | 162 | 1.8x | +14 |
-  | rho <= 0.6, F42-like, waits in minutes | 190 | 2.1x | +20 |
-  | rho <= 0.5, room for a couple of cycles | 227 | 2.5x | +28 |
-
-  So the ask is **+14 to +20 builders** if today's per-task cost is taken
-  as permanent. Three things should be said with the number rather than
-  after it:
-
-  - **Diagnose before buying.** Returning mean service time to F42's 3.7m
-    from F45's 8.6m drops offered load to 48 weight — rho 0.53 at today's
-    capacity, waits in minutes, no hardware at all. The regression is worth
-    about twice the fleet. And capacity was already raised once, 57 to 96
-    weight across 2024, and the regression consumed all of it inside six
-    months; buying 2x without knowing why risks the same outcome.
-  - **This sizes for two weeks a year.** A rebuild is a batch, so capacity
-    bought for it idles between times. Pacing the rebuild over more days
-    lowers peak rho at no cost, trading rebuild duration for hardware, and
-    belongs on the table beside the purchase.
-  - **The +20 has no growth margin.** Fedora's package count only rises, so
-    rho drifts upward unaided; rho <= 0.5 is the option that survives.
-
-- (2026-08-20) **The slowdown is two effects, and separating them changes
-  who owns each.** Suggested hypothesis: Fedora Changes adding hardening
-  would hit C and C++ disproportionately. Tested by classifying every
-  package by the toolchain its spec pulls in and comparing **the same
-  package in both windows** — 9,952 packages that built successfully on
-  s390x in F42 and again in F45, failures excluded so hangs cannot skew it.
-
-  | toolchain | packages | median ratio | slower by >20% |
-  |:--|--:|--:|--:|
-  | c++ | 2,117 | 1.53x | 72% |
-  | c | 2,930 | 1.40x | 69% |
-  | python | 54 | 1.35x | 65% |
-  | perl | 83 | 1.29x | 63% |
-  | other | 2,104 | 1.28x | 57% |
-  | rust | 2,500 | **1.16x** | 46% |
-
-  Everything slowed, so no single toolchain explains it — but the ordering
-  is exactly what compiler-flag changes would produce, with rust least
-  affected because it does not consume Fedora's C flags. Repeating the
-  paired comparison per architecture separates the two effects:
-
-  | arch | rust (baseline) | c++ | c++ / rust |
-  |:--|--:|--:|--:|
-  | s390x | **1.16x** | 1.53x | 1.31x |
-  | aarch64 | 0.94x | 1.13x | 1.20x |
-  | ppc64le | 0.73x | 0.96x | 1.32x |
-  | x86_64 | 0.69x | 0.79x | 1.14x |
-
-  1. **A compile-specific cost, Fedora-wide.** C++ builds cost 1.14x to
-     1.32x more than rust builds did over the same span, on *every*
-     architecture. A platform fault could not do that; compiler flags can,
-     and the hardening Changes are the obvious candidate.
-
-     **The ask here is process, not reversal.** A hardening Change is a
-     deliberate security trade-off and its cost does not make it wrong —
-     nobody is going to unwind one because builds got slower, and proposing
-     that would waste the finding. What the data supports is a *future*
-     checklist item: a Change that alters compiler flags, or otherwise
-     raises what every package costs to build, should carry an estimate of
-     its build-capacity impact, with the constrained architectures called
-     out. On an architecture already near saturation, a 20% increase in
-     per-package cost is not a rounding error — it is the difference
-     between F42's rebuild queueing for seconds and F45's queueing for
-     hours.
-
-     The method for producing that estimate is in this repo now: a paired
-     per-package comparison across two mass rebuilds, with rust as the
-     control population, since it is the one group that does not consume
-     Fedora's C flags. A proposer would not have to invent it.
-  2. **An s390x platform regression.** Its baseline went 1.16x *slower*
-     while every peer got faster (0.69x to 0.94x), so s390x lost roughly
-     1.5x relative to the fleet on work that has nothing to do with
-     compiler flags. That is the part to chase with infrastructure.
-
-  On s390x the two multiply — 1.16 x 1.31 = 1.52, against the 1.53x
-  measured for C++ — which is why that architecture saturated while the
-  others absorbed the same policy cost without queueing.
-
-  Caveats: the specs are current, so a package's toolchain classification
-  may have drifted since January 2025; python and perl samples are small
-  (54 and 83) because most such packages are noarch and never build per
-  architecture; and the c++/c split rests on `BuildRequires` naming
-  `gcc-c++` or `clang++`, which understates C++ in packages that pull it in
-  through cmake macros.
-
-- (2026-08-20) **Where the service-time regression actually lives: the
-  tail, and hung builds in particular. It is not Rust — and the regression
-  spares Rust in a way that hints at its cause.** Rust's share of s390x
-  rebuild tasks did rise as suspected, 18.5% at F42 to 26.1% at F45, COSMIC
-  and its weekly upstream releases included.
-
-  A first pass concluded that Rust "builds faster than the average Fedora
-  package", which was **wrong** — it compared means across two populations
-  with different tail shapes. By median the two are indistinguishable at
-  F45: rust 2.2m against everything else 2.3m. The suspicion that raised
-  it was that Fedora's rust library crates might be no-op builds, since
-  their `-devel` subpackages are `noarch` and arch incompatibility is
-  handled by skipping build and test rather than by `ExcludeArch`. Checked
-  against the specs, that is not what is happening: they run `%cargo_build`
-  and `%cargo_test` per architecture, and of 3,376 `rust-*.spec` files only
-  47 carry `ExcludeArch`, 58 `%ifarch`, 24 `%ifnarch`, and none use
-  `__cargo_skip_build`. Nor is there a no-op cluster in the durations —
-  nothing under 30s, and 0.6% under a minute, where a minute is about what
-  buildroot setup costs.
-
-  What the statistics do say, reported properly:
-
-  | population | median | p90 | mean |
-  |:--|--:|--:|--:|
-  | rust, F45 over F42 | 1.24x | 1.23x | 1.15x |
-  | everything else | **1.65x** | **2.63x** | **2.74x** |
-
-  So non-rust builds slowed at every statistic and rust barely moved. That
-  is a diagnostic hint worth handing to infrastructure: cargo and rustc are
-  CPU-bound, spawn few processes and touch little of the filesystem, while
-  autotools and C++ builds fork constantly and hammer it. A regression that
-  spares the former and doubles the latter points at storage, the
-  hypervisor or a kernel change rather than at processor speed.
-
-  What grew is the tail. Tasks over six hours took 5.8% of s390x rebuild
-  builder-hours at F42 and 23.8% at F45 (4 tasks, then 26), and the top
-  twenty tasks alone are 21.8% of the architecture's whole rebuild.
-
-  Much of that tail is not building anything. In F45, four tasks ran to a
-  ceiling near 56 hours and produced nothing: `libredwg` (FAILED, 56.1h)
-  and `libunwind` (FAILED, 56.0h), both of which take 0.0-0.5h on every
-  other architecture and so are genuine s390x faults; and `gnulib`
-  (CANCELED, 52.0h) and `m4` (CANCELED, 50.2h), which hung at 52-56h on
-  *all four* architectures and were cancelled by hand. Those four are 214
-  builder-hours, **11.8% of s390x's entire rebuild capacity**, and neither
-  pair existed as a problem at F42 (m4 took 0.0h, gnulib 0.8h).
-
-  Wasted builder-hours — failed or cancelled — roughly doubled as a share
-  across the four: 6.8%, 12.5%, 9.1%, 12.5%.
-
-  **The cheap lever, then, is a build timeout.** Something around 40-48
-  hours would have reclaimed all 214 hours in F45 while touching nothing
-  that succeeded — `gcc` is the longest legitimate build at 37.5h, with
-  `llvm` and `vtk` at 14.2h. That is roughly a tenth of the architecture's
-  rebuild capacity recovered for the cost of a configuration change, before
-  anybody buys a machine. Worth checking what Fedora's current per-task
-  limit actually is, since these ran past 50 hours.
-
-- (2026-08-20) **ppc64le lost half its capacity in July 2025 and has not
-  got it back.** From the `host_config` history now in the store: 132
-  weight through 2025-06, then 64 from 2025-07 and 58-62 ever since. The
-  administrative halving noted above for 2025-11-11 — 32 hosts to 16 — was
-  therefore a further dip on top of a fleet already at half strength, not a
-  fall from full strength. Worth stating whenever ppc64le is compared with
-  s390x, since the two architectures' capacity moved in opposite directions
-  over the same eighteen months: s390x up 57 to 93, ppc64le down 132 to 58.
-
-- (2026-08-20, PARTLY DONE) `tools/koji-lag/notebooks/arch-lag.ipynb`
-  exists and executes, covering the sections listed in the tool README. It
-  lives here rather than in koji-lag-metrics so it stays beside the code and
-  queries it depends on; the fleshed-out narrative version is the metrics
-  repo's, committed there by hand. Still open from the entry below: the
-  ~~publish half~~ — done 2026-08-20: `scripts/publish-store.sh` and
-  `scripts/fetch-store.sh`, 2,462MB to 723MB in forty seconds. What remains
-  is somewhere to put the artefact; the scripts assume only that it is
-  reachable by URL with its `.sha256` beside it.
-
-- (2026-08-20, exploration) Emit reports as Jupyter notebooks, so a reader
-  can change the question rather than only read our answer. Ship a
-  notebook plus a database dump and the queries become a starting point:
-  someone can re-cut a window, swap the architecture, add a cohort, or
-  test a hypothesis of their own without waiting for us to build a flag
-  for it.
-
-  **Publishing the store itself is viable, which settles the question that
-  was blocking this.** zstd at its default setting takes the store to 32%
-  — measured 2026-08-20 at 2,402MB down to 763MB, and independently at
-  1.95GB down to 645MB on an earlier backup. That is a download rather
-  than a dataset release, so the notebook can query the real store and
-  needs no CSV extract that goes stale the moment it is written.
-
-  Decided 2026-08-20: **the notebook is written by hand in the
-  koji-lag-metrics repo; this side supplies the scripts it calls.** So the
-  work here is the publish half — producing the compressed store with a
-  checksum, a helper that fetches and verifies it, and `queries/` content
-  worth embedding — and none of it is notebook authoring. Keeping the
-  notebook out of this repo also keeps a generated artefact out of a tree
-  that would otherwise diff to noise on every re-run.
-
-- (2026-08-20) **Correction to the arch-bottleneck story, and the
-  reporting model that follows from it.** Earlier entries here read the
-  s390x collapse during a mass rebuild as system-wide pain. It is not:
-  the rebuild queues behind itself, and the numbers that said otherwise
-  were aggregates across classes of build that should never have been
-  added together.
-
-  Measured for all three rebuilds, official builds only, s390x queue
-  wait: releng's own tasks sat at 2.0h (F43), 4.3h (F44) and 4.2h (F45)
-  medians, while **everyone else's stayed at one minute** through every
-  burst, exactly as in the weeks before and after. Koji priority is why —
-  maintainers submit at 19-20, packit at 20, releng's rebuild at 25,
-  koschei at 50, and lower is served first — so the rebuild is
-  deliberately deprioritised beneath interactive work and absorbs its own
-  delay. The ~60,000 s390x delay-hours per rebuild are a throughput cost
-  to the rebuild's completion, not contributors being blocked. This also
-  contradicts the crate docs' premise that "scratch builds, which gate
-  dist-git PR CI, run at lower priority still": packit CI waited 6m
-  against official's 4.2h in F45's burst.
-
-  **So report per class, always, and never aggregate across them.** The
-  classes differ in priority, in architecture coverage and in meaning:
-
-  | class | priority | s390x tasks/1000 | what it is |
-  |:--|--:|--:|:--|
-  | releng | 25 | 588 | bulk, self-contending, deprioritised |
-  | maintainer official | 19-20 | 588 | the thing that must stay fast, and does |
-  | packit PR CI | 20 | 576 | contributor-facing latency |
-  | scratch by hand | 20-50 | 544 | maintainer testing |
-  | ELN sync | 25 | 504 | bulk, automated, its own calendar |
-  | ELN fix by hand | 20 | 494 | packager repairing an ELN failure |
-  | koschei | 50 | 0.1 | dependency canary, skips s390x |
-
-  **And lead with the tail, not the median — the median describes an
-  experience nobody had.** During F44's burst the population median was
-  1 minute and every one of the 74 hour-plus waits belonged to a *single*
-  maintainer, who submitted 75 builds and had a personal median of 8¼
-  hours while 63 colleagues saw one minute. F45 has a build that waited
-  48.7 hours. A heavy maintainer meets the p90 many times over in one
-  session, and bulk work across a dependency set serialises — each build
-  waits on the last — so a tail event compounds into days for exactly the
-  people doing the most. A report should therefore give p90 and max, and
-  ideally per-submitter counts, so it can say "one maintainer absorbed
-  all 74 bad waits" rather than "p90 was 8 hours".
-
-  Behavioural model, all three rebuilds agreeing: maintainers stand down
-  during a burst — non-releng official volume falls to a quarter or a
-  third (1,772→887, 1,911→379, 1,540→379) — and those who keep building
-  are disproportionately fixing what just broke, enriched 2.2x to 5.5x
-  for failed packages (18.3% vs 3.3%, 10.7% vs 4.8%, 8.6% vs 3.2%).
-  That is also why the same test over the *fallout* window came out flat:
-  by then everyone has resumed and repair work is diluted.
-
-- (2026-08-20) **Four mass rebuilds measured, and the s390x story is
-  capacity rather than slowness.** F42's window was collected on
-  2026-08-20, which gives a rebuild from before whatever changed and turns
-  the other three from a pattern into a comparison.
-
-  s390x queue wait for the rebuild's *own* tasks, dated from who submitted
-  rather than from the schedule:
-
-  | release | observed window | median | p90 | max | over 1h |
-  |:--|:--|--:|--:|--:|--:|
-  | F42 | 2025-01-16..19 | **53s** | 7m | 56.4h | 1.8% |
-  | F43 | 2025-07-23..26 | 2.0h | 5.1h | 12.1h | 92.6% |
-  | F44 | 2026-01-16..19 | 4.2h | 7.8h | 22.7h | 95.3% |
-  | F45 | 2026-07-15..18 | 3.8h | 8.3h | 18.2h | 95.0% |
-
-  F42 did not queue. The other three queue for hours. The mechanism is
-  measured end to end and each link is a separate observation:
-
-  1. **Capacity was stable across the four windows** — 19-20 enabled hosts
-     at 92-96 weight — but see the correction below: over the longer run it
-     *grew*, and that changes what the figures ask for.
-  2. **Service time rose, and only on s390x.** `buildArch` duration for
-     rebuild tasks, F42 against F45: median 1.4m to 2.2m (1.56x), p90 5.1m
-     to 10.9m (2.13x), mean 3.7m to 8.6m (2.34x). The control says this is
-     not the toolchain or the package mix: over the same span x86_64 went
-     *faster* (1.5m to 1.2m, 0.78x), aarch64 was flat (1.07x) and ppc64le
-     slightly faster (0.92x).
-  3. **So weighted utilisation climbed** — 54%, 72%, 79%, and over 100% at
-     F45 — and queueing is nonlinear as utilisation approaches one, which
-     is the whole of why seconds became hours.
-  4. **On a shrinking workload.** s390x carried 15,900 rebuild tasks at F42
-     and 12,651 at F45, while x86_64 held near 17,000 throughout. It is
-     being excluded from more packages every cycle and saturates anyway.
-
-  Unchanged across all four, and the thing to lead with when this is
-  written up: **maintainers never feel it.** Official builds sat at a
-  roughly one-minute median in every window, with 0.0%, 0.0%, 0.2% and
-  5.4% of tasks waiting over an hour. The cost falls on the rebuild itself
-  and then on the classes at or below its priority — CI (10-45% over an
-  hour) and ELN's sync (an 8.1h median during F44).
-
-  **Correction, from putting capacity in the store (below): Fedora did
-  invest in s390x, and a service-time regression ate the investment.**
-  Capacity rose from 57 weight across 26 hosts in January 2024 to 96 across
-  20 by that December — including a March 2024 consolidation that halved
-  the host count while raising total weight, taking per-host capacity from
-  2.2 to 5.8. F42 in January 2025 was running on exactly that new headroom,
-  which is why it sat at 54% utilisation and never queued. Service time
-  then doubled between January and July 2025 with capacity unchanged at 93,
-  consuming the whole increase.
-
-  That reframes the ask. It is not "s390x has been starved of builders" —
-  builders were added, twelve months before the regression, and it did not
-  hold. The question to put to infrastructure is why per-task wall-clock
-  doubled while the fleet stood still, and the candidates are the March
-  2024 consolidation onto fewer, larger VMs (more concurrent builds per
-  physical machine, hence more contention per build), storage, or the
-  hypervisor — none of which this data can separate.
-
-  Three things this cannot yet say. The regression is unbracketed between
-  2025-01-19 and 2025-07-23, since F42 is the only window predating it —
-  **collecting 2025-02 through 2025-04 would date it**, which is now the
-  main reason to finish F42's cycle beyond completing it. Wall-clock
-  service time cannot separate slower hardware from contention or storage;
-  the co-location finding above is a candidate and unproven. And the
-  utilisation figure exceeding 100% means the weight integral over-counts
-  somewhere, so treat the trend as sound and the absolute number as not.
+- (2026-08-20) Decide what `queries/` content is worth embedding in the
+  published notebook. The rest of that plan has landed: the store
+  publishes (`scripts/publish-store.sh`, `scripts/fetch-store.sh`, the
+  `koji-lag-store-*` release), the narrative notebook is written by hand
+  in koji-lag-metrics, and this side supplies the scripts it calls.
+  Keeping the notebook out of this tree also keeps a generated artefact
+  out of one that would otherwise diff to noise on every re-run.
 
 - (2026-08-20) **The SRPM stage ran on s390x for about ten months, and it
   should never run there at all.** Confirmed as a misconfiguration rather
@@ -485,28 +68,6 @@
   56/74/79/123% with the SRPM stage included), because the work is cheap
   per task; it is worth reporting for its own sake rather than as a
   correction.
-
-- (2026-08-20) **Backfill floor: F42's mass rebuild (2025-01-15).** The
-  store holds two complete release cycles, F43 and F44; F45's finishes on
-  2026-10-20. A third complete cycle is available now by going backwards
-  rather than waiting, since F42 ran 2025-01-15 to its release on
-  2025-04-15, entirely before the store's first day (2025-06-23). That
-  needs 2024-12-15 .. 2025-06-22, about six months and an estimated 1GB at
-  the store's observed 160MB/month.
-
-  Do not go back further than that. Cost per page grows with depth when
-  the hub is healthy — 0.6-1.6s a day back against 17.7-24.1s at thirteen
-  months — and F42 is already the point where a cycle costs hours; earlier
-  cycles buy less relevant data for more hub time. F42 also gives a fourth
-  mass rebuild, which is the sample that matters.
-
-  Cost at that depth, measured 2026-08-20 with `sync`'s own query shape:
-  about 30-60s per 4000-row page against 7s recently, so roughly 25-40
-  minutes of listing per month of data before pacing doubles it. The
-  children stage dominates the total — around 8 minutes per day of builds
-  — which puts six months at the better part of a day of hub time. That is
-  fine: a sync resumes, so it can run across an outage and be picked up
-  after.
 
 - (2026-08-20) The branch date is a second cost multiplier, and the
   reports should treat it as a window in its own right. Once a release
@@ -573,64 +134,6 @@
   waits were 1 minute — that is the holidays, not a response to trouble.
   Worth re-testing as the store grows, since the absence of an event in
   14 months is not proof the practice does not exist.
-
-- (2026-08-20) Retire "build volume" as a measure, and say why in the
-  write-up: Fedora's largest single source of builds is almost invisible
-  to the architecture everyone worries about.
-
-  Measured over 2025-12, the busiest month in the store at 259,062
-  builds: `koschei` submitted 239,188 of them and produced **0.1 s390x
-  tasks per 1,000 builds** (22 `buildArch` tasks in all), against **588
-  per 1,000** for everyone else.
-
-  It is not sampling one architecture for cheapness — it builds x86_64
-  (124,670), aarch64 (123,557) and ppc64le (121,699) in that month and
-  skips s390x and i386 almost entirely. So the asymmetry is a policy
-  fact, and it cuts both ways: s390x is spared several hundred thousand
-  canary tasks a year, and it also gets far less continuous coverage, so
-  dependency breakage there surfaces only when a real build meets it.
-
-  Its builds also carry 2.22 child tasks each against 4.08, which is why
-  that month's ratio looks anomalous, and part of that is builds that
-  never reach an arch task at all: per the wiki, koschei will not attempt
-  a build whose dependencies are Unresolved or whose package is Blocked
-  in Koji.
-
-  What koschei actually does (https://fedoraproject.org/wiki/Koschei) is
-  worth stating in the write-up, because it explains the arrival pattern:
-  it tracks dependency changes in Rawhide and rebuilds packages whose
-  dependencies change too much, from the latest available SRPM, on a
-  priority queue weighted by distance in the dependency graph. Its
-  activity therefore reflects dependency churn rather than anyone
-  updating a package, and it drains on its own schedule — which is how it
-  reached 15,600 builds a day over Christmas with nothing else happening.
-
-  All of it is `scratch=1`, and scratch is 78-95% of every month's builds,
-  so any figure quoted as "builds" is mostly canary traffic unless it says
-  otherwise. The reports already split official from scratch; on official
-  builds only, the s390x median is 47-63s in every ordinary month and
-  4,917s / 7,936s / 8,602s in the three rebuild months.
-
-  So the busiest month in the store is one of the calmest for arch
-  pressure, and the pairs that once looked paradoxical are not:
-  2026-07-12's 10,611 builds ran at a 50s s390x median (98% koschei, about
-  one s390x task in the lot) while 2026-07-17's 9,587 produced a 7.4-hour
-  median (95% releng, which builds everything for everything). The
-  quantity that predicts pain is s390x-bound work, and it barely
-  correlates with total builds.
-
-  Corollary for reading any monthly figure: a busy month can be one
-  service, one week, or one person. December 2025 was koschei running hard
-  over Christmas plus a handful of maintainers doing bulk work — human
-  submitters dropped from ~69 a day to ~23 while each did roughly twice as
-  much — and 2026-01-08's 1,211-build peak was mostly a single account.
-  None of it touched s390x. The submitter breakdown is what makes a
-  monthly number interpretable at all, which is a further argument for
-  graduating `submitters-by-day.sql` into a report section.
-
-  Keep individuals out of anything published: the aggregate ("two thirds
-  of contributors step away over the holidays while the rest double their
-  output") carries the point without profiling volunteers.
 
 - (2026-08-19) Measure the FTBFS tail as part of the write-up — it may
   be the strongest thing the store can say about a mass rebuild, and it
@@ -712,32 +215,15 @@
   as SQL: `arch-load-vs-wait.sql` (the capacity curve) and
   `long-builds.sql` (whether `CREATE_GRACE_SECS` still holds).
 
-- (2026-08-18) Write up the arch-bottleneck analysis for FESCo, once two
-  or three full release cycles are collected — one mass rebuild is an
-  anecdote. FESCo's hypothesis (mass-rebuild months worst for s390x,
-  freeze months best through low load) held for 2026/07 but needs
-  restating in two parts, both measured:
-  - s390x pain is **episodic and not load-driven**. July 16-18 produced
-    88% of the month's 65,850 hours of s390x delay on ordinary volume,
-    while July 12 (10,611 builds) and 24 (11,852) were untouched at a
-    50s median. The bad days were 79-95% `releng` (the mass rebuild);
-    the busy fine days were 91-98% `koschei` (steady low-priority
-    scratch rebuilds). July had 23% more builds than March and a 118x
-    worse s390x median wait, with x86_64 unmoved at 52s. Capacity: 35
-    s390x-capable hosts against 190 x86_64 and 114 ppc64le, and the
-    same 16 hosts ran 146 s390x tasks on the 12th and 4,601 on the 16th.
-  - **ppc64le is the chronic tax** and the bigger steady cost: last to
-    finish on 75-86% of attributable builds every month at 33-43s each,
-    losing more total wall-clock than s390x in both freeze months
-    (3,713h vs 2,877h in March; 3,108h vs 2,085h in April). Fixing
-    s390x would not touch it.
-
-  Months held as of 2026-08-18: 2026/01 (collecting), 03, 04, 06, 07,
-  plus 08/01-09. Needed for two full cycles: 2025/11 and /12 and
-  2026/02 (~2.5h each), 2026/05 (import, raw data on the laptop), then
-  2026/09 and /10 once they happen. The per-day and per-submitter
-  tables are what make the case — a monthly summary hides the three
-  days that did the damage.
+- (2026-08-18) Write up the arch-bottleneck analysis for FESCo. The
+  precondition is met — four mass rebuilds and an unbroken store — and
+  the material is in `tools/koji-lag/FINDINGS.md`, which is source for a
+  write-up rather than the write-up. What is left is the document FESCo
+  actually reads: shorter, one ask per section, and answering their
+  original hypothesis (mass-rebuild months worst for s390x, freeze months
+  best) in the two parts the data supports — s390x pain is episodic
+  rather than load-driven, and ppc64le is the chronic tax that fixing
+  s390x would not touch.
 
 - (2026-08-17) Split the store by period *when backups start to hurt*,
   not when the file gets large — measured, a decade of data still
@@ -930,7 +416,9 @@ considered and rejected.)
   needs: the releng Forgejo repo coordinates, growing the report's
   per-request escalation state from `pinged: bool` to a level
   (none → needinfo'd → releng-filed) so `escalate` knows which step
-  each request is on, and the releng-filing branch in `escalate`.- (2026-06-25, EXPLORATORY — may not be worth it) check-update: source
+  each request is on, and the releng-filing branch in `escalate`.
+
+- (2026-06-25, EXPLORATORY — may not be worth it) check-update: source
   a Bodhi update's Provides from koji instead of fedrq `@testing`, to
   dodge mirror-propagation flakiness. NOT decided — the current
   `@testing` approach may be good enough if we just accept up to ~1 day
