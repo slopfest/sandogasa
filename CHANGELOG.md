@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a resolved fix version says which bug it is being used for
+
+`CVE-2026-49854: using confirmed fix version 6.5.6` appeared twice in a row
+while the CVE beneath it appeared once, with nothing to say why. The line is
+printed for each bug that resolves against the version, and that CVE had two
+bugs in the queue — but reading it, the repetition looks like the tool doing
+the same work twice. It is not: the advisory is read once and the question
+asked once.
+
+Each of the three lines now names its bug, so `bug 2501082 (CVE-2026-49854):
+using confirmed fix version 6.5.6` followed by `bug 2501088` says what is
+happening. Repetition is worth keeping rather than collapsing: two bugs on the
+same component and branch are duplicates of each other, which is something to
+go and look at — 2501082 and 2501088 are the same bug filed three and a half
+minutes apart.
+
 ### fedora-cve-triage: keep a fix version once someone has confirmed it
 
 Answering "yes" to `CVE-2026-49854: NVD lists no fixed version (Deferred); an
