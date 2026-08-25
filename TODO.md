@@ -23,53 +23,6 @@
      says only "check what your package provides", because inventing a path
      before packaging exists would be worse than saying nothing.
 
-- (2026-08-21, DONE) **Utilisation is computed per builder pool.**
-  `Store::pools_at` groups architectures into connected components of the
-  "some host serves both" relation and counts each host's weight once;
-  `ArchHealth::utilisation` is the pool's, so architectures sharing hardware
-  report the same figure. Fedora has four pools — `s390x`, `ppc64le`,
-  `aarch64`, and `i386 i686 x86_64` — the last because x86_64 appears in two
-  different host lists and pulls both 32-bit names in with it. During F45's
-  rebuild that reads 0.52 where the per-architecture figures were 0.19 and
-  0.35, and the 136 weight units of i386 headroom that could not be
-  redeployed are gone, having been x86_64's own counted twice.
-
-- (2026-08-21) **0.21.0 is deliberately held**, not blocked: the choice on
-  2026-08-21 was to wait for the 2025-02..06 backfill and for the report
-  metrics below, rather than ship around work in progress. The metrics are
-  better designed against a store with no hole in it, and the backfill is
-  hours rather than days.
-
-- (2026-08-21) **The next release is 0.21.0, not a patch.** `cargo
-  semver-checks` against the published 0.20.0 finds three breaking changes,
-  and the pre-1.0 rule in the root guidance maps breaking to a minor bump:
-
-  | crate | what broke |
-  |:--|:--|
-  | `sandogasa-bugzilla` | ~~`claim::resolve_claim` removed~~ — **false positive**: the definition moved to `sandogasa-cli` and `sandogasa_bugzilla::claim` re-exports it, so callers are unaffected. `cargo semver-checks` does not follow cross-crate re-exports |
-  | `sandogasa-gitlab` | `IssueUpdate` gained a public `assignee_ids` field |
-  | `sandogasa-kojihub` | `ListTasksOpts` gained a public `created_before` field |
-
-  All three predate 2026-08-20 — the two struct fields come from the
-  cursor-paging work and the GitLab assignee support, not from anything in
-  the recent koji-lag run. The additions made on 2026-08-20 to
-  `sandogasa-kojihub` (`HostConfig`, `HubClient::with_timeout`,
-  `xmlrpc::configured_timeout`, `TIMEOUT_ENV`, `DEFAULT_TIMEOUT`,
-  `host_config_history`) are purely additive and pass, as does everything in
-  `koji-lag` itself, which is a binary crate and not checked.
-
-  Note what makes this easy to get wrong: `cargo semver-checks` reports
-  "semver requires new major version", which is its post-1.0 reading. At
-  0.x a breaking change is a *minor* bump, so the answer is 0.21.0 rather
-  than 1.0.0. Two of the three are also the kind nobody notices while
-  writing them — adding a public field to a struct that callers construct
-  with a literal is a breaking change, and neither field looked like one
-  going in.
-
-  The other two release gates as of 2026-08-21: `cargo audit` clean (h2 at
-  0.4.16, with the pre-existing allowed unsoundness warnings for anyhow and
-  scc), and coverage 82.32% lines against the 80% floor.
-
 - (2026-08-17) Packaging: koji-lag now links system SQLite through
   rusqlite, so its Fedora spec needs `BuildRequires: sqlite-devel`
   (`pkgconfig(sqlite3)`) and Debian's needs `libsqlite3-dev`. The
@@ -77,23 +30,6 @@
   not acceptable in either archive. rust-rusqlite 0.38 and
   rust-libsqlite3-sys 0.36 are already packaged on rawhide, f43 and
   epel9.
-
-- (2026-08-20) Two report features that follow from the tail finding, and
-  neither singles anybody out.
-  - ~~**`report --owner NAME` and `--package NAME`.**~~ Done 2026-08-20.
-    Both take a comma-separated or repeated list, filter through the parent
-    build, and drop tasks that cannot be attributed rather than counting
-    them in. DEVELOPMENT.md had been claiming these existed ever since the
-    filters were removed from the sweep; that sentence is now true.
-  - **Cohort rows: top N submitters by volume, the next M, and the rest.**
-    Publishable, and it carries the finding without a name. Measured for
-    2026-07, official builds by people (338 submitters), s390x: the top
-    ten hold 10,985 of the month's 14,402 tasks with a p90 of 2.9h and
-    **27.8% of their builds waiting over an hour**, the next forty 8.6%,
-    and the remaining 288 people 4.5%. ppc64le is starker still — top ten
-    at a 1.4h p90 and 18.3% over an hour, everyone else at one minute and
-    0.1%. Every cohort has a one-minute median, which is exactly how this
-    stayed invisible.
 
 - (2026-08-21) **What should be tracked long term, and why the current
   reports would not have caught this.** Every number that mattered in the
@@ -373,30 +309,6 @@
   s390x, since the two architectures' capacity moved in opposite directions
   over the same eighteen months: s390x up 57 to 93, ppc64le down 132 to 58.
 
-- (2026-08-20, DONE) **Builder capacity is in the store.** `host_config`
-  holds 12,592 revisions back to 2018-10-03, fetched by `sync` on every run
-  in one call, and `Store::capacity_at` answers "enabled hosts and weight
-  for this architecture at this instant". Validated against the figures
-  previously computed outside the repo: the four rebuild windows read
-  96/93/93/91.5, matching. What follows is why it was worth doing. Everything in the
-  four-rebuild analysis comes from the store except its denominator:
-  enabled hosts and their weight capacity, which came from a live
-  `queryHistory(tables=['host_config'])` call cached outside the repo. So
-  the central claim — capacity flat while service time doubled — is the
-  one nobody else can reproduce, including us once that file is gone.
-
-  `hosts` holds only id, name and arches. What is needed is the history:
-  per host, the spans over which it was enabled and at what capacity,
-  which is exactly what the hub returns. It is backfillable to 2020 in a
-  single call, so this is a migration and one fetch rather than a
-  collection campaign — and it turns "has s390x kept pace with the rest of
-  the fleet?" into a query instead of an afternoon.
-
-  Watch the reconstruction: enabled-at-an-instant from overlapping
-  revisions is easy to get wrong, and the check that caught it was
-  comparing against hosts observed serving work *at the same instant*
-  rather than over the whole day.
-
 - (2026-08-20, PARTLY DONE) `tools/koji-lag/notebooks/arch-lag.ipynb`
   exists and executes, covering the sections listed in the tool README. It
   lives here rather than in koji-lag-metrics so it stays beside the code and
@@ -596,29 +508,6 @@
   fine: a sync resumes, so it can run across an outage and be picked up
   after.
 
-- (2026-08-20) **Identify a service by its build target, not by the
-  account that submits it.** Filtering on `owner` alone reported that ELN
-  did no building whatsoever before January 2026 — 31 consecutive weeks
-  of zero — when in fact it had been running throughout. The account was
-  renamed: `distrobuildsync-eln/jenkins-continuous-infra.apps.ci.centos.org`
-  hands over to `eln-buildsync` on 2026-01-08, with both appearing that
-  day. An owner string is an operational detail that changes without
-  notice, and when it changes a filter built on it reports absence rather
-  than failing, which is the worst way for it to be wrong.
-
-  `target` survives the rename: everything ELN builds goes to `eln`,
-  `eln-candidate` or an `eln-build-side-NNNNNN` side tag. Measured that
-  way the store holds 61,257 ELN sync builds across 14 months, plus 5,838
-  from CI (`packit`, `zuul`) and 2,572 submitted by people — a packager
-  whose package failed in ELN building it by hand rather than waiting for
-  the next sync. Three classes, and the reports must not add them up.
-
-  The same trap caught an earlier reading of the post-branch spike: F44's
-  8,003-build day looked like maintainers racing a deadline and was 91%
-  ELN, because the filter for "not a service account" tested for a `/` in
-  the name and `eln-buildsync` has none. Any such filter needs an
-  explicit list of what the services are, plus a target test.
-
 - (2026-08-20) The branch date is a second cost multiplier, and the
   reports should treat it as a window in its own right. Once a release
   branches, a package that still does not build has to be fixed twice —
@@ -684,112 +573,6 @@
   waits were 1 minute — that is the holidays, not a response to trouble.
   Worth re-testing as the store grows, since the absence of an event in
   14 months is not proof the practice does not exist.
-
-- (2026-08-20) **Detect single-architecture stalls, which are a different
-  event from a busy window and are currently invisible.** For about two
-  days in May 2026 every Fedora build needing s390x waited roughly two
-  days for it, while every other architecture was served in a minute.
-  There was no mass rebuild that month and the load was ordinary.
-
-  Measured by task creation day: s390x `buildArch` tasks created
-  2026-05-06 waited a mean of **46.0 hours** and those created 05-07
-  **38.3 hours**, against 0.1 hours on 05-05 and 1 minute again by 05-10;
-  25 of them never started at all. On 05-08, when the backlog was
-  draining at a 37-hour mean, x86_64, aarch64, ppc64le and i386 all sat
-  at 1-2 minutes. Volume was normal all week (371 s390x tasks created on
-  05-06 against 291 and 260 the days before), so this is availability,
-  not congestion, and it hit ordinary maintainers rather than bulk work.
-
-  This matters for how the s390x question gets framed: the architecture's
-  worst days in the store are not its mass-rebuild days. 2,243 minutes
-  beats every rebuild day measured, by five times.
-
-  `crate::stall` now finds these — one architecture's daily mean exceeding
-  the median of its peers tenfold, with an hour's floor and a 50-task
-  minimum — and its first run over the store says May was not a freak but
-  the extreme of a recurring pattern. **19 stalls in 14 months, 14 of them
-  outside any rebuild window**, all but two on s390x (ppc64le twice, on
-  2025-09-19 and 2025-11-11). So an ordinary month carries about one
-  single-architecture stall, ranging from 1.3 hours at 31x the fleet up to
-  May's 46 hours at 3,779x, and 1,600 tasks across those 14 events never
-  ran at all.
-
-  **Why each one happened is now answered from the store, and the answer
-  is mostly "the builders were working".** Throughput separates the two
-  reasons a queue grows, and it needed no new collection: 17 of the 19 are
-  congestion, where the architecture ran several times its ordinary
-  concurrency and still fell behind, and only **two are outages** — the
-  May event, where s390x ran *nothing at all* on 05-07 against a queue of
-  412 having managed 5.9 the day before, and a single ppc64le day on
-  2025-11-11 at 6.7 against an ordinary 23.1.
-
-  So the recurring monthly stalls are demand, not broken hardware, which
-  reframes them: s390x has an ordinary throughput of 6.3 concurrent tasks
-  against ppc64le's 23.1, and it falls an order of magnitude behind
-  roughly monthly because that capacity is thin, not because it fails.
-
-  **The two outages have different causes, and the hub's own history
-  names one of them.** Koji keeps full `host_config` history —
-  `queryHistory(tables=['host_config'])` returns 12,593 revisions with
-  `enabled`, `capacity`, `arches` and validity timestamps, back to 2020 —
-  so builder capacity is backfillable rather than something to start
-  collecting.
-
-  - **ppc64le, 2025-11-11: administrative.** Half the fleet was disabled
-    from 11-06 to 11-11 — 32 hosts at capacity 64 down to 16 at 32 — and
-    the hosts involved carry `rdu3` names, so this looks like the
-    datacentre move. Throughput of 6.7 against an ordinary 23.1 is what
-    running on half a fleet looks like, and calling it an outage in the
-    sense of a failure overstates it.
-  - **s390x, 2026-05-07: not administrative.** 18 hosts stayed enabled at
-    capacity 90 and *none of them served a single task*. A storage
-    problem, tracked as
-    https://forge.fedoraproject.org/infra/tickets/issues/13326, which is
-    exactly the shape such a failure leaves in this data: capacity
-    present, throughput zero.
-
-  What history does not keep is `ready`, the live check-in state, which
-  distinguishes those two without recourse to memory. Only `listHosts`
-  reports it and only for the present, so that remains the one thing a
-  snapshot collector would genuinely add.
-
-  (An earlier note here claimed the reconstruction was untrustworthy
-  because it found 16 enabled ppc64le hosts on a day 29 served. The
-  reconstruction was right and the check was wrong: it compared a noon
-  snapshot against activity from the whole day, and 15 of those hosts were
-  re-enabled at 23:04. Validated at matching instants, served never
-  exceeds enabled.)
-
-- (2026-08-20) **Which builders share a machine is inferable, and s390x is
-  concentrated enough that it matters.** Hosts on one physical mainframe
-  get maintained together, so simultaneous `host_config` changes cluster
-  them — and for s390x the clusters are unambiguous:
-
-  | group | hosts | changes in the same minute | enabled capacity |
-  |:--|:--|--:|--:|
-  | A | `buildvm-s390x-01..14` | 30 | 75.0 (82%) |
-  | B | `buildvm-s390x-15..24` | 17 | 16.5 (18%) |
-  | C | `buildvm-s390x-25..35` | — | all disabled |
-
-  Fourteen hosts are not disabled together thirty times by coincidence, and
-  group A's members are individually larger too (capacity 6.0 against
-  group B's 3.0). So **82% of Fedora's s390x capacity shares one
-  maintenance group**, and if that group is one physical machine, losing it
-  costs four fifths of the architecture.
-
-  The May outage was *not* that, though: both groups went to zero on the
-  same day, so it was site- or storage-level rather than one mainframe.
-  Which means the concentration is a latent risk the store has not yet
-  seen realised — worth saying plainly in the write-up, and worth
-  confirming against infrastructure rather than asserting from
-  correlation alone, since a shared maintenance window is evidence of
-  shared handling and not proof of shared hardware.
-
-  Same method applies to the other architectures; ppc64le's November
-  grouping (16 disabled at once) suggests it is similarly clustered.
-
-  Still to do: label each stall against the rebuild windows in the output,
-  which is what `reports --schedule` should emit.
 
 - (2026-08-20) Retire "build volume" as a measure, and say why in the
   write-up: Fedora's largest single source of builds is almost invisible
@@ -909,18 +692,6 @@
     larger page leaves our share of the hub unchanged while asking it
     for far fewer of the expensive seeks.
 
-- (2026-08-19) Collect the two 2025 mass rebuilds, so the s390x
-  signature can be checked across four consecutive ones rather than the
-  two we have. From the schedule XML — which carries explicit "Mass
-  Rebuild starts"/"ends" milestones, better than inferring a window:
-  F42 2025-01-15 to 02-04, F43 2025-07-23 to 08-12, F44 2026-01-14 to
-  02-03 (held), F45 2026-07-15 to 08-11 (held). Both held rebuilds
-  collapsed s390x identically — median wait 6,777s and 6,141s, 12.3%
-  and 13.0% of attributable builds, ~60,000 hours each — and both burned
-  through in six days rather than the three weeks the schedule allots.
-  Four in a row would settle whether that is the mechanism or a
-  coincidence of two.
-
 - (2026-08-19) Graduate two analyses from `queries/` into `report`, since
   they carry the FESCo argument and a published command is a stronger
   citation than "we ran some SQL":
@@ -940,71 +711,6 @@
   The other two queries are diagnostics rather than reports and can stay
   as SQL: `arch-load-vs-wait.sql` (the capacity curve) and
   `long-builds.sql` (whether `CREATE_GRACE_SECS` still holds).
-
-- (2026-08-18) Report on schedule windows, not just calendar periods.
-  A mass rebuild or a freeze straddles month boundaries — F44's ran
-  2026-01-14 to 02-03, F45's 2026-07-15 to 08-11 — so monthly reports
-  cut them in half and weekly ones scatter them. `report --since/--until`
-  already covers the ad-hoc case; what is missing is deriving the
-  windows from Fedora's schedule and emitting them as named periods,
-  e.g. `reports/events/f-45/mass-rebuild/`.
-  - Source: the schedule repo (MS Project XML, `<Task>` with `<Name>`,
-    `<Start>`, `<Finish>`, one directory per release back to F10). Read
-    it by path with a `--schedule DIR` flag; do not vendor it. Fedora's
-    generated HTML works too but is the wrong format to depend on.
-  - Detection is already calibrated, so no threshold guessing is needed.
-    `releng`'s share of a day's builds is sharply bimodal: across 267 days
-    held, 254 sit **under 1%** and eleven sit **above 25%**, with only two
-    days anywhere between. Any cut between about 2% and 25% separates them
-    exactly. Require two consecutive days over the threshold so a small
-    targeted rebuild is not mistaken for a mass one.
-  - Submission takes 3-4 days whatever the schedule allots. F43's window
-    ran 2025-07-23 to 08-12 on paper and the submissions were entirely
-    within 07-23..26 — August 2025 holds none of it. F44 and F45 are the
-    same. The schedule's end date is the branch date, not the rebuild's.
-  - A rebuild has three phases and an event report should name them.
-    **Submission** runs 3-4 days (F43 2025-07-23..26, F44 2026-01-16..18,
-    F45 2026-07-15..18) at 79-95% `releng`, during which releng's own
-    s390x tasks queue behind each other at 2.0-4.3h medians while
-    everyone else's stay at one minute. Maintainers largely stand down —
-    non-releng official volume falls to a quarter or a third — and those
-    who keep building are enriched 2.2x to 5.5x for packages that just
-    failed. **Fallout** runs another 3-4 days: the population returns (33
-    → 42 → 74 → 80 distinct packagers across F45's aftermath) and repair
-    work mixes into resumed ordinary building, which is why the
-    failed-package enrichment washes out in that window even though it is
-    strong during submission and again in week two. Fedora's schedule
-    marks the phase with a "File FTBFS bugs from mass rebuild" milestone.
-    Then a **long tail** of months; see the FTBFS entry.
-  - An event report must apply the per-class model, or it will repeat the
-    mistake corrected on 2026-08-20: aggregating releng's self-contention
-    with everyone else's builds reports a four-hour median that describes
-    only the rebuild waiting for itself. Report releng, maintainer
-    official, packit CI, hand-submitted scratch and koschei separately,
-    and lead with p90 and max rather than the median.
-  - Consequence for the eventual write-up: spreading a rebuild would
-    spread the fallout too, since a maintainer cannot start fixing until
-    their package has failed. Four days of submission concentrates the
-    human response into the four days after it. Note also what spreading
-    would *not* fix — contributor-facing latency is already protected by
-    priority, so the case for spreading rests on the rebuild's own
-    completion time and on the repair burden, not on unblocking anyone.
-  - Report the *observed* window beside the announced one. They differ:
-    F45's was scheduled over four weeks and submitted in four days
-    (2026-07-15..18), F44's likewise (2026-01-16..18, against a 01-14
-    announced start), F43's exactly on its announced start
-    (2025-07-23..26 against 07-23). Our own data dates it far better than
-    the schedule does — the days where `releng` submits 79-95% of builds
-    — and the gap between planned and actual is itself a finding. The
-    schedule drifts too, visibly: its git log carries commits like
-    "updating f48 schedule with correct dates".
-  - Completeness already works for arbitrary windows (`Store::analysable`
-    takes any from/to), so an event window that is only partly held will
-    decline to report itself, as a month does.
-
-  Ready to implement: 413 unbroken days are held (2025-06-23 to
-  2026-08-10), covering F43's and F44's full cycles and F45 to branching,
-  with three rebuild windows measured consistently.
 
 - (2026-08-18) Write up the arch-bottleneck analysis for FESCo, once two
   or three full release cycles are collected — one mass rebuild is an
@@ -1076,10 +782,6 @@
   v1): median build time per (host, arch) to spot sick builders —
   host names are already captured in the dataset.
 
-## hs-relmon
-
-## Cross-cutting
-
 ## poi-tracker / sandogasa-pkg-health seam
 
 Decision (2026-07-21): keep both tools — pkg-health **observes**
@@ -1090,12 +792,6 @@ READMEs. Done (2026-07-21): version classifier extracted to
 `sandogasa_distgit::spec`); pkg-health gained the `pending_update`
 check; semver-audit stays in poi-tracker as the interactive
 one-shot view. Follow-ups:
-
-- Done (2026-07-22): poi-tracker `adopt` — walks the inventory for
-  orphan-owned packages and takes them via the dist-git
-  take-orphan endpoint, per-package confirmation.
-
-## cpu-sig-tracker
 
 ## sandogasa-report
 
@@ -1110,31 +806,12 @@ one-shot view. Follow-ups:
   (e.g. "Releases published: 0 across 0 project(s)"), and consider an
   executive-summary block at the top (cross-domain totals)
 
-## ebranch
-
-Done (2026-07-06):
-- check-update `--submit`: check a side tag pre-emptively and submit it
-  to Bodhi only when the check passes (notes via `--notes`/`--notes-file`,
-  plus `--type`/`--severity`/`--bug`/karma-threshold flags)
-
 ## dbranch
 
 - (2026-07-03, nice-to-have) the merge phase of proposed-updates and
   backports could run on non-Debian hosts (only build/upload truly need
   Debian); kept simple and symmetric for now with a full up-front host
   guard
-
-Done (2026-07-06):
-- upload stage supports Debusine personal repositories (`--debusine
-  <name>` on rebuild + update → `dput -O debusine_workspace=… -O
-  debusine_workflow=publish-to-<base-suite>-<srcpkg>
-  debusine.debian.net`)
-
-Done (2026-07-03):
-- rebuild supports Debian backports targets (`debian/<codename>-backports`
-  → `~bpo<N>+<M>`, gbp.conf debian-branch only, salsa-ci RELEASE pinned to
-  `<codename>-backports` — leaving it untouched built against sid). Tested
-  with iptstate.
 
 ## ebranch
 
@@ -1162,44 +839,6 @@ Done (2026-07-03):
     breaks the aggregated "concerns" into per-item findings.
   Not applicable: sandogasa-pkg-health, koji-diff, cpu-sig-tracker, dbranch.
 
-Done (2026-06-29):
-- Unified review-issue handling: new `sandogasa-review` crate provides the
-  keep/explain/remove resolver; `fedora-review-digest` refactored onto it
-  (behavior-preserving) and `ebranch check-update --give-karma` now curates
-  blocking findings (installability + reverse-dep breaks grouped by Provide)
-  before deriving karma and posting — explained/removed findings don't
-  downvote; explanations go in an "addressed by the reviewer" section.
-- fedora-cve-triage adopted `sandogasa-review`: the false-positive detectors
-  (interpreter-fps, js-fps, cross-ecosystem, unshipped-tools) now review each
-  detected bug keep/explain/remove before closing as NOTABUG (explain appends
-  a justification to the close comment), instead of one bulk y/N.
-- check-update condenses large updates: counts by default, updated
-  packages grouped by `old → new` version transition, new packages
-  listed separately, actionable findings still shown in full, bulky
-  lists behind `--detailed` (and capped at 15 otherwise).
-- check-update memoizes stable-repo capability resolution
-  (`provides_of_provider`) per capability, so libstdc++ / libQt6Core.so.6
-  resolve once per run instead of once per requiring package. (A general
-  fedrq-layer cache across all query methods is still possible if more
-  memoization is needed — would touch ~20 `Fedrq {}` literals.)
-- check-update side-tag NVRs now use `koji list-tagged --latest`, and
-  the staleness check only flags repodata that's *older* than expected
-  (rpmvercmp) — so a side tag that moved 6.7.0 → 6.7.1 no longer
-  false-flags as stale.
-- check-update now evaluates boolean/rich deps in the installability
-  check with real semantics (`A if B` requires A only when B resolves,
-  `unless`/`or`/`and`/`with`/`without` likewise) instead of requiring
-  every capability — plus fixed the extraction bug that left a stray
-  `)` on inner-group caps. Fixed the bogus plasma-settings issue; a
-  flagged boolean dep now reports which capabilities failed.
-
-## Dependencies / Fedora packaging
-
-Done (2026-07-07): rust-quick-xml 0.41 landed in Fedora and EPEL, so
-the `>=0.40, <0.42` range (introduced post-0.15.3 per the CLAUDE.md
-range policy) is tightened back to `"0.41"` — no more floor/ceiling
-double-testing at release time.
-
 ## hs-relmon
 
 - (2026-06-26) add retire command to archive repo and untag builds. Test with sqlite
@@ -1207,10 +846,6 @@ double-testing at release time.
   do not close the issue even though it's up to date. 
   This is likely because it is not built for hs.el10 but that's because
   CentOS 10 is already up to date. Figure out how to handle it
-
-Done (2026-07-02):
-- --version now works on every tool (hs-relmon and hs-intake were
-  missing the standard clap header; audited all 14 tools).
 
 ## dbranch
 
@@ -1245,16 +880,6 @@ branch *is* the opt-in. To include a release, check it out once; to
 drop it, delete the local branch. (Remote-inclusive bulk was
 considered and rejected.)
 
-Done (shipped): the `push`/`upload`/`tag` stages, per-job CI watch
-progress, `git push -u`→plain-push simplification, `--quiet` mode, the
-`--source` merge-source override, the `fixup` subcommand, stale-chroot
-auto-refresh (`--refresh-chroot`/`--no-refresh-chroot`), grouped
-`--help` sections, the safer bulk run (Ubuntu-codename selection
-via `ubuntu-distro-info`, EOL skip + `--include-eol`, newest-first
-order, confirmation + `--yes`), and the `update` subcommand
-(new-upstream import of the Debian branch, sharing the build→…→tag
-pipeline; `--build-suite`, dput-default upload).
-
 ## fedora-review-digest
 
 - (2026-06-23) pyp2spec support: a Python checklist + post-import
@@ -1263,14 +888,6 @@ pipeline; `--build-suite`, dput-default upload).
   just need the Python branch.
 - (2026-06-23, later) Run `fedora-review -b <id>` ourselves instead of
   only pointing at an existing result dir.
-
-Done (shipped): the core digest + interactive `+1/0/-1` finalization,
-`--post` (comment + `fedora-review` flag + status POST + bug claim) and
-the `config` subcommand, rust2rpm spec/license fixes, the
-builds-and-installs item reading fedora-review's install verdict,
-interactive issue resolution (keep/explain/remove → APPROVED flip), and
-the statically-linked-deps license verification (build-log LICENSE
-SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
 
 ## ebranch
 
@@ -1304,14 +921,6 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   resolution above lands — flipping it earlier is NOISY (it includes
   optional deps the root doesn't enable). The `--include-unmet` half was
   flipped to `--exclude-unmet` in v0.16.0.
-- (2026-07-02, done for `--copr`) check-crate annotates the generated
-  Copr script with why each package is in it. `--koji` deliberately
-  does not: its output is one chain-build argument string, so a
-  comment line lands inside `$(...)` as an argument — the premise
-  that comments are pipe-safe holds for a script and not for that.
-  If the chain output ever needs explaining, the place for it is
-  stderr beside the human report.
-
 - Second-level branch-request escalation: when a `needinfo?` ping
   (the level-1 escalation `escalate` already does) goes unanswered
   for another N days, file a releng ticket on Forgejo (releng's
@@ -1321,8 +930,7 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   needs: the releng Forgejo repo coordinates, growing the report's
   per-request escalation state from `pinged: bool` to a level
   (none → needinfo'd → releng-filed) so `escalate` knows which step
-  each request is on, and the releng-filing branch in `escalate`.
-- (2026-06-25, EXPLORATORY — may not be worth it) check-update: source
+  each request is on, and the releng-filing branch in `escalate`.- (2026-06-25, EXPLORATORY — may not be worth it) check-update: source
   a Bodhi update's Provides from koji instead of fedrq `@testing`, to
   dodge mirror-propagation flakiness. NOT decided — the current
   `@testing` approach may be good enough if we just accept up to ~1 day
@@ -1411,49 +1019,22 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
     (`commit_contained`), which costs ~1 more call (back to ~2, same as
     #1 but with reworded coverage). Gate on the PR carrying a
     `Fixes #N` so we only spend calls where there's something to find.
-- (2026-06-24) Document the required GitLab and GitHub token
-  permissions/scopes in the README, the way the Forgejo
-  authentication section now does (exact scopes per operation, and
-  which are only needed by `config`'s token validation). Determine
-  the *minimum* fine-grained scopes — currently the GitHub side is
-  being used with a legacy/coarse-grained classic PAT, so figure out
-  the least-privilege fine-grained-PAT permission set (Contents,
-  Pull requests, Metadata, etc.) and the GitLab equivalent (`read_api`
-  vs `api`, and whether `read_user` is needed for the username
-  lookup). Cross-check against `validate_token` and the actual
-  endpoints each `*_report` calls.
-
-
+- (2026-06-24) Document the required **GitLab** token scopes in the
+  README, the way the Forgejo and GitHub sections now do. The GitLab
+  section says only where the token is looked up, not what it must be
+  allowed to do: settle `read_api` vs `api`, and whether `read_user` is
+  needed for the username lookup. Cross-check against `validate_token`
+  and the endpoints each `*_report` calls.
 
 ## ebranch check-update (2026-08-07)
 
-- (2026-08-07) When a recognized bug's package is in no build of the
-  update, suggest -1 instead of falling through to a bare prompt. If
-  the update ships nothing for that package it does not fix that bug,
-  which is what a -1 on Bodhi means, and a silent default of 0 leaves
-  the user wondering why nothing was decided.
-
-  Scope it to the two kinds that name their package outright: an
-  update request (its Bugzilla component, confirmed by the summary
-  parsing as `<component>-<version> is available`) and a review
-  request (the package under review, from the title). Everything else
-  — CVE, FTBFS, plain bugs — is not classified here and must keep
-  today's behavior of no verdict and a 0 default; those are the ones
-  where a component can be stale after a package rename, and we have
-  no basis to read anything into a missing match.
-
-  Treat it as a suggestion rather than a verdict: the interactive
-  prompt defaults to -1 and prints the reason ("this update builds no
-  rust-dtor"), and `--yes` takes the suggestion rather than 0, since
-  0 would post a claim we have reason to think is wrong. The reason
-  goes in the vote plan either way, which is confirmed before
-  anything is posted.
-
-  On our own updates, prefer fixing the update to voting on it. A -1
-  from the submitter is nearly useless anyway — Bodhi zeroes the
-  submitter's overall karma, and karma.rs already detects this as
-  `own_update` — while the bug being listed at all is the actual
-  mistake. So:
+- (2026-08-07) On our own updates, prefer fixing the update to voting
+  on it. (`bug_verdict` now returns `Missing` with a reason when a
+  recognized bug's package is in no build of the update, so the -1
+  suggestion itself is done.) A -1 from the submitter is nearly useless
+  anyway — Bodhi zeroes the submitter's overall karma, and karma.rs
+  already detects this as `own_update` — while the bug being listed at
+  all is the actual mistake. So:
   - under `--submit`, when a bug we are about to attach would score
     -1, offer to leave it off the update before submitting;
   - under `--give-karma` on an update we submitted, offer to edit the
@@ -1466,35 +1047,6 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   endpoint carrying the existing fields with a modified `bugs` list.
   Confirm before writing, and print the bugs being dropped with the
   reason each was flagged.
-
-- (2026-08-07) Judge FTBFS bugs — the strongest verdict available,
-  and worth doing first. An FTBFS bug claims a package does not build
-  on a release; a successful, tagged build of that package for that
-  release refutes the claim outright. That is proof rather than
-  inference: no model of the repo, no prediction, just the artifact
-  the bug says cannot exist. The pieces exist: `bugclass::classify`
-  already identifies FTBFS by the tracker the bug blocks, and the
-  bug's `version` field carries the release. What needs care is
-  matching that release against the update's — Bugzilla's `version`
-  values ("41", "rawhide", "epel9") and Bodhi's release identifiers
-  (F41, EPEL-9) are not the same strings, so a mapping is needed,
-  and a mismatch has to mean "no verdict" rather than a guess.
-
-- (2026-08-07) Judge FTI bugs from the installability check we
-  already run. An FTI bug says a package fails to install on a
-  release, and `check-update` computes exactly that: it resolves the
-  update's subpackage Requires and reports `installability_issues`.
-  So for an FTI bug against a component in the update, on a matching
-  release, the check's own result is the verdict — clean is +1, still
-  broken is -1 with the unresolved requirement as the reason.
-
-  Weaker than the FTBFS case, though, and worth treating as such: the
-  check resolves dependencies against a repo snapshot we assemble, so
-  it is a prediction of what dnf would do rather than an observation.
-  It can over-report when a touched capability is also provided by an
-  unrelated package, and the repo set it resolves against is not
-  necessarily the one the reporter had. Good enough to suggest, and
-  the reason should name the requirement so the user can judge it.
 
 - (2026-08-07) Judge a bug that depends on a satisfied update
   request. If a bug's component is a package in the update, *and* the
@@ -1529,37 +1081,6 @@ SUMMARY vs the spec's folded `License:`, confirmed on rust-git-absorb).
   behind again — while the CVE it was linked for really is fixed,
   because the fix landed in 4.1. The two verdicts diverge, so an
   unsatisfied chain has to mean silence, never -1.
-
-- (2026-08-07) Discover an update's bugs instead of making the
-  maintainer find them: `--submit` should propose the bug list.
-  Finding which bugs belong to a big update is one of the more
-  time-consuming parts of the flow. Two sources, and the second is
-  the one that earns its keep:
-  1. Open Bugzilla bugs against the components being built — update
-     requests (`<pkg>-<version> is available`, FutureFeature) and
-     package reviews. `sandogasa_bugclass::bugzilla::classify`
-     already sorts these, and the anchored `extract_new_version`
-     tells us whether the build actually satisfies the request.
-  2. `rhbz#NNN` mentions in the builds' RPM changelogs. A bug fixed
-     in Rawhide is auto-closed when that build lands, so it is no
-     longer *open* against the component and source 1 misses it —
-     but the EPEL/branch update still fixes it and should list it.
-     Read the changelog from the build (koji, or the spec in
-     dist-git) and parse the usual `rhbz#NNN` / `RHBZ#NNN` /
-     `bz#NNN` / bugzilla URL forms.
-
-  Do not let the update's `--type` decide which kinds to look for.
-  An update is routinely a mix: the epel9 update this work came out
-  of was `--type enhancement` and carried three Review Request bugs
-  for new packages alongside two update requests. Bodhi's type is a
-  single value chosen for the update as a whole, so it says nothing
-  about which bugs belong to it. Search both kinds for every
-  component, whatever the type.
-
-  Present the union for confirmation with each bug's provenance
-  (which build's changelog, or which component's open-bug query) and
-  let the user drop entries, the way the per-bug vote plan already
-  works. Bugs already attached to the update are left alone.
 
 ## COPR-staged update workflows (2026-08-07)
 
