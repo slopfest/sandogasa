@@ -34,12 +34,18 @@ along or learn to do it by hand.
 cargo install dbranch
 ```
 
-Or, without a Rust toolchain, from the prebuilt binaries attached to
-each release with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):
+Or from the prebuilt binaries attached to each release, which install
+without a compile, using
+[cargo-binstall](https://github.com/cargo-bins/cargo-binstall):
 
 ```
 cargo binstall dbranch
 ```
+
+That still needs cargo, since `binstall` is a cargo subcommand. With no
+Rust installed at all, download the archive for your architecture from
+the [releases page](https://github.com/slopfest/sandogasa/releases) and
+put `dbranch` on your `PATH`.
 
 The binaries are statically linked against musl, for x86_64 and
 aarch64 Linux, so they run on any distribution.
