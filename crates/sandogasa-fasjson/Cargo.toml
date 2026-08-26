@@ -7,7 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-sandogasa-cli = { workspace = true }
+# Registers the rustls provider directly; `tls` is not implied
+# here because this crate does not use the `http` module.
+sandogasa-cli = { workspace = true, features = ["tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

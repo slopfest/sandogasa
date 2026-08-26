@@ -82,7 +82,14 @@ schemars = { version = "1", features = ["chrono04"] }
 sandogasa-bodhi = { version = "0.21", path = "crates/sandogasa-bodhi" }
 sandogasa-bugclass = { version = "0.21", path = "crates/sandogasa-bugclass" }
 sandogasa-bugzilla = { version = "0.21", path = "crates/sandogasa-bugzilla" }
-sandogasa-cli = { version = "0.21", path = "crates/sandogasa-cli" }
+# `default-features = false` so a member that needs no TLS does not
+# get one: cargo forbids a member turning off a default its workspace
+# dependency enabled, so the choice has to be made here. The `tls`
+# feature is still on by default for anyone depending on the published
+# crate; `http` implies it, so the API-client crates need nothing, and
+# the few crates that register the provider without using `http` ask
+# for `tls` by name.
+sandogasa-cli = { version = "0.21", path = "crates/sandogasa-cli", default-features = false }
 sandogasa-config = { version = "0.21", path = "crates/sandogasa-config" }
 sandogasa-copr = { version = "0.21", path = "crates/sandogasa-copr" }
 sandogasa-depfilter = { version = "0.21", path = "crates/sandogasa-depfilter" }

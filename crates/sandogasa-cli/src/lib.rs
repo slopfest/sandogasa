@@ -25,10 +25,12 @@ use url::{Host, Url};
 /// scattering setup across mains.
 ///
 /// Today it registers the rustls crypto provider that reqwest's
-/// TLS support needs (see [`install_crypto_provider`]). Idempotent
-/// and cheap, so calling it from a tool that does no networking is
-/// harmless.
+/// TLS support needs (see [`install_crypto_provider`]), under the
+/// default `tls` feature. Idempotent and cheap, so calling it from
+/// a tool that does no networking is harmless — and a tool built
+/// without `tls` still calls it, to nothing.
 pub fn init() {
+    #[cfg(feature = "tls")]
     install_crypto_provider();
 }
 
@@ -49,6 +51,7 @@ pub fn init() {
 /// we ignore so repeated calls (e.g. across tests) are harmless.
 ///
 /// [`CryptoProvider`]: rustls::crypto::CryptoProvider
+#[cfg(feature = "tls")]
 pub fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }

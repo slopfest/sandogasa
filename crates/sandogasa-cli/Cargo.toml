@@ -11,7 +11,7 @@ chrono = { workspace = true }
 clap = { workspace = true }
 clap_mangen = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
-rustls = { workspace = true }
+rustls = { workspace = true, optional = true }
 sandogasa-config = { workspace = true }
 serde = { workspace = true, optional = true }
 toml = { workspace = true }
@@ -21,10 +21,19 @@ url = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
+default = ["tls"]
+
+# The rustls crypto provider that `install_crypto_provider` registers.
+# On by default because nearly every tool here talks to a web service,
+# so leaving it off would be a trap. A tool that talks to none opts out
+# with `default-features = false` and sheds ring with it — which is what
+# lets dbranch build for musl without a C toolchain.
+tls = ["dep:rustls"]
+
 # HTTP plumbing shared by the API-client crates (the `http` module):
 # preconfigured reqwest builders and uniform status/JSON handling.
 # Off by default so network-free tools don't pull in reqwest.
-http = ["dep:reqwest", "dep:serde"]
+http = ["tls", "dep:reqwest", "dep:serde"]
 
 # Man page generation from the clap definition (the `man` module).
 # Off by default and enabled as a dev-dependency by the tools, so

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### sandogasa-cli: a tool that makes no web request no longer links a TLS stack
+
+`rustls` was an unconditional dependency, so `init` — which every tool
+calls as the first statement of `main` — registered a crypto provider
+whether or not the tool would ever open a connection. dbranch, which
+shells out to the Debian tools and speaks to nothing over HTTP, still
+carried rustls and ring.
+
+`rustls` is now optional behind a `tls` feature, which is **on by
+default**, so nothing changes for anyone depending on the published
+crate: `install_crypto_provider` and `init`'s call to it are still there
+under the default feature set. What changes is inside this workspace,
+where `[workspace.dependencies]` sets `default-features = false` —
+cargo forbids a member from turning off a default its workspace
+dependency enabled, so the choice has to be made at the top. `http`
+implies `tls`, so the API-client crates need nothing; the three that
+register the provider without using the `http` module
+(sandogasa-kojihub, sandogasa-fasjson, fesco-chair) now ask for `tls` by
+name.
+
+The failure mode is a compile error rather than a runtime surprise: a
+crate that calls `install_crypto_provider` without the feature does not
+build, so nothing can quietly reach the "No provider set" panic.
+
+Beyond the smaller binary, this is what lets dbranch's release build
+target musl without a C toolchain — ring is the only C in its tree.
+
+
 ### sandogasa-pkg-acl: take an orphaned package
 
 The tool could hand a package away but not pick one up. Orphaning was

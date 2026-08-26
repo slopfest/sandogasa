@@ -9,7 +9,9 @@ repository.workspace = true
 [dependencies]
 quick-xml = { workspace = true }
 reqwest = { workspace = true }
-sandogasa-cli = { workspace = true }
+# Registers the rustls provider directly; `tls` is not implied
+# here because this crate does not use the `http` module.
+sandogasa-cli = { workspace = true, features = ["tls"] }
 
 [dev-dependencies]
 tokio = { workspace = true }

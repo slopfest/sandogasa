@@ -11,7 +11,9 @@ chrono = { workspace = true }
 clap = { workspace = true }
 dirs = { workspace = true }
 reqwest = { workspace = true }
-sandogasa-cli = { workspace = true }
+# Registers the rustls provider directly; `tls` is not implied
+# here because this crate does not use the `http` module.
+sandogasa-cli = { workspace = true, features = ["tls"] }
 sandogasa-config = { workspace = true }
 sandogasa-forgejo = { workspace = true }
 sandogasa-meetbot = { workspace = true }
