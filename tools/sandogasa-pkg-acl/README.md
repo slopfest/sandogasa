@@ -65,6 +65,13 @@ Gave librdp to 'dcavalca'
 The target username is validated before any transfers. Requires the
 caller to be the package owner.
 
+To orphan a package, give it to the `orphan` sentinel user:
+
+```
+$ sandogasa-pkg-acl give orphan ccze
+Gave ccze to 'orphan'
+```
+
 ### Remove an ACL
 
 ```
@@ -101,6 +108,29 @@ Groups:
 Your access (salimma): admin
 ```
 
+### Take an orphaned package
+
+```
+$ sandogasa-pkg-acl take ccze colorized-logs
+ccze: orphaned: Important bug not fixed — https://bugzilla.redhat.com/2454279
+Took ccze (point of contact: 'salimma')
+colorized-logs: orphaned: Lack of time
+Took colorized-logs (point of contact: 'salimma')
+```
+
+The orphaning reason is shown before each package is taken, since the
+server drops it on adoption. A package that is not orphaned is refused
+by name:
+
+```
+$ sandogasa-pkg-acl take bash
+error: bash is not orphaned, so there is nothing to take
+  (sandogasa-pkg-acl show bash names its owner)
+```
+
+Each package is attempted independently; a failure is reported and the
+rest still run.
+
 ### JSON output
 
 All subcommands support `--json` for machine-readable output:
@@ -114,6 +144,9 @@ $ sandogasa-pkg-acl --json show freerdp
 - `show` — no authentication required
 - `set`, `remove`, `apply` — require admin access (direct or via group)
 - `give` — requires package owner
+- `take` — requires membership in the `packager` group, and the
+  package must be owned by `orphan` and not retired (a retired
+  package needs a releng ticket instead)
 
 Package owners cannot be downgraded or removed via `set`, `remove`,
 or `apply`.

@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### sandogasa-pkg-acl: take an orphaned package
+
+The tool could hand a package away but not pick one up. Orphaning was
+already reachable — `give orphan <package>` sets the sentinel user as
+point of contact — but the way back, the "Take" button on
+src.fedoraproject.org, had no equivalent, so adopting a package meant
+leaving the tool for the web UI. An orphan is retired about six weeks
+after it is orphaned, so that gap sat on the deadline side of the
+workflow.
+
+`sandogasa-pkg-acl take <package>...` adopts one or more orphaned
+packages, making the token's owner their point of contact. It calls the
+dist-git plugin's take-orphan endpoint — the same one the web UI's
+button uses — via `sandogasa_distgit::DistGitClient::take_orphan`, which
+poi-tracker's `adopt` already drove. Each package is attempted
+independently: a failure is reported and the remaining packages still
+run, with a non-zero exit at the end.
+
+Whether the package is orphaned at all is checked first, over the
+unauthenticated orphan-state lookup, because the server's own answer
+misdiagnoses it. `take_orphan` on a package with a live point of
+contact raises `EMODIFYPROJECTNOTALLOWED`, whose body is the bare "You
+are not allowed to modify this project" — which reads as a missing
+token ACL or `packager` membership, sending the reader off to check
+their credentials when the package simply wasn't up for adoption. The
+name is now given instead. The check is best-effort: if the lookup
+fails the adoption is still attempted, since the server enforces the
+same rule either way. The remaining preconditions (`packager`
+membership, not retired) are left to the server, whose error body does
+name them.
+
+The lookup also carries the orphaning reason, which the server deletes
+once it accepts the adoption, so `take` prints it before each package
+is taken — otherwise the one moment it can be read is the moment it
+goes away. `--json` reports per-package `ok`, the new
+`point_of_contact`, and the `reason`/`reason_info` that were in force.
+
+`sandogasa-distgit` re-exports `OrphanInfo` from the crate root,
+alongside the other types its client returns.
+
 ### fedora-cve-triage: a confirmed fix version is recorded as yours, not the profile's
 
 A version confirmed at the prompt was written into whichever run profile the

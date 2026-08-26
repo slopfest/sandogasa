@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-pkg-acl 1 2026-08-22 "sandogasa 0.21.0" "Sandogasa Manual"
+.TH sandogasa-pkg-acl 1 2026-08-26 "sandogasa 0.21.0" "Sandogasa Manual"
 .SH NAME
 sandogasa\-pkg\-acl \- View and manage Fedora package ACLs via the Pagure dist\-git API
 .SH SYNOPSIS
@@ -120,3 +120,16 @@ Print help
 .TP
 <\fIPACKAGE\fR>
 Package name
+.SS sandogasa-pkg-acl take
+\fBsandogasa\-pkg\-acl take\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGES\fR> 
+.PP
+Take ownership of an orphaned package
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIPACKAGES\fR>
+Package name(s)

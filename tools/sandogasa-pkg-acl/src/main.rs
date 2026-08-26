@@ -104,6 +104,13 @@ enum Command {
         /// Package name
         package: String,
     },
+
+    /// Take ownership of an orphaned package
+    Take {
+        /// Package name(s)
+        #[arg(required = true)]
+        packages: Vec<String>,
+    },
 }
 
 fn parse_acl_level(s: &str) -> Result<String, String> {
@@ -167,6 +174,10 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             cmd_set(&package, &user_type, &name, &level, &token, strict, json).await
         }
         Command::Show { package } => cmd_show(&package, json).await,
+        Command::Take { packages } => {
+            let client = DistGitClient::new().with_token(resolve_token()?);
+            cmd_take(&client, &packages, json).await
+        }
     }
 }
 
@@ -571,6 +582,115 @@ async fn cmd_give(
 
     if !errors.is_empty() {
         return Err(format!("{} package(s) failed", errors.len()).into());
+    }
+    Ok(())
+}
+
+/// Describe why a package was orphaned, for the line printed
+/// before it is taken. The reason is gone once the server accepts
+/// the adoption, so it is only visible now.
+fn describe_orphan(info: &sandogasa_distgit::OrphanInfo) -> String {
+    match (info.reason.as_str(), info.reason_info.as_str()) {
+        ("", _) => "orphaned, no reason recorded".to_string(),
+        (reason, "") => format!("orphaned: {reason}"),
+        (reason, info) => format!("orphaned: {reason} — {info}"),
+    }
+}
+
+/// Adopt orphaned packages, making the token's owner their point
+/// of contact.
+///
+/// The orphan state is checked first, over the unauthenticated
+/// `GET /_dg/orphan`: the take endpoint answers a package that
+/// isn't orphaned with a bare 401 "You are not allowed to modify
+/// this project", which reads as a token or membership problem
+/// rather than the truth. The check is best-effort — if it fails
+/// the adoption is still attempted, since the server enforces the
+/// same rule. The remaining preconditions (`packager` membership,
+/// not retired) are left to the server, whose error body names
+/// them.
+async fn cmd_take(
+    client: &DistGitClient,
+    packages: &[String],
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut errors = 0usize;
+    let mut entries = Vec::new();
+
+    for package in packages {
+        let mut reason = None;
+        match client.orphan_info(package).await {
+            Ok(info) if !info.orphan => {
+                let msg = format!(
+                    "{package} is not orphaned, so there is nothing to \
+                     take (sandogasa-pkg-acl show {package} names its \
+                     owner)"
+                );
+                if json {
+                    entries.push(serde_json::json!({
+                        "package": package,
+                        "ok": false,
+                        "orphan": false,
+                        "error": msg,
+                    }));
+                } else {
+                    eprintln!("error: {msg}");
+                }
+                errors += 1;
+                continue;
+            }
+            Ok(info) => {
+                if !json {
+                    println!("{package}: {}", describe_orphan(&info));
+                }
+                reason = Some(info);
+            }
+            Err(e) => {
+                eprintln!("warning: {package}: could not check orphan state: {e}");
+            }
+        }
+
+        match client.take_orphan(package).await {
+            Ok(poc) => {
+                if json {
+                    entries.push(serde_json::json!({
+                        "package": package,
+                        "ok": true,
+                        "point_of_contact": poc,
+                        "reason": reason.as_ref().map(|i| i.reason.clone()),
+                        "reason_info": reason.as_ref().map(|i| i.reason_info.clone()),
+                    }));
+                } else {
+                    println!("Took {package} (point of contact: '{poc}')");
+                }
+            }
+            Err(e) => {
+                if json {
+                    entries.push(serde_json::json!({
+                        "package": package,
+                        "ok": false,
+                        "error": e.to_string(),
+                    }));
+                } else {
+                    eprintln!("error: {package}: {e}");
+                }
+                errors += 1;
+            }
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "action": "take",
+                "results": entries,
+            }))?
+        );
+    }
+
+    if errors > 0 {
+        return Err(format!("{errors} package(s) failed").into());
     }
     Ok(())
 }
@@ -1339,6 +1459,165 @@ mod tests {
             false,
         );
         assert!(result.is_none(), "strict should allow downgrade");
+    }
+
+    // ---- take ----
+
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Mount a `take_orphan` response for `package`.
+    async fn mock_take(server: &MockServer, package: &str, resp: ResponseTemplate) {
+        Mock::given(method("POST"))
+            .and(path(format!("/_dg/take_orphan/rpms/{package}")))
+            .respond_with(resp)
+            .mount(server)
+            .await;
+    }
+
+    /// Mount the orphan-state lookup `cmd_take` runs first.
+    async fn mock_orphan_info(server: &MockServer, package: &str, orphan: bool) {
+        Mock::given(method("GET"))
+            .and(path(format!("/_dg/orphan/rpms/{package}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "orphan": orphan,
+                "reason": if orphan { "Lack of time" } else { "" },
+                "reason_info": "",
+            })))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn take_adopts_every_package() {
+        let server = MockServer::start().await;
+        for pkg in ["ccze", "colorized-logs"] {
+            mock_orphan_info(&server, pkg, true).await;
+            mock_take(
+                &server,
+                pkg,
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"point_of_contact": "salimma"})),
+            )
+            .await;
+        }
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        cmd_take(
+            &client,
+            &["ccze".to_string(), "colorized-logs".to_string()],
+            false,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn take_reports_failures_but_keeps_going() {
+        let server = MockServer::start().await;
+        mock_orphan_info(&server, "ccze", true).await;
+        mock_orphan_info(&server, "colorized-logs", true).await;
+        mock_take(
+            &server,
+            "ccze",
+            ResponseTemplate::new(403)
+                .set_body_json(serde_json::json!({"error": "You must be a packager"})),
+        )
+        .await;
+        mock_take(
+            &server,
+            "colorized-logs",
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"point_of_contact": "salimma"})),
+        )
+        .await;
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        let err = cmd_take(
+            &client,
+            &["ccze".to_string(), "colorized-logs".to_string()],
+            true,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert_eq!(err, "1 package(s) failed");
+        // The second package was still attempted after the first failed.
+        let posts = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.method == wiremock::http::Method::POST)
+            .count();
+        assert_eq!(posts, 2);
+    }
+
+    #[tokio::test]
+    async fn take_refuses_a_package_that_is_not_orphaned() {
+        let server = MockServer::start().await;
+        mock_orphan_info(&server, "bash", false).await;
+        // No take_orphan mock: reaching the endpoint at all is the
+        // bug. The server answers a non-orphaned package with a bare
+        // 401 "You are not allowed to modify this project", which
+        // reads as a token problem rather than the truth.
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        let err = cmd_take(&client, &["bash".to_string()], false)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "1 package(s) failed");
+        let posts = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.method == wiremock::http::Method::POST)
+            .count();
+        assert_eq!(posts, 0, "must not attempt to take a live package");
+    }
+
+    #[tokio::test]
+    async fn take_proceeds_when_the_orphan_check_fails() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/_dg/orphan/rpms/ccze"))
+            // 404, not a 5xx: the client retries server errors, and
+            // this test only needs the lookup to come back unusable.
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        mock_take(
+            &server,
+            "ccze",
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"point_of_contact": "salimma"})),
+        )
+        .await;
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        cmd_take(&client, &["ccze".to_string()], false)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn describe_orphan_covers_each_reason_shape() {
+        let info = |reason: &str, reason_info: &str| {
+            serde_json::from_value::<sandogasa_distgit::OrphanInfo>(serde_json::json!({
+                "orphan": true, "reason": reason, "reason_info": reason_info,
+            }))
+            .unwrap()
+        };
+        assert_eq!(
+            describe_orphan(&info("", "")),
+            "orphaned, no reason recorded"
+        );
+        assert_eq!(
+            describe_orphan(&info("Lack of time", "")),
+            "orphaned: Lack of time"
+        );
+        assert_eq!(
+            describe_orphan(&info("Important bug not fixed", "rhbz#2454279")),
+            "orphaned: Important bug not fixed — rhbz#2454279"
+        );
     }
 
     #[test]
