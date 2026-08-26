@@ -234,13 +234,11 @@ than annotated as done.
   measured; a build and its children stay in one store) are recorded
   in the tool's DEVELOPMENT.md.
 
-- (2026-08-20) Two things left over from removing the JSON dataset path,
-  both now unused outside their own tests: `Dataset::merge` and
-  `DatasetMeta::schema_version`. `merge` is kept deliberately — unioning
-  rows from more than one source is exactly what querying several stores
-  needs, which is recorded above — but a version number for a format with
-  no reader is only misleading, and should go with the next pass that can
-  break the library API.
+- (2026-08-20) `Dataset::merge` is unused outside its own tests and kept
+  deliberately — unioning rows from more than one source is exactly what
+  querying several stores needs, which is recorded above.
+  (`DatasetMeta::schema_version`, the other half of this entry, was
+  removed in the breaking pass.)
 
 - (2026-08-17) Ask the Fedora Data WG whether what they have is what
   they wanted. There are two CSV shapes now: `export` dumps the

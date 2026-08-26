@@ -19,11 +19,6 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 
-/// Bump when the on-disk shape changes incompatibly. Loading a
-/// file with a NEWER version errors (old tool, new file); older
-/// versions are migrated or rejected explicitly.
-pub const SCHEMA_VERSION: u32 = 1;
-
 /// A set of architectures served by the same builders.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Pool {
@@ -102,7 +97,6 @@ pub fn is_srpm_step(method: &str) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct DatasetMeta {
-    pub schema_version: u32,
     /// When this file was last written.
     pub generated: DateTime<Utc>,
     /// Completion-time windows the records were swept from.
@@ -221,7 +215,6 @@ impl Dataset {
     pub fn new() -> Self {
         Self {
             meta: DatasetMeta {
-                schema_version: SCHEMA_VERSION,
                 generated: Utc::now(),
                 windows: Vec::new(),
             },

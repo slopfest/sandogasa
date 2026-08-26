@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### koji-lag: a schema version that nothing reads (breaking)
+
+Every dataset written carried a `schema_version` stamp, and no code
+anywhere loaded it back. It is left over from the JSON dataset path,
+removed earlier: the reader that would have checked it went with it, so
+what remained was a number promising a compatibility check that does not
+happen.
+
+`DatasetMeta::schema_version` and the `dataset::SCHEMA_VERSION` constant
+that fed it are gone. Nothing migrates, because nothing read the field.
+Note that `store::SCHEMA_VERSION` is a different constant and still
+governs the SQLite migrations — that one is checked on every open.
+
+`Dataset::merge` was the other half of this cleanup and stays,
+deliberately: unioning rows from more than one source is what querying
+several stores will need, and that plan is recorded in TODO.md.
+
 ### Dead public API removed from eight library crates (breaking)
 
 A workspace-wide survey in July found roughly 500 lines of public API
