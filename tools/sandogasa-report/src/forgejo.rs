@@ -21,7 +21,7 @@ use serde::Serialize;
 
 use crate::config::ForgejoConfig;
 pub(crate) use crate::forge::instance_host;
-use crate::forge::{self, TokenSpec, date_in_range};
+use crate::forge::{self, TokenSpec, date_in_range, stat};
 
 const TOKEN_SPEC: TokenSpec = TokenSpec {
     service: "Forgejo",
@@ -224,33 +224,25 @@ pub fn format_markdown(report: &ForgejoReport, detail: u8) -> String {
     let detailed = detail >= 1;
     let heading = "### Forgejo\n\n".to_string();
 
-    if report.opened_prs.is_empty()
-        && report.merged_prs.is_empty()
-        && report.opened_issues.is_empty()
-        && report.closed_issues.is_empty()
-    {
-        let mut out = heading;
-        out.push_str("No Forgejo activity.\n\n");
-        return out;
-    }
-
     let applied = report.opened_prs.iter().filter(|p| p.applied).count();
-    let mut out = heading;
-    out.push_str(&format!("- **PRs opened:** {}\n", report.opened_prs.len()));
-    out.push_str(&format!("- **PRs merged:** {}\n", report.merged_prs.len()));
+
+    // See the note in `gitlab::format_markdown`: the block decides
+    // for itself whether anything happened.
+    let mut stats = String::new();
+    stat(&mut stats, "PRs opened", report.opened_prs.len());
+    stat(&mut stats, "PRs merged", report.merged_prs.len());
     // A closed PR whose commit landed out-of-band — counted separately
     // since the forge reports it as neither merged nor open.
-    if applied > 0 {
-        out.push_str(&format!("- **PRs applied (landed unmerged):** {applied}\n"));
+    stat(&mut stats, "PRs applied (landed unmerged)", applied);
+    stat(&mut stats, "Issues opened", report.opened_issues.len());
+    stat(&mut stats, "Issues closed", report.closed_issues.len());
+
+    if stats.is_empty() {
+        return format!("{heading}No Forgejo activity.\n\n");
     }
-    out.push_str(&format!(
-        "- **Issues opened:** {}\n",
-        report.opened_issues.len()
-    ));
-    out.push_str(&format!(
-        "- **Issues closed:** {}\n\n",
-        report.closed_issues.len()
-    ));
+    let mut out = heading;
+    out.push_str(&stats);
+    out.push('\n');
 
     if !detailed {
         return out;
@@ -513,7 +505,9 @@ mod tests {
         });
         let md = format_markdown(&report, 1);
         assert!(md.contains("- **Issues opened:** 1"));
-        assert!(md.contains("- **Issues closed:** 0"));
+        // A zero line is left out entirely, rather than reported as 0.
+        assert!(!md.contains("Issues closed"));
+        assert!(!md.contains("PRs opened"));
         assert!(md.contains("#### Issues opened"));
         assert!(md.contains(
             "[ptesarik/libkdumpfile#91](https://codeberg.org/ptesarik/libkdumpfile/issues/91) build fails with binutils 2.46"

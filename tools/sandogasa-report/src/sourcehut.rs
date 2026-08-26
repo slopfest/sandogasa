@@ -22,7 +22,7 @@ use serde::Serialize;
 
 use crate::config::SourcehutConfig;
 pub(crate) use crate::forge::instance_host;
-use crate::forge::{self, TokenSpec, date_in_range};
+use crate::forge::{self, TokenSpec, date_in_range, stat, stat_across};
 
 const TOKEN_SPEC: TokenSpec = TokenSpec {
     service: "Sourcehut",
@@ -316,14 +316,6 @@ fn actor_matches(actor: &Option<Actor>, user: &str) -> bool {
 /// Format the Sourcehut section as Markdown.
 pub fn format_markdown(report: &SourcehutReport, detail: u8) -> String {
     let heading = "### Sourcehut\n\n".to_string();
-    if report.patches.is_empty()
-        && report.opened_tickets.is_empty()
-        && report.closed_tickets.is_empty()
-        && report.commits.is_empty()
-    {
-        return format!("{heading}No Sourcehut activity.\n\n");
-    }
-
     let applied = report.patches.iter().filter(|p| p.applied()).count();
     let repos = report
         .commits
@@ -332,33 +324,36 @@ pub fn format_markdown(report: &SourcehutReport, detail: u8) -> String {
         .collect::<std::collections::BTreeSet<_>>()
         .len();
 
-    let mut out = heading;
-    out.push_str(&format!("- **Patches sent:** {}\n", report.patches.len()));
-    if applied > 0 {
-        out.push_str(&format!("- **Patches applied:** {applied}\n"));
-    }
-    out.push_str(&format!(
-        "- **Tickets opened:** {}\n",
-        report.opened_tickets.len()
-    ));
-    out.push_str(&format!(
-        "- **Tickets closed:** {}\n",
-        report.closed_tickets.len()
-    ));
     let own: Vec<&CommitItem> = report.commits.iter().filter(|c| c.owner).collect();
     let others: Vec<&CommitItem> = report.commits.iter().filter(|c| !c.owner).collect();
-    out.push_str(&format!(
-        "- **Commits by you:** {} across {repos} repo(s)\n",
-        own.len()
-    ));
+
+    // See the note in `gitlab::format_markdown`: the block decides
+    // for itself whether anything happened.
+    let mut stats = String::new();
+    stat(&mut stats, "Patches sent", report.patches.len());
+    stat(&mut stats, "Patches applied", applied);
+    stat(&mut stats, "Tickets opened", report.opened_tickets.len());
+    stat(&mut stats, "Tickets closed", report.closed_tickets.len());
+    stat_across(
+        &mut stats,
+        "Commits by you",
+        own.len() as u64,
+        repos,
+        "repo",
+    );
     // Third-party commits landed in your repos (e.g. patches you applied
-    // that preserve the submitter as author) — shown only when present.
-    if !others.is_empty() {
-        out.push_str(&format!(
-            "- **Commits by others (in your repos):** {}\n",
-            others.len()
-        ));
+    // that preserve the submitter as author).
+    stat(
+        &mut stats,
+        "Commits by others (in your repos)",
+        others.len(),
+    );
+
+    if stats.is_empty() {
+        return format!("{heading}No Sourcehut activity.\n\n");
     }
+    let mut out = heading;
+    out.push_str(&stats);
     out.push('\n');
 
     if detail < 1 {

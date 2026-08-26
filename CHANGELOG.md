@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### sandogasa-report: a quiet period rendered as a wall of zeroes
+
+Every forge section printed its whole summary block whatever it found,
+so a domain with one merge request still reported "Tags pushed: 0
+across 0 project(s)", "Releases published: 0 across 0 project(s)" and
+five more like them. On a multi-domain run the reader had to pick the
+few lines that said something out of dozens that said nothing.
+
+A summary line is now written only when it counts something, via
+`forge::stat` / `forge::stat_across` shared by the gitlab, github,
+forgejo and sourcehut sections. Forgejo's "PRs applied" and
+sourcehut's "Patches applied" already behaved this way; the rule now
+covers every line.
+
+Each section also decides whether it is empty from the block it just
+built, rather than from a separate condition listing the collections
+it thought mattered. Those four conditions are gone, and with them the
+chance of one drifting from the lines below it: GitLab's had omitted
+`commits_authored`, so a period with authored commits and nothing else
+reported "No GitLab activity."
+
+### sandogasa-report: what a GitLab token has to be allowed to do
+
+The GitLab section of the README said where a token is looked up but
+never what it needs to be able to do, unlike the Forgejo and GitHub
+sections. It now lists the seven endpoints the tool calls and asks for
+`read_api`, which is enough for all of them: every call is a GET, and
+GitLab admits any GET under `read_api` at the top of its API, so
+neither the read/write `api` scope nor `read_user` is needed — despite
+`read_user` being the scope whose description names `/user` and
+`/users`, the endpoints that carry the whole report.
+
+
 ### sandogasa-cli: a tool that makes no web request no longer links a TLS stack
 
 `rustls` was an unconditional dependency, so `init` — which every tool

@@ -19,7 +19,7 @@ use serde::Serialize;
 
 use crate::config::GithubConfig;
 pub(crate) use crate::forge::instance_host;
-use crate::forge::{self, TokenSpec, date_in_range};
+use crate::forge::{self, TokenSpec, date_in_range, stat, stat_across};
 
 const TOKEN_SPEC: TokenSpec = TokenSpec {
     service: "GitHub",
@@ -231,45 +231,46 @@ pub fn format_markdown(report: &GithubReport, detail: u8) -> String {
     let detailed = detail >= 1;
     let heading = "### GitHub\n\n".to_string();
 
-    if report.opened_prs.is_empty()
-        && report.merged_prs.is_empty()
-        && report.reviewed_prs.is_empty()
-        && report.commented_prs.is_empty()
-        && report.commits_authored.is_empty()
-        && report.tags_pushed.is_empty()
-        && report.releases_published.is_empty()
-    {
-        let mut out = heading;
-        out.push_str("No GitHub activity.\n\n");
-        return out;
-    }
-
     let total_authored: u64 = report.commits_authored.values().sum();
     let authored_repos = report.commits_authored.len();
     let tag_repos = unique_repos(&report.tags_pushed, |t| &t.repo);
     let release_repos = unique_repos(&report.releases_published, |r| &r.repo);
+
+    // See the note in `gitlab::format_markdown`: the block decides
+    // for itself whether anything happened.
+    let mut stats = String::new();
+    stat(&mut stats, "PRs opened", report.opened_prs.len());
+    stat(&mut stats, "PRs merged", report.merged_prs.len());
+    stat(&mut stats, "PRs reviewed", report.reviewed_prs.len());
+    stat(&mut stats, "PRs commented on", report.commented_prs.len());
+    stat_across(
+        &mut stats,
+        "Commits authored",
+        total_authored,
+        authored_repos,
+        "repo",
+    );
+    stat_across(
+        &mut stats,
+        "Tags pushed",
+        report.tags_pushed.len() as u64,
+        tag_repos,
+        "repo",
+    );
+    stat_across(
+        &mut stats,
+        "Releases published",
+        report.releases_published.len() as u64,
+        release_repos,
+        "repo",
+    );
+
+    if stats.is_empty() {
+        return format!("{heading}No GitHub activity.\n\n");
+    }
     let mut out = heading;
-    out.push_str(&format!("- **PRs opened:** {}\n", report.opened_prs.len()));
-    out.push_str(&format!("- **PRs merged:** {}\n", report.merged_prs.len()));
-    out.push_str(&format!(
-        "- **PRs reviewed:** {}\n",
-        report.reviewed_prs.len()
-    ));
-    out.push_str(&format!(
-        "- **PRs commented on:** {}\n",
-        report.commented_prs.len()
-    ));
-    out.push_str(&format!(
-        "- **Commits authored:** {total_authored} across {authored_repos} repo(s)\n",
-    ));
-    out.push_str(&format!(
-        "- **Tags pushed:** {} across {tag_repos} repo(s)\n",
-        report.tags_pushed.len(),
-    ));
-    out.push_str(&format!(
-        "- **Releases published:** {} across {release_repos} repo(s)\n\n",
-        report.releases_published.len(),
-    ));
+    out.push_str(&stats);
+    out.push('\n');
 
     if !detailed {
         return out;

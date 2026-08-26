@@ -95,8 +95,49 @@ pub(crate) fn find_token(
     ))
 }
 
+/// Append a `- **<label>:** <count>` summary bullet, unless there
+/// is nothing to count.
+///
+/// A summary block exists to say what happened, so a line saying
+/// something did not happen is noise — and there are enough of
+/// them that a quiet period rendered as a wall of zeroes. The
+/// backends already suppressed their `applied` counts this way;
+/// this applies the same rule to every line.
+pub fn stat(out: &mut String, label: &str, count: usize) {
+    if count > 0 {
+        out.push_str(&format!("- **{label}:** {count}\n"));
+    }
+}
+
+/// Append a `- **<label>:** <total> across <n> <unit>(s)` bullet,
+/// unless the total is zero. `unit` is the bare noun (`project`,
+/// `repo`); the `(s)` is added here.
+pub fn stat_across(out: &mut String, label: &str, total: u64, n: usize, unit: &str) {
+    if total > 0 {
+        out.push_str(&format!("- **{label}:** {total} across {n} {unit}(s)\n"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn stat_omits_a_zero_and_keeps_a_count() {
+        let mut out = String::new();
+        stat(&mut out, "PRs opened", 0);
+        assert!(out.is_empty());
+        stat(&mut out, "PRs merged", 3);
+        assert_eq!(out, "- **PRs merged:** 3\n");
+    }
+
+    #[test]
+    fn stat_across_omits_a_zero_total_and_pluralizes_the_unit() {
+        let mut out = String::new();
+        stat_across(&mut out, "Releases published", 0, 0, "repo");
+        assert!(out.is_empty());
+        stat_across(&mut out, "Commits authored", 12, 2, "repo");
+        assert_eq!(out, "- **Commits authored:** 12 across 2 repo(s)\n");
+    }
     use super::*;
 
     const GITLAB: TokenSpec = TokenSpec {

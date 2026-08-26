@@ -288,9 +288,9 @@ one-shot view. Follow-ups:
   revisit if configs grow enough domains that full walks get tedious.
 
 - (2026-07-07, nice-to-have) readability polish deferred from the H1
-  report review: suppress all-zero stat lines in the non-detailed view
-  (e.g. "Releases published: 0 across 0 project(s)"), and consider an
-  executive-summary block at the top (cross-domain totals)
+  report review: consider an executive-summary block at the top
+  (cross-domain totals). The other half of this entry — suppressing
+  all-zero stat lines — has landed.
 
 ## dbranch
 
@@ -507,12 +507,6 @@ considered and rejected.)
     (`commit_contained`), which costs ~1 more call (back to ~2, same as
     #1 but with reworded coverage). Gate on the PR carrying a
     `Fixes #N` so we only spend calls where there's something to find.
-- (2026-06-24) Document the required **GitLab** token scopes in the
-  README, the way the Forgejo and GitHub sections now do. The GitLab
-  section says only where the token is looked up, not what it must be
-  allowed to do: settle `read_api` vs `api`, and whether `read_user` is
-  needed for the username lookup. Cross-check against `validate_token`
-  and the endpoints each `*_report` calls.
 
 ## ebranch check-update (2026-08-07)
 

@@ -19,6 +19,7 @@ use serde::Serialize;
 use crate::config::GitlabConfig;
 pub(crate) use crate::forge::instance_host;
 use crate::forge::{self, TokenSpec, date_in_range};
+use crate::forge::{stat, stat_across};
 
 const TOKEN_SPEC: TokenSpec = TokenSpec {
     service: "GitLab",
@@ -323,50 +324,55 @@ pub fn format_markdown(report: &GitlabReport, detail: u8) -> String {
     let detailed = detail >= 1;
     let heading = "### GitLab\n\n".to_string();
 
-    if report.opened_mrs.is_empty()
-        && report.merged_mrs.is_empty()
-        && report.approved_mrs.is_empty()
-        && report.commented_mrs.is_empty()
-        && report.commits_pushed.is_empty()
-        && report.tags_pushed.is_empty()
-        && report.releases_published.is_empty()
-    {
-        let mut out = heading;
-        out.push_str("No GitLab activity.\n\n");
-        return out;
-    }
-
     let total_pushed: u64 = report.commits_pushed.values().sum();
     let total_authored: u64 = report.commits_authored.values().sum();
+    let authored_projects = report.commits_authored.values().filter(|&&n| n > 0).count();
     let tag_projects = unique_project_count(&report.tags_pushed, |t| &t.project);
     let release_projects = unique_project_count(&report.releases_published, |r| &r.project);
+
+    // Built first so an all-zero block can answer "was there any
+    // activity?" itself, instead of a separate condition that has
+    // to be kept in step with the lines below it.
+    let mut stats = String::new();
+    stat(&mut stats, "MRs opened", report.opened_mrs.len());
+    stat(&mut stats, "MRs merged", report.merged_mrs.len());
+    stat(&mut stats, "MRs approved", report.approved_mrs.len());
+    stat(&mut stats, "MRs commented on", report.commented_mrs.len());
+    stat_across(
+        &mut stats,
+        "Commits pushed",
+        total_pushed,
+        report.commits_pushed.len(),
+        "project",
+    );
+    stat_across(
+        &mut stats,
+        "Commits authored",
+        total_authored,
+        authored_projects,
+        "project",
+    );
+    stat_across(
+        &mut stats,
+        "Tags pushed",
+        report.tags_pushed.len() as u64,
+        tag_projects,
+        "project",
+    );
+    stat_across(
+        &mut stats,
+        "Releases published",
+        report.releases_published.len() as u64,
+        release_projects,
+        "project",
+    );
+
+    if stats.is_empty() {
+        return format!("{heading}No GitLab activity.\n\n");
+    }
     let mut out = heading;
-    out.push_str(&format!("- **MRs opened:** {}\n", report.opened_mrs.len()));
-    out.push_str(&format!("- **MRs merged:** {}\n", report.merged_mrs.len()));
-    out.push_str(&format!(
-        "- **MRs approved:** {}\n",
-        report.approved_mrs.len()
-    ));
-    out.push_str(&format!(
-        "- **MRs commented on:** {}\n",
-        report.commented_mrs.len()
-    ));
-    let authored_projects = report.commits_authored.values().filter(|&&n| n > 0).count();
-    out.push_str(&format!(
-        "- **Commits pushed:** {total_pushed} across {} project(s)\n",
-        report.commits_pushed.len()
-    ));
-    out.push_str(&format!(
-        "- **Commits authored:** {total_authored} across {authored_projects} project(s)\n",
-    ));
-    out.push_str(&format!(
-        "- **Tags pushed:** {} across {tag_projects} project(s)\n",
-        report.tags_pushed.len(),
-    ));
-    out.push_str(&format!(
-        "- **Releases published:** {} across {release_projects} project(s)\n\n",
-        report.releases_published.len(),
-    ));
+    out.push_str(&stats);
+    out.push('\n');
 
     if !detailed {
         return out;

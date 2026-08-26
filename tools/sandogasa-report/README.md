@@ -293,6 +293,30 @@ Env vars win over config, so a one-off shell override still
 works even with a persisted token. The overlay file is kept at
 `~/.config/sandogasa-report/config.toml` with 0600 permissions.
 
+Because the report is about a named user's own activity, and the
+events endpoint returns only what the requesting token may see, use
+that user's token. Create one at `Preferences → Access tokens` (on
+gitlab.com, <https://gitlab.com/-/user_settings/personal_access_tokens>).
+
+Grant **`read_api`**, and nothing more. Every call the tool makes is
+a GET:
+
+| endpoint | what it is for |
+|---|---|
+| `/api/v4/users?username=` | resolve the username to an id |
+| `/api/v4/users/<id>/events` | the activity the report is built from |
+| `/api/v4/projects/<id>` | the project path an event belongs to |
+| `/api/v4/projects/<id>/repository/commits` | authored commit counts |
+| `/api/v4/projects/<id>/repository/tags` | tag names for batched tag pushes |
+| `/api/v4/projects/<id>/releases` | releases published |
+| `/api/v4/user` | `sandogasa-report config` only, to validate the token |
+
+`api` is read *and write*, and nothing here writes. `read_user` is
+not needed either, despite `/user` and `/users` being the endpoints
+its description names: GitLab allows any GET under `read_api` at the
+top of the API, and an endpoint permits a token carrying any one of
+its allowed scopes, so `read_api` already covers them.
+
 ### GitHub authentication
 
 Same lookup shape as GitLab. The instance-specific env var is
