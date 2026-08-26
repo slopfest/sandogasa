@@ -84,11 +84,33 @@ On Fedora:
 sudo dnf install sandogasa
 ```
 
+From crates.io, one tool at a time:
+
+```
+cargo install <tool>
+```
+
 From source:
 
 ```
 cargo build --release
 ```
+
+Elsewhere — Debian and Ubuntu have no package — `dbranch` additionally
+ships prebuilt binaries with each release, since it is the tool aimed at
+those distributions:
+
+```
+cargo binstall dbranch
+```
+
+That fetches a statically linked x86_64 or aarch64 Linux build instead
+of compiling one. It still needs cargo, `binstall` being a cargo
+subcommand; with no Rust at all, take the archive from the
+[releases page](https://github.com/slopfest/sandogasa/releases). No
+other tool ships binaries — for those, `cargo binstall` finds nothing to
+download and falls back to building from source, which is the same as
+`cargo install`. See [tools/dbranch/README.md](tools/dbranch/README.md).
 
 ## Development
 

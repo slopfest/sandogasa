@@ -123,6 +123,40 @@ gate over and over, because then those trees are live caches and each
 iteration becomes a full instrumented rebuild. `cargo clean` is for
 stepping away from the repo, or for running out of space for real.
 
+## Only dbranch ships binaries, and `precise-builds` is why it can
+
+Each release attaches statically linked musl builds of `dbranch` for
+x86_64 and aarch64, so `cargo binstall dbranch` fetches one instead of
+compiling. `dbranch` alone, because it is the tool aimed at Debian and
+Ubuntu, where nothing packages sandogasa; the rest reach a Fedora or
+CentOS audience through packaging. The workspace sets `dist = false` and
+a tool opts in with `[package.metadata.dist] dist = true` in its own
+`Cargo.toml` — so adding one is a line, but it also means editing that
+tool's README and the claim in the root README that no other tool ships
+binaries.
+
+musl rather than glibc because a binary linked against the runner's
+glibc 2.39 will not start on EL9, and reaching people who are not
+building from source is the whole point. Nothing here links OpenSSL —
+reqwest is configured for rustls throughout — so a static build costs
+nothing.
+
+**`precise-builds = true` is load-bearing; do not remove it as an
+optimisation.** cargo-dist defaults to `cargo build --workspace`, which
+unifies features across every tool and switches `sandogasa-cli`'s `tls`
+feature back on, linking `ring` into dbranch after all. `ring` compiles
+C, and on a musl target `cc` insists on a compiler named
+`<arch>-linux-musl-gcc` while Debian's `musl-tools` installs only
+`musl-gcc` — and it does not fall back, so the build fails with
+`ToolNotFound` even with `musl-gcc` on `PATH`. Building the one app that
+ships keeps its tree pure Rust and the runner free of a C toolchain.
+`cargo tree -p dbranch -e normal` finding no `ring` is the check.
+
+`.github/workflows/release.yml` is generated: change
+`[workspace.metadata.dist]` and run `dist generate`, never edit the YAML.
+`dist plan` shows what a release would produce and
+`dist build --artifacts=local --target=<triple>` builds one for real.
+
 ## Take a setting and its override together, or neither
 
 If a crate adopts a tuneable that another crate already has — a timeout, a
