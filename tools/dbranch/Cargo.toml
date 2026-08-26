@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# Shipped as a prebuilt binary for `cargo binstall`; see
+# `[workspace.metadata.dist]` in the root Cargo.toml.
+[package.metadata.dist]
+dist = true
+
 [dependencies]
 anstream = { workspace = true }
 anstyle = { workspace = true }

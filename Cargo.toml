@@ -53,6 +53,42 @@ edition = "2024"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/slopfest/sandogasa"
 
+# Prebuilt binaries attached to GitHub releases, for `cargo binstall`.
+# Only dbranch ships this way for now: it is the one tool useful on
+# Debian and Ubuntu, where sandogasa is not packaged. `dist = false`
+# here opts the whole workspace out; a tool ships by setting
+# `[package.metadata.dist] dist = true` in its own Cargo.toml.
+#
+# musl rather than glibc because the audience runs a spread of
+# distributions and a glibc-2.39 binary from the runner image will not
+# start on EL9. Nothing here links OpenSSL — reqwest is configured for
+# rustls throughout — so a static build costs nothing.
+#
+# `create-release = false` keeps the release page ours: dist uploads
+# into a draft release that already exists for the tag, rather than
+# generating a title and body from CHANGELOG.md over the tag message
+# written for it.
+[workspace.metadata.dist]
+cargo-dist-version = "0.32.0"
+ci = ["github"]
+dist = false
+targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]
+installers = []
+create-release = false
+
+# Build dbranch alone rather than the default `cargo build
+# --workspace`. A workspace build unifies features across all sixteen
+# tools, which would switch sandogasa-cli's `tls` feature on and link
+# ring into dbranch after all — and ring compiles C, which is the one
+# thing that would make a musl target need a C toolchain on the runner.
+# Building the one app we ship keeps its dependency tree pure Rust.
+precise-builds = true
+
+# The profile cargo-dist builds releases with.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
 # Dev builds carry line tables instead of full DWARF. A workspace of
 # this size wrote tens of gigabytes of debuginfo into target/debug,
 # enough to run a machine out of disk, and what it bought was variable

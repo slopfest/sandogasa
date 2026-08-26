@@ -34,6 +34,16 @@ along or learn to do it by hand.
 cargo install dbranch
 ```
 
+Or, without a Rust toolchain, from the prebuilt binaries attached to
+each release with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):
+
+```
+cargo binstall dbranch
+```
+
+The binaries are statically linked against musl, for x86_64 and
+aarch64 Linux, so they run on any distribution.
+
 `dbranch` shells out to the standard Debian tooling; install what the
 stages you run need:
 
