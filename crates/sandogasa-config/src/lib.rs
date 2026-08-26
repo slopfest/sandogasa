@@ -261,18 +261,10 @@ pub fn validate_email(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// System-wide config path for a tool: `/etc/<tool>/config.toml`.
-/// Read-only from our side; owned by the admin / the distro
-/// package. Layered beneath the per-user file by
-/// [`ConfigFile::load`] / [`ConfigFile::read_merged`].
-pub fn system_config_path(tool_name: &str) -> PathBuf {
-    Path::new("/etc").join(tool_name).join("config.toml")
-}
-
 /// Recursively merge two TOML tables: `over` wins per key;
 /// nested tables merge, everything else (scalars, arrays) is
 /// replaced whole.
-pub fn merge_tables(mut base: toml::Table, over: toml::Table) -> toml::Table {
+fn merge_tables(mut base: toml::Table, over: toml::Table) -> toml::Table {
     for (key, over_value) in over {
         match (base.remove(&key), over_value) {
             (Some(toml::Value::Table(b)), toml::Value::Table(o)) => {
@@ -354,14 +346,6 @@ mod tests {
     fn for_tool_path_ends_with_tool_name() {
         let cf = ConfigFile::for_tool("my-tool");
         assert!(cf.path().ends_with("my-tool/config.toml"));
-    }
-
-    #[test]
-    fn system_config_path_is_under_etc() {
-        assert_eq!(
-            system_config_path("dbranch"),
-            Path::new("/etc/dbranch/config.toml")
-        );
     }
 
     #[test]

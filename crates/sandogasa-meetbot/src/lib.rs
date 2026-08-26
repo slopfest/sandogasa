@@ -26,14 +26,6 @@ use serde::Deserialize;
 /// Default production base URL for meetbot's web frontend.
 pub const DEFAULT_BASE_URL: &str = "https://meetbot.fedoraproject.org";
 
-/// Default base URL used for public meeting artefacts (log /
-/// summary HTML). Distinct from the web frontend: the JSON
-/// endpoint returns URLs on `meetbot-raw.fedoraproject.org`,
-/// but users typically want to link to the public-facing
-/// `meetbot.fedoraproject.org` host instead. `Meetbot::search`
-/// applies this rewrite.
-pub const PUBLIC_ARTEFACT_BASE: &str = "https://meetbot.fedoraproject.org";
-
 /// A single meeting discovered via the search endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Meeting {

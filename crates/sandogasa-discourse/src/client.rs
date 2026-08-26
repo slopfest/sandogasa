@@ -7,8 +7,6 @@ use crate::models::{User, UserResponse};
 pub struct DiscourseClient {
     base_url: String,
     client: Client,
-    api_key: Option<String>,
-    api_username: Option<String>,
 }
 
 impl DiscourseClient {
@@ -16,23 +14,6 @@ impl DiscourseClient {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: build_http_client(),
-            api_key: None,
-            api_username: None,
-        }
-    }
-
-    pub fn with_api_key(mut self, key: String, username: String) -> Self {
-        self.api_key = Some(key);
-        self.api_username = Some(username);
-        self
-    }
-
-    fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        match (&self.api_key, &self.api_username) {
-            (Some(key), Some(username)) => {
-                req.header("Api-Key", key).header("Api-Username", username)
-            }
-            _ => req,
         }
     }
 
@@ -42,7 +23,7 @@ impl DiscourseClient {
     /// rather than exposing the raw HTTP error.
     pub async fn user(&self, username: &str) -> Result<User, Box<dyn std::error::Error>> {
         let url = format!("{}/u/{}.json", self.base_url, username);
-        let resp = self.auth(self.client.get(&url)).send().await?;
+        let resp = self.client.get(&url).send().await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(format!("user '{username}' not found on Discourse").into());
         }
@@ -66,7 +47,7 @@ fn build_http_client() -> Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // ---- new / URL normalization ----
@@ -87,23 +68,6 @@ mod tests {
     fn new_trims_multiple_trailing_slashes() {
         let client = DiscourseClient::new("https://discussion.fedoraproject.org///");
         assert_eq!(client.base_url, "https://discussion.fedoraproject.org");
-    }
-
-    #[test]
-    fn new_no_api_key_by_default() {
-        let client = DiscourseClient::new("https://example.com");
-        assert!(client.api_key.is_none());
-        assert!(client.api_username.is_none());
-    }
-
-    // ---- with_api_key ----
-
-    #[test]
-    fn with_api_key_sets_key_and_username() {
-        let client = DiscourseClient::new("https://example.com")
-            .with_api_key("secret".to_string(), "admin".to_string());
-        assert_eq!(client.api_key.as_deref(), Some("secret"));
-        assert_eq!(client.api_username.as_deref(), Some("admin"));
     }
 
     // ---- user() ----
@@ -193,30 +157,6 @@ mod tests {
         assert!(user.location.is_none());
         assert!(user.last_posted_at.is_none());
         assert!(user.status.is_none());
-    }
-
-    #[tokio::test]
-    async fn user_sends_auth_headers() {
-        let server = MockServer::start().await;
-        let client = DiscourseClient::new(&server.uri())
-            .with_api_key("mykey".to_string(), "admin".to_string());
-
-        Mock::given(method("GET"))
-            .and(path("/u/someone.json"))
-            .and(header("Api-Key", "mykey"))
-            .and(header("Api-Username", "admin"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "user": {
-                    "id": 5,
-                    "username": "someone"
-                }
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let user = client.user("someone").await.unwrap();
-        assert_eq!(user.username, "someone");
     }
 
     #[tokio::test]

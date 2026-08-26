@@ -1,45 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-/// Known package ecosystems detectable from Fedora package names and spec files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ecosystem {
-    JavaScript,
-    Rust,
-    Python,
-}
-
-/// Fedora package name prefixes for each ecosystem.
+/// Fedora package name prefixes. Only the JavaScript one names a
+/// match; the other two are here so that a `rust-` or `python-`
+/// package can be ruled out with confidence rather than left unknown.
 const JS_NAME_PREFIXES: &[&str] = &["nodejs-"];
 const RUST_NAME_PREFIXES: &[&str] = &["rust-"];
 const PYTHON_NAME_PREFIXES: &[&str] = &["python-"];
 
-/// BuildRequires and macro patterns that indicate each ecosystem.
+/// BuildRequires and macro patterns that indicate a JavaScript package.
 const JS_BUILD_INDICATORS: &[&str] = &["nodejs", "npm("];
 const JS_MACRO_INDICATORS: &[&str] = &["%nodejs_"];
-
-const RUST_BUILD_INDICATORS: &[&str] = &["cargo-rpm-macros", "rust-packaging"];
-const RUST_MACRO_INDICATORS: &[&str] = &["%cargo_"];
-
-const PYTHON_BUILD_INDICATORS: &[&str] = &["python3-devel", "pyproject-rpm-macros"];
-const PYTHON_MACRO_INDICATORS: &[&str] = &["%py3_", "%pyproject_"];
-
-/// Detect the ecosystem of a Fedora package.
-///
-/// When `spec` is `None`, only the package name is used (quick mode).
-/// Returns `None` if the ecosystem cannot be determined from the
-/// available information.
-pub fn detect_ecosystem(name: &str, spec: Option<&str>) -> Option<Ecosystem> {
-    if is_js_package(name, spec) == Some(true) {
-        return Some(Ecosystem::JavaScript);
-    }
-    if is_rust_package(name, spec) == Some(true) {
-        return Some(Ecosystem::Rust);
-    }
-    if is_python_package(name, spec) == Some(true) {
-        return Some(Ecosystem::Python);
-    }
-    None
-}
 
 /// Check whether a package is a JavaScript/Node.js package.
 ///
@@ -54,28 +24,6 @@ pub fn is_js_package(name: &str, spec: Option<&str>) -> Option<bool> {
         return Some(false);
     }
     spec.map(|s| spec_matches(s, JS_BUILD_INDICATORS, JS_MACRO_INDICATORS))
-}
-
-/// Check whether a package is a Rust package.
-pub fn is_rust_package(name: &str, spec: Option<&str>) -> Option<bool> {
-    if name_matches_any(name, RUST_NAME_PREFIXES) {
-        return Some(true);
-    }
-    if name_matches_other_ecosystem(name, RUST_NAME_PREFIXES) {
-        return Some(false);
-    }
-    spec.map(|s| spec_matches(s, RUST_BUILD_INDICATORS, RUST_MACRO_INDICATORS))
-}
-
-/// Check whether a package is a Python package.
-pub fn is_python_package(name: &str, spec: Option<&str>) -> Option<bool> {
-    if name_matches_any(name, PYTHON_NAME_PREFIXES) {
-        return Some(true);
-    }
-    if name_matches_other_ecosystem(name, PYTHON_NAME_PREFIXES) {
-        return Some(false);
-    }
-    spec.map(|s| spec_matches(s, PYTHON_BUILD_INDICATORS, PYTHON_MACRO_INDICATORS))
 }
 
 /// Check if a package name matches any of the given prefixes.
@@ -342,99 +290,6 @@ mod tests {
     fn js_package_requires_not_buildrequires() {
         let spec = "Requires: nodejs\nBuildRequires: cargo-rpm-macros\n";
         assert_eq!(is_js_package("mypkg", Some(spec)), Some(false));
-    }
-
-    // ---- is_rust_package ----
-
-    #[test]
-    fn rust_package_by_name() {
-        assert_eq!(is_rust_package("rust-elliptic-curve", None), Some(true));
-    }
-
-    #[test]
-    fn rust_package_by_spec() {
-        let spec = "BuildRequires: cargo-rpm-macros >= 26\n%cargo_prep\n";
-        assert_eq!(is_rust_package("elliptic-curve", Some(spec)), Some(true));
-    }
-
-    #[test]
-    fn rust_package_js_name_shortcircuit() {
-        assert_eq!(is_rust_package("nodejs-elliptic", None), Some(false));
-    }
-
-    #[test]
-    fn rust_package_unknown_name_no_spec() {
-        assert_eq!(is_rust_package("openssl", None), None);
-    }
-
-    // ---- is_python_package ----
-
-    #[test]
-    fn python_package_by_name() {
-        assert_eq!(is_python_package("python-cryptography", None), Some(true));
-    }
-
-    #[test]
-    fn python_package_by_spec() {
-        let spec = "BuildRequires: python3-devel\n%py3_build\n";
-        assert_eq!(is_python_package("cryptography", Some(spec)), Some(true));
-    }
-
-    #[test]
-    fn python_package_by_spec_pyproject() {
-        let spec = "BuildRequires: pyproject-rpm-macros\n%pyproject_wheel\n";
-        assert_eq!(is_python_package("mypkg", Some(spec)), Some(true));
-    }
-
-    #[test]
-    fn python_package_rust_name_shortcircuit() {
-        assert_eq!(is_python_package("rust-pyo3", None), Some(false));
-    }
-
-    // ---- detect_ecosystem ----
-
-    #[test]
-    fn detect_ecosystem_js_by_name() {
-        assert_eq!(
-            detect_ecosystem("nodejs-elliptic", None),
-            Some(Ecosystem::JavaScript)
-        );
-    }
-
-    #[test]
-    fn detect_ecosystem_rust_by_name() {
-        assert_eq!(
-            detect_ecosystem("rust-elliptic-curve", None),
-            Some(Ecosystem::Rust)
-        );
-    }
-
-    #[test]
-    fn detect_ecosystem_python_by_name() {
-        assert_eq!(
-            detect_ecosystem("python-cryptography", None),
-            Some(Ecosystem::Python)
-        );
-    }
-
-    #[test]
-    fn detect_ecosystem_unknown_without_spec() {
-        assert_eq!(detect_ecosystem("openssl", None), None);
-    }
-
-    #[test]
-    fn detect_ecosystem_rust_by_spec() {
-        let spec = "BuildRequires: cargo-rpm-macros\n%cargo_build\n";
-        assert_eq!(
-            detect_ecosystem("elliptic-curve", Some(spec)),
-            Some(Ecosystem::Rust)
-        );
-    }
-
-    #[test]
-    fn detect_ecosystem_unknown_c_package() {
-        let spec = "BuildRequires: gcc\nBuildRequires: cmake\n";
-        assert_eq!(detect_ecosystem("openssl", Some(spec)), None);
     }
 
     // ---- extract_package_name ----

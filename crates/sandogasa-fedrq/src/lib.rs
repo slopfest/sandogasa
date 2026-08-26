@@ -67,35 +67,16 @@ pub fn libdnf5_cache_dir() -> PathBuf {
     cache_base().join("libdnf5")
 }
 
-/// Check whether the fedrq smartcache for `branch` is populated.
-///
-/// Returns `true` if the cache directory for the branch exists and
-/// contains at least one `.solv` file, meaning fedrq can serve
-/// queries without downloading metadata first.
-pub fn cache_fresh(branch: &str) -> bool {
-    let dir = cache_dir().join(branch);
-    if !dir.is_dir() {
-        return false;
-    }
-    // Look for .solv files (compiled repo metadata).
-    match std::fs::read_dir(&dir) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok())
-            .any(|e| e.path().extension().is_some_and(|ext| ext == "solv")),
-        Err(_) => false,
-    }
-}
-
 /// Remove the fedrq smartcache directory so the next query fetches
 /// fresh repository metadata.
-pub fn clear_cache() -> std::io::Result<()> {
+fn clear_cache() -> std::io::Result<()> {
     remove_if_present(&cache_dir())
 }
 
 /// Remove the libdnf5 metadata cache so the next query for the host's
 /// native branch refetches fresh metadata (the smartcache clear alone
 /// doesn't cover the native branch — see [`libdnf5_cache_dir`]).
-pub fn clear_libdnf5_cache() -> std::io::Result<()> {
+fn clear_libdnf5_cache() -> std::io::Result<()> {
     remove_if_present(&libdnf5_cache_dir())
 }
 
@@ -243,18 +224,6 @@ impl Fedrq {
     /// Return the Provides of a binary package (by name).
     pub fn pkg_provides(&self, name: &str) -> Result<Vec<String>, Error> {
         self.query(&["pkgs", "-F", "provides"], &[name])
-    }
-
-    /// Return `(name, version, release)` for binary packages
-    /// matching `name`.
-    ///
-    /// Lets callers detect side-tag repos whose metadata still
-    /// serves a stale V-R for a name that koji has at a newer NVR.
-    pub fn pkg_nvrs(&self, name: &str) -> Result<Vec<(String, String, String)>, Error> {
-        Ok(parse_3col(self.query(
-            &["pkgs", "-F", "line:name,version,release"],
-            &[name],
-        )?))
     }
 
     /// Map binary package names to their source and version-release in
@@ -448,11 +417,6 @@ mod tests {
             dir.ends_with("fedrq"),
             "cache_dir should end with 'fedrq', got: {dir:?}"
         );
-    }
-
-    #[test]
-    fn cache_fresh_missing_branch() {
-        assert!(!super::cache_fresh("nonexistent_test_branch_xyz"));
     }
 
     #[test]

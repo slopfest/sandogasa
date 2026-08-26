@@ -32,9 +32,6 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue}
 use sandogasa_cli::http;
 use serde::{Deserialize, Serialize};
 
-/// Default production base URL for the GitHub REST API.
-pub const DEFAULT_BASE_URL: &str = "https://api.github.com";
-
 /// A GitHub user as returned by `/users/{username}`. Only the
 /// fields downstream tools currently consume.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -60,9 +57,6 @@ pub struct Repository {
     /// `owner/name` form; preserved verbatim.
     #[serde(default)]
     pub name: Option<String>,
-    /// Web URL (when present on PR results).
-    #[serde(default)]
-    pub html_url: Option<String>,
 }
 
 impl Repository {
@@ -712,7 +706,6 @@ mod tests {
             id: 1,
             full_name: Some("o/r".into()),
             name: Some("ignored".into()),
-            html_url: None,
         };
         assert_eq!(repo.slug(), Some("o/r"));
         // Event payloads only ship `name`.
@@ -720,7 +713,6 @@ mod tests {
             id: 1,
             full_name: None,
             name: Some("o/r".into()),
-            html_url: None,
         };
         assert_eq!(evt_repo.slug(), Some("o/r"));
     }

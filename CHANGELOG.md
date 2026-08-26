@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### Dead public API removed from eight library crates (breaking)
+
+A workspace-wide survey in July found roughly 500 lines of public API
+that nothing calls — functions kept after the caller that justified them
+was rewritten, constants superseded by a neighbour with the same value,
+an error enum whose variants no reader distinguishes. It was left in
+place because removing published API needs a breaking release, and there
+was no reason to force one. This release is breaking anyway.
+
+Removed, or narrowed to private:
+
+- **sandogasa-kojihub** — `HubClient::sweep_completion_window` and its
+  private `sweep_slice`. Superseded by the descending-id walk, which is
+  the sweep primitive every caller uses.
+- **sandogasa-distgit** — the ecosystem-detection API: `Ecosystem`,
+  `detect_ecosystem`, `is_rust_package`, `is_python_package` and the
+  Rust/Python indicator constants. `is_js_package` stays, and so do all
+  three `*_NAME_PREFIXES` — it needs the Rust and Python prefixes to
+  answer `Some(false)` for a `rust-` or `python-` package rather than
+  leaving it unknown. `retain_rpms_namespace` is now private.
+- **sandogasa-fedrq** — `pkg_nvrs` and `cache_fresh`; `clear_cache` and
+  `clear_libdnf5_cache` are now private, reachable through
+  `clear_all_caches`.
+- **sandogasa-discourse** — `DiscourseClient::with_api_key` and the
+  `api_key`/`api_username` fields behind it. Every caller constructs the
+  client with `new`, so no request was ever authenticated.
+- **sandogasa-fasjson** — the `FasjsonError` enum. `FasjsonClient::user`
+  returns `Box<dyn std::error::Error>` instead. Both callers only format
+  the error, so nothing distinguished the variants.
+- **sandogasa-config** — `system_config_path`, which duplicated a path
+  `try_for_tool_file` builds inline and was called only by its own test;
+  `merge_tables` is now private.
+- **sandogasa-github** — `DEFAULT_BASE_URL` and `Repository.html_url`.
+- **sandogasa-meetbot** — `PUBLIC_ARTEFACT_BASE`, a duplicate of
+  `DEFAULT_BASE_URL` four lines above it with the same value, whose
+  documentation claimed a rewrite `Meetbot::search` does not perform.
+
+Migration: none of the above has a caller in this workspace, so an
+external user is the only one affected. `is_js_package` covers the one
+ecosystem check anything performed; construct a Discourse client with
+`new`; format a FASJSON error rather than matching it.
+
+Two items the survey listed were **not** removed, because they have
+acquired callers since: `sandogasa-nvd`'s `CpeMatch` version bounds, now
+read to build a version range, and `sandogasa-config`'s
+`ConfigFile::with_system_path`, used by fedora-cve-triage.
+
 ### sandogasa-cli: a tool that makes no web request no longer links a TLS stack
 
 `rustls` was an unconditional dependency, so `init` — which every tool
@@ -266,7 +313,7 @@ mention it with no positional cue at all ("as demonstrated by xmllint",
 "libxml2's xmllint", "discovered in xmllint (from libxml2)"); those need a
 different route, recorded in TODO.md.
 
-### koji-lag: a trend is named for what it compared
+### koji-lag: a trend is named for what it compared (breaking)
 
 `events` and `reports` both wrote `trend.txt` and `trend.json`, and both are
 meant to be produced into the same repository — so a metrics repo ends up
@@ -284,6 +331,18 @@ them back.
 which is why this was nearly a half-done rename: changing `trend::write`
 alone would have moved `events` and left `reports` writing the old name. Both
 callers go through one path now.
+
+**Breaking, for anyone using the `koji-lag` library crate:**
+`koji_lag::trend::write` takes the filename stem as a new second argument —
+`write(root: &Path, stem: &str, trend: &Trend)`, previously
+`write(root: &Path, trend: &Trend)`. The stem belongs to the caller because
+the two trends are different measurements and must not share a filename.
+Migration: pass `"rebuild-trend"` to reproduce what `events` writes, or
+`"monthly-trend"` for `reports`; `"trend"` restores the old filenames.
+
+The output filenames change with it, which affects the command-line tool
+too: `events` writes `rebuild-trend.txt`/`.json` and `reports` writes
+`monthly-trend.txt`/`.json`, where both wrote `trend.txt`/`.json` before.
 
 ### koji-lag: how to get a store, for people without a checkout
 

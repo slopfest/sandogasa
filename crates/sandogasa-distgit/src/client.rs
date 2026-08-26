@@ -87,7 +87,7 @@ pub struct ProjectInfo {
 /// group endpoint honors neither `namespace=` nor `fork=false`.
 /// Projects without a fullname are kept (the API always sends
 /// one; only minimal test fixtures omit it).
-pub fn retain_rpms_namespace(projects: &mut Vec<ProjectInfo>) {
+fn retain_rpms_namespace(projects: &mut Vec<ProjectInfo>) {
     projects.retain(|p| p.fullname.as_deref().is_none_or(|f| f.starts_with("rpms/")));
 }
 

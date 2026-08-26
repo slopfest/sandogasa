@@ -66,55 +66,27 @@ impl FasjsonClient {
     /// Shells out to `curl --negotiate` since FASJSON requires GSSAPI
     /// authentication and there is no pure-Rust GSSAPI implementation
     /// that avoids a build-time dependency on system krb5 libraries.
-    pub fn user(&self, username: &str) -> Result<FasUser, FasjsonError> {
+    pub fn user(&self, username: &str) -> Result<FasUser, Box<dyn std::error::Error>> {
         let url = format!("{}/v1/users/{}/", self.base_url, username);
         let output = Command::new("curl")
             .args(curl_args(&url))
             .output()
-            .map_err(|e| FasjsonError::Curl(format!("failed to run curl: {e}")))?;
+            .map_err(|e| format!("failed to run curl: {e}"))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.contains("401") || stderr.contains("403") {
-                return Err(FasjsonError::Auth(
-                    "Kerberos authentication failed — do you have a valid ticket?".to_string(),
-                ));
+                return Err("Kerberos authentication failed — do you have a valid ticket?".into());
             }
-            return Err(FasjsonError::Curl(format!(
-                "curl failed (exit {}): {}",
-                output.status,
-                stderr.trim()
-            )));
+            return Err(format!("curl failed (exit {}): {}", output.status, stderr.trim()).into());
         }
 
         let resp: FasjsonResponse<FasUser> = serde_json::from_slice(&output.stdout)
-            .map_err(|e| FasjsonError::Parse(format!("failed to parse FASJSON response: {e}")))?;
+            .map_err(|e| format!("failed to parse FASJSON response: {e}"))?;
 
         Ok(resp.result)
     }
 }
-
-#[derive(Debug)]
-pub enum FasjsonError {
-    /// curl command failed.
-    Curl(String),
-    /// Kerberos authentication failed.
-    Auth(String),
-    /// Failed to parse JSON response.
-    Parse(String),
-}
-
-impl std::fmt::Display for FasjsonError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FasjsonError::Curl(msg) => write!(f, "{msg}"),
-            FasjsonError::Auth(msg) => write!(f, "{msg}"),
-            FasjsonError::Parse(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-
-impl std::error::Error for FasjsonError {}
 
 #[cfg(test)]
 mod tests {
@@ -155,30 +127,6 @@ mod tests {
     fn with_base_url_trims_trailing_slash() {
         let client = FasjsonClient::with_base_url("https://fasjson.example.com/");
         assert_eq!(client.base_url, "https://fasjson.example.com");
-    }
-
-    #[test]
-    fn error_display_auth() {
-        let e = FasjsonError::Auth("no ticket".to_string());
-        assert_eq!(format!("{e}"), "no ticket");
-    }
-
-    #[test]
-    fn error_display_curl() {
-        let e = FasjsonError::Curl("curl failed".to_string());
-        assert_eq!(format!("{e}"), "curl failed");
-    }
-
-    #[test]
-    fn error_display_parse() {
-        let e = FasjsonError::Parse("bad json".to_string());
-        assert_eq!(format!("{e}"), "bad json");
-    }
-
-    #[test]
-    fn error_is_std_error() {
-        let e: Box<dyn std::error::Error> = Box::new(FasjsonError::Auth("test".to_string()));
-        assert_eq!(format!("{e}"), "test");
     }
 
     #[test]
