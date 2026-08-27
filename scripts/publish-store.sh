@@ -92,4 +92,9 @@ printf '  %sMB from %sMB (%d%% of the original)\n' \
     "$((after / 1024 / 1024))" "$((before / 1024 / 1024))" \
     "$((after * 100 / before))"
 printf '  %s\n' "$(cat "$OUTDIR/$NAME.sha256")"
-printf '\nto use it:\n  scripts/fetch-store.sh <url>/%s\n' "$NAME"
+# The fetch counterpart is named differently once packaged, and sits
+# beside this script either way -- so ask where this one is running from
+# rather than hardcoding the checkout path.
+FETCH=$(dirname "$0")/koji-lag-fetch-store
+[[ -x $FETCH ]] && FETCH=koji-lag-fetch-store || FETCH=scripts/fetch-store.sh
+printf '\nto use it:\n  %s <url>/%s\n' "$FETCH" "$NAME"

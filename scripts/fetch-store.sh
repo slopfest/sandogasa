@@ -70,4 +70,10 @@ if command -v sqlite3 >/dev/null; then
     sqlite3 "file:$DEST?mode=ro" "SELECT 'covers ' || date(min(from_ts),'unixepoch')
         || ' to ' || date(max(to_ts),'unixepoch','-1 day') FROM listed;"
 fi
-printf '\nready:\n  KOJI_LAG_STORE=%s jupyter lab tools/koji-lag/notebooks/arch-lag.ipynb\n' "$DEST"
+# Name the notebook where the caller actually has it: a package installs
+# it under /usr/share, a checkout keeps it in the tree. Printing the
+# repo path to someone who installed the RPM sends them to a file they
+# do not have.
+NOTEBOOK=/usr/share/koji-lag/notebooks/arch-lag.ipynb
+[[ -f $NOTEBOOK ]] || NOTEBOOK=tools/koji-lag/notebooks/arch-lag.ipynb
+printf '\nready:\n  KOJI_LAG_STORE=%s jupyter lab %s\n' "$DEST" "$NOTEBOOK"
