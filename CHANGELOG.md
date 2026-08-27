@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### koji-lag: the store scripts name paths the caller actually has
+
+`fetch-store.sh` signed off by telling you to open
+`tools/koji-lag/notebooks/arch-lag.ipynb`, and `publish-store.sh` told
+you to fetch the result with `scripts/fetch-store.sh`. Both are paths
+inside a checkout, which is where these scripts have lived until now.
+Fedora packaging installs them as `koji-lag-fetch-store` and friends,
+with the notebook under `/usr/share/koji-lag/`, so someone who installed
+the package was being pointed at files they do not have.
+
+Each now names the location the caller actually has: the notebook is
+taken from `/usr/share/koji-lag/` when it is there and from the tree
+otherwise, and `publish-store.sh` looks for its fetch counterpart beside
+itself before falling back to the checkout path. The `usage()` output
+already self-named through `basename "$0"` and needed no change.
+
 ## v0.22.0
 
 ### koji-lag: a schema version that nothing reads (breaking)
