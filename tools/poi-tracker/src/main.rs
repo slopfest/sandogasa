@@ -1037,13 +1037,35 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
     let mut candidates = kondo::cull_candidates(&personal, &essential_names);
     candidates.retain(|name| args.filter.matches(name));
     candidates.sort();
+    // The cull inventory is the accumulated verdict: what a previous
+    // pass already decided is not asked about (or looked up) again.
+    let prior = match &args.output {
+        Some(path) => kondo::prior_culled(path)?,
+        None => Default::default(),
+    };
+    let before = candidates.len();
+    candidates.retain(|name| !prior.contains(name));
     let mut report = kondo::KondoReport {
         candidates: candidates.len(),
+        previously_culled: before - candidates.len(),
         ..Default::default()
     };
+    if report.previously_culled > 0 {
+        eprintln!(
+            "skipping {} candidate(s) already culled in {}",
+            report.previously_culled,
+            args.output.as_deref().unwrap_or_default(),
+        );
+    }
     if candidates.is_empty() {
         if args.json {
             println!("{}", serde_json::to_string_pretty(&report)?);
+        } else if report.previously_culled > 0 {
+            println!(
+                "Nothing new to triage: every remaining candidate ({}) was \
+                 culled in an earlier pass.",
+                report.previously_culled
+            );
         } else {
             println!("Every package is in an essential inventory; nothing to triage.");
         }

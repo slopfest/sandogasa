@@ -17,7 +17,9 @@
 //! inventory path, and recording it means adding the package there,
 //! which makes the justification durable as membership rather than
 //! prose — and **remove** drops a false positive (the analysis missed
-//! a real need). Non-interactive runs keep every candidate.
+//! a real need). A remove is a temporary skip: it is not persisted,
+//! and the candidate returns next run until the gap in the essential
+//! inputs is fixed. Non-interactive runs keep every candidate.
 //!
 //! What remains culled is then classified by the user's own dist-git
 //! access, because the access level routes the action: a main admin
@@ -68,6 +70,9 @@ pub struct Culled {
 pub struct KondoReport {
     /// Personal packages not found in any essential inventory.
     pub candidates: usize,
+    /// Candidates skipped because a previous pass already culled
+    /// them (they are in the `-o` inventory).
+    pub previously_culled: usize,
     /// Confirmed cullable, classified by access.
     pub culled: Vec<Culled>,
     /// Filed into another inventory: (package, inventory path).
@@ -376,6 +381,22 @@ pub fn format_report(report: &KondoReport, user: &str) -> String {
     out
 }
 
+/// The names already verdicted into the cull inventory at `path` —
+/// empty when the file does not exist yet. `-o` is the accumulated
+/// verdict across passes, so a candidate found here was already
+/// decided and is not asked about again; without this, every re-run
+/// re-prompted for the entire standing cull list.
+pub fn prior_culled(path: &str) -> Result<BTreeSet<String>, String> {
+    if !std::path::Path::new(path).exists() {
+        return Ok(BTreeSet::new());
+    }
+    Ok(sandogasa_inventory::load(path)?
+        .package
+        .into_iter()
+        .map(|p| p.name)
+        .collect())
+}
+
 /// Merge the culled set into the inventory at `path`, creating it if
 /// absent — `-o` accumulates across passes, because triage happens in
 /// sittings (one `--pattern` at a time) and each pass owns only its
@@ -601,6 +622,21 @@ mod tests {
             ]
         );
         assert_eq!(culled[3].level, "none");
+    }
+
+    #[test]
+    fn prior_culled_is_empty_for_a_new_file_and_full_after_a_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("cull.toml");
+        let dest = dest.to_str().unwrap();
+        assert!(prior_culled(dest).unwrap().is_empty());
+
+        let pass = KondoReport {
+            culled: vec![culled("a-thing", "owner")],
+            ..Default::default()
+        };
+        merge_culled(dest, &pass, "cull", "me").unwrap();
+        assert!(prior_culled(dest).unwrap().contains("a-thing"));
     }
 
     #[test]

@@ -66,7 +66,10 @@ bounded concurrency turns minutes of pre-prompt waiting into seconds
 without leaning on dist-git. `-o` merges into its file rather than
 overwriting it, so the sittings accumulate one cull inventory between
 them — the first draft overwrote, which would have made every pass
-silently discard the previous passes' verdict.
+silently discard the previous passes' verdict. The file is also the
+memory: re-running re-prompted for every package already culled, so a
+candidate found in the `-o` inventory is now skipped (and not looked
+up), and only the genuinely undecided reach the prompt.
 
 What stays culled is classified by the user's own direct dist-git
 access, since the level routes the action: owners can orphan
