@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Help text wraps at 80 columns, by machinery instead of by hand
+
+Every tool's `--help` printed each option's description as one long
+line — pipe it or read it in a narrow terminal and lines ran well past
+80 columns, in every tool, despite a standing 80-column rule for help
+text. The rule was being enforced by manually shortening doc comments,
+which is why some strings read clipped, and it was enforced
+imperfectly: an audit across all sixteen tools and every subcommand
+found dozens of over-long lines.
+
+The cause was two missing halves of one mechanism: clap only wraps at
+all when its `wrap_help` cargo feature is on — without it the wrapping
+code is compiled out and width settings are silently inert — and the
+width itself comes from `max_term_width`, which no tool set. The
+workspace now enables the feature and every tool sets
+`max_term_width = 80`.
+
+Four lines remain over, all `Usage:` lines in hs-intake subcommands
+that take three positionals: clap wraps help text but never the usage
+string itself. Shortening those value names would cost more clarity
+than the columns buy. Two other stragglers were single unbreakable
+tokens and got reworded instead: cpu-sig-tracker's example merge
+request URL, and sandogasa-pkg-health's `--inventory`/`--output`,
+whose value names are now `PATH` — which they are.
+
 ### poi-tracker: inventory the runtime dependencies pulled from other repos
 
 Keeping a package working on EL means keeping its dependency chain

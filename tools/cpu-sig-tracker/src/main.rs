@@ -30,6 +30,7 @@ use untag::UntagArgs;
     version,
     about,
     long_about = None,
+    max_term_width = 80,
     before_help = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"))
 )]
 struct Cli {

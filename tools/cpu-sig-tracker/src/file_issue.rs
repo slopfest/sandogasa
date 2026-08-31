@@ -45,7 +45,8 @@ impl IssueType {
 #[derive(clap::Args)]
 pub struct FileIssueArgs {
     /// Full Merge Request URL to track, e.g.
-    /// `https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42`.
+    /// `gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42`
+    /// (with the https:// scheme).
     pub mr_url: String,
 
     /// Affected (currently-tagged) NVR. If omitted, left blank in

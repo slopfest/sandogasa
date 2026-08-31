@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cpu-sig-tracker 1 2026-08-26 "sandogasa 0.22.0" "Sandogasa Manual"
+.TH cpu-sig-tracker 1 2026-08-31 "sandogasa 0.22.0" "Sandogasa Manual"
 .SH NAME
 cpu\-sig\-tracker \- Track CentOS Proposed Updates (CPU) SIG package state across Koji, GitLab, and JIRA
 .SH SYNOPSIS
@@ -91,7 +91,7 @@ Print progress to stderr
 Print help
 .TP
 <\fIMR_URL\fR>
-Full Merge Request URL to track, e.g. `https://gitlab.com/redhat/centos\-stream/rpms/xz/\-/merge_requests/42`
+Full Merge Request URL to track, e.g. `gitlab.com/redhat/centos\-stream/rpms/xz/\-/merge_requests/42` (with the https:// scheme)
 .SS cpu-sig-tracker retire
 \fBcpu\-sig\-tracker retire\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-\-claim\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE_URL\fR> 
 .PP

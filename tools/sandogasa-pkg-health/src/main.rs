@@ -11,6 +11,7 @@ use sandogasa_pkg_health::{Context, CostTier, HealthReport, duration, registry::
     version,
     about,
     long_about = None,
+    max_term_width = 80,
     before_help = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"))
 )]
 struct Cli {
@@ -32,11 +33,11 @@ enum Command {
 #[derive(clap::Args)]
 struct RunArgs {
     /// Path to inventory TOML file.
-    #[arg(short, long)]
+    #[arg(short, long, value_name = "PATH")]
     inventory: String,
 
     /// Path to report TOML file (read if exists, written after run).
-    #[arg(short, long)]
+    #[arg(short, long, value_name = "PATH")]
     output: String,
 
     /// Run only these checks (repeatable).
