@@ -69,7 +69,12 @@ them — the first draft overwrote, which would have made every pass
 silently discard the previous passes' verdict. The file is also the
 memory: re-running re-prompted for every package already culled, so a
 candidate found in the `-o` inventory is now skipped (and not looked
-up), and only the genuinely undecided reach the prompt.
+up), and only the genuinely undecided reach the prompt. It corrects
+itself in the other direction too: essential inputs improve between
+passes — a `deps --build` run justifying a crate stack, say — and a
+culled package that has become essential is rescued from the file and
+named, rather than leaving a stale verdict for someone to notice by
+hand.
 
 What stays culled is classified by the user's own direct dist-git
 access, since the level routes the action: owners can orphan

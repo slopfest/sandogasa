@@ -243,7 +243,10 @@ a candidate a previous pass already culled is skipped, not re-asked, so
 re-running with the same `-o` only ever prompts for what is genuinely
 undecided. That makes the file itself the undo mechanism: delete an
 entry (a mistaken keep, say) and the next run asks about that package
-again. `remove` decisions are deliberately not persisted — a remove
+again. The reverse correction is automatic: a culled package that has
+since become essential — after a `deps --build` run justified it, say
+— is rescued from the file and reported, so the verdict never
+contradicts the inputs. `remove` decisions are deliberately not persisted — a remove
 is a temporary skip, and the dropped candidate returns on the next run
 until whatever the analysis missed is fixed in the essential inputs. Sessions
 running at the same time should still write distinct files — the merge

@@ -1042,8 +1042,21 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
     let mut candidates = kondo::cull_candidates(&personal, &essential_names);
     candidates.retain(|name| args.filter.matches(name));
     candidates.sort();
-    // The cull inventory is the accumulated verdict: what a previous
-    // pass already decided is not asked about (or looked up) again.
+    // The cull inventory is the accumulated verdict — but essential
+    // inputs can improve between passes (deps --build justifying a
+    // crate stack), so anything on it that is now essential gets
+    // rescued first, then what remains decided is not re-asked.
+    let rescued = match &args.output {
+        Some(path) => kondo::rescue_culled(path, &essential_names)?,
+        None => Vec::new(),
+    };
+    if !rescued.is_empty() {
+        eprintln!(
+            "rescued {} package(s) from the cull list (now essential): {}",
+            rescued.len(),
+            rescued.join(", "),
+        );
+    }
     let prior = match &args.output {
         Some(path) => kondo::prior_culled(path)?,
         None => Default::default(),
@@ -1053,6 +1066,7 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
     let mut report = kondo::KondoReport {
         candidates: candidates.len(),
         previously_culled: before - candidates.len(),
+        rescued,
         ..Default::default()
     };
     if report.previously_culled > 0 {

@@ -73,6 +73,9 @@ pub struct KondoReport {
     /// Candidates skipped because a previous pass already culled
     /// them (they are in the `-o` inventory).
     pub previously_culled: usize,
+    /// Packages removed from the `-o` inventory because they have
+    /// become essential since they were culled.
+    pub rescued: Vec<String>,
     /// Confirmed cullable, classified by access.
     pub culled: Vec<Culled>,
     /// Filed into another inventory: (package, inventory path).
@@ -381,6 +384,33 @@ pub fn format_report(report: &KondoReport, user: &str) -> String {
     out
 }
 
+/// Remove from the cull inventory at `path` every package that has
+/// become essential: regenerated essential inputs — a `deps --build`
+/// run justifying a crate stack, say — can overtake a standing
+/// verdict, and a stale "cullable" would otherwise survive until
+/// someone hand-edited the file. Returns the rescued names; an
+/// absent file rescues nothing.
+pub fn rescue_culled(path: &str, essential: &BTreeSet<String>) -> Result<Vec<String>, String> {
+    if !std::path::Path::new(path).exists() {
+        return Ok(Vec::new());
+    }
+    let mut inventory = sandogasa_inventory::load(path)?;
+    let before = inventory.package.len();
+    let mut rescued = Vec::new();
+    inventory.package.retain(|p| {
+        if essential.contains(&p.name) {
+            rescued.push(p.name.clone());
+            false
+        } else {
+            true
+        }
+    });
+    if inventory.package.len() != before {
+        sandogasa_inventory::save(&inventory, path)?;
+    }
+    Ok(rescued)
+}
+
 /// The names already verdicted into the cull inventory at `path` —
 /// empty when the file does not exist yet. `-o` is the accumulated
 /// verdict across passes, so a candidate found here was already
@@ -622,6 +652,34 @@ mod tests {
             ]
         );
         assert_eq!(culled[3].level, "none");
+    }
+
+    #[test]
+    fn newly_essential_packages_are_rescued_from_the_cull_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("cull.toml");
+        let dest = dest.to_str().unwrap();
+        let pass = KondoReport {
+            culled: vec![culled("rust-clap", "owner"), culled("old-toy", "owner")],
+            ..Default::default()
+        };
+        merge_culled(dest, &pass, "cull", "me").unwrap();
+
+        // deps --build later justifies rust-clap: it leaves the
+        // verdict, old-toy stays condemned.
+        let essential: BTreeSet<String> = ["rust-clap".to_string()].into();
+        assert_eq!(rescue_culled(dest, &essential).unwrap(), ["rust-clap"]);
+        let names: Vec<String> = prior_culled(dest).unwrap().into_iter().collect();
+        assert_eq!(names, ["old-toy"]);
+
+        // Nothing left to rescue; the absent-file case is also calm.
+        assert!(rescue_culled(dest, &essential).unwrap().is_empty());
+        let gone = dir.path().join("never.toml");
+        assert!(
+            rescue_culled(gone.to_str().unwrap(), &essential)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
