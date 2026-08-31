@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### poi-tracker: inventory the runtime dependencies pulled from other repos
+
+Keeping a package working on EL means keeping its dependency chain
+available, and part of that chain usually lives in EPEL — but nothing
+could say *which* part. "Given this inventory of packages we maintain
+in Hyperscale, which EPEL 9 packages does it depend on" had no answer
+short of chasing `Requires` by hand, and the same question underlies
+any attempt to cull a personal package inventory: a package someone
+maintains "for themselves" may in fact be load-bearing for work.
+
+`poi-tracker deps` walks the transitive runtime dependency graph of
+the inventory's packages against a fedrq branch and repo stack
+(`-b hs.el9 -r stack`), classifies every provider by the repository it
+comes from, and collects the ones pulled from the repos named by
+`--from` (default `epel`). Providers whose repo id matches
+`--base-repo` (default `fedrq-centos-stream-`) end the walk — the base
+distro is a given. `-o` writes the result as an inventory whose
+`reason` fields record what pulled each package in
+("runtime dependency (epel): systemd-ukify requires
+python3dist(zstandard)"), so the collected set plugs straight back
+into the inventory tooling: culling becomes a set difference.
+
+The walk is breadth-first over binary packages with one batched fedrq
+invocation per dependency-graph level, so a whole closure costs a
+handful of spawns. Rich (boolean) dependencies are skipped with a
+warning, and file dependencies classify correctly but are reported as
+unattributable. Build-time dependencies are deliberately out of scope
+for now: this answers "what must stay available for these packages to
+keep working", not "…to keep rebuilding".
+
+### sandogasa-fedrq: batched JSON queries (breaking)
+
+fedrq's `line:` formatter refuses multi-valued attributes, so any
+caller that needed a package *and* its Requires had to query
+per-package — thousands of process spawns for a dependency walk. The
+crate now drives `-F json:`, which returns whole objects:
+`subpkgs_info` (binaries of a batch of source packages, with Requires,
+source attribution and repo) and `providers_info` (the providers of a
+batch of capabilities — the candidates dnf would pick — with their own
+Requires, Provides, source and repo), both one invocation per batch,
+returning the new `PkgInfo` (`#[non_exhaustive]`, so fields can grow).
+
+**Breaking:** the `Error` enum gains a `Parse(String)` variant for
+JSON that fails to decode, which breaks exhaustive matches on
+`sandogasa_fedrq::Error`. Migration: add a `Parse` (or wildcard) arm.
+
 ### Hyperscale SIG repos become fedrq branches
 
 Nothing could query what the Hyperscale SIG actually ships: fedrq knows

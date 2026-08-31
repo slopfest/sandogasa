@@ -26,6 +26,8 @@ pub enum Error {
         status: std::process::ExitStatus,
         stderr: String,
     },
+    /// fedrq's output was not the JSON it was asked for.
+    Parse(String),
 }
 
 impl fmt::Display for Error {
@@ -39,11 +41,37 @@ impl fmt::Display for Error {
                 }
                 Ok(())
             }
+            Error::Parse(e) => write!(f, "unexpected fedrq output: {e}"),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+/// One package from a `fedrq … -F json:…` query.
+///
+/// Fields beyond `name` and `repoid` are filled only when the query
+/// asked the formatter for them; the serde defaults absorb the rest.
+/// `source_name` is `None` for source packages themselves.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[non_exhaustive]
+pub struct PkgInfo {
+    /// Binary (or source) package name.
+    pub name: String,
+    /// Runtime Requires, raw dependency strings.
+    #[serde(default)]
+    pub requires: Vec<String>,
+    /// Provides, raw capability strings.
+    #[serde(default)]
+    pub provides: Vec<String>,
+    /// Source package name, for a binary package.
+    #[serde(default)]
+    pub source_name: Option<String>,
+    /// Repository the package came from (e.g. `epel`,
+    /// `centos-hyperscale`, `fedrq-centos-stream-baseos`).
+    #[serde(default)]
+    pub repoid: String,
+}
 
 /// The XDG cache base (`$XDG_CACHE_HOME`, default `~/.cache`), via
 /// the `dirs` crate — which also implements the spec's rule that a
@@ -107,7 +135,7 @@ impl Fedrq {
         }
     }
 
-    fn run(cmd: &mut Command) -> Result<Vec<String>, Error> {
+    fn run_raw(cmd: &mut Command) -> Result<String, Error> {
         let output = cmd.output().map_err(Error::Spawn)?;
 
         if !output.status.success() {
@@ -117,7 +145,11 @@ impl Fedrq {
             });
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    fn run(cmd: &mut Command) -> Result<Vec<String>, Error> {
+        let stdout = Self::run_raw(cmd)?;
         let lines: Vec<String> = stdout
             .lines()
             .map(|l| l.trim().to_string())
@@ -142,6 +174,22 @@ impl Fedrq {
         cmd.arg("--");
         cmd.args(operands);
         Self::run(&mut cmd)
+    }
+
+    /// Run `fedrq <args>… [opts] -- <operands>…` with a `json:`
+    /// formatter and parse the array it prints.
+    fn query_json<S: AsRef<std::ffi::OsStr>>(
+        &self,
+        args: &[&str],
+        operands: &[S],
+    ) -> Result<Vec<PkgInfo>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.args(args);
+        self.apply_opts(&mut cmd);
+        cmd.arg("--");
+        cmd.args(operands);
+        let raw = Self::run_raw(&mut cmd)?;
+        serde_json::from_str(&raw).map_err(|e| Error::Parse(e.to_string()))
     }
 
     /// Run `fedrq subpkgs -S -F <formatter> <srpm>` and return one entry per line.
@@ -258,6 +306,45 @@ impl Fedrq {
         self.query(&["pkgs", "-P", "-F", "provides"], &[capability])
     }
 
+    /// Batched: the binary subpackages of the given source packages,
+    /// each with its runtime Requires, source attribution and
+    /// providing repo — one fedrq invocation for the whole batch.
+    pub fn subpkgs_info(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, Error> {
+        if srpms.is_empty() {
+            return Ok(vec![]);
+        }
+        self.query_json(
+            &[
+                "subpkgs",
+                "-S",
+                "-F",
+                "json:name,requires,source_name,repoid",
+            ],
+            srpms,
+        )
+    }
+
+    /// Batched: the packages providing the given capabilities — the
+    /// candidates dnf would actually pick — with their own Requires
+    /// (so a closure walk gets the next wave's inputs from the same
+    /// invocation), their Provides (so the caller can attribute which
+    /// capability each provider matched), source and repo.
+    pub fn providers_info(&self, deps: &[String]) -> Result<Vec<PkgInfo>, Error> {
+        if deps.is_empty() {
+            return Ok(vec![]);
+        }
+        self.query_json(
+            &[
+                "pkgs",
+                "-P",
+                "-S",
+                "-F",
+                "json:name,requires,provides,source_name,repoid",
+            ],
+            deps,
+        )
+    }
+
     /// Check whether a source package exists.
     ///
     /// Equivalent to `fedrq pkgs --src <name>`.
@@ -338,6 +425,36 @@ fn parse_source_vr_lines(raw: Vec<String>) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pkg_info_parses_a_full_record() {
+        let raw = r#"[{"name":"htop","requires":["libc.so.6()(64bit)"],
+            "provides":["htop = 3.3.0-1.el9"],
+            "source_name":"htop","repoid":"epel"}]"#;
+        let pkgs: Vec<PkgInfo> = serde_json::from_str(raw).unwrap();
+        assert_eq!(pkgs[0].name, "htop");
+        assert_eq!(pkgs[0].requires, ["libc.so.6()(64bit)"]);
+        assert_eq!(pkgs[0].source_name.as_deref(), Some("htop"));
+        assert_eq!(pkgs[0].repoid, "epel");
+    }
+
+    #[test]
+    fn pkg_info_defaults_absorb_unrequested_attrs() {
+        // A query that asked only for name,repoid — the other
+        // fields must default rather than fail the parse.
+        let raw = r#"[{"name":"htop","repoid":"epel"}]"#;
+        let pkgs: Vec<PkgInfo> = serde_json::from_str(raw).unwrap();
+        assert!(pkgs[0].requires.is_empty());
+        assert!(pkgs[0].provides.is_empty());
+        assert!(pkgs[0].source_name.is_none());
+    }
+
+    #[test]
+    fn empty_inputs_skip_the_spawn() {
+        let f = Fedrq::default();
+        assert!(f.subpkgs_info(&[]).unwrap().is_empty());
+        assert!(f.providers_info(&[]).unwrap().is_empty());
+    }
 
     #[test]
     fn build_command_defaults() {

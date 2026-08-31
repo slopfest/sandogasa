@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH poi-tracker 1 2026-08-26 "sandogasa 0.22.0" "Sandogasa Manual"
+.TH poi-tracker 1 2026-08-31 "sandogasa 0.22.0" "Sandogasa Manual"
 .SH NAME
 poi\-tracker \- Package\-of\-interest tracker for Fedora, EPEL, and CentOS SIGs
 .SH SYNOPSIS
@@ -87,6 +87,46 @@ Print help
 \fBpoi\-tracker config\fR [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Configure poi\-tracker (Bugzilla API key, etc.)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker deps
+\fBpoi\-tracker deps\fR [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] <\fB\-b\fR|\fB\-\-branch\fR> [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-from\fR] [\fB\-\-base\-repo\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-name\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Inventory the runtime dependencies pulled from other repos (e.g. EPEL)
+.TP
+\fB\-\-pattern\fR \fI<GLOB,...>\fR
+Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
+.TP
+\fB\-\-start\-from\fR \fI<NAME>\fR
+Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
+.TP
+\fB\-\-end\-with\fR \fI<NAME>\fR
+Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a sub\-range
+.TP
+\fB\-b\fR, \fB\-\-branch\fR \fI<BRANCH>\fR
+fedrq branch (e.g. hs.el9, epel9)
+.TP
+\fB\-r\fR, \fB\-\-repo\fR \fI<REPO>\fR
+fedrq repo class (e.g. stack)
+.TP
+\fB\-\-from\fR \fI<FROM>\fR [default: epel]
+Collect providers from these repo ids (CSV or repeated)
+.TP
+\fB\-\-base\-repo\fR \fI<BASE_REPO>\fR [default: fedrq\-centos\-stream\-]
+Base\-distro repo id prefix(es); their providers end the walk
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
+Write the collected dependencies as an inventory TOML file
+.TP
+\fB\-\-name\fR \fI<NAME>\fR
+Inventory name for \-\-output (default: "<input name>\-deps\-<branch>")
+.TP
+\fB\-\-json\fR
+Output as JSON instead of human\-readable
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

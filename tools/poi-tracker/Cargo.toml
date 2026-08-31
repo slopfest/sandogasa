@@ -14,7 +14,9 @@ sandogasa-bodhi = { workspace = true }
 sandogasa-bugclass = { workspace = true }
 sandogasa-bugzilla = { workspace = true }
 sandogasa-config = { workspace = true }
+sandogasa-depfilter = { workspace = true }
 sandogasa-distgit = { workspace = true }
+sandogasa-fedrq = { workspace = true }
 sandogasa-gitlab = { workspace = true }
 sandogasa-inventory = { workspace = true }
 sandogasa-koji = { workspace = true }

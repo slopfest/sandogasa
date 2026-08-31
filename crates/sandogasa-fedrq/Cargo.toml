@@ -8,3 +8,5 @@ repository.workspace = true
 
 [dependencies]
 dirs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

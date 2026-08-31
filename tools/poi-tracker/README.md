@@ -86,6 +86,48 @@ Adopting needs a dist-git API token with the
 with `poi-tracker config` (or pass `--api-token` / set
 `PAGURE_API_TOKEN`). `--dry-run` works without a token.
 
+### Inventory runtime dependencies from other repos
+
+Walk the transitive runtime dependency graph of the inventory's
+packages against a fedrq branch and repo stack, and collect what they
+pull from repos of interest — e.g. which EPEL 9 packages a Hyperscale
+inventory depends on:
+
+```
+$ poi-tracker -i hyperscale-packages.toml deps -b hs.el9 -r stack \
+    -o hyperscale-epel9-deps.toml
+1 runtime dependency from [epel] for 2 package(s) on hs.el9:
+  python-zstandard (epel) — systemd-ukify requires python3dist(zstandard)
+wrote hyperscale-epel9-deps.toml
+```
+
+A *capability* here is RPM's own term for the strings in `Provides:`
+and `Requires:` — a package name, a versioned expression like
+`python3dist(zstandard)`, a soname like `libhwloc.so.15()(64bit)`, or
+a file path (`rpm -q --provides` lists a package's). The walk
+repeatedly resolves the capabilities the current packages require
+into the packages that provide them, the way dnf would.
+
+Providers whose repo id matches `--base-repo` (default
+`fedrq-centos-stream-`) satisfy a dependency and end the walk there —
+the base distro is a given. Every other provider is walked further,
+and collected when its repo is in `--from` (default `epel`). The
+output inventory records why each package was pulled in, in its
+`reason` field. Build-time dependencies are not walked: this answers
+"what must stay available for these packages to keep working", not
+"…to keep rebuilding".
+
+The shared walk filters apply: `--pattern` (glob, CSV or repeated),
+`--start-from` and `--end-with` restrict which inventory packages are
+used as roots — handy for a quick look at one package's pull before
+walking a whole inventory.
+
+Requires `fedrq`, with the branch configured — `hs.el9` and `hs.el10`
+come from this repository's `configs/fedrq/`. Rich (boolean)
+dependencies are skipped with a warning. File dependencies resolve
+and classify normally, but appear under `unmatched` in `--json`
+output, since tying a path to its provider would need file lists.
+
 ### Export to content-resolver YAML
 
 ```sh

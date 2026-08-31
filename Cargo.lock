@@ -1457,7 +1457,9 @@ dependencies = [
  "sandogasa-bugzilla",
  "sandogasa-cli",
  "sandogasa-config",
+ "sandogasa-depfilter",
  "sandogasa-distgit",
+ "sandogasa-fedrq",
  "sandogasa-gitlab",
  "sandogasa-inventory",
  "sandogasa-koji",
@@ -2012,6 +2014,8 @@ name = "sandogasa-fedrq"
 version = "0.22.0"
 dependencies = [
  "dirs",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
