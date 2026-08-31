@@ -127,7 +127,10 @@ walking a whole inventory.
 
 Requires `fedrq`, with the branch configured — `hs.el9` and `hs.el10`
 come from this repository's `configs/fedrq/`. Rich (boolean)
-dependencies are skipped with a warning. File dependencies resolve
+dependencies made only of conjunctions (`with`, `and` — the shape of
+rust-packaging's crate version ranges) resolve by their leaves;
+conditional ones (`or`, `if`, `unless`) are skipped with a warning.
+File dependencies resolve
 and classify normally, but appear under `unmatched` in `--json`
 output, since tying a path to its provider would need file lists.
 

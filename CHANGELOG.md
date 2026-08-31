@@ -51,9 +51,15 @@ into the inventory tooling: culling becomes a set difference.
 
 The walk is breadth-first over binary packages with one batched fedrq
 invocation per dependency-graph level, so a whole closure costs a
-handful of spawns. Rich (boolean) dependencies are skipped with a
-warning, and file dependencies classify correctly but are reported as
-unattributable. Build-time dependencies are deliberately out of scope
+handful of spawns. Rich (boolean) dependencies whose connectives are
+all conjunctions resolve by their leaves — that is the shape
+rust-packaging emits for every crate version range
+(`(crate(x) >= 1.2 with crate(x) < 2.0~)`), so a Rust-heavy inventory
+keeps its crate graph instead of dropping it; genuinely conditional
+ones (`or`, `if`, `unless`) are skipped with a warning, since which
+branch applies depends on install state. File dependencies classify
+correctly but are reported as unattributable. Build-time dependencies
+are deliberately out of scope
 for now: this answers "what must stay available for these packages to
 keep working", not "…to keep rebuilding".
 

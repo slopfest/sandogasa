@@ -110,12 +110,63 @@ fn provider_matches(p: &PkgInfo, req: &str) -> bool {
 /// Whether `dep` should be resolved at all. RPM-internal and
 /// auto-generated capabilities are noise; symbol-version deps always
 /// ride alongside a bare soname dep that resolves to the same
-/// provider; rich (boolean) deps are beyond `-P` resolution and are
-/// skipped with a warning by the caller.
+/// provider; rich (boolean) deps go through [`rich_dep_leaves`]
+/// first and reach here as plain leaves.
 fn wants_resolution(dep: &str) -> bool {
     !sandogasa_depfilter::is_rpm_internal_dep(dep)
         && !sandogasa_depfilter::is_solib_symbol_dep(dep)
         && !dep.starts_with('(')
+}
+
+/// The leaf dependency strings of a rich (boolean) dependency, when
+/// every connective in it is a conjunction (`and`, `with`) — then
+/// each leaf is genuinely required and resolvable on its own. This
+/// is the shape rust-packaging emits for every crate version range,
+/// `(crate(x) >= 1.2 with crate(x) < 2.0~)`, so skipping it would
+/// drop the whole crate graph of any shipped -devel subpackage.
+///
+/// `None` for expressions with a conditional or alternative
+/// connective (`or`, `if`, `else`, `unless`, `without`): which
+/// branch applies depends on install state, and resolving all of
+/// them would overstate the closure. The caller warns and skips.
+fn rich_dep_leaves(dep: &str) -> Option<Vec<String>> {
+    let inner = dep.strip_prefix('(')?.strip_suffix(')')?;
+    let mut leaves: Vec<String> = Vec::new();
+    let mut segment = String::new();
+    let mut depth: i32 = 0;
+    // Split into words, tracking parenthesis depth: connectives are
+    // bare words at depth 0; anything else (including versioned
+    // leaves like `crate(x) >= 1.2`, whose own parentheses raise the
+    // depth only mid-word) accumulates into the current segment.
+    let flush = |segment: &mut String, leaves: &mut Vec<String>| -> Option<()> {
+        let seg = std::mem::take(segment);
+        let seg = seg.trim();
+        if seg.is_empty() {
+            return None; // malformed: empty operand
+        }
+        if seg.starts_with('(') {
+            leaves.extend(rich_dep_leaves(seg)?);
+        } else {
+            leaves.push(seg.to_string());
+        }
+        Some(())
+    };
+    for word in inner.split(' ') {
+        if depth == 0 && matches!(word, "and" | "with") {
+            flush(&mut segment, &mut leaves)?;
+            continue;
+        }
+        if depth == 0 && matches!(word, "or" | "if" | "else" | "unless" | "without") {
+            return None;
+        }
+        depth += word.matches('(').count() as i32 - word.matches(')').count() as i32;
+        if !segment.is_empty() {
+            segment.push(' ');
+        }
+        segment.push_str(word);
+    }
+    flush(&mut segment, &mut leaves)?;
+    Some(leaves)
 }
 
 /// Walk the runtime closure of `roots` (source package names).
@@ -171,18 +222,30 @@ pub fn walk(
                 continue;
             }
             for dep in &pkg.requires {
-                if dep.starts_with('(') && rich_warned.insert(dep.clone()) {
-                    report
-                        .warnings
-                        .push(format!("rich dependency skipped: {dep} ({})", pkg.name));
-                    continue;
+                // A rich dep made only of conjunctions contributes
+                // its leaves as ordinary requirements; conditional
+                // ones are skipped with a warning.
+                let leaves = if dep.starts_with('(') {
+                    match rich_dep_leaves(dep) {
+                        Some(leaves) => leaves,
+                        None => {
+                            if rich_warned.insert(dep.clone()) {
+                                report
+                                    .warnings
+                                    .push(format!("rich dependency skipped: {dep} ({})", pkg.name));
+                            }
+                            continue;
+                        }
+                    }
+                } else {
+                    vec![dep.clone()]
+                };
+                for leaf in leaves {
+                    if !wants_resolution(&leaf) || seen_reqs.contains(&leaf) {
+                        continue;
+                    }
+                    pending.entry(leaf).or_insert_with(|| pkg.name.clone());
                 }
-                if !wants_resolution(dep) || seen_reqs.contains(dep) {
-                    continue;
-                }
-                pending
-                    .entry(dep.clone())
-                    .or_insert_with(|| pkg.name.clone());
             }
         }
         if pending.is_empty() {
@@ -403,6 +466,63 @@ mod tests {
         let roots = ["a".to_string(), "b".to_string()];
         let r = walk(&q, &roots, &from_epel(), &base(), false).unwrap();
         assert!(r.collected.is_empty());
+    }
+
+    #[test]
+    fn rich_dep_leaves_handles_the_crate_range_shape() {
+        assert_eq!(
+            rich_dep_leaves(
+                "(crate(syn/clone-impls) >= 2.0.52 with crate(syn/clone-impls) < 3.0.0~)"
+            ),
+            Some(vec![
+                "crate(syn/clone-impls) >= 2.0.52".to_string(),
+                "crate(syn/clone-impls) < 3.0.0~".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn rich_dep_leaves_recurses_into_nested_conjunctions() {
+        assert_eq!(
+            rich_dep_leaves("((crate(a) >= 1 with crate(a) < 2) and crate(b))"),
+            Some(vec![
+                "crate(a) >= 1".to_string(),
+                "crate(a) < 2".to_string(),
+                "crate(b)".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn rich_dep_leaves_refuses_conditionals() {
+        assert_eq!(rich_dep_leaves("(util-linux-core or util-linux)"), None);
+        assert_eq!(
+            rich_dep_leaves("(systemd-rpm-macros = 260 if rpm-build)"),
+            None
+        );
+        assert_eq!(rich_dep_leaves("(a and (b or c))"), None);
+        assert_eq!(rich_dep_leaves("(a unless b)"), None);
+    }
+
+    #[test]
+    fn conjunctive_rich_deps_are_walked_not_warned() {
+        let q = Canned {
+            subpkgs: vec![pkg(serde_json::json!({
+                "name": "rust-app-devel", "source_name": "rust-app",
+                "repoid": "centos-hyperscale",
+                "requires": ["(crate(syn) >= 2.0 with crate(syn) < 3.0~)"],
+            }))],
+            providers: vec![pkg(serde_json::json!({
+                "name": "rust-syn-devel", "source_name": "rust-syn",
+                "repoid": "epel",
+                "provides": ["crate(syn) = 2.0.52", "rust-syn-devel = 2.0.52-1.el10"],
+            }))],
+        };
+        let r = walk(&q, &["rust-app".to_string()], &from_epel(), &base(), false).unwrap();
+        assert!(r.warnings.is_empty());
+        assert_eq!(r.collected[0].source, "rust-syn");
+        assert_eq!(r.collected[0].via, "crate(syn) < 3.0~");
+        assert!(r.unmatched.is_empty());
     }
 
     #[test]
