@@ -183,6 +183,67 @@ poi-tracker import old-inventory.json -o inventory.toml \
     --workload hyperscale
 ```
 
+### Triage cull candidates (kondo)
+
+The set difference between the inventory ("packages I maintain") and
+the union of *essential* inventories — work inventories, and the
+dependency inventories `deps` writes — is the list of packages nothing
+justifies. `kondo` walks that list with the shared keep/explain/remove
+prompt, under this reading: the finding is "nothing essential needs
+this package", so **keep** confirms it as a cull candidate, **explain**
+files the package into another inventory (the explanation *is* the
+inventory path; the file is created if needed), and **remove** drops a
+false positive. Filing is immediate, so an interrupted triage loses
+nothing already decided.
+
+```sh
+poi-tracker -i personal.toml kondo --user salimma \
+    --essential inventory-hyperscale.toml \
+    --essential hs-el9-deps.toml --essential hs-el10-deps.toml \
+    -o cull.toml
+```
+
+Confirmed candidates are then classified by your own (direct) dist-git
+access, because the level routes the action — owner: orphanable
+directly; admin: you can remove your own ACL; commit, collaborator or
+ticket: you have to ask. The report groups them accordingly and prints
+ready-to-run `sandogasa-pkg-acl` command lines for the first two
+groups, in a form fit for a mailing-list announcement — which comes
+first: `kondo` itself never touches dist-git ACLs. Group-granted
+access is deliberately ignored (pair with `sync-distgit --no-groups`);
+a group grant is not yours to walk away from.
+
+Access levels are looked up before the prompt, so each candidate line
+carries its context — `old-toy (commit) — nothing essential needs it`
+reads differently from `(owner)`.
+
+`--explain-into PATH` sets a default: Enter at the explanation prompt
+files the package there, so a pass that sorts many packages into one
+inventory is two keystrokes each (`e`, Enter); an explicit path still
+wins. The natural multi-pass flow is one pass per destination, passing
+the same file as `--essential` too — filed packages then never
+reappear as candidates. Candidates are computed once, up front, so
+filing into an essential inventory mid-run is safe; and when the
+`--explain-into` file does not exist yet, it is tolerated as an empty
+essential input rather than failing the load. Any *other* missing
+essential path is still an error — treating a typo as an empty
+inventory would make every package it names look cullable.
+
+The shared walk filters (`--pattern`, `--start-from`, `--end-with`)
+restrict the candidates, which is how a large triage gets eaten in
+sittings: one themed pass at a time (`--pattern 'rust-*'
+--explain-into keep-rust.toml`), with `--start-from` as the resume
+point — candidates are sorted, and access lookups run a few at a time
+so even hundreds classify in under a minute. `-o` merges rather than
+overwrites, so every pass adds its slice of the verdict to one cull
+inventory; packages already present are left untouched. Sessions
+running at the same time should still write distinct files — the merge
+is load-modify-save, so simultaneous finishes can drop each other's
+additions — and let a later pass fold them together.
+
+Without a terminal, with `--json`, or with `-y`, no prompt fires and
+every candidate stays a candidate — which acts on nothing.
+
 ### Mark packages no longer shipped anywhere
 
 `prune-retired` finds inventory packages that are no longer

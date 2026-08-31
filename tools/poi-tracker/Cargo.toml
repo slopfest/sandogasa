@@ -21,6 +21,7 @@ sandogasa-fedrq = { workspace = true }
 sandogasa-gitlab = { workspace = true }
 sandogasa-inventory = { workspace = true }
 sandogasa-koji = { workspace = true }
+sandogasa-review = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -28,4 +29,5 @@ toml = { workspace = true }
 
 [dev-dependencies]
 sandogasa-cli = { workspace = true, features = ["man"] }
+tempfile = { workspace = true }
 wiremock = { workspace = true }

@@ -4,6 +4,7 @@ mod adopt;
 mod config;
 mod deps;
 mod gitlab_unshipped;
+mod kondo;
 mod prune_retired;
 mod semver_audit;
 mod triage_retired;
@@ -55,6 +56,9 @@ enum Command {
     Find(FindArgs),
     /// Import from legacy JSON format.
     Import(ImportArgs),
+    /// Triage packages no essential inventory needs: keep as a
+    /// cull candidate, file into an inventory, or drop.
+    Kondo(KondoArgs),
     /// Mark (or remove) packages no longer carried on any
     /// active branch (dist-git project gone or retired
     /// everywhere).
@@ -273,6 +277,43 @@ struct SemverAuditArgs {
     non_breaking: bool,
 
     /// Output as JSON instead of human-readable text.
+    #[arg(long)]
+    json: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+#[derive(clap::Args)]
+struct KondoArgs {
+    #[command(flatten)]
+    filter: WalkFilterArgs,
+
+    /// Essential inventory file(s): packages found in any of these
+    /// are never cull candidates (repeat the flag per file).
+    #[arg(long, required = true)]
+    essential: Vec<String>,
+
+    /// dist-git username whose access level routes each action.
+    #[arg(long)]
+    user: String,
+
+    /// Default inventory for 'explain': Enter at the explanation
+    /// prompt files the package here.
+    #[arg(long, value_name = "PATH")]
+    explain_into: Option<String>,
+
+    /// Keep every candidate without prompting.
+    #[arg(short, long)]
+    yes: bool,
+
+    /// Merge the culled set into this inventory TOML file
+    /// (accumulates across passes).
+    #[arg(short, long)]
+    output: Option<String>,
+
+    /// Output as JSON instead of human-readable.
     #[arg(long)]
     json: bool,
 
@@ -734,6 +775,7 @@ fn main() -> ExitCode {
         Command::Export(args) => cmd_export(&paths, args),
         Command::Find(args) => cmd_find(&paths, args),
         Command::Import(args) => cmd_import(args),
+        Command::Kondo(args) => cmd_kondo(&paths, args),
         Command::PruneRetired(args) => cmd_prune_retired(&paths, args),
         Command::Remove(args) => cmd_remove(&paths[0], args),
         Command::SemverAudit(args) => cmd_semver_audit(&paths, args),
@@ -977,6 +1019,113 @@ fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> CmdResult {
     } else {
         ExitCode::SUCCESS
     })
+}
+
+fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
+    use std::io::IsTerminal;
+
+    let personal = sandogasa_inventory::load_and_merge(paths)?;
+    let (essential_paths, note) =
+        kondo::essential_paths_to_load(&args.essential, args.explain_into.as_deref());
+    if let Some(note) = &note {
+        eprintln!("note: {note}");
+    }
+    let essential = sandogasa_inventory::load_and_merge(&essential_paths)?;
+    let essential_names: std::collections::BTreeSet<String> =
+        essential.package.into_iter().map(|p| p.name).collect();
+
+    let mut candidates = kondo::cull_candidates(&personal, &essential_names);
+    candidates.retain(|name| args.filter.matches(name));
+    candidates.sort();
+    let mut report = kondo::KondoReport {
+        candidates: candidates.len(),
+        ..Default::default()
+    };
+    if candidates.is_empty() {
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            println!("Every package is in an essential inventory; nothing to triage.");
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // Access levels first: they contextualize the prompt (a mere
+    // committer reads differently from an owner), and the kept
+    // candidates come out already classified.
+    eprintln!(
+        "checking dist-git access for {} candidate(s)...",
+        candidates.len()
+    );
+    let dg = sandogasa_distgit::DistGitClient::new();
+    let rt = new_runtime()?;
+    let (classified, warnings) =
+        rt.block_on(kondo::classify(&dg, &args.user, &candidates, args.verbose));
+    report.warnings.extend(warnings);
+
+    // Prompt only where the house rules allow it; otherwise every
+    // candidate stays a candidate, which acts on nothing.
+    let interactive = !args.yes && !args.json && std::io::stdin().is_terminal();
+    let resolutions = if interactive {
+        eprintln!(
+            "{} candidate(s). keep = cullable; explain = file it into an \
+             inventory (the explanation is the inventory path); remove = \
+             the analysis missed a real need.",
+            classified.len()
+        );
+        match &args.explain_into {
+            Some(default) => sandogasa_review::resolve_interactive_with_default(
+                classified,
+                kondo::triage_summary,
+                default,
+            )?,
+            None => sandogasa_review::resolve_interactive(classified, kondo::triage_summary)?,
+        }
+    } else {
+        classified
+            .into_iter()
+            .map(|c| (c, sandogasa_review::Resolution::Keep))
+            .collect()
+    };
+    kondo::apply_resolutions(resolutions, &personal.inventory.maintainer, &mut report);
+
+    let written = if let Some(path) = &args.output {
+        let added = kondo::merge_culled(
+            path,
+            &report,
+            &format!("{}-cull", personal.inventory.name),
+            &personal.inventory.maintainer,
+        )?;
+        Some((path.clone(), added))
+    } else {
+        None
+    };
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "report": report,
+                "output": written.as_ref().map(|(p, _)| p),
+                "output_added": written.as_ref().map(|(_, n)| n),
+            }))?
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    print!("{}", kondo::format_report(&report, &args.user));
+    for (name, inv) in &report.explained {
+        println!("filed {name} → {inv}");
+    }
+    if !report.removed.is_empty() {
+        println!("dropped as false positives: {}", report.removed.join(", "));
+    }
+    for warning in &report.warnings {
+        eprintln!("warning: {warning}");
+    }
+    if let Some((path, added)) = written {
+        println!("merged into {path} ({added} new)");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_deps(paths: &[String], args: &DepsArgs) -> CmdResult {

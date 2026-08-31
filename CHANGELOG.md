@@ -27,6 +27,57 @@ tokens and got reworded instead: cpu-sig-tracker's example merge
 request URL, and sandogasa-pkg-health's `--inventory`/`--output`,
 whose value names are now `PATH` — which they are.
 
+### poi-tracker: kondo, the triage that decides what stops sparking joy
+
+A personal package inventory accumulates: dependencies once needed,
+favors once granted, experiments once shipped. Culling it by hand
+means answering, per package, "does anything actually need this?" and
+then "what am I even allowed to do about it?" — two questions with
+tooling-shaped answers that had no tooling.
+
+`poi-tracker kondo` takes the inventory and a set of `--essential`
+inventories (work inventories, and what `deps` generates), and walks
+the set difference with the shared keep/explain/remove prompt. The
+finding is "nothing essential needs this package": keep confirms the
+cull candidate, remove drops a false positive, and explain files the
+package into an inventory the user names — the explanation *is* the
+inventory, so the justification survives as membership rather than
+prose, and the file is written immediately so an interrupted triage
+keeps its decisions. `--explain-into` sets a default destination —
+Enter at the explanation prompt files the package there, so a pass
+that sorts many packages into one inventory is two keystrokes per
+package instead of a retyped path; `sandogasa-review` grows the
+underlying `resolve_interactive_with_default` for any tool whose
+explanations are usually the same thing. Access levels are looked up
+before the prompt rather than after it, so each candidate line carries
+the context that routes the eventual action — a package one merely
+commits to reads differently from one one owns. Passing the
+`--explain-into` file as `--essential` too is the supported multi-pass
+idiom: candidates are snapshotted before any filing, and a not-yet-
+existing explain target among the essentials is tolerated as empty,
+while any other missing essential path stays a loud error.
+
+Sized for reality: the first real run produced 931 candidates. The
+shared walk filters (`--pattern`, `--start-from`, `--end-with`)
+restrict the candidate set so a triage that size can be eaten in
+themed sittings with `--start-from` as the resume point, and the
+access lookups run five at a time — latency-bound requests, so
+bounded concurrency turns minutes of pre-prompt waiting into seconds
+without leaning on dist-git. `-o` merges into its file rather than
+overwriting it, so the sittings accumulate one cull inventory between
+them — the first draft overwrote, which would have made every pass
+silently discard the previous passes' verdict.
+
+What stays culled is classified by the user's own direct dist-git
+access, since the level routes the action: owners can orphan
+(`sandogasa-pkg-acl give orphan`, printed ready to run), admins can
+remove their own ACL, and commit/collaborator/ticket holders have to
+ask — that group is emitted as the ask-list. The output is grouped for
+a mailing-list announcement, which comes before any action; kondo
+itself never modifies ACLs. Group-granted access is deliberately not
+consulted: it pairs with `sync-distgit --no-groups`, and a group grant
+is not the user's to walk away from.
+
 ### poi-tracker: inventory the runtime dependencies pulled from other repos
 
 Keeping a package working on EL means keeping its dependency chain

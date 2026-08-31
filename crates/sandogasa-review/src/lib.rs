@@ -47,7 +47,27 @@ pub fn resolve_interactive<T>(
     items: Vec<T>,
     summary: impl Fn(&T) -> String,
 ) -> Result<Vec<(T, Resolution)>, String> {
-    resolve_with(items, summary, read_line, &mut std::io::stderr())
+    resolve_with(items, summary, None, read_line, &mut std::io::stderr())
+}
+
+/// Like [`resolve_interactive`], with a default explanation: pressing
+/// Enter at the explanation prompt records `default_explanation`
+/// instead of re-asking. For flows where the explanation is usually
+/// the same thing — a destination file, a standard justification —
+/// and typing it per finding would be tedious and error-prone. An
+/// explicit explanation still wins over the default.
+pub fn resolve_interactive_with_default<T>(
+    items: Vec<T>,
+    summary: impl Fn(&T) -> String,
+    default_explanation: &str,
+) -> Result<Vec<(T, Resolution)>, String> {
+    resolve_with(
+        items,
+        summary,
+        Some(default_explanation),
+        read_line,
+        &mut std::io::stderr(),
+    )
 }
 
 /// Parse one answer line into a choice. Empty (Enter) defaults to Keep —
@@ -67,13 +87,21 @@ fn parse_choice(line: &str) -> Option<Choice> {
 fn resolve_with<T>(
     items: Vec<T>,
     summary: impl Fn(&T) -> String,
+    default_explanation: Option<&str>,
     mut read: impl FnMut() -> Result<String, String>,
     mut err: impl Write,
 ) -> Result<Vec<(T, Resolution)>, String> {
     let total = items.len();
     let mut out = Vec::with_capacity(total);
     for (i, item) in items.into_iter().enumerate() {
-        let resolution = prompt_one(i + 1, total, &summary(&item), &mut read, &mut err)?;
+        let resolution = prompt_one(
+            i + 1,
+            total,
+            &summary(&item),
+            default_explanation,
+            &mut read,
+            &mut err,
+        )?;
         out.push((item, resolution));
     }
     Ok(out)
@@ -85,6 +113,7 @@ fn prompt_one(
     idx: usize,
     total: usize,
     summary: &str,
+    default_explanation: Option<&str>,
     read: &mut impl FnMut() -> Result<String, String>,
     err: &mut impl Write,
 ) -> Result<Resolution, String> {
@@ -96,12 +125,24 @@ fn prompt_one(
             Some(Choice::Keep) => return Ok(Resolution::Keep),
             Some(Choice::Remove) => return Ok(Resolution::Removed),
             Some(Choice::Explain) => {
-                let _ = write!(err, "    explanation: ");
+                match default_explanation {
+                    Some(default) => {
+                        let _ = write!(err, "    explanation [{default}]: ");
+                    }
+                    None => {
+                        let _ = write!(err, "    explanation: ");
+                    }
+                }
                 let _ = err.flush();
                 let why = read()?.trim().to_string();
                 if why.is_empty() {
-                    let _ = writeln!(err, "  an explanation is required (or pick k/r)");
-                    continue;
+                    match default_explanation {
+                        Some(default) => return Ok(Resolution::Explained(default.to_string())),
+                        None => {
+                            let _ = writeln!(err, "  an explanation is required (or pick k/r)");
+                            continue;
+                        }
+                    }
                 }
                 return Ok(Resolution::Explained(why));
             }
@@ -159,7 +200,7 @@ mod tests {
         // a: Enter→keep, b: explain "because", c: remove, d: "k"→keep.
         let read = reader(&["", "e", "because", "r", "k"]);
         let mut sink = Vec::new();
-        let out = resolve_with(items, |s| s.to_string(), read, &mut sink).unwrap();
+        let out = resolve_with(items, |s| s.to_string(), None, read, &mut sink).unwrap();
         assert_eq!(out[0], ("a", Resolution::Keep));
         assert_eq!(out[1], ("b", Resolution::Explained("because".to_string())));
         assert_eq!(out[2], ("c", Resolution::Removed));
@@ -173,7 +214,31 @@ mod tests {
         // again with a real reason → Explained.
         let read = reader(&["huh", "e", "", "e", "real reason"]);
         let mut sink = Vec::new();
-        let out = resolve_with(items, |s| s.to_string(), read, &mut sink).unwrap();
+        let out = resolve_with(items, |s| s.to_string(), None, read, &mut sink).unwrap();
         assert_eq!(out[0].1, Resolution::Explained("real reason".to_string()));
+    }
+
+    #[test]
+    fn blank_explanation_takes_the_default_when_one_is_set() {
+        let items = vec!["a", "b"];
+        // a: explain, Enter → the default. b: explain, explicit text
+        // → the explicit text wins.
+        let read = reader(&["e", "", "e", "elsewhere.toml"]);
+        let mut sink = Vec::new();
+        let out = resolve_with(
+            items,
+            |s| s.to_string(),
+            Some("default.toml"),
+            read,
+            &mut sink,
+        )
+        .unwrap();
+        assert_eq!(out[0].1, Resolution::Explained("default.toml".to_string()));
+        assert_eq!(
+            out[1].1,
+            Resolution::Explained("elsewhere.toml".to_string())
+        );
+        let shown = String::from_utf8(sink).unwrap();
+        assert!(shown.contains("explanation [default.toml]: "));
     }
 }
