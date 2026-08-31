@@ -35,15 +35,7 @@ left open / reported as up to date).
 
 ## Usage
 
-### Show inventory
-
-```sh
-poi-tracker show -i inventory.toml
-poi-tracker show -i inventory.toml --workload hyperscale
-poi-tracker show -i inventory.toml --json
-```
-
-### Add / remove packages
+### Add a package
 
 ```sh
 poi-tracker add systemd -i inventory.toml \
@@ -51,9 +43,6 @@ poi-tracker add systemd -i inventory.toml \
     --rpm systemd-networkd \
     --workload hyperscale \
     --track upstream
-
-poi-tracker remove systemd -i inventory.toml
-poi-tracker remove systemd -i inventory.toml --rpm systemd-networkd
 ```
 
 ### Adopt orphaned packages
@@ -85,6 +74,20 @@ Adopting needs a dist-git API token with the
 <https://src.fedoraproject.org/settings/token/new> and store it
 with `poi-tracker config` (or pass `--api-token` / set
 `PAGURE_API_TOKEN`). `--dry-run` works without a token.
+
+### Configure (Bugzilla API key)
+
+```sh
+poi-tracker config
+```
+
+Prompts for a Bugzilla API key, validates it with a quick test
+search, and saves it to `~/.config/poi-tracker/config.toml`.
+Lookup order at runtime: `--api-key` flag → `BUGZILLA_API_KEY`
+env var → config file.
+
+Generate an API key at
+<https://bugzilla.redhat.com/userprefs.cgi?tab=apikey>.
 
 ### Inventory runtime dependencies from other repos
 
@@ -167,6 +170,124 @@ export, so a revived package returns to normal tracking.
 
 ```sh
 poi-tracker find systemd -i inv1.toml -i inv2.toml
+```
+
+### Import from legacy JSON
+
+```sh
+poi-tracker import old-inventory.json -o inventory.toml \
+    --private-fields poc,reason,team,task \
+    --workload hyperscale
+```
+
+### Mark packages no longer shipped anywhere
+
+`prune-retired` finds inventory packages that are no longer
+carried on **any** active branch — the dist-git project is gone
+(404), it has no branch on an active release, or it carries a
+`dead.package` marker on every active branch it has. The active
+branch set is queried from Bodhi's active releases (plus
+rawhide) or overridden with `--branch`:
+
+```sh
+poi-tracker -i inventory.toml prune-retired --dry-run
+poi-tracker -i inventory.toml prune-retired
+```
+
+By default matches are *marked* with an `unshipped` reason in
+the inventory rather than deleted: retired packages keep their
+ACLs, so a deleted entry would come straight back on the next
+`sync-distgit` run, and the marker is what lets the rest of the
+tooling do the right thing. `triage-updates` and `semver-audit`
+skip unshipped packages; `triage-retired` still processes them
+so their remaining bugs get closed; the sync commands' `--prune`
+preserves them. Markers are refreshed in both directions — a
+revived package gets its marker cleared. Pass `--remove` to
+delete the entries outright instead. Packages are checked
+concurrently (`-j`/`--jobs`, default 8 in-flight dist-git
+requests).
+
+An entry with no `rpms/` dist-git project (404) is reported as
+**invalid** rather than marked: the entry itself is wrong — a
+non-RPM repo (module, container image, tests) imported under its
+bare name by an older group sync (e.g. `modules/askalono-cli`
+showing up as `askalono-cli`), a *binary subpackage* name
+recorded instead of the source package, or a typo. The fix is
+editing or removing the entry, which is a human call. A stale
+`unshipped` marker on such an entry is cleared by the next run.
+
+`sync-distgit --mark-unshipped` runs the same check on the
+packages a sync adds, so a fresh inventory starts with its
+`unshipped` markers in place instead of needing a follow-up
+`prune-retired` run. This catches retired packages, which keep
+their ACLs and so still appear in sync listings. A package whose
+dist-git project was deleted outright never appears in a listing
+at all — harmless for a fresh inventory (it simply isn't added),
+but if an existing inventory recorded it before the project
+vanished, only `prune-retired` notices the 404.
+
+### Remove a package
+
+```sh
+poi-tracker remove systemd -i inventory.toml
+poi-tracker remove systemd -i inventory.toml --rpm systemd-networkd
+```
+
+### Audit pending updates by semver impact
+
+`semver-audit` looks at each maintained package's pending upstream
+release notification (the open `upstream-release-monitoring@`
+"X is available" bug) and classifies the version bump against the
+version currently packaged in rawhide dist-git, so you can see
+which updates are safe to push and which need care:
+
+```sh
+# All pending updates, grouped by impact
+poi-tracker -i inventory.toml semver-audit
+
+# Just the safe ones for your Rust packages
+poi-tracker -i inventory.toml semver-audit --pattern 'rust-*' --non-breaking
+
+# Machine-readable
+poi-tracker -i inventory.toml semver-audit --json
+```
+
+Bumps are classified with Cargo's compatibility rule (the Rust
+convention): a change at or before the version's leftmost non-zero
+component is **breaking**. So `1.4 → 1.5` is non-breaking, but
+`0.4 → 0.5` is breaking (pre-1.0 minor bumps can break), and
+`0.0.3 → 0.0.4` is breaking too. Versions that aren't plain dotted
+integers — pre-releases, dates, git snapshots — are reported as
+**needs review** rather than guessed at. A package whose packaged
+version already equals the "available" version is reported as
+**up to date (stale bug)** — but only after verifying (via
+`koji`) that a build with that version is actually in rawhide's
+tag chain. A version merely committed to dist-git whose build
+sits in a side tag or is still gating is reported as
+**committed, awaiting release** instead: the bug isn't stale,
+the update just hasn't shipped. A package that's retired on rawhide (a
+`dead.package` marker — the same signal `triage-retired` uses) is
+reported as **retired (update request invalid)**, since there's no
+live package to update; run `triage-retired` to close those bugs.
+
+`--pattern <glob>` (comma-separated or repeated, e.g. `rust-*`)
+limits the audit to matching packages, and `--non-breaking` shows
+only the safe updates. The audit makes a Bugzilla search and a
+dist-git spec fetch per matching package, so scope it with
+`--pattern` for a large inventory — or use `--batch [EMAIL]`,
+which replaces the per-package searches with **one** Bugzilla
+query for all open release-monitoring bugs assigned to or CC'ing
+EMAIL (default: the email set via `poi-tracker config`), matched
+against the inventory locally. Batch mode misses bugs where that
+email is neither assignee nor CC'd, so it fits inventories of
+packages you (co-)maintain or watch.
+
+### Show inventory
+
+```sh
+poi-tracker show -i inventory.toml
+poi-tracker show -i inventory.toml --workload hyperscale
+poi-tracker show -i inventory.toml --json
 ```
 
 ### Sync from dist-git
@@ -290,200 +411,6 @@ which major releases count (default `9,10`). Requires `koji` with
 the `cbs` profile. Markers are refreshed in both directions on
 each run.
 
-### Import from legacy JSON
-
-```sh
-poi-tracker import old-inventory.json -o inventory.toml \
-    --private-fields poc,reason,team,task \
-    --workload hyperscale
-```
-
-### Validate
-
-```sh
-poi-tracker validate -i inventory.toml
-```
-
-### Configure (Bugzilla API key)
-
-```sh
-poi-tracker config
-```
-
-Prompts for a Bugzilla API key, validates it with a quick test
-search, and saves it to `~/.config/poi-tracker/config.toml`.
-Lookup order at runtime: `--api-key` flag → `BUGZILLA_API_KEY`
-env var → config file.
-
-Generate an API key at
-<https://bugzilla.redhat.com/userprefs.cgi?tab=apikey>.
-
-### Audit pending updates by semver impact
-
-`semver-audit` looks at each maintained package's pending upstream
-release notification (the open `upstream-release-monitoring@`
-"X is available" bug) and classifies the version bump against the
-version currently packaged in rawhide dist-git, so you can see
-which updates are safe to push and which need care:
-
-```sh
-# All pending updates, grouped by impact
-poi-tracker -i inventory.toml semver-audit
-
-# Just the safe ones for your Rust packages
-poi-tracker -i inventory.toml semver-audit --pattern 'rust-*' --non-breaking
-
-# Machine-readable
-poi-tracker -i inventory.toml semver-audit --json
-```
-
-Bumps are classified with Cargo's compatibility rule (the Rust
-convention): a change at or before the version's leftmost non-zero
-component is **breaking**. So `1.4 → 1.5` is non-breaking, but
-`0.4 → 0.5` is breaking (pre-1.0 minor bumps can break), and
-`0.0.3 → 0.0.4` is breaking too. Versions that aren't plain dotted
-integers — pre-releases, dates, git snapshots — are reported as
-**needs review** rather than guessed at. A package whose packaged
-version already equals the "available" version is reported as
-**up to date (stale bug)** — but only after verifying (via
-`koji`) that a build with that version is actually in rawhide's
-tag chain. A version merely committed to dist-git whose build
-sits in a side tag or is still gating is reported as
-**committed, awaiting release** instead: the bug isn't stale,
-the update just hasn't shipped. A package that's retired on rawhide (a
-`dead.package` marker — the same signal `triage-retired` uses) is
-reported as **retired (update request invalid)**, since there's no
-live package to update; run `triage-retired` to close those bugs.
-
-`--pattern <glob>` (comma-separated or repeated, e.g. `rust-*`)
-limits the audit to matching packages, and `--non-breaking` shows
-only the safe updates. The audit makes a Bugzilla search and a
-dist-git spec fetch per matching package, so scope it with
-`--pattern` for a large inventory — or use `--batch [EMAIL]`,
-which replaces the per-package searches with **one** Bugzilla
-query for all open release-monitoring bugs assigned to or CC'ing
-EMAIL (default: the email set via `poi-tracker config`), matched
-against the inventory locally. Batch mode misses bugs where that
-email is neither assignee nor CC'd, so it fits inventories of
-packages you (co-)maintain or watch.
-
-### Triage update bugs
-
-Some packages reliably need attention when a new upstream version
-appears — `python-django*` updates almost always fix CVEs, for
-instance. Mark them in the inventory with a `priority` field (or
-a workload-level `default_priority`), then have poi-tracker
-triage the auto-filed release-monitoring bugs by raising their
-Bugzilla priority:
-
-```sh
-poi-tracker -i inventory.toml triage-updates --dry-run
-poi-tracker -i inventory.toml triage-updates
-```
-
-For each inventoried package with a resolved priority, this
-queries OPEN bugs reported by `upstream-release-monitoring@
-fedoraproject.org` (against `Fedora` and `Fedora EPEL`) and
-raises any whose priority is `unspecified`. Bugs already
-triaged by a human are left alone.
-
-Per-package `priority` wins over `default_priority`; if a
-package is in multiple workloads, the highest workload
-default applies. Set `priority = "unspecified"` on a package
-to explicitly opt out of a workload default.
-
-Independently of priorities, every open release-monitoring bug
-is also checked against Bodhi for builds that already carry the
-advertised version (or newer). When found, the latest addressing
-build per release is recorded in the bug's **Fixed In Version**
-field, and:
-
-- stable in **every** active release the package has a branch
-  for → the bug is closed as `ERRATA`, with a comment listing
-  the Bodhi updates;
-- any addressing update still in **testing** → the bug is moved
-  to `MODIFIED` (a later run closes it once everything is
-  stable);
-- addressed only in **some** releases (commonly just rawhide,
-  since stable branches often intentionally stay behind) → you
-  are asked before closing. `--close-stale` closes these without
-  asking; under `-y` they are skipped unless `--close-stale` is
-  given.
-
-Bodhi records updates per release, so a release can carry a build
-Bodhi has no update for in that release — content inherited at
-branching, or answers missing while Bodhi is degraded. For those,
-the release's Koji tag chain is consulted (via `koji`, checking
-`fXX-updates` + `fXX` and the EPEL equivalents through tag
-inheritance), so years-old stale bugs close too — while a version
-merely committed to dist-git and built into a side tag or
-`-candidate`/`-testing` tag correctly stays pending. Without the
-`koji` CLI this check is skipped (with a warning) and such bugs
-are simply left open. Genuinely pending bugs are cheap: rawhide is
-checked first, and since a stable release may never carry a newer
-version than rawhide, a version absent from rawhide skips the
-stable-release queries entirely (EPEL bugs, whose branches update
-independently, are always checked in full). Pass `--skip-stale`
-to disable the whole check (also restoring the cheaper
-priority-only scan), and `--pattern <glob>` (e.g. `rust-*`) to
-scope the run. `--batch [EMAIL]` works as in `semver-audit`: one
-Bugzilla query for everything assigned to or CC'ing EMAIL
-(default: the configured email) instead of one query per package.
-
-As in `triage-retired`, interactive runs offer to claim ownership
-of the bugs being closed (set `assigned_to` to your configured
-Bugzilla email). Pass `--claim` to claim without prompting —
-under `-y` this is the only way to opt in. Bugs moved to
-`MODIFIED` keep their assignee: they stay open and belong to
-whoever owns the in-flight update. The email is set via
-`poi-tracker config`.
-
-### Mark packages no longer shipped anywhere
-
-`prune-retired` finds inventory packages that are no longer
-carried on **any** active branch — the dist-git project is gone
-(404), it has no branch on an active release, or it carries a
-`dead.package` marker on every active branch it has. The active
-branch set is queried from Bodhi's active releases (plus
-rawhide) or overridden with `--branch`:
-
-```sh
-poi-tracker -i inventory.toml prune-retired --dry-run
-poi-tracker -i inventory.toml prune-retired
-```
-
-By default matches are *marked* with an `unshipped` reason in
-the inventory rather than deleted: retired packages keep their
-ACLs, so a deleted entry would come straight back on the next
-`sync-distgit` run, and the marker is what lets the rest of the
-tooling do the right thing. `triage-updates` and `semver-audit`
-skip unshipped packages; `triage-retired` still processes them
-so their remaining bugs get closed; the sync commands' `--prune`
-preserves them. Markers are refreshed in both directions — a
-revived package gets its marker cleared. Pass `--remove` to
-delete the entries outright instead. Packages are checked
-concurrently (`-j`/`--jobs`, default 8 in-flight dist-git
-requests).
-
-An entry with no `rpms/` dist-git project (404) is reported as
-**invalid** rather than marked: the entry itself is wrong — a
-non-RPM repo (module, container image, tests) imported under its
-bare name by an older group sync (e.g. `modules/askalono-cli`
-showing up as `askalono-cli`), a *binary subpackage* name
-recorded instead of the source package, or a typo. The fix is
-editing or removing the entry, which is a human call. A stale
-`unshipped` marker on such an entry is cleared by the next run.
-
-`sync-distgit --mark-unshipped` runs the same check on the
-packages a sync adds, so a fresh inventory starts with its
-`unshipped` markers in place instead of needing a follow-up
-`prune-retired` run. This catches retired packages, which keep
-their ACLs and so still appear in sync listings. A package whose
-dist-git project was deleted outright never appears in a listing
-at all — harmless for a fresh inventory (it simply isn't added),
-but if an existing inventory recorded it before the project
-vanished, only `prune-retired` notices the 404.
-
 ### Close retired packages' update bugs
 
 When a package gets retired on a dist-git branch (a
@@ -569,6 +496,83 @@ Network reads (dist-git probes, Bugzilla searches) retry up to
 3 times with exponential backoff, so a transient connection
 hiccup against `src.fedoraproject.org` doesn't abort the whole
 inventory.
+### Triage update bugs
+
+Some packages reliably need attention when a new upstream version
+appears — `python-django*` updates almost always fix CVEs, for
+instance. Mark them in the inventory with a `priority` field (or
+a workload-level `default_priority`), then have poi-tracker
+triage the auto-filed release-monitoring bugs by raising their
+Bugzilla priority:
+
+```sh
+poi-tracker -i inventory.toml triage-updates --dry-run
+poi-tracker -i inventory.toml triage-updates
+```
+
+For each inventoried package with a resolved priority, this
+queries OPEN bugs reported by `upstream-release-monitoring@
+fedoraproject.org` (against `Fedora` and `Fedora EPEL`) and
+raises any whose priority is `unspecified`. Bugs already
+triaged by a human are left alone.
+
+Per-package `priority` wins over `default_priority`; if a
+package is in multiple workloads, the highest workload
+default applies. Set `priority = "unspecified"` on a package
+to explicitly opt out of a workload default.
+
+Independently of priorities, every open release-monitoring bug
+is also checked against Bodhi for builds that already carry the
+advertised version (or newer). When found, the latest addressing
+build per release is recorded in the bug's **Fixed In Version**
+field, and:
+
+- stable in **every** active release the package has a branch
+  for → the bug is closed as `ERRATA`, with a comment listing
+  the Bodhi updates;
+- any addressing update still in **testing** → the bug is moved
+  to `MODIFIED` (a later run closes it once everything is
+  stable);
+- addressed only in **some** releases (commonly just rawhide,
+  since stable branches often intentionally stay behind) → you
+  are asked before closing. `--close-stale` closes these without
+  asking; under `-y` they are skipped unless `--close-stale` is
+  given.
+
+Bodhi records updates per release, so a release can carry a build
+Bodhi has no update for in that release — content inherited at
+branching, or answers missing while Bodhi is degraded. For those,
+the release's Koji tag chain is consulted (via `koji`, checking
+`fXX-updates` + `fXX` and the EPEL equivalents through tag
+inheritance), so years-old stale bugs close too — while a version
+merely committed to dist-git and built into a side tag or
+`-candidate`/`-testing` tag correctly stays pending. Without the
+`koji` CLI this check is skipped (with a warning) and such bugs
+are simply left open. Genuinely pending bugs are cheap: rawhide is
+checked first, and since a stable release may never carry a newer
+version than rawhide, a version absent from rawhide skips the
+stable-release queries entirely (EPEL bugs, whose branches update
+independently, are always checked in full). Pass `--skip-stale`
+to disable the whole check (also restoring the cheaper
+priority-only scan), and `--pattern <glob>` (e.g. `rust-*`) to
+scope the run. `--batch [EMAIL]` works as in `semver-audit`: one
+Bugzilla query for everything assigned to or CC'ing EMAIL
+(default: the configured email) instead of one query per package.
+
+As in `triage-retired`, interactive runs offer to claim ownership
+of the bugs being closed (set `assigned_to` to your configured
+Bugzilla email). Pass `--claim` to claim without prompting —
+under `-y` this is the only way to opt in. Bugs moved to
+`MODIFIED` keep their assignee: they stay open and belong to
+whoever owns the in-flight update. The email is set via
+`poi-tracker config`.
+
+### Validate
+
+```sh
+poi-tracker validate -i inventory.toml
+```
+
 
 ## Inventory format
 
