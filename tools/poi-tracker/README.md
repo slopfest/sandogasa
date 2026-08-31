@@ -185,6 +185,25 @@ poi-tracker import old-inventory.json -o inventory.toml \
     --workload hyperscale
 ```
 
+### Intersect inventories
+
+Keep only the main inventory's packages that also appear in the
+`--with` inventories, optionally merging them into another file. The
+motivating case: a `deps --build` closure lists everything a keep-set
+needs — thousands of packages, most of them other people's — and the
+durable fact is its intersection with the packages *you* maintain.
+Entries come from the main (`-i`) side, so `deps`' reason chains
+survive into the merge target, and the essentials file explains
+itself:
+
+```sh
+poi-tracker -i fedora-build-deps.toml intersect --with personal.toml \
+    -o my-essential-deps.toml
+```
+
+`-o` accumulates like kondo's: existing entries win, new ones are
+added sorted.
+
 ### Triage cull candidates (kondo)
 
 The set difference between the inventory ("packages I maintain") and

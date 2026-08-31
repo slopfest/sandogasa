@@ -4,6 +4,7 @@ mod adopt;
 mod config;
 mod deps;
 mod gitlab_unshipped;
+mod intersect;
 mod kondo;
 mod prune_retired;
 mod semver_audit;
@@ -56,6 +57,9 @@ enum Command {
     Find(FindArgs),
     /// Import from legacy JSON format.
     Import(ImportArgs),
+    /// Keep only the inventory packages also present in other
+    /// inventories, optionally merging them into a file.
+    Intersect(IntersectArgs),
     /// Triage packages no essential inventory needs: keep as a
     /// cull candidate, file into an inventory, or drop.
     Kondo(KondoArgs),
@@ -283,6 +287,24 @@ struct SemverAuditArgs {
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
+}
+
+#[derive(clap::Args)]
+struct IntersectArgs {
+    /// Inventory file(s) to intersect with: only packages of the
+    /// main inventory also found in one of these survive
+    /// (repeat the flag per file).
+    #[arg(long, required = true)]
+    with: Vec<String>,
+
+    /// Merge the intersection into this inventory TOML file
+    /// (accumulates; existing entries win).
+    #[arg(short, long)]
+    output: Option<String>,
+
+    /// Output as JSON instead of human-readable.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args)]
@@ -780,6 +802,7 @@ fn main() -> ExitCode {
         Command::Export(args) => cmd_export(&paths, args),
         Command::Find(args) => cmd_find(&paths, args),
         Command::Import(args) => cmd_import(args),
+        Command::Intersect(args) => cmd_intersect(&paths, args),
         Command::Kondo(args) => cmd_kondo(&paths, args),
         Command::PruneRetired(args) => cmd_prune_retired(&paths, args),
         Command::Remove(args) => cmd_remove(&paths[0], args),
@@ -1024,6 +1047,46 @@ fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> CmdResult {
     } else {
         ExitCode::SUCCESS
     })
+}
+
+fn cmd_intersect(paths: &[String], args: &IntersectArgs) -> CmdResult {
+    let base = sandogasa_inventory::load_and_merge(paths)?;
+    let filter: std::collections::BTreeSet<String> =
+        sandogasa_inventory::load_and_merge(&args.with)?
+            .package
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+    let meta = base.inventory.clone();
+    let packages = intersect::intersect(base, &filter);
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packages": packages.iter().map(|p| &p.name).collect::<Vec<_>>(),
+                "count": packages.len(),
+                "output": args.output,
+            }))?
+        );
+        if let Some(path) = &args.output {
+            intersect::merge_packages(path, packages, &meta)?;
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    println!("{} package(s) in the intersection", packages.len());
+    for pkg in &packages {
+        match &pkg.reason {
+            Some(reason) => println!("  {} — {}", pkg.name, reason),
+            None => println!("  {}", pkg.name),
+        }
+    }
+    if let Some(path) = &args.output {
+        let added = intersect::merge_packages(path, packages, &meta)?;
+        println!("merged into {path} ({added} new)");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {

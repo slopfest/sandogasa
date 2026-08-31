@@ -27,6 +27,24 @@ tokens and got reworded instead: cpu-sig-tracker's example merge
 request URL, and sandogasa-pkg-health's `--inventory`/`--output`,
 whose value names are now `PATH` — which they are.
 
+### poi-tracker: intersect, because the durable fact is the overlap
+
+A `deps --build` closure over a keep-set lists everything those
+packages need — a real one came to 2,254 packages, 1,129 of them rust
+crates — but most of that is other people's to maintain. The fact
+worth keeping is the intersection with one's own inventory: the
+packages *you* are on the ACL for that your keeps demonstrably need.
+Re-deriving it meant either re-running a three-quarter-hour walk or
+one-off scripting.
+
+`poi-tracker intersect` keeps the main inventory's packages that also
+appear in the `--with` inventories and merges them into a target file,
+kondo-style (existing entries win). Entries travel from the main side,
+so the reason chains a `deps` run wrote survive — the resulting
+essentials file says *why* each package is essential
+("src:mesa requires crate(syn/clone-impls)"), which is exactly what a
+future triage, or a future self, needs to trust it.
+
 ### poi-tracker: kondo, the triage that decides what stops sparking joy
 
 A personal package inventory accumulates: dependencies once needed,
