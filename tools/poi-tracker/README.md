@@ -116,9 +116,11 @@ Providers whose repo id matches `--base-repo` (default
 the base distro is a given. Every other provider is walked further,
 and collected when its repo is in `--from` (default `epel`). The
 output inventory records why each package was pulled in, in its
-`reason` field. Build-time dependencies are not walked: this answers
-"what must stay available for these packages to keep working", not
-"…to keep rebuilding".
+`reason` field. `--build` also seeds the walk with the roots' own
+BuildRequires (attributed `src:<name>`), so a kept application
+justifies its crate graph — those edges exist only at build time.
+Build dependencies beyond the roots are not walked: the closure keeps
+the roots working and the roots rebuildable, not the world.
 
 The shared walk filters apply: `--pattern` (glob, CSV or repeated),
 `--start-from` and `--end-with` restrict which inventory packages are

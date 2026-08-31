@@ -44,6 +44,9 @@ pub trait PkgQuery: Sync {
     /// Binary subpackages of the given source packages, with their
     /// Requires, source attribution and providing repo.
     fn subpkgs(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, String>;
+    /// The given source packages themselves, whose Requires are
+    /// their BuildRequires.
+    fn srcs(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, String>;
     /// Providers of the given capabilities — the candidates dnf would
     /// pick — with their own Requires, Provides, source and repo.
     fn providers(&self, deps: &[String]) -> Result<Vec<PkgInfo>, String>;
@@ -52,6 +55,9 @@ pub trait PkgQuery: Sync {
 impl PkgQuery for sandogasa_fedrq::Fedrq {
     fn subpkgs(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, String> {
         self.subpkgs_info(srpms).map_err(|e| e.to_string())
+    }
+    fn srcs(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, String> {
+        self.srcs_info(srpms).map_err(|e| e.to_string())
     }
     fn providers(&self, deps: &[String]) -> Result<Vec<PkgInfo>, String> {
         self.providers_info(deps).map_err(|e| e.to_string())
@@ -184,11 +190,18 @@ fn rich_dep_leaves(dep: &str) -> Option<Vec<String>> {
 /// so a stray `--base-repo=` would otherwise classify *everything*
 /// as base and return an empty report. Roots are never collected,
 /// whatever repo they resolve from.
+/// With `build`, the roots' own BuildRequires seed the first wave
+/// too, attributed as `src:<name>`: a kept application then justifies
+/// the packages it *builds* with — for Rust apps, the whole crate
+/// graph, whose app→crate edges exist only at build time. Build deps
+/// of anything beyond the roots stay out of scope: this keeps the
+/// roots working and *the roots* rebuildable, not the world.
 pub fn walk(
     query: &impl PkgQuery,
     roots: &[String],
     from: &BTreeSet<String>,
     base_prefixes: &[String],
+    build: bool,
     verbose: bool,
 ) -> Result<DepsReport, String> {
     let root_sources: BTreeSet<&str> = roots.iter().map(String::as_str).collect();
@@ -211,11 +224,23 @@ pub fn walk(
         eprintln!("[deps] expanding {} root source(s)", roots.len());
     }
     let mut wave = query.subpkgs(roots)?;
+    if build {
+        // The sources ride the first wave under a `src:` name: their
+        // Requires are BuildRequires and flow through the same
+        // filtering and resolution, and the prefix keeps a source
+        // from shadowing its same-named main binary in the seen-set
+        // (and labels the attribution in reports).
+        for mut src in query.srcs(roots)? {
+            src.name = format!("src:{}", src.name);
+            wave.push(src);
+        }
+    }
     if verbose {
         eprintln!(
-            "[deps] {} binaries in {:.1}s",
+            "[deps] {} binaries in {:.1}s{}",
             wave.len(),
-            started.elapsed().as_secs_f64()
+            started.elapsed().as_secs_f64(),
+            if build { " (sources included)" } else { "" },
         );
     }
 
@@ -388,8 +413,10 @@ mod tests {
     /// Canned query: `PkgInfo` can only be built through serde (the
     /// struct is `#[non_exhaustive]`), which doubles as a check that
     /// fixtures stay in fedrq's actual output shape.
+    #[derive(Default)]
     struct Canned {
         subpkgs: Vec<PkgInfo>,
+        srcs: Vec<PkgInfo>,
         providers: Vec<PkgInfo>,
     }
 
@@ -400,6 +427,9 @@ mod tests {
     impl PkgQuery for Canned {
         fn subpkgs(&self, _srpms: &[String]) -> Result<Vec<PkgInfo>, String> {
             Ok(self.subpkgs.clone())
+        }
+        fn srcs(&self, _srpms: &[String]) -> Result<Vec<PkgInfo>, String> {
+            Ok(self.srcs.clone())
         }
         fn providers(&self, deps: &[String]) -> Result<Vec<PkgInfo>, String> {
             Ok(self
@@ -428,6 +458,7 @@ mod tests {
                 "repoid": "centos-hyperscale",
                 "requires": ["libfoo.so.1()(64bit)", "rpmlib(X)"],
             }))],
+            srcs: vec![],
             providers: vec![
                 pkg(serde_json::json!({
                     "name": "foo-libs", "source_name": "foo", "repoid": "epel",
@@ -440,7 +471,15 @@ mod tests {
                 })),
             ],
         };
-        let r = walk(&q, &["root".to_string()], &from_epel(), &base(), false).unwrap();
+        let r = walk(
+            &q,
+            &["root".to_string()],
+            &from_epel(),
+            &base(),
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(r.waves, 2);
         let names: Vec<&str> = r.collected.iter().map(|c| c.source.as_str()).collect();
         assert_eq!(names, ["bar", "foo"]);
@@ -457,6 +496,7 @@ mod tests {
                 "name": "root-bin", "source_name": "root",
                 "repoid": "centos-hyperscale", "requires": ["glibc"],
             }))],
+            srcs: vec![],
             providers: vec![pkg(serde_json::json!({
                 "name": "glibc", "source_name": "glibc",
                 "repoid": "fedrq-centos-stream-baseos",
@@ -465,7 +505,15 @@ mod tests {
                 "requires": ["libunreachable.so.1()(64bit)"],
             }))],
         };
-        let r = walk(&q, &["root".to_string()], &from_epel(), &base(), false).unwrap();
+        let r = walk(
+            &q,
+            &["root".to_string()],
+            &from_epel(),
+            &base(),
+            false,
+            false,
+        )
+        .unwrap();
         assert!(r.collected.is_empty());
         assert_eq!(r.waves, 1);
         assert!(r.unmatched.is_empty());
@@ -481,13 +529,14 @@ mod tests {
                 "name": "a-bin", "source_name": "a",
                 "repoid": "epel", "requires": ["b-bin"],
             }))],
+            srcs: vec![],
             providers: vec![pkg(serde_json::json!({
                 "name": "b-bin", "source_name": "b", "repoid": "epel",
                 "provides": ["b-bin = 1.0"],
             }))],
         };
         let roots = ["a".to_string(), "b".to_string()];
-        let r = walk(&q, &roots, &from_epel(), &base(), false).unwrap();
+        let r = walk(&q, &roots, &from_epel(), &base(), false, false).unwrap();
         assert!(r.collected.is_empty());
     }
 
@@ -535,13 +584,22 @@ mod tests {
                 "repoid": "centos-hyperscale",
                 "requires": ["(crate(syn) >= 2.0 with crate(syn) < 3.0~)"],
             }))],
+            srcs: vec![],
             providers: vec![pkg(serde_json::json!({
                 "name": "rust-syn-devel", "source_name": "rust-syn",
                 "repoid": "epel",
                 "provides": ["crate(syn) = 2.0.52", "rust-syn-devel = 2.0.52-1.el10"],
             }))],
         };
-        let r = walk(&q, &["rust-app".to_string()], &from_epel(), &base(), false).unwrap();
+        let r = walk(
+            &q,
+            &["rust-app".to_string()],
+            &from_epel(),
+            &base(),
+            false,
+            false,
+        )
+        .unwrap();
         assert!(r.warnings.is_empty());
         assert_eq!(r.collected[0].source, "rust-syn");
         assert_eq!(r.collected[0].via, "crate(syn) < 3.0~");
@@ -556,9 +614,18 @@ mod tests {
                 "repoid": "centos-hyperscale",
                 "requires": ["(foo if bar)", "/usr/bin/vanisher"],
             }))],
+            srcs: vec![],
             providers: vec![],
         };
-        let r = walk(&q, &["root".to_string()], &from_epel(), &base(), false).unwrap();
+        let r = walk(
+            &q,
+            &["root".to_string()],
+            &from_epel(),
+            &base(),
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(r.warnings.len(), 1);
         assert!(r.warnings[0].contains("(foo if bar)"));
         assert_eq!(r.unmatched, ["/usr/bin/vanisher"]);
@@ -571,6 +638,7 @@ mod tests {
                 "name": "root-bin", "source_name": "root",
                 "repoid": "centos-hyperscale", "requires": ["libfoo.so.1()(64bit)"],
             }))],
+            srcs: vec![],
             providers: vec![pkg(serde_json::json!({
                 "name": "foo-libs", "source_name": "foo", "repoid": "epel",
                 "provides": ["libfoo.so.1()(64bit)"],
@@ -579,7 +647,7 @@ mod tests {
         // A stray `--base-repo=` must not turn every provider into
         // base: the empty prefix is ignored, foo is still collected.
         let base = vec![String::new(), "fedrq-centos-stream-".to_string()];
-        let r = walk(&q, &["root".to_string()], &from_epel(), &base, false).unwrap();
+        let r = walk(&q, &["root".to_string()], &from_epel(), &base, false, false).unwrap();
         assert_eq!(r.collected.len(), 1);
         assert_eq!(r.collected[0].source, "foo");
     }
@@ -592,15 +660,81 @@ mod tests {
                 "repoid": "centos-hyperscale",
                 "requires": ["python3-foo >= 1.2"],
             }))],
+            srcs: vec![],
             providers: vec![pkg(serde_json::json!({
                 "name": "python3-foo", "source_name": "foo", "repoid": "epel",
                 "provides": ["python3-foo = 1.5-1.el9"],
             }))],
         };
-        let r = walk(&q, &["root".to_string()], &from_epel(), &base(), false).unwrap();
+        let r = walk(
+            &q,
+            &["root".to_string()],
+            &from_epel(),
+            &base(),
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(r.collected[0].source, "foo");
         assert_eq!(r.collected[0].via, "python3-foo >= 1.2");
         assert!(r.unmatched.is_empty());
+    }
+
+    #[test]
+    fn build_seeds_buildrequires_attributed_to_the_source() {
+        let q = Canned {
+            subpkgs: vec![pkg(serde_json::json!({
+                "name": "ripgrep", "source_name": "ripgrep",
+                "repoid": "rawhide", "requires": [],
+            }))],
+            srcs: vec![pkg(serde_json::json!({
+                "name": "ripgrep", "repoid": "rawhide-source",
+                "requires": ["(crate(clap) >= 4.0 with crate(clap) < 5.0~)"],
+            }))],
+            providers: vec![pkg(serde_json::json!({
+                "name": "rust-clap-devel", "source_name": "rust-clap",
+                "repoid": "rawhide",
+                "provides": ["crate(clap) = 4.5.0"],
+            }))],
+        };
+        let from: BTreeSet<String> = ["rawhide".to_string()].into();
+        // Without --build the crate edge is invisible…
+        let r = walk(&q, &["ripgrep".to_string()], &from, &base(), false, false).unwrap();
+        assert!(r.collected.is_empty());
+        // …with it, the app justifies its crate, labeled as build-time.
+        let r = walk(&q, &["ripgrep".to_string()], &from, &base(), true, false).unwrap();
+        assert_eq!(r.collected[0].source, "rust-clap");
+        assert_eq!(r.collected[0].required_by, "src:ripgrep");
+        assert!(r.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_source_does_not_shadow_its_same_named_binary() {
+        // Source and main binary share the name; both must be walked
+        // (the src: prefix keeps them apart in the seen-set).
+        let q = Canned {
+            subpkgs: vec![pkg(serde_json::json!({
+                "name": "app", "source_name": "app",
+                "repoid": "centos-hyperscale", "requires": ["librun.so.1()(64bit)"],
+            }))],
+            srcs: vec![pkg(serde_json::json!({
+                "name": "app", "repoid": "centos-hyperscale-source",
+                "requires": ["buildtool"],
+            }))],
+            providers: vec![
+                pkg(serde_json::json!({
+                    "name": "run-libs", "source_name": "run", "repoid": "epel",
+                    "provides": ["librun.so.1()(64bit)"],
+                })),
+                pkg(serde_json::json!({
+                    "name": "buildtool", "source_name": "buildtool", "repoid": "epel",
+                    "provides": ["buildtool = 1.0"],
+                })),
+            ],
+        };
+        let r = walk(&q, &["app".to_string()], &from_epel(), &base(), true, false).unwrap();
+        let sources: Vec<&str> = r.collected.iter().map(|c| c.source.as_str()).collect();
+        assert_eq!(sources, ["buildtool", "run"]);
     }
 
     #[test]

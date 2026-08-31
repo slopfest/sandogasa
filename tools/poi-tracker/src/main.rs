@@ -344,6 +344,11 @@ struct DepsArgs {
     #[arg(long, value_delimiter = ',', default_value = "fedrq-centos-stream-")]
     base_repo: Vec<String>,
 
+    /// Also seed the walk with the roots' BuildRequires, so a kept
+    /// package justifies what it builds with.
+    #[arg(long)]
+    build: bool,
+
     /// Write the collected dependencies as an inventory TOML file.
     #[arg(short, long)]
     output: Option<String>,
@@ -1168,7 +1173,14 @@ fn cmd_deps(paths: &[String], args: &DepsArgs) -> CmdResult {
         repo: args.repo.clone(),
     };
     let from: std::collections::BTreeSet<String> = args.from.iter().cloned().collect();
-    let report = deps::walk(&fedrq, &roots, &from, &args.base_repo, args.verbose)?;
+    let report = deps::walk(
+        &fedrq,
+        &roots,
+        &from,
+        &args.base_repo,
+        args.build,
+        args.verbose,
+    )?;
 
     let name = args
         .name

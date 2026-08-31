@@ -324,6 +324,25 @@ impl Fedrq {
         )
     }
 
+    /// Batched: the given *source* packages with their Requires —
+    /// which for a source package are its BuildRequires — one fedrq
+    /// invocation for the whole batch. Needs source repos in the
+    /// selected repo class.
+    pub fn srcs_info(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, Error> {
+        if srpms.is_empty() {
+            return Ok(vec![]);
+        }
+        self.query_json(
+            &[
+                "pkgs",
+                "--src",
+                "-F",
+                "json:name,requires,source_name,repoid",
+            ],
+            srpms,
+        )
+    }
+
     /// Batched: the packages providing the given capabilities — the
     /// candidates dnf would actually pick — with their own Requires
     /// (so a closure walk gets the next wave's inputs from the same

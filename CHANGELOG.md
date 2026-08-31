@@ -119,10 +119,13 @@ rust-packaging emits for every crate version range
 keeps its crate graph instead of dropping it; genuinely conditional
 ones (`or`, `if`, `unless`) are skipped with a warning, since which
 branch applies depends on install state. File dependencies classify
-correctly but are reported as unattributable. Build-time dependencies
-are deliberately out of scope
-for now: this answers "what must stay available for these packages to
-keep working", not "…to keep rebuilding".
+correctly but are reported as unattributable. `--build` seeds the walk
+with the roots' own BuildRequires too, attributed as `src:<name>` — a
+kept application then justifies the packages it *builds* with, which
+for Rust applications is the entire crate graph, whose app→crate edges
+exist only at build time. Build dependencies of anything beyond the
+roots are deliberately out of scope: the closure keeps the roots
+working and the roots rebuildable, not the world.
 
 ### sandogasa-fedrq: batched JSON queries (breaking)
 
