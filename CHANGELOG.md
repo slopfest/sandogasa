@@ -49,9 +49,16 @@ distro is a given. `-o` writes the result as an inventory whose
 python3dist(zstandard)"), so the collected set plugs straight back
 into the inventory tooling: culling becomes a set difference.
 
-The walk is breadth-first over binary packages with one batched fedrq
-invocation per dependency-graph level, so a whole closure costs a
-handful of spawns. Rich (boolean) dependencies whose connectives are
+The walk is breadth-first over binary packages, one batched fedrq
+query per dependency-graph level, split across the CPUs when a wave
+is large (chunks of at least 32 capabilities; `RAYON_NUM_THREADS`
+overrides). The split exists because measurement corrected an
+assumption: the expensive part is fedrq's per-capability resolution
+(~0.4s each), not the repo sack load (~1s once the smartcache is
+warm), so the sequential design first shipped here was paying almost
+the whole wall time in one process — the full Hyperscale inventory's
+first wave took 442s sequentially and 107s on four cores, with an
+identical collected set. Rich (boolean) dependencies whose connectives are
 all conjunctions resolve by their leaves — that is the shape
 rust-packaging emits for every crate version range
 (`(crate(x) >= 1.2 with crate(x) < 2.0~)`), so a Rust-heavy inventory

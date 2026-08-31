@@ -18,9 +18,14 @@
 //! the package whose Provides (or file list) satisfies one.
 //!
 //! The walk is breadth-first over *binary* packages, one batched fedrq
-//! invocation per wave: a provider's own Requires arrive in the same
-//! query that discovered it, so the whole closure costs roughly one
-//! fedrq spawn per dependency-graph level. Providers from the base
+//! query per wave — split into parallel chunks when the wave is
+//! large. A provider's own Requires arrive in the same query that
+//! discovered it, so a closure costs a handful of fedrq spawns. The
+//! split pays off because the measured cost is fedrq's per-capability
+//! resolution (~0.4s each), not the sack load (~1s warm): chunks of
+//! at least 32 keep the fixed cost amortized while cutting a large
+//! wave's wall time by roughly the core count
+//! (`RAYON_NUM_THREADS` overrides). Providers from the base
 //! distro terminate a path (base is a given); everything else is
 //! walked further, and collected when its repo is one of the repos of
 //! interest. Build-time dependencies are out of scope for now — this
@@ -29,12 +34,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use rayon::prelude::*;
 use sandogasa_fedrq::PkgInfo;
 use serde::Serialize;
 
 /// Source of batched package facts — [`sandogasa_fedrq::Fedrq`] in
 /// production, canned fixtures in tests.
-pub trait PkgQuery {
+pub trait PkgQuery: Sync {
     /// Binary subpackages of the given source packages, with their
     /// Requires, source attribution and providing repo.
     fn subpkgs(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, String>;
@@ -263,13 +269,30 @@ pub fn walk(
             );
         }
         let wave_started = std::time::Instant::now();
-        let providers = query.providers(&reqs)?;
+        // Resolution cost is per capability, so a large wave splits
+        // across the rayon pool. The ordered collect keeps runs
+        // reproducible and the collected *set* is chunk-invariant
+        // (verified against a sequential run of the full Hyperscale
+        // inventory: identical packages); only the `reason`
+        // attribution can differ across chunkings, when a source has
+        // several matching binaries and a different one is met
+        // first — every such attribution is true.
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let chunk_size = reqs.len().div_ceil(threads).max(32);
+        let providers: Vec<PkgInfo> = reqs
+            .par_chunks(chunk_size)
+            .map(|chunk| query.providers(chunk))
+            .collect::<Result<Vec<_>, String>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         if verbose {
             eprintln!(
-                "[deps] wave {}: {} provider(s) in {:.1}s",
+                "[deps] wave {}: {} provider(s) in {:.1}s ({} batch(es))",
                 report.waves,
                 providers.len(),
-                wave_started.elapsed().as_secs_f64()
+                wave_started.elapsed().as_secs_f64(),
+                reqs.len().div_ceil(chunk_size),
             );
         }
 
