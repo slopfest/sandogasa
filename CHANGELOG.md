@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Hyperscale SIG repos become fedrq branches
+
+Nothing could query what the Hyperscale SIG actually ships: fedrq knows
+Fedora, EPEL and CentOS Stream out of the box, but not the SIG overlay,
+so questions like "which of this package's dependencies come from EPEL
+rather than base EL" had no tool answering them. `configs/fedrq/` now
+carries a fedrq release config and repo definitions that make
+`-b hs.el9` and `-b hs.el10` work, spelled the way the inventories'
+`distros` fields already spell them. Copy the directory's contents to
+`/etc/fedrq/` or `~/.config/fedrq/`.
+
+The repo ids, names and metalinks are taken from what
+centos-release-hyperscale and its flavor subpackages install, extracted
+from the packages themselves — `centos-hyperscale`,
+`centos-hyperscale-experimental` and so on — so on a machine that runs
+the SIG these definitions coincide with the system's. Two deliberate
+departures: the metalinks spell `$stream` as `$releasever-stream`,
+because `$stream` is a dnf variable only CentOS systems define and
+fedrq supplies `$releasever` from the branch; and the GPG key path
+points at distribution-gpg-keys, which exists on machines that never
+installed the release package.
+
+`-r base` is the SIG main repo (with sources); per-flavor classes layer
+experimental, facebook, spin and the stream-specific flavors on top of
+main. `-r stack` composes CentOS Stream base, EPEL and SIG main into
+the resolution view a Hyperscale machine actually has — and with
+`-F line:name,repoid`, one query then attributes every answer to its
+layer (`htop : epel`, `systemd : hyperscale-main`), which is the
+primitive the inventory dependency-classification work needs. Testing
+repos (buildlogs.centos.org) are deliberately not defined.
+
 ### koji-lag: the store scripts name paths the caller actually has
 
 `fetch-store.sh` signed off by telling you to open

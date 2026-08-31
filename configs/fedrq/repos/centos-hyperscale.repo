@@ -1,0 +1,176 @@
+# CentOS Hyperscale SIG repos, for fedrq queries
+# (`-b hs.el9` / `-b hs.el10`; see ../centos-hyperscale.toml).
+# Installed to /etc/fedrq/repos/ or ~/.config/fedrq/repos/.
+#
+# Repo ids, names and metalinks match what centos-release-hyperscale
+# and its flavor subpackages install in /etc/yum.repos.d/, so on a real
+# Hyperscale machine these definitions coincide with the system's. Two
+# deliberate differences: `$stream` is a CentOS-only dnf variable, so
+# the metalinks spell it `$releasever-stream` (fedrq sets $releasever
+# from the branch); and gpgkey points at distribution-gpg-keys, which
+# exists on machines that never installed the release package.
+#
+# Flavors are per-stream: main, experimental, facebook, spin exist on
+# both 9 and 10; hotfixes and intel on 9 only; kernel and asahi on 10
+# only. Enabling a flavor on a stream that lacks it fails on metadata.
+# Testing repos live on buildlogs.centos.org and are not defined here.
+
+[centos-hyperscale]
+name=CentOS Stream $releasever - Hyperscale
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-main-$releasever-stream&arch=$basearch&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/$basearch/packages-main/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-source]
+name=CentOS Stream $releasever - Hyperscale - Source
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-main-source-$releasever-stream&arch=source&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/source/packages-main/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-experimental]
+name=CentOS Stream $releasever - Hyperscale Experimental
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-experimental-$releasever-stream&arch=$basearch&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/$basearch/packages-experimental/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-experimental-source]
+name=CentOS Stream $releasever - Hyperscale Experimental - Source
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-experimental-source-$releasever-stream&arch=source&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/source/packages-experimental/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-facebook]
+name=CentOS Stream $releasever - Hyperscale Facebook
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-facebook-$releasever-stream&arch=$basearch&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/$basearch/packages-facebook/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-facebook-source]
+name=CentOS Stream $releasever - Hyperscale Facebook - Source
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-facebook-source-$releasever-stream&arch=source&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/source/packages-facebook/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-spin]
+name=CentOS Stream $releasever - Hyperscale Spin
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-spin-$releasever-stream&arch=$basearch&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/$basearch/packages-spin/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-spin-source]
+name=CentOS Stream $releasever - Hyperscale Spin - Source
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-spin-source-$releasever-stream&arch=source&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/source/packages-spin/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-hotfixes]
+name=CentOS Stream $releasever - Hyperscale Hotfixes  (9 only)
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-hotfixes-$releasever-stream&arch=$basearch&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/$basearch/packages-hotfixes/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-hotfixes-source]
+name=CentOS Stream $releasever - Hyperscale Hotfixes - Source  (9 only)
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-hotfixes-source-$releasever-stream&arch=source&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/source/packages-hotfixes/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-intel]
+name=CentOS Stream $releasever - Hyperscale Intel  (9 only)
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-intel-$releasever-stream&arch=$basearch&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/$basearch/packages-intel/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-intel-source]
+name=CentOS Stream $releasever - Hyperscale Intel - Source  (9 only)
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-intel-source-$releasever-stream&arch=source&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/source/packages-intel/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-kernel]
+name=CentOS Stream $releasever - Hyperscale Kernel  (10 only)
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-kernel-$releasever-stream&arch=$basearch&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/$basearch/packages-kernel/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-kernel-source]
+name=CentOS Stream $releasever - Hyperscale Kernel - Source  (10 only)
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-kernel-source-$releasever-stream&arch=source&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/source/packages-kernel/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-asahi]
+name=CentOS Stream $releasever - Hyperscale Asahi  (10 only)
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-asahi-$releasever-stream&arch=$basearch&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/$basearch/packages-asahi/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-asahi-source]
+name=CentOS Stream $releasever - Hyperscale Asahi - Source  (10 only)
+metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-asahi-source-$releasever-stream&arch=source&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/source/packages-asahi/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0

@@ -1,0 +1,50 @@
+# CentOS Hyperscale SIG releases for fedrq.
+#
+#   fedrq pkgs -b hs.el9 systemd            # SIG main repo only
+#   fedrq pkgs -b hs.el9 -r stack systemd   # base + EPEL + SIG main,
+#                                           # i.e. what a Hyperscale
+#                                           # machine actually resolves
+#
+# The branch spelling matches the `distros` values sandogasa's
+# inventories already use (hs.el9, hs.el10). The capture group becomes
+# $releasever in repos/centos-hyperscale.repo, whose repo ids match the
+# centos-release-hyperscale packages.
+#
+# Install this file where fedrq looks: /etc/fedrq/ (system-wide, what a
+# package would do) or ~/.config/fedrq/ (per-user), with the repos/
+# directory beside it either way.
+#
+# On a CentOS Stream machine itself — a Hyperscale install reports
+# plain CentOS Stream, ID=centos, so nothing marks the SIG — the
+# system releasever is 9 or 10 and these branches therefore count as
+# fedrq's *native* release: it uses the system dnf cache rather than
+# its smartcache. The matching repo ids make that cache coincide with
+# the system's own centos-hyperscale metadata, but the native cache
+# can serve stale data; set `smartcache = "always"` in your own fedrq
+# config if that bites.
+
+[releases.centos-hyperscale]
+matcher = '^hs\.el(\d+)$'
+defpaths = ["centos-hyperscale.repo", "centos-stream.repo", "epel.repo"]
+system_repos = false
+
+defs.base = ["centos-hyperscale", "centos-hyperscale-source"]
+defs.experimental = ["@base", "centos-hyperscale-experimental", "centos-hyperscale-experimental-source"]
+defs.facebook = ["@base", "centos-hyperscale-facebook", "centos-hyperscale-facebook-source"]
+defs.spin = ["@base", "centos-hyperscale-spin", "centos-hyperscale-spin-source"]
+# Per-stream flavors; enabling one on the wrong stream fails on metadata.
+defs.hotfixes = ["@base", "centos-hyperscale-hotfixes", "centos-hyperscale-hotfixes-source"]
+defs.intel = ["@base", "centos-hyperscale-intel", "centos-hyperscale-intel-source"]
+defs.kernel = ["@base", "centos-hyperscale-kernel", "centos-hyperscale-kernel-source"]
+defs.asahi = ["@base", "centos-hyperscale-asahi", "centos-hyperscale-asahi-source"]
+
+# The full stack a Hyperscale machine resolves against: CentOS Stream
+# base (from fedrq's own centos-stream.repo), EPEL, and the SIG main
+# repo layered on top.
+defs.stack = [
+    "fedrq-centos-stream-baseos", "fedrq-centos-stream-baseos-source",
+    "fedrq-centos-stream-appstream", "fedrq-centos-stream-appstream-source",
+    "fedrq-centos-stream-crb", "fedrq-centos-stream-crb-source",
+    "epel", "epel-source",
+    "centos-hyperscale", "centos-hyperscale-source",
+]
