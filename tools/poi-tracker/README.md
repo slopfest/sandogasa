@@ -75,6 +75,26 @@ Adopting needs a dist-git API token with the
 with `poi-tracker config` (or pass `--api-token` / set
 `PAGURE_API_TOKEN`). `--dry-run` works without a token.
 
+### Announce the standing cull verdicts
+
+Render the whole cull inventory as the grouped, announcement-ready
+report — the artifact the act phase posts to the mailing list before
+anything runs:
+
+```sh
+poi-tracker -i cull.toml announce --user salimma
+```
+
+Owner-level packages come with the runnable batch
+(`sandogasa-pkg-acl give orphan …`), admin-level ones with per-package
+self-remove lines, and the rest as the ask-list. Levels are
+re-classified per run (day-fresh cache first; `--refresh-acls` forces
+fresh lookups) rather than read from the cull file, whose `reason`
+text is free-form. `kondo`'s own report covers only the packages
+culled in that run, and re-runs skip the already-decided — this is how
+the accumulated verdicts of a whole triage get rendered. `--json`
+prints the report machine-readably.
+
 ### Configure (Bugzilla API key)
 
 ```sh

@@ -45,6 +45,26 @@ essentials file says *why* each package is essential
 ("src:mesa requires crate(syn/clone-impls)"), which is exactly what a
 future triage, or a future self, needs to trust it.
 
+### poi-tracker: announce, the report the act phase actually posts
+
+The cull workflow's endgame is a mailing-list post: every standing
+verdict, grouped by the user's access level, with the commands that
+will enact them. Nothing could produce it — kondo's grouped report
+covers only the packages culled in that run, and re-runs deliberately
+skip the already-decided, so a triage accumulated over many sittings
+(214 verdicts, here) had no way to render its total.
+
+`poi-tracker -i cull.toml announce --user <fas>` re-classifies the
+cull inventory's packages (day-fresh ACL cache first, dist-git for
+the rest — never the cull file's `reason` text, which is free-form)
+and prints the same grouped report a kondo run ends with: the
+owner-level batch as one runnable `sandogasa-pkg-acl give orphan`
+command, per-package self-removals for admin, and the ask-list for
+everything the user cannot act on alone. The first real render
+grouped 214 verdicts into 114 orphanable, 61 self-removable and 39 to
+ask about. The cache-first classification moved into a helper kondo
+and announce share.
+
 ### poi-tracker: dependents, the report that says where to prune next
 
 A keep set is meant to shrink over time, but nothing could say where

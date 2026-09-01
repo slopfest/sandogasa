@@ -49,6 +49,9 @@ enum Command {
     Add(AddArgs),
     /// Adopt orphaned inventory packages on dist-git.
     Adopt(AdoptArgs),
+    /// Render the standing cull verdicts as the grouped,
+    /// announcement-ready report with runnable ACL commands.
+    Announce(AnnounceArgs),
     /// Configure poi-tracker (Bugzilla API key, etc.).
     Config,
     /// Classify inventory packages by who depends on them, over a
@@ -431,6 +434,25 @@ struct DepsArgs {
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
+}
+
+#[derive(clap::Args)]
+struct AnnounceArgs {
+    /// FAS username whose access level routes each action.
+    #[arg(long)]
+    user: String,
+
+    /// Ignore the day-fresh ACL cache and look every level up again.
+    #[arg(long)]
+    refresh_acls: bool,
+
+    /// Log each access lookup.
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Output machine-readable JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args)]
@@ -900,6 +922,7 @@ fn main() -> ExitCode {
     let result = match &cli.command {
         Command::Add(args) => cmd_add(&paths, args),
         Command::Adopt(args) => cmd_adopt(&paths, args),
+        Command::Announce(args) => cmd_announce(&paths, args),
         Command::Config => cmd_config(),
         Command::Deps(args) => cmd_deps(&paths, args),
         Command::Export(args) => cmd_export(&paths, args),
@@ -1201,6 +1224,90 @@ fn cmd_intersect(paths: &[String], args: &IntersectArgs) -> CmdResult {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Render the standing verdicts of a cull inventory (`-i`) as the
+/// same grouped report kondo prints for a single run — the artifact
+/// the act phase posts to the mailing list. Levels come from
+/// re-classification (cache first), never from the reason text,
+/// which is user-customizable.
+fn cmd_announce(paths: &[String], args: &AnnounceArgs) -> CmdResult {
+    let mut names: Vec<String> = Vec::new();
+    for path in paths {
+        names.extend(
+            sandogasa_inventory::load(path)?
+                .package
+                .into_iter()
+                .map(|p| p.name),
+        );
+    }
+    names.sort();
+    names.dedup();
+    let (culled, warnings) =
+        classify_with_cache(&args.user, &names, args.refresh_acls, args.verbose)?;
+    let report = kondo::KondoReport {
+        candidates: names.len(),
+        culled,
+        warnings,
+        ..Default::default()
+    };
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(ExitCode::SUCCESS);
+    }
+    print!("{}", kondo::format_report(&report, &args.user));
+    for warning in &report.warnings {
+        eprintln!("warning: {warning}");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Classify `names` by the user's own access level: day-fresh cache
+/// answers first, dist-git covers the rest, and successful lookups
+/// refresh the cache. Shared by kondo (triage) and announce (render).
+fn classify_with_cache(
+    user: &str,
+    names: &[String],
+    refresh_acls: bool,
+    verbose: bool,
+) -> Result<(Vec<kondo::Culled>, Vec<String>), Box<dyn std::error::Error>> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut cache = kondo::AclCache::load(kondo::AclCache::default_path());
+    let mut by_name: BTreeMap<String, kondo::Culled> = Default::default();
+    let mut to_lookup: Vec<String> = Vec::new();
+    for name in names {
+        match (!refresh_acls)
+            .then(|| cache.fresh(user, name, now))
+            .flatten()
+        {
+            Some(hit) => {
+                by_name.insert(name.clone(), kondo::culled_from_level(name, &hit.level));
+            }
+            None => to_lookup.push(name.clone()),
+        }
+    }
+    eprintln!(
+        "checking dist-git access for {} candidate(s) ({} from cache)...",
+        to_lookup.len(),
+        by_name.len(),
+    );
+    let dg = sandogasa_distgit::DistGitClient::new();
+    let rt = new_runtime()?;
+    let (looked_up, warnings) = rt.block_on(kondo::classify(&dg, user, &to_lookup, verbose));
+    for c in looked_up {
+        if c.level != "unknown" {
+            cache.remember(user, &c.name, c.level.clone(), now);
+        }
+        by_name.insert(c.name.clone(), c);
+    }
+    if let Some(warning) = cache.save() {
+        eprintln!("warning: {warning}");
+    }
+    let classified = names.iter().filter_map(|n| by_name.remove(n)).collect();
+    Ok((classified, warnings))
+}
+
 fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
     use std::io::IsTerminal;
 
@@ -1282,47 +1389,9 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
     // committer reads differently from an owner), and the kept
     // candidates come out already classified. Day-fresh answers come
     // from the cache; only the rest go to dist-git.
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let mut cache = kondo::AclCache::load(kondo::AclCache::default_path());
-    let mut by_name: std::collections::BTreeMap<String, kondo::Culled> = Default::default();
-    let mut to_lookup: Vec<String> = Vec::new();
-    for name in &candidates {
-        match (!args.refresh_acls)
-            .then(|| cache.fresh(&args.user, name, now))
-            .flatten()
-        {
-            Some(hit) => {
-                by_name.insert(name.clone(), kondo::culled_from_level(name, &hit.level));
-            }
-            None => to_lookup.push(name.clone()),
-        }
-    }
-    eprintln!(
-        "checking dist-git access for {} candidate(s) ({} from cache)...",
-        to_lookup.len(),
-        by_name.len(),
-    );
-    let dg = sandogasa_distgit::DistGitClient::new();
-    let rt = new_runtime()?;
-    let (looked_up, warnings) =
-        rt.block_on(kondo::classify(&dg, &args.user, &to_lookup, args.verbose));
+    let (classified, warnings) =
+        classify_with_cache(&args.user, &candidates, args.refresh_acls, args.verbose)?;
     report.warnings.extend(warnings);
-    for c in looked_up {
-        if c.level != "unknown" {
-            cache.remember(&args.user, &c.name, c.level.clone(), now);
-        }
-        by_name.insert(c.name.clone(), c);
-    }
-    if let Some(warning) = cache.save() {
-        eprintln!("warning: {warning}");
-    }
-    let classified: Vec<kondo::Culled> = candidates
-        .iter()
-        .filter_map(|n| by_name.remove(n))
-        .collect();
 
     // Prompt only where the house rules allow it; otherwise every
     // candidate stays a candidate, which acts on nothing.
