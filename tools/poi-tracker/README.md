@@ -122,6 +122,16 @@ justifies its crate graph — those edges exist only at build time.
 Build dependencies beyond the roots are not walked: the closure keeps
 the roots working and the roots rebuildable, not the world.
 
+`--fixpoint <inventory>` iterates to closure in one run: collected
+packages found in that inventory (yours) become roots of their own,
+their BuildRequires seeding further rounds until a round adds nothing
+— because keeping a package means keeping it rebuildable, and its
+test-only BuildRequires appear in no `-devel`'s runtime Requires.
+Rounds reuse the walk's seen-sets, so each costs only the genuinely
+new capabilities; the manual three-invocation equivalent measured ~90
+minutes against rawhide where the in-process fixpoint is the first
+walk plus small change. Requires `--build`.
+
 `--graph <path>` writes the walk's full dependency graph as JSON —
 every requirer of every capability and every provider, where the
 report keeps only first attributions. That is the input incremental

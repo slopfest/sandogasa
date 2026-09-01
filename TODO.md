@@ -266,6 +266,22 @@ than annotated as done.
   v1): median build time per (host, arch) to spot sick builders —
   host names are already captured in the dataset.
 
+## Shared dependency-closure engine (2026-09-01)
+
+- ebranch's `resolve` and poi-tracker's `deps` are the same walk with
+  opposite collection polarity: ebranch lists providers *missing* on a
+  target branch (branch requests), deps appends providers *present* in
+  repos of interest (essentials). Engine — wave BFS, seen-sets, batched
+  `-F json:` resolution, edge recording, seed-growth fixpoint — is
+  shareable; only the collect/terminate predicates and the fixpoint's
+  seed rule differ. Extract to a crate when ebranch migrates, which is
+  also when ebranch should shed its per-package fedrq spawns
+  (`src_buildrequires`/`resolve_to_source` singles under rayon, each
+  paying a repo sack load) for sandogasa-fedrq's batched `PkgInfo`
+  layer — measured in poi-tracker at ~0.4s/capability, sack load ~1s
+  warm, so batching is where its runtime went. Do it after
+  `deps --fixpoint` proves the engine shape on real use.
+
 ## poi-tracker / sandogasa-pkg-health seam
 
 Decision (2026-07-21): keep both tools — pkg-health **observes**

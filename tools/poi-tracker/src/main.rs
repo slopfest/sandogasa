@@ -380,6 +380,12 @@ struct DepsArgs {
     #[arg(long, value_name = "PATH")]
     graph: Option<String>,
 
+    /// Iterate to a fixpoint: collected packages found in this
+    /// inventory (yours) become roots whose BuildRequires seed
+    /// further rounds. Requires --build.
+    #[arg(long, value_name = "PATH", requires = "build")]
+    fixpoint: Option<String>,
+
     /// Write the collected dependencies as an inventory TOML file.
     #[arg(short, long)]
     output: Option<String>,
@@ -1317,13 +1323,26 @@ fn cmd_deps(paths: &[String], args: &DepsArgs) -> CmdResult {
         repo: args.repo.clone(),
     };
     let from: std::collections::BTreeSet<String> = args.from.iter().cloned().collect();
+    let own: Option<std::collections::BTreeSet<String>> = match &args.fixpoint {
+        Some(path) => Some(
+            sandogasa_inventory::load(path)?
+                .package
+                .into_iter()
+                .map(|p| p.name)
+                .collect(),
+        ),
+        None => None,
+    };
     let (report, graph) = deps::walk(
         &fedrq,
         &roots,
-        &from,
-        &args.base_repo,
-        args.build,
-        args.verbose,
+        &deps::WalkOpts {
+            from: &from,
+            base_prefixes: &args.base_repo,
+            build: args.build,
+            fixpoint_own: own.as_ref(),
+            verbose: args.verbose,
+        },
     )?;
     if let Some(path) = &args.graph {
         std::fs::write(path, serde_json::to_vec_pretty(&graph)?)

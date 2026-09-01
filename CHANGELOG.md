@@ -160,12 +160,22 @@ kept application then justifies the packages it *builds* with, which
 for Rust applications is the entire crate graph, whose app→crate edges
 exist only at build time. Build dependencies of anything beyond the
 roots are deliberately out of scope: the closure keeps the roots
-working and the roots rebuildable, not the world.
+working and the roots rebuildable — and, under `--fixpoint`, the owned
+packages the walk itself proves essential.
 
-`--graph` writes the walk's complete dependency graph as JSON — every
-requirer and provider edge, where the report keeps first attributions
-only — which is what incremental maintenance ("does anything else
-still reach this?") will consume.
+`--fixpoint <inventory>` exists because the essentials computation is
+genuinely iterative: adding an owned package to the essentials makes
+it a root that must stay rebuildable, and its test-only BuildRequires
+appear in no `-devel`'s runtime Requires, so they only enter once it
+seeds a round of its own. Run manually, that loop cost three full
+walks (~90 minutes against rawhide) to learn "+93, +21, +0"; run
+in-process, rounds reuse the walk's seen-sets and resolve only the
+genuinely new capabilities, so convergence costs the first walk plus
+small change. `--graph` writes the walk's complete dependency graph
+as JSON — every requirer and provider edge, where the report keeps
+first attributions only — which is what incremental maintenance
+("does anything else still reach this?") will consume.
+
 
 ### sandogasa-fedrq: batched JSON queries (breaking)
 

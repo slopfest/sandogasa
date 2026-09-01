@@ -91,7 +91,7 @@ Configure poi\-tracker (Bugzilla API key, etc.)
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker deps
-\fBpoi\-tracker deps\fR [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] <\fB\-b\fR|\fB\-\-branch\fR> [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-from\fR] [\fB\-\-base\-repo\fR] [\fB\-\-build\fR] [\fB\-\-graph\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-name\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker deps\fR [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] <\fB\-b\fR|\fB\-\-branch\fR> [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-from\fR] [\fB\-\-base\-repo\fR] [\fB\-\-build\fR] [\fB\-\-graph\fR] [\fB\-\-fixpoint\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-name\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Inventory the runtime dependencies pulled from other repos (e.g. EPEL)
 .TP
@@ -121,6 +121,9 @@ Also seed the walk with the roots\*(Aq BuildRequires, so a kept package justifie
 .TP
 \fB\-\-graph\fR \fI<PATH>\fR
 Write the walk\*(Aqs full dependency graph as JSON (every requirer/provider edge, not just first attributions)
+.TP
+\fB\-\-fixpoint\fR \fI<PATH>\fR
+Iterate to a fixpoint: collected packages found in this inventory (yours) become roots whose BuildRequires seed further rounds. Requires \-\-build
 .TP
 \fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
 Write the collected dependencies as an inventory TOML file

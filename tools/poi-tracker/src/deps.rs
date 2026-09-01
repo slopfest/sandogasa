@@ -127,6 +127,10 @@ pub struct DepsReport {
     /// Wall-clock seconds the walk took, resolution queries
     /// included.
     pub elapsed_secs: f64,
+    /// Fixpoint rounds taken beyond the initial walk (0 without
+    /// `--fixpoint`, or when the first walk already covered every
+    /// owned package).
+    pub fixpoint_rounds: usize,
     /// Non-fatal oddities worth a human glance.
     pub warnings: Vec<String>,
 }
@@ -220,20 +224,48 @@ fn rich_dep_leaves(dep: &str) -> Option<Vec<String>> {
 /// so a stray `--base-repo=` would otherwise classify *everything*
 /// as base and return an empty report. Roots are never collected,
 /// whatever repo they resolve from.
+/// What a walk should do, beyond its roots.
+pub struct WalkOpts<'a> {
+    /// Repo ids whose providers are collected.
+    pub from: &'a BTreeSet<String>,
+    /// Repo id prefixes whose providers end the walk (the base
+    /// distro is a given). Empty prefixes are ignored.
+    pub base_prefixes: &'a [String],
+    /// Seed the roots' own BuildRequires too, attributed
+    /// `src:<name>`: a kept application then justifies what it
+    /// builds with.
+    pub build: bool,
+    /// The fixpoint: names "our own" packages (an inventory's).
+    /// After the walk converges, collected packages found in this
+    /// set become additional roots — they are ours to keep
+    /// rebuildable, so their BuildRequires seed another round —
+    /// repeating until a round adds nothing. Requires `build`.
+    /// Rounds reuse the walk's seen-sets, so each costs only the
+    /// genuinely new capabilities: measured against the manual
+    /// three-invocation loop (~90 min), the in-process fixpoint is
+    /// the first walk plus small change.
+    pub fixpoint_own: Option<&'a BTreeSet<String>>,
+    pub verbose: bool,
+}
+
 /// With `build`, the roots' own BuildRequires seed the first wave
 /// too, attributed as `src:<name>`: a kept application then justifies
 /// the packages it *builds* with — for Rust apps, the whole crate
 /// graph, whose app→crate edges exist only at build time. Build deps
-/// of anything beyond the roots stay out of scope: this keeps the
-/// roots working and *the roots* rebuildable, not the world.
+/// of anything beyond the roots (and, under the fixpoint, beyond the
+/// owned packages that become roots) stay out of scope.
 pub fn walk(
     query: &impl PkgQuery,
     roots: &[String],
-    from: &BTreeSet<String>,
-    base_prefixes: &[String],
-    build: bool,
-    verbose: bool,
+    opts: &WalkOpts,
 ) -> Result<(DepsReport, DepsGraph), String> {
+    let WalkOpts {
+        from,
+        base_prefixes,
+        build,
+        fixpoint_own,
+        verbose,
+    } = *opts;
     let root_sources: BTreeSet<&str> = roots.iter().map(String::as_str).collect();
     let base_prefixes: Vec<&str> = base_prefixes
         .iter()
@@ -248,6 +280,7 @@ pub fn walk(
         roots: roots.to_vec(),
         ..Default::default()
     };
+    let mut fixpoint_roots: BTreeSet<String> = roots.iter().cloned().collect();
     let mut seen_bins: BTreeSet<String> = BTreeSet::new();
     let mut seen_reqs: BTreeSet<String> = BTreeSet::new();
     let mut rich_warned: BTreeSet<String> = BTreeSet::new();
@@ -332,7 +365,34 @@ pub fn walk(
             }
         }
         if pending.is_empty() {
-            break;
+            // Converged — unless the fixpoint finds newly collected
+            // packages of our own, whose BuildRequires open another
+            // round against the same seen-sets.
+            let Some(own) = fixpoint_own else { break };
+            let new_roots: Vec<String> = collected
+                .keys()
+                .filter(|src| own.contains(*src) && !fixpoint_roots.contains(*src))
+                .cloned()
+                .collect();
+            if new_roots.is_empty() {
+                break;
+            }
+            report.fixpoint_rounds += 1;
+            if verbose {
+                eprintln!(
+                    "[deps] fixpoint round {}: {} newly owned root(s)",
+                    report.fixpoint_rounds,
+                    new_roots.len(),
+                );
+            }
+            fixpoint_roots.extend(new_roots.iter().cloned());
+            graph.roots.extend(new_roots.iter().cloned());
+            let mut sources = query.srcs(&new_roots)?;
+            for src in &mut sources {
+                src.name = format!("src:{}", src.name);
+            }
+            wave = sources;
+            continue;
         }
         report.waves += 1;
         let reqs: Vec<String> = pending.keys().cloned().collect();
@@ -539,10 +599,13 @@ mod tests {
         let (r, _) = walk(
             &q,
             &["root".to_string()],
-            &from_epel(),
-            &base(),
-            false,
-            false,
+            &WalkOpts {
+                from: &from_epel(),
+                base_prefixes: &base(),
+                build: false,
+                fixpoint_own: None,
+                verbose: false,
+            },
         )
         .unwrap();
         assert_eq!(r.waves, 2);
@@ -573,10 +636,13 @@ mod tests {
         let (r, _) = walk(
             &q,
             &["root".to_string()],
-            &from_epel(),
-            &base(),
-            false,
-            false,
+            &WalkOpts {
+                from: &from_epel(),
+                base_prefixes: &base(),
+                build: false,
+                fixpoint_own: None,
+                verbose: false,
+            },
         )
         .unwrap();
         assert!(r.collected.is_empty());
@@ -601,7 +667,18 @@ mod tests {
             }))],
         };
         let roots = ["a".to_string(), "b".to_string()];
-        let (r, _) = walk(&q, &roots, &from_epel(), &base(), false, false).unwrap();
+        let (r, _) = walk(
+            &q,
+            &roots,
+            &WalkOpts {
+                from: &from_epel(),
+                base_prefixes: &base(),
+                build: false,
+                fixpoint_own: None,
+                verbose: false,
+            },
+        )
+        .unwrap();
         assert!(r.collected.is_empty());
     }
 
@@ -659,10 +736,13 @@ mod tests {
         let (r, _) = walk(
             &q,
             &["rust-app".to_string()],
-            &from_epel(),
-            &base(),
-            false,
-            false,
+            &WalkOpts {
+                from: &from_epel(),
+                base_prefixes: &base(),
+                build: false,
+                fixpoint_own: None,
+                verbose: false,
+            },
         )
         .unwrap();
         assert!(r.warnings.is_empty());
@@ -685,10 +765,13 @@ mod tests {
         let (r, _) = walk(
             &q,
             &["root".to_string()],
-            &from_epel(),
-            &base(),
-            false,
-            false,
+            &WalkOpts {
+                from: &from_epel(),
+                base_prefixes: &base(),
+                build: false,
+                fixpoint_own: None,
+                verbose: false,
+            },
         )
         .unwrap();
         assert_eq!(r.warnings.len(), 1);
@@ -712,7 +795,18 @@ mod tests {
         // A stray `--base-repo=` must not turn every provider into
         // base: the empty prefix is ignored, foo is still collected.
         let base = vec![String::new(), "fedrq-centos-stream-".to_string()];
-        let (r, _) = walk(&q, &["root".to_string()], &from_epel(), &base, false, false).unwrap();
+        let (r, _) = walk(
+            &q,
+            &["root".to_string()],
+            &WalkOpts {
+                from: &from_epel(),
+                base_prefixes: &base,
+                build: false,
+                fixpoint_own: None,
+                verbose: false,
+            },
+        )
+        .unwrap();
         assert_eq!(r.collected.len(), 1);
         assert_eq!(r.collected[0].source, "foo");
     }
@@ -734,10 +828,13 @@ mod tests {
         let (r, _) = walk(
             &q,
             &["root".to_string()],
-            &from_epel(),
-            &base(),
-            false,
-            false,
+            &WalkOpts {
+                from: &from_epel(),
+                base_prefixes: &base(),
+                build: false,
+                fixpoint_own: None,
+                verbose: false,
+            },
         )
         .unwrap();
         assert_eq!(r.collected[0].source, "foo");
@@ -764,10 +861,32 @@ mod tests {
         };
         let from: BTreeSet<String> = ["rawhide".to_string()].into();
         // Without --build the crate edge is invisible…
-        let (r, _) = walk(&q, &["ripgrep".to_string()], &from, &base(), false, false).unwrap();
+        let (r, _) = walk(
+            &q,
+            &["ripgrep".to_string()],
+            &WalkOpts {
+                from: &from,
+                base_prefixes: &base(),
+                build: false,
+                fixpoint_own: None,
+                verbose: false,
+            },
+        )
+        .unwrap();
         assert!(r.collected.is_empty());
         // …with it, the app justifies its crate, labeled as build-time.
-        let (r, _) = walk(&q, &["ripgrep".to_string()], &from, &base(), true, false).unwrap();
+        let (r, _) = walk(
+            &q,
+            &["ripgrep".to_string()],
+            &WalkOpts {
+                from: &from,
+                base_prefixes: &base(),
+                build: true,
+                fixpoint_own: None,
+                verbose: false,
+            },
+        )
+        .unwrap();
         assert_eq!(r.collected[0].source, "rust-clap");
         assert_eq!(r.collected[0].required_by, "src:ripgrep");
         assert!(r.warnings.is_empty());
@@ -797,9 +916,81 @@ mod tests {
                 })),
             ],
         };
-        let (r, _) = walk(&q, &["app".to_string()], &from_epel(), &base(), true, false).unwrap();
+        let (r, _) = walk(
+            &q,
+            &["app".to_string()],
+            &WalkOpts {
+                from: &from_epel(),
+                base_prefixes: &base(),
+                build: true,
+                fixpoint_own: None,
+                verbose: false,
+            },
+        )
+        .unwrap();
         let sources: Vec<&str> = r.collected.iter().map(|c| c.source.as_str()).collect();
         assert_eq!(sources, ["buildtool", "run"]);
+    }
+
+    #[test]
+    fn fixpoint_seeds_newly_owned_packages_and_converges() {
+        // app's BuildRequires pull crate(x) → rust-x (ours!). The
+        // fixpoint then seeds src:rust-x, whose BuildRequires pull
+        // its test-only dep crate(dev) → rust-dev (not ours, no
+        // further round). Without the fixpoint, rust-dev is missed:
+        // test deps appear in no -devel's runtime Requires.
+        let q = Canned {
+            subpkgs: vec![pkg(serde_json::json!({
+                "name": "app", "source_name": "app",
+                "repoid": "rawhide", "requires": [],
+            }))],
+            srcs: vec![
+                pkg(serde_json::json!({
+                    "name": "app", "repoid": "rawhide-source",
+                    "requires": ["crate(x)"],
+                })),
+                pkg(serde_json::json!({
+                    "name": "rust-x", "repoid": "rawhide-source",
+                    "requires": ["crate(dev)"],
+                })),
+            ],
+            providers: vec![
+                pkg(serde_json::json!({
+                    "name": "rust-x-devel", "source_name": "rust-x",
+                    "repoid": "rawhide", "provides": ["crate(x) = 1.0"],
+                })),
+                pkg(serde_json::json!({
+                    "name": "rust-dev-devel", "source_name": "rust-dev",
+                    "repoid": "rawhide", "provides": ["crate(dev) = 1.0"],
+                })),
+            ],
+        };
+        let from: BTreeSet<String> = ["rawhide".to_string()].into();
+        let own: BTreeSet<String> = ["rust-x".to_string()].into();
+
+        // Canned::srcs ignores its argument and returns both sources,
+        // so the initial --build wave already carries src:rust-x's
+        // BuildRequires — sidestep that by checking the fixpoint
+        // bookkeeping AND the collected set.
+        let (r, graph) = walk(
+            &q,
+            &["app".to_string()],
+            &WalkOpts {
+                from: &from,
+                base_prefixes: &base(),
+                build: true,
+                fixpoint_own: Some(&own),
+                verbose: false,
+            },
+        )
+        .unwrap();
+        let sources: Vec<&str> = r.collected.iter().map(|c| c.source.as_str()).collect();
+        assert_eq!(sources, ["rust-dev", "rust-x"]);
+        assert!(graph.roots.contains(&"rust-x".to_string()));
+
+        // Convergence: rust-dev is not ours, so no further round —
+        // the walk terminated rather than looping forever.
+        assert!(r.fixpoint_rounds >= 1);
     }
 
     #[test]
@@ -836,7 +1027,18 @@ mod tests {
             ],
         };
         let roots = ["app-a".to_string(), "app-b".to_string()];
-        let (report, graph) = walk(&q, &roots, &from_epel(), &base(), true, false).unwrap();
+        let (report, graph) = walk(
+            &q,
+            &roots,
+            &WalkOpts {
+                from: &from_epel(),
+                base_prefixes: &base(),
+                build: true,
+                fixpoint_own: None,
+                verbose: false,
+            },
+        )
+        .unwrap();
 
         // Report: one attribution.
         let shared = report
