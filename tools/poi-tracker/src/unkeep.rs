@@ -36,6 +36,11 @@ pub struct UnkeepReport {
     /// requirers that reach them — culling these would be undone by
     /// the next rescue pass.
     pub still_reached: BTreeMap<String, Vec<String>>,
+    /// Still-reached packages that were keeps: provably in the
+    /// closure, so they belong in the derived inventory instead —
+    /// name → the `reason` chain the graph justifies, ready to file
+    /// without a fresh walk.
+    pub moved: BTreeMap<String, String>,
     /// Packages no longer reachable from the remaining keeps.
     pub freed: Vec<Freed>,
 }
@@ -104,6 +109,25 @@ pub fn plan(
     let before = reachable(graph, &all_keeps);
     let after = reachable(graph, &remaining);
     let dependents = graph.dependents();
+    // One witness edge whose requirer survives the removal — the
+    // `reason` a walk would have written for this package.
+    let closure_reason = |name: &str| -> Option<String> {
+        for (capability, providers) in &graph.providers {
+            let Some(p) = providers.iter().find(|p| p.source == name) else {
+                continue;
+            };
+            for requirer in graph.requirers.get(capability).into_iter().flatten() {
+                let source = graph.binary_sources.get(requirer).unwrap_or(requirer);
+                if source != name && after.contains(source) {
+                    return Some(format!(
+                        "dependency ({}): {requirer} requires {capability}",
+                        p.repoid
+                    ));
+                }
+            }
+        }
+        None
+    };
     let dependents_of = |name: &str| -> Vec<String> {
         dependents
             .get(name)
@@ -127,6 +151,12 @@ pub fn plan(
             report
                 .still_reached
                 .insert(name.clone(), dependents_of(name));
+            if report.removed[name].is_empty() {
+                continue;
+            }
+            if let Some(reason) = closure_reason(name) {
+                report.moved.insert(name.clone(), reason);
+            }
         }
     }
     for name in before.difference(&after) {
@@ -172,11 +202,18 @@ pub fn format_report(report: &UnkeepReport, applied: bool) -> String {
         }
     }
     for (name, requirers) in &report.still_reached {
-        out.push_str(&format!(
-            "warning: the remaining keeps still reach {name} (via {}) — \
-             a cull would be rescued right back\n",
-            requirers.join(", ")
-        ));
+        match report.moved.contains_key(name) {
+            true => out.push_str(&format!(
+                "{name}: stays in the closure (via {}) — {} the derived inventory\n",
+                requirers.join(", "),
+                if applied { "moved to" } else { "would move to" },
+            )),
+            false => out.push_str(&format!(
+                "warning: the remaining keeps still reach {name} (via {}) — \
+                 a cull would be rescued right back\n",
+                requirers.join(", ")
+            )),
+        }
     }
     match report.freed.is_empty() {
         true => out.push_str("nothing else falls out of the closure\n"),
@@ -315,6 +352,43 @@ mod tests {
         let report = plan(&g, &["app-x".to_string()], &keeps(), &deps_files());
         assert_eq!(report.still_reached["app-x"], ["app-a"]);
         assert!(report.freed.is_empty());
+    }
+
+    #[test]
+    fn a_still_reached_keep_moves_to_the_derived_inventory() {
+        // lib-l is a curated keep, but app-a demonstrably needs it:
+        // unkeeping it is a move, not a cull.
+        let keeps = BTreeMap::from([(
+            "essential.toml".to_string(),
+            [
+                "app-a".to_string(),
+                "app-x".to_string(),
+                "lib-l".to_string(),
+            ]
+            .into(),
+        )]);
+        let report = plan(&graph(), &["lib-l".to_string()], &keeps, &deps_files());
+        assert_eq!(report.still_reached["lib-l"], ["app-a"]);
+        assert_eq!(
+            report.moved["lib-l"],
+            "dependency (rawhide): app-a requires liba.so"
+        );
+        assert!(report.freed.is_empty());
+        let text = format_report(&report, false);
+        assert!(text.contains("lib-l: stays in the closure (via app-a) — would move to"));
+
+        // A still-reached package that was never a keep is warned
+        // about, not moved — there is nothing to move it from.
+        let no_lib = BTreeMap::from([(
+            "essential.toml".to_string(),
+            ["app-a".to_string(), "app-x".to_string()].into(),
+        )]);
+        let report = plan(&graph(), &["lib-l".to_string()], &no_lib, &deps_files());
+        assert!(report.moved.is_empty());
+        assert!(
+            format_report(&report, false)
+                .contains("warning: the remaining keeps still reach lib-l")
+        );
     }
 
     #[test]

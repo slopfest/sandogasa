@@ -741,8 +741,13 @@ poi-tracker -i essential.toml -i essential-rust.toml \
 The report names each freed package with its former requirers; adding
 `--apply` removes the unkept packages from the `-i` keep inventories
 and the freed ones from the `--deps` derived inventories, so the next
-`kondo` run offers them all as candidates. A package the remaining
-keeps still reach is a warning, not a free — culling it would be
+`kondo` run offers them all as candidates. An unkept keep the
+remaining closure still reaches is not freed — it is *moved*: provably
+still needed, it is filed into the first `--deps` inventory
+immediately, with a `reason` chain taken from the graph, so pruning
+redundant curated entries needs no follow-up walk and leaves no window
+where they are essential in no file. Unkeeping a package that was
+never a keep and is still reached only warns — culling it would be
 rescued right back.
 
 Reachability follows every provider the walk recorded, so nothing is

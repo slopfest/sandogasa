@@ -86,8 +86,14 @@ keeps reach and reports every package that falls out of the closure,
 each named with its former requirers. `--apply` enacts the plan —
 unkept packages leave the `-i` keep inventories, freed ones leave the
 `--deps` derived inventories — so the next kondo pass offers them all
-as candidates. A package the remaining keeps still reach is a warning
-rather than a free, since culling it would only be rescued back.
+as candidates. A keep the remaining closure still reaches is moved
+rather than freed: it lands in the first `--deps` inventory right
+away, with a `reason` witness edge taken from the graph — the first
+real prune (239 crates other keeps carry, demoted from curated to
+derived) initially left them essential in no file until a fresh
+half-hour walk re-derived what the graph had already proven, which is
+the gap this closes. A still-reached package that was never a keep
+only warns, since culling it would be rescued back.
 
 Reachability is deliberately conservative: every provider the walk
 recorded counts, so nothing is freed while an alternative chain still

@@ -1580,6 +1580,32 @@ fn cmd_unkeep(paths: &[String], args: &UnkeepArgs) -> CmdResult {
                 unkeep::remove_from_inventory(file, &freed)?;
             }
         }
+        // Still-reached keeps are provably in the closure, so they
+        // move into the derived inventory right away — the reason
+        // chain comes from the graph, no fresh walk needed.
+        if !report.moved.is_empty() {
+            match args.deps.first() {
+                Some(dest) => {
+                    let packages: Vec<sandogasa_inventory::Package> = report
+                        .moved
+                        .iter()
+                        .map(|(name, reason)| sandogasa_inventory::Package {
+                            name: name.clone(),
+                            reason: Some(reason.clone()),
+                            ..Default::default()
+                        })
+                        .collect();
+                    let meta = sandogasa_inventory::load(&paths[0])?.inventory;
+                    intersect::merge_packages(dest, packages, &meta)?;
+                }
+                None => eprintln!(
+                    "warning: {} still-reached package(s) have no --deps \
+                     inventory to move into; the next deps walk will \
+                     re-derive them",
+                    report.moved.len()
+                ),
+            }
+        }
     }
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
