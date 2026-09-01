@@ -1452,6 +1452,7 @@ name = "poi-tracker"
 version = "0.22.0"
 dependencies = [
  "clap",
+ "dirs",
  "rayon",
  "rpassword",
  "sandogasa-bodhi",

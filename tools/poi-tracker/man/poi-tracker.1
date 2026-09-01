@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH poi-tracker 1 2026-08-31 "sandogasa 0.22.0" "Sandogasa Manual"
+.TH poi-tracker 1 2026-09-01 "sandogasa 0.22.0" "Sandogasa Manual"
 .SH NAME
 poi\-tracker \- Package\-of\-interest tracker for Fedora, EPEL, and CentOS SIGs
 .SH SYNOPSIS
@@ -221,7 +221,7 @@ Output as JSON instead of human\-readable
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker kondo
-\fBpoi\-tracker kondo\fR [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] <\fB\-\-essential\fR> <\fB\-\-user\fR> [\fB\-\-explain\-into\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker kondo\fR [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] <\fB\-\-essential\fR> <\fB\-\-user\fR> [\fB\-\-explain\-into\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-refresh\-acls\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Triage packages no essential inventory needs: keep as a cull candidate, file into an inventory, or drop
 .TP
@@ -245,6 +245,9 @@ Default inventory for \*(Aqexplain\*(Aq: Enter at the explanation prompt files t
 .TP
 \fB\-y\fR, \fB\-\-yes\fR
 Keep every candidate without prompting
+.TP
+\fB\-\-refresh\-acls\fR
+Ignore the day\-fresh ACL cache and look every level up again
 .TP
 \fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
 Merge the culled set into this inventory TOML file (accumulates across passes)

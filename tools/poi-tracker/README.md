@@ -234,8 +234,10 @@ first: `kondo` itself never touches dist-git ACLs. Group-granted
 access is deliberately ignored (pair with `sync-distgit --no-groups`);
 a group grant is not yours to walk away from.
 
-Access levels are looked up before the prompt, so each candidate line
-carries its context — `old-toy (commit) — nothing essential needs it`
+Access levels are looked up before the prompt (answers are cached for
+a day under `~/.cache/poi-tracker/`, since ownership changes on human
+timescales — `--refresh-acls` forces a fresh look), so each candidate
+line carries its context — `old-toy (commit) — nothing essential needs it`
 reads differently from `(owner)`.
 
 `--explain-into PATH` sets a default: Enter at the explanation prompt

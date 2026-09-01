@@ -75,7 +75,11 @@ idiom: candidates are snapshotted before any filing, and a not-yet-
 existing explain target among the essentials is tolerated as empty,
 while any other missing essential path stays a loud error.
 
-And the essential union is now built from names read
+Access-level answers are cached for a day under the XDG cache
+directory — ownership changes on human timescales, and during a
+multi-sitting triage the cache turns each session's pre-prompt wait
+into a file read (`--refresh-acls` forces a fresh look; failures are
+never cached). And the essential union is now built from names read
 per file rather than a full inventory merge: the merger warned once
 per reason conflict, the same crate legitimately carries different
 reasons in an el9 and a rawhide deps inventory, and on the first real

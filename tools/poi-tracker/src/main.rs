@@ -330,6 +330,10 @@ struct KondoArgs {
     #[arg(short, long)]
     yes: bool,
 
+    /// Ignore the day-fresh ACL cache and look every level up again.
+    #[arg(long)]
+    refresh_acls: bool,
+
     /// Merge the culled set into this inventory TOML file
     /// (accumulates across passes).
     #[arg(short, long)]
@@ -1174,16 +1178,49 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
 
     // Access levels first: they contextualize the prompt (a mere
     // committer reads differently from an owner), and the kept
-    // candidates come out already classified.
+    // candidates come out already classified. Day-fresh answers come
+    // from the cache; only the rest go to dist-git.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut cache = kondo::AclCache::load(kondo::AclCache::default_path());
+    let mut by_name: std::collections::BTreeMap<String, kondo::Culled> = Default::default();
+    let mut to_lookup: Vec<String> = Vec::new();
+    for name in &candidates {
+        match (!args.refresh_acls)
+            .then(|| cache.fresh(&args.user, name, now))
+            .flatten()
+        {
+            Some(hit) => {
+                by_name.insert(name.clone(), kondo::culled_from_level(name, &hit.level));
+            }
+            None => to_lookup.push(name.clone()),
+        }
+    }
     eprintln!(
-        "checking dist-git access for {} candidate(s)...",
-        candidates.len()
+        "checking dist-git access for {} candidate(s) ({} from cache)...",
+        to_lookup.len(),
+        by_name.len(),
     );
     let dg = sandogasa_distgit::DistGitClient::new();
     let rt = new_runtime()?;
-    let (classified, warnings) =
-        rt.block_on(kondo::classify(&dg, &args.user, &candidates, args.verbose));
+    let (looked_up, warnings) =
+        rt.block_on(kondo::classify(&dg, &args.user, &to_lookup, args.verbose));
     report.warnings.extend(warnings);
+    for c in looked_up {
+        if c.level != "unknown" {
+            cache.remember(&args.user, &c.name, c.level.clone(), now);
+        }
+        by_name.insert(c.name.clone(), c);
+    }
+    if let Some(warning) = cache.save() {
+        eprintln!("warning: {warning}");
+    }
+    let classified: Vec<kondo::Culled> = candidates
+        .iter()
+        .filter_map(|n| by_name.remove(n))
+        .collect();
 
     // Prompt only where the house rules allow it; otherwise every
     // candidate stays a candidate, which acts on nothing.

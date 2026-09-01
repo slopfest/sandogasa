@@ -224,6 +224,98 @@ fn action_for(level: Option<AccessLevel>) -> Action {
     }
 }
 
+/// One remembered ACL answer. Only successful lookups are cached —
+/// an error or an absent project retries next run.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CachedLevel {
+    pub level: String,
+    /// Unix seconds when dist-git answered.
+    pub checked: u64,
+}
+
+/// ACL answers age on human timescales — ownership changes are rare
+/// events — so remembering them for a day is honest and turns each
+/// triage sitting's pre-prompt wait into a file read.
+pub const ACL_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+
+/// The per-user ACL answer cache, one JSON file under the XDG cache
+/// directory. Disposable by definition: deleting it only costs the
+/// next run its lookups, and concurrent kondo sessions may clobber
+/// each other's *cache* writes harmlessly (last one wins).
+#[derive(Debug, Default)]
+pub struct AclCache {
+    path: Option<std::path::PathBuf>,
+    /// user → package → answer.
+    entries: BTreeMap<String, BTreeMap<String, CachedLevel>>,
+}
+
+impl AclCache {
+    /// Load the cache from `path`, tolerating absence and decay: a
+    /// missing or unreadable file is an empty cache, never an error.
+    pub fn load(path: Option<std::path::PathBuf>) -> Self {
+        let entries = path
+            .as_ref()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            .unwrap_or_default();
+        Self { path, entries }
+    }
+
+    /// The default location: `~/.cache/poi-tracker/acl-levels.json`
+    /// via the XDG rules; `None` (cache disabled) when no cache
+    /// directory can be determined.
+    pub fn default_path() -> Option<std::path::PathBuf> {
+        dirs::cache_dir().map(|d| d.join("poi-tracker").join("acl-levels.json"))
+    }
+
+    /// A still-fresh remembered level for (`user`, `package`).
+    pub fn fresh(&self, user: &str, package: &str, now: u64) -> Option<&CachedLevel> {
+        self.entries
+            .get(user)?
+            .get(package)
+            .filter(|c| now.saturating_sub(c.checked) < ACL_CACHE_TTL_SECS)
+    }
+
+    /// Remember a successful lookup.
+    pub fn remember(&mut self, user: &str, package: &str, level: String, now: u64) {
+        self.entries.entry(user.to_string()).or_default().insert(
+            package.to_string(),
+            CachedLevel {
+                level,
+                checked: now,
+            },
+        );
+    }
+
+    /// Write the cache back; failure costs only the next run's
+    /// lookups, so it warns rather than errs.
+    pub fn save(&self) -> Option<String> {
+        let path = self.path.as_ref()?;
+        let write = || -> std::io::Result<()> {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(path, serde_json::to_vec(&self.entries).unwrap_or_default())
+        };
+        write()
+            .err()
+            .map(|e| format!("could not save the ACL cache to {}: {e}", path.display()))
+    }
+}
+
+/// Rebuild a [`Culled`] from a cached level string.
+pub fn culled_from_level(name: &str, level: &str) -> Culled {
+    let parsed: Option<AccessLevel> = level.parse().ok();
+    Culled {
+        name: name.to_string(),
+        level: level.to_string(),
+        action: match level {
+            "owner" => Action::Orphan,
+            _ => action_for(parsed),
+        },
+    }
+}
+
 /// How many ACL lookups fly at once. Latency-bound requests against
 /// src.fedoraproject.org, so a handful in flight cuts a 900-package
 /// pass from minutes to well under one without leaning on the server.
@@ -652,6 +744,50 @@ mod tests {
             ]
         );
         assert_eq!(culled[3].level, "none");
+    }
+
+    #[test]
+    fn acl_cache_round_trips_respects_ttl_and_survives_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("acl-levels.json");
+
+        let mut cache = AclCache::load(Some(path.clone()));
+        assert!(cache.fresh("me", "htop", 1000).is_none());
+        cache.remember("me", "htop", "commit".to_string(), 1000);
+        assert!(cache.save().is_none());
+
+        let cache = AclCache::load(Some(path.clone()));
+        // Fresh within the TTL, stale past it, per-user keyed.
+        assert_eq!(cache.fresh("me", "htop", 1000).unwrap().level, "commit");
+        assert!(
+            cache
+                .fresh("me", "htop", 1000 + ACL_CACHE_TTL_SECS)
+                .is_none()
+        );
+        assert!(cache.fresh("someone-else", "htop", 1000).is_none());
+
+        // A corrupt or missing file is an empty cache, never an error.
+        std::fs::write(&path, b"not json").unwrap();
+        assert!(
+            AclCache::load(Some(path))
+                .fresh("me", "htop", 1000)
+                .is_none()
+        );
+        assert!(AclCache::load(None).fresh("me", "htop", 1000).is_none());
+    }
+
+    #[test]
+    fn cached_levels_rebuild_the_same_actions() {
+        for (level, action) in [
+            ("owner", Action::Orphan),
+            ("admin", Action::SelfRemove),
+            ("commit", Action::Ask),
+            ("collaborator", Action::Ask),
+            ("ticket", Action::Ask),
+            ("none", Action::Unknown),
+        ] {
+            assert_eq!(culled_from_level("x", level).action, action, "{level}");
+        }
     }
 
     #[test]
