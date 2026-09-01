@@ -302,6 +302,25 @@ than annotated as done.
   livable); build it the next time a prune session actually stalls on
   the walk.
 
+## poi-tracker: announcement renderer for the act phase (2026-09-02)
+
+- The cull workflow's act phase requires the FULL verdict list —
+  grouped by the user's access level, with the runnable
+  `sandogasa-pkg-acl give orphan` batch for owner-level packages, the
+  self-remove lines for admin, and the ask-list for the rest — posted
+  to the mailing list BEFORE anything runs. Nothing renders that
+  today: kondo's grouped report covers only packages culled in that
+  run, and re-runs deliberately skip the already-decided, so the 214
+  standing verdicts in cull.toml have no announcement artifact.
+- Shape: a mode that reads the cull inventory and emits the grouped
+  announcement. Don't parse levels out of the `reason` suffix —
+  reasons are user-customizable free text now — re-classify instead
+  via `kondo::culled_from_level` over the day-fresh ACL cache (cache
+  misses go to dist-git as usual).
+- Build it against the real act phase rather than ahead of it — the
+  announcement email and the orphaning run are the test, and the
+  format should follow what the mailing-list post actually needs.
+
 ## poi-tracker / sandogasa-pkg-health seam
 
 Decision (2026-07-21): keep both tools — pkg-health **observes**
