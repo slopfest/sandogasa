@@ -64,6 +64,36 @@ impl PkgQuery for sandogasa_fedrq::Fedrq {
     }
 }
 
+/// The full dependency graph a walk traversed, for persistence:
+/// where the report keeps one attribution per collected package, the
+/// graph keeps every edge, which is what incremental maintenance
+/// needs — removing a root means asking "does anything else still
+/// reach this?", a reachability question over all edges, not the
+/// first-met one.
+///
+/// Normalized: capabilities map to every binary that required them
+/// and every provider that satisfied them; `binary_sources` maps
+/// binaries (and `src:`-prefixed sources) back to source packages.
+#[derive(Debug, Default, Serialize)]
+pub struct DepsGraph {
+    /// Source packages the walk started from.
+    pub roots: Vec<String>,
+    /// Binary name → source package name.
+    pub binary_sources: BTreeMap<String, String>,
+    /// Capability → binaries whose Requires named it.
+    pub requirers: BTreeMap<String, BTreeSet<String>>,
+    /// Capability → providers that satisfied it.
+    pub providers: BTreeMap<String, BTreeSet<GraphProvider>>,
+}
+
+/// One provider of a capability, as the graph records it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct GraphProvider {
+    pub binary: String,
+    pub source: String,
+    pub repoid: String,
+}
+
 /// One collected dependency: a source package the inventory
 /// transitively requires at runtime, pulled from a repo of interest.
 #[derive(Debug, Clone, Serialize)]
@@ -203,7 +233,7 @@ pub fn walk(
     base_prefixes: &[String],
     build: bool,
     verbose: bool,
-) -> Result<DepsReport, String> {
+) -> Result<(DepsReport, DepsGraph), String> {
     let root_sources: BTreeSet<&str> = roots.iter().map(String::as_str).collect();
     let base_prefixes: Vec<&str> = base_prefixes
         .iter()
@@ -212,6 +242,10 @@ pub fn walk(
         .collect();
     let mut report = DepsReport {
         roots: roots.len(),
+        ..Default::default()
+    };
+    let mut graph = DepsGraph {
+        roots: roots.to_vec(),
         ..Default::default()
     };
     let mut seen_bins: BTreeSet<String> = BTreeSet::new();
@@ -252,6 +286,13 @@ pub fn walk(
             if !seen_bins.insert(pkg.name.clone()) {
                 continue;
             }
+            if let Some(src) = &pkg.source_name {
+                graph.binary_sources.insert(pkg.name.clone(), src.clone());
+            } else if let Some(root) = pkg.name.strip_prefix("src:") {
+                graph
+                    .binary_sources
+                    .insert(pkg.name.clone(), root.to_string());
+            }
             for dep in &pkg.requires {
                 // A rich dep made only of conjunctions contributes
                 // its leaves as ordinary requirements; conditional
@@ -272,7 +313,18 @@ pub fn walk(
                     vec![dep.clone()]
                 };
                 for leaf in leaves {
-                    if !wants_resolution(&leaf) || seen_reqs.contains(&leaf) {
+                    if !wants_resolution(&leaf) {
+                        continue;
+                    }
+                    // The graph keeps every requirer edge, even for a
+                    // capability someone already asked about — the
+                    // pending queue below only carries the unresolved.
+                    graph
+                        .requirers
+                        .entry(leaf.clone())
+                        .or_default()
+                        .insert(pkg.name.clone());
+                    if seen_reqs.contains(&leaf) {
                         continue;
                     }
                     pending.entry(leaf).or_insert_with(|| pkg.name.clone());
@@ -333,6 +385,19 @@ pub fn walk(
                 .filter(|r| provider_matches(&p, r))
                 .collect();
             matched.extend(mine.iter().copied());
+            if let Some(src) = &p.source_name {
+                for req in &mine {
+                    graph
+                        .providers
+                        .entry(req.to_string())
+                        .or_default()
+                        .insert(GraphProvider {
+                            binary: p.name.clone(),
+                            source: src.clone(),
+                            repoid: p.repoid.clone(),
+                        });
+                }
+            }
 
             if base_prefixes.iter().any(|b| p.repoid.starts_with(b)) {
                 continue; // satisfied by the base distro
@@ -367,7 +432,7 @@ pub fn walk(
     report.binaries_walked = seen_bins.len();
     report.collected = collected.into_values().collect();
     report.elapsed_secs = started.elapsed().as_secs_f64();
-    Ok(report)
+    Ok((report, graph))
 }
 
 /// Turn a report into an inventory of the collected sources, ready
@@ -471,7 +536,7 @@ mod tests {
                 })),
             ],
         };
-        let r = walk(
+        let (r, _) = walk(
             &q,
             &["root".to_string()],
             &from_epel(),
@@ -505,7 +570,7 @@ mod tests {
                 "requires": ["libunreachable.so.1()(64bit)"],
             }))],
         };
-        let r = walk(
+        let (r, _) = walk(
             &q,
             &["root".to_string()],
             &from_epel(),
@@ -536,7 +601,7 @@ mod tests {
             }))],
         };
         let roots = ["a".to_string(), "b".to_string()];
-        let r = walk(&q, &roots, &from_epel(), &base(), false, false).unwrap();
+        let (r, _) = walk(&q, &roots, &from_epel(), &base(), false, false).unwrap();
         assert!(r.collected.is_empty());
     }
 
@@ -591,7 +656,7 @@ mod tests {
                 "provides": ["crate(syn) = 2.0.52", "rust-syn-devel = 2.0.52-1.el10"],
             }))],
         };
-        let r = walk(
+        let (r, _) = walk(
             &q,
             &["rust-app".to_string()],
             &from_epel(),
@@ -617,7 +682,7 @@ mod tests {
             srcs: vec![],
             providers: vec![],
         };
-        let r = walk(
+        let (r, _) = walk(
             &q,
             &["root".to_string()],
             &from_epel(),
@@ -647,7 +712,7 @@ mod tests {
         // A stray `--base-repo=` must not turn every provider into
         // base: the empty prefix is ignored, foo is still collected.
         let base = vec![String::new(), "fedrq-centos-stream-".to_string()];
-        let r = walk(&q, &["root".to_string()], &from_epel(), &base, false, false).unwrap();
+        let (r, _) = walk(&q, &["root".to_string()], &from_epel(), &base, false, false).unwrap();
         assert_eq!(r.collected.len(), 1);
         assert_eq!(r.collected[0].source, "foo");
     }
@@ -666,7 +731,7 @@ mod tests {
                 "provides": ["python3-foo = 1.5-1.el9"],
             }))],
         };
-        let r = walk(
+        let (r, _) = walk(
             &q,
             &["root".to_string()],
             &from_epel(),
@@ -699,10 +764,10 @@ mod tests {
         };
         let from: BTreeSet<String> = ["rawhide".to_string()].into();
         // Without --build the crate edge is invisible…
-        let r = walk(&q, &["ripgrep".to_string()], &from, &base(), false, false).unwrap();
+        let (r, _) = walk(&q, &["ripgrep".to_string()], &from, &base(), false, false).unwrap();
         assert!(r.collected.is_empty());
         // …with it, the app justifies its crate, labeled as build-time.
-        let r = walk(&q, &["ripgrep".to_string()], &from, &base(), true, false).unwrap();
+        let (r, _) = walk(&q, &["ripgrep".to_string()], &from, &base(), true, false).unwrap();
         assert_eq!(r.collected[0].source, "rust-clap");
         assert_eq!(r.collected[0].required_by, "src:ripgrep");
         assert!(r.warnings.is_empty());
@@ -732,9 +797,67 @@ mod tests {
                 })),
             ],
         };
-        let r = walk(&q, &["app".to_string()], &from_epel(), &base(), true, false).unwrap();
+        let (r, _) = walk(&q, &["app".to_string()], &from_epel(), &base(), true, false).unwrap();
         let sources: Vec<&str> = r.collected.iter().map(|c| c.source.as_str()).collect();
         assert_eq!(sources, ["buildtool", "run"]);
+    }
+
+    #[test]
+    fn the_graph_keeps_every_edge_the_report_drops() {
+        // Two binaries require the same capability: the report
+        // attributes the collected package to the first requirer
+        // only, but removal-reachability needs both edges.
+        let q = Canned {
+            subpkgs: vec![
+                pkg(serde_json::json!({
+                    "name": "app-a", "source_name": "app-a",
+                    "repoid": "centos-hyperscale",
+                    "requires": ["libshared.so.1()(64bit)"],
+                })),
+                pkg(serde_json::json!({
+                    "name": "app-b", "source_name": "app-b",
+                    "repoid": "centos-hyperscale",
+                    "requires": ["libshared.so.1()(64bit)"],
+                })),
+            ],
+            srcs: vec![pkg(serde_json::json!({
+                "name": "app-a", "repoid": "centos-hyperscale-source",
+                "requires": ["buildtool"],
+            }))],
+            providers: vec![
+                pkg(serde_json::json!({
+                    "name": "shared-libs", "source_name": "shared", "repoid": "epel",
+                    "provides": ["libshared.so.1()(64bit)"],
+                })),
+                pkg(serde_json::json!({
+                    "name": "buildtool", "source_name": "buildtool", "repoid": "epel",
+                    "provides": ["buildtool = 1.0"],
+                })),
+            ],
+        };
+        let roots = ["app-a".to_string(), "app-b".to_string()];
+        let (report, graph) = walk(&q, &roots, &from_epel(), &base(), true, false).unwrap();
+
+        // Report: one attribution.
+        let shared = report
+            .collected
+            .iter()
+            .find(|c| c.source == "shared")
+            .unwrap();
+        assert_eq!(shared.required_by, "app-a");
+
+        // Graph: both requirer edges, the provider, the src mapping.
+        let cap = "libshared.so.1()(64bit)";
+        let requirers: Vec<&str> = graph.requirers[cap].iter().map(String::as_str).collect();
+        assert_eq!(requirers, ["app-a", "app-b"]);
+        let provider = graph.providers[cap].first().unwrap();
+        assert_eq!(
+            (provider.source.as_str(), provider.repoid.as_str()),
+            ("shared", "epel")
+        );
+        assert_eq!(graph.binary_sources["src:app-a"], "app-a");
+        assert_eq!(graph.requirers["buildtool"].first().unwrap(), "src:app-a");
+        assert_eq!(graph.roots, roots);
     }
 
     #[test]

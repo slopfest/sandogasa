@@ -162,6 +162,11 @@ exist only at build time. Build dependencies of anything beyond the
 roots are deliberately out of scope: the closure keeps the roots
 working and the roots rebuildable, not the world.
 
+`--graph` writes the walk's complete dependency graph as JSON — every
+requirer and provider edge, where the report keeps first attributions
+only — which is what incremental maintenance ("does anything else
+still reach this?") will consume.
+
 ### sandogasa-fedrq: batched JSON queries (breaking)
 
 fedrq's `line:` formatter refuses multi-valued attributes, so any

@@ -122,6 +122,12 @@ justifies its crate graph — those edges exist only at build time.
 Build dependencies beyond the roots are not walked: the closure keeps
 the roots working and the roots rebuildable, not the world.
 
+`--graph <path>` writes the walk's full dependency graph as JSON —
+every requirer of every capability and every provider, where the
+report keeps only first attributions. That is the input incremental
+maintenance needs ("does anything else still reach this?"), and the
+periodic full walk is its refresh.
+
 The shared walk filters apply: `--pattern` (glob, CSV or repeated),
 `--start-from` and `--end-with` restrict which inventory packages are
 used as roots — handy for a quick look at one package's pull before

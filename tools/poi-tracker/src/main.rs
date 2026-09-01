@@ -375,6 +375,11 @@ struct DepsArgs {
     #[arg(long)]
     build: bool,
 
+    /// Write the walk's full dependency graph as JSON (every
+    /// requirer/provider edge, not just first attributions).
+    #[arg(long, value_name = "PATH")]
+    graph: Option<String>,
+
     /// Write the collected dependencies as an inventory TOML file.
     #[arg(short, long)]
     output: Option<String>,
@@ -1312,7 +1317,7 @@ fn cmd_deps(paths: &[String], args: &DepsArgs) -> CmdResult {
         repo: args.repo.clone(),
     };
     let from: std::collections::BTreeSet<String> = args.from.iter().cloned().collect();
-    let report = deps::walk(
+    let (report, graph) = deps::walk(
         &fedrq,
         &roots,
         &from,
@@ -1320,6 +1325,10 @@ fn cmd_deps(paths: &[String], args: &DepsArgs) -> CmdResult {
         args.build,
         args.verbose,
     )?;
+    if let Some(path) = &args.graph {
+        std::fs::write(path, serde_json::to_vec_pretty(&graph)?)
+            .map_err(|e| format!("writing {path}: {e}"))?;
+    }
 
     let name = args
         .name
