@@ -55,40 +55,6 @@ pub struct Freed {
     pub in_deps_files: Vec<String>,
 }
 
-/// Sources reachable from `keeps` over the recorded edges. Every
-/// recorded provider of an active capability counts, and a root's
-/// `src:` (BuildRequires) edges activate only once the root itself is
-/// reached.
-fn reachable(graph: &DepsGraph, keeps: &BTreeSet<String>) -> BTreeSet<String> {
-    // Source → the walk entities (binaries, `src:` pseudo-entries)
-    // whose Requires it owns.
-    let mut entities: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (binary, source) in &graph.binary_sources {
-        entities.entry(source).or_default().push(binary);
-    }
-    // Entity → capabilities it required.
-    let mut requires: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (capability, requirers) in &graph.requirers {
-        for requirer in requirers {
-            requires.entry(requirer).or_default().push(capability);
-        }
-    }
-    let mut reached: BTreeSet<String> = keeps.clone();
-    let mut frontier: Vec<String> = keeps.iter().cloned().collect();
-    while let Some(source) = frontier.pop() {
-        for entity in entities.get(source.as_str()).into_iter().flatten() {
-            for capability in requires.get(entity).into_iter().flatten() {
-                for provider in graph.providers.get(*capability).into_iter().flatten() {
-                    if reached.insert(provider.source.clone()) {
-                        frontier.push(provider.source.clone());
-                    }
-                }
-            }
-        }
-    }
-    reached
-}
-
 /// Work out what unkeeping `names` frees. `keeps` are the keep
 /// inventories' packages by file; `deps_files` the derived
 /// inventories' packages by file. Nothing is edited here.
@@ -106,28 +72,9 @@ pub fn plan(
         .cloned()
         .collect();
 
-    let before = reachable(graph, &all_keeps);
-    let after = reachable(graph, &remaining);
+    let before = graph.reachable(&all_keeps);
+    let after = graph.reachable(&remaining);
     let dependents = graph.dependents();
-    // One witness edge whose requirer survives the removal — the
-    // `reason` a walk would have written for this package.
-    let closure_reason = |name: &str| -> Option<String> {
-        for (capability, providers) in &graph.providers {
-            let Some(p) = providers.iter().find(|p| p.source == name) else {
-                continue;
-            };
-            for requirer in graph.requirers.get(capability).into_iter().flatten() {
-                let source = graph.binary_sources.get(requirer).unwrap_or(requirer);
-                if source != name && after.contains(source) {
-                    return Some(format!(
-                        "dependency ({}): {requirer} requires {capability}",
-                        p.repoid
-                    ));
-                }
-            }
-        }
-        None
-    };
     let dependents_of = |name: &str| -> Vec<String> {
         dependents
             .get(name)
@@ -154,7 +101,7 @@ pub fn plan(
             if report.removed[name].is_empty() {
                 continue;
             }
-            if let Some(reason) = closure_reason(name) {
+            if let Some(reason) = graph.witness_reason(name, &after) {
                 report.moved.insert(name.clone(), reason);
             }
         }

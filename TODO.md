@@ -282,6 +282,26 @@ than annotated as done.
   warm, so batching is where its runtime went. Do it after
   `deps --fixpoint` proves the engine shape on real use.
 
+## poi-tracker: essential-deps as a materialized view (2026-09-01)
+
+- The offline recompute is built (`poi-tracker derive`, 2026-09-01):
+  reachable-from-keeps ∩ owned, witness-edge reasons, diff-first
+  report, idempotent `--apply`. Validated against the first real
+  prune: 353 packages in ~1s, name-for-name what the verification
+  walk re-derived.
+- Adding a brand-new keep is the one edit the graph cannot answer:
+  walk it as a *single root* (minutes) and merge its edges into the
+  stored graph instead of replacing it; then the same offline
+  recompute.
+- Both are only as true as the last full walk — rawhide drift (renamed
+  sources like pandoc→pandoc-cli, changed Requires/providers) is
+  invisible offline. Keep the hour-long full walk as a periodic
+  calibration, run when Fedora has moved rather than when keeps
+  change.
+- Not urgent by the user's own call (one hour every few months is
+  livable); build it the next time a prune session actually stalls on
+  the walk.
+
 ## poi-tracker / sandogasa-pkg-health seam
 
 Decision (2026-07-21): keep both tools — pkg-health **observes**

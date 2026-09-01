@@ -188,6 +188,25 @@ File dependencies resolve
 and classify normally, but appear under `unmatched` in `--json`
 output, since tying a path to its provider would need file lists.
 
+### Recompute a derived inventory offline (derive)
+
+The derived dependency inventory is a view the graph can rebuild:
+owned packages the keeps reach, minus the keeps themselves —
+
+```sh
+poi-tracker -i essential.toml -i essential-rust.toml \
+    derive --graph fedora-build-deps-graph.json \
+    --owned personal.toml -o essential-deps.toml
+```
+
+The report is the diff against the file's current content (`+`/`-`
+lines); `--apply` replaces its packages wholesale, `reason` chains
+taken from witness edges in the graph. Because the recompute is
+idempotent, keep-set edits never need a fresh walk to update the
+derived inventory — but the view is only as true as the last full
+walk, which remains the periodic calibration against distro drift.
+`--json` prints the report machine-readably.
+
 ### Export to content-resolver YAML
 
 ```sh

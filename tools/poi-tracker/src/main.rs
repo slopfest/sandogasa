@@ -4,6 +4,7 @@ mod adopt;
 mod config;
 mod dependents;
 mod deps;
+mod derive;
 mod gitlab_unshipped;
 mod intersect;
 mod kondo;
@@ -57,6 +58,9 @@ enum Command {
     /// Inventory the dependencies pulled from other repos
     /// (e.g. EPEL).
     Deps(DepsArgs),
+    /// Recompute a derived dependency inventory offline from a
+    /// saved graph: owned packages the keeps reach.
+    Derive(DeriveArgs),
     /// Export inventory to another format.
     Export(ExportArgs),
     /// Find which inventory file(s) contain a package.
@@ -434,6 +438,30 @@ struct DependentsArgs {
     /// Dependency graph JSON from a `deps --graph` run.
     #[arg(long, value_name = "PATH")]
     graph: String,
+
+    /// Output machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+struct DeriveArgs {
+    /// Dependency graph JSON from a `deps --graph` run.
+    #[arg(long, value_name = "PATH")]
+    graph: String,
+
+    /// Inventory of the packages you own (e.g. a sync-distgit
+    /// output); only owned packages enter the derived inventory.
+    #[arg(long, value_name = "PATH")]
+    owned: String,
+
+    /// The derived inventory to recompute.
+    #[arg(short, long, value_name = "PATH")]
+    output: String,
+
+    /// Replace the output file's packages; without it, report only.
+    #[arg(long)]
+    apply: bool,
 
     /// Output machine-readable JSON.
     #[arg(long)]
@@ -879,6 +907,7 @@ fn main() -> ExitCode {
         Command::Import(args) => cmd_import(args),
         Command::Intersect(args) => cmd_intersect(&paths, args),
         Command::Dependents(args) => cmd_dependents(&paths, args),
+        Command::Derive(args) => cmd_derive(&paths, args),
         Command::Kondo(args) => cmd_kondo(&paths, args),
         Command::PruneRetired(args) => cmd_prune_retired(&paths, args),
         Command::Remove(args) => cmd_remove(&paths[0], args),
@@ -1534,6 +1563,59 @@ fn cmd_dependents(paths: &[String], args: &DependentsArgs) -> CmdResult {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         print!("{}", dependents::format_report(&report));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Recompute a derived inventory (owned ∩ reachable-from-keeps) from
+/// a saved graph — the global `-i` inventories are the keeps.
+fn cmd_derive(paths: &[String], args: &DeriveArgs) -> CmdResult {
+    use std::collections::BTreeSet;
+
+    let bytes = std::fs::read(&args.graph).map_err(|e| format!("reading {}: {e}", args.graph))?;
+    let graph: deps::DepsGraph =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parsing {}: {e}", args.graph))?;
+    let names_of = |path: &str| -> Result<BTreeSet<String>, String> {
+        Ok(sandogasa_inventory::load(path)?
+            .package
+            .into_iter()
+            .map(|p| p.name)
+            .collect())
+    };
+    let mut keeps: BTreeSet<String> = Default::default();
+    for path in paths {
+        keeps.extend(names_of(path)?);
+    }
+    let owned = names_of(&args.owned)?;
+    let current = match std::path::Path::new(&args.output).exists() {
+        true => names_of(&args.output)?,
+        false => Default::default(),
+    };
+
+    let report = derive::derive(&graph, &keeps, &owned, &current);
+    if args.apply {
+        let mut inventory = match std::path::Path::new(&args.output).exists() {
+            true => sandogasa_inventory::load(&args.output)?,
+            false => sandogasa_inventory::Inventory {
+                inventory: sandogasa_inventory::load(&paths[0])?.inventory,
+                package: Vec::new(),
+            },
+        };
+        inventory.package = report
+            .derived
+            .iter()
+            .map(|d| sandogasa_inventory::Package {
+                name: d.name.clone(),
+                reason: d.reason.clone(),
+                ..Default::default()
+            })
+            .collect();
+        sandogasa_inventory::save(&inventory, &args.output)?;
+    }
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print!("{}", derive::format_report(&report, args.apply));
     }
     Ok(ExitCode::SUCCESS)
 }

@@ -107,6 +107,60 @@ impl DepsGraph {
         }
         out
     }
+
+    /// Sources reachable from `keeps` over the recorded edges. Every
+    /// recorded provider of an active capability counts, and a
+    /// root's `src:` (BuildRequires) edges activate only once the
+    /// root itself is reached.
+    pub fn reachable(&self, keeps: &BTreeSet<String>) -> BTreeSet<String> {
+        // Source → the walk entities (binaries, `src:` pseudo-
+        // entries) whose Requires it owns.
+        let mut entities: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (binary, source) in &self.binary_sources {
+            entities.entry(source).or_default().push(binary);
+        }
+        // Entity → capabilities it required.
+        let mut requires: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (capability, requirers) in &self.requirers {
+            for requirer in requirers {
+                requires.entry(requirer).or_default().push(capability);
+            }
+        }
+        let mut reached: BTreeSet<String> = keeps.clone();
+        let mut frontier: Vec<String> = keeps.iter().cloned().collect();
+        while let Some(source) = frontier.pop() {
+            for entity in entities.get(source.as_str()).into_iter().flatten() {
+                for capability in requires.get(entity).into_iter().flatten() {
+                    for provider in self.providers.get(*capability).into_iter().flatten() {
+                        if reached.insert(provider.source.clone()) {
+                            frontier.push(provider.source.clone());
+                        }
+                    }
+                }
+            }
+        }
+        reached
+    }
+
+    /// One witness edge for `name` whose requirer is in `within` —
+    /// the `reason` a walk would have written for it.
+    pub fn witness_reason(&self, name: &str, within: &BTreeSet<String>) -> Option<String> {
+        for (capability, providers) in &self.providers {
+            let Some(p) = providers.iter().find(|p| p.source == name) else {
+                continue;
+            };
+            for requirer in self.requirers.get(capability).into_iter().flatten() {
+                let source = self.binary_sources.get(requirer).unwrap_or(requirer);
+                if source != name && within.contains(source) {
+                    return Some(format!(
+                        "dependency ({}): {requirer} requires {capability}",
+                        p.repoid
+                    ));
+                }
+            }
+        }
+        None
+    }
 }
 
 /// One provider of a capability, as the graph records it.

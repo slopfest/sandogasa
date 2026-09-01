@@ -71,6 +71,26 @@ found 328 leaves (13 of them devel-only) and 275 carried entries, and
 flagged a stale keep as a bonus: a package renamed upstream shows up
 as a root shipping nothing the walk saw.
 
+### poi-tracker: derive, the derived inventory as a materialized view
+
+Updating the derived dependency inventory after a keep-set edit cost a
+full walk — half an hour against rawhide to re-establish facts the
+saved graph already held, since the derived set is by definition the
+owned packages the keeps reach.
+
+`poi-tracker derive --graph <json> --owned <inventory> -o <derived>`
+recomputes that view offline: reachable from the `-i` keeps,
+intersected with the owned inventory, minus the keeps themselves, each
+entry carrying a witness-edge `reason`. The report is the diff against
+the file's current content, and `--apply` replaces its packages
+wholesale — idempotent recompute instead of per-edit bookkeeping. On
+real data it reproduced the post-prune derived set (353 packages, the
+239 demoted crates included, matching the prune list name for name) in
+about a second, while the verification walk computing the same answer
+was still running. The full walk stays the periodic calibration:
+distro drift is invisible offline, and an owned package that was never
+a fixpoint root has no BuildRequires edges recorded.
+
 ### poi-tracker: unkeep, the remove half of incremental maintenance
 
 Changing one's mind about a keep used to cost a full walk: dropping a

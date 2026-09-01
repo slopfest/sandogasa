@@ -156,6 +156,28 @@ Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
+.SS poi-tracker derive
+\fBpoi\-tracker derive\fR <\fB\-\-graph\fR> <\fB\-\-owned\fR> <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-apply\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Recompute a derived dependency inventory offline from a saved graph: owned packages the keeps reach
+.TP
+\fB\-\-graph\fR \fI<PATH>\fR
+Dependency graph JSON from a `deps \-\-graph` run
+.TP
+\fB\-\-owned\fR \fI<PATH>\fR
+Inventory of the packages you own (e.g. a sync\-distgit output); only owned packages enter the derived inventory
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<PATH>\fR
+The derived inventory to recompute
+.TP
+\fB\-\-apply\fR
+Replace the output file\*(Aqs packages; without it, report only
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS poi-tracker export
 \fBpoi\-tracker export\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
 .PP
