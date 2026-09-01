@@ -106,7 +106,12 @@ leaf (every binary ends in `-devel` — the library shape) is kept for
 nobody. **Carried** packages are needed by *other packages of the same
 inventories* — if such an entry is only tracked as a dependency, stop
 curating it: track the dependent and let the dependency walk carry it
-in the derived inventory. **Externally needed** ones are required only
+in the derived inventory. The edge says whom the graph *could* carry
+a package for, never why the entry exists, so carried lines wear the
+same `[devel-only]` marker: a devel-only carried crate is almost
+always dependency-only and safe to bulk-prune, while one shipping
+real binaries (a tool whose satellite plugin is the dependent, say)
+is likely kept on purpose — decide those per package. **Externally needed** ones are required only
 by closure packages outside the inventories. Packages the graph never
 saw are reported as unknown rather than guessed at (a stale graph — or
 a stale keep: a package renamed upstream shows up as a leaf shipping

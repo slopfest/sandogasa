@@ -59,7 +59,13 @@ library kept for nobody, and the binaries are listed so the reader
 can tell that shape from an application kept on purpose. Carried
 packages are needed by other packages of the same inventories, so
 curating them is redundant — the dependency walk would re-derive them
-from their dependents. Externally needed ones are required only by
+from their dependents. They wear the leaf section's `[devel-only]`
+marker too, because the edge states whom the graph could carry a
+package for, not why the entry exists: transactional-update showed up
+carried by its own libdnf plugin, which has the arrow backwards from
+the maintainer's point of view — the devel-only marker is what
+separates crates safe to bulk-prune from applications whose keep is
+deliberate. Externally needed ones are required only by
 closure packages outside the set. The first real run over 614 keeps
 found 328 leaves (13 of them devel-only) and 275 carried entries, and
 flagged a stale keep as a bonus: a package renamed upstream shows up

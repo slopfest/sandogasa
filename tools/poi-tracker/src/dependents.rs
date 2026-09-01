@@ -51,11 +51,20 @@ pub struct Leaf {
     pub devel_only: bool,
 }
 
-/// A package something requires, and who.
+/// A package something requires, and who. Carries the same shape
+/// markers as a leaf: a devel-only carried package is almost always
+/// tracked as a mere dependency (prune it and let the walk carry it),
+/// while one shipping real binaries is likely kept on purpose — the
+/// dependency edge says whom the graph *could* carry it for, not why
+/// the entry exists.
 #[derive(Debug, Serialize)]
 pub struct Carried {
     pub name: String,
     pub dependents: Vec<String>,
+    /// Its binary packages, as the graph saw them.
+    pub binaries: Vec<String>,
+    /// Every binary is `-devel` — the library-only shape.
+    pub devel_only: bool,
 }
 
 /// Classify each of `names` by its dependents in the graph, keeping
@@ -80,15 +89,16 @@ pub fn classify(graph: &DepsGraph, names: &BTreeSet<String>) -> DependentsReport
             continue;
         }
         let deps = dependents.get(name).cloned().unwrap_or_default();
+        let bins: Vec<String> = binaries
+            .get(name.as_str())
+            .into_iter()
+            .flatten()
+            .map(|b| b.to_string())
+            .collect();
+        let devel_only = !bins.is_empty() && bins.iter().all(|b| b.ends_with("-devel"));
         if deps.is_empty() {
-            let bins: Vec<String> = binaries
-                .get(name.as_str())
-                .into_iter()
-                .flatten()
-                .map(|b| b.to_string())
-                .collect();
             report.leaves.push(Leaf {
-                devel_only: !bins.is_empty() && bins.iter().all(|b| b.ends_with("-devel")),
+                devel_only,
                 name: name.clone(),
                 binaries: bins,
             });
@@ -103,14 +113,30 @@ pub fn classify(graph: &DepsGraph, names: &BTreeSet<String>) -> DependentsReport
             false => report.carried.push(Carried {
                 name: name.clone(),
                 dependents: in_set,
+                binaries: bins,
+                devel_only,
             }),
             true => report.externally_needed.push(Carried {
                 name: name.clone(),
                 dependents: deps.into_iter().collect(),
+                binaries: bins,
+                devel_only,
             }),
         }
     }
     report
+}
+
+/// One carried/externally-needed line: the devel-only marker is what
+/// separates "prune it, the walk will carry it" from "kept on
+/// purpose, decide per package".
+fn carried_line(c: &Carried) -> String {
+    format!(
+        "  {}{} — needed by {}\n",
+        c.name,
+        if c.devel_only { " [devel-only]" } else { "" },
+        c.dependents.join(", ")
+    )
 }
 
 /// The human-readable report.
@@ -137,11 +163,7 @@ pub fn format_report(report: &DependentsReport) -> String {
         report.carried.len()
     ));
     for c in &report.carried {
-        out.push_str(&format!(
-            "  {} — needed by {}\n",
-            c.name,
-            c.dependents.join(", ")
-        ));
+        out.push_str(&carried_line(c));
     }
     if !report.externally_needed.is_empty() {
         out.push_str(&format!(
@@ -150,11 +172,7 @@ pub fn format_report(report: &DependentsReport) -> String {
             report.externally_needed.len()
         ));
         for c in &report.externally_needed {
-            out.push_str(&format!(
-                "  {} — needed by {}\n",
-                c.name,
-                c.dependents.join(", ")
-            ));
+            out.push_str(&carried_line(c));
         }
     }
     if !report.unknown.is_empty() {
@@ -236,6 +254,8 @@ mod tests {
         assert_eq!(report.carried.len(), 1);
         assert_eq!(report.carried[0].name, "rust-anyhow");
         assert_eq!(report.carried[0].dependents, ["pandoc"]);
+        assert!(report.carried[0].devel_only);
+        assert!(format_report(&report).contains("rust-anyhow [devel-only] — needed by pandoc"));
 
         assert_eq!(report.externally_needed.len(), 1);
         assert_eq!(report.externally_needed[0].name, "rust-syn");
