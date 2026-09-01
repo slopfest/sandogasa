@@ -41,6 +41,12 @@ Each finding is shown as `[i/total] <summary>` followed by
 `(k)eep / (e)xplain / (r)emove [k]:` on stderr; Enter keeps (the safe
 default), and `explain` requires a non-empty justification.
 
+`resolve_interactive_noted` serves flows where keeping records a
+verdict rather than dismissing a finding (`poi-tracker kondo`'s cull
+triage): a default explanation, when given, is what Enter records at
+the explanation prompt, and `k <note>` keeps with a note, returned as
+a third tuple element.
+
 ## License
 
 Licensed under either of

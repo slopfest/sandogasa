@@ -265,7 +265,16 @@ reads differently from `(owner)`.
 `--explain-into PATH` sets a default: Enter at the explanation prompt
 files the package there, so a pass that sorts many packages into one
 inventory is two keystrokes each (`e`, Enter); an explicit path still
-wins. The natural multi-pass flow is one pass per destination, passing
+wins.
+
+The cull file records why each package is condemned. The stock
+`reason` is `kondo cull candidate (<level>)`; `--reason TEXT` replaces
+the wording for packages culled this run (the sitting usually has one
+shared story — "retiring my GNOME extensions"), and `k <note>` at the
+prompt records this one package's own words instead. The access level
+is always appended, entries already in the file keep their reason, and
+only names are ever read back — so hand-editing a reason later is
+safe. The natural multi-pass flow is one pass per destination, passing
 the same file as `--essential` too — filed packages then never
 reappear as candidates. Candidates are computed once, up front, so
 filing into an essential inventory mid-run is safe; and when the

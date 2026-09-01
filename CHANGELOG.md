@@ -65,8 +65,14 @@ keeps its decisions. `--explain-into` sets a default destination —
 Enter at the explanation prompt files the package there, so a pass
 that sorts many packages into one inventory is two keystrokes per
 package instead of a retyped path; `sandogasa-review` grows the
-underlying `resolve_interactive_with_default` for any tool whose
-explanations are usually the same thing. Access levels are looked up
+underlying `resolve_interactive_noted` for any tool whose explanations
+are usually the same thing — it also accepts `k <note>` at the prompt,
+handing the note back beside the resolution. In kondo that note
+becomes the package's `reason` in the cull file, `--reason` sets the
+wording for the whole sitting, and the stock
+"kondo cull candidate" covers the rest — the access level is appended
+whichever way, and hand-editing a reason later is safe because only
+names are ever read back. Access levels are looked up
 before the prompt rather than after it, so each candidate line carries
 the context that routes the eventual action — a package one merely
 commits to reads differently from one one owns. Passing the

@@ -334,6 +334,12 @@ struct KondoArgs {
     #[arg(long)]
     refresh_acls: bool,
 
+    /// Reason recorded in the -o cull file for packages culled this
+    /// run (the access level is always appended). A note typed at
+    /// the prompt as `k <note>` overrides it per package.
+    #[arg(long)]
+    reason: Option<String>,
+
     /// Merge the culled set into this inventory TOML file
     /// (accumulates across passes).
     #[arg(short, long)]
@@ -1251,18 +1257,15 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
              the analysis missed a real need.",
             classified.len()
         );
-        match &args.explain_into {
-            Some(default) => sandogasa_review::resolve_interactive_with_default(
-                classified,
-                kondo::triage_summary,
-                default,
-            )?,
-            None => sandogasa_review::resolve_interactive(classified, kondo::triage_summary)?,
-        }
+        sandogasa_review::resolve_interactive_noted(
+            classified,
+            kondo::triage_summary,
+            args.explain_into.as_deref(),
+        )?
     } else {
         classified
             .into_iter()
-            .map(|c| (c, sandogasa_review::Resolution::Keep))
+            .map(|c| (c, sandogasa_review::Resolution::Keep, None))
             .collect()
     };
     kondo::apply_resolutions(resolutions, &personal.inventory.maintainer, &mut report);
@@ -1273,6 +1276,7 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
             &report,
             &format!("{}-cull", personal.inventory.name),
             &personal.inventory.maintainer,
+            args.reason.as_deref(),
         )?;
         Some((path.clone(), added))
     } else {

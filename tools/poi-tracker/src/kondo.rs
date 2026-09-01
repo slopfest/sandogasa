@@ -63,6 +63,10 @@ pub struct Culled {
     /// or a note when it could not be determined.
     pub level: String,
     pub action: Action,
+    /// Why this one is being culled, in the user's words — typed at
+    /// the prompt as `k <note>`; carried into the cull file's
+    /// `reason`.
+    pub note: Option<String>,
 }
 
 /// The whole run's outcome, for `--json` and the report.
@@ -138,13 +142,16 @@ pub fn file_into_inventory(path: &str, name: &str, maintainer: &str) -> Result<b
 /// so the access level can inform the decision — and the kept ones
 /// land in `report.culled` as they are.
 pub fn apply_resolutions(
-    resolutions: Vec<(Culled, Resolution)>,
+    resolutions: Vec<(Culled, Resolution, Option<String>)>,
     maintainer: &str,
     report: &mut KondoReport,
 ) {
-    for (candidate, resolution) in resolutions {
+    for (mut candidate, resolution, note) in resolutions {
         match resolution {
-            Resolution::Keep => report.culled.push(candidate),
+            Resolution::Keep => {
+                candidate.note = note;
+                report.culled.push(candidate);
+            }
             Resolution::Explained(path) => {
                 match file_into_inventory(&path, &candidate.name, maintainer) {
                     Ok(true) => report.explained.push((candidate.name, path)),
@@ -313,6 +320,7 @@ pub fn culled_from_level(name: &str, level: &str) -> Culled {
             "owner" => Action::Orphan,
             _ => action_for(parsed),
         },
+        note: None,
     }
 }
 
@@ -366,6 +374,7 @@ pub async fn classify(
                                 name,
                                 level: level.map_or_else(|| "none".to_string(), |l| l.to_string()),
                                 action: action_for(level),
+                                note: None,
                             },
                             None,
                         )
@@ -375,6 +384,7 @@ pub async fn classify(
                             name: name.clone(),
                             level: "unknown".to_string(),
                             action: Action::Unknown,
+                            note: None,
                         },
                         Some(format!("{name}: could not check access: {e}")),
                     ),
@@ -405,6 +415,7 @@ pub async fn classify(
                         name: chunk[i].clone(),
                         level: "unknown".to_string(),
                         action: Action::Unknown,
+                        note: None,
                     });
                 }
             }
@@ -523,8 +534,9 @@ pub fn prior_culled(path: &str) -> Result<BTreeSet<String>, String> {
 /// absent — `-o` accumulates across passes, because triage happens in
 /// sittings (one `--pattern` at a time) and each pass owns only its
 /// slice of the verdict. Packages already present are left untouched;
-/// new ones carry their access level in `reason`. Returns how many
-/// were added.
+/// new ones carry their access level in `reason`, appended to the
+/// per-package note, the run's `--reason`, or the stock wording — in
+/// that order. Returns how many were added.
 ///
 /// The same load-modify-save caveat as explain filing applies: two
 /// *simultaneously finishing* runs can drop each other's additions,
@@ -535,18 +547,19 @@ pub fn merge_culled(
     report: &KondoReport,
     name: &str,
     maintainer: &str,
+    reason: Option<&str>,
 ) -> Result<usize, String> {
     let mut inventory = if std::path::Path::new(path).exists() {
         sandogasa_inventory::load(path)?
     } else {
         Inventory {
-            inventory: to_inventory(report, name, maintainer).inventory,
+            inventory: to_inventory(report, name, maintainer, reason).inventory,
             package: Vec::new(),
         }
     };
     let existing: BTreeSet<String> = inventory.package.iter().map(|p| p.name.clone()).collect();
     let mut added = 0;
-    for pkg in to_inventory(report, name, maintainer).package {
+    for pkg in to_inventory(report, name, maintainer, reason).package {
         if !existing.contains(&pkg.name) {
             inventory.package.push(pkg);
             added += 1;
@@ -558,8 +571,16 @@ pub fn merge_culled(
 }
 
 /// The culled set as an inventory: something to keep beside the
-/// announcement, and to diff after the next triage.
-pub fn to_inventory(report: &KondoReport, name: &str, maintainer: &str) -> Inventory {
+/// announcement, and to diff after the next triage. Each entry's
+/// `reason` is the package's own prompt note when one was typed,
+/// else `reason` (the run's `--reason`), else stock wording — always
+/// with the access level appended.
+pub fn to_inventory(
+    report: &KondoReport,
+    name: &str,
+    maintainer: &str,
+    reason: Option<&str>,
+) -> Inventory {
     Inventory {
         inventory: InventoryMeta {
             name: name.to_string(),
@@ -574,7 +595,14 @@ pub fn to_inventory(report: &KondoReport, name: &str, maintainer: &str) -> Inven
             .iter()
             .map(|c| Package {
                 name: c.name.clone(),
-                reason: Some(format!("kondo cull candidate ({})", c.level)),
+                reason: Some(format!(
+                    "{} ({})",
+                    c.note
+                        .as_deref()
+                        .or(reason)
+                        .unwrap_or("kondo cull candidate"),
+                    c.level
+                )),
                 ..Default::default()
             })
             .collect(),
@@ -617,6 +645,7 @@ mod tests {
             name: name.to_string(),
             level: level.to_string(),
             action: Action::Ask,
+            note: None,
         }
     }
 
@@ -629,15 +658,17 @@ mod tests {
         let mut report = KondoReport::default();
         apply_resolutions(
             vec![
-                (culled("a", "owner"), Resolution::Keep),
+                (culled("a", "owner"), Resolution::Keep, None),
                 (
                     culled("b", "commit"),
                     Resolution::Explained(dest.to_string()),
+                    None,
                 ),
-                (culled("c", "commit"), Resolution::Removed),
+                (culled("c", "commit"), Resolution::Removed, None),
                 (
                     culled("d", "admin"),
                     Resolution::Explained(dest.to_string()),
+                    None,
                 ),
             ],
             "me",
@@ -799,7 +830,7 @@ mod tests {
             culled: vec![culled("rust-clap", "owner"), culled("old-toy", "owner")],
             ..Default::default()
         };
-        merge_culled(dest, &pass, "cull", "me").unwrap();
+        merge_culled(dest, &pass, "cull", "me", None).unwrap();
 
         // deps --build later justifies rust-clap: it leaves the
         // verdict, old-toy stays condemned.
@@ -829,7 +860,7 @@ mod tests {
             culled: vec![culled("a-thing", "owner")],
             ..Default::default()
         };
-        merge_culled(dest, &pass, "cull", "me").unwrap();
+        merge_culled(dest, &pass, "cull", "me", None).unwrap();
         assert!(prior_culled(dest).unwrap().contains("a-thing"));
     }
 
@@ -843,14 +874,14 @@ mod tests {
             culled: vec![culled("a-thing", "owner")],
             ..Default::default()
         };
-        assert_eq!(merge_culled(dest, &pass1, "cull", "me").unwrap(), 1);
+        assert_eq!(merge_culled(dest, &pass1, "cull", "me", None).unwrap(), 1);
 
         // Second pass: one overlap (untouched), one new.
         let pass2 = KondoReport {
             culled: vec![culled("a-thing", "commit"), culled("rust-old", "owner")],
             ..Default::default()
         };
-        assert_eq!(merge_culled(dest, &pass2, "cull", "me").unwrap(), 1);
+        assert_eq!(merge_culled(dest, &pass2, "cull", "me", None).unwrap(), 1);
 
         let merged = sandogasa_inventory::load(dest).unwrap();
         let names: Vec<&str> = merged.package.iter().map(|p| p.name.as_str()).collect();
@@ -863,6 +894,32 @@ mod tests {
     }
 
     #[test]
+    fn cull_reasons_prefer_the_note_then_the_flag_then_stock_wording() {
+        let noted = Culled {
+            note: Some("superseded by uv".to_string()),
+            ..culled("python-pipx", "owner")
+        };
+        let report = KondoReport {
+            culled: vec![noted, culled("old-toy", "commit")],
+            ..Default::default()
+        };
+        let with_flag = to_inventory(&report, "cull", "me", Some("2026 spring clean"));
+        assert_eq!(
+            with_flag.package[0].reason.as_deref(),
+            Some("superseded by uv (owner)")
+        );
+        assert_eq!(
+            with_flag.package[1].reason.as_deref(),
+            Some("2026 spring clean (commit)")
+        );
+        let bare = to_inventory(&report, "cull", "me", None);
+        assert_eq!(
+            bare.package[1].reason.as_deref(),
+            Some("kondo cull candidate (commit)")
+        );
+    }
+
+    #[test]
     fn report_groups_and_emits_commands() {
         let report = KondoReport {
             candidates: 3,
@@ -871,11 +928,13 @@ mod tests {
                     name: "old-toy".into(),
                     level: "owner".into(),
                     action: Action::Orphan,
+                    note: None,
                 },
                 Culled {
                     name: "helped-once".into(),
                     level: "commit".into(),
                     action: Action::Ask,
+                    note: None,
                 },
             ],
             ..Default::default()
