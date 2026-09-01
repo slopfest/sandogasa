@@ -89,9 +89,9 @@ env var → config file.
 Generate an API key at
 <https://bugzilla.redhat.com/userprefs.cgi?tab=apikey>.
 
-### Inventory runtime dependencies from other repos
+### Inventory dependencies from other repos
 
-Walk the transitive runtime dependency graph of the inventory's
+Walk the transitive dependency graph of the inventory's
 packages against a fedrq branch and repo stack, and collect what they
 pull from repos of interest — e.g. which EPEL 9 packages a Hyperscale
 inventory depends on:
@@ -111,16 +111,22 @@ a file path (`rpm -q --provides` lists a package's). The walk
 repeatedly resolves the capabilities the current packages require
 into the packages that provide them, the way dnf would.
 
-Providers whose repo id matches `--base-repo` (default
+Providers whose repo id matches `--base-repo` (a prefix, default
 `fedrq-centos-stream-`) satisfy a dependency and end the walk there —
 the base distro is a given. Every other provider is walked further,
-and collected when its repo is in `--from` (default `epel`). The
+and collected when its repo id is in `--from` (exact, default
+`epel`). Those defaults describe an EPEL-on-CentOS-Stream stack; for
+a Fedora walk there is no base distro beneath the branch, so the
+default prefix never matches and the only setting needed is the
+branch's own repo id, e.g. `-b rawhide --from rawhide`. The
 output inventory records why each package was pulled in, in its
-`reason` field. `--build` also seeds the walk with the roots' own
-BuildRequires (attributed `src:<name>`), so a kept application
-justifies its crate graph — those edges exist only at build time.
-Build dependencies beyond the roots are not walked: the closure keeps
-the roots working and the roots rebuildable, not the world.
+`reason` field. The walk also seeds the roots' own BuildRequires
+(attributed `src:<name>`), so a kept application justifies its crate
+graph — those edges exist only at build time. Build dependencies
+beyond the roots are not walked: the closure keeps the roots working
+and the roots rebuildable, not the world. `--runtime-only` skips the
+BuildRequires seeding when the question is the deployment surface
+rather than what must stay for the roots to survive.
 
 `--fixpoint <inventory>` iterates to closure in one run: collected
 packages found in that inventory (yours) become roots of their own,
@@ -130,7 +136,7 @@ test-only BuildRequires appear in no `-devel`'s runtime Requires.
 Rounds reuse the walk's seen-sets, so each costs only the genuinely
 new capabilities; the manual three-invocation equivalent measured ~90
 minutes against rawhide where the in-process fixpoint is the first
-walk plus small change. Requires `--build`.
+walk plus small change. Conflicts with `--runtime-only`.
 
 `--graph <path>` writes the walk's full dependency graph as JSON —
 every requirer of every capability and every provider, where the
@@ -205,7 +211,7 @@ poi-tracker import old-inventory.json -o inventory.toml \
 
 Keep only the main inventory's packages that also appear in the
 `--with` inventories, optionally merging them into another file. The
-motivating case: a `deps --build` closure lists everything a keep-set
+motivating case: a `deps` closure lists everything a keep-set
 needs — thousands of packages, most of them other people's — and the
 durable fact is its intersection with the packages *you* maintain.
 Entries come from the main (`-i`) side, so `deps`' reason chains
@@ -281,7 +287,7 @@ re-running with the same `-o` only ever prompts for what is genuinely
 undecided. That makes the file itself the undo mechanism: delete an
 entry (a mistaken keep, say) and the next run asks about that package
 again. The reverse correction is automatic: a culled package that has
-since become essential — after a `deps --build` run justified it, say
+since become essential — after a `deps` run justified it, say
 — is rescued from the file and reported, so the verdict never
 contradicts the inputs. `remove` decisions are deliberately not persisted — a remove
 is a temporary skip, and the dropped candidate returns on the next run

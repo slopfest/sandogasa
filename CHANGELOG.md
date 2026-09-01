@@ -29,7 +29,7 @@ whose value names are now `PATH` — which they are.
 
 ### poi-tracker: intersect, because the durable fact is the overlap
 
-A `deps --build` closure over a keep-set lists everything those
+A `deps` closure over a keep-set lists everything those
 packages need — a real one came to 2,254 packages, 1,129 of them rust
 crates — but most of that is other people's to maintain. The fact
 worth keeping is the intersection with one's own inventory: the
@@ -101,7 +101,7 @@ memory: re-running re-prompted for every package already culled, so a
 candidate found in the `-o` inventory is now skipped (and not looked
 up), and only the genuinely undecided reach the prompt. It corrects
 itself in the other direction too: essential inputs improve between
-passes — a `deps --build` run justifying a crate stack, say — and a
+passes — a `deps` run justifying a crate stack, say — and a
 culled package that has become essential is rescued from the file and
 named, rather than leaving a stale verdict for someone to notice by
 hand.
@@ -116,7 +116,7 @@ itself never modifies ACLs. Group-granted access is deliberately not
 consulted: it pairs with `sync-distgit --no-groups`, and a group grant
 is not the user's to walk away from.
 
-### poi-tracker: inventory the runtime dependencies pulled from other repos
+### poi-tracker: inventory the dependencies pulled from other repos
 
 Keeping a package working on EL means keeping its dependency chain
 available, and part of that chain usually lives in EPEL — but nothing
@@ -126,7 +126,7 @@ short of chasing `Requires` by hand, and the same question underlies
 any attempt to cull a personal package inventory: a package someone
 maintains "for themselves" may in fact be load-bearing for work.
 
-`poi-tracker deps` walks the transitive runtime dependency graph of
+`poi-tracker deps` walks the transitive dependency graph of
 the inventory's packages against a fedrq branch and repo stack
 (`-b hs.el9 -r stack`), classifies every provider by the repository it
 comes from, and collects the ones pulled from the repos named by
@@ -154,11 +154,14 @@ rust-packaging emits for every crate version range
 keeps its crate graph instead of dropping it; genuinely conditional
 ones (`or`, `if`, `unless`) are skipped with a warning, since which
 branch applies depends on install state. File dependencies classify
-correctly but are reported as unattributable. `--build` seeds the walk
-with the roots' own BuildRequires too, attributed as `src:<name>` — a
-kept application then justifies the packages it *builds* with, which
-for Rust applications is the entire crate graph, whose app→crate edges
-exist only at build time. Build dependencies of anything beyond the
+correctly but are reported as unattributable. The walk seeds the
+roots' own BuildRequires too, attributed as `src:<name>` — a kept
+application then justifies the packages it *builds* with, which for
+Rust applications is the entire crate graph, whose app→crate edges
+exist only at build time; a runtime-only closure looks complete while
+omitting exactly those load-bearing packages, so leaving them out is
+the explicit choice (`--runtime-only`, for deployment-surface
+questions), not the default. Build dependencies of anything beyond the
 roots are deliberately out of scope: the closure keeps the roots
 working and the roots rebuildable — and, under `--fixpoint`, the owned
 packages the walk itself proves essential.
