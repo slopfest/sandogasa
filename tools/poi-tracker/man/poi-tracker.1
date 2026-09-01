@@ -137,7 +137,7 @@ The default treats CentOS Stream as the given beneath an EPEL stack. A Fedora wa
 Walk runtime dependencies only, without seeding the roots\*(Aq BuildRequires
 .TP
 \fB\-\-graph\fR \fI<PATH>\fR
-Write the walk\*(Aqs full dependency graph as JSON (every requirer/provider edge, not just first attributions)
+Where to write the walk\*(Aqs full dependency graph (every requirer/provider edge, not just first attributions) as JSON. Default: beside \-o, as <output>\-graph.json
 .TP
 \fB\-\-fixpoint\fR \fI<PATH>\fR
 Iterate to a fixpoint: collected packages found in this inventory (yours) become roots whose BuildRequires seed further rounds

@@ -225,10 +225,13 @@ seeds a round of its own. Run manually, that loop cost three full
 walks (~90 minutes against rawhide) to learn "+93, +21, +0"; run
 in-process, rounds reuse the walk's seen-sets and resolve only the
 genuinely new capabilities, so convergence costs the first walk plus
-small change. `--graph` writes the walk's complete dependency graph
-as JSON — every requirer and provider edge, where the report keeps
-first attributions only — which is what incremental maintenance
-("does anything else still reach this?") will consume.
+small change. And the graph is no longer opt-in: whenever `-o` writes an
+inventory, the walk's complete dependency graph — every requirer and
+provider edge, where the report keeps first attributions only — is
+written beside it as `<output>-graph.json`, `--graph` only moving it.
+The first closure regenerated without a graph left the offline
+commands (`unkeep`, `dependents`) a half-hour walk behind their data
+for no reason; a closure now never exists without its graph.
 
 
 ### sandogasa-fedrq: batched JSON queries (breaking)

@@ -399,8 +399,9 @@ struct DepsArgs {
     #[arg(long)]
     runtime_only: bool,
 
-    /// Write the walk's full dependency graph as JSON (every
-    /// requirer/provider edge, not just first attributions).
+    /// Where to write the walk's full dependency graph (every
+    /// requirer/provider edge, not just first attributions) as
+    /// JSON. Default: beside -o, as <output>-graph.json.
     #[arg(long, value_name = "PATH")]
     graph: Option<String>,
 
@@ -1403,7 +1404,15 @@ fn cmd_deps(paths: &[String], args: &DepsArgs) -> CmdResult {
             verbose: args.verbose,
         },
     )?;
-    if let Some(path) = &args.graph {
+    // A closure without its graph strands the offline commands
+    // (unkeep, dependents) a walk behind, so writing an inventory
+    // always writes the graph beside it; --graph only moves it.
+    let graph_path = args.graph.clone().or_else(|| {
+        args.output
+            .as_ref()
+            .map(|o| format!("{}-graph.json", o.strip_suffix(".toml").unwrap_or(o)))
+    });
+    if let Some(path) = &graph_path {
         std::fs::write(path, serde_json::to_vec_pretty(&graph)?)
             .map_err(|e| format!("writing {path}: {e}"))?;
     }
@@ -1450,6 +1459,7 @@ fn cmd_deps(paths: &[String], args: &DepsArgs) -> CmdResult {
                 "from": args.from,
                 "report": report,
                 "output": written,
+                "graph": graph_path,
             }))?
         );
         return Ok(ExitCode::SUCCESS);
@@ -1497,6 +1507,9 @@ fn cmd_deps(paths: &[String], args: &DepsArgs) -> CmdResult {
     }
     if let Some(path) = written {
         println!("wrote {path}");
+    }
+    if let Some(path) = graph_path {
+        println!("wrote graph to {path}");
     }
     Ok(ExitCode::SUCCESS)
 }

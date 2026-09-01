@@ -161,11 +161,13 @@ new capabilities; the manual three-invocation equivalent measured ~90
 minutes against rawhide where the in-process fixpoint is the first
 walk plus small change. Conflicts with `--runtime-only`.
 
-`--graph <path>` writes the walk's full dependency graph as JSON —
-every requirer of every capability and every provider, where the
-report keeps only first attributions. That is the input incremental
-maintenance needs ("does anything else still reach this?"), and the
-periodic full walk is its refresh.
+Whenever `-o` writes an inventory, the walk's full dependency graph
+lands beside it as `<output>-graph.json` (`--graph` moves it) — every
+requirer of every capability and every provider, where the report
+keeps only first attributions. That is the input `unkeep` and
+`dependents` answer from in milliseconds instead of a fresh walk, and
+the periodic full walk is its refresh; a closure is never written
+without it.
 
 The shared walk filters apply: `--pattern` (glob, CSV or repeated),
 `--start-from` and `--end-with` restrict which inventory packages are
