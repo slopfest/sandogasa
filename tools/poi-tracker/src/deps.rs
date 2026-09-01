@@ -86,6 +86,29 @@ pub struct DepsGraph {
     pub providers: BTreeMap<String, BTreeSet<GraphProvider>>,
 }
 
+impl DepsGraph {
+    /// Dependent sources per source: for every capability, each
+    /// provider's source gains every requirer's source, with
+    /// self-edges dropped and `src:` pseudo-requirers mapped back to
+    /// the source whose BuildRequires they carry.
+    pub fn dependents(&self) -> BTreeMap<String, BTreeSet<String>> {
+        let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (capability, providers) in &self.providers {
+            for requirer in self.requirers.get(capability).into_iter().flatten() {
+                let source = self.binary_sources.get(requirer).unwrap_or(requirer);
+                for p in providers {
+                    if &p.source != source {
+                        out.entry(p.source.clone())
+                            .or_default()
+                            .insert(source.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 /// One provider of a capability, as the graph records it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
 pub struct GraphProvider {

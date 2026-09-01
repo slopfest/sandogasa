@@ -45,6 +45,26 @@ essentials file says *why* each package is essential
 ("src:mesa requires crate(syn/clone-impls)"), which is exactly what a
 future triage, or a future self, needs to trust it.
 
+### poi-tracker: dependents, the report that says where to prune next
+
+A keep set is meant to shrink over time, but nothing could say where
+to start: which curated packages does nothing actually need, and which
+are only in the essentials because something else there drags them in
+anyway? Answering either meant reading the deps output by hand.
+
+`poi-tracker dependents --graph <json>` classifies every package of
+the given inventories by its dependents in the saved graph. Leaves
+have no dependent at all — one shipping only `-devel` binaries is a
+library kept for nobody, and the binaries are listed so the reader
+can tell that shape from an application kept on purpose. Carried
+packages are needed by other packages of the same inventories, so
+curating them is redundant — the dependency walk would re-derive them
+from their dependents. Externally needed ones are required only by
+closure packages outside the set. The first real run over 614 keeps
+found 328 leaves (13 of them devel-only) and 275 carried entries, and
+flagged a stale keep as a bonus: a package renamed upstream shows up
+as a root shipping nothing the walk saw.
+
 ### poi-tracker: unkeep, the remove half of incremental maintenance
 
 Changing one's mind about a keep used to cost a full walk: dropping a

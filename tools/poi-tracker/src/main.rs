@@ -2,6 +2,7 @@
 
 mod adopt;
 mod config;
+mod dependents;
 mod deps;
 mod gitlab_unshipped;
 mod intersect;
@@ -49,6 +50,10 @@ enum Command {
     Adopt(AdoptArgs),
     /// Configure poi-tracker (Bugzilla API key, etc.).
     Config,
+    /// Classify inventory packages by who depends on them, over a
+    /// saved dependency graph: leaves, packages other keeps carry,
+    /// externally needed ones.
+    Dependents(DependentsArgs),
     /// Inventory the dependencies pulled from other repos
     /// (e.g. EPEL).
     Deps(DepsArgs),
@@ -421,6 +426,17 @@ struct DepsArgs {
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
+}
+
+#[derive(clap::Args)]
+struct DependentsArgs {
+    /// Dependency graph JSON from a `deps --graph` run.
+    #[arg(long, value_name = "PATH")]
+    graph: String,
+
+    /// Output machine-readable JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args)]
@@ -861,6 +877,7 @@ fn main() -> ExitCode {
         Command::Find(args) => cmd_find(&paths, args),
         Command::Import(args) => cmd_import(args),
         Command::Intersect(args) => cmd_intersect(&paths, args),
+        Command::Dependents(args) => cmd_dependents(&paths, args),
         Command::Kondo(args) => cmd_kondo(&paths, args),
         Command::PruneRetired(args) => cmd_prune_retired(&paths, args),
         Command::Remove(args) => cmd_remove(&paths[0], args),
@@ -1480,6 +1497,30 @@ fn cmd_deps(paths: &[String], args: &DepsArgs) -> CmdResult {
     }
     if let Some(path) = written {
         println!("wrote {path}");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Classify the `-i` inventories' packages by their dependents in a
+/// saved deps graph — the pruning report for shrinking a keep set.
+fn cmd_dependents(paths: &[String], args: &DependentsArgs) -> CmdResult {
+    let bytes = std::fs::read(&args.graph).map_err(|e| format!("reading {}: {e}", args.graph))?;
+    let graph: deps::DepsGraph =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parsing {}: {e}", args.graph))?;
+    let mut names: std::collections::BTreeSet<String> = Default::default();
+    for path in paths {
+        names.extend(
+            sandogasa_inventory::load(path)?
+                .package
+                .into_iter()
+                .map(|p| p.name),
+        );
+    }
+    let report = dependents::classify(&graph, &names);
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print!("{}", dependents::format_report(&report));
     }
     Ok(ExitCode::SUCCESS)
 }

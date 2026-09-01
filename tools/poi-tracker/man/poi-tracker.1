@@ -90,6 +90,19 @@ Configure poi\-tracker (Bugzilla API key, etc.)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS poi-tracker dependents
+\fBpoi\-tracker dependents\fR <\fB\-\-graph\fR> [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Classify inventory packages by who depends on them, over a saved dependency graph: leaves, packages other keeps carry, externally needed ones
+.TP
+\fB\-\-graph\fR \fI<PATH>\fR
+Dependency graph JSON from a `deps \-\-graph` run
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS poi-tracker deps
 \fBpoi\-tracker deps\fR [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] <\fB\-b\fR|\fB\-\-branch\fR> [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-from\fR] [\fB\-\-base\-repo\fR] [\fB\-\-runtime\-only\fR] [\fB\-\-graph\fR] [\fB\-\-fixpoint\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-name\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP

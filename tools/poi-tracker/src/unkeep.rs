@@ -84,27 +84,6 @@ fn reachable(graph: &DepsGraph, keeps: &BTreeSet<String>) -> BTreeSet<String> {
     reached
 }
 
-/// The sources whose walk entities required a capability some binary
-/// of `name` provides — its requirers, as the graph remembers them.
-fn requirers_of(graph: &DepsGraph, name: &str) -> Vec<String> {
-    let mut out: BTreeSet<String> = BTreeSet::new();
-    for (capability, providers) in &graph.providers {
-        if providers.iter().any(|p| p.source == name) {
-            for requirer in graph.requirers.get(capability).into_iter().flatten() {
-                let source = graph
-                    .binary_sources
-                    .get(requirer)
-                    .cloned()
-                    .unwrap_or_else(|| requirer.clone());
-                if source != name {
-                    out.insert(source);
-                }
-            }
-        }
-    }
-    out.into_iter().collect()
-}
-
 /// Work out what unkeeping `names` frees. `keeps` are the keep
 /// inventories' packages by file; `deps_files` the derived
 /// inventories' packages by file. Nothing is edited here.
@@ -124,6 +103,15 @@ pub fn plan(
 
     let before = reachable(graph, &all_keeps);
     let after = reachable(graph, &remaining);
+    let dependents = graph.dependents();
+    let dependents_of = |name: &str| -> Vec<String> {
+        dependents
+            .get(name)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    };
 
     let mut report = UnkeepReport::default();
     for name in names {
@@ -138,13 +126,13 @@ pub fn plan(
         if after.contains(name) {
             report
                 .still_reached
-                .insert(name.clone(), requirers_of(graph, name));
+                .insert(name.clone(), dependents_of(name));
         }
     }
     for name in before.difference(&after) {
         report.freed.push(Freed {
             name: name.clone(),
-            former_requirers: requirers_of(graph, name),
+            former_requirers: dependents_of(name),
             in_deps_files: deps_files
                 .iter()
                 .filter(|(_, pkgs)| pkgs.contains(name))

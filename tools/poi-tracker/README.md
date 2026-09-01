@@ -89,6 +89,29 @@ env var → config file.
 Generate an API key at
 <https://bugzilla.redhat.com/userprefs.cgi?tab=apikey>.
 
+### Classify keeps by their dependents
+
+The pruning report for shrinking a keep set over time — over the graph
+a `deps --graph` run saved, classify every package of the given
+inventories by who needs it:
+
+```sh
+poi-tracker -i essential.toml -i essential-rust.toml \
+    dependents --graph fedora-build-deps-graph.json
+```
+
+**Leaves** have no dependent in the closure: one shipping real
+binaries is presumably kept for its own sake, while a `[devel-only]`
+leaf (every binary ends in `-devel` — the library shape) is kept for
+nobody. **Carried** packages are needed by *other packages of the same
+inventories* — if such an entry is only tracked as a dependency, stop
+curating it: track the dependent and let the dependency walk carry it
+in the derived inventory. **Externally needed** ones are required only
+by closure packages outside the inventories. Packages the graph never
+saw are reported as unknown rather than guessed at (a stale graph — or
+a stale keep: a package renamed upstream shows up as a leaf shipping
+nothing). `--json` prints the report machine-readably.
+
 ### Inventory dependencies from other repos
 
 Walk the transitive dependency graph of the inventory's
