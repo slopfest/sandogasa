@@ -57,13 +57,19 @@ skip the already-decided, so a triage accumulated over many sittings
 `poi-tracker -i cull.toml announce --user <fas>` re-classifies the
 cull inventory's packages (day-fresh ACL cache first, dist-git for
 the rest — never the cull file's `reason` text, which is free-form)
-and prints the same grouped report a kondo run ends with: the
-owner-level batch as one runnable `sandogasa-pkg-acl give orphan`
-command, per-package self-removals for admin, and the ask-list for
-everything the user cannot act on alone. The first real render
-grouped 214 verdicts into 114 orphanable, 61 self-removable and 39 to
-ask about. The cache-first classification moved into a helper kondo
-and announce share.
+and prints the grouped report: package names by level, with the
+ask-list for everything the user cannot act on alone. The report
+deliberately carries no commands — a mailing-list post is for humans.
+The commands go to `--script <path>` instead: an executable shell
+script in which the owner-level `sandogasa-pkg-acl give orphan` batch
+and each admin-level self-removal is echoed and individually
+confirmed before running, so enacting the cull is a deliberate walk
+rather than one irreversible paste. (kondo's own end-of-run report
+loses its command lines the same way.) The first real render grouped
+214 verdicts into 114 orphanable, 61 self-removable and 39 to ask
+about — one batch command plus 61 confirmations in the script. The
+cache-first classification moved into a helper kondo and announce
+share.
 
 ### poi-tracker: dependents, the report that says where to prune next
 

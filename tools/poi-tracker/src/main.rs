@@ -450,6 +450,11 @@ struct AnnounceArgs {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Write the actionable commands as a shell script that echoes
+    /// and confirms each one before running it.
+    #[arg(long, value_name = "PATH")]
+    script: Option<String>,
+
     /// Output machine-readable JSON.
     #[arg(long)]
     json: bool,
@@ -1249,11 +1254,21 @@ fn cmd_announce(paths: &[String], args: &AnnounceArgs) -> CmdResult {
         warnings,
         ..Default::default()
     };
+    if let Some(path) = &args.script {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, kondo::format_script(&report, &args.user))
+            .map_err(|e| format!("writing {path}: {e}"))?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("marking {path} executable: {e}"))?;
+    }
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(ExitCode::SUCCESS);
     }
     print!("{}", kondo::format_report(&report, &args.user));
+    if let Some(path) = &args.script {
+        println!("\nwrote the act-phase script to {path}");
+    }
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
     }

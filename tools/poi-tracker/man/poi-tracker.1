@@ -84,7 +84,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker announce
-\fBpoi\-tracker announce\fR <\fB\-\-user\fR> [\fB\-\-refresh\-acls\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker announce\fR <\fB\-\-user\fR> [\fB\-\-refresh\-acls\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-script\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Render the standing cull verdicts as the grouped, announcement\-ready report with runnable ACL commands
 .TP
@@ -96,6 +96,9 @@ Ignore the day\-fresh ACL cache and look every level up again
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Log each access lookup
+.TP
+\fB\-\-script\fR \fI<PATH>\fR
+Write the actionable commands as a shell script that echoes and confirms each one before running it
 .TP
 \fB\-\-json\fR
 Output machine\-readable JSON
