@@ -45,6 +45,31 @@ essentials file says *why* each package is essential
 ("src:mesa requires crate(syn/clone-impls)"), which is exactly what a
 future triage, or a future self, needs to trust it.
 
+### poi-tracker: unkeep, the remove half of incremental maintenance
+
+Changing one's mind about a keep used to cost a full walk: dropping a
+package from the essential inventories says nothing about the crates
+and tools that were only ever there for its sake, and the only way to
+find them was to regenerate the whole dependency closure — half an
+hour against rawhide — then diff. That made small keep-set edits
+expensive exactly when they should be trivial.
+
+`poi-tracker unkeep <packages> --graph <json>` answers offline, over
+the graph a `deps --graph` run saved: it recomputes what the remaining
+keeps reach and reports every package that falls out of the closure,
+each named with its former requirers. `--apply` enacts the plan —
+unkept packages leave the `-i` keep inventories, freed ones leave the
+`--deps` derived inventories — so the next kondo pass offers them all
+as candidates. A package the remaining keeps still reach is a warning
+rather than a free, since culling it would only be rescued back.
+
+Reachability is deliberately conservative: every provider the walk
+recorded counts, so nothing is freed while an alternative chain still
+holds; and a derived package's `src:` build-dependency edges lapse
+when it does, so test-only build dependencies cascade out the way the
+forward fixpoint pulled them in. Zero fedrq calls — the periodic full
+walk is the graph's refresh.
+
 ### poi-tracker: kondo, the triage that decides what stops sparking joy
 
 A personal package inventory accumulates: dependencies once needed,

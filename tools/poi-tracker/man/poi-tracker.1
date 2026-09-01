@@ -548,6 +548,28 @@ Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS poi-tracker unkeep
+\fBpoi\-tracker unkeep\fR <\fB\-\-graph\fR> [\fB\-\-deps\fR] [\fB\-\-apply\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> 
+.PP
+Stop keeping packages: over a saved dependency graph, report what the removal frees, and optionally edit the inventories
+.TP
+\fB\-\-graph\fR \fI<PATH>\fR
+Dependency graph JSON from a `deps \-\-graph` run
+.TP
+\fB\-\-deps\fR \fI<PATH>\fR
+Derived dependency inventories (a `deps` output merged by `intersect`, say); freed packages leave these with \-\-apply
+.TP
+\fB\-\-apply\fR
+Edit the inventories; without it, report only
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIPACKAGE\fR>
+Packages to stop keeping
 .SS poi-tracker validate
 \fBpoi\-tracker validate\fR [\fB\-h\fR|\fB\-\-help\fR] 
 .PP

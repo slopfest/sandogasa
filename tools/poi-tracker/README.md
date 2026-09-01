@@ -695,6 +695,33 @@ under `-y` this is the only way to opt in. Bugs moved to
 whoever owns the in-flight update. The email is set via
 `poi-tracker config`.
 
+### Stop keeping packages (unkeep)
+
+Remove packages from the keep inventories and learn, without re-walking
+anything, what else stops being needed — over the dependency graph a
+`deps --graph` run saved:
+
+```sh
+poi-tracker -i essential.toml -i essential-rust.toml \
+    unkeep neovim GraphicsMagick \
+    --graph fedora-build-deps-graph.json \
+    --deps essential-deps.toml
+```
+
+The report names each freed package with its former requirers; adding
+`--apply` removes the unkept packages from the `-i` keep inventories
+and the freed ones from the `--deps` derived inventories, so the next
+`kondo` run offers them all as candidates. A package the remaining
+keeps still reach is a warning, not a free — culling it would be
+rescued right back.
+
+Reachability follows every provider the walk recorded, so nothing is
+freed while any alternative chain still holds, and a derived package's
+`src:` build-dependency edges lapse with it, so test-only build
+dependencies cascade out the way the fixpoint pulled them in. The
+graph is a snapshot: the periodic full `deps --graph` walk is its
+refresh. `--json` prints the report machine-readably.
+
 ### Validate
 
 ```sh

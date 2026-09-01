@@ -10,6 +10,7 @@ mod prune_retired;
 mod semver_audit;
 mod triage_retired;
 mod triage_updates;
+mod unkeep;
 
 use std::collections::BTreeMap;
 use std::process::ExitCode;
@@ -85,6 +86,10 @@ enum Command {
     /// packages by bumping their Bugzilla priority to match the
     /// inventory.
     TriageUpdates(TriageUpdatesArgs),
+    /// Stop keeping packages: over a saved dependency graph,
+    /// report what the removal frees, and optionally edit the
+    /// inventories.
+    Unkeep(UnkeepArgs),
     /// Validate inventory consistency.
     Validate,
 }
@@ -416,6 +421,30 @@ struct DepsArgs {
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
+}
+
+#[derive(clap::Args)]
+struct UnkeepArgs {
+    /// Packages to stop keeping.
+    #[arg(required = true, value_name = "PACKAGE")]
+    names: Vec<String>,
+
+    /// Dependency graph JSON from a `deps --graph` run.
+    #[arg(long, value_name = "PATH")]
+    graph: String,
+
+    /// Derived dependency inventories (a `deps` output merged by
+    /// `intersect`, say); freed packages leave these with --apply.
+    #[arg(long, value_name = "PATH")]
+    deps: Vec<String>,
+
+    /// Edit the inventories; without it, report only.
+    #[arg(long)]
+    apply: bool,
+
+    /// Output machine-readable JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args)]
@@ -841,6 +870,7 @@ fn main() -> ExitCode {
         Command::SyncGitlab(args) => cmd_sync_gitlab(args),
         Command::TriageRetired(args) => cmd_triage_retired(&paths, args),
         Command::TriageUpdates(args) => cmd_triage_updates(&paths, args),
+        Command::Unkeep(args) => cmd_unkeep(&paths, args),
         Command::Validate => cmd_validate(&paths),
     };
     match result {
@@ -1450,6 +1480,57 @@ fn cmd_deps(paths: &[String], args: &DepsArgs) -> CmdResult {
     }
     if let Some(path) = written {
         println!("wrote {path}");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Report (and with `--apply`, enact) what unkeeping packages frees,
+/// over a saved deps graph instead of a fresh walk. The global `-i`
+/// inventories are the keeps; `--deps` names the derived inventories
+/// freed packages leave.
+fn cmd_unkeep(paths: &[String], args: &UnkeepArgs) -> CmdResult {
+    use std::collections::BTreeSet;
+
+    let bytes = std::fs::read(&args.graph).map_err(|e| format!("reading {}: {e}", args.graph))?;
+    let graph: deps::DepsGraph =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parsing {}: {e}", args.graph))?;
+    let load_names = |path: &String| -> Result<(String, BTreeSet<String>), String> {
+        Ok((
+            path.clone(),
+            sandogasa_inventory::load(path)?
+                .package
+                .into_iter()
+                .map(|p| p.name)
+                .collect(),
+        ))
+    };
+    let keeps: BTreeMap<String, BTreeSet<String>> =
+        paths.iter().map(&load_names).collect::<Result<_, _>>()?;
+    let deps_files: BTreeMap<String, BTreeSet<String>> = args
+        .deps
+        .iter()
+        .map(&load_names)
+        .collect::<Result<_, _>>()?;
+
+    let report = unkeep::plan(&graph, &args.names, &keeps, &deps_files);
+    if args.apply {
+        let unkept: BTreeSet<&str> = args.names.iter().map(String::as_str).collect();
+        for (file, pkgs) in &keeps {
+            if args.names.iter().any(|n| pkgs.contains(n)) {
+                unkeep::remove_from_inventory(file, &unkept)?;
+            }
+        }
+        let freed: BTreeSet<&str> = report.freed.iter().map(|f| f.name.as_str()).collect();
+        for (file, pkgs) in &deps_files {
+            if report.freed.iter().any(|f| pkgs.contains(&f.name)) {
+                unkeep::remove_from_inventory(file, &freed)?;
+            }
+        }
+    }
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print!("{}", unkeep::format_report(&report, args.apply));
     }
     Ok(ExitCode::SUCCESS)
 }

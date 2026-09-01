@@ -74,7 +74,7 @@ impl PkgQuery for sandogasa_fedrq::Fedrq {
 /// Normalized: capabilities map to every binary that required them
 /// and every provider that satisfied them; `binary_sources` maps
 /// binaries (and `src:`-prefixed sources) back to source packages.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, serde::Deserialize)]
 pub struct DepsGraph {
     /// Source packages the walk started from.
     pub roots: Vec<String>,
@@ -87,7 +87,7 @@ pub struct DepsGraph {
 }
 
 /// One provider of a capability, as the graph records it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
 pub struct GraphProvider {
     pub binary: String,
     pub source: String,
