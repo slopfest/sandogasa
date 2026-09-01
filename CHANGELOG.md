@@ -75,6 +75,14 @@ idiom: candidates are snapshotted before any filing, and a not-yet-
 existing explain target among the essentials is tolerated as empty,
 while any other missing essential path stays a loud error.
 
+And the essential union is now built from names read
+per file rather than a full inventory merge: the merger warned once
+per reason conflict, the same crate legitimately carries different
+reasons in an el9 and a rawhide deps inventory, and on the first real
+rescue run those warnings buried the one line that mattered — 108
+packages being rescued — thoroughly enough that it took a file-level
+diff to notice them.
+
 Sized for reality: the first real run produced 931 candidates. The
 shared walk filters (`--pattern`, `--start-from`, `--end-with`)
 restrict the candidate set so a triage that size can be eaten in

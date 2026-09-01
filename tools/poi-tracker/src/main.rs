@@ -1051,12 +1051,18 @@ fn cmd_triage_retired(paths: &[String], args: &TriageRetiredArgs) -> CmdResult {
 
 fn cmd_intersect(paths: &[String], args: &IntersectArgs) -> CmdResult {
     let base = sandogasa_inventory::load_and_merge(paths)?;
-    let filter: std::collections::BTreeSet<String> =
-        sandogasa_inventory::load_and_merge(&args.with)?
-            .package
-            .into_iter()
-            .map(|p| p.name)
-            .collect();
+    // Names only — reading the filter files independently avoids
+    // load_and_merge's per-package reason-conflict warnings, which
+    // are meaningless for a name filter.
+    let mut filter: std::collections::BTreeSet<String> = Default::default();
+    for path in &args.with {
+        filter.extend(
+            sandogasa_inventory::load(path)?
+                .package
+                .into_iter()
+                .map(|p| p.name),
+        );
+    }
     let meta = base.inventory.clone();
     let packages = intersect::intersect(base, &filter);
 
@@ -1098,9 +1104,21 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
     if let Some(note) = &note {
         eprintln!("note: {note}");
     }
-    let essential = sandogasa_inventory::load_and_merge(&essential_paths)?;
-    let essential_names: std::collections::BTreeSet<String> =
-        essential.package.into_iter().map(|p| p.name).collect();
+    // Only the names matter for a set difference, so the essential
+    // files are read independently rather than merged — merging
+    // warns per reason conflict, and the same crate legitimately
+    // carries different reasons in an el9 deps inventory and a
+    // rawhide one. On the first real run those warnings buried the
+    // rescue report.
+    let mut essential_names: std::collections::BTreeSet<String> = Default::default();
+    for path in &essential_paths {
+        essential_names.extend(
+            sandogasa_inventory::load(path)?
+                .package
+                .into_iter()
+                .map(|p| p.name),
+        );
+    }
 
     let mut candidates = kondo::cull_candidates(&personal, &essential_names);
     candidates.retain(|name| args.filter.matches(name));
@@ -1217,6 +1235,13 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
         return Ok(ExitCode::SUCCESS);
     }
     print!("{}", kondo::format_report(&report, &args.user));
+    if !report.rescued.is_empty() {
+        println!(
+            "rescued earlier this run ({} package(s), now essential): {}",
+            report.rescued.len(),
+            report.rescued.join(", "),
+        );
+    }
     for (name, inv) in &report.explained {
         println!("filed {name} → {inv}");
     }
