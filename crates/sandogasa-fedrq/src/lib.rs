@@ -235,6 +235,28 @@ impl Fedrq {
         self.query(&["whatrequires", "-F", "source"], packages)
     }
 
+    /// Like [`Self::whatrequires`] but returning `(binary, source)`
+    /// pairs — so a feature subpackage (`foo+bar`) is visible as such
+    /// (its name carries the `+`) while still resolving to its true
+    /// source, which is not derivable from the binary name by string
+    /// surgery (`python3-dulwich+merge`'s source is `python-dulwich`).
+    pub fn whatrequires_binaries(
+        &self,
+        packages: &[String],
+    ) -> Result<Vec<(String, String)>, Error> {
+        if packages.is_empty() {
+            return Ok(vec![]);
+        }
+        let rows = self.query(&["whatrequires", "-F", "line:name,source"], packages)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let (name, source) = row.split_once(" : ")?;
+                Some((name.trim().to_string(), source.trim().to_string()))
+            })
+            .collect())
+    }
+
     /// Return the Requires of a *source* package — its BuildRequires —
     /// via `fedrq pkgs --src -F requires`. Complements
     /// [`Self::subpkgs_requires`] (the binary subpackages' install-time

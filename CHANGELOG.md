@@ -77,7 +77,14 @@ feature away. The probe reproduced a colleague's by-hand findings for
 rust-wayland-server name for name: mir, the wayland-protocols family,
 wl-clipboard-rs. A package with dependents defaults to skip, since
 orphaning starts the retirement clock and retirement is what leaves
-dependents uninstallable. The probe aims itself: by default each
+dependents uninstallable. Each dependent is resolved to its source
+and classified by severability: a requirer that reaches the package
+only through an optional `foo+feature` subpackage is a soft edge
+(dropping that feature severs it), distinguished from a hard
+dependency by the base package, which makes orphan reconfirm —
+python-dulwich needs merge3 only via its `+merge` feature while breezy
+requires it outright, and the probe now says so. The probe aims
+itself: by default each
 package is probed on the branches its dist-git repo actually carries —
 rawhide plus its own EPEL branches, `epel10.x` normalized — because an
 EPEL-only package's dependents are invisible from rawhide, and *which*

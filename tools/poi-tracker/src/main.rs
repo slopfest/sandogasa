@@ -1321,6 +1321,7 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
         if !actionable {
             println!("  nothing to self-enact — ask to be removed (or uncull)");
         }
+        let mut hard_dependents = false;
         if orphanable {
             // Orphaning starts the retirement clock; retiring a
             // package something requires strands its dependents, so
@@ -1355,12 +1356,30 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
                         println!("  no {branch} dependents");
                     }
                     Ok(act::Probe::Dependents(deps)) => {
-                        println!(
-                            "  {branch} dependents: {} — orphaning starts the                              retirement clock for them",
-                            deps.join(", ")
-                        );
+                        let rendered: Vec<String> = deps
+                            .iter()
+                            .map(|d| match d.feature_only {
+                                true => format!("{} (optional feature)", d.source),
+                                false => d.source.clone(),
+                            })
+                            .collect();
+                        if deps.iter().all(|d| d.feature_only) {
+                            println!(
+                                "  {branch} dependents, all via optional features \
+                                 (likely severable): {}",
+                                rendered.join(", ")
+                            );
+                        } else {
+                            hard_dependents = true;
+                            println!(
+                                "  {branch} dependents: {} — orphaning starts the \
+                                 retirement clock for them",
+                                rendered.join(", ")
+                            );
+                        }
                     }
                     Err(e) => {
+                        hard_dependents = true;
                         println!("  {branch} probe failed ({e}) — assume it has dependents");
                     }
                 }
@@ -1418,6 +1437,20 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
                     break;
                 }
                 act::Choice::Enact if orphanable => {
+                    // A hard dependent means retirement would strand
+                    // it; make the operator say so twice.
+                    if hard_dependents {
+                        print!("  a package still hard-depends on this — orphan anyway? [y/N] ");
+                        let _ = std::io::stdout().flush();
+                        if !matches!(
+                            read_line()?.trim().to_ascii_lowercase().as_str(),
+                            "y" | "yes"
+                        ) {
+                            println!("  kept");
+                            skipped += 1;
+                            break;
+                        }
+                    }
                     rt.block_on(client.give_package(&c.name, "orphan"))
                 }
                 act::Choice::Enact => rt.block_on(client.remove_acl(&c.name, "user", &args.user)),

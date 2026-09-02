@@ -61,7 +61,13 @@ probed distro-wide through fedrq, across **all** subpackages, so
 feature capabilities (`crate(x/feature)`) are covered: orphaning
 starts the retirement clock, and retirement is what leaves dependents
 uninstallable. A package something still requires says so at the
-prompt, where skip is already the default. The probe aims itself: by
+prompt, where skip is already the default — and a hard dependency
+makes the orphan reconfirm. Each dependent is resolved to its source
+and classified: one that reaches the package only through an optional
+`foo+feature` subpackage is shown as `(optional feature)` and, if
+every dependent is such, flagged likely severable rather than a block
+(python-dulwich needs merge3 only via its `+merge` feature, breezy
+outright). The probe aims itself: by
 default (`--branch auto`) each package is probed on the branches it
 actually carries per dist-git — rawhide plus its own EPEL branches —
 because which branches matter belongs to the package, not to a flag

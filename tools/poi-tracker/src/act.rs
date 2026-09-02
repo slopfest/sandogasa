@@ -10,12 +10,15 @@
 //!
 //! Before any orphan-class prompt, the package's reverse dependencies
 //! are probed distro-wide through fedrq — every subpackage, so
-//! feature capabilities (`crate(x/feature)`) cannot hide the way they
-//! can in an inventory-scoped closure — because orphaning starts the
-//! retirement clock, and retirement is what strands dependents. A
-//! package something still requires defaults to skip; enacting it
-//! anyway is a deliberate choice, as is `g <user>`, which hands the
-//! package to a named person instead of the orphan pool.
+//! feature capabilities cannot hide the way they can in an
+//! inventory-scoped closure — because orphaning starts the retirement
+//! clock, and retirement is what strands dependents. Each requirer is
+//! resolved to its source *and* classified: a dependent that reaches
+//! the package only through a `foo+feature` subpackage is flagged
+//! severable (dropping that optional feature breaks the edge), while
+//! a base-package requirer is a hard block that makes orphan
+//! reconfirm. `g <user>` hands the package to a named person instead
+//! of the orphan pool.
 
 use serde::Serialize;
 
@@ -95,25 +98,47 @@ pub enum Probe {
     /// No binaries on this branch (retired there, or never present).
     Absent,
     /// Source packages that require any of its subpackages' provides.
-    Dependents(Vec<String>),
+    Dependents(Vec<Dependent>),
 }
 
-/// Keep only the dependents that are someone else's problem: the
-/// package's own subpackages requiring each other prove nothing, and
-/// fedrq's literal `(none)` rows are noise.
-pub fn external_dependents(package: &str, raw: Vec<String>) -> Vec<String> {
-    let mut out: Vec<String> = raw
-        .into_iter()
-        .filter(|s| s != "(none)" && s != package)
-        .collect();
-    out.sort();
-    out.dedup();
-    out
+/// One requiring source package, and whether the requirement is
+/// severable: `feature_only` means every requiring binary of it is a
+/// `foo+feature` subpackage, so dropping that optional feature would
+/// break the edge — a soft block, unlike a hard dependency from the
+/// base package.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Dependent {
+    pub source: String,
+    pub feature_only: bool,
+}
+
+/// Resolve `(binary, source)` requirers into dependent source
+/// packages, dropping the package's own subpackages and fedrq's
+/// `(none)` rows. A source is `feature_only` when every one of its
+/// requiring binaries is a `+feature` subpackage — the `+` lives in
+/// the binary name, while the source is what fedrq resolved it to.
+pub fn resolve_dependents(package: &str, requirers: Vec<(String, String)>) -> Vec<Dependent> {
+    // Source → did any *base* (non-`+feature`) binary of it require us?
+    let mut hard: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+    for (binary, source) in requirers {
+        if binary == "(none)" || source == package {
+            continue;
+        }
+        let is_feature = binary.contains('+');
+        let entry = hard.entry(source).or_insert(false);
+        *entry = *entry || !is_feature;
+    }
+    hard.into_iter()
+        .map(|(source, had_hard)| Dependent {
+            source,
+            feature_only: !had_hard,
+        })
+        .collect()
 }
 
 /// Probe a package's reverse dependencies on one branch: all of its
 /// subpackages (so feature-gated capabilities are covered), resolved
-/// to requiring source packages.
+/// to requiring source packages with their severability.
 pub fn probe_dependents(branch: &str, package: &str) -> Result<Probe, String> {
     let fedrq = sandogasa_fedrq::Fedrq {
         branch: Some(branch.to_string()),
@@ -125,10 +150,10 @@ pub fn probe_dependents(branch: &str, package: &str) -> Result<Probe, String> {
     if binaries.is_empty() {
         return Ok(Probe::Absent);
     }
-    let raw = fedrq
-        .whatrequires(&binaries)
+    let requirers = fedrq
+        .whatrequires_binaries(&binaries)
         .map_err(|e| format!("whatrequires for {package} on {branch}: {e}"))?;
-    Ok(Probe::Dependents(external_dependents(package, raw)))
+    Ok(Probe::Dependents(resolve_dependents(package, requirers)))
 }
 
 #[cfg(test)]
@@ -192,17 +217,78 @@ mod tests {
     }
 
     #[test]
-    fn own_subpackages_and_none_rows_are_not_dependents() {
-        let raw = vec![
-            "(none)".to_string(),
-            "rust-buf-min".to_string(),
-            "rust-v_htmlescape".to_string(),
-            "rust-v_htmlescape".to_string(),
+    fn dependents_resolve_to_sources_and_flag_feature_only_edges() {
+        // breezy requires via its base binary (hard); python-dulwich
+        // only via python3-dulwich+merge (severable) — and that
+        // feature binary's base name (python3-dulwich) is NOT the
+        // source (python-dulwich), so the source must come from fedrq,
+        // not from stripping the `+`.
+        let requirers = vec![
+            ("(none)".to_string(), "(none)".to_string()),
+            ("breezy".to_string(), "breezy".to_string()),
+            (
+                "python3-dulwich+merge".to_string(),
+                "python-dulwich".to_string(),
+            ),
         ];
+        let deps = resolve_dependents("python-merge3", requirers);
         assert_eq!(
-            external_dependents("rust-buf-min", raw),
-            ["rust-v_htmlescape"]
+            deps,
+            [
+                Dependent {
+                    source: "breezy".into(),
+                    feature_only: false
+                },
+                Dependent {
+                    source: "python-dulwich".into(),
+                    feature_only: true
+                },
+            ]
         );
-        assert!(external_dependents("x", vec!["(none)".into(), "x".into()]).is_empty());
+    }
+
+    #[test]
+    fn a_source_with_both_edges_is_a_hard_dependency() {
+        // If any base binary requires us, the source is a hard block
+        // even when another of its subpackages is a feature edge.
+        let deps = resolve_dependents(
+            "libx",
+            vec![
+                ("app".into(), "app".into()),
+                ("app+extra".into(), "app".into()),
+            ],
+        );
+        assert_eq!(
+            deps,
+            [Dependent {
+                source: "app".into(),
+                feature_only: false
+            }]
+        );
+    }
+
+    #[test]
+    fn own_subpackages_and_none_rows_are_not_dependents() {
+        let deps = resolve_dependents(
+            "rust-buf-min",
+            vec![
+                ("(none)".into(), "(none)".into()),
+                ("rust-buf-min".into(), "rust-buf-min".into()),
+                ("rust-buf-min+std".into(), "rust-buf-min".into()),
+                (
+                    "rust-v_htmlescape+default".into(),
+                    "rust-v_htmlescape".into(),
+                ),
+            ],
+        );
+        // Own subpackages (base and +feature) drop out; the external
+        // requirer remains, feature-only.
+        assert_eq!(
+            deps,
+            [Dependent {
+                source: "rust-v_htmlescape".into(),
+                feature_only: true
+            }]
+        );
     }
 }
