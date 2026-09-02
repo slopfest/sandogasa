@@ -163,6 +163,129 @@ impl DepsGraph {
     }
 }
 
+impl DepsGraph {
+    /// Fold another walk's graph into this one: roots, binary
+    /// attribution and every edge, union-wise. This is how an
+    /// incremental walk (one new root) extends a stored graph instead
+    /// of replacing it.
+    pub fn merge(&mut self, other: DepsGraph) {
+        for root in other.roots {
+            if !self.roots.contains(&root) {
+                self.roots.push(root);
+            }
+        }
+        self.binary_sources.extend(other.binary_sources);
+        for (cap, reqs) in other.requirers {
+            self.requirers.entry(cap).or_default().extend(reqs);
+        }
+        for (cap, provs) in other.providers {
+            self.providers.entry(cap).or_default().extend(provs);
+        }
+    }
+}
+
+/// A [`PkgQuery`] that answers from a saved graph wherever it can and
+/// asks the real query only for what the graph has never seen.
+///
+/// Capabilities the graph already resolved come back as the recorded
+/// providers, their Requires reconstructed from the inverted edge map
+/// — so a new root's walk cascades offline through the known part of
+/// the world and pays fedrq's per-capability price only at the
+/// frontier. Root expansion (`subpkgs`/`srcs`) always goes live: a
+/// package the graph met as a *collected* dependency carries only the
+/// feature subpackages something requested, and a root must expand
+/// every feature (the asymmetry that once made four crates look
+/// dependent-free).
+pub struct GraphBackedQuery<'a, Q: PkgQuery> {
+    inner: &'a Q,
+    graph: &'a DepsGraph,
+    /// Entity → the capabilities it required, per the graph.
+    requires_of: BTreeMap<&'a str, Vec<&'a str>>,
+    /// Binary → the capabilities it provided, per the graph.
+    provides_of: BTreeMap<&'a str, Vec<&'a str>>,
+    /// Capabilities answered from the graph / sent to the inner query.
+    pub offline: std::sync::atomic::AtomicUsize,
+    pub online: std::sync::atomic::AtomicUsize,
+}
+
+impl<'a, Q: PkgQuery> GraphBackedQuery<'a, Q> {
+    pub fn new(inner: &'a Q, graph: &'a DepsGraph) -> Self {
+        let mut requires_of: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (cap, reqs) in &graph.requirers {
+            for r in reqs {
+                requires_of
+                    .entry(r.as_str())
+                    .or_default()
+                    .push(cap.as_str());
+            }
+        }
+        let mut provides_of: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (cap, provs) in &graph.providers {
+            for p in provs {
+                provides_of
+                    .entry(p.binary.as_str())
+                    .or_default()
+                    .push(cap.as_str());
+            }
+        }
+        Self {
+            inner,
+            graph,
+            requires_of,
+            provides_of,
+            offline: Default::default(),
+            online: Default::default(),
+        }
+    }
+}
+
+impl<Q: PkgQuery> PkgQuery for GraphBackedQuery<'_, Q> {
+    fn subpkgs(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, String> {
+        self.inner.subpkgs(srpms)
+    }
+    fn srcs(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, String> {
+        self.inner.srcs(srpms)
+    }
+    fn providers(&self, deps: &[String]) -> Result<Vec<PkgInfo>, String> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut known: BTreeMap<&str, PkgInfo> = BTreeMap::new();
+        let mut unknown: Vec<String> = Vec::new();
+        for dep in deps {
+            match self.graph.providers.get(dep).filter(|p| !p.is_empty()) {
+                None => unknown.push(dep.clone()),
+                Some(provs) => {
+                    for gp in provs {
+                        let entry = known.entry(gp.binary.as_str()).or_insert_with(|| {
+                            let strings = |m: &BTreeMap<&str, Vec<&str>>| -> Vec<String> {
+                                m.get(gp.binary.as_str())
+                                    .map(|v| v.iter().map(|c| c.to_string()).collect())
+                                    .unwrap_or_default()
+                            };
+                            PkgInfo::new(
+                                gp.binary.clone(),
+                                strings(&self.requires_of),
+                                strings(&self.provides_of),
+                                Some(gp.source.clone()),
+                                gp.repoid.clone(),
+                            )
+                        });
+                        if !entry.provides.iter().any(|c| c == dep) {
+                            entry.provides.push(dep.clone());
+                        }
+                    }
+                }
+            }
+        }
+        self.offline.fetch_add(deps.len() - unknown.len(), Relaxed);
+        self.online.fetch_add(unknown.len(), Relaxed);
+        let mut out: Vec<PkgInfo> = known.into_values().collect();
+        if !unknown.is_empty() {
+            out.extend(self.inner.providers(&unknown)?);
+        }
+        Ok(out)
+    }
+}
+
 /// One provider of a capability, as the graph records it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
 pub struct GraphProvider {
@@ -1157,5 +1280,98 @@ mod tests {
             inv.package[0].reason.as_deref(),
             Some("runtime dependency (epel): root-bin requires libfoo.so.1()(64bit)")
         );
+    }
+
+    #[test]
+    fn merge_unions_roots_attribution_and_edges() {
+        let mut a = DepsGraph {
+            roots: vec!["app".into()],
+            ..Default::default()
+        };
+        a.binary_sources.insert("app".into(), "app".into());
+        a.requirers
+            .entry("liba.so".into())
+            .or_default()
+            .insert("app".into());
+        a.providers
+            .entry("liba.so".into())
+            .or_default()
+            .insert(GraphProvider {
+                binary: "liba".into(),
+                source: "lib-a".into(),
+                repoid: "rawhide".into(),
+            });
+        let mut b = DepsGraph {
+            roots: vec!["app".into(), "tool".into()],
+            ..Default::default()
+        };
+        b.binary_sources.insert("tool".into(), "tool".into());
+        b.requirers
+            .entry("liba.so".into())
+            .or_default()
+            .insert("tool".into());
+        b.providers
+            .entry("libb.so".into())
+            .or_default()
+            .insert(GraphProvider {
+                binary: "libb".into(),
+                source: "lib-b".into(),
+                repoid: "rawhide".into(),
+            });
+        a.merge(b);
+        assert_eq!(a.roots, ["app", "tool"]);
+        assert_eq!(a.binary_sources.len(), 2);
+        assert_eq!(a.requirers["liba.so"].len(), 2);
+        assert!(a.providers.contains_key("libb.so"));
+    }
+
+    #[test]
+    fn graph_backed_query_answers_known_capabilities_offline() {
+        // Graph knows liba.so → liba (source lib-a), and that liba
+        // requires libc.so, itself known → glibc.
+        let mut g = DepsGraph::default();
+        g.binary_sources.insert("liba".into(), "lib-a".into());
+        g.requirers
+            .entry("libc.so".into())
+            .or_default()
+            .insert("liba".into());
+        g.providers
+            .entry("liba.so".into())
+            .or_default()
+            .insert(GraphProvider {
+                binary: "liba".into(),
+                source: "lib-a".into(),
+                repoid: "rawhide".into(),
+            });
+        g.providers
+            .entry("libc.so".into())
+            .or_default()
+            .insert(GraphProvider {
+                binary: "glibc".into(),
+                source: "glibc".into(),
+                repoid: "rawhide".into(),
+            });
+        // The inner query knows only the genuinely new capability.
+        let inner = Canned {
+            subpkgs: vec![],
+            srcs: vec![],
+            providers: vec![pkg(serde_json::json!({
+                "name": "libnew", "source_name": "lib-new", "repoid": "rawhide",
+                "provides": ["libnew.so"], "requires": []
+            }))],
+        };
+        let q = GraphBackedQuery::new(&inner, &g);
+        let out = q
+            .providers(&["liba.so".to_string(), "libnew.so".to_string()])
+            .unwrap();
+        let names: Vec<&str> = out.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["liba", "libnew"]);
+        // The offline provider carries its graph-recorded Requires, so
+        // the walk keeps cascading through the known world.
+        assert_eq!(out[0].requires, ["libc.so"]);
+        assert!(out[0].provides.iter().any(|c| c == "liba.so"));
+        assert_eq!(out[0].source_name.as_deref(), Some("lib-a"));
+        assert_eq!(q.offline.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(q.online.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 }

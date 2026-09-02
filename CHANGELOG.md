@@ -170,6 +170,32 @@ found 328 leaves (13 of them devel-only) and 275 carried entries, and
 flagged a stale keep as a bonus: a package renamed upstream shows up
 as a root shipping nothing the walk saw.
 
+### poi-tracker: keep, the add half of incremental maintenance
+
+Adding a keep was the one keep-set edit the saved graph could not
+answer: the new package's edges were simply not in it, so a single
+addition meant the full hour-long walk — and then the essential
+inventory and the derived one still had to be edited by hand.
+
+`poi-tracker keep <packages> --graph <json> --owned <inventory>`
+walks the new roots over a graph-backed query: every capability the
+graph already resolved is answered offline, with the provider's
+Requires reconstructed from the recorded edges so the walk keeps
+cascading through the known world at no cost, and fedrq is asked only
+at the frontier. The new edges merge into the graph file rather than
+replacing it, the names are filed into a keep inventory (`--into`),
+and `--deps` recomputes the derived inventory in the same run; the
+summary reports how many capabilities were answered from the graph
+versus resolved live. Root expansion always goes live — a package the
+graph met as a collected dependency carries only the feature
+subpackages something requested, and a root must expand every feature,
+the asymmetry that once made four crates look dependent-free. The
+first real run — keeping tpm2-tools against the 700-root graph —
+took under ten seconds: 27 waves, 851 capabilities answered from the
+graph, 15 resolved live, where the full walk it replaces takes an
+hour. The repo flags `deps` and `keep` share moved into one argument
+group.
+
 ### poi-tracker: derive, the derived inventory as a materialized view
 
 Updating the derived dependency inventory after a keep-set edit cost a

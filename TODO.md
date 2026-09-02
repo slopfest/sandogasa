@@ -289,10 +289,6 @@ than annotated as done.
   report, idempotent `--apply`. Validated against the first real
   prune: 353 packages in ~1s, name-for-name what the verification
   walk re-derived.
-- Adding a brand-new keep is the one edit the graph cannot answer:
-  walk it as a *single root* (minutes) and merge its edges into the
-  stored graph instead of replacing it; then the same offline
-  recompute.
 - Both are only as true as the last full walk — rawhide drift (renamed
   sources like pandoc→pandoc-cli, changed Requires/providers) is
   invisible offline. Keep the hour-long full walk as a periodic

@@ -73,6 +73,28 @@ pub struct PkgInfo {
     pub repoid: String,
 }
 
+impl PkgInfo {
+    /// Build a package record from parts — for callers that
+    /// reconstruct packages from stored data rather than a fedrq
+    /// answer (the struct is `#[non_exhaustive]`, so a literal
+    /// cannot be written outside this crate).
+    pub fn new(
+        name: impl Into<String>,
+        requires: Vec<String>,
+        provides: Vec<String>,
+        source_name: Option<String>,
+        repoid: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            requires,
+            provides,
+            source_name,
+            repoid: repoid.into(),
+        }
+    }
+}
+
 /// The XDG cache base (`$XDG_CACHE_HOME`, default `~/.cache`), via
 /// the `dirs` crate — which also implements the spec's rule that a
 /// *relative* `$XDG_CACHE_HOME` is invalid and must be ignored.

@@ -338,6 +338,33 @@ poi-tracker -i fedora-build-deps.toml intersect --with personal.toml \
 `-o` accumulates like kondo's: existing entries win, new ones are
 added sorted.
 
+### Start keeping packages (keep)
+
+The add half of incremental maintenance — the mirror of `unkeep`.
+Walk the new keeps' dependencies against the saved graph, so fedrq is
+only consulted for capabilities the graph has never seen:
+
+```sh
+poi-tracker -i essential.toml -i essential-rust.toml \
+    keep ripgrep --into essential.toml \
+    --graph fedora-build-deps-graph.json \
+    --owned personal.toml --deps essential-deps.toml \
+    -b rawhide --from rawhide
+```
+
+Known capabilities resolve offline from the graph (their providers'
+Requires come from the recorded edges, so the walk cascades through
+the known world for free); only the frontier goes to fedrq, and the
+summary says how many went each way. The new edges merge into the
+graph file, the names are filed into `--into` (default: the first
+`-i`), and `--deps` recomputes the derived inventory in the same run —
+one command instead of an hour-long walk plus three edits. The new
+roots themselves always expand live, every feature subpackage
+included: a package the graph met as a mere dependency carries only
+the features something requested. Takes the same `-b`/`-r`/`--from`/
+`--base-repo`/`--runtime-only` as `deps`. `--json` prints the report
+machine-readably.
+
 ### Triage cull candidates (kondo)
 
 The set difference between the inventory ("packages I maintain") and
