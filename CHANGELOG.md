@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### sandogasa-distgit: ownership changes surface Pagure's own error
+
+`give_package` and `set_acl`/`remove_acl` ended in `.error_for_status()`,
+which discards Pagure's JSON error body — so a failed orphan or give
+read as a bare `401 Unauthorized`, indistinguishable to the operator
+from an expired token, a missing ACL scope, or a transient outage
+(`take_orphan` already parsed the body; these did not). They now
+return Pagure's own message, prefixed with the attempted action
+(`give foo to orphan: 401: Invalid or expired token`). `poi-tracker
+act` additionally pre-flights the token with a `whoami` before walking
+the verdicts, failing in seconds with a pointer to regenerate an
+account token carrying the "Modify an existing project" ACL rather
+than at the first give deep into the walk.
+
 ### Help text wraps at 80 columns, by machinery instead of by hand
 
 Every tool's `--help` printed each option's description as one long

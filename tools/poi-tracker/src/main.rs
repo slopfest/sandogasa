@@ -1302,6 +1302,22 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
 
     let client = DistGitClient::new().with_token(token);
     let rt = new_runtime()?;
+    // Fail in seconds on a bad token rather than at the first give,
+    // deep into the walk. A valid token can still lack the ACL scope
+    // for changing ownership; the per-action errors now carry
+    // Pagure's own message when that happens.
+    match rt.block_on(client.verify_token()) {
+        Ok(who) => eprintln!("authenticated as {who}"),
+        Err(e) => {
+            return Err(format!(
+                "dist-git token check failed: {e}\n\
+                 orphaning and giving need an account token with the \
+                 \"Modify an existing project\" ACL — regenerate one at \
+                 https://src.fedoraproject.org/settings#nav-api-tab"
+            )
+            .into());
+        }
+    }
     let total = culled.len();
     let mut enacted: Vec<String> = Vec::new();
     let mut skipped = 0usize;

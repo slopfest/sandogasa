@@ -394,11 +394,12 @@ impl DistGitClient {
         validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}/git/modifyacls", self.base_url, package);
         let form = [("user_type", user_type), ("name", name), ("acl", acl)];
-        self.auth(self.client.post(&url))
-            .form(&form)
-            .send()
-            .await?
-            .error_for_status()?;
+        let resp = self.auth(self.client.post(&url)).form(&form).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let detail = pagure_error_detail(&resp.text().await.unwrap_or_default());
+            return Err(format!("modifyacls for {package}: {status}: {detail}").into());
+        }
         Ok(())
     }
 
@@ -486,11 +487,16 @@ impl DistGitClient {
         validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}", self.base_url, package);
         let form = [("main_admin", new_owner)];
-        self.auth(self.client.patch(&url))
+        let resp = self
+            .auth(self.client.patch(&url))
             .form(&form)
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let detail = pagure_error_detail(&resp.text().await.unwrap_or_default());
+            return Err(format!("give {package} to {new_owner}: {status}: {detail}").into());
+        }
         Ok(())
     }
 
@@ -881,6 +887,48 @@ mod tests {
     fn with_token_sets_token() {
         let client = DistGitClient::new().with_token("secret".to_string());
         assert_eq!(client.api_token.as_deref(), Some("secret"));
+    }
+
+    // ---- give_package / set_acl error surfacing ----
+
+    #[tokio::test]
+    async fn give_package_surfaces_the_pagure_error_body() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        Mock::given(method("PATCH"))
+            .and(path("/api/0/rpms/foo"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_string(r#"{"error": "Invalid or expired token"}"#),
+            )
+            .mount(&server)
+            .await;
+        let err = client
+            .give_package("foo", "orphan")
+            .await
+            .unwrap_err()
+            .to_string();
+        // The Pagure message survives instead of a bare status line.
+        assert!(err.contains("Invalid or expired token"), "{err}");
+        assert!(err.contains("give foo to orphan"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn set_acl_surfaces_the_pagure_error_body() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        Mock::given(method("POST"))
+            .and(path("/api/0/rpms/foo/git/modifyacls"))
+            .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"error": "no ACL"}"#))
+            .mount(&server)
+            .await;
+        let err = client
+            .remove_acl("foo", "user", "me")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no ACL"), "{err}");
+        assert!(err.contains("modifyacls for foo"), "{err}");
     }
 
     // ---- get_acls ----
