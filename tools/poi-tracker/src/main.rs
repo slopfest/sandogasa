@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+mod act;
 mod adopt;
 mod config;
 mod dependents;
@@ -45,6 +46,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Enact the standing cull verdicts interactively: orphan,
+    /// remove own ACL, or give each package away, adjusting the
+    /// inventories as you go.
+    Act(ActArgs),
     /// Add a package to the inventory.
     Add(AddArgs),
     /// Adopt orphaned inventory packages on dist-git.
@@ -432,6 +437,41 @@ struct DepsArgs {
     json: bool,
 
     /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+#[derive(clap::Args)]
+struct ActArgs {
+    /// FAS username whose ACL actions these are.
+    #[arg(long)]
+    user: String,
+
+    #[command(flatten)]
+    filter: WalkFilterArgs,
+
+    /// Personal inventory to drop enacted packages from.
+    #[arg(long, value_name = "PATH")]
+    personal: Option<String>,
+
+    /// Branch(es) for the reverse-dependency probe before an orphan
+    /// (CSV or repeated). The default `auto` derives them per package
+    /// from its dist-git branches: rawhide plus its own EPEL
+    /// branches — an EPEL-only package's dependents are invisible
+    /// from rawhide.
+    #[arg(long, value_delimiter = ',', default_value = "auto")]
+    branch: Vec<String>,
+
+    /// Dist-git API token (or PAGURE_API_TOKEN, or run
+    /// `poi-tracker config`).
+    #[arg(long, env = "PAGURE_API_TOKEN")]
+    api_token: Option<String>,
+
+    /// Ignore the day-fresh ACL cache and look every level up again.
+    #[arg(long)]
+    refresh_acls: bool,
+
+    /// Log each access lookup.
     #[arg(short, long)]
     verbose: bool,
 }
@@ -926,6 +966,7 @@ fn main() -> ExitCode {
 
     let result = match &cli.command {
         Command::Add(args) => cmd_add(&paths, args),
+        Command::Act(args) => cmd_act(&paths, args),
         Command::Adopt(args) => cmd_adopt(&paths, args),
         Command::Announce(args) => cmd_announce(&paths, args),
         Command::Config => cmd_config(),
@@ -1226,6 +1267,184 @@ fn cmd_intersect(paths: &[String], args: &IntersectArgs) -> CmdResult {
         let added = intersect::merge_packages(path, packages, &meta)?;
         println!("merged into {path} ({added} new)");
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Walk the cull inventory's verdicts (`-i`) and enact them one
+/// confirmed action at a time. Interactive only — this changes
+/// ownership on a server, so there is no bulk mode.
+fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
+    use std::io::{IsTerminal, Write};
+
+    if !std::io::stdin().is_terminal() {
+        return Err("act is interactive-only: each ACL change needs a confirmation".into());
+    }
+    sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])?;
+    let token = config::resolve_distgit_token(args.api_token.as_deref())?;
+
+    let mut names: Vec<String> = Vec::new();
+    for path in paths {
+        names.extend(
+            sandogasa_inventory::load(path)?
+                .package
+                .into_iter()
+                .map(|p| p.name),
+        );
+    }
+    names.sort();
+    names.dedup();
+    names.retain(|name| args.filter.matches(name));
+    let (culled, warnings) =
+        classify_with_cache(&args.user, &names, args.refresh_acls, args.verbose)?;
+    for warning in &warnings {
+        eprintln!("warning: {warning}");
+    }
+
+    let client = DistGitClient::new().with_token(token);
+    let rt = new_runtime()?;
+    let total = culled.len();
+    let mut enacted: Vec<String> = Vec::new();
+    let mut skipped = 0usize;
+    let mut unactionable = 0usize;
+    let read_line = || -> Result<String, String> {
+        let mut line = String::new();
+        std::io::stdin()
+            .read_line(&mut line)
+            .map_err(|e| format!("reading input: {e}"))?;
+        Ok(line)
+    };
+    'walk: for (i, c) in culled.iter().enumerate() {
+        let idx = i + 1;
+        let orphanable = matches!(c.action, kondo::Action::Orphan);
+        if !orphanable && !matches!(c.action, kondo::Action::SelfRemove) {
+            println!(
+                "[{idx}/{total}] {} ({}) — nothing to self-enact; ask to be removed",
+                c.name, c.level
+            );
+            unactionable += 1;
+            continue;
+        }
+        println!("[{idx}/{total}] {} ({})", c.name, c.level);
+        if orphanable {
+            // Orphaning starts the retirement clock; retiring a
+            // package something requires strands its dependents, so
+            // look before every leap — features included, on the
+            // branches this package actually lives on.
+            let branches = match args.branch.as_slice() {
+                [auto] if auto == "auto" => match rt.block_on(client.project_branches(&c.name)) {
+                    Ok(Some(git)) => {
+                        let derived = act::probe_branches(&git);
+                        if derived.is_empty() {
+                            println!("  no probeable branch (git has: {})", git.join(", "));
+                        }
+                        derived
+                    }
+                    Ok(None) => {
+                        println!("  no such dist-git project — probing rawhide anyway");
+                        vec!["rawhide".to_string()]
+                    }
+                    Err(e) => {
+                        println!("  branch listing failed ({e}) — probing rawhide anyway");
+                        vec!["rawhide".to_string()]
+                    }
+                },
+                _ => args.branch.clone(),
+            };
+            for branch in &branches {
+                match act::probe_dependents(branch, &c.name) {
+                    Ok(act::Probe::Absent) => {
+                        println!("  not present on {branch}");
+                    }
+                    Ok(act::Probe::Dependents(deps)) if deps.is_empty() => {
+                        println!("  no {branch} dependents");
+                    }
+                    Ok(act::Probe::Dependents(deps)) => {
+                        println!(
+                            "  {branch} dependents: {} — orphaning starts the                              retirement clock for them",
+                            deps.join(", ")
+                        );
+                    }
+                    Err(e) => {
+                        println!("  {branch} probe failed ({e}) — assume it has dependents");
+                    }
+                }
+            }
+        }
+        loop {
+            let prompt = match orphanable {
+                true => "  (y) orphan / (g <user>) give / (s)kip / (q)uit [s]: ",
+                false => "  (y) remove my ACL / (s)kip / (q)uit [s]: ",
+            };
+            print!("{prompt}");
+            let _ = std::io::stdout().flush();
+            let choice = match act::parse_choice(&read_line()?, orphanable) {
+                Some(choice) => choice,
+                None => {
+                    println!(
+                        "  enter y, s, or q{}",
+                        if orphanable { " (or g <user>)" } else { "" }
+                    );
+                    continue;
+                }
+            };
+            let outcome = match &choice {
+                act::Choice::Skip => {
+                    skipped += 1;
+                    break;
+                }
+                act::Choice::Quit => break 'walk,
+                act::Choice::Enact if orphanable => {
+                    rt.block_on(client.give_package(&c.name, "orphan"))
+                }
+                act::Choice::Enact => rt.block_on(client.remove_acl(&c.name, "user", &args.user)),
+                act::Choice::Give(fas) => match rt.block_on(client.user_exists(fas)) {
+                    Ok(true) => rt.block_on(client.give_package(&c.name, fas)),
+                    Ok(false) => {
+                        println!("  no such user: {fas}");
+                        continue;
+                    }
+                    Err(e) => {
+                        println!("  could not verify {fas}: {e}");
+                        continue;
+                    }
+                },
+            };
+            match outcome {
+                Ok(()) => {
+                    let did = match &choice {
+                        act::Choice::Give(fas) => format!("gave to {fas}"),
+                        _ if orphanable => "orphaned".to_string(),
+                        _ => "removed own ACL".to_string(),
+                    };
+                    println!("  {did}");
+                    // Adjust the books immediately, so an interrupted
+                    // walk loses nothing already enacted.
+                    let gone: std::collections::BTreeSet<&str> = [c.name.as_str()].into();
+                    for path in paths {
+                        unkeep::remove_from_inventory(path, &gone)?;
+                    }
+                    if let Some(personal) = &args.personal {
+                        unkeep::remove_from_inventory(personal, &gone)?;
+                    }
+                    enacted.push(c.name.clone());
+                    break;
+                }
+                Err(e) => {
+                    println!("  failed: {e} — verdict kept");
+                    skipped += 1;
+                    break;
+                }
+            }
+        }
+    }
+    println!(
+        "
+enacted {} package(s), skipped {}, {} need asking; {} verdict(s) remain in the cull inventory",
+        enacted.len(),
+        skipped,
+        unactionable,
+        total - enacted.len(),
+    );
     Ok(ExitCode::SUCCESS)
 }
 

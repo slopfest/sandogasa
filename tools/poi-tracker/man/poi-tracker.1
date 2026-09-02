@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH poi-tracker 1 2026-09-01 "sandogasa 0.22.0" "Sandogasa Manual"
+.TH poi-tracker 1 2026-09-02 "sandogasa 0.22.0" "Sandogasa Manual"
 .SH NAME
 poi\-tracker \- Package\-of\-interest tracker for Fedora, EPEL, and CentOS SIGs
 .SH SYNOPSIS
@@ -21,6 +21,43 @@ Print help
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
+.SS poi-tracker act
+\fBpoi\-tracker act\fR <\fB\-\-user\fR> [\fB\-\-pattern\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-\-personal\fR] [\fB\-\-branch\fR] [\fB\-\-api\-token\fR] [\fB\-\-refresh\-acls\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Enact the standing cull verdicts interactively: orphan, remove own ACL, or give each package away, adjusting the inventories as you go
+.TP
+\fB\-\-user\fR \fI<USER>\fR
+FAS username whose ACL actions these are
+.TP
+\fB\-\-pattern\fR \fI<GLOB,...>\fR
+Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
+.TP
+\fB\-\-start\-from\fR \fI<NAME>\fR
+Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
+.TP
+\fB\-\-end\-with\fR \fI<NAME>\fR
+Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a sub\-range
+.TP
+\fB\-\-personal\fR \fI<PATH>\fR
+Personal inventory to drop enacted packages from
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR [default: auto]
+Branch(es) for the reverse\-dependency probe before an orphan (CSV or repeated). The default `auto` derives them per package from its dist\-git branches: rawhide plus its own EPEL branches — an EPEL\-only package\*(Aqs dependents are invisible from rawhide
+.TP
+\fB\-\-api\-token\fR \fI<API_TOKEN>\fR
+Dist\-git API token (or PAGURE_API_TOKEN, or run `poi\-tracker config`)
+.RS
+May also be specified with the \fBPAGURE_API_TOKEN\fR environment variable. 
+.RE
+.TP
+\fB\-\-refresh\-acls\fR
+Ignore the day\-fresh ACL cache and look every level up again
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Log each access lookup
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS poi-tracker add
 \fBpoi\-tracker add\fR [\fB\-\-poc\fR] [\fB\-\-reason\fR] [\fB\-\-team\fR] [\fB\-\-task\fR] [\fB\-\-rpm\fR] [\fB\-\-workload\fR] [\fB\-\-track\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR> 
 .PP

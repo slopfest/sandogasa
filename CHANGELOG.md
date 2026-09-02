@@ -45,6 +45,41 @@ essentials file says *why* each package is essential
 ("src:mesa requires crate(syn/clone-impls)"), which is exactly what a
 future triage, or a future self, needs to trust it.
 
+### poi-tracker: act, the confirmed walk that gives the packages away
+
+Enacting the cull meant a generated shell script: faithful, but blind.
+It could not hold four packages back on a colleague's advice, hand one
+package to a named person instead of the orphan pool, keep the cull
+and personal inventories true as each package went — or answer the
+question that actually gates an orphan: does anything still depend on
+this? Real feedback on the first announcement needed all four within
+a day.
+
+`poi-tracker -i cull.toml act --user <fas>` walks the verdicts
+interactively. Each package is classified fresh; owner-level prompts
+offer orphan / give-to-`<user>` / skip / quit (Enter skips),
+admin-level offers removing one's own ACL, ask-level shows as a
+reminder. On success the entry leaves the cull inventory and the
+package leaves the `--personal` inventory immediately, so an
+interrupted walk loses nothing.
+
+Before every orphan prompt the package's reverse dependencies are
+probed through fedrq across **all** its subpackages — the
+inventory-scoped closure misses non-default feature edges
+(`crate(x/feature)` lives in a `+feature-devel` subpackage nothing may
+request), which is exactly how four culled crates briefly read as
+"no remaining dependents" when their dependents were one optional
+feature away. The probe reproduced a colleague's by-hand findings for
+rust-wayland-server name for name: mir, the wayland-protocols family,
+wl-clipboard-rs. A package with dependents defaults to skip, since
+orphaning starts the retirement clock and retirement is what leaves
+dependents uninstallable. The probe aims itself: by default each
+package is probed on the branches its dist-git repo actually carries —
+rawhide plus its own EPEL branches, `epel10.x` normalized — because an
+EPEL-only package's dependents are invisible from rawhide, and *which*
+EPEL is the package's own fact, not the operator's to remember
+(`python39-*` lives on epel8). An explicit `--branch` list overrides.
+
 ### poi-tracker: announce, the report the act phase actually posts
 
 The cull workflow's endgame is a mailing-list post: every standing

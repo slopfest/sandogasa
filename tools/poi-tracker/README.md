@@ -35,6 +35,39 @@ left open / reported as up to date).
 
 ## Usage
 
+### Act on the cull verdicts
+
+The workflow's last verb — walk the standing verdicts and give the
+packages away, one confirmed action at a time:
+
+```sh
+poi-tracker -i cull.toml act --user salimma \
+    --personal personal.toml
+```
+
+Each package is classified fresh (cache-first) and prompted by level:
+owner-level offers `(y) orphan / (g <user>) give / (s)kip / (q)uit`,
+admin-level offers removing your own ACL, and the rest are shown as
+reminders to ask. Enter skips — the safe default for server-side
+ownership changes — and there is deliberately no bulk mode.
+
+Before any orphan prompt, the package's reverse dependencies are
+probed distro-wide through fedrq, across **all** subpackages, so
+feature capabilities (`crate(x/feature)`) are covered: orphaning
+starts the retirement clock, and retirement is what leaves dependents
+uninstallable. A package something still requires says so at the
+prompt, where skip is already the default. The probe aims itself: by
+default (`--branch auto`) each package is probed on the branches it
+actually carries per dist-git — rawhide plus its own EPEL branches —
+because which branches matter belongs to the package, not to a flag
+(`python39-*` lives on epel8, invisible from rawhide). An explicit
+`--branch` list overrides.
+
+On each success the entry leaves the cull inventory and the package
+leaves the `--personal` inventory, so an interrupted walk loses
+nothing already enacted. Requires a dist-git API token (`--api-token`,
+`PAGURE_API_TOKEN`, or `poi-tracker config`) and `fedrq`.
+
 ### Add a package
 
 ```sh
