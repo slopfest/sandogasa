@@ -243,6 +243,18 @@ pub trait DepResolver: Send + Sync {
             .collect()
     }
 
+    /// Base-distro `(source, version-release)` providers of several
+    /// bare capabilities, capability → providers. Only consulted
+    /// while the base-distro guard is active.
+    fn resolve_base_vr_many(
+        &self,
+        caps: &[String],
+    ) -> Result<BTreeMap<String, Vec<(String, String)>>, String> {
+        caps.iter()
+            .map(|c| Ok((c.clone(), self.resolve_base_vr(c)?)))
+            .collect()
+    }
+
     /// Subpackage Requires of several source packages, per package.
     fn subpkg_requires_many(
         &self,
@@ -578,6 +590,7 @@ fn record_blocked(
 fn prefetch_resolutions(
     resolver: &dyn DepResolver,
     cache: &ResolveCache,
+    guard_active: bool,
     deps: impl IntoIterator<Item = String>,
 ) {
     let wanted: BTreeSet<String> = deps.into_iter().collect();
@@ -607,6 +620,30 @@ fn prefetch_resolutions(
     {
         for d in &need_source {
             cache.source.insert(d.clone(), first_real(resolved.get(d)));
+        }
+    }
+    // The base-distro guard probes every dependency the source
+    // satisfies and the target lacks — by bare capability, which is
+    // how classify_against_base keys its cache. One batch per level.
+    if !guard_active {
+        return;
+    }
+    let caps: Vec<String> = wanted
+        .iter()
+        .filter(|d| cache.target.get(*d).is_some_and(|v| v.is_none()))
+        .filter(|d| cache.source.get(*d).is_some_and(|v| v.is_some()))
+        .filter_map(|d| parse_versioned_dep(d).map(|(cap, _)| cap.to_string()))
+        .filter(|cap| !cache.base_probe.contains_key(cap))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if !caps.is_empty()
+        && let Ok(probed) = resolver.resolve_base_vr_many(&caps)
+    {
+        for cap in &caps {
+            cache
+                .base_probe
+                .insert(cap.clone(), probed.get(cap).cloned().unwrap_or_default());
         }
     }
 }
@@ -761,6 +798,7 @@ fn resolve_closure_with_cache(
         prefetch_resolutions(
             resolver,
             cache,
+            options.base_branch.is_some(),
             build_reqs_by_pkg
                 .values()
                 .flatten()
@@ -992,6 +1030,7 @@ fn check_installability_with_cache(
     prefetch_resolutions(
         resolver,
         cache,
+        options.base_branch.is_some(),
         requires_by_pkg
             .values()
             .flatten()
@@ -1385,6 +1424,28 @@ impl DepResolver for FedrqResolver {
         Ok(attribute_providers(deps, &providers))
     }
 
+    fn resolve_base_vr_many(
+        &self,
+        caps: &[String],
+    ) -> Result<BTreeMap<String, Vec<(String, String)>>, String> {
+        let Some(base) = &self.base else {
+            return Ok(caps.iter().map(|c| (c.clone(), vec![])).collect());
+        };
+        let providers = base.providers_vr_info(caps).map_err(|e| e.to_string())?;
+        Ok(caps
+            .iter()
+            .map(|cap| {
+                let mut found: Vec<(String, String)> = providers
+                    .iter()
+                    .filter(|p| p.satisfies(cap))
+                    .filter_map(|p| Some((p.source_name.clone()?, p.vr()?)))
+                    .collect();
+                found.dedup();
+                (cap.clone(), found)
+            })
+            .collect())
+    }
+
     fn subpkg_requires_many(
         &self,
         srpms: &[String],
@@ -1712,6 +1773,15 @@ packages = ["a"]
         fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
             panic!("single subpkg_requires({srpm}); the level must be batched");
         }
+        fn resolve_base_vr(&self, cap: &str) -> Result<Vec<(String, String)>, String> {
+            panic!("single resolve_base_vr({cap}); the level must be batched");
+        }
+        fn resolve_base_vr_many(
+            &self,
+            caps: &[String],
+        ) -> Result<BTreeMap<String, Vec<(String, String)>>, String> {
+            self.0.resolve_base_vr_many(caps)
+        }
         fn buildrequires_many(
             &self,
             srpms: &[String],
@@ -1768,6 +1838,32 @@ packages = ["a"]
             &BTreeSet::new(),
         );
         assert!(report.additional_packages.contains("bar"));
+    }
+
+    #[test]
+    fn the_base_guard_probe_is_batched_too() {
+        let mut inner = MockResolver::new();
+        // mypkg needs libfoo-devel >= 2: the target lacks it, the source
+        // has it from libfoo, and the base ships libfoo at 1.0 — too old,
+        // so the guard must block it rather than request a branch.
+        inner.add_buildrequires("mypkg", &["libfoo-devel >= 2"]);
+        inner.add_source_resolve("libfoo-devel >= 2", "libfoo");
+        inner.add_base_resolve("libfoo-devel", "libfoo", "1.0-1.el10");
+        let resolver = BatchOnly(inner);
+
+        let closure = resolve_closure_with_options(
+            &resolver,
+            &["mypkg".to_string()],
+            "rawhide",
+            "epel10",
+            &guard_opts(&[]),
+        )
+        .unwrap();
+        // Reached only through resolve_base_vr_many: a single probe
+        // would have panicked above.
+        assert!(closure.blocked_by_base.contains_key("libfoo"));
+        assert_eq!(closure.blocked_by_base["libfoo"].base_version, "1.0-1.el10");
+        assert!(closure.closure["mypkg"].missing_deps.is_empty());
     }
 
     #[test]

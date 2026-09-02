@@ -71,6 +71,13 @@ pub struct PkgInfo {
     /// `centos-hyperscale`, `fedrq-centos-stream-baseos`).
     #[serde(default)]
     pub repoid: String,
+    /// Version, when the query asked for it (see
+    /// [`Fedrq::providers_vr_info`]); `None` otherwise.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Release, when the query asked for it; `None` otherwise.
+    #[serde(default)]
+    pub release: Option<String>,
 }
 
 /// The capability name of a dependency string: `foo >= 1.2` → `foo`,
@@ -111,6 +118,16 @@ impl PkgInfo {
             provides,
             source_name,
             repoid: repoid.into(),
+            version: None,
+            release: None,
+        }
+    }
+
+    /// `version-release`, when the record carries both.
+    pub fn vr(&self) -> Option<String> {
+        match (&self.version, &self.release) {
+            (Some(v), Some(r)) if !v.is_empty() && !r.is_empty() => Some(format!("{v}-{r}")),
+            _ => None,
         }
     }
 }
@@ -428,6 +445,26 @@ impl Fedrq {
         )
     }
 
+    /// Batched: the packages providing the given capabilities, with
+    /// their version and release — for callers that must compare what
+    /// a repo offers against a constraint (the base-distro guard) and
+    /// so cannot use the version-less [`Self::providers_info`].
+    pub fn providers_vr_info(&self, deps: &[String]) -> Result<Vec<PkgInfo>, Error> {
+        if deps.is_empty() {
+            return Ok(vec![]);
+        }
+        self.query_json(
+            &[
+                "pkgs",
+                "-P",
+                "-S",
+                "-F",
+                "json:name,provides,source_name,repoid,version,release",
+            ],
+            deps,
+        )
+    }
+
     /// Check whether a source package exists.
     ///
     /// Equivalent to `fedrq pkgs --src <name>`.
@@ -508,6 +545,21 @@ fn parse_source_vr_lines(raw: Vec<String>) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pkginfo_carries_version_release_only_when_asked() {
+        let with: PkgInfo = serde_json::from_str(
+            r#"{"name":"libfoo","provides":["libfoo.so.1()(64bit)"],"source_name":"foo",
+                "repoid":"c10s","version":"1.2","release":"3.el10"}"#,
+        )
+        .unwrap();
+        assert_eq!(with.vr().as_deref(), Some("1.2-3.el10"));
+        assert!(with.satisfies("libfoo.so.1()(64bit)"));
+        let without: PkgInfo =
+            serde_json::from_str(r#"{"name":"libfoo","repoid":"rawhide"}"#).unwrap();
+        assert_eq!(without.vr(), None);
+        assert_eq!(PkgInfo::new("x", vec![], vec![], None, "r").vr(), None);
+    }
 
     #[test]
     fn pkg_info_parses_a_full_record() {

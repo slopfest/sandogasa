@@ -279,11 +279,9 @@ than annotated as done.
   queries per BFS level) and the matching rule is shared
   (`PkgInfo::satisfies`), so the remaining extraction is the wave loop
   itself plus poi-tracker's `PkgQuery` seam — which also gives ebranch
-  the graph-backed offline oracle for free. Still to batch on the
-  ebranch side: the base-distro guard's per-capability version probe
-  (`resolve_base_vr`; the batched layer carries no version fields —
-  add optional `version`/`release` to `PkgInfo`, serde-default, then a
-  `providers_vr_many`).
+  the graph-backed offline oracle for free. Every fedrq path in the
+  resolve walks is batched per level as of 2026-09-02, the base-distro
+  guard's version probe included.
 
 ## poi-tracker: essential-deps as a materialized view (2026-09-01)
 

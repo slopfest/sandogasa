@@ -24,11 +24,17 @@ ones, so implementors and test doubles needed no change; only
 back to the asked-for dependencies is by name from each provider's
 Provides — the same rule poi-tracker used, now shared as
 `sandogasa_fedrq::PkgInfo::satisfies` / `dep_name`. The base-distro
-guard's per-capability version probe is unchanged (the batched layer
-carries no versions yet). Results are identical — measured, not
-assumed: resolving rust-difftastic from rawhide to epel10 with the old
-and new binaries gave byte-identical JSON, in 134.6 s and 24.3 s of
-wall clock respectively. A failed batch degrades to the old per-item
+guard batches the same way: the capabilities the source satisfies and
+the target lacks are probed against the base in one call per level
+(`PkgInfo` gained optional `version`/`release`, and
+`providers_vr_info` asks for them), stored under the bare capability
+the guard already keys its cache by — so an EPEL-target resolve no
+longer pays one spawn per capability it must compare against the
+base. Results are identical — measured, not
+assumed: resolving rust-difftastic from rawhide to epel10 gave
+byte-identical JSON across all three binaries — 134.6 s per-item,
+24.3 s with the walks batched but the guard still probing one
+capability at a time, 6.3 s with the guard batched too. A failed batch degrades to the old per-item
 path rather than failing the level.
 
 ### sandogasa-distgit: ownership changes surface Pagure's own error
