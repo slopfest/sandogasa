@@ -132,14 +132,15 @@ the rest — never the cull file's `reason` text, which is free-form)
 and prints the grouped report: package names by level, with the
 ask-list for everything the user cannot act on alone. The report
 deliberately carries no commands — a mailing-list post is for humans.
-The commands go to `--script <path>` instead: an executable shell
-script in which the owner-level `sandogasa-pkg-acl give orphan` batch
-and each admin-level self-removal is echoed and individually
-confirmed before running, so enacting the cull is a deliberate walk
-rather than one irreversible paste. (kondo's own end-of-run report
-loses its command lines the same way.) The first real render grouped
-214 verdicts into 114 orphanable, 61 self-removable and 39 to ask
-about — one batch command plus 61 confirmations in the script. The
+Enacting the verdicts is `act`'s job, one confirmed prompt at a time;
+kondo's own end-of-run report loses its command lines the same way.
+(A `--script` option that wrote the commands as a confirm-each shell
+script existed for a day between the two and was removed once `act`
+landed — a script cannot hold a package back, hand one to a colleague,
+or keep the inventories true as it goes, and `act` does all three.)
+The first real render grouped 214 verdicts into 114 orphanable, 61
+self-removable and 39 to ask about; after the act walk, the same
+command rendered the 39 that remain as the ask-list to hand on. The
 cache-first classification moved into a helper kondo and announce
 share.
 

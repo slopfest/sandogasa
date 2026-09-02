@@ -130,12 +130,8 @@ poi-tracker -i cull.toml announce --user salimma
 ```
 
 The text report is for humans — the mailing list gets package names
-grouped by level, never commands. The commands go to `--script PATH`:
-an executable shell script where the owner-level orphan batch and each
-admin-level self-removal is echoed and individually confirmed before
-it runs, so the act phase is a deliberate walk, not a paste. Levels
-are
-re-classified per run (day-fresh cache first; `--refresh-acls` forces
+grouped by level, never commands. Enacting the verdicts is `act`'s
+job, one confirmed prompt at a time. Levels are re-classified per run (day-fresh cache first; `--refresh-acls` forces
 fresh lookups) rather than read from the cull file, whose `reason`
 text is free-form. `kondo`'s own report covers only the packages
 culled in that run, and re-runs skip the already-decided — this is how
