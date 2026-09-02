@@ -514,13 +514,21 @@ async fn cmd_give(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = DistGitClient::new().with_token(token.to_string());
 
-    // Validate the target user exists (once, before any transfers)
-    let exists = client
-        .user_exists(new_owner)
-        .await
-        .map_err(|e| format!("could not verify user '{new_owner}' exists on dist-git: {e}"))?;
-    if !exists {
-        return Err(format!("user '{new_owner}' does not exist").into());
+    // Validate the target user exists (once, before any transfers).
+    // The user endpoint 503s for prolific packagers — exactly the
+    // people who receive packages — so an unverifiable recipient is a
+    // warning, not a stop: Pagure validates main_admin on each give.
+    match client.user_exists(new_owner).await {
+        Ok(true) => {}
+        Ok(false) => return Err(format!("user '{new_owner}' does not exist").into()),
+        Err(e) => {
+            if !json {
+                eprintln!(
+                    "warning: could not verify user '{new_owner}' on dist-git ({e}); \
+                     proceeding — Pagure will reject an unknown user"
+                );
+            }
+        }
     }
 
     let mut errors = Vec::new();

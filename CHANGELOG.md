@@ -16,6 +16,18 @@ the verdicts, failing in seconds with a pointer to regenerate an
 account token carrying the "Modify an existing project" ACL rather
 than at the first give deep into the walk.
 
+The recipient pre-check learned humility the same day: dist-git's
+`/api/0/user/<name>` endpoint answers 503 for prolific packagers — a
+known issue, and exactly the people who receive packages — so both
+`poi-tracker act`'s `g <user>` and `sandogasa-pkg-acl give` treat an
+*unverifiable* recipient as a warning and proceed, rather than
+refusing. A recipient positively known not to exist still stops the
+give; for the rest, Pagure validates `main_admin` on the transfer
+itself and rejects an unknown user, so nothing is lost by asking it.
+The first real give (python-merge3 to a colleague who offered to take
+it) was blocked by exactly this pre-check while the transfer path was
+healthy.
+
 ### Help text wraps at 80 columns, by machinery instead of by hand
 
 Every tool's `--help` printed each option's description as one long

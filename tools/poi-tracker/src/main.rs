@@ -1476,9 +1476,15 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
                         println!("  no such user: {fas}");
                         continue;
                     }
+                    // The user endpoint 503s for prolific packagers —
+                    // exactly the people who receive packages — so an
+                    // unverifiable recipient is not a blocked one:
+                    // Pagure validates main_admin on the give itself.
                     Err(e) => {
-                        println!("  could not verify {fas}: {e}");
-                        continue;
+                        println!(
+                            "  could not verify {fas} ({e}); Pagure will reject an unknown user"
+                        );
+                        rt.block_on(client.give_package(&c.name, fas))
                     }
                 },
             };
