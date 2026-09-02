@@ -54,7 +54,9 @@ there is deliberately no bulk mode. `u` lifts a verdict you no longer
 stand behind: the entry leaves the cull inventory and the package
 returns to candidacy on the next kondo run — unless you type
 `u <inventory>`, which also files it into that essential inventory so
-it never comes back.
+it never comes back. Filing this way adds a keep the graph has never
+walked, so the prompt says to `keep` it afterwards to record its
+dependencies.
 
 Before any orphan prompt, the package's reverse dependencies are
 probed distro-wide through fedrq, across **all** subpackages, so
@@ -357,7 +359,9 @@ Requires come from the recorded edges, so the walk cascades through
 the known world for free); only the frontier goes to fedrq, and the
 summary says how many went each way. The new edges merge into the
 graph file, the names are filed into `--into` (default: the first
-`-i`), and `--deps` recomputes the derived inventory in the same run —
+`-i`; a name already kept in any `-i` inventory is walked but not
+re-filed, since the keep set is their union), and `--deps` recomputes
+the derived inventory in the same run —
 one command instead of an hour-long walk plus three edits. The new
 roots themselves always expand live, every feature subpackage
 included: a package the graph met as a mere dependency carries only

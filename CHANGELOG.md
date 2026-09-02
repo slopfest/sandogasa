@@ -193,7 +193,16 @@ the asymmetry that once made four crates look dependent-free. The
 first real run — keeping tpm2-tools against the 700-root graph —
 took under ten seconds: 27 waves, 851 capabilities answered from the
 graph, 15 resolved live, where the full walk it replaces takes an
-hour. The repo flags `deps` and `keep` share moved into one argument
+hour. A name already kept in any `-i` inventory is walked (to record
+its edges) but not re-filed into `--into` — the first multi-package
+run duplicated two crates from the rust keep inventory into the main
+one before that guard existed. That run also exposed why the walk
+matters for existing keeps: five packages filed at the act prompt via
+`u <inventory>` had never been walked, so the graph carried no edges
+for them and the derived view could not see what they justified;
+walking them added 781 dependencies in 21 seconds and surfaced one
+owned package as newly essential. The act prompt now says so when it
+files a keep. The repo flags `deps` and `keep` share moved into one argument
 group.
 
 ### poi-tracker: derive, the derived inventory as a materialized view

@@ -1478,7 +1478,11 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
                 act::Choice::Uncull(into) => {
                     if let Some(inventory) = into {
                         match kondo::file_into_inventory(inventory, &c.name, &args.user) {
-                            Ok(true) => println!("  filed into {inventory}"),
+                            Ok(true) => println!(
+                                "  filed into {inventory} — not in the dependency graph yet: \
+                                 `keep {}` records its edges",
+                                c.name
+                            ),
                             Ok(false) => println!("  already in {inventory}"),
                             Err(e) => {
                                 println!("  could not add to {inventory}: {e} — verdict kept");
@@ -2074,7 +2078,9 @@ fn cmd_keep(paths: &[String], args: &KeepArgs) -> CmdResult {
     }
     for name in &args.names {
         if keeps.contains(name) {
-            eprintln!("note: {name} is already a keep; walking it anyway");
+            eprintln!(
+                "note: {name} is already a keep; walking it to record its edges, not re-filing"
+            );
         }
     }
     let owned = names_of(&args.owned)?;
@@ -2104,7 +2110,9 @@ fn cmd_keep(paths: &[String], args: &KeepArgs) -> CmdResult {
     let into = args.into.clone().unwrap_or_else(|| paths[0].clone());
     let maintainer = sandogasa_inventory::load(&paths[0])?.inventory.maintainer;
     let mut filed = 0usize;
-    for name in &args.names {
+    for name in args.names.iter().filter(|n| !keeps.contains(*n)) {
+        // A keep already held by another -i inventory must not be
+        // duplicated into --into: the keep set is their union.
         if kondo::file_into_inventory(&into, name, &maintainer)? {
             filed += 1;
         }
