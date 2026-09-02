@@ -1305,7 +1305,7 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
     let total = culled.len();
     let mut enacted: Vec<String> = Vec::new();
     let mut skipped = 0usize;
-    let mut unactionable = 0usize;
+    let mut unculled = 0usize;
     let read_line = || -> Result<String, String> {
         let mut line = String::new();
         std::io::stdin()
@@ -1316,15 +1316,11 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
     'walk: for (i, c) in culled.iter().enumerate() {
         let idx = i + 1;
         let orphanable = matches!(c.action, kondo::Action::Orphan);
-        if !orphanable && !matches!(c.action, kondo::Action::SelfRemove) {
-            println!(
-                "[{idx}/{total}] {} ({}) — nothing to self-enact; ask to be removed",
-                c.name, c.level
-            );
-            unactionable += 1;
-            continue;
-        }
+        let actionable = orphanable || matches!(c.action, kondo::Action::SelfRemove);
         println!("[{idx}/{total}] {} ({})", c.name, c.level);
+        if !actionable {
+            println!("  nothing to self-enact — ask to be removed (or uncull)");
+        }
         if orphanable {
             // Orphaning starts the retirement clock; retiring a
             // package something requires strands its dependents, so
@@ -1371,18 +1367,25 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
             }
         }
         loop {
-            let prompt = match orphanable {
-                true => "  (y) orphan / (g <user>) give / (s)kip / (q)uit [s]: ",
-                false => "  (y) remove my ACL / (s)kip / (q)uit [s]: ",
+            let prompt = match (orphanable, actionable) {
+                (true, _) => {
+                    "  (y) orphan / (g <user>) give / (u [inventory]) uncull / (s)kip / (q)uit [s]: "
+                }
+                (_, true) => "  (y) remove my ACL / (u [inventory]) uncull / (s)kip / (q)uit [s]: ",
+                _ => "  (u [inventory]) uncull / (s)kip / (q)uit [s]: ",
             };
             print!("{prompt}");
             let _ = std::io::stdout().flush();
-            let choice = match act::parse_choice(&read_line()?, orphanable) {
+            let choice = match act::parse_choice(&read_line()?, actionable, orphanable) {
                 Some(choice) => choice,
                 None => {
                     println!(
-                        "  enter y, s, or q{}",
-                        if orphanable { " (or g <user>)" } else { "" }
+                        "  enter u, s, or q ('u <inventory>' also files it as essential{})",
+                        match (orphanable, actionable) {
+                            (true, _) => "; y enacts, g <user> gives",
+                            (_, true) => "; y enacts",
+                            _ => "",
+                        }
                     );
                     continue;
                 }
@@ -1393,6 +1396,27 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
                     break;
                 }
                 act::Choice::Quit => break 'walk,
+                act::Choice::Uncull(into) => {
+                    if let Some(inventory) = into {
+                        match kondo::file_into_inventory(inventory, &c.name, &args.user) {
+                            Ok(true) => println!("  filed into {inventory}"),
+                            Ok(false) => println!("  already in {inventory}"),
+                            Err(e) => {
+                                println!("  could not add to {inventory}: {e} — verdict kept");
+                                skipped += 1;
+                                break;
+                            }
+                        }
+                    } else {
+                        println!("  unculled — returns to candidacy on the next kondo run");
+                    }
+                    let gone: std::collections::BTreeSet<&str> = [c.name.as_str()].into();
+                    for path in paths {
+                        unkeep::remove_from_inventory(path, &gone)?;
+                    }
+                    unculled += 1;
+                    break;
+                }
                 act::Choice::Enact if orphanable => {
                     rt.block_on(client.give_package(&c.name, "orphan"))
                 }
@@ -1439,11 +1463,11 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
     }
     println!(
         "
-enacted {} package(s), skipped {}, {} need asking; {} verdict(s) remain in the cull inventory",
+enacted {} package(s), unculled {}, skipped {}; {} verdict(s) remain in the cull inventory",
         enacted.len(),
+        unculled,
         skipped,
-        unactionable,
-        total - enacted.len(),
+        total - enacted.len() - unculled,
     );
     Ok(ExitCode::SUCCESS)
 }

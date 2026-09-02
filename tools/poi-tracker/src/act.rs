@@ -26,6 +26,11 @@ pub enum Choice {
     Enact,
     /// Give the package to this user instead.
     Give(String),
+    /// Lift the verdict: the package leaves the cull inventory
+    /// without any server action, optionally filed into an essential
+    /// inventory so it never comes back as a candidate. Without one
+    /// it returns to candidacy on the next kondo run.
+    Uncull(Option<String>),
     /// Leave the verdict standing for a later pass.
     Skip,
     /// Stop the walk.
@@ -33,23 +38,28 @@ pub enum Choice {
 }
 
 /// Parse one prompt answer. Enter (or `s`) skips — the safe default
-/// for actions that change ownership on a server. `g <user>` is only
-/// meaningful where giving is (owner-level packages).
-pub fn parse_choice(line: &str, allow_give: bool) -> Option<Choice> {
+/// for actions that change ownership on a server. `y` only where an
+/// action exists (ask-level packages have none), `g <user>` only
+/// where giving does (owner-level); unculling is always open.
+pub fn parse_choice(line: &str, allow_enact: bool, allow_give: bool) -> Option<Choice> {
     let line = line.trim();
     let (head, rest) = match line.split_once(char::is_whitespace) {
         Some((head, rest)) => (head, rest.trim()),
         None => (line, ""),
     };
     if !rest.is_empty() {
-        return match allow_give && head.eq_ignore_ascii_case("g") {
-            true => Some(Choice::Give(rest.to_string())),
-            false => None,
-        };
+        if allow_give && head.eq_ignore_ascii_case("g") {
+            return Some(Choice::Give(rest.to_string()));
+        }
+        if head.eq_ignore_ascii_case("u") {
+            return Some(Choice::Uncull(Some(rest.to_string())));
+        }
+        return None;
     }
     match head.to_ascii_lowercase().as_str() {
         "" | "s" | "skip" => Some(Choice::Skip),
-        "y" | "yes" => Some(Choice::Enact),
+        "y" | "yes" if allow_enact => Some(Choice::Enact),
+        "u" | "uncull" => Some(Choice::Uncull(None)),
         "q" | "quit" => Some(Choice::Quit),
         _ => None,
     }
@@ -128,27 +138,42 @@ mod tests {
     #[test]
     fn skip_is_the_default_and_junk_reasks() {
         for line in ["", "  ", "s", "Skip"] {
-            assert_eq!(parse_choice(line, true), Some(Choice::Skip));
+            assert_eq!(parse_choice(line, true, true), Some(Choice::Skip));
         }
-        assert_eq!(parse_choice("y", true), Some(Choice::Enact));
-        assert_eq!(parse_choice("q", false), Some(Choice::Quit));
-        assert_eq!(parse_choice("x", true), None);
-        assert_eq!(parse_choice("orphan it", true), None);
+        assert_eq!(parse_choice("y", true, true), Some(Choice::Enact));
+        assert_eq!(parse_choice("q", false, false), Some(Choice::Quit));
+        assert_eq!(parse_choice("x", true, true), None);
+        assert_eq!(parse_choice("orphan it", true, true), None);
+        // Ask-level prompts have no action to enact.
+        assert_eq!(parse_choice("y", false, false), None);
     }
 
     #[test]
     fn give_names_a_user_and_only_where_giving_applies() {
         assert_eq!(
-            parse_choice("g decathorpe", true),
+            parse_choice("g decathorpe", true, true),
             Some(Choice::Give("decathorpe".to_string()))
         );
         assert_eq!(
-            parse_choice("G  someone ", true),
+            parse_choice("G  someone ", true, true),
             Some(Choice::Give("someone".to_string()))
         );
         // Bare g has no target; admin-level prompts take no g at all.
-        assert_eq!(parse_choice("g", true), None);
-        assert_eq!(parse_choice("g someone", false), None);
+        assert_eq!(parse_choice("g", true, true), None);
+        assert_eq!(parse_choice("g someone", true, false), None);
+    }
+
+    #[test]
+    fn uncull_is_always_open_and_optionally_files_as_essential() {
+        assert_eq!(parse_choice("u", true, true), Some(Choice::Uncull(None)));
+        assert_eq!(
+            parse_choice("u keep-tools.toml", false, false),
+            Some(Choice::Uncull(Some("keep-tools.toml".to_string())))
+        );
+        assert_eq!(
+            parse_choice("uncull", false, false),
+            Some(Choice::Uncull(None))
+        );
     }
 
     #[test]

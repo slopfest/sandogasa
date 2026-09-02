@@ -46,10 +46,15 @@ poi-tracker -i cull.toml act --user salimma \
 ```
 
 Each package is classified fresh (cache-first) and prompted by level:
-owner-level offers `(y) orphan / (g <user>) give / (s)kip / (q)uit`,
-admin-level offers removing your own ACL, and the rest are shown as
-reminders to ask. Enter skips — the safe default for server-side
-ownership changes — and there is deliberately no bulk mode.
+owner-level offers `(y) orphan / (g <user>) give / (u)ncull / (s)kip /
+(q)uit`, admin-level offers removing your own ACL, and ask-level
+entries prompt too (uncull is the one action always open). Enter
+skips — the safe default for server-side ownership changes — and
+there is deliberately no bulk mode. `u` lifts a verdict you no longer
+stand behind: the entry leaves the cull inventory and the package
+returns to candidacy on the next kondo run — unless you type
+`u <inventory>`, which also files it into that essential inventory so
+it never comes back.
 
 Before any orphan prompt, the package's reverse dependencies are
 probed distro-wide through fedrq, across **all** subpackages, so

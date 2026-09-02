@@ -58,10 +58,14 @@ a day.
 `poi-tracker -i cull.toml act --user <fas>` walks the verdicts
 interactively. Each package is classified fresh; owner-level prompts
 offer orphan / give-to-`<user>` / skip / quit (Enter skips),
-admin-level offers removing one's own ACL, ask-level shows as a
-reminder. On success the entry leaves the cull inventory and the
-package leaves the `--personal` inventory immediately, so an
-interrupted walk loses nothing.
+admin-level offers removing one's own ACL, and every level can
+**uncull** — lift a verdict without touching the server: the entry
+leaves the cull inventory and the package returns to candidacy on the
+next kondo run, or `u <inventory>` also files it as essential so it
+never comes back. Changing one's mind at the last checkpoint should
+be one keystroke, not a hand-edit. On success the entry leaves the
+cull inventory and the package leaves the `--personal` inventory
+immediately, so an interrupted walk loses nothing.
 
 Before every orphan prompt the package's reverse dependencies are
 probed through fedrq across **all** its subpackages — the
