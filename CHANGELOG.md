@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### ebranch: resolve batches each BFS level into three fedrq queries
+
+`ebranch resolve` paid fedrq's repo-sack load once per source package
+(its BuildRequires) and once per capability per branch (target, then
+source) — a closure of a few hundred packages and a few thousand
+capabilities meant thousands of one-second process spawns, memoized
+but never batched. poi-tracker's `deps` had already shown where the
+time goes (~1s sack load per spawn against ~0.4s per capability
+resolved) and that a whole wave resolves in a handful of batched
+`-F json:` invocations.
+
+The closure BFS and the installability check now prefetch each level:
+one `srcs_info` (or `subpkgs_info`) call for the level's Requires, one
+`providers_info` call against the target for its capabilities, one
+against the source for whatever the target lacks — then the existing
+per-package pass runs against warm caches. `DepResolver` gained
+batched `*_many` methods whose defaults loop over the single-item
+ones, so implementors and test doubles needed no change; only
+`FedrqResolver` overrides them. Attribution of a batched `-P` answer
+back to the asked-for dependencies is by name from each provider's
+Provides — the same rule poi-tracker used, now shared as
+`sandogasa_fedrq::PkgInfo::satisfies` / `dep_name`. The base-distro
+guard's per-capability version probe is unchanged (the batched layer
+carries no versions yet). Results are identical — measured, not
+assumed: resolving rust-difftastic from rawhide to epel10 with the old
+and new binaries gave byte-identical JSON, in 134.6 s and 24.3 s of
+wall clock respectively. A failed batch degrades to the old per-item
+path rather than failing the level.
+
 ### sandogasa-distgit: ownership changes surface Pagure's own error
 
 `give_package` and `set_acl`/`remove_acl` ended in `.error_for_status()`,

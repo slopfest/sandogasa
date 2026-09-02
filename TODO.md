@@ -274,13 +274,16 @@ than annotated as done.
   repos of interest (essentials). Engine — wave BFS, seen-sets, batched
   `-F json:` resolution, edge recording, seed-growth fixpoint — is
   shareable; only the collect/terminate predicates and the fixpoint's
-  seed rule differ. Extract to a crate when ebranch migrates, which is
-  also when ebranch should shed its per-package fedrq spawns
-  (`src_buildrequires`/`resolve_to_source` singles under rayon, each
-  paying a repo sack load) for sandogasa-fedrq's batched `PkgInfo`
-  layer — measured in poi-tracker at ~0.4s/capability, sack load ~1s
-  warm, so batching is where its runtime went. Do it after
-  `deps --fixpoint` proves the engine shape on real use.
+  seed rule differ. ebranch shed its per-package spawns on 2026-09-02
+  (`DepResolver::*_many` over the batched `PkgInfo` layer, three
+  queries per BFS level) and the matching rule is shared
+  (`PkgInfo::satisfies`), so the remaining extraction is the wave loop
+  itself plus poi-tracker's `PkgQuery` seam — which also gives ebranch
+  the graph-backed offline oracle for free. Still to batch on the
+  ebranch side: the base-distro guard's per-capability version probe
+  (`resolve_base_vr`; the batched layer carries no version fields —
+  add optional `version`/`release` to `PkgInfo`, serde-default, then a
+  `providers_vr_many`).
 
 ## poi-tracker: essential-deps as a materialized view (2026-09-01)
 

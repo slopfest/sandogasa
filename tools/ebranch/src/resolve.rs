@@ -204,6 +204,55 @@ pub trait DepResolver: Send + Sync {
     fn resolve_base_vr(&self, _dep: &str) -> Result<Vec<(String, String)>, String> {
         Ok(vec![])
     }
+
+    // Batched forms. The walks call these once per BFS level; the
+    // defaults loop over the single-item methods, so an implementor
+    // that cannot batch (or a test double) needs nothing new. A real
+    // backend answers a whole level in one query instead of paying a
+    // repo-sack load per package and per capability.
+
+    /// BuildRequires of several source packages, per package (so one
+    /// unknown package stays one warning, not a failed level).
+    fn buildrequires_many(
+        &self,
+        srpms: &[String],
+    ) -> BTreeMap<String, Result<Vec<String>, String>> {
+        srpms
+            .iter()
+            .map(|s| (s.clone(), self.buildrequires(s)))
+            .collect()
+    }
+
+    /// Source-branch providers of several dependencies, dep → sources.
+    fn resolve_source_many(
+        &self,
+        deps: &[String],
+    ) -> Result<BTreeMap<String, Vec<String>>, String> {
+        deps.iter()
+            .map(|d| Ok((d.clone(), self.resolve_source(d)?)))
+            .collect()
+    }
+
+    /// Target-branch providers of several dependencies, dep → sources.
+    fn resolve_target_many(
+        &self,
+        deps: &[String],
+    ) -> Result<BTreeMap<String, Vec<String>>, String> {
+        deps.iter()
+            .map(|d| Ok((d.clone(), self.resolve_target(d)?)))
+            .collect()
+    }
+
+    /// Subpackage Requires of several source packages, per package.
+    fn subpkg_requires_many(
+        &self,
+        srpms: &[String],
+    ) -> BTreeMap<String, Result<Vec<String>, String>> {
+        srpms
+            .iter()
+            .map(|s| (s.clone(), self.subpkg_requires(s)))
+            .collect()
+    }
 }
 
 /// Options for controlling the resolution process.
@@ -521,6 +570,67 @@ fn record_blocked(
         .insert(parent.to_string());
 }
 
+/// Warm the target/source caches for a whole level's dependencies in
+/// two batched queries (target first; only what the target lacks goes
+/// to the source), so the per-package pass that follows never has to
+/// resolve a capability on its own. A failed batch leaves the caches
+/// untouched and the per-package pass falls back to single lookups.
+fn prefetch_resolutions(
+    resolver: &dyn DepResolver,
+    cache: &ResolveCache,
+    deps: impl IntoIterator<Item = String>,
+) {
+    let wanted: BTreeSet<String> = deps.into_iter().collect();
+    let first_real = |v: Option<&Vec<String>>| -> Option<String> {
+        v.and_then(|v| v.iter().find(|s| *s != "(none)").cloned())
+    };
+    let uncached: Vec<String> = wanted
+        .iter()
+        .filter(|d| !cache.target.contains_key(*d))
+        .cloned()
+        .collect();
+    if !uncached.is_empty()
+        && let Ok(resolved) = resolver.resolve_target_many(&uncached)
+    {
+        for d in &uncached {
+            cache.target.insert(d.clone(), first_real(resolved.get(d)));
+        }
+    }
+    let need_source: Vec<String> = wanted
+        .iter()
+        .filter(|d| cache.target.get(*d).is_some_and(|v| v.is_none()))
+        .filter(|d| !cache.source.contains_key(*d))
+        .cloned()
+        .collect();
+    if !need_source.is_empty()
+        && let Ok(resolved) = resolver.resolve_source_many(&need_source)
+    {
+        for d in &need_source {
+            cache.source.insert(d.clone(), first_real(resolved.get(d)));
+        }
+    }
+}
+
+/// Attribute a batched `-P` answer back to the dependencies asked
+/// for: fedrq returns the union of providers, and which one answers
+/// which dependency is recoverable by name from their Provides.
+fn attribute_providers(
+    deps: &[String],
+    providers: &[sandogasa_fedrq::PkgInfo],
+) -> BTreeMap<String, Vec<String>> {
+    deps.iter()
+        .map(|d| {
+            let mut sources: Vec<String> = providers
+                .iter()
+                .filter(|p| p.satisfies(d))
+                .filter_map(|p| p.source_name.clone())
+                .collect();
+            sources.dedup();
+            (d.clone(), sources)
+        })
+        .collect()
+}
+
 /// Fetch a dep's resolution from a cache map, querying `resolve` on a
 /// miss and keeping the first real provider (fedrq may return a
 /// literal "(none)", which is filtered out).
@@ -643,6 +753,22 @@ fn resolve_closure_with_cache(
             );
         }
 
+        // One query for the level's BuildRequires, then two for its
+        // capabilities (target, then source for what the target
+        // lacks); the per-package pass below runs against warm caches.
+        let level_pkgs: Vec<String> = to_process.iter().map(|(p, _)| p.clone()).collect();
+        let build_reqs_by_pkg = resolver.buildrequires_many(&level_pkgs);
+        prefetch_resolutions(
+            resolver,
+            cache,
+            build_reqs_by_pkg
+                .values()
+                .flatten()
+                .flatten()
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.starts_with("rpmlib(") && !d.starts_with("auto(")),
+        );
+
         // Resolve all packages at this level in parallel.
         // Each returns: (pkg, entry, new_packages, pkg_warnings)
         let results: Vec<_> = to_process
@@ -653,9 +779,10 @@ fn resolve_closure_with_cache(
                     log.push(format!("[depth {pkg_depth}] resolving {pkg}",));
                 }
 
-                let build_reqs = match resolver.buildrequires(pkg) {
-                    Ok(reqs) => reqs,
-                    Err(e) => {
+                let build_reqs = match build_reqs_by_pkg.get(pkg) {
+                    Some(Ok(reqs)) => reqs.clone(),
+                    Some(Err(e)) => {
+                        let e = e.clone();
                         let warn = format!("{pkg}: failed to query BuildRequires: {e}");
                         return (
                             pkg.clone(),
@@ -668,6 +795,7 @@ fn resolve_closure_with_cache(
                             log,
                         );
                     }
+                    None => Vec::new(),
                 };
 
                 let mut missing_deps: Vec<MissingDep> = Vec::new();
@@ -857,13 +985,30 @@ fn check_installability_with_cache(
     // Collect warnings from parallel subpkg_requires failures.
     let warn_collector: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+    // Batched: every package's subpackage Requires in one query, then
+    // their resolutions in two, before the per-package pass.
+    let check_names: Vec<String> = pkgs_to_check.iter().map(|p| (*p).clone()).collect();
+    let requires_by_pkg = resolver.subpkg_requires_many(&check_names);
+    prefetch_resolutions(
+        resolver,
+        cache,
+        requires_by_pkg
+            .values()
+            .flatten()
+            .flatten()
+            .map(|d| d.trim().to_string())
+            .filter(|d| !sandogasa_depfilter::is_rpm_internal_dep(d))
+            .filter(|d| !(options.auto_exclude && sandogasa_depfilter::is_solib_symbol_dep(d))),
+    );
+
     // Process all packages in parallel.
     let results: Vec<_> = pkgs_to_check
         .par_iter()
         .filter_map(|pkg| {
-            let requires = match resolver.subpkg_requires(pkg) {
-                Ok(r) => r,
-                Err(e) => {
+            let requires = match requires_by_pkg.get(*pkg) {
+                Some(Ok(r)) => r.clone(),
+                None => Vec::new(),
+                Some(Err(e)) => {
                     warn_collector.lock().unwrap().push(format!(
                         "warning: {pkg}: failed to query subpackage \
                          Requires: {e}"
@@ -1190,6 +1335,81 @@ impl DepResolver for FedrqResolver {
             None => Ok(vec![]),
         }
     }
+
+    fn buildrequires_many(
+        &self,
+        srpms: &[String],
+    ) -> BTreeMap<String, Result<Vec<String>, String>> {
+        match self.source_srpm().srcs_info(srpms) {
+            Ok(infos) => {
+                let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                for info in infos {
+                    by_name.entry(info.name).or_default().extend(info.requires);
+                }
+                srpms
+                    .iter()
+                    .map(|s| {
+                        let reqs = by_name
+                            .remove(s)
+                            .ok_or_else(|| format!("{s}: not found on source"));
+                        (s.clone(), reqs)
+                    })
+                    .collect()
+            }
+            Err(e) => srpms
+                .iter()
+                .map(|s| (s.clone(), Err(e.to_string())))
+                .collect(),
+        }
+    }
+
+    fn resolve_source_many(
+        &self,
+        deps: &[String],
+    ) -> Result<BTreeMap<String, Vec<String>>, String> {
+        let providers = self
+            .source
+            .providers_info(deps)
+            .map_err(|e| e.to_string())?;
+        Ok(attribute_providers(deps, &providers))
+    }
+
+    fn resolve_target_many(
+        &self,
+        deps: &[String],
+    ) -> Result<BTreeMap<String, Vec<String>>, String> {
+        let providers = self
+            .target
+            .providers_info(deps)
+            .map_err(|e| e.to_string())?;
+        Ok(attribute_providers(deps, &providers))
+    }
+
+    fn subpkg_requires_many(
+        &self,
+        srpms: &[String],
+    ) -> BTreeMap<String, Result<Vec<String>, String>> {
+        match self.source_srpm().subpkgs_info(srpms) {
+            Ok(infos) => {
+                let mut by_source: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                for info in infos {
+                    if let Some(src) = info.source_name {
+                        by_source.entry(src).or_default().extend(info.requires);
+                    }
+                }
+                // A source with no subpackages found is an empty list,
+                // as the single-item query reports it.
+                srpms
+                    .iter()
+                    .map(|s| (s.clone(), Ok(by_source.remove(s).unwrap_or_default())))
+                    .collect()
+            }
+            Err(e) => srpms
+                .iter()
+                .map(|s| (s.clone(), Err(e.to_string())))
+                .collect(),
+        }
+    }
 }
 
 /// Why a package is in a generated build script, as a shell comment.
@@ -1468,6 +1688,86 @@ packages = ["a"]
         fn resolve_base_vr(&self, dep: &str) -> Result<Vec<(String, String)>, String> {
             Ok(self.base_resolve.get(dep).cloned().unwrap_or_default())
         }
+    }
+
+    /// A resolver whose single-item lookups panic: the walks must reach
+    /// fedrq only through the batched entry points, or the whole point
+    /// of prefetching (one query per level, not per package or per
+    /// capability) is silently lost.
+    struct BatchOnly(MockResolver);
+
+    impl DepResolver for BatchOnly {
+        fn buildrequires(&self, srpm: &str) -> Result<Vec<String>, String> {
+            panic!("single buildrequires({srpm}); the level must be batched");
+        }
+        fn resolve_source(&self, dep: &str) -> Result<Vec<String>, String> {
+            panic!("single resolve_source({dep}); the level must be batched");
+        }
+        fn resolve_target(&self, dep: &str) -> Result<Vec<String>, String> {
+            panic!("single resolve_target({dep}); the level must be batched");
+        }
+        fn src_exists(&self, srpm: &str) -> Result<bool, String> {
+            self.0.src_exists(srpm)
+        }
+        fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
+            panic!("single subpkg_requires({srpm}); the level must be batched");
+        }
+        fn buildrequires_many(
+            &self,
+            srpms: &[String],
+        ) -> BTreeMap<String, Result<Vec<String>, String>> {
+            self.0.buildrequires_many(srpms)
+        }
+        fn resolve_source_many(
+            &self,
+            deps: &[String],
+        ) -> Result<BTreeMap<String, Vec<String>>, String> {
+            self.0.resolve_source_many(deps)
+        }
+        fn resolve_target_many(
+            &self,
+            deps: &[String],
+        ) -> Result<BTreeMap<String, Vec<String>>, String> {
+            self.0.resolve_target_many(deps)
+        }
+        fn subpkg_requires_many(
+            &self,
+            srpms: &[String],
+        ) -> BTreeMap<String, Result<Vec<String>, String>> {
+            self.0.subpkg_requires_many(srpms)
+        }
+    }
+
+    #[test]
+    fn walks_reach_the_backend_only_through_batched_lookups() {
+        let mut inner = MockResolver::new();
+        // mypkg needs libfoo (missing on target, from libfoo on source);
+        // libfoo's own BuildRequires are satisfied on target; libfoo's
+        // subpackages need libbar at install time, provided by bar.
+        inner.add_buildrequires("mypkg", &["libfoo-devel", "gcc"]);
+        inner.add_target_resolve("gcc", "gcc");
+        inner.add_source_resolve("libfoo-devel", "libfoo");
+        inner.add_buildrequires("libfoo", &["gcc"]);
+        inner.add_subpkg_requires("libfoo", &["libbar"]);
+        inner.add_source_resolve("libbar", "bar");
+        inner.add_buildrequires("bar", &[]);
+        let resolver = BatchOnly(inner);
+
+        let closure =
+            resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "epel10").unwrap();
+        assert_eq!(closure.closure.len(), 2);
+        assert_eq!(
+            closure.closure["mypkg"].missing_deps[0].provided_by,
+            "libfoo"
+        );
+
+        let report = check_installability(
+            &resolver,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
+        assert!(report.additional_packages.contains("bar"));
     }
 
     #[test]

@@ -335,24 +335,6 @@ pub struct DepsReport {
     pub warnings: Vec<String>,
 }
 
-/// The dependency's name token: everything up to the first space, so
-/// `python3-foo >= 1.2` and the Provides `python3-foo = 1.5-1.el9`
-/// meet at `python3-foo`. Solib capabilities carry no spaces and pass
-/// through whole.
-fn dep_name(dep: &str) -> &str {
-    dep.split_whitespace().next().unwrap_or(dep)
-}
-
-/// Whether provider `p` satisfies `req`, by exact Provides match,
-/// name-token match, or its own package name.
-fn provider_matches(p: &PkgInfo, req: &str) -> bool {
-    let name = dep_name(req);
-    p.name == name
-        || p.provides
-            .iter()
-            .any(|pr| pr == req || dep_name(pr) == name)
-}
-
 /// Whether `dep` should be resolved at all. RPM-internal and
 /// auto-generated capabilities are noise; symbol-version deps always
 /// ride alongside a bare soname dep that resolves to the same
@@ -642,7 +624,7 @@ pub fn walk(
             let mine: Vec<&str> = reqs
                 .iter()
                 .map(String::as_str)
-                .filter(|r| provider_matches(&p, r))
+                .filter(|r| p.satisfies(r))
                 .collect();
             matched.extend(mine.iter().copied());
             if let Some(src) = &p.source_name {
@@ -760,7 +742,7 @@ mod tests {
             Ok(self
                 .providers
                 .iter()
-                .filter(|p| deps.iter().any(|d| provider_matches(p, d)))
+                .filter(|p| deps.iter().any(|d| p.satisfies(d)))
                 .cloned()
                 .collect())
         }

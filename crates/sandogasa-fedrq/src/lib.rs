@@ -73,7 +73,27 @@ pub struct PkgInfo {
     pub repoid: String,
 }
 
+/// The capability name of a dependency string: `foo >= 1.2` → `foo`,
+/// `crate(x/default) < 2~` → `crate(x/default)`.
+pub fn dep_name(dep: &str) -> &str {
+    dep.split_whitespace().next().unwrap_or(dep)
+}
+
 impl PkgInfo {
+    /// Whether this package satisfies `dep`: by exact Provides match,
+    /// by the capability's name token, or by its own package name.
+    /// The version constraint is fedrq's business — a package only
+    /// appears in a `-P` answer if it satisfied the constraint — so
+    /// attribution back to the asked-for dependency is by name.
+    pub fn satisfies(&self, dep: &str) -> bool {
+        let name = dep_name(dep);
+        self.name == name
+            || self
+                .provides
+                .iter()
+                .any(|pr| pr == dep || dep_name(pr) == name)
+    }
+
     /// Build a package record from parts — for callers that
     /// reconstruct packages from stored data rather than a fedrq
     /// answer (the struct is `#[non_exhaustive]`, so a literal
