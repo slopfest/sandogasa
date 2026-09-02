@@ -302,6 +302,22 @@ than annotated as done.
   livable); build it the next time a prune session actually stalls on
   the walk.
 
+## poi-tracker act: name the feature subpackage a dependent needs (2026-09-02)
+
+- act's orphan probe resolves reverse dependencies to SOURCE names
+  ("who would I strand"), which is right for the orphan decision but
+  coarser than it could be: it cannot say whether the edge is a hard
+  dependency or a severable non-default feature. python-dulwich needs
+  merge3 only through its `+merge` feature subpackage
+  (`python3-dulwich+merge` requires `python3.15dist(merge3)`), while
+  breezy requires it outright — the probe shows both identically.
+- Surface the requiring BINARY subpackage alongside the source, so a
+  `+feature`-suffixed requirer reads as "likely severable, not a hard
+  block". whatrequires already sees these (it found the +merge edge);
+  the resolution to source is where the detail is dropped. This is the
+  same feature-subpackage structure the rust crates have, so the
+  marker generalizes.
+
 ## poi-tracker / sandogasa-pkg-health seam
 
 Decision (2026-07-21): keep both tools — pkg-health **observes**
