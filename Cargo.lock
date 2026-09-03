@@ -451,6 +451,7 @@ dependencies = [
  "sandogasa-bugclass",
  "sandogasa-bugzilla",
  "sandogasa-cli",
+ "sandogasa-closure",
  "sandogasa-config",
  "sandogasa-copr",
  "sandogasa-depfilter",

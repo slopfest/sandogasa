@@ -364,6 +364,15 @@ pub struct FedrqResolver {
     /// Base-distro repos behind an EPEL target (the base-distro
     /// guard's probe). `None` = guard inactive.
     pub base: Option<sandogasa_fedrq::Fedrq>,
+    /// A saved dependency graph of the source branch (from
+    /// `poi-tracker deps`): source-side lookups it can answer —
+    /// providers of capabilities it resolved, BuildRequires of
+    /// packages it walked as roots — never reach fedrq. Target and
+    /// base stay live.
+    pub source_graph: Option<sandogasa_closure::DepsGraph>,
+    /// Source-side lookups answered from the graph / sent to fedrq.
+    pub source_offline: std::sync::atomic::AtomicUsize,
+    pub source_online: std::sync::atomic::AtomicUsize,
 }
 
 /// The base-distro branch to probe for an EPEL-ish branch name.
@@ -1278,6 +1287,35 @@ impl FedrqResolver {
     }
 }
 
+/// BuildRequires of several sources straight from fedrq, per
+/// package (an unknown package stays one error, not a failed level).
+fn live_buildrequires(
+    fedrq: &sandogasa_fedrq::Fedrq,
+    srpms: &[String],
+) -> BTreeMap<String, Result<Vec<String>, String>> {
+    match fedrq.srcs_info(srpms) {
+        Ok(infos) => {
+            let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for info in infos {
+                by_name.entry(info.name).or_default().extend(info.requires);
+            }
+            srpms
+                .iter()
+                .map(|s| {
+                    let reqs = by_name
+                        .remove(s)
+                        .ok_or_else(|| format!("{s}: not found on source"));
+                    (s.clone(), reqs)
+                })
+                .collect()
+        }
+        Err(e) => srpms
+            .iter()
+            .map(|s| (s.clone(), Err(e.to_string())))
+            .collect(),
+    }
+}
+
 impl DepResolver for FedrqResolver {
     fn validate(&self) -> Result<(), String> {
         // Koji repos only index binary RPMs. If source_src is set,
@@ -1379,40 +1417,61 @@ impl DepResolver for FedrqResolver {
         &self,
         srpms: &[String],
     ) -> BTreeMap<String, Result<Vec<String>, String>> {
-        match self.source_srpm().srcs_info(srpms) {
-            Ok(infos) => {
-                let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
-                for info in infos {
-                    by_name.entry(info.name).or_default().extend(info.requires);
+        use std::sync::atomic::Ordering::Relaxed;
+        // A package the graph walked as a root has its BuildRequires
+        // recorded in full under its `src:` entity; only the rest go
+        // to fedrq.
+        let mut out: BTreeMap<String, Result<Vec<String>, String>> = BTreeMap::new();
+        let mut live: Vec<String> = Vec::new();
+        match &self.source_graph {
+            Some(graph) => {
+                let by_entity = graph.requires_by_entity();
+                for srpm in srpms {
+                    match by_entity.get(format!("src:{srpm}").as_str()) {
+                        Some(reqs) => {
+                            out.insert(
+                                srpm.clone(),
+                                Ok(reqs.iter().map(|c| c.to_string()).collect()),
+                            );
+                        }
+                        None => live.push(srpm.clone()),
+                    }
                 }
-                srpms
-                    .iter()
-                    .map(|s| {
-                        let reqs = by_name
-                            .remove(s)
-                            .ok_or_else(|| format!("{s}: not found on source"));
-                        (s.clone(), reqs)
-                    })
-                    .collect()
             }
-            Err(e) => srpms
-                .iter()
-                .map(|s| (s.clone(), Err(e.to_string())))
-                .collect(),
+            None => live = srpms.to_vec(),
         }
+        self.source_offline
+            .fetch_add(srpms.len() - live.len(), Relaxed);
+        self.source_online.fetch_add(live.len(), Relaxed);
+        if !live.is_empty() {
+            out.extend(live_buildrequires(self.source_srpm(), &live));
+        }
+        out
     }
-
     fn resolve_source_many(
         &self,
         deps: &[String],
     ) -> Result<BTreeMap<String, Vec<String>>, String> {
-        let providers = self
-            .source
-            .providers_info(deps)
-            .map_err(|e| e.to_string())?;
+        use std::sync::atomic::Ordering::Relaxed;
+        let providers = match &self.source_graph {
+            Some(graph) => {
+                let q = sandogasa_closure::GraphBackedQuery::new(&self.source, graph);
+                let providers = sandogasa_closure::PkgQuery::providers(&q, deps)?;
+                self.source_offline
+                    .fetch_add(q.offline.load(Relaxed), Relaxed);
+                self.source_online
+                    .fetch_add(q.online.load(Relaxed), Relaxed);
+                providers
+            }
+            None => {
+                self.source_online.fetch_add(deps.len(), Relaxed);
+                self.source
+                    .providers_info(deps)
+                    .map_err(|e| e.to_string())?
+            }
+        };
         Ok(attribute_providers(deps, &providers))
     }
-
     fn resolve_target_many(
         &self,
         deps: &[String],
@@ -1864,6 +1923,63 @@ packages = ["a"]
         assert!(closure.blocked_by_base.contains_key("libfoo"));
         assert_eq!(closure.blocked_by_base["libfoo"].base_version, "1.0-1.el10");
         assert!(closure.closure["mypkg"].missing_deps.is_empty());
+    }
+
+    #[test]
+    fn a_source_graph_answers_known_lookups_without_fedrq() {
+        use sandogasa_closure::{DepsGraph, GraphProvider};
+        // The source fedrq points at a branch that cannot exist, so any
+        // lookup that escapes the graph fails loudly instead of
+        // passing by accident.
+        let bogus = || sandogasa_fedrq::Fedrq {
+            branch: Some("no-such-branch-for-a-test".to_string()),
+            repo: None,
+        };
+        let mut graph = DepsGraph::default();
+        graph
+            .binary_sources
+            .insert("src:mypkg".into(), "mypkg".into());
+        graph
+            .requirers
+            .entry("libfoo-devel".into())
+            .or_default()
+            .insert("src:mypkg".into());
+        graph
+            .providers
+            .entry("libfoo-devel".into())
+            .or_default()
+            .insert(GraphProvider {
+                binary: "libfoo-devel".into(),
+                source: "libfoo".into(),
+                repoid: "rawhide".into(),
+            });
+        let resolver = FedrqResolver {
+            source: bogus(),
+            source_src: None,
+            target: bogus(),
+            base: None,
+            source_graph: Some(graph),
+            source_offline: Default::default(),
+            source_online: Default::default(),
+        };
+        let br = resolver.buildrequires_many(&["mypkg".to_string()]);
+        assert_eq!(br["mypkg"].as_ref().unwrap(), &["libfoo-devel".to_string()]);
+        let res = resolver
+            .resolve_source_many(&["libfoo-devel".to_string()])
+            .unwrap();
+        assert_eq!(res["libfoo-devel"], ["libfoo"]);
+        assert_eq!(
+            resolver
+                .source_offline
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+        assert_eq!(
+            resolver
+                .source_online
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
     }
 
     #[test]

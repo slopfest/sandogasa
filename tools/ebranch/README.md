@@ -703,6 +703,16 @@ ebranch check-crate arrow 57 -b rawhide -t --copr > build.sh
 Use `--check-install` to verify that every subpackage in the closure
 will be installable after building:
 
+#### Resolving offline from a saved graph
+
+`--graph PATH` takes a dependency graph that `poi-tracker deps` saved
+for the source branch and answers the source side from it: providers
+of capabilities the graph resolved, BuildRequires of packages it
+walked as roots. Only the frontier — plus the target branch and the
+base-distro guard, which are always live — goes to fedrq, and the
+summary says how many lookups went each way. The graph is a snapshot
+of the source branch; its periodic regeneration is the refresh.
+
 #### Base-distro guard (EPEL targets)
 
 EPEL packages must not replace base-distro (RHEL / CentOS Stream)

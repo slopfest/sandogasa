@@ -16,6 +16,7 @@ sandogasa-bodhi = { workspace = true }
 sandogasa-bugclass = { workspace = true }
 sandogasa-bugzilla = { workspace = true }
 sandogasa-cli = { workspace = true, features = ["http"] }
+sandogasa-closure = { workspace = true }
 sandogasa-config = { workspace = true }
 sandogasa-copr = { workspace = true }
 sandogasa-depfilter = { workspace = true }

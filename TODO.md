@@ -279,9 +279,14 @@ than annotated as done.
   queries per BFS level) and the matching rule is shared
   (`PkgInfo::satisfies`), so the remaining extraction is the wave loop
   itself plus poi-tracker's `PkgQuery` seam — which also gives ebranch
-  the graph-backed offline oracle for free. Every fedrq path in the
-  resolve walks is batched per level as of 2026-09-02, the base-distro
-  guard's version probe included.
+  the graph-backed offline oracle for free. Status 2026-09-02: the
+  engine is a crate (`sandogasa-closure`), ebranch consumes its oracle
+  (`resolve --graph`), every fedrq path in both walks is batched per
+  level. What is *not* done is unifying the two wave loops themselves —
+  ebranch's closure BFS is the engine with terminate="target has it",
+  collect="missing", src-only expansion, plus max-depth/excludes/the
+  sequential override-prompt point. Decide after both walks have seen a
+  few weeks of real use; the payoff is one implementation, not speed.
 
 ## poi-tracker: essential-deps as a materialized view (2026-09-01)
 

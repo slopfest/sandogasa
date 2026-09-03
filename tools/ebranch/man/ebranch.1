@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-08-26 "sandogasa 0.22.0" "Sandogasa Manual"
+.TH ebranch 1 2026-09-02 "sandogasa 0.22.0" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -464,7 +464,7 @@ check\-crate report TOML listing the missing packages
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch find-cycles
-\fBebranch find\-cycles\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-no\-auto\-exclude\-install\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR] 
+\fBebranch find\-cycles\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-no\-auto\-exclude\-install\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR] 
 .PP
 Detect dependency cycles in the build graph
 .TP
@@ -578,13 +578,16 @@ Number of parallel fedrq queries (0 = CPUs)
 \fB\-\-refresh\fR
 Clear fedrq + libdnf5 repo metadata caches before querying
 .TP
+\fB\-\-graph\fR \fI<PATH>\fR
+Saved dependency graph of the source branch (a `poi\-tracker deps` graph JSON): source\-side lookups it can answer are served offline; only the frontier, the target and the base go to fedrq
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 [\fIPACKAGES\fR]
 Source RPM names to analyze
 .SS ebranch resolve
-\fBebranch resolve\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-no\-auto\-exclude\-install\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR] 
+\fBebranch resolve\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-no\-auto\-exclude\-install\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR] 
 .PP
 Resolve the full dependency closure for porting
 .TP
@@ -697,6 +700,9 @@ Number of parallel fedrq queries (0 = CPUs)
 .TP
 \fB\-\-refresh\fR
 Clear fedrq + libdnf5 repo metadata caches before querying
+.TP
+\fB\-\-graph\fR \fI<PATH>\fR
+Saved dependency graph of the source branch (a `poi\-tracker deps` graph JSON): source\-side lookups it can answer are served offline; only the frontier, the target and the base go to fedrq
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

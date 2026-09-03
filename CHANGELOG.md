@@ -15,6 +15,21 @@ walk's tests move with them. poi-tracker keeps only the
 inventory-shaped `to_inventory` and re-exports the rest, so nothing
 about its behavior or output changes.
 
+ebranch is the crate's second consumer: `resolve --graph <json>`
+serves the source side of a branch-request closure from a saved
+rawhide graph — providers of capabilities the graph resolved,
+BuildRequires of packages it walked as roots — and asks fedrq only
+for the frontier (the target branch and the base-distro guard stay
+live; they describe other repos). `FedrqResolver` counts how many
+source lookups went each way and `resolve` reports it: the
+rust-difftastic → epel10 query that took 6.3 s live took 3.1 s with
+the graph, both of its source-side lookups answered offline, JSON
+identical. The two walks
+themselves remain separate: one is a closure over binaries collecting
+what a repo of interest provides, the other a closure over sources
+collecting what a target lacks, and unifying their loops is a
+decision for after both have been exercised on real work.
+
 ### ebranch: resolve batches each BFS level into three fedrq queries
 
 `ebranch resolve` paid fedrq's repo-sack load once per source package

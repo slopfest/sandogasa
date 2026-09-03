@@ -201,6 +201,13 @@ are excluded automatically."
     /// Clear fedrq + libdnf5 repo metadata caches before querying.
     #[arg(long)]
     refresh: bool,
+
+    /// Saved dependency graph of the source branch (a `poi-tracker
+    /// deps` graph JSON): source-side lookups it can answer are
+    /// served offline; only the frontier, the target and the base
+    /// go to fedrq.
+    #[arg(long, value_name = "PATH")]
+    graph: Option<String>,
 }
 
 #[derive(clap::Args, Clone)]
@@ -1224,6 +1231,19 @@ fn main() -> ExitCode {
         eprintln!("[resolve] base-distro guard active (probing {b})");
     }
 
+    let source_graph = match &args.graph {
+        Some(path) => match std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
+        {
+            Ok(g) => Some(g),
+            Err(e) => {
+                eprintln!("error: reading graph {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
     let resolver = FedrqResolver {
         source: sandogasa_fedrq::Fedrq {
             branch: args.source.clone(),
@@ -1238,6 +1258,9 @@ fn main() -> ExitCode {
             branch: Some(b.clone()),
             repo: None,
         }),
+        source_graph,
+        source_offline: Default::default(),
+        source_online: Default::default(),
     };
     let source_label = branch_repo_label(args.source.as_deref(), args.source_repo.as_deref());
     let target_label = branch_repo_label(args.target.as_deref(), args.target_repo.as_deref());
@@ -1286,6 +1309,14 @@ fn main() -> ExitCode {
 
     for w in &closure.warnings {
         eprintln!("warning: {w}");
+    }
+    if args.graph.is_some() {
+        use std::sync::atomic::Ordering::Relaxed;
+        eprintln!(
+            "[resolve] source lookups: {} from the graph, {} live",
+            resolver.source_offline.load(Relaxed),
+            resolver.source_online.load(Relaxed),
+        );
     }
 
     if let Some(report) = &install_report {
