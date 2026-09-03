@@ -159,6 +159,19 @@ dependency list too, not merely left unexpanded, and `--exclude` no
 longer requires `--transitive` — since a dependency Fedora will not
 package is not one the report should count.
 
+The usual harnesses are now excluded without any config: `criterion`,
+`criterion2`, `codspeed` and its `-criterion-compat`, `-divan-compat`
+and `-bencher-compat` shims, `divan`, `iai`, `iai-callgrind` and
+`count_instructions`. The coreutils report showed why the default
+matters — 473 of its 483 transitive-missing crates sat behind
+`codspeed-criterion-compat`, one crate's dev dependency, through the
+dev dependencies of `smol`, `surf` and `plotters`. A configured
+`exclude` list replaces the built-in set rather than adding to it, so
+someone who really means to package criterion lists the rest without
+it, or sets `exclude = []` to exclude nothing; `--exclude` adds to
+whichever list is in force, and `--verbose` says when the built-in
+set is the one applying.
+
 ### ebranch: resolve batches each BFS level into three fedrq queries
 
 `ebranch resolve` paid fedrq's repo-sack load once per source package

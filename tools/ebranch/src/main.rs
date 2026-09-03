@@ -512,8 +512,10 @@ what needs (re)building."
     exclude_unmet: bool,
 
     /// Ignore these crates entirely, direct or transitive, as
-    /// dependencies Fedora will not package (CSV or repeated).
-    /// Merged with the config file's `[check-crate] exclude`.
+    /// dependencies Fedora will not package (CSV or repeated). Added
+    /// to the config file's `[check-crate] exclude`, or, when no
+    /// config sets one, to the built-in benchmark set (criterion,
+    /// codspeed-*, divan, iai, count_instructions).
     #[arg(long, value_delimiter = ',', value_name = "CRATE,...")]
     exclude: Vec<String>,
 
@@ -934,6 +936,14 @@ fn main() -> ExitCode {
             Some(_) => String::new(),
             None => branch_repo_label(a.branch.as_deref(), a.repo.as_deref()),
         };
+        let (standing, from_config) = config::check_crate_excludes();
+        if a.verbose && !from_config {
+            eprintln!(
+                "[check-crate] excluding benchmark crates by default: {} \
+                 (set [check-crate] exclude in the config file to change)",
+                standing.join(", ")
+            );
+        }
         let opts = check_crate::CheckCrateOptions {
             branch: a.branch.clone(),
             repo: a.repo.clone(),
@@ -943,12 +953,7 @@ fn main() -> ExitCode {
             exclude_dev: a.exclude_dev,
             include_optional: a.include_optional,
             include_too_old: !a.exclude_unmet,
-            exclude: a
-                .exclude
-                .iter()
-                .cloned()
-                .chain(config::check_crate_excludes())
-                .collect(),
+            exclude: a.exclude.iter().cloned().chain(standing).collect(),
             refresh: a.refresh,
             features: a.features.clone(),
             no_default_features: a.no_default_features,

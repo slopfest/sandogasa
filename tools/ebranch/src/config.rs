@@ -26,18 +26,50 @@ pub struct CheckCrateConfig {
     /// some upstream dependencies (benchmark harnesses like
     /// `criterion`, say), so listing them here keeps every report
     /// honest about what will actually be packaged. Merged with
-    /// `--exclude`.
-    #[serde(default)]
-    pub exclude: Vec<String>,
+    /// `--exclude`. Unset, [`DEFAULT_EXCLUDES`] applies; a list set
+    /// here replaces it (`exclude = []` excludes nothing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
 }
 
-/// The crates `check-crate` ignores by configuration (system file
-/// beneath user file, as usual); empty when there is no config.
-pub fn check_crate_excludes() -> Vec<String> {
-    sandogasa_config::ConfigFile::for_tool("ebranch")
-        .load::<EbranchConfig>()
-        .map(|c| c.check_crate.exclude)
-        .unwrap_or_default()
+/// The benchmark harnesses `check-crate` ignores unless the config
+/// file sets its own `exclude` list: Fedora drops them from every
+/// build, so they are never something to package.
+pub const DEFAULT_EXCLUDES: &[&str] = &[
+    "codspeed",
+    "codspeed-bencher-compat",
+    "codspeed-criterion-compat",
+    "codspeed-divan-compat",
+    "count_instructions",
+    "criterion",
+    "criterion2",
+    "divan",
+    "iai",
+    "iai-callgrind",
+];
+
+/// The effective exclude list and whether the config file set it
+/// (`false`: [`DEFAULT_EXCLUDES`] is in force).
+pub fn resolve_excludes(configured: Option<Vec<String>>) -> (Vec<String>, bool) {
+    match configured {
+        Some(list) => (list, true),
+        None => (
+            DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect(),
+            false,
+        ),
+    }
+}
+
+/// The crates `check-crate` ignores: the config file's list (system
+/// file beneath user file, as usual), or [`DEFAULT_EXCLUDES`] when no
+/// file sets one. The flag says which.
+pub fn check_crate_excludes() -> (Vec<String>, bool) {
+    resolve_excludes(
+        sandogasa_config::ConfigFile::for_tool("ebranch")
+            .load::<EbranchConfig>()
+            .ok()
+            .and_then(|c| c.check_crate.exclude),
+    )
 }
 
 /// Bugzilla configuration.
@@ -144,8 +176,18 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert_eq!(cfg.check_crate.exclude, ["criterion", "pretty_assertions"]);
+        let (list, set) = resolve_excludes(cfg.check_crate.exclude);
+        assert_eq!(list, ["criterion", "pretty_assertions"]);
+        assert!(set);
+        // No list: the built-in benchmark set applies.
         let bare: EbranchConfig = toml::from_str("").unwrap();
-        assert!(bare.check_crate.exclude.is_empty());
+        let (list, set) = resolve_excludes(bare.check_crate.exclude);
+        assert_eq!(list, DEFAULT_EXCLUDES);
+        assert!(!set);
+        // An explicit empty list replaces it: someone packaging criterion.
+        let none: EbranchConfig = toml::from_str("[check-crate]\nexclude = []").unwrap();
+        let (list, set) = resolve_excludes(none.check_crate.exclude);
+        assert!(list.is_empty());
+        assert!(set);
     }
 }

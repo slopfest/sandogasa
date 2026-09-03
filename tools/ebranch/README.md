@@ -143,8 +143,9 @@ ebranch check-crate --from rbw.toml --copr > build.sh
   from transitive expansion; they are included by default, since
   omitting them silently under-reports what needs rebuilding
 - `--exclude CRATE,...` — ignore crates entirely, direct or transitive, as
-  dependencies Fedora will not package; merged with the config file's
-  `[check-crate] exclude` list
+  dependencies Fedora will not package; added to the config file's
+  `[check-crate] exclude` list, or to the built-in benchmark set when
+  no config sets one (see Configuration)
 - `--dot` — output dependency graph in Graphviz DOT format
 - `--toml PATH` — save full analysis to a TOML file for reuse
 - `--verbose` / `-v` — print progress to stderr as packages are resolved
@@ -870,14 +871,23 @@ defaults (see the root `DEVELOPMENT.md`).
 A `[check-crate]` table lists crates to ignore in every run, direct
 or transitive, as if they were not dependencies — Fedora almost
 always drops benchmark harnesses and the like, and this keeps each
-report honest about what will actually be packaged:
+report honest about what will actually be packaged. Without a list,
+the built-in benchmark set applies: `codspeed`,
+`codspeed-bencher-compat`, `codspeed-criterion-compat`,
+`codspeed-divan-compat`, `count_instructions`, `criterion`,
+`criterion2`, `divan`, `iai`, `iai-callgrind`. A list in the file
+*replaces* that set rather than adding to it, so a run that should
+count criterion — someone packaging it — lists the others without it,
+and `exclude = []` excludes nothing:
 
 ```toml
 [check-crate]
 exclude = ["criterion", "pretty_assertions"]
 ```
 
-It merges with `--exclude`; both ignore the crate outright.
+`--exclude` adds to whichever list is in force; all of them ignore the
+crate outright, and `--verbose` says when the built-in set is the one
+applying.
 
 `ebranch config` writes the user file only, with 700 on the
 directory and 600 on the file. Nothing writes under `/etc`: a system
