@@ -402,25 +402,27 @@ considered and rejected.)
   `rust_version` (crates.io exposes it) against the target's rustc and
   flag chains that are blocked on the toolchain before any branch
   requests/builds are attempted.
-- (2026-07-02) check-crate: feature-aware dependency resolution. Optional
-  deps are all-or-nothing today — `should_expand` skips `optional=true`
-  deps unless `--include-optional`, which then pulls in *every* crate's
-  optional deps. But an optional dep enabled by a feature the root crate
-  activates is effectively required, e.g. routinator → rpki `^0.19.3` →
-  quick-xml `^0.39.4` (optional, behind rpki's `rrdp` feature that
-  routinator turns on). Fedora rawhide has quick-xml 0.40.1 + compat
-  0.31/0.36/0.37/0.38 — no 0.39.x — so it's genuinely unmet, but
-  check-crate never checks it (default) or over-reports it (with
-  `--include-optional`). Proper fix: resolve the enabled feature set from
-  the root down and follow only the optional deps those features
-  activate — needs each crate's `features` map, per-dep
-  `features`/`default-features`, and the root's enabled features (the
-  Cargo feature-unification problem).
-- (2026-07-02, remaining half) check-crate: flip `--include-optional` to
-  on by default (rename to `--exclude-optional`) once the feature-aware
-  resolution above lands — flipping it earlier is NOISY (it includes
-  optional deps the root doesn't enable). The `--include-unmet` half was
-  flipped to `--exclude-unmet` in v0.16.0.
+- (2026-07-02, redesigned 2026-09-03) check-crate: feature-aware
+  dependency resolution — as a **hybrid** over the shared closure
+  engine. Fedora builds library crates with all features
+  (`%cargo_generate_buildrequires -a`) unless the spec trims them, so
+  the feature calculus only needs to run at the *root* (the
+  application: default features plus `--features`; the root's
+  optional deps activated by those are required). Every other crate is
+  one of two cases: **already packaged in rawhide** → its real spec
+  BuildRequires are the truth (trimmed benchmark features and all),
+  i.e. delegate to `resolve`'s BuildRequires closure source→target;
+  **not packaged anywhere** → all optional deps are hard
+  requirements for packaging it (rust2rpm `-a`). No per-edge feature
+  unification needed. Shape: a third `Policy` over
+  `sandogasa_closure::engine` with mixed nodes (crate from crates.io
+  / rawhide source), batched target checks per level (replacing the
+  per-crate `provides_of_provider` spawns). Then flip
+  `--include-optional` to `--exclude-optional` for the non-root part,
+  which is where it was right all along. Same structure applies to
+  Python extras on the RPM side (`python3-foo+extra` subpackages):
+  feature-aware root expansion is the open item in the walks, see the
+  act/dependents notes.
 - Second-level branch-request escalation: when a `needinfo?` ping
   (the level-1 escalation `escalate` already does) goes unanswered
   for another N days, file a releng ticket on Forgejo (releng's
