@@ -484,6 +484,14 @@ struct CheckCrateArgs {
     #[arg(long)]
     no_default_features: bool,
 
+    /// Crates built in-tree from the root's own source (a
+    /// workspace's members, e.g. `uu_*`): hidden as dependencies,
+    /// their own dependencies checked as the workspace's. Globs, CSV
+    /// or repeated. Crates published from the root's repository are
+    /// detected without being listed.
+    #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
+    in_tree: Vec<String>,
+
     /// Fedora package name when it is not `rust-<crate>` (e.g. the
     /// `coreutils` crate is `uutils-coreutils`): used for the spec
     /// lookup and as the report's package name.
@@ -945,6 +953,7 @@ fn main() -> ExitCode {
             features: a.features.clone(),
             no_default_features: a.no_default_features,
             package: a.package.clone(),
+            in_tree: a.in_tree.clone(),
         };
         let outcome = match &a.from {
             Some(path) => check_crate::load_report(path),

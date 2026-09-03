@@ -118,6 +118,22 @@ ebranch check-crate --from rbw.toml --copr > build.sh
   reads that line from the spec on dist-git (so an update check of
   uutils-coreutils picks up its `-f feat_acl,…` by itself; a
   conditional `%global` is read as the union of its definitions)
+- `--in-tree GLOB,...` — crates built from the root's own source tree
+  (a workspace's members, `uu_*` for uutils-coreutils): not
+  dependencies Fedora packages, so they leave the missing/unmet lists
+  into a "Built in-tree" line, while *their* dependencies are checked
+  as the workspace's and marked `via <member>`. Members published from
+  the root's own repository are detected without being listed, and
+  each is checked with the features the root's enabled set requests
+  of it (`feat_selinux = ["uu_ls/selinux", …]`). A member's own dev
+  dependencies do not count: it is built as a dependency, not tested.
+  A member whose crates.io entry names no repository is only found
+  through the glob
+- Dependencies limited to another target — `cfg(windows)`,
+  `x86_64-pc-windows-msvc` — are not counted at any level; the
+  crates.io `target` is evaluated for a Linux build the way
+  `%cargo_generate_buildrequires` does, with architecture predicates
+  treated as true
 - `--package NAME` — the Fedora package when it is not `rust-<crate>`
   (the `coreutils` crate is `uutils-coreutils`): used for the spec
   lookup and as the report's package name

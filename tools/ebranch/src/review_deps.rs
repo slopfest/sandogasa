@@ -466,7 +466,9 @@ mod tests {
                     optional: false,
                 },
                 status: DepStatus::Missing,
+                via: None,
             }],
+            in_tree: vec![],
             transitive_missing: vec![check_crate::TransitiveDep {
                 name: "dep-b".to_string(),
                 package: "rust-dep-b".to_string(),

@@ -16,6 +16,7 @@ use crate::dag;
 // ---- Public types ----
 
 /// Options for the check-crate command.
+#[derive(Clone)]
 pub struct CheckCrateOptions {
     pub branch: Option<String>,
     pub repo: Option<String>,
@@ -35,6 +36,12 @@ pub struct CheckCrateOptions {
     pub features: Vec<String>,
     /// Build without default features (`-n`).
     pub no_default_features: bool,
+    /// Crates built in-tree from the root's own source (a workspace's
+    /// members, `uu_*` for uutils-coreutils): not dependencies Fedora
+    /// packages, but their dependencies are the workspace's. Globs;
+    /// crates published from the root's repository are detected
+    /// without being listed.
+    pub in_tree: Vec<String>,
     /// The Fedora package name when it is not `rust-<crate>`
     /// (`coreutils` → `uutils-coreutils`): used for the spec lookup
     /// and as the report's package name.
@@ -80,6 +87,17 @@ pub struct DepResult {
     pub dep: CrateDep,
     #[serde(flatten)]
     pub status: DepStatus,
+    /// The in-tree crate this dependency was found under, when it is
+    /// not the root's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+}
+
+/// A crate built from the root's own source tree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InTreeCrate {
+    pub name: String,
+    pub version_req: String,
 }
 
 /// A transitively-discovered dependency that needs action.
@@ -111,6 +129,10 @@ pub struct CheckCrateReport {
     pub package: String,
     pub branch: String,
     pub dependencies: Vec<DepResult>,
+    /// Workspace members: built in-tree, not packaged; their
+    /// dependencies appear in `dependencies` with `via` set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub in_tree: Vec<InTreeCrate>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transitive_missing: Vec<TransitiveDep>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -218,7 +240,8 @@ pub fn check_crate(
             }
         );
     }
-    let deps = rt.block_on(fetch_dependencies(name, &version, &seeds))?;
+    let (deps, dep_features) =
+        rt.block_on(fetch_dependencies_with_features(name, &version, &seeds))?;
     // Excluded crates are ignored outright — direct or transitive —
     // as if they were not dependencies: Fedora drops them.
     let (deps, ignored): (Vec<CrateDep>, Vec<CrateDep>) = deps
@@ -251,16 +274,129 @@ pub fn check_crate(
 
     // One fedrq invocation for every direct dependency.
     let statuses = check_deps_in_repo(&fedrq, &deps.iter().collect::<Vec<_>>());
-    let dependencies: Vec<DepResult> = deps
+    let mut dependencies: Vec<DepResult> = deps
         .iter()
         .cloned()
         .zip(statuses)
-        .map(|(dep, status)| DepResult { dep, status })
+        .map(|(dep, status)| DepResult {
+            dep,
+            status,
+            via: None,
+        })
         .collect();
 
+    // Workspace members are built from the root's own tree, not
+    // packaged: they leave the dependency lists, and their own
+    // dependencies join them as the workspace's — with the features
+    // the root's enabled set requests of them (`uu_ls/selinux`).
+    let root_repo = rt.block_on(fetch_repository(name));
+    let is_in_tree = |dep: &str| -> bool {
+        opts.in_tree.iter().any(|g| glob_match(g, dep))
+            || (root_repo.is_some() && rt.block_on(fetch_repository(dep)) == root_repo)
+    };
+    let mut in_tree: Vec<InTreeCrate> = Vec::new();
+    let mut queue: VecDeque<(String, String, Vec<String>)> = VecDeque::new();
+    let mut visited_members: HashSet<String> = HashSet::new();
+    let mut kept: Vec<DepResult> = Vec::new();
+    for dr in dependencies {
+        if !matches!(dr.status, DepStatus::Satisfied { .. }) && is_in_tree(&dr.dep.name) {
+            // A member the root lists twice (normal and dev) is one crate.
+            if visited_members.insert(dr.dep.name.clone()) {
+                queue.push_back((
+                    dr.dep.name.clone(),
+                    dr.dep.version_req.clone(),
+                    dep_features.get(&dr.dep.name).cloned().unwrap_or_default(),
+                ));
+                in_tree.push(InTreeCrate {
+                    name: dr.dep.name,
+                    version_req: dr.dep.version_req,
+                });
+            }
+        } else {
+            kept.push(dr);
+        }
+    }
+    dependencies = kept;
+    let mut member_deps: Vec<(CrateDep, String)> = Vec::new();
+    let mut seen_member_deps: HashSet<(String, String)> = HashSet::new();
+    while let Some((member, req, feats)) = queue.pop_front() {
+        let Ok(mversion) = rt.block_on(resolve_matching_version(&member, &req)) else {
+            if opts.verbose {
+                eprintln!("[check-crate] warning: no version of in-tree {member} matches {req}");
+            }
+            continue;
+        };
+        let mut mseeds = vec!["default".to_string()];
+        mseeds.extend(feats);
+        let Ok((mdeps, mfeats)) = rt.block_on(fetch_dependencies_with_features(
+            &member, &mversion, &mseeds,
+        )) else {
+            continue;
+        };
+        // A member is built as a dependency, never tested on its own:
+        // its dev dependencies are not the workspace's.
+        for d in mdeps
+            .into_iter()
+            .filter(|d| d.kind != "dev" && should_expand(d, opts, false))
+        {
+            if is_in_tree(&d.name) {
+                if visited_members.insert(d.name.clone()) {
+                    in_tree.push(InTreeCrate {
+                        name: d.name.clone(),
+                        version_req: d.version_req.clone(),
+                    });
+                    queue.push_back((
+                        d.name.clone(),
+                        d.version_req.clone(),
+                        mfeats.get(&d.name).cloned().unwrap_or_default(),
+                    ));
+                }
+                continue;
+            }
+            if seen_member_deps.insert((d.name.clone(), d.version_req.clone())) {
+                member_deps.push((d, member.clone()));
+            }
+        }
+    }
+    if !in_tree.is_empty() {
+        if opts.verbose {
+            let names: Vec<&str> = in_tree.iter().map(|m| m.name.as_str()).collect();
+            eprintln!(
+                "[check-crate] {} crate(s) built in-tree, their {} dependencies checked as the workspace's: {}",
+                in_tree.len(),
+                member_deps.len(),
+                names.join(", ")
+            );
+        }
+        let refs: Vec<&CrateDep> = member_deps.iter().map(|(d, _)| d).collect();
+        let statuses = check_deps_in_repo(&fedrq, &refs);
+        // A dependency the root already has directly needs no second entry.
+        let direct: HashSet<(String, String)> = dependencies
+            .iter()
+            .map(|d| (d.dep.name.clone(), d.dep.version_req.clone()))
+            .collect();
+        for ((dep, via), status) in member_deps.into_iter().zip(statuses) {
+            if !direct.contains(&(dep.name.clone(), dep.version_req.clone())) {
+                dependencies.push(DepResult {
+                    dep,
+                    status,
+                    via: Some(via),
+                });
+            }
+        }
+    }
+    let in_tree_names: HashSet<String> = in_tree.iter().map(|m| m.name.clone()).collect();
+
     let (transitive_missing, transitive_build_order, transitive_edges) = if opts.transitive {
-        let (deps, edges) =
-            expand_transitive(&rt, &fedrq, &dependencies, opts, library_root || spec_all)?;
+        let mut expansion_opts = opts.clone();
+        expansion_opts.exclude.extend(in_tree_names.iter().cloned());
+        let (deps, edges) = expand_transitive(
+            &rt,
+            &fedrq,
+            &dependencies,
+            &expansion_opts,
+            library_root || spec_all,
+        )?;
         let phases = if edges.is_empty() {
             vec![]
         } else {
@@ -313,6 +449,7 @@ pub fn check_crate(
         transitive_build_order,
         transitive_edges,
         review_bugs: BTreeMap::new(),
+        in_tree,
     })
 }
 
@@ -389,6 +526,15 @@ pub fn render_report(report: &CheckCrateReport) -> String {
         out,
         "Dependencies ({normal} normal, {build} build, {dev} dev):\n"
     );
+    if !report.in_tree.is_empty() {
+        let names: Vec<&str> = report.in_tree.iter().map(|m| m.name.as_str()).collect();
+        let _ = writeln!(
+            out,
+            "Built in-tree ({}), dependencies listed as the workspace's:\n  {}\n",
+            report.in_tree.len(),
+            names.join(", ")
+        );
+    }
 
     let missing: Vec<&DepResult> = report
         .dependencies
@@ -603,8 +749,15 @@ pub fn load_report(path: &str) -> Result<CheckCrateReport, String> {
 
 // ---- Private helpers ----
 
-fn opt_label(d: &DepResult) -> &str {
-    if d.dep.optional { ", optional" } else { "" }
+fn opt_label(d: &DepResult) -> String {
+    let mut label = String::new();
+    if d.dep.optional {
+        label.push_str(", optional");
+    }
+    if let Some(via) = &d.via {
+        label.push_str(&format!(", via {via}"));
+    }
+    label
 }
 
 /// Version lookup for crates that need building: crate name →
@@ -750,6 +903,7 @@ fn expand_transitive(
             .map(|(dep, status)| DepResult {
                 dep: (*dep).clone(),
                 status,
+                via: None,
             })
             .collect();
 
@@ -821,6 +975,14 @@ fn expand_transitive(
 #[derive(Deserialize)]
 struct CrateInfoResponse {
     versions: Vec<CrateVersion>,
+    #[serde(default, rename = "crate")]
+    krate: CrateMeta,
+}
+
+#[derive(Deserialize, Default)]
+struct CrateMeta {
+    #[serde(default)]
+    repository: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -841,6 +1003,10 @@ struct RawDep {
     req: String,
     kind: Option<String>,
     optional: bool,
+    /// `cfg(...)` expression or target triple the dependency is
+    /// limited to.
+    #[serde(default)]
+    target: Option<String>,
 }
 
 /// crates.io API response for version info (features).
@@ -972,11 +1138,133 @@ async fn get_json<T: serde::de::DeserializeOwned>(
     Ok(parsed)
 }
 
+/// The crate's info page (versions, repository) — cached a day.
+async fn fetch_crate_info(name: &str) -> Result<CrateInfoResponse, String> {
+    let url = format!("https://crates.io/api/v1/crates/{name}");
+    get_json(&url, &format!("{name}/versions.json"), Some(VERSIONS_TTL)).await
+}
+
+/// The repository a crate is published from, normalized for
+/// comparison (scheme-less, no trailing slash or `.git`, and cut at
+/// the in-tree path a workspace member points into:
+/// `…/coreutils/tree/main/src/uu/ls` is the coreutils repository).
+async fn fetch_repository(name: &str) -> Option<String> {
+    fetch_crate_info(name)
+        .await
+        .ok()?
+        .krate
+        .repository
+        .map(|r| normalize_repository(&r))
+}
+
+fn normalize_repository(url: &str) -> String {
+    let mut r = url
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("www.")
+        .to_ascii_lowercase();
+    for marker in ["/-/tree/", "/tree/", "/blob/"] {
+        if let Some(i) = r.find(marker) {
+            r.truncate(i);
+        }
+    }
+    r.trim_end_matches('/').trim_end_matches(".git").to_string()
+}
+
+/// Whether a dependency's `target` (a `cfg(...)` expression or a
+/// target triple) applies to a Linux build, as
+/// `%cargo_generate_buildrequires` decides it: `windows-sys` behind
+/// `cfg(windows)` is not something Fedora has to package. Predicates
+/// the build does not fix (architecture, pointer width) count as
+/// true, so a dependency is only dropped when it cannot apply.
+fn target_applies(target: Option<&str>) -> bool {
+    let Some(t) = target.map(str::trim).filter(|t| !t.is_empty()) else {
+        return true;
+    };
+    match t.strip_prefix("cfg(").and_then(|e| e.strip_suffix(')')) {
+        Some(expr) => eval_cfg(expr),
+        None => t.contains("linux"),
+    }
+}
+
+fn eval_cfg(expr: &str) -> bool {
+    let expr = expr.trim();
+    for (op, all) in [("all(", true), ("any(", false)] {
+        if let Some(inner) = expr.strip_prefix(op).and_then(|e| e.strip_suffix(')')) {
+            let mut terms = split_top_level(inner).into_iter().map(eval_cfg);
+            return if all {
+                terms.all(|b| b)
+            } else {
+                terms.any(|b| b)
+            };
+        }
+    }
+    if let Some(inner) = expr.strip_prefix("not(").and_then(|e| e.strip_suffix(')')) {
+        return !eval_cfg(inner);
+    }
+    let (key, value) = match expr.split_once('=') {
+        Some((k, v)) => (k.trim(), Some(v.trim().trim_matches('"'))),
+        None => (expr, None),
+    };
+    match (key, value) {
+        ("unix", _) => true,
+        ("windows", _) => false,
+        ("target_os", Some(v)) => v == "linux",
+        ("target_family", Some(v)) => v == "unix",
+        ("target_env", Some(v)) => v == "gnu" || v.is_empty(),
+        ("target_vendor", Some(v)) => v == "unknown",
+        _ => true,
+    }
+}
+
+/// Split `a, all(b, c), d` on the commas outside parentheses.
+fn split_top_level(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts
+}
+
+/// Shell-style `*` matching, enough for `uu_*` and `*-sys`.
+fn glob_match(pattern: &str, name: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == name;
+    }
+    let mut rest = name;
+    for (i, part) in parts.iter().enumerate() {
+        if i == 0 {
+            match rest.strip_prefix(part) {
+                Some(r) => rest = r,
+                None => return false,
+            }
+        } else if i == parts.len() - 1 {
+            return rest.ends_with(part);
+        } else {
+            match rest.find(part) {
+                Some(pos) => rest = &rest[pos + part.len()..],
+                None => return false,
+            }
+        }
+    }
+    true
+}
+
 /// Fetch all non-yanked versions of a crate from crates.io.
 async fn fetch_versions(name: &str) -> Result<Vec<String>, String> {
-    let url = format!("https://crates.io/api/v1/crates/{name}");
-    let resp: CrateInfoResponse =
-        get_json(&url, &format!("{name}/versions.json"), Some(VERSIONS_TTL)).await?;
+    let resp = fetch_crate_info(name).await?;
     Ok(resp
         .versions
         .into_iter()
@@ -1054,15 +1342,38 @@ fn resolve_default_deps(
     resolve_activated_deps(features, &["default".to_string()], all_optional_deps)
 }
 
+/// What enabling `seeds` activates.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Activation {
+    /// Optional deps switched on.
+    deps: HashSet<String>,
+    /// Features requested *of* dependencies (`uu_ls/selinux` enables
+    /// feature `selinux` of dep `uu_ls`) — what an in-tree member is
+    /// built with.
+    dep_features: BTreeMap<String, Vec<String>>,
+}
+
 /// The optional deps activated by enabling `seeds` — feature names,
 /// `dep:` entries or optional dep names — followed transitively
 /// through the crate's feature table.
+#[cfg(test)]
 fn resolve_activated_deps(
     features: &std::collections::HashMap<String, Vec<String>>,
     seeds: &[String],
     all_optional_deps: &HashSet<String>,
 ) -> HashSet<String> {
+    resolve_activation(features, seeds, all_optional_deps).deps
+}
+
+/// [`resolve_activated_deps`], keeping the per-dependency feature
+/// requests too.
+fn resolve_activation(
+    features: &std::collections::HashMap<String, Vec<String>>,
+    seeds: &[String],
+    all_optional_deps: &HashSet<String>,
+) -> Activation {
     let mut activated = HashSet::new();
+    let mut dep_features: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut queue: VecDeque<&str> = VecDeque::new();
     let mut visited_features: HashSet<&str> = HashSet::new();
 
@@ -1083,23 +1394,39 @@ fn resolve_activated_deps(
             activated.insert(dep_name.to_string());
             continue;
         }
+        // `foo/bar` enables feature bar of dep foo (and the dep, if
+        // optional); `foo?/bar` only the feature, if foo is enabled.
+        if let Some((dep_name, dep_feat)) = feat.split_once('/') {
+            let (dep_name, weak) = match dep_name.strip_suffix('?') {
+                Some(d) => (d, true),
+                None => (dep_name, false),
+            };
+            if !weak && all_optional_deps.contains(dep_name) {
+                activated.insert(dep_name.to_string());
+            }
+            dep_features
+                .entry(dep_name.to_string())
+                .or_default()
+                .push(dep_feat.to_string());
+            continue;
+        }
+
         // A feature named after an optional dep activates it.
         if all_optional_deps.contains(feat) {
             activated.insert(feat.to_string());
         }
 
-        // Recurse into sub-features.
+        // Recurse into sub-features (`dep/feature` entries included —
+        // the branch above records them).
         if let Some(sub) = features.get(feat) {
-            for s in sub {
-                // Handle "feat/subfeat" (feature of a dep) — the
-                // dep part before the slash is what gets activated.
-                let base = s.split('/').next().unwrap_or(s);
-                queue.push_back(base);
-            }
+            queue.extend(sub.iter().map(String::as_str));
         }
     }
 
-    activated
+    Activation {
+        deps: activated,
+        dep_features,
+    }
 }
 
 /// Fetch version info (features) for a specific crate version.
@@ -1274,6 +1601,18 @@ async fn fetch_dependencies(
     version: &str,
     seeds: &[String],
 ) -> Result<Vec<CrateDep>, String> {
+    Ok(fetch_dependencies_with_features(name, version, seeds)
+        .await?
+        .0)
+}
+
+/// [`fetch_dependencies`], also returning the features the enabled
+/// set requests of each dependency (`dep/feature` entries).
+async fn fetch_dependencies_with_features(
+    name: &str,
+    version: &str,
+    seeds: &[String],
+) -> Result<(Vec<CrateDep>, BTreeMap<String, Vec<String>>), String> {
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}/dependencies");
     let resp: DepsResponse =
         get_json(&url, &format!("{name}/{version}/dependencies.json"), None).await?;
@@ -1287,18 +1626,17 @@ async fn fetch_dependencies(
         .map(|d| d.crate_id.clone())
         .collect();
 
-    let default_activated = if all_optional.is_empty() {
-        HashSet::new()
-    } else {
-        let features = fetch_features(name, version).await.unwrap_or_default();
-        resolve_activated_deps(&features, seeds, &all_optional)
-    };
+    // The feature table is needed for `dep/feature` requests even
+    // when nothing is optional.
+    let features = fetch_features(name, version).await.unwrap_or_default();
+    let activation = resolve_activation(&features, seeds, &all_optional);
 
-    Ok(resp
+    let deps = resp
         .dependencies
         .into_iter()
+        .filter(|d| target_applies(d.target.as_deref()))
         .map(|d| {
-            let activated = d.optional && default_activated.contains(&d.crate_id);
+            let activated = d.optional && activation.deps.contains(&d.crate_id);
             CrateDep {
                 name: d.crate_id,
                 version_req: d.req,
@@ -1306,7 +1644,8 @@ async fn fetch_dependencies(
                 optional: d.optional && !activated,
             }
         })
-        .collect())
+        .collect();
+    Ok((deps, activation.dep_features))
 }
 
 /// Check if a dependency is available in the target repo and if
@@ -1431,6 +1770,7 @@ mod tests {
             transitive_build_order: vec![],
             transitive_edges: Default::default(),
             review_bugs: Default::default(),
+            in_tree: vec![],
         };
 
         // Packaged but too old: the requirement is the interesting part.
@@ -1550,6 +1890,7 @@ mod tests {
             features: Vec::new(),
             no_default_features: false,
             package: None,
+            in_tree: Vec::new(),
         }
     }
 
@@ -1722,6 +2063,89 @@ mod tests {
     }
 
     #[test]
+    fn target_cfg_is_evaluated_for_linux() {
+        assert!(target_applies(None));
+        assert!(target_applies(Some("cfg(unix)")));
+        assert!(target_applies(Some("cfg(not(windows))")));
+        assert!(target_applies(Some("cfg(target_os = \"linux\")")));
+        assert!(target_applies(Some(
+            "cfg(all(unix, not(target_os = \"macos\")))"
+        )));
+        assert!(target_applies(Some("cfg(target_arch = \"x86_64\")")));
+        assert!(target_applies(Some("x86_64-unknown-linux-gnu")));
+        assert!(!target_applies(Some("cfg(windows)")));
+        assert!(!target_applies(Some(
+            "cfg(any(windows, target_os = \"macos\"))"
+        )));
+        assert!(!target_applies(Some("cfg(target_env = \"musl\")")));
+        assert!(!target_applies(Some("x86_64-pc-windows-msvc")));
+        assert!(!target_applies(Some(
+            "cfg(all(unix, target_os = \"redox\"))"
+        )));
+    }
+
+    #[test]
+    fn glob_match_handles_prefix_suffix_and_exact() {
+        assert!(glob_match("uu_*", "uu_ls"));
+        assert!(!glob_match("uu_*", "uucore"));
+        assert!(glob_match("*-sys", "libz-sys"));
+        assert!(glob_match("uu_*_compat", "uu_ls_compat"));
+        assert!(glob_match("exact", "exact"));
+        assert!(!glob_match("exact", "exactly"));
+    }
+
+    #[test]
+    fn repository_normalization_matches_the_same_project() {
+        assert_eq!(
+            normalize_repository("https://github.com/uutils/coreutils/"),
+            normalize_repository("http://www.github.com/uutils/coreutils.git")
+        );
+        // crates.io: uu_ls points into the workspace it lives in.
+        assert_eq!(
+            normalize_repository("https://github.com/uutils/coreutils/tree/main/src/uu/ls"),
+            normalize_repository("https://github.com/uutils/coreutils")
+        );
+        assert_ne!(
+            normalize_repository("https://github.com/uutils/coreutils"),
+            normalize_repository("https://github.com/uutils/findutils")
+        );
+    }
+
+    #[test]
+    fn dep_feature_entries_request_features_of_members() {
+        // uutils-style: the root's feat_selinux enables selinux in
+        // several members; `feat_acl` enables an optional dep by name.
+        let features = std::collections::HashMap::from([
+            ("default".to_string(), vec!["feat_common".to_string()]),
+            (
+                "feat_selinux".to_string(),
+                vec![
+                    "uu_ls/selinux".to_string(),
+                    "uu_cp/selinux".to_string(),
+                    "selinux".to_string(),
+                ],
+            ),
+            ("feat_acl".to_string(), vec!["exacl".to_string()]),
+            (
+                "feat_common".to_string(),
+                vec!["uucore?/backup".to_string()],
+            ),
+        ]);
+        let optional: HashSet<String> = ["selinux", "exacl", "uu_ls"].map(String::from).into();
+        let seeds = ["default", "feat_selinux", "feat_acl"].map(String::from);
+        let act = resolve_activation(&features, &seeds, &optional);
+        assert_eq!(
+            act.deps,
+            ["selinux", "exacl", "uu_ls"].map(String::from).into()
+        );
+        assert_eq!(act.dep_features["uu_ls"], ["selinux"]);
+        assert_eq!(act.dep_features["uu_cp"], ["selinux"]);
+        // Weak (`?/`) requests the feature without enabling the dep.
+        assert_eq!(act.dep_features["uucore"], ["backup"]);
+        assert!(!act.deps.contains("uucore"));
+    }
+
+    #[test]
     fn should_expand_normal() {
         let opts = make_opts(true, false, false);
         assert!(should_expand(
@@ -1840,6 +2264,7 @@ mod tests {
                         version: "1.0.210".to_string(),
                         compat: false,
                     },
+                    via: None,
                 },
                 DepResult {
                     dep: CrateDep {
@@ -1849,6 +2274,7 @@ mod tests {
                         optional: false,
                     },
                     status: DepStatus::Missing,
+                    via: None,
                 },
                 DepResult {
                     dep: CrateDep {
@@ -1861,6 +2287,7 @@ mod tests {
                         available: vec!["1.5.0".to_string()],
                         need: "^2.0".to_string(),
                     },
+                    via: None,
                 },
             ],
             transitive_missing: vec![TransitiveDep {
@@ -1883,6 +2310,7 @@ mod tests {
                 ("transitive-dep".to_string(), BTreeSet::new()),
             ]),
             review_bugs: BTreeMap::new(),
+            in_tree: vec![],
         };
 
         // Serialize via JSON intermediate to TOML string.
@@ -1913,6 +2341,7 @@ mod tests {
                 DepResult {
                     dep: make_dep("dep-a", "normal", false),
                     status: DepStatus::Missing,
+                    via: None,
                 },
                 DepResult {
                     dep: make_dep("dep-b", "normal", false),
@@ -1920,6 +2349,7 @@ mod tests {
                         version: "1.0.0".to_string(),
                         compat: false,
                     },
+                    via: None,
                 },
             ],
             transitive_missing: vec![],
@@ -1935,6 +2365,7 @@ mod tests {
             ],
             transitive_edges: BTreeMap::new(),
             review_bugs: BTreeMap::new(),
+            in_tree: vec![],
         }
     }
 
@@ -1996,6 +2427,7 @@ mod tests {
         let dep = DepResult {
             dep: make_dep("foo", "normal", true),
             status: DepStatus::Missing,
+            via: None,
         };
         assert_eq!(opt_label(&dep), ", optional");
     }
@@ -2005,6 +2437,7 @@ mod tests {
         let dep = DepResult {
             dep: make_dep("foo", "normal", false),
             status: DepStatus::Missing,
+            via: None,
         };
         assert_eq!(opt_label(&dep), "");
     }
@@ -2015,14 +2448,17 @@ mod tests {
             DepResult {
                 dep: make_dep("foo", "normal", false),
                 status: DepStatus::Missing,
+                via: None,
             },
             DepResult {
                 dep: make_dep("foo", "build", false),
                 status: DepStatus::Missing,
+                via: None,
             },
             DepResult {
                 dep: make_dep("bar", "normal", false),
                 status: DepStatus::Missing,
+                via: None,
             },
         ];
         let refs: Vec<&DepResult> = deps.iter().collect();

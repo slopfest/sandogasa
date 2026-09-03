@@ -88,6 +88,34 @@ half of the hybrid idea — answering rawhide-packaged crates through
 rawhide with check-crate and branches the result with resolve, two
 tools for two steps.
 
+That same crate showed the next gap: crates.io lists the hundred
+`uu_*` crates as its dependencies, and check-crate reported them all
+missing, while Fedora builds them from the workspace tarball — which
+is exactly why their `rust-uu_*` packages were retired. A workspace
+member is not a dependency Fedora packages; its dependencies are the
+workspace's. `--in-tree GLOB` names such crates, and a dependency
+published from the root's own repository (crates.io says) is
+recognized as one without being named. In-tree crates leave the
+missing/unmet lists into a "Built in-tree" line; their dependencies
+are checked as the root's, marked `via <member>` — and checked with
+the features the root's enabled set requests of each member, since
+`feat_selinux = ["uu_ls/selinux", …]` is Cargo's way of saying so, and
+`dep/feature` and `dep?/feature` entries are now understood. A
+member's own dev dependencies do not count — it is built as a
+dependency, not tested — and a member whose crates.io entry names no
+repository (`uu_checksum_common`) is only found through the glob.
+Saved reports without these fields load unchanged.
+
+The first such run also listed `windows-sys` as missing, pulled by
+`uu_cat` behind `cfg(windows)`: crates.io records the target a
+dependency is limited to, and check-crate had ignored it at every
+level, so Windows- and macOS-only dependencies counted as
+missing. The `target` is now evaluated for a Linux build the way
+`%cargo_generate_buildrequires` does — `unix`, `target_os = "linux"`,
+`not`/`all`/`any` — with predicates the build does not fix
+(architecture, pointer width) treated as true, so a dependency is only
+dropped when it cannot apply.
+
 ### ebranch check-crate: one fedrq invocation per dependency list
 
 check-crate asked fedrq about each crate on its own — one spawn, one

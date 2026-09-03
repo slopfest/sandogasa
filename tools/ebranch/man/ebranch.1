@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS ebranch check-crate
-\fBebranch check\-crate\fR [\fB\-\-from\fR] [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-t\fR|\fB\-\-transitive\fR] [\fB\-\-exclude\-dev\fR] [\fB\-\-include\-optional\fR] [\fB\-\-features\fR] [\fB\-\-no\-default\-features\fR] [\fB\-\-package\fR] [\fB\-\-exclude\-unmet\fR] [\fB\-\-exclude\fR] [\fB\-\-copr\fR] [\fB\-\-dot\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-toml\fR] [\fB\-\-refresh\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] [\fIVERSION\fR] 
+\fBebranch check\-crate\fR [\fB\-\-from\fR] [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-t\fR|\fB\-\-transitive\fR] [\fB\-\-exclude\-dev\fR] [\fB\-\-include\-optional\fR] [\fB\-\-features\fR] [\fB\-\-no\-default\-features\fR] [\fB\-\-in\-tree\fR] [\fB\-\-package\fR] [\fB\-\-exclude\-unmet\fR] [\fB\-\-exclude\fR] [\fB\-\-copr\fR] [\fB\-\-dot\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-toml\fR] [\fB\-\-refresh\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] [\fIVERSION\fR] 
 .PP
 Analyze a crates.io crate\*(Aqs dependencies
 .TP
@@ -43,6 +43,9 @@ Non\-default features the Fedora build enables for an application root, as `%car
 .TP
 \fB\-\-no\-default\-features\fR
 Build without default features (`\-n`)
+.TP
+\fB\-\-in\-tree\fR \fI<GLOB,...>\fR
+Crates built in\-tree from the root\*(Aqs own source (a workspace\*(Aqs members, e.g. `uu_*`): hidden as dependencies, their own dependencies checked as the workspace\*(Aqs. Globs, CSV or repeated. Crates published from the root\*(Aqs repository are detected without being listed
 .TP
 \fB\-\-package\fR \fI<NAME>\fR
 Fedora package name when it is not `rust\-<crate>` (e.g. the `coreutils` crate is `uutils\-coreutils`): used for the spec lookup and as the report\*(Aqs package name
