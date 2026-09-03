@@ -89,6 +89,18 @@ to skip dev deps, or `--include-optional` to also expand optional
 deps. The output includes a phased build order showing which
 `rust-*` packages to build first.
 
+Responses from crates.io are cached under `~/.cache/ebranch/crates-io/`
+— a published crate version never changes, so its dependency list and
+feature map are kept for good, and only the versions list ages (a
+day); `--refresh` re-fetches. Repeat runs are near-instant and hit
+crates.io less, not more. A report saved with `--toml` can be
+re-rendered later without touching the network or the repo:
+
+```
+ebranch check-crate --from rbw.toml
+ebranch check-crate --from rbw.toml --copr > build.sh
+```
+
 ### Useful flags
 
 - `--transitive` / `-t` — expand missing `check-crate` deps transitively

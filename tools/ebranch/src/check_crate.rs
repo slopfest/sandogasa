@@ -28,6 +28,8 @@ pub struct CheckCrateOptions {
     pub include_optional: bool,
     pub include_too_old: bool,
     pub exclude: HashSet<String>,
+    /// Bypass the on-disk crates.io cache (re-fetch and re-store).
+    pub refresh: bool,
 }
 
 /// A dependency from crates.io.
@@ -136,6 +138,7 @@ pub fn check_crate(
     version: Option<&str>,
     opts: &CheckCrateOptions,
 ) -> Result<CheckCrateReport, String> {
+    init_cache(opts.refresh);
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| format!("failed to create async runtime: {e}"))?;
 
@@ -222,6 +225,16 @@ pub fn check_crate(
             .filter(|d| !opts.exclude.contains(&d.dep.name))
             .collect()
     };
+
+    if opts.verbose {
+        use std::sync::atomic::Ordering::Relaxed;
+        let c = cache();
+        eprintln!(
+            "[check-crate] crates.io: {} response(s) from cache, {} fetched",
+            c.hits.load(Relaxed),
+            c.misses.load(Relaxed)
+        );
+    }
 
     Ok(CheckCrateReport {
         crate_name: name.to_string(),
@@ -772,21 +785,113 @@ fn client() -> &'static reqwest::Client {
     })
 }
 
-/// GET a crates.io API URL and deserialize the JSON response.
-async fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
+/// On-disk cache of crates.io responses, under the XDG cache dir
+/// (`~/.cache/ebranch/crates-io/`). A published crate version is
+/// immutable, so its dependency list and feature map are cached for
+/// good; only a crate's *versions* list ages (24h). Fewer requests
+/// hit crates.io and repeat runs are near-instant — the polite kind
+/// of speedup. `--refresh` bypasses reads (and re-stores).
+struct CratesIoCache {
+    dir: Option<std::path::PathBuf>,
+    refresh: bool,
+    hits: std::sync::atomic::AtomicUsize,
+    misses: std::sync::atomic::AtomicUsize,
+}
+
+static CACHE: std::sync::OnceLock<CratesIoCache> = std::sync::OnceLock::new();
+
+/// Configure the cache for this run; a no-op after the first call.
+pub fn init_cache(refresh: bool) {
+    let _ = CACHE.set(CratesIoCache {
+        dir: dirs::cache_dir().map(|d| d.join("ebranch").join("crates-io")),
+        refresh,
+        hits: Default::default(),
+        misses: Default::default(),
+    });
+}
+
+fn cache() -> &'static CratesIoCache {
+    init_cache(false);
+    CACHE.get().expect("cache initialized")
+}
+
+/// Versions lists age; everything about a published version does not.
+const VERSIONS_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+impl CratesIoCache {
+    /// A cached body, if present and (when `ttl` is given) young enough.
+    fn load(&self, rel: &str, ttl: Option<std::time::Duration>) -> Option<String> {
+        if self.refresh {
+            return None;
+        }
+        let path = self.dir.as_ref()?.join(rel);
+        if let Some(ttl) = ttl {
+            let age = std::fs::metadata(&path)
+                .ok()?
+                .modified()
+                .ok()?
+                .elapsed()
+                .ok()?;
+            if age > ttl {
+                return None;
+            }
+        }
+        std::fs::read_to_string(path).ok()
+    }
+
+    /// Store a body; failures are silent (a cache is a convenience).
+    fn store(&self, rel: &str, body: &str) {
+        let Some(dir) = &self.dir else { return };
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_ok()
+        {
+            let tmp = path.with_extension("tmp");
+            if std::fs::write(&tmp, body).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+        }
+    }
+}
+
+/// GET a crates.io API URL and deserialize the JSON response, through
+/// the cache: `rel` is the cache path, `ttl` how long an entry may
+/// serve (`None`: forever).
+async fn get_json<T: serde::de::DeserializeOwned>(
+    url: &str,
+    rel: &str,
+    ttl: Option<std::time::Duration>,
+) -> Result<T, String> {
+    use std::sync::atomic::Ordering::Relaxed;
     let what = format!("GET {url}");
+    let c = cache();
+    if let Some(body) = c.load(rel, ttl)
+        && let Ok(parsed) = serde_json::from_str::<T>(&body)
+    {
+        c.hits.fetch_add(1, Relaxed);
+        return Ok(parsed);
+    }
+    c.misses.fetch_add(1, Relaxed);
     let resp = client()
         .get(url)
         .send()
         .await
         .map_err(|e| format!("{what}: {e}"))?;
-    sandogasa_cli::http::json_ok(resp, &what).await
+    let body = sandogasa_cli::http::ok(resp, &what)
+        .await?
+        .text()
+        .await
+        .map_err(|e| format!("{what}: {e}"))?;
+    let parsed = serde_json::from_str::<T>(&body).map_err(|e| format!("{what}: {e}"))?;
+    c.store(rel, &body);
+    Ok(parsed)
 }
 
 /// Fetch all non-yanked versions of a crate from crates.io.
 async fn fetch_versions(name: &str) -> Result<Vec<String>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}");
-    let resp: CrateInfoResponse = get_json(&url).await?;
+    let resp: CrateInfoResponse =
+        get_json(&url, &format!("{name}/versions.json"), Some(VERSIONS_TTL)).await?;
     Ok(resp
         .versions
         .into_iter()
@@ -906,7 +1011,8 @@ async fn fetch_features(
     version: &str,
 ) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}");
-    let resp: VersionInfoResponse = get_json(&url).await?;
+    let resp: VersionInfoResponse =
+        get_json(&url, &format!("{name}/{version}/version.json"), None).await?;
     Ok(resp.version.features)
 }
 
@@ -948,7 +1054,8 @@ async fn resolve_matching_version(name: &str, version_req: &str) -> Result<Strin
 /// defaults as non-optional (since RPMs are built with defaults).
 async fn fetch_dependencies(name: &str, version: &str) -> Result<Vec<CrateDep>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}/dependencies");
-    let resp: DepsResponse = get_json(&url).await?;
+    let resp: DepsResponse =
+        get_json(&url, &format!("{name}/{version}/dependencies.json"), None).await?;
 
     // Resolve default features to find which optional deps are
     // activated by default (RPMs are built with default features).
@@ -1196,6 +1303,7 @@ mod tests {
             include_optional,
             include_too_old: false,
             exclude: HashSet::new(),
+            refresh: false,
         }
     }
 
@@ -1206,6 +1314,52 @@ mod tests {
             kind: kind.to_string(),
             optional,
         }
+    }
+
+    #[test]
+    fn cache_serves_stored_bodies_until_ttl_and_never_when_refreshing() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = CratesIoCache {
+            dir: Some(dir.path().to_path_buf()),
+            refresh: false,
+            hits: Default::default(),
+            misses: Default::default(),
+        };
+        assert_eq!(c.load("foo/1.0.0/dependencies.json", None), None);
+        c.store("foo/1.0.0/dependencies.json", "{\"dependencies\":[]}");
+        // Immutable entries serve forever; aged ones only within TTL.
+        assert_eq!(
+            c.load("foo/1.0.0/dependencies.json", None).as_deref(),
+            Some("{\"dependencies\":[]}")
+        );
+        assert!(
+            c.load("foo/1.0.0/dependencies.json", Some(VERSIONS_TTL))
+                .is_some()
+        );
+        assert!(
+            c.load(
+                "foo/1.0.0/dependencies.json",
+                Some(std::time::Duration::ZERO)
+            )
+            .is_none()
+        );
+        // --refresh reads nothing (but still stores).
+        let r = CratesIoCache {
+            dir: Some(dir.path().to_path_buf()),
+            refresh: true,
+            hits: Default::default(),
+            misses: Default::default(),
+        };
+        assert_eq!(r.load("foo/1.0.0/dependencies.json", None), None);
+        // No cache dir: silently a no-op.
+        let none = CratesIoCache {
+            dir: None,
+            refresh: false,
+            hits: Default::default(),
+            misses: Default::default(),
+        };
+        none.store("x", "y");
+        assert_eq!(none.load("x", None), None);
     }
 
     #[test]

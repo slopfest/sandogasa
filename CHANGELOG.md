@@ -50,6 +50,28 @@ what a repo of interest provides, the other a closure over sources
 collecting what a target lacks, and unifying their loops is a
 decision for after both have been exercised on real work.
 
+### ebranch check-crate: a crates.io cache, and rendering a saved report
+
+Every `check-crate` run re-asked crates.io for every crate in the
+tree — dependency lists, feature maps, versions — although a
+published crate version is immutable and the answers never change.
+The obvious speedup, more concurrent requests, is the impolite one;
+the right one is not asking twice. Responses are now cached under the
+XDG cache dir (`~/.cache/ebranch/crates-io/`): dependency lists and
+feature maps per version forever, the versions list for a day,
+`--refresh` bypassing reads; `--verbose` reports the split. On rbw's
+146-response tree the second run served all 146 from disk — but the
+wall clock only fell from 247 s to 205 s, because crates.io was never
+where the time went: check-crate still spawns fedrq once per crate to
+ask what Fedora provides, and that is what the engine-based hybrid
+redesign (TODO) removes. The cache's real gain is the politeness.
+
+And a report saved with `--toml` can be rendered again:
+`check-crate --from <report.toml>` produces the human summary, the
+Copr script, the Koji chain or the DOT graph from the file, with no
+network and no repo query — the loader existed for `review-deps`,
+but nothing on the command line reached it.
+
 ### ebranch: resolve batches each BFS level into three fedrq queries
 
 `ebranch resolve` paid fedrq's repo-sack load once per source package

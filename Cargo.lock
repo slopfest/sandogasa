@@ -445,6 +445,7 @@ dependencies = [
  "chrono",
  "clap",
  "dashmap",
+ "dirs",
  "rayon",
  "reqwest",
  "sandogasa-bodhi",

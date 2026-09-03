@@ -440,10 +440,16 @@ severity for --type security.",
 #[derive(clap::Args, Clone)]
 struct CheckCrateArgs {
     /// Crate name on crates.io.
-    name: String,
+    #[arg(required_unless_present = "from")]
+    name: Option<String>,
 
     /// Crate version (default: latest).
     version: Option<String>,
+
+    /// Render a report saved earlier with --toml instead of
+    /// querying crates.io and the repo again.
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["name", "version", "transitive"])]
+    from: Option<String>,
 
     /// Target branch (e.g. epel9, rawhide).
     #[arg(short = 'b', long)]
@@ -889,7 +895,9 @@ fn main() -> ExitCode {
 
     // CheckCrate and CheckUpdate have their own args; handle separately.
     if let Command::CheckCrate(a) = &cli.command {
-        if a.branch.is_none() && a.repo.is_none() {
+        // A saved report carries its own branch label; only a live
+        // check needs somewhere to look.
+        if a.from.is_none() && a.branch.is_none() && a.repo.is_none() {
             eprintln!("error: at least one of --branch or --repo is required");
             return ExitCode::FAILURE;
         }
@@ -897,7 +905,11 @@ fn main() -> ExitCode {
             return code;
         }
         configure_jobs(a.jobs);
-        let label = branch_repo_label(a.branch.as_deref(), a.repo.as_deref());
+        // A saved report brings its own label; a live check needs one.
+        let label = match a.from {
+            Some(_) => String::new(),
+            None => branch_repo_label(a.branch.as_deref(), a.repo.as_deref()),
+        };
         let opts = check_crate::CheckCrateOptions {
             branch: a.branch.clone(),
             repo: a.repo.clone(),
@@ -908,8 +920,17 @@ fn main() -> ExitCode {
             include_optional: a.include_optional,
             include_too_old: !a.exclude_unmet,
             exclude: a.exclude.iter().cloned().collect(),
+            refresh: a.refresh,
         };
-        return match check_crate::check_crate(&a.name, a.version.as_deref(), &opts) {
+        let outcome = match &a.from {
+            Some(path) => check_crate::load_report(path),
+            None => check_crate::check_crate(
+                a.name.as_deref().unwrap_or_default(),
+                a.version.as_deref(),
+                &opts,
+            ),
+        };
+        return match outcome {
             Ok(report) => {
                 if let Some(ref path) = a.toml
                     && let Err(e) = check_crate::write_toml(&report, path)

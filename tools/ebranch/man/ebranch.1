@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-09-02 "sandogasa 0.22.0" "Sandogasa Manual"
+.TH ebranch 1 2026-09-03 "sandogasa 0.22.0" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -16,9 +16,12 @@ Print help
 Print version
 .SH COMMANDS
 .SS ebranch check-crate
-\fBebranch check\-crate\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-t\fR|\fB\-\-transitive\fR] [\fB\-\-exclude\-dev\fR] [\fB\-\-include\-optional\fR] [\fB\-\-exclude\-unmet\fR] [\fB\-\-exclude\fR] [\fB\-\-copr\fR] [\fB\-\-dot\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-toml\fR] [\fB\-\-refresh\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR> [\fIVERSION\fR] 
+\fBebranch check\-crate\fR [\fB\-\-from\fR] [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-t\fR|\fB\-\-transitive\fR] [\fB\-\-exclude\-dev\fR] [\fB\-\-include\-optional\fR] [\fB\-\-exclude\-unmet\fR] [\fB\-\-exclude\fR] [\fB\-\-copr\fR] [\fB\-\-dot\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-toml\fR] [\fB\-\-refresh\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] [\fIVERSION\fR] 
 .PP
 Analyze a crates.io crate\*(Aqs dependencies
+.TP
+\fB\-\-from\fR \fI<PATH>\fR
+Render a report saved earlier with \-\-toml instead of querying crates.io and the repo again
 .TP
 \fB\-b\fR, \fB\-\-branch\fR \fI<BRANCH>\fR
 Target branch (e.g. epel9, rawhide)
@@ -76,7 +79,7 @@ Parallel fedrq queries (0 = CPUs)
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fINAME\fR>
+[\fINAME\fR]
 Crate name on crates.io
 .TP
 [\fIVERSION\fR]
