@@ -27,7 +27,9 @@ pub struct CheckCrateConfig {
     /// `criterion`, say), so listing them here keeps every report
     /// honest about what will actually be packaged. Merged with
     /// `--exclude`. Unset, [`DEFAULT_EXCLUDES`] applies; a list set
-    /// here replaces it (`exclude = []` excludes nothing).
+    /// here replaces it (`exclude = []` excludes nothing), and the
+    /// entry [`DEFAULT_SENTINEL`] inside it stands for that set, so
+    /// crates can be added without retyping it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude: Option<Vec<String>>,
 }
@@ -48,15 +50,30 @@ pub const DEFAULT_EXCLUDES: &[&str] = &[
     "iai-callgrind",
 ];
 
+/// The list entry that expands to [`DEFAULT_EXCLUDES`]: TOML has no
+/// `+=`, so `exclude = ["@default", "pretty_assertions"]` is how a
+/// config adds to the built-in set instead of replacing it. `@` cannot
+/// start a crate name, so it cannot collide.
+pub const DEFAULT_SENTINEL: &str = "@default";
+
 /// The effective exclude list and whether the config file set it
-/// (`false`: [`DEFAULT_EXCLUDES`] is in force).
+/// (`false`: [`DEFAULT_EXCLUDES`] is in force on its own).
 pub fn resolve_excludes(configured: Option<Vec<String>>) -> (Vec<String>, bool) {
+    let defaults = || DEFAULT_EXCLUDES.iter().map(|s| s.to_string());
     match configured {
-        Some(list) => (list, true),
-        None => (
-            DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect(),
-            false,
+        Some(list) => (
+            list.into_iter()
+                .flat_map(|e| {
+                    if e == DEFAULT_SENTINEL {
+                        defaults().collect::<Vec<_>>()
+                    } else {
+                        vec![e]
+                    }
+                })
+                .collect(),
+            true,
         ),
+        None => (defaults().collect(), false),
     }
 }
 
@@ -188,6 +205,14 @@ mod tests {
         let none: EbranchConfig = toml::from_str("[check-crate]\nexclude = []").unwrap();
         let (list, set) = resolve_excludes(none.check_crate.exclude);
         assert!(list.is_empty());
+        assert!(set);
+        // "@default" inside the list stands for the built-in set.
+        let (list, set) = resolve_excludes(Some(
+            ["@default", "pretty_assertions"].map(String::from).to_vec(),
+        ));
+        let mut want: Vec<String> = DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect();
+        want.push("pretty_assertions".to_string());
+        assert_eq!(list, want);
         assert!(set);
     }
 }

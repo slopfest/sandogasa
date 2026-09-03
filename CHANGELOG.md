@@ -168,9 +168,11 @@ matters — 473 of its 483 transitive-missing crates sat behind
 dev dependencies of `smol`, `surf` and `plotters`. A configured
 `exclude` list replaces the built-in set rather than adding to it, so
 someone who really means to package criterion lists the rest without
-it, or sets `exclude = []` to exclude nothing; `--exclude` adds to
-whichever list is in force, and `--verbose` says when the built-in
-set is the one applying.
+it, or sets `exclude = []` to exclude nothing — and since TOML has no
+`+=`, the entry `"@default"` inside a list stands for the built-in
+set, so `exclude = ["@default", "pretty_assertions"]` adds to it
+without retyping it. `--exclude` adds to whichever list is in force,
+and `--verbose` says when the built-in set is the one applying.
 
 ### ebranch: resolve batches each BFS level into three fedrq queries
 

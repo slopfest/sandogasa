@@ -878,11 +878,12 @@ the built-in benchmark set applies: `codspeed`,
 `criterion2`, `divan`, `iai`, `iai-callgrind`. A list in the file
 *replaces* that set rather than adding to it, so a run that should
 count criterion — someone packaging it — lists the others without it,
-and `exclude = []` excludes nothing:
+and `exclude = []` excludes nothing. The entry `"@default"` stands for
+the built-in set, which is how a list adds to it (TOML has no `+=`):
 
 ```toml
 [check-crate]
-exclude = ["criterion", "pretty_assertions"]
+exclude = ["@default", "pretty_assertions"]
 ```
 
 `--exclude` adds to whichever list is in force; all of them ignore the

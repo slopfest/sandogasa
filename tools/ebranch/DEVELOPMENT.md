@@ -30,6 +30,8 @@ fresh install gets a sane report. A configured list *replaces* the
 built-in one rather than merging with it — the same "user wins per
 key" rule the /etc-beneath-~/.config layering follows — because the
 one person who wants to package criterion must be able to un-exclude
-it, and a merge would leave them no way to. So: keep the built-in list
-to crates Fedora never packages as dependencies, and never add a
-second, merged list on top of it.
+it, and a merge would leave them no way to. Adding to the set is done
+inside the same list, with the `"@default"` entry standing for it —
+TOML has no `+=`. So: keep the built-in list to crates Fedora never
+packages as dependencies, and never add a second, merged list on top
+of it.
