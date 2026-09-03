@@ -402,37 +402,21 @@ considered and rejected.)
   `rust_version` (crates.io exposes it) against the target's rustc and
   flag chains that are blocked on the toolchain before any branch
   requests/builds are attempted.
-- (2026-07-02, redesigned 2026-09-03) check-crate: feature-aware
-  dependency resolution — as a **hybrid** over the shared closure
-  engine. Fedora builds library crates with all features
-  (`%cargo_generate_buildrequires -a`) unless the spec trims them, so
-  the feature calculus only needs to run at the *root* (the
-  application: default features plus `--features`; the root's
-  optional deps activated by those are required). DONE 2026-09-03:
-  root kind from crates.io `bin_names` (application → default
-  features; library → all), transitive crates always all-features,
-  repo checks batched per dependency list. LEFT: a `--features` flag
-  for application roots, and the delegation below. Every other crate is
-  one of three cases, decided against the *target* first and rawhide
-  second: **target has a matching version** → satisfied (compat
-  packages count); **rawhide has a matching version the target lacks**
-  → its real spec BuildRequires are the truth (trimmed benchmark
-  features and all), i.e. delegate to `resolve`'s BuildRequires
-  closure source→target — and say which action that is: a *branch
-  request* when the target has no such package at all, a *rebase of
-  the target branch* when it has an older one; **rawhide is too old
-  or has nothing** → crates.io for the wanted version's tree, all
-  optional deps as hard requirements (rust2rpm `-a`), reported as
-  "update rawhide or add a compat package" vs "new package". No per-edge feature
-  unification needed. Shape: a third `Policy` over
-  `sandogasa_closure::engine` with mixed nodes (crate from crates.io
-  / rawhide source), batched target checks per level (replacing the
-  per-crate `provides_of_provider` spawns). Then flip
-  `--include-optional` to `--exclude-optional` for the non-root part,
-  which is where it was right all along. Same structure applies to
-  Python extras on the RPM side (`python3-foo+extra` subpackages):
-  feature-aware root expansion is the open item in the walks, see the
-  act/dependents notes.
+- (2026-07-02, resolved 2026-09-03) check-crate: feature-aware
+  dependency resolution — done in the form that fits Fedora's
+  packaging, and deliberately no further. Root kind comes from
+  crates.io `bin_names` (application → default features; library →
+  all features), transitive crates always count all features
+  (rust2rpm `-a`), repo checks are batched per dependency list. A
+  "hybrid" that would delegate rawhide-packaged crates to `resolve`'s
+  real BuildRequires closure was designed and then dropped: the Rust
+  workflow is (a) bring or update the package in rawhide, then (b)
+  branch or rebase it in the stable series — check-crate serves (a)
+  against rawhide, where source and target coincide and the
+  delegation case cannot arise, and `resolve` already *is* step (b).
+  One small item remains: a `--features` flag for application roots,
+  naming the non-default features the Fedora build enables, so their
+  optional deps count too.
 - Second-level branch-request escalation: when a `needinfo?` ping
   (the level-1 escalation `escalate` already does) goes unanswered
   for another N days, file a releng ticket on Forgejo (releng's
