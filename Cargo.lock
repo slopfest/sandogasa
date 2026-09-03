@@ -1453,14 +1453,13 @@ version = "0.22.0"
 dependencies = [
  "clap",
  "dirs",
- "rayon",
  "rpassword",
  "sandogasa-bodhi",
  "sandogasa-bugclass",
  "sandogasa-bugzilla",
  "sandogasa-cli",
+ "sandogasa-closure",
  "sandogasa-config",
- "sandogasa-depfilter",
  "sandogasa-distgit",
  "sandogasa-fedrq",
  "sandogasa-gitlab",
@@ -1950,6 +1949,17 @@ dependencies = [
  "tempfile",
  "toml",
  "url",
+]
+
+[[package]]
+name = "sandogasa-closure"
+version = "0.22.0"
+dependencies = [
+ "rayon",
+ "sandogasa-depfilter",
+ "sandogasa-fedrq",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

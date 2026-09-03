@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### sandogasa-closure: the dependency-closure engine as a crate
+
+poi-tracker's `deps` walk, its persisted graph and the graph-backed
+offline oracle had become the engine behind five subcommands — and
+the thing `ebranch resolve` should be using for the source side of a
+branch-request closure, once its own per-item lookups were batched.
+Two tools, one algorithm, one copy: the walk, `DepsGraph`
+(reachability, dependents, witness edges, merge), `GraphBackedQuery`
+and the `PkgQuery` seam move to `sandogasa-closure`, unchanged; the
+walk's tests move with them. poi-tracker keeps only the
+inventory-shaped `to_inventory` and re-exports the rest, so nothing
+about its behavior or output changes.
+
 ### ebranch: resolve batches each BFS level into three fedrq queries
 
 `ebranch resolve` paid fedrq's repo-sack load once per source package

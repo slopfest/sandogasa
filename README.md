@@ -52,6 +52,7 @@ library crates:
 - **sandogasa-cli** — shared CLI utilities (external tool availability
   checks, yes/no prompts, word wrapping, and an optional `http` feature
   with the API clients' shared reqwest plumbing)
+- **sandogasa-closure** — dependency-closure walking over fedrq, with a persisted graph and an offline oracle
 - **sandogasa-config** — shared config file management and interactive prompting
 - **sandogasa-copr** — COPR API client for read-only project monitoring
 - **sandogasa-depfilter** — RPM dependency filtering for cross-branch analysis

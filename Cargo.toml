@@ -5,6 +5,7 @@ members = [
     "crates/sandogasa-bugclass",
     "crates/sandogasa-bugzilla",
     "crates/sandogasa-cli",
+    "crates/sandogasa-closure",
     "crates/sandogasa-config",
     "crates/sandogasa-copr",
     "crates/sandogasa-depfilter",
@@ -126,6 +127,7 @@ sandogasa-bugzilla = { version = "0.22", path = "crates/sandogasa-bugzilla" }
 # the few crates that register the provider without using `http` ask
 # for `tls` by name.
 sandogasa-cli = { version = "0.22", path = "crates/sandogasa-cli", default-features = false }
+sandogasa-closure = { version = "0.22", path = "crates/sandogasa-closure" }
 sandogasa-config = { version = "0.22", path = "crates/sandogasa-config" }
 sandogasa-copr = { version = "0.22", path = "crates/sandogasa-copr" }
 sandogasa-depfilter = { version = "0.22", path = "crates/sandogasa-depfilter" }
