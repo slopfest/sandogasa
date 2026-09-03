@@ -21,6 +21,14 @@ turns it off, so `-b c9s -r @epel` still compares against CentOS
 Stream. The minor-release branches (`epel10.1`) have no assumed base —
 c10s runs ahead of a RHEL minor — and keep requiring both flags.
 
+Checking an older update also used to die on Koji's usage banner: the
+side tag behind a Bodhi update is deleted once the update goes stable,
+and `koji list-tagged` answers a missing tag with two lines of usage
+text before the actual `No such tag`. A Bodhi update whose tag is gone
+now falls back to the build list the update itself carries, saying so
+on stderr; a side tag given directly that does not exist is an error
+that says that, with a pointer to the Bodhi update.
+
 ### sandogasa-closure: the dependency-closure engine as a crate
 
 poi-tracker's `deps` walk, its persisted graph and the graph-backed

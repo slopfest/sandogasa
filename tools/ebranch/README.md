@@ -479,6 +479,10 @@ ebranch check-update FEDORA-EPEL-2026-f9eaa11e18
 ebranch check-update https://bodhi.fedoraproject.org/updates/FEDORA-EPEL-2026-f9eaa11e18
 ```
 
+An update built in a side tag is listed from Koji; when that tag has
+since been deleted (as happens once the update goes stable), the
+update's own build list is used and check-update says so.
+
 …or a **COPR project** — for big coordinated updates staged in a COPR
 before any side tag or Bodhi update exists. Pass an `owner/project`
 spec (`@group` for group projects) or the project URL:

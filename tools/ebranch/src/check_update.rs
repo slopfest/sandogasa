@@ -302,10 +302,30 @@ pub fn koji_list_tagged(tag: &str, profile: Option<&str>) -> Result<Vec<String>,
     // yields only the current NVR, not the old one. Otherwise the
     // stale-side-tag check would compare the superseded 6.7.0 against
     // the repodata's 6.7.1 and wrongly flag it.
-    Ok(sandogasa_koji::list_tagged(tag, profile, None)?
+    Ok(sandogasa_koji::list_tagged(tag, profile, None)
+        .map_err(|e| koji_error_summary(&e))?
         .into_iter()
         .map(|b| b.nvr)
         .collect())
+}
+
+/// Koji's CLI answers a bad tag with its usage banner first and the
+/// actual complaint (`koji: error: No such tag: …`) last; keep the
+/// complaint. Anything else passes through.
+fn koji_error_summary(err: &str) -> String {
+    match err
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("koji: error:"))
+    {
+        Some(reason) => format!("koji list-tagged failed: {}", reason.trim()),
+        None => err.to_string(),
+    }
+}
+
+/// Whether a `koji list-tagged` error says the tag does not exist —
+/// the fate of every side tag once its update has gone stable.
+fn is_no_such_tag(err: &str) -> bool {
+    err.contains("No such tag")
 }
 
 /// Run the check-update analysis.
@@ -326,7 +346,16 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
                         b
                     }
                 };
-                let nvrs = koji_list_tagged(&tag, opts.koji_profile.as_deref())?;
+                let nvrs = koji_list_tagged(&tag, opts.koji_profile.as_deref()).map_err(|e| {
+                    if is_no_such_tag(&e) {
+                        format!(
+                            "side tag {tag} does not exist — deleted once its update went \
+                             stable? Check the Bodhi update instead"
+                        )
+                    } else {
+                        e
+                    }
+                })?;
                 (Some(tag), None, nvrs, branch, None, None)
             }
             InputKind::BodhiAlias(alias) => {
@@ -335,12 +364,23 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
                 let branch =
                     resolve_bodhi_branch(opts.branch.clone(), info.release_name.as_deref())?;
 
-                // If backed by a side tag, use koji to get the full list.
-                let (side_tag, nvrs) = if let Some(tag) = info.side_tag {
-                    let koji_nvrs = koji_list_tagged(&tag, opts.koji_profile.as_deref())?;
-                    (Some(tag), koji_nvrs)
-                } else {
-                    (None, info.nvrs)
+                // If backed by a side tag, use koji to get the full list —
+                // unless the tag is gone (deleted once the update went
+                // stable), when the update's own build list is what there is.
+                let (side_tag, nvrs) = match info.side_tag {
+                    Some(tag) => match koji_list_tagged(&tag, opts.koji_profile.as_deref()) {
+                        Ok(koji_nvrs) => (Some(tag), koji_nvrs),
+                        Err(e) if is_no_such_tag(&e) => {
+                            eprintln!(
+                                "[check-update] side tag {tag} no longer exists; using the \
+                                 update's own {} build(s)",
+                                info.nvrs.len()
+                            );
+                            (None, info.nvrs)
+                        }
+                        Err(e) => return Err(e),
+                    },
+                    None => (None, info.nvrs),
                 };
 
                 (
@@ -2981,6 +3021,23 @@ mod tests {
         assert!(!is_fedora_branch("f")); // no digits
         assert!(!is_fedora_branch("fc43")); // letters after f
         assert!(!is_fedora_branch("rawhide"));
+    }
+
+    #[test]
+    fn koji_error_summary_keeps_the_complaint_not_the_usage_banner() {
+        let raw = "koji list-tagged failed: Usage: koji list-tagged [options] <tag>\n\
+                   (Specify the --help global option for a list of other help options)\n\n\
+                   koji: error: No such tag: epel9-build-side-134436";
+        let e = koji_error_summary(raw);
+        assert_eq!(
+            e,
+            "koji list-tagged failed: No such tag: epel9-build-side-134436"
+        );
+        assert!(is_no_such_tag(&e));
+        // Other failures pass through untouched.
+        let other = "koji list-tagged failed: connection refused";
+        assert_eq!(koji_error_summary(other), other);
+        assert!(!is_no_such_tag(other));
     }
 
     #[test]
