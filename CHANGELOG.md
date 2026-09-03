@@ -72,6 +72,15 @@ Copr script, the Koji chain or the DOT graph from the file, with no
 network and no repo query — the loader existed for `review-deps`,
 but nothing on the command line reached it.
 
+Standing exclusions live in the config file: a `[check-crate]`
+table's `exclude` list names crates ignored in every run, merged with
+`--exclude`. Fedora almost always drops some upstream dependencies
+(benchmark harnesses like criterion), and re-typing them per run, or
+watching them show up as "missing" under a new crate, was noise.
+Excluding now means *ignoring* — the crate is dropped from the direct
+dependency list too, not merely left unexpanded — since a dependency
+Fedora will not package is not one the report should count.
+
 ### ebranch: resolve batches each BFS level into three fedrq queries
 
 `ebranch resolve` paid fedrq's repo-sack load once per source package

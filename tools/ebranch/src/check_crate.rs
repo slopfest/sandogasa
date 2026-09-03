@@ -163,6 +163,15 @@ pub fn check_crate(
     }
 
     let deps = rt.block_on(fetch_dependencies(name, &version))?;
+    // Excluded crates are ignored outright — direct or transitive —
+    // as if they were not dependencies: Fedora drops them.
+    let (deps, ignored): (Vec<CrateDep>, Vec<CrateDep>) = deps
+        .into_iter()
+        .partition(|d| !opts.exclude.contains(&d.name));
+    if opts.verbose && !ignored.is_empty() {
+        let names: Vec<&str> = ignored.iter().map(|d| d.name.as_str()).collect();
+        eprintln!("[check-crate] ignoring excluded: {}", names.join(", "));
+    }
 
     if opts.verbose {
         let normal = deps.iter().filter(|d| d.kind == "normal").count();

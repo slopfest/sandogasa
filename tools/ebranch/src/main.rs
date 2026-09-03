@@ -919,7 +919,12 @@ fn main() -> ExitCode {
             exclude_dev: a.exclude_dev,
             include_optional: a.include_optional,
             include_too_old: !a.exclude_unmet,
-            exclude: a.exclude.iter().cloned().collect(),
+            exclude: a
+                .exclude
+                .iter()
+                .cloned()
+                .chain(config::check_crate_excludes())
+                .collect(),
             refresh: a.refresh,
         };
         let outcome = match &a.from {

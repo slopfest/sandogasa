@@ -3,15 +3,41 @@
 //! Configuration management for ebranch.
 //!
 //! Stores the Bugzilla API key at `~/.config/ebranch/config.toml`
-//! with restricted permissions (dir 700, file 600).
+//! with restricted permissions (dir 700, file 600), and carries
+//! standing preferences such as the crates `check-crate` ignores.
 
 use serde::{Deserialize, Serialize};
 
 /// Top-level config structure.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct EbranchConfig {
     #[serde(default)]
     pub bugzilla: BugzillaConfig,
+    /// `[check-crate]` table.
+    #[serde(default, rename = "check-crate")]
+    pub check_crate: CheckCrateConfig,
+}
+
+/// Standing `check-crate` preferences.
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct CheckCrateConfig {
+    /// Crates to ignore in every run — direct or transitive — as if
+    /// they were not dependencies at all. Fedora almost always drops
+    /// some upstream dependencies (benchmark harnesses like
+    /// `criterion`, say), so listing them here keeps every report
+    /// honest about what will actually be packaged. Merged with
+    /// `--exclude`.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
+/// The crates `check-crate` ignores by configuration (system file
+/// beneath user file, as usual); empty when there is no config.
+pub fn check_crate_excludes() -> Vec<String> {
+    sandogasa_config::ConfigFile::for_tool("ebranch")
+        .load::<EbranchConfig>()
+        .map(|c| c.check_crate.exclude)
+        .unwrap_or_default()
 }
 
 /// Bugzilla configuration.
@@ -57,9 +83,7 @@ pub fn resolve_api_key(cli_key: Option<&str>) -> Result<String, String> {
 /// Interactive config setup.
 pub async fn cmd_config() -> Result<(), String> {
     let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
-    let mut config: EbranchConfig = cf.load().unwrap_or(EbranchConfig {
-        bugzilla: BugzillaConfig::default(),
-    });
+    let mut config: EbranchConfig = cf.load().unwrap_or_default();
 
     println!("ebranch configuration\n");
     println!("Config file: {}\n", cf.path().display());
@@ -103,4 +127,25 @@ pub async fn cmd_config() -> Result<(), String> {
     println!("\nConfig saved to {}", cf.path().display());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_crate_excludes_parse_from_their_table_and_default_empty() {
+        let cfg: EbranchConfig = toml::from_str(
+            r#"
+            [bugzilla]
+            url = "https://bugzilla.example"
+            [check-crate]
+            exclude = ["criterion", "pretty_assertions"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.check_crate.exclude, ["criterion", "pretty_assertions"]);
+        let bare: EbranchConfig = toml::from_str("").unwrap();
+        assert!(bare.check_crate.exclude.is_empty());
+    }
 }

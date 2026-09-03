@@ -833,6 +833,19 @@ overriding both. A system file alone is enough — no per-user file is
 required — and either may also carry a `[defaults]` table pinning flag
 defaults (see the root `DEVELOPMENT.md`).
 
+A `[check-crate]` table lists crates to ignore in every run, direct
+or transitive, as if they were not dependencies — Fedora almost
+always drops benchmark harnesses and the like, and this keeps each
+report honest about what will actually be packaged:
+
+```toml
+[check-crate]
+exclude = ["criterion", "pretty_assertions"]
+```
+
+It merges with `--exclude`, which now means the same thing (ignore),
+not merely "do not expand".
+
 `ebranch config` writes the user file only, with 700 on the
 directory and 600 on the file. Nothing writes under `/etc`: a system
 file is admin-authored, holds shared non-secret settings, and is
