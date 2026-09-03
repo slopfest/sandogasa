@@ -78,8 +78,9 @@ table's `exclude` list names crates ignored in every run, merged with
 (benchmark harnesses like criterion), and re-typing them per run, or
 watching them show up as "missing" under a new crate, was noise.
 Excluding now means *ignoring* — the crate is dropped from the direct
-dependency list too, not merely left unexpanded — since a dependency
-Fedora will not package is not one the report should count.
+dependency list too, not merely left unexpanded, and `--exclude` no
+longer requires `--transitive` — since a dependency Fedora will not
+package is not one the report should count.
 
 ### ebranch: resolve batches each BFS level into three fedrq queries
 

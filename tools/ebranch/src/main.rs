@@ -484,13 +484,10 @@ what needs (re)building."
     )]
     exclude_unmet: bool,
 
-    /// Exclude crates from transitive expansion.
-    #[arg(
-        long,
-        requires = "transitive",
-        value_delimiter = ',',
-        value_name = "CRATE,..."
-    )]
+    /// Ignore these crates entirely, direct or transitive, as
+    /// dependencies Fedora will not package (CSV or repeated).
+    /// Merged with the config file's `[check-crate] exclude`.
+    #[arg(long, value_delimiter = ',', value_name = "CRATE,...")]
     exclude: Vec<String>,
 
     /// Generate a shell script for Copr batch builds.

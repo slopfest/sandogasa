@@ -46,7 +46,7 @@ default: omitting them silently under\-reports
 what needs (re)building.
 .TP
 \fB\-\-exclude\fR \fI<CRATE,...>\fR
-Exclude crates from transitive expansion
+Ignore these crates entirely, direct or transitive, as dependencies Fedora will not package (CSV or repeated). Merged with the config file\*(Aqs `[check\-crate] exclude`
 .TP
 \fB\-\-copr\fR
 Generate a shell script for Copr batch builds.

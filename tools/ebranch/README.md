@@ -110,7 +110,9 @@ ebranch check-crate --from rbw.toml --copr > build.sh
 - `--exclude-unmet` — exclude unmet-version deps (packaged but too old)
   from transitive expansion; they are included by default, since
   omitting them silently under-reports what needs rebuilding
-- `--exclude CRATE,...` — skip specific crates in transitive expansion
+- `--exclude CRATE,...` — ignore crates entirely, direct or transitive, as
+  dependencies Fedora will not package; merged with the config file's
+  `[check-crate] exclude` list
 - `--dot` — output dependency graph in Graphviz DOT format
 - `--toml PATH` — save full analysis to a TOML file for reuse
 - `--verbose` / `-v` — print progress to stderr as packages are resolved
@@ -843,8 +845,7 @@ report honest about what will actually be packaged:
 exclude = ["criterion", "pretty_assertions"]
 ```
 
-It merges with `--exclude`, which now means the same thing (ignore),
-not merely "do not expand".
+It merges with `--exclude`; both ignore the crate outright.
 
 `ebranch config` writes the user file only, with 700 on the
 directory and 600 on the file. Nothing writes under `/etc`: a system
