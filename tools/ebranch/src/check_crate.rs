@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::dag;
@@ -193,15 +192,13 @@ pub fn check_crate(
         eprintln!("[check-crate] checking dependencies against repo");
     }
 
+    // One fedrq invocation for every direct dependency.
+    let statuses = check_deps_in_repo(&fedrq, &deps.iter().collect::<Vec<_>>());
     let dependencies: Vec<DepResult> = deps
-        .par_iter()
-        .map(|dep| {
-            let status = check_dep_in_repo(&fedrq, dep);
-            DepResult {
-                dep: dep.clone(),
-                status,
-            }
-        })
+        .iter()
+        .cloned()
+        .zip(statuses)
+        .map(|(dep, status)| DepResult { dep, status })
         .collect();
 
     let (transitive_missing, transitive_build_order, transitive_edges) = if opts.transitive {
@@ -668,17 +665,16 @@ fn expand_transitive(
             }
         };
 
-        // Filter to relevant kinds and check against repo in parallel.
+        // Filter to relevant kinds and check against the repo — one
+        // fedrq invocation for the whole crate's dependency list.
         let relevant: Vec<&CrateDep> = deps.iter().filter(|d| should_expand(d, opts)).collect();
-
+        let statuses = check_deps_in_repo(fedrq, &relevant);
         let results: Vec<DepResult> = relevant
-            .par_iter()
-            .map(|dep| {
-                let status = check_dep_in_repo(fedrq, dep);
-                DepResult {
-                    dep: (*dep).clone(),
-                    status,
-                }
+            .iter()
+            .zip(statuses)
+            .map(|(dep, status)| DepResult {
+                dep: (*dep).clone(),
+                status,
             })
             .collect();
 
@@ -1099,17 +1095,39 @@ async fn fetch_dependencies(name: &str, version: &str) -> Result<Vec<CrateDep>, 
 
 /// Check if a dependency is available in the target repo and if
 /// the version satisfies the requirement.
+#[cfg(test)]
 fn check_dep_in_repo(fedrq: &sandogasa_fedrq::Fedrq, dep: &CrateDep) -> DepStatus {
-    let provide_name = format!("crate({})", dep.name);
+    check_deps_in_repo(fedrq, &[dep]).remove(0)
+}
 
-    // Query fedrq for packages that provide this crate capability.
-    let provides = fedrq
-        .provides_of_provider(&provide_name)
-        .unwrap_or_default();
+/// Check several dependencies against the repo in one fedrq
+/// invocation: the providers of every `crate(<name>)` come back
+/// together, each attributed to the crates its Provides satisfy, and
+/// the per-crate decision is the same as ever. A repo the query
+/// cannot reach reads as "nothing provides anything", as the
+/// single-crate query always did.
+fn check_deps_in_repo(fedrq: &sandogasa_fedrq::Fedrq, deps: &[&CrateDep]) -> Vec<DepStatus> {
+    let caps: Vec<String> = deps.iter().map(|d| format!("crate({})", d.name)).collect();
+    let providers = fedrq.providers_info(&caps).unwrap_or_default();
+    deps.iter()
+        .zip(&caps)
+        .map(|(dep, cap)| {
+            let provides: Vec<String> = providers
+                .iter()
+                .filter(|p| p.satisfies(cap))
+                .flat_map(|p| p.provides.iter().cloned())
+                .collect();
+            status_from_provides(dep, &provides)
+        })
+        .collect()
+}
 
+/// The status of one dependency given everything the repo's providers
+/// of its capability declare.
+fn status_from_provides(dep: &CrateDep, provides: &[String]) -> DepStatus {
     // Extract all provided versions (multiple packages may provide
     // different versions, e.g. rust-rand and rust-rand0.9).
-    let versions = extract_crate_versions(&provides, &dep.name);
+    let versions = extract_crate_versions(provides, &dep.name);
 
     if versions.is_empty() {
         return DepStatus::Missing;
@@ -1369,6 +1387,54 @@ mod tests {
         };
         none.store("x", "y");
         assert_eq!(none.load("x", None), None);
+    }
+
+    #[test]
+    fn batched_statuses_attribute_providers_by_capability() {
+        let pkg = |v: serde_json::Value| -> sandogasa_fedrq::PkgInfo {
+            serde_json::from_value(v).unwrap()
+        };
+        // rand is provided at 0.9 (main) and 0.8 (compat); serde only
+        // at 1.0; nothing provides ureq.
+        let providers = [
+            pkg(
+                serde_json::json!({"name": "rust-rand-devel", "source_name": "rust-rand",
+                "repoid": "rawhide", "provides": ["crate(rand) = 0.9.2", "crate(rand/default) = 0.9.2"]}),
+            ),
+            pkg(
+                serde_json::json!({"name": "rust-rand0.8-devel", "source_name": "rust-rand0.8",
+                "repoid": "rawhide", "provides": ["crate(rand) = 0.8.5"]}),
+            ),
+            pkg(
+                serde_json::json!({"name": "rust-serde-devel", "source_name": "rust-serde",
+                "repoid": "rawhide", "provides": ["crate(serde) = 1.0.228"]}),
+            ),
+        ];
+        let deps = [
+            make_dep("rand", "normal", false),
+            make_dep("serde", "normal", false),
+            make_dep("ureq", "normal", false),
+        ];
+        // Reproduce check_deps_in_repo's attribution over canned providers.
+        let statuses: Vec<DepStatus> = deps
+            .iter()
+            .map(|dep| {
+                let cap = format!("crate({})", dep.name);
+                let provides: Vec<String> = providers
+                    .iter()
+                    .filter(|p| p.satisfies(&cap))
+                    .flat_map(|p| p.provides.iter().cloned())
+                    .collect();
+                status_from_provides(dep, &provides)
+            })
+            .collect();
+        // make_dep asks for ^1 by default: rand has no 1.x → unmet with
+        // both versions listed, serde 1.0.228 satisfied, ureq missing.
+        assert!(matches!(&statuses[0], DepStatus::Unmet { available, .. } if available.len() == 2));
+        assert!(
+            matches!(&statuses[1], DepStatus::Satisfied { version, compat: false } if version == "1.0.228")
+        );
+        assert!(matches!(statuses[2], DepStatus::Missing));
     }
 
     #[test]

@@ -50,6 +50,17 @@ what a repo of interest provides, the other a closure over sources
 collecting what a target lacks, and unifying their loops is a
 decision for after both have been exercised on real work.
 
+### ebranch check-crate: one fedrq invocation per dependency list
+
+check-crate asked fedrq about each crate on its own — one spawn, one
+repo-sack load, per dependency — which is where a transitive check
+spent its minutes once crates.io was cached. Each dependency list is
+now one `providers_info` call (the direct dependencies together; each
+expanded crate's list together), with the answer attributed back to
+crates by the Provides each provider declares and the per-crate
+decision unchanged. rbw's transitive check went from 205 s to 38 s
+with a byte-identical report.
+
 ### ebranch check-crate: a crates.io cache, and rendering a saved report
 
 Every `check-crate` run re-asked crates.io for every crate in the
