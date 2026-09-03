@@ -5,6 +5,15 @@ offline oracle. Extracted from `poi-tracker deps`, where it drives the
 inventory-culling workflow; the same engine is what `ebranch resolve`
 needs for the source side of a branch-request closure.
 
+- **`engine`** — the wave loop every closure walk shares: seen-sets
+  for nodes and capabilities (with first-requirer attribution),
+  batched resolution of a wave's unresolved capabilities, per-node
+  depth, wave counting, and a converged hook for fixpoints or
+  deferred decisions. A `Policy` supplies what differs between walks
+  — expansion, which requirements count, what a provider means, and
+  the order results are absorbed in (attribution depends on it).
+  `walk` below is one policy; ebranch's branch-request closure is
+  another.
 - **`PkgQuery`** — the backend seam: subpackages of sources, sources
   with their BuildRequires, providers of capabilities (each with its
   own Requires, so a wave's answer seeds the next). Implemented for

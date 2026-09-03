@@ -15,6 +15,19 @@ walk's tests move with them. poi-tracker keeps only the
 inventory-shaped `to_inventory` and re-exports the rest, so nothing
 about its behavior or output changes.
 
+The walk itself now runs on a shared loop. `sandogasa_closure::engine`
+owns what every dependency-closure walk has in common — the seen-set
+of nodes, the seen-set of capabilities with first-requirer
+attribution, batching a wave's unresolved capabilities into one
+resolution call, per-node depth, wave counting, and an end-of-walk
+hook — and a `Policy` supplies the rest: how roots expand, which
+requirements count and as what capabilities, what a resolved provider
+means, and the order in which a wave's results are absorbed (because
+attribution depends on it). poi-tracker's `walk` is the first policy
+over it, unchanged in every observable way: its tests pass untouched,
+and the reference and engine binaries produce byte-identical graphs
+and inventories on a real `keep` run.
+
 ebranch is the crate's second consumer: `resolve --graph <json>`
 serves the source side of a branch-request closure from a saved
 rawhide graph — providers of capabilities the graph resolved,

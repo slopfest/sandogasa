@@ -36,6 +36,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rayon::prelude::*;
 pub use sandogasa_fedrq::PkgInfo;
+
+pub mod engine;
 use serde::Serialize;
 
 /// Source of batched package facts — [`sandogasa_fedrq::Fedrq`] in
@@ -436,159 +438,186 @@ pub struct WalkOpts<'a> {
     pub verbose: bool,
 }
 
-/// With `build`, the roots' own BuildRequires seed the first wave
-/// too, attributed as `src:<name>`: a kept application then justifies
-/// the packages it *builds* with — for Rust apps, the whole crate
-/// graph, whose app→crate edges exist only at build time. Build deps
-/// of anything beyond the roots (and, under the fixpoint, beyond the
-/// owned packages that become roots) stay out of scope.
+/// Walk the closure from `roots`: the shared [`engine`] loop under
+/// the deps policy — collect providers from the repos of interest,
+/// terminate at the base distro, record every edge, grow the roots
+/// by fixpoint when asked. Returns the report (first attributions)
+/// and the graph (all edges).
 pub fn walk(
     query: &impl PkgQuery,
     roots: &[String],
     opts: &WalkOpts,
 ) -> Result<(DepsReport, DepsGraph), String> {
-    let WalkOpts {
-        from,
-        base_prefixes,
-        build,
-        fixpoint_own,
-        verbose,
-    } = *opts;
-    let root_sources: BTreeSet<&str> = roots.iter().map(String::as_str).collect();
-    let base_prefixes: Vec<&str> = base_prefixes
-        .iter()
-        .filter(|b| !b.is_empty())
-        .map(String::as_str)
-        .collect();
-    let mut report = DepsReport {
-        roots: roots.len(),
-        ..Default::default()
+    let mut policy = DepsPolicy {
+        query,
+        from: opts.from,
+        base_prefixes: opts
+            .base_prefixes
+            .iter()
+            .filter(|b| !b.is_empty())
+            .map(String::as_str)
+            .collect(),
+        build: opts.build,
+        fixpoint_own: opts.fixpoint_own,
+        verbose: opts.verbose,
+        root_sources: roots.iter().cloned().collect(),
+        fixpoint_roots: roots.iter().cloned().collect(),
+        report: DepsReport {
+            roots: roots.len(),
+            ..Default::default()
+        },
+        graph: DepsGraph {
+            roots: roots.to_vec(),
+            ..Default::default()
+        },
+        collected: BTreeMap::new(),
+        rich_warned: BTreeSet::new(),
+        started: std::time::Instant::now(),
     };
-    let mut graph = DepsGraph {
-        roots: roots.to_vec(),
-        ..Default::default()
-    };
-    let mut fixpoint_roots: BTreeSet<String> = roots.iter().cloned().collect();
-    let mut seen_bins: BTreeSet<String> = BTreeSet::new();
-    let mut seen_reqs: BTreeSet<String> = BTreeSet::new();
-    let mut rich_warned: BTreeSet<String> = BTreeSet::new();
-    let mut collected: BTreeMap<String, CollectedDep> = BTreeMap::new();
+    let stats = engine::run(&mut policy, roots)?;
+    let DepsPolicy {
+        mut report,
+        graph,
+        collected,
+        started,
+        ..
+    } = policy;
+    report.waves = stats.waves;
+    report.binaries_walked = stats.nodes_seen;
+    report.collected = collected.into_values().collect();
+    report.elapsed_secs = started.elapsed().as_secs_f64();
+    Ok((report, graph))
+}
 
-    let started = std::time::Instant::now();
-    if verbose {
-        eprintln!("[deps] expanding {} root source(s)", roots.len());
-    }
-    let mut wave = query.subpkgs(roots)?;
-    if build {
-        // The sources ride the first wave under a `src:` name: their
-        // Requires are BuildRequires and flow through the same
-        // filtering and resolution, and the prefix keeps a source
-        // from shadowing its same-named main binary in the seen-set
-        // (and labels the attribution in reports).
-        for mut src in query.srcs(roots)? {
-            src.name = format!("src:{}", src.name);
-            wave.push(src);
+/// The deps walk's policy: binaries and `src:` entries as nodes,
+/// providers followed unless the base distro satisfies them,
+/// collected when their repo is one of interest.
+struct DepsPolicy<'a, Q: PkgQuery> {
+    query: &'a Q,
+    from: &'a BTreeSet<String>,
+    base_prefixes: Vec<&'a str>,
+    build: bool,
+    fixpoint_own: Option<&'a BTreeSet<String>>,
+    verbose: bool,
+    root_sources: BTreeSet<String>,
+    fixpoint_roots: BTreeSet<String>,
+    report: DepsReport,
+    graph: DepsGraph,
+    collected: BTreeMap<String, CollectedDep>,
+    rich_warned: BTreeSet<String>,
+    started: std::time::Instant,
+}
+
+impl<Q: PkgQuery> DepsPolicy<'_, Q> {
+    fn node(p: PkgInfo) -> engine::Node<PkgInfo> {
+        engine::Node {
+            key: p.name.clone(),
+            depth: 0,
+            requires: Some(p.requires.clone()),
+            meta: p,
         }
     }
-    if verbose {
-        eprintln!(
-            "[deps] {} binaries in {:.1}s{}",
-            wave.len(),
-            started.elapsed().as_secs_f64(),
-            if build { " (sources included)" } else { "" },
-        );
+
+    /// Sources as `src:` nodes: their Requires are BuildRequires and
+    /// flow through the same filtering and resolution, and the prefix
+    /// keeps a source from shadowing its same-named main binary in
+    /// the seen-set (and labels the attribution in reports).
+    fn src_nodes(&self, sources: &[String]) -> Result<Vec<engine::Node<PkgInfo>>, String> {
+        let mut out = Vec::new();
+        for mut src in self.query.srcs(sources)? {
+            src.name = format!("src:{}", src.name);
+            out.push(Self::node(src));
+        }
+        Ok(out)
+    }
+}
+
+impl<Q: PkgQuery> engine::Policy for DepsPolicy<'_, Q> {
+    type Meta = PkgInfo;
+    type Hit = PkgInfo;
+
+    fn seed(&mut self, roots: &[String]) -> Result<Vec<engine::Node<PkgInfo>>, String> {
+        if self.verbose {
+            eprintln!("[deps] expanding {} root source(s)", roots.len());
+        }
+        let mut wave: Vec<engine::Node<PkgInfo>> = self
+            .query
+            .subpkgs(roots)?
+            .into_iter()
+            .map(Self::node)
+            .collect();
+        if self.build {
+            wave.extend(self.src_nodes(roots)?);
+        }
+        if self.verbose {
+            eprintln!(
+                "[deps] {} binaries in {:.1}s{}",
+                wave.len(),
+                self.started.elapsed().as_secs_f64(),
+                if self.build {
+                    " (sources included)"
+                } else {
+                    ""
+                },
+            );
+        }
+        Ok(wave)
     }
 
-    loop {
-        // Ingest this wave's packages: collect the capabilities their
-        // Requires add, remembering who asked first.
-        let mut pending: BTreeMap<String, String> = BTreeMap::new();
-        for pkg in &wave {
-            if !seen_bins.insert(pkg.name.clone()) {
-                continue;
-            }
-            if let Some(src) = &pkg.source_name {
-                graph.binary_sources.insert(pkg.name.clone(), src.clone());
-            } else if let Some(root) = pkg.name.strip_prefix("src:") {
-                graph
-                    .binary_sources
-                    .insert(pkg.name.clone(), root.to_string());
-            }
-            for dep in &pkg.requires {
-                // A rich dep made only of conjunctions contributes
-                // its leaves as ordinary requirements; conditional
-                // ones are skipped with a warning.
-                let leaves = if dep.starts_with('(') {
-                    match rich_dep_leaves(dep) {
-                        Some(leaves) => leaves,
-                        None => {
-                            if rich_warned.insert(dep.clone()) {
-                                report
-                                    .warnings
-                                    .push(format!("rich dependency skipped: {dep} ({})", pkg.name));
-                            }
-                            continue;
-                        }
+    fn ingest(&mut self, node: &engine::Node<PkgInfo>) {
+        if let Some(src) = &node.meta.source_name {
+            self.graph
+                .binary_sources
+                .insert(node.key.clone(), src.clone());
+        } else if let Some(root) = node.key.strip_prefix("src:") {
+            self.graph
+                .binary_sources
+                .insert(node.key.clone(), root.to_string());
+        }
+    }
+
+    fn capabilities(&mut self, node: &engine::Node<PkgInfo>, dep: &str) -> Vec<String> {
+        // A rich dep made only of conjunctions contributes its leaves
+        // as ordinary requirements; conditional ones are skipped with
+        // a warning.
+        let leaves = if dep.starts_with('(') {
+            match rich_dep_leaves(dep) {
+                Some(leaves) => leaves,
+                None => {
+                    if self.rich_warned.insert(dep.to_string()) {
+                        self.report
+                            .warnings
+                            .push(format!("rich dependency skipped: {dep} ({})", node.key));
                     }
-                } else {
-                    vec![dep.clone()]
-                };
-                for leaf in leaves {
-                    if !wants_resolution(&leaf) {
-                        continue;
-                    }
-                    // The graph keeps every requirer edge, even for a
-                    // capability someone already asked about — the
-                    // pending queue below only carries the unresolved.
-                    graph
-                        .requirers
-                        .entry(leaf.clone())
-                        .or_default()
-                        .insert(pkg.name.clone());
-                    if seen_reqs.contains(&leaf) {
-                        continue;
-                    }
-                    pending.entry(leaf).or_insert_with(|| pkg.name.clone());
+                    return vec![];
                 }
             }
+        } else {
+            vec![dep.to_string()]
+        };
+        let mut out = Vec::new();
+        for leaf in leaves {
+            if !wants_resolution(&leaf) {
+                continue;
+            }
+            // The graph keeps every requirer edge, even for a
+            // capability someone already asked about — the engine's
+            // pending queue only carries the unresolved.
+            self.graph
+                .requirers
+                .entry(leaf.clone())
+                .or_default()
+                .insert(node.key.clone());
+            out.push(leaf);
         }
-        if pending.is_empty() {
-            // Converged — unless the fixpoint finds newly collected
-            // packages of our own, whose BuildRequires open another
-            // round against the same seen-sets.
-            let Some(own) = fixpoint_own else { break };
-            let new_roots: Vec<String> = collected
-                .keys()
-                .filter(|src| own.contains(*src) && !fixpoint_roots.contains(*src))
-                .cloned()
-                .collect();
-            if new_roots.is_empty() {
-                break;
-            }
-            report.fixpoint_rounds += 1;
-            if verbose {
-                eprintln!(
-                    "[deps] fixpoint round {}: {} newly owned root(s)",
-                    report.fixpoint_rounds,
-                    new_roots.len(),
-                );
-            }
-            fixpoint_roots.extend(new_roots.iter().cloned());
-            graph.roots.extend(new_roots.iter().cloned());
-            let mut sources = query.srcs(&new_roots)?;
-            for src in &mut sources {
-                src.name = format!("src:{}", src.name);
-            }
-            wave = sources;
-            continue;
-        }
-        report.waves += 1;
-        let reqs: Vec<String> = pending.keys().cloned().collect();
-        seen_reqs.extend(reqs.iter().cloned());
-        if verbose {
+        out
+    }
+
+    fn resolve(&self, wave: usize, reqs: &[String]) -> Result<Vec<PkgInfo>, String> {
+        if self.verbose {
             eprintln!(
                 "[deps] wave {}: resolving {} new capabilit{}",
-                report.waves,
+                wave,
                 reqs.len(),
                 if reqs.len() == 1 { "y" } else { "ies" }
             );
@@ -606,36 +635,40 @@ pub fn walk(
         let chunk_size = reqs.len().div_ceil(threads).max(32);
         let providers: Vec<PkgInfo> = reqs
             .par_chunks(chunk_size)
-            .map(|chunk| query.providers(chunk))
+            .map(|chunk| self.query.providers(chunk))
             .collect::<Result<Vec<_>, String>>()?
             .into_iter()
             .flatten()
             .collect();
-        if verbose {
+        if self.verbose {
             eprintln!(
                 "[deps] wave {}: {} provider(s) in {:.1}s ({} batch(es))",
-                report.waves,
+                wave,
                 providers.len(),
                 wave_started.elapsed().as_secs_f64(),
                 reqs.len().div_ceil(chunk_size),
             );
         }
+        Ok(providers)
+    }
 
+    fn absorb(
+        &mut self,
+        providers: Vec<PkgInfo>,
+        pending: &BTreeMap<String, String>,
+    ) -> Result<engine::NextWave<PkgInfo>, String> {
+        let reqs: Vec<&str> = pending.keys().map(String::as_str).collect();
         let mut matched: BTreeSet<&str> = BTreeSet::new();
-        let mut next: Vec<PkgInfo> = Vec::new();
+        let mut next = Vec::new();
         for p in providers {
             // Which of this wave's capabilities did this provider
             // satisfy? Attribution is best-effort: the first match
             // names the requirer in the report.
-            let mine: Vec<&str> = reqs
-                .iter()
-                .map(String::as_str)
-                .filter(|r| p.satisfies(r))
-                .collect();
+            let mine: Vec<&str> = reqs.iter().copied().filter(|r| p.satisfies(r)).collect();
             matched.extend(mine.iter().copied());
             if let Some(src) = &p.source_name {
                 for req in &mine {
-                    graph
+                    self.graph
                         .providers
                         .entry(req.to_string())
                         .or_default()
@@ -647,40 +680,62 @@ pub fn walk(
                 }
             }
 
-            if base_prefixes.iter().any(|b| p.repoid.starts_with(b)) {
+            if self.base_prefixes.iter().any(|b| p.repoid.starts_with(b)) {
                 continue; // satisfied by the base distro
             }
-            if from.contains(&p.repoid)
+            if self.from.contains(&p.repoid)
                 && let Some(src) = &p.source_name
-                && !root_sources.contains(src.as_str())
+                && !self.root_sources.contains(src.as_str())
             {
                 let (via, required_by) = mine
                     .first()
                     .map(|r| (r.to_string(), pending[*r].clone()))
                     .unwrap_or_default();
-                collected.entry(src.clone()).or_insert(CollectedDep {
+                self.collected.entry(src.clone()).or_insert(CollectedDep {
                     source: src.clone(),
                     repoid: p.repoid.clone(),
                     required_by,
                     via,
                 });
             }
-            if !seen_bins.contains(&p.name) {
-                next.push(p);
-            }
+            next.push((Self::node(p), None));
         }
-        report.unmatched.extend(
+        self.report.unmatched.extend(
             reqs.iter()
-                .filter(|r| !matched.contains(r.as_str()))
-                .cloned(),
+                .filter(|r| !matched.contains(*r))
+                .map(|r| r.to_string()),
         );
-        wave = next;
+        Ok(next)
     }
 
-    report.binaries_walked = seen_bins.len();
-    report.collected = collected.into_values().collect();
-    report.elapsed_secs = started.elapsed().as_secs_f64();
-    Ok((report, graph))
+    fn converged(&mut self) -> Result<Vec<engine::Node<PkgInfo>>, String> {
+        // Converged — unless the fixpoint finds newly collected
+        // packages of our own, whose BuildRequires open another round
+        // against the same seen-sets.
+        let Some(own) = self.fixpoint_own else {
+            return Ok(vec![]);
+        };
+        let new_roots: Vec<String> = self
+            .collected
+            .keys()
+            .filter(|src| own.contains(*src) && !self.fixpoint_roots.contains(*src))
+            .cloned()
+            .collect();
+        if new_roots.is_empty() {
+            return Ok(vec![]);
+        }
+        self.report.fixpoint_rounds += 1;
+        if self.verbose {
+            eprintln!(
+                "[deps] fixpoint round {}: {} newly owned root(s)",
+                self.report.fixpoint_rounds,
+                new_roots.len(),
+            );
+        }
+        self.fixpoint_roots.extend(new_roots.iter().cloned());
+        self.graph.roots.extend(new_roots.iter().cloned());
+        self.src_nodes(&new_roots)
+    }
 }
 
 #[cfg(test)]
