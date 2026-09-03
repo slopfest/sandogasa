@@ -730,6 +730,230 @@ pub fn resolve_closure_with_options(
 }
 
 /// Resolve the full transitive closure, reusing an existing cache.
+/// The closure BFS as a policy over the shared wave engine: source
+/// packages as nodes, a level's BuildRequires as its requirements,
+/// the target branch terminating what it already has, the source
+/// branch providing the rest — each provider becoming a missing dep
+/// and the next level. Results are absorbed requirer-major (a
+/// package's missing deps in its BuildRequires order, first provider
+/// only), which is what the report and 260-odd tests describe.
+struct ClosurePolicy<'a> {
+    resolver: &'a dyn DepResolver,
+    options: &'a ResolveOptions,
+    cache: &'a ResolveCache,
+    closure: BTreeMap<String, ClosureEntry>,
+    warnings: Vec<String>,
+    blocked_by_base: BTreeMap<String, BlockedByBase>,
+    /// This level's packages in wave order, with depth and raw
+    /// BuildRequires — the per-package pass walks them in `absorb`.
+    level: Vec<(String, usize, Vec<String>)>,
+    /// Successors found this level, with the package each came from.
+    pending_next: Vec<(String, String)>,
+}
+
+impl sandogasa_closure::engine::Policy for ClosurePolicy<'_> {
+    type Meta = ();
+    type Hit = ();
+
+    fn seed(
+        &mut self,
+        roots: &[String],
+    ) -> Result<Vec<sandogasa_closure::engine::Node<()>>, String> {
+        Ok(roots.iter().map(|p| source_node(p)).collect())
+    }
+
+    fn max_depth(&self) -> usize {
+        self.options.max_depth
+    }
+
+    fn begin_wave(&mut self, nodes: &[sandogasa_closure::engine::Node<()>]) {
+        self.level.clear();
+        if self.options.verbose {
+            let names: Vec<&str> = nodes.iter().map(|n| n.key.as_str()).collect();
+            eprintln!(
+                "[level] processing {} package(s) ({} resolved so far): {}",
+                nodes.len(),
+                self.closure.len(),
+                names.join(", "),
+            );
+        }
+    }
+
+    fn expand(&mut self, keys: &[String]) -> Result<BTreeMap<String, Vec<String>>, String> {
+        // One query for the level's BuildRequires; a package the
+        // source cannot answer for is one warning and an empty entry,
+        // not a failed level.
+        let mut out = BTreeMap::new();
+        for (pkg, reqs) in self.resolver.buildrequires_many(keys) {
+            match reqs {
+                Ok(reqs) => {
+                    out.insert(pkg, reqs);
+                }
+                Err(e) => {
+                    self.warnings
+                        .push(format!("{pkg}: failed to query BuildRequires: {e}"));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn ingest(&mut self, node: &sandogasa_closure::engine::Node<()>) {
+        self.closure.insert(
+            node.key.clone(),
+            ClosureEntry {
+                missing_deps: vec![],
+            },
+        );
+        self.level.push((
+            node.key.clone(),
+            node.depth,
+            node.requires.clone().unwrap_or_default(),
+        ));
+    }
+
+    fn capabilities(
+        &mut self,
+        _node: &sandogasa_closure::engine::Node<()>,
+        raw: &str,
+    ) -> Vec<String> {
+        let dep = raw.trim();
+        if dep.starts_with("rpmlib(") || dep.starts_with("auto(") {
+            vec![]
+        } else {
+            vec![dep.to_string()]
+        }
+    }
+
+    fn resolve(&self, _wave: usize, caps: &[String]) -> Result<Vec<()>, String> {
+        // Two batched queries warm the caches (target, then source for
+        // what the target lacks; the base for the guard); the
+        // per-package pass in `absorb` then reads them.
+        prefetch_resolutions(
+            self.resolver,
+            self.cache,
+            self.options.base_branch.is_some(),
+            caps.iter().cloned(),
+        );
+        Ok(vec![])
+    }
+
+    fn absorb(
+        &mut self,
+        _hits: Vec<()>,
+        _pending: &BTreeMap<String, String>,
+    ) -> Result<sandogasa_closure::engine::NextWave<()>, String> {
+        let resolver = self.resolver;
+        let options = self.options;
+        let cache = self.cache;
+        let mut next: Vec<String> = Vec::new();
+        for (pkg, pkg_depth, build_reqs) in std::mem::take(&mut self.level) {
+            if options.verbose {
+                eprintln!("[depth {pkg_depth}] resolving {pkg}");
+            }
+            let mut missing_deps: Vec<MissingDep> = Vec::new();
+            let mut seen_providers: BTreeSet<String> = BTreeSet::new();
+            let mut new_packages: Vec<String> = Vec::new();
+            let mut blocked_candidates: Vec<BlockedCandidate> = Vec::new();
+
+            for raw_dep in &build_reqs {
+                let dep_str = raw_dep.trim();
+                if dep_str.starts_with("rpmlib(") || dep_str.starts_with("auto(") {
+                    continue;
+                }
+                let target_resolved =
+                    cached_first(&cache.target, dep_str, |d| resolver.resolve_target(d));
+                if target_resolved.is_some() {
+                    continue;
+                }
+                let source_resolved =
+                    cached_first(&cache.source, dep_str, |d| resolver.resolve_source(d));
+                let Some(provider) = source_resolved else {
+                    continue;
+                };
+                if provider == pkg || options.exclude.contains(&provider) {
+                    continue;
+                }
+                // Base-distro guard: a provider that exists in the base
+                // at an unsatisfying version must not become a branch
+                // request (EPEL can't replace base packages). Decision
+                // (override vs prune) happens below, sequentially.
+                if options.base_branch.is_some() {
+                    match classify_against_base(resolver, cache, dep_str) {
+                        BaseClass::NotInBase => {}
+                        BaseClass::SatisfiedByBase { base_vr } => {
+                            if options.verbose {
+                                eprintln!("  {dep_str}: satisfied by base ({base_vr})");
+                            }
+                            continue;
+                        }
+                        BaseClass::Blocked { base_vr } => {
+                            if seen_providers.insert(provider.clone()) {
+                                blocked_candidates.push(BlockedCandidate {
+                                    provider,
+                                    dep: raw_dep.clone(),
+                                    base_vr,
+                                });
+                            }
+                            continue;
+                        }
+                    }
+                }
+                if seen_providers.insert(provider.clone()) {
+                    missing_deps.push(MissingDep {
+                        dep: raw_dep.clone(),
+                        provided_by: provider.clone(),
+                    });
+                    new_packages.push(provider);
+                }
+            }
+
+            // Decide blocked candidates here — the only place the
+            // override prompt may fire.
+            let mut entry = ClosureEntry { missing_deps };
+            next.extend(new_packages);
+            for cand in blocked_candidates {
+                let base = options.base_branch.as_deref().unwrap_or_default();
+                if decide_override(options, cache, &cand, &pkg, base) {
+                    next.push(cand.provider.clone());
+                    entry.missing_deps.push(MissingDep {
+                        dep: cand.dep,
+                        provided_by: cand.provider,
+                    });
+                } else {
+                    record_blocked(&mut self.blocked_by_base, cand, &pkg, base);
+                }
+            }
+            self.closure.insert(pkg.clone(), entry);
+            // Depth: every successor found while processing `pkg` is
+            // one deeper than it.
+            let from = pkg;
+            for provider in next.drain(..) {
+                self.pending_next.push((provider, from.clone()));
+            }
+        }
+        // The next level is sorted, as the report and its tests expect.
+        let mut successors = std::mem::take(&mut self.pending_next);
+        successors.sort();
+        successors.dedup_by(|a, b| a.0 == b.0);
+        Ok(successors
+            .into_iter()
+            .map(|(provider, from)| (source_node(&provider), Some(from)))
+            .collect())
+    }
+}
+
+/// A source package as a wave node: its BuildRequires arrive through
+/// [`ClosurePolicy::expand`].
+fn source_node(pkg: &str) -> sandogasa_closure::engine::Node<()> {
+    sandogasa_closure::engine::Node {
+        key: pkg.to_string(),
+        depth: 0,
+        requires: None,
+        meta: (),
+    }
+}
+
 fn resolve_closure_with_cache(
     resolver: &dyn DepResolver,
     packages: &[String],
@@ -757,210 +981,23 @@ fn resolve_closure_with_cache(
         }
     }
 
-    let mut closure: BTreeMap<String, ClosureEntry> = BTreeMap::new();
-    let mut visited: BTreeSet<String> = BTreeSet::new();
-    let mut depth: BTreeMap<String, usize> = BTreeMap::new();
-    for p in packages {
-        depth.insert(p.clone(), 1);
-    }
-    let mut warnings: Vec<String> = Vec::new();
-    let mut blocked_by_base: BTreeMap<String, BlockedByBase> = BTreeMap::new();
-
-    // Level-parallel BFS: process all packages at the same depth
-    // concurrently, then collect new packages for the next level.
-    let mut current_level: Vec<String> = packages.to_vec();
-
-    while !current_level.is_empty() {
-        // Filter to unvisited packages within depth limit.
-        let to_process: Vec<(String, usize)> = current_level
-            .iter()
-            .filter(|pkg| !visited.contains(*pkg))
-            .filter_map(|pkg| {
-                let d = depth[pkg];
-                if options.max_depth > 0 && d > options.max_depth {
-                    None
-                } else {
-                    Some((pkg.clone(), d))
-                }
-            })
-            .collect();
-
-        if to_process.is_empty() {
-            break;
-        }
-
-        if options.verbose {
-            let names: Vec<&str> = to_process.iter().map(|(p, _)| p.as_str()).collect();
-            eprintln!(
-                "[level] processing {} package(s) ({} resolved so far): {}",
-                to_process.len(),
-                closure.len(),
-                names.join(", "),
-            );
-        }
-
-        // One query for the level's BuildRequires, then two for its
-        // capabilities (target, then source for what the target
-        // lacks); the per-package pass below runs against warm caches.
-        let level_pkgs: Vec<String> = to_process.iter().map(|(p, _)| p.clone()).collect();
-        let build_reqs_by_pkg = resolver.buildrequires_many(&level_pkgs);
-        prefetch_resolutions(
-            resolver,
-            cache,
-            options.base_branch.is_some(),
-            build_reqs_by_pkg
-                .values()
-                .flatten()
-                .flatten()
-                .map(|d| d.trim().to_string())
-                .filter(|d| !d.starts_with("rpmlib(") && !d.starts_with("auto(")),
-        );
-
-        // Resolve all packages at this level in parallel.
-        // Each returns: (pkg, entry, new_packages, pkg_warnings)
-        let results: Vec<_> = to_process
-            .par_iter()
-            .map(|(pkg, pkg_depth)| {
-                let mut log = Vec::new();
-                if options.verbose {
-                    log.push(format!("[depth {pkg_depth}] resolving {pkg}",));
-                }
-
-                let build_reqs = match build_reqs_by_pkg.get(pkg) {
-                    Some(Ok(reqs)) => reqs.clone(),
-                    Some(Err(e)) => {
-                        let e = e.clone();
-                        let warn = format!("{pkg}: failed to query BuildRequires: {e}");
-                        return (
-                            pkg.clone(),
-                            ClosureEntry {
-                                missing_deps: vec![],
-                            },
-                            vec![],
-                            vec![],
-                            vec![warn],
-                            log,
-                        );
-                    }
-                    None => Vec::new(),
-                };
-
-                let mut missing_deps: Vec<MissingDep> = Vec::new();
-                let mut seen_providers: BTreeSet<String> = BTreeSet::new();
-                let mut new_packages: Vec<String> = Vec::new();
-                let mut blocked_candidates: Vec<BlockedCandidate> = Vec::new();
-
-                for raw_dep in &build_reqs {
-                    let dep_str = raw_dep.trim();
-
-                    if dep_str.starts_with("rpmlib(") || dep_str.starts_with("auto(") {
-                        continue;
-                    }
-
-                    let target_resolved =
-                        cached_first(&cache.target, dep_str, |d| resolver.resolve_target(d));
-
-                    if target_resolved.is_some() {
-                        continue;
-                    }
-
-                    let source_resolved =
-                        cached_first(&cache.source, dep_str, |d| resolver.resolve_source(d));
-
-                    let Some(provider) = source_resolved else {
-                        continue;
-                    };
-
-                    if provider == *pkg || options.exclude.contains(&provider) {
-                        continue;
-                    }
-
-                    // Base-distro guard: a provider that exists in the
-                    // base at an unsatisfying version must not become a
-                    // branch request (EPEL can't replace base packages).
-                    // Decision (override vs prune) happens sequentially.
-                    if options.base_branch.is_some() {
-                        match classify_against_base(resolver, cache, dep_str) {
-                            BaseClass::NotInBase => {}
-                            BaseClass::SatisfiedByBase { base_vr } => {
-                                if options.verbose {
-                                    log.push(format!("  {dep_str}: satisfied by base ({base_vr})"));
-                                }
-                                continue;
-                            }
-                            BaseClass::Blocked { base_vr } => {
-                                if seen_providers.insert(provider.clone()) {
-                                    blocked_candidates.push(BlockedCandidate {
-                                        provider,
-                                        dep: raw_dep.clone(),
-                                        base_vr,
-                                    });
-                                }
-                                continue;
-                            }
-                        }
-                    }
-
-                    if seen_providers.insert(provider.clone()) {
-                        missing_deps.push(MissingDep {
-                            dep: raw_dep.clone(),
-                            provided_by: provider.clone(),
-                        });
-                        new_packages.push(provider);
-                    }
-                }
-
-                (
-                    pkg.clone(),
-                    ClosureEntry { missing_deps },
-                    new_packages,
-                    blocked_candidates,
-                    vec![],
-                    log,
-                )
-            })
-            .collect();
-
-        // Collect results sequentially: update closure, queue next
-        // level, and decide blocked candidates (this is the only
-        // place the override prompt may fire).
-        let mut next_level: Vec<String> = Vec::new();
-        for (pkg, mut entry, new_pkgs, candidates, warns, log) in results {
-            if options.verbose {
-                for line in log {
-                    eprintln!("{line}");
-                }
-            }
-            let pkg_depth = depth[&pkg];
-            visited.insert(pkg.clone());
-            warnings.extend(warns);
-            for new_pkg in new_pkgs {
-                if !visited.contains(&new_pkg) {
-                    depth.entry(new_pkg.clone()).or_insert(pkg_depth + 1);
-                    next_level.push(new_pkg);
-                }
-            }
-            for cand in candidates {
-                let base = options.base_branch.as_deref().unwrap_or_default();
-                if decide_override(options, cache, &cand, &pkg, base) {
-                    if !visited.contains(&cand.provider) {
-                        depth.entry(cand.provider.clone()).or_insert(pkg_depth + 1);
-                        next_level.push(cand.provider.clone());
-                    }
-                    entry.missing_deps.push(MissingDep {
-                        dep: cand.dep,
-                        provided_by: cand.provider,
-                    });
-                } else {
-                    record_blocked(&mut blocked_by_base, cand, &pkg, base);
-                }
-            }
-            closure.insert(pkg, entry);
-        }
-        next_level.sort();
-        next_level.dedup();
-        current_level = next_level;
-    }
+    let mut policy = ClosurePolicy {
+        resolver,
+        options,
+        cache,
+        closure: BTreeMap::new(),
+        warnings: Vec::new(),
+        blocked_by_base: BTreeMap::new(),
+        level: Vec::new(),
+        pending_next: Vec::new(),
+    };
+    sandogasa_closure::engine::run(&mut policy, packages)?;
+    let ClosurePolicy {
+        closure,
+        warnings,
+        blocked_by_base,
+        ..
+    } = policy;
 
     // Providers approved as overrides (flag or prompt) that actually
     // entered the closure — recorded so the report can refuse to file

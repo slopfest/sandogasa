@@ -15,18 +15,25 @@ walk's tests move with them. poi-tracker keeps only the
 inventory-shaped `to_inventory` and re-exports the rest, so nothing
 about its behavior or output changes.
 
-The walk itself now runs on a shared loop. `sandogasa_closure::engine`
-owns what every dependency-closure walk has in common — the seen-set
-of nodes, the seen-set of capabilities with first-requirer
-attribution, batching a wave's unresolved capabilities into one
-resolution call, per-node depth, wave counting, and an end-of-walk
-hook — and a `Policy` supplies the rest: how roots expand, which
-requirements count and as what capabilities, what a resolved provider
-means, and the order in which a wave's results are absorbed (because
-attribution depends on it). poi-tracker's `walk` is the first policy
-over it, unchanged in every observable way: its tests pass untouched,
-and the reference and engine binaries produce byte-identical graphs
-and inventories on a real `keep` run.
+The two walks now share one loop. `sandogasa_closure::engine` owns
+what every dependency-closure walk has in common — the seen-set of
+nodes, the seen-set of capabilities with first-requirer attribution,
+batching a wave's unresolved capabilities into one resolution call,
+per-node depth, wave counting, and an end-of-walk hook — and a
+`Policy` supplies the rest: how roots expand, which requirements
+count and as what capabilities, what a resolved provider means, and,
+deliberately, the order in which a wave's results are absorbed.
+That last point is why the split falls where it does: poi-tracker
+attributes provider-major (the first provider of a source, in the
+resolver's order, names the `reason`), ebranch requirer-major (a
+package's missing deps in its own BuildRequires order, first
+provider only), and both are right for their reports. poi-tracker's
+`walk` and ebranch's closure BFS are each a policy over the engine
+now; ebranch's installability pass is not a BFS and stays as it was.
+Zero-drift was the bar and was verified rather than assumed: every
+existing test in both tools passes unchanged, and the reference and
+engine binaries produce byte-identical graphs, inventories and
+closure JSON on real queries.
 
 ebranch is the crate's second consumer: `resolve --graph <json>`
 serves the source side of a branch-request closure from a saved

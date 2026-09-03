@@ -266,28 +266,6 @@ than annotated as done.
   v1): median build time per (host, arch) to spot sick builders —
   host names are already captured in the dataset.
 
-## Shared dependency-closure engine (2026-09-01)
-
-- ebranch's `resolve` and poi-tracker's `deps` are the same walk with
-  opposite collection polarity: ebranch lists providers *missing* on a
-  target branch (branch requests), deps appends providers *present* in
-  repos of interest (essentials). Engine — wave BFS, seen-sets, batched
-  `-F json:` resolution, edge recording, seed-growth fixpoint — is
-  shareable; only the collect/terminate predicates and the fixpoint's
-  seed rule differ. ebranch shed its per-package spawns on 2026-09-02
-  (`DepResolver::*_many` over the batched `PkgInfo` layer, three
-  queries per BFS level) and the matching rule is shared
-  (`PkgInfo::satisfies`), so the remaining extraction is the wave loop
-  itself plus poi-tracker's `PkgQuery` seam — which also gives ebranch
-  the graph-backed offline oracle for free. Status 2026-09-02: the
-  engine is a crate (`sandogasa-closure`), ebranch consumes its oracle
-  (`resolve --graph`), every fedrq path in both walks is batched per
-  level. What is *not* done is unifying the two wave loops themselves —
-  ebranch's closure BFS is the engine with terminate="target has it",
-  collect="missing", src-only expansion, plus max-depth/excludes/the
-  sequential override-prompt point. Decide after both walks have seen a
-  few weeks of real use; the payoff is one implementation, not speed.
-
 ## poi-tracker: essential-deps as a materialized view (2026-09-01)
 
 - The offline recompute is built (`poi-tracker derive`, 2026-09-01):
