@@ -50,6 +50,28 @@ what a repo of interest provides, the other a closure over sources
 collecting what a target lacks, and unifying their loops is a
 decision for after both have been exercised on real work.
 
+### ebranch check-crate: a library's optional dependencies are required
+
+Optional dependencies were all-or-nothing: skipped unless
+`--include-optional`, which then pulled in every crate's optional
+deps. So `check-crate totp-rs` reported one missing crate,
+qrcodegen-image, and nothing under it — the crate is optional (behind
+totp-rs's `qr` feature), so its own dependencies were never checked,
+and the attempt to build it failed on `crate(qrcodegen/default)`,
+which nobody in rawhide provides.
+
+The rule that fits Fedora's packaging is simpler than feature
+unification: an **application** is built with its default features, a
+**library** with all of them (rust2rpm's `-a`), and every crate that
+has to be packaged transitively is a library. crates.io says which a
+root is (a version's `bin_names`), so a library root's optional deps
+now count as required, transitive crates' optional deps always do,
+and `--include-optional` keeps its meaning only for an application
+root such as rbw. `--verbose` says which kind it decided. The rest of
+the hybrid design (rawhide-packaged crates through `resolve`'s
+real BuildRequires; a `--features` flag for application roots) stays
+in TODO.
+
 ### ebranch check-crate: one fedrq invocation per dependency list
 
 check-crate asked fedrq about each crate on its own — one spawn, one

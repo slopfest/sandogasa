@@ -162,6 +162,20 @@ pub fn check_crate(
     }
 
     let deps = rt.block_on(fetch_dependencies(name, &version))?;
+    // Fedora builds an application with its default features and a
+    // library with all of them, so a library root's optional deps are
+    // as required as any other (same for every transitive crate).
+    let library_root = !rt.block_on(is_application(name, &version));
+    if opts.verbose {
+        eprintln!(
+            "[check-crate] {name} is {}",
+            if library_root {
+                "a library: every feature counts, optional deps included"
+            } else {
+                "an application: default features (--include-optional for the rest)"
+            }
+        );
+    }
     // Excluded crates are ignored outright — direct or transitive —
     // as if they were not dependencies: Fedora drops them.
     let (deps, ignored): (Vec<CrateDep>, Vec<CrateDep>) = deps
@@ -202,7 +216,7 @@ pub fn check_crate(
         .collect();
 
     let (transitive_missing, transitive_build_order, transitive_edges) = if opts.transitive {
-        let (deps, edges) = expand_transitive(&rt, &fedrq, &dependencies, opts)?;
+        let (deps, edges) = expand_transitive(&rt, &fedrq, &dependencies, opts, library_root)?;
         let phases = if edges.is_empty() {
             vec![]
         } else {
@@ -584,8 +598,12 @@ fn write_section_header(out: &mut String, label: &str, deps: &[&DepResult]) {
 pub type DepEdges = BTreeMap<String, BTreeSet<String>>;
 
 /// Whether a dependency should be expanded in transitive mode.
-fn should_expand(dep: &CrateDep, opts: &CheckCrateOptions) -> bool {
-    if dep.optional && !opts.include_optional {
+/// `all_features`: the depending crate is built with every feature
+/// (a library, or any crate that has to be packaged), so its optional
+/// dependencies are required. Only an application root keeps its
+/// optional deps out unless `--include-optional`.
+fn should_expand(dep: &CrateDep, opts: &CheckCrateOptions, all_features: bool) -> bool {
+    if dep.optional && !all_features && !opts.include_optional {
         return false;
     }
     match dep.kind.as_str() {
@@ -606,6 +624,7 @@ fn expand_transitive(
     fedrq: &sandogasa_fedrq::Fedrq,
     direct_results: &[DepResult],
     opts: &CheckCrateOptions,
+    library_root: bool,
 ) -> Result<(Vec<TransitiveDep>, DepEdges), String> {
     let mut visited: HashSet<String> = opts.exclude.clone();
     let mut result: Vec<TransitiveDep> = Vec::new();
@@ -630,7 +649,7 @@ fn expand_transitive(
     for dr in direct_results {
         let excluded = visited.contains(&dr.dep.name);
         visited.insert(dr.dep.name.clone());
-        if !excluded && needs_rebuild(&dr.status) && should_expand(&dr.dep, opts) {
+        if !excluded && needs_rebuild(&dr.status) && should_expand(&dr.dep, opts, library_root) {
             all_missing.insert(dr.dep.name.clone());
             queue.push_back((dr.dep.name.clone(), dr.dep.version_req.clone()));
         }
@@ -667,7 +686,12 @@ fn expand_transitive(
 
         // Filter to relevant kinds and check against the repo — one
         // fedrq invocation for the whole crate's dependency list.
-        let relevant: Vec<&CrateDep> = deps.iter().filter(|d| should_expand(d, opts)).collect();
+        // A crate that must be packaged is built with every feature
+        // (rust2rpm's `-a`), so all its optional deps count.
+        let relevant: Vec<&CrateDep> = deps
+            .iter()
+            .filter(|d| should_expand(d, opts, true))
+            .collect();
         let statuses = check_deps_in_repo(fedrq, &relevant);
         let results: Vec<DepResult> = relevant
             .iter()
@@ -778,6 +802,11 @@ struct VersionInfoResponse {
 struct VersionInfo {
     #[serde(default)]
     features: std::collections::HashMap<String, Vec<String>>,
+    /// Binaries the crate ships: non-empty means an application,
+    /// which Fedora builds with its default features; empty means a
+    /// library, which Fedora builds with every feature.
+    #[serde(default)]
+    bin_names: Vec<String>,
 }
 
 /// Shared HTTP client for crates.io requests, built once.
@@ -1011,14 +1040,28 @@ fn resolve_default_deps(
 }
 
 /// Fetch version info (features) for a specific crate version.
+async fn fetch_version_info(name: &str, version: &str) -> Result<VersionInfo, String> {
+    let url = format!("https://crates.io/api/v1/crates/{name}/{version}");
+    let resp: VersionInfoResponse =
+        get_json(&url, &format!("{name}/{version}/version.json"), None).await?;
+    Ok(resp.version)
+}
+
+/// Fetch version info (features) for a specific crate version.
 async fn fetch_features(
     name: &str,
     version: &str,
 ) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
-    let url = format!("https://crates.io/api/v1/crates/{name}/{version}");
-    let resp: VersionInfoResponse =
-        get_json(&url, &format!("{name}/{version}/version.json"), None).await?;
-    Ok(resp.version.features)
+    Ok(fetch_version_info(name, version).await?.features)
+}
+
+/// Whether a crate version ships binaries — an application, built with
+/// its default features — or is a library, built with all of them.
+async fn is_application(name: &str, version: &str) -> bool {
+    fetch_version_info(name, version)
+        .await
+        .map(|v| !v.bin_names.is_empty())
+        .unwrap_or(false)
 }
 
 /// Find the highest version of a crate matching a semver requirement.
@@ -1438,39 +1481,70 @@ mod tests {
     }
 
     #[test]
+    fn all_features_makes_optional_deps_required() {
+        let opts = make_opts(true, false, false);
+        // A library root or any transitive crate: optional counts.
+        assert!(should_expand(&make_dep("foo", "normal", true), &opts, true));
+        // An application root without --include-optional: it does not.
+        assert!(!should_expand(
+            &make_dep("foo", "normal", true),
+            &opts,
+            false
+        ));
+        // Kind filtering still applies under all-features.
+        assert!(!should_expand(&make_dep("foo", "weird", true), &opts, true));
+    }
+
+    #[test]
     fn should_expand_normal() {
         let opts = make_opts(true, false, false);
-        assert!(should_expand(&make_dep("foo", "normal", false), &opts));
+        assert!(should_expand(
+            &make_dep("foo", "normal", false),
+            &opts,
+            false
+        ));
     }
 
     #[test]
     fn should_expand_build() {
         let opts = make_opts(true, false, false);
-        assert!(should_expand(&make_dep("foo", "build", false), &opts));
+        assert!(should_expand(
+            &make_dep("foo", "build", false),
+            &opts,
+            false
+        ));
     }
 
     #[test]
     fn should_expand_dev_included_by_default() {
         let opts = make_opts(true, false, false);
-        assert!(should_expand(&make_dep("foo", "dev", false), &opts));
+        assert!(should_expand(&make_dep("foo", "dev", false), &opts, false));
     }
 
     #[test]
     fn should_expand_dev_excluded_when_requested() {
         let opts = make_opts(true, true, false);
-        assert!(!should_expand(&make_dep("foo", "dev", false), &opts));
+        assert!(!should_expand(&make_dep("foo", "dev", false), &opts, false));
     }
 
     #[test]
     fn should_expand_optional_excluded_by_default() {
         let opts = make_opts(true, false, false);
-        assert!(!should_expand(&make_dep("foo", "normal", true), &opts));
+        assert!(!should_expand(
+            &make_dep("foo", "normal", true),
+            &opts,
+            false
+        ));
     }
 
     #[test]
     fn should_expand_optional_when_included() {
         let opts = make_opts(true, false, true);
-        assert!(should_expand(&make_dep("foo", "normal", true), &opts));
+        assert!(should_expand(
+            &make_dep("foo", "normal", true),
+            &opts,
+            false
+        ));
     }
 
     #[test]

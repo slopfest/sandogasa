@@ -36,7 +36,7 @@ Expand missing deps transitively
 Exclude dev dependencies from transitive expansion
 .TP
 \fB\-\-include\-optional\fR
-Include optional dependencies in transitive expansion
+For an application root, also count optional dependencies its default features do not enable. Library roots and every transitive crate count all features, as Fedora builds them
 .TP
 \fB\-\-exclude\-unmet\fR
 Exclude unmet\-version dependencies (packaged,

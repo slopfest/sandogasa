@@ -408,12 +408,22 @@ considered and rejected.)
   (`%cargo_generate_buildrequires -a`) unless the spec trims them, so
   the feature calculus only needs to run at the *root* (the
   application: default features plus `--features`; the root's
-  optional deps activated by those are required). Every other crate is
-  one of two cases: **already packaged in rawhide** → its real spec
-  BuildRequires are the truth (trimmed benchmark features and all),
-  i.e. delegate to `resolve`'s BuildRequires closure source→target;
-  **not packaged anywhere** → all optional deps are hard
-  requirements for packaging it (rust2rpm `-a`). No per-edge feature
+  optional deps activated by those are required). DONE 2026-09-03:
+  root kind from crates.io `bin_names` (application → default
+  features; library → all), transitive crates always all-features,
+  repo checks batched per dependency list. LEFT: a `--features` flag
+  for application roots, and the delegation below. Every other crate is
+  one of three cases, decided against the *target* first and rawhide
+  second: **target has a matching version** → satisfied (compat
+  packages count); **rawhide has a matching version the target lacks**
+  → its real spec BuildRequires are the truth (trimmed benchmark
+  features and all), i.e. delegate to `resolve`'s BuildRequires
+  closure source→target — and say which action that is: a *branch
+  request* when the target has no such package at all, a *rebase of
+  the target branch* when it has an older one; **rawhide is too old
+  or has nothing** → crates.io for the wanted version's tree, all
+  optional deps as hard requirements (rust2rpm `-a`), reported as
+  "update rawhide or add a compat package" vs "new package". No per-edge feature
   unification needed. Shape: a third `Policy` over
   `sandogasa_closure::engine` with mixed nodes (crate from crates.io
   / rawhide source), batched target checks per level (replacing the

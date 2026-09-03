@@ -105,6 +105,12 @@ ebranch check-crate --from rbw.toml --copr > build.sh
 
 - `--transitive` / `-t` — expand missing `check-crate` deps transitively
   (includes phased build order)
+- `--include-optional` — for an *application* root (a crate shipping
+  binaries), also count optional dependencies its default features do
+  not enable. A *library* root and every transitive crate count all
+  features regardless, because that is how Fedora builds them
+  (`%cargo_generate_buildrequires -a`): an optional dependency of a
+  library is a hard requirement for packaging it
 - `--exclude-dev` — exclude dev deps from transitive expansion
 - `--include-optional` — include optional deps in transitive expansion
 - `--exclude-unmet` — exclude unmet-version deps (packaged but too old)

@@ -467,7 +467,9 @@ struct CheckCrateArgs {
     #[arg(long, requires = "transitive")]
     exclude_dev: bool,
 
-    /// Include optional dependencies in transitive expansion.
+    /// For an application root, also count optional dependencies
+    /// its default features do not enable. Library roots and every
+    /// transitive crate count all features, as Fedora builds them.
     #[arg(long, requires = "transitive")]
     include_optional: bool,
 
