@@ -28,6 +28,7 @@ pub enum InputKind {
 }
 
 /// Options for the check-update command.
+#[derive(Clone)]
 pub struct CheckUpdateOptions {
     pub branch: Option<String>,
     pub repo: Option<String>,
@@ -402,6 +403,21 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
                 )
             }
         };
+
+    // EPEL on its own can't resolve base-OS dependencies: a plain
+    // epelN branch is checked against its base distro plus @epel.
+    let mapped = apply_epel_defaults(branch, opts.repo.clone(), opts.testing_branch.clone())?;
+    if let Some(note) = &mapped.note {
+        eprintln!("[check-update] {note}");
+    }
+    let branch = mapped.branch;
+    let effective = CheckUpdateOptions {
+        branch: Some(branch.clone()),
+        repo: mapped.repo,
+        testing_branch: mapped.testing_branch,
+        ..opts.clone()
+    };
+    let opts = &effective;
 
     // Extract unique source package names from NVRs.
     let updated_packages: Vec<String> = nvrs
@@ -1467,16 +1483,67 @@ fn is_fedora_branch(b: &str) -> bool {
         .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|c| c.is_ascii_digit()))
 }
 
-/// Actionable error for an auto-detected EPEL branch: the `epelN` branch
-/// alone can't resolve base-OS dependencies, so the reviewer must pass a
-/// RHEL-compatible base branch plus the EPEL repo (the choice of base —
-/// AlmaLinux, CentOS Stream, … — is theirs).
+/// Actionable error for an EPEL branch with no assumed base: the
+/// `epelN` branch alone can't resolve base-OS dependencies, so the
+/// reviewer must pass a RHEL-compatible base branch plus the EPEL repo.
 fn epel_guard_error(branch: &str) -> String {
     format!(
-        "{branch} can't resolve base-OS dependencies on its own; pass a \
-         base branch plus the EPEL repo, e.g. -b al9 -r @epel (epel9) or \
-         -b c10s -r @epel (epel10)"
+        "{branch} can't resolve base-OS dependencies on its own and has no \
+         assumed base (epel8, epel9 and epel10 map to al8, al9 and c10s); \
+         pass a base branch plus the EPEL repo, e.g. -b c10s -r @epel"
     )
+}
+
+/// The base distro a plain EPEL branch is checked against — exact
+/// matches only. `epel10.Y` targets a RHEL minor release that c10s
+/// runs ahead of, so the minor-release branches are not assumed.
+fn epel_base(branch: &str) -> Option<&'static str> {
+    match branch {
+        "epel8" => Some("al8"),
+        "epel9" => Some("al9"),
+        "epel10" => Some("c10s"),
+        _ => None,
+    }
+}
+
+/// The branch, repo and @testing/chroot branch a check runs with, and
+/// the note to print when they were substituted.
+#[derive(Debug, PartialEq, Eq)]
+struct EpelDefaults {
+    branch: String,
+    repo: Option<String>,
+    testing_branch: Option<String>,
+    note: Option<String>,
+}
+
+/// A plain `epelN` branch with no `-r` becomes its base distro plus
+/// `@epel`, keeping the EPEL name as the @testing/chroot branch. An
+/// explicit `-r` is an override and leaves everything alone; an EPEL
+/// branch with no mapping (a minor release, epel7) is the guard error.
+fn apply_epel_defaults(
+    branch: String,
+    repo: Option<String>,
+    testing_branch: Option<String>,
+) -> Result<EpelDefaults, String> {
+    if repo.is_some() || !branch.starts_with("epel") {
+        return Ok(EpelDefaults {
+            branch,
+            repo,
+            testing_branch,
+            note: None,
+        });
+    }
+    let base = epel_base(&branch).ok_or_else(|| epel_guard_error(&branch))?;
+    let testing = testing_branch.unwrap_or_else(|| branch.clone());
+    Ok(EpelDefaults {
+        note: Some(format!(
+            "{branch}: checking against {base} with -r @epel (testing/chroot \
+             {testing}); pass -b and -r to override"
+        )),
+        branch: base.to_string(),
+        repo: Some("@epel".to_string()),
+        testing_branch: Some(testing),
+    })
 }
 
 /// The prefix of a Koji side-tag name before `-build-side-` (e.g.
@@ -1496,16 +1563,12 @@ pub fn branch_from_side_tag(tag: &str) -> Option<String> {
 
 /// Infer the fedrq branch for a side tag when `--branch` is omitted.
 ///
-/// Only Fedora side tags (`fNN-build-side-*`) map cleanly to their own
-/// branch. EPEL side tags are rejected with an actionable error: the
-/// `epelN` branch alone can't resolve base-OS dependencies, so a
-/// RHEL-compatible base branch plus `-r @epel` is required (the choice
-/// of base — AlmaLinux, CentOS Stream, … — is the user's). Any other
-/// shape can't be inferred either.
+/// Fedora side tags (`fNN-build-side-*`) map to their own branch; EPEL
+/// side tags to their `epelN`, which [`apply_epel_defaults`] then
+/// pairs with a base distro. Any other shape can't be inferred.
 fn infer_branch_for_side_tag(tag: &str) -> Result<String, String> {
     match branch_from_side_tag(tag) {
-        Some(b) if is_fedora_branch(&b) => Ok(b),
-        Some(b) if b.starts_with("epel") => Err(epel_guard_error(&b)),
+        Some(b) if is_fedora_branch(&b) || b.starts_with("epel") => Ok(b),
         _ => Err(format!(
             "could not infer branch from side tag {tag}; pass --branch"
         )),
@@ -1513,11 +1576,9 @@ fn infer_branch_for_side_tag(tag: &str) -> Result<String, String> {
 }
 
 /// Resolve the branch for a Bodhi update: an explicit `--branch` wins;
-/// otherwise it's derived from the release name (e.g. "EPEL-9" → "epel9",
-/// "F44" → "f44"). A *derived* EPEL branch is rejected with
-/// [`epel_guard_error`] — `epelN` alone can't resolve base-OS deps — so
-/// the reviewer must pass a base branch + `-r @epel`. An explicit
-/// `--branch` bypasses that guard.
+/// otherwise it's derived from the release name (e.g. "EPEL-9" →
+/// "epel9", "F44" → "f44"); [`apply_epel_defaults`] pairs a derived
+/// EPEL branch with its base distro.
 fn resolve_bodhi_branch(
     user: Option<String>,
     release_name: Option<&str>,
@@ -1525,13 +1586,9 @@ fn resolve_bodhi_branch(
     if let Some(b) = user {
         return Ok(b);
     }
-    let derived = release_name
+    release_name
         .map(|r| r.to_lowercase().replace('-', ""))
-        .ok_or("could not determine branch from Bodhi release; use --branch")?;
-    if derived.starts_with("epel") {
-        return Err(epel_guard_error(&derived));
-    }
-    Ok(derived)
+        .ok_or_else(|| "could not determine branch from Bodhi release; use --branch".to_string())
 }
 
 /// Extract a testing branch from a side tag name.
@@ -2935,13 +2992,63 @@ mod tests {
     }
 
     #[test]
-    fn infer_branch_for_side_tag_epel_errors_with_hint() {
-        let err = infer_branch_for_side_tag("epel9-build-side-134436").unwrap_err();
-        // Names the offending branch and tells the user what to pass.
-        assert!(err.contains("epel9"));
-        assert!(err.contains("-b al9 -r @epel"));
-        // epel8 is rejected too (not auto-mapped).
-        assert!(infer_branch_for_side_tag("epel8-build-side-1").is_err());
+    fn infer_branch_for_side_tag_epel_is_its_epel_branch() {
+        assert_eq!(
+            infer_branch_for_side_tag("epel9-build-side-134436"),
+            Ok("epel9".to_string())
+        );
+        assert_eq!(
+            infer_branch_for_side_tag("epel10.1-build-side-1"),
+            Ok("epel10.1".to_string())
+        );
+    }
+
+    #[test]
+    fn epel_defaults_pair_a_plain_epel_branch_with_its_base() {
+        for (epel, base) in [("epel8", "al8"), ("epel9", "al9"), ("epel10", "c10s")] {
+            let d = apply_epel_defaults(epel.to_string(), None, None).unwrap();
+            assert_eq!(d.branch, base);
+            assert_eq!(d.repo.as_deref(), Some("@epel"));
+            assert_eq!(d.testing_branch.as_deref(), Some(epel));
+            let note = d.note.unwrap();
+            assert!(note.contains(base) && note.contains("override"), "{note}");
+        }
+        // An explicit testing branch survives the substitution.
+        let d =
+            apply_epel_defaults("epel9".to_string(), None, Some("epel9-next".to_string())).unwrap();
+        assert_eq!(d.testing_branch.as_deref(), Some("epel9-next"));
+    }
+
+    #[test]
+    fn epel_defaults_leave_overrides_and_fedora_alone() {
+        // An explicit -r is the override: -b c9s -r @epel stays as given,
+        // and so does -b epel9 -r @epel (the reviewer's call).
+        for (b, r) in [("c9s", "@epel"), ("epel9", "@epel"), ("al9", "@epel")] {
+            let d = apply_epel_defaults(b.to_string(), Some(r.to_string()), None).unwrap();
+            assert_eq!(
+                d,
+                EpelDefaults {
+                    branch: b.to_string(),
+                    repo: Some(r.to_string()),
+                    testing_branch: None,
+                    note: None,
+                }
+            );
+        }
+        let d = apply_epel_defaults("f44".to_string(), None, None).unwrap();
+        assert_eq!(d.branch, "f44");
+        assert!(d.repo.is_none() && d.note.is_none());
+    }
+
+    #[test]
+    fn epel_defaults_do_not_assume_a_base_for_minor_releases() {
+        // c10s runs ahead of a RHEL minor: epel10.1 needs -b and -r.
+        let err = apply_epel_defaults("epel10.1".to_string(), None, None).unwrap_err();
+        assert!(
+            err.contains("epel10.1") && err.contains("-b c10s -r @epel"),
+            "{err}"
+        );
+        assert!(apply_epel_defaults("epel7".to_string(), None, None).is_err());
     }
 
     #[test]
@@ -2968,12 +3075,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_bodhi_branch_epel_derived_is_rejected() {
-        // The bug: an EPEL Bodhi update must not silently run against the
-        // bare epelN branch (can't resolve base-OS deps).
-        let err = resolve_bodhi_branch(None, Some("EPEL-9")).unwrap_err();
-        assert!(err.contains("epel9"));
-        assert!(err.contains("-b al9 -r @epel"));
+    fn resolve_bodhi_branch_epel_derived() {
+        // Derived as epel9; apply_epel_defaults pairs it with al9.
+        assert_eq!(
+            resolve_bodhi_branch(None, Some("EPEL-9")),
+            Ok("epel9".to_string())
+        );
     }
 
     #[test]

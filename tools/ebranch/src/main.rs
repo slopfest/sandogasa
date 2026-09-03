@@ -220,9 +220,8 @@ The update to check, one of:
   (FEDORA-EPEL-2026-f9eaa11e18)
 - a COPR project: owner/project spec
   (@rust/uutils-and-nushell) or its URL. COPR
-  input requires -b, and --testing-branch when
-  -b is a base branch like al9 (it picks the
-  COPR chroot, e.g. epel9 → epel-9-*).")]
+  input requires -b (-b epel9 also picks the
+  chroot, epel-9-*).")]
     input: String,
 
     /// Branch to check against (e.g. epel9).
@@ -234,10 +233,14 @@ Branch to check against (e.g. epel9).
 
 Auto-detected from the input: the Bodhi
 release for an update alias, or the name of a
-Fedora side tag (f43-build-side-* uses f43).
-EPEL side tags are not inferred: pass a base
-branch plus the EPEL repo, e.g. -b al9 -r
-@epel (epel9) or -b c10s -r @epel (epel10)."
+side tag (f43-build-side-* uses f43,
+epel9-build-side-* uses epel9). A plain EPEL
+branch, inferred or given, is checked against
+its base distro plus -r @epel: epel8 → al8,
+epel9 → al9, epel10 → c10s, said on stderr.
+Minor releases (epel10.1) have no assumed
+base: pass -b and -r yourself, as you can to
+override, e.g. -b c9s -r @epel."
     )]
     branch: Option<String>,
 
@@ -250,10 +253,10 @@ branch plus the EPEL repo, e.g. -b al9 -r
 Repository class for the branch (fedrq -r).
 
 Defaults to the branch's stable base repos,
-which is the correct comparison baseline.
-Override only for special cases, e.g. -r @epel
-for EPEL side tags (paired with a base branch
-like -b al9)."
+which is the correct comparison baseline, and
+to @epel for a plain EPEL branch (see -b).
+Passing -r turns that mapping off: pair it
+with a base branch, e.g. -b c9s -r @epel."
     )]
     repo: Option<String>,
 
@@ -265,9 +268,11 @@ Override branch for the new-provides queries:
 @testing for Bodhi updates, and the chroot
 selection for COPR input (epel9 → epel-9-*).
 
-Auto-detected for EPEL side tags
-(e.g. epel9-build-side-* uses epel9).
-Otherwise defaults to --branch."
+Kept as the EPEL branch when -b is mapped to
+its base (epel9 → al9 queries epel9 here);
+auto-detected for EPEL side tags
+(epel9-build-side-* uses epel9). Otherwise
+defaults to --branch."
     )]
     testing_branch: Option<String>,
 

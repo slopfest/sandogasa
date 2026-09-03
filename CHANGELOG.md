@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ebranch check-update: EPEL is checked against its base distro by default
+
+An EPEL update reached fedrq as its bare `epelN` branch, which cannot
+resolve base-OS dependencies, so check-update refused EPEL input
+without `-b` and `-r` and left the pairing to the reviewer — who could
+get it wrong: an epel10 update was once checked against `-b al9 -r
+@epel`, and nothing in the report said so, because the flags were only
+ever overrides. A COPR given `-b epel9` was accepted as-is and compared
+against nothing usable.
+
+A plain EPEL branch — inferred from a side tag or a Bodhi release, or
+given for a COPR — is now checked against its base distro plus the EPEL
+repo: epel8 → al8, epel9 → al9, epel10 → c10s, each with `-r @epel`
+and the EPEL name kept as the `@testing`/chroot branch, and the
+substitution is printed on stderr on every run. Passing `-r` yourself
+turns it off, so `-b c9s -r @epel` still compares against CentOS
+Stream. The minor-release branches (`epel10.1`) have no assumed base —
+c10s runs ahead of a RHEL minor — and keep requiring both flags.
+
 ### sandogasa-closure: the dependency-closure engine as a crate
 
 poi-tracker's `deps` walk, its persisted graph and the graph-backed

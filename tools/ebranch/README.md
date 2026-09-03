@@ -475,7 +475,7 @@ unrelated package, the check can over-report — the safe direction.)
 The input can also be a Bodhi update alias or URL:
 
 ```sh
-ebranch check-update FEDORA-EPEL-2026-f9eaa11e18 -b c9s -r @epel
+ebranch check-update FEDORA-EPEL-2026-f9eaa11e18
 ebranch check-update https://bodhi.fedoraproject.org/updates/FEDORA-EPEL-2026-f9eaa11e18
 ```
 
@@ -486,7 +486,7 @@ spec (`@group` for group projects) or the project URL:
 ```sh
 ebranch check-update @rust/uutils-and-nushell -b rawhide
 ebranch check-update https://copr.fedorainfracloud.org/coprs/g/rust/uutils-and-nushell/ -b rawhide
-ebranch check-update @rust/uutils-and-nushell -b al9 -r @epel --testing-branch epel9
+ebranch check-update @rust/uutils-and-nushell -b epel9
 ```
 
 The update contents come from COPR's monitor API (each package's
@@ -494,8 +494,8 @@ latest **succeeded** build in the chroot matching the branch; x86_64
 preferred) and the new provides from fedrq's `@copr:` repo class —
 COPR repos index source RPMs and regenerate their own repodata, so
 there is no koji or regen-repo involvement. COPR input always
-requires `-b` (a COPR builds for many chroots); when `-b` is a base
-branch like `al9`, add `--testing-branch epel9` to name the chroot.
+requires `-b` (a COPR builds for many chroots); `-b epel9` picks the
+`epel-9-*` chroot and compares against al9 plus `@epel`, as below.
 `--give-karma` and `--submit` don't apply to COPRs.
 
 For new provides, ebranch checks these sources in order:
@@ -530,17 +530,20 @@ For new provides, ebranch checks these sources in order:
 
 `-b`/`--branch` and `-r`/`--repo` are override-only. The branch is
 inferred from the input: the Bodhi release for an update alias, or the
-name of a **Fedora** side tag (`f43-build-side-*` uses `f43`). `--repo`
-defaults to the branch's stable base repos (the correct comparison
-baseline).
+name of a side tag (`f43-build-side-*` uses `f43`, `epel9-build-side-*`
+uses `epel9`). `--repo` defaults to the branch's stable base repos (the
+correct comparison baseline).
 
-**EPEL is not auto-resolved.** The `epelN` branch alone can't resolve
-base-OS dependencies, so an EPEL input without `--branch` errors out —
-both an `epel*-build-side-*` side tag and a Bodhi EPEL update (whose
-release derives to `epelN`). Pass a RHEL-compatible base branch plus the
-EPEL repo, e.g. `-b al9 -r @epel` (epel9) or `-b c10s -r @epel`
-(epel10). The choice of base distribution (AlmaLinux, CentOS Stream, …)
-is yours, which is why it isn't guessed.
+**EPEL is checked against a base distro.** The `epelN` branch alone
+can't resolve base-OS dependencies, so a plain EPEL branch — inferred
+from a side tag or a Bodhi release, or given as `-b epel9` for a COPR —
+is replaced by its base plus the EPEL repo: epel8 → `-b al8 -r @epel`,
+epel9 → `-b al9 -r @epel`, epel10 → `-b c10s -r @epel`, with the EPEL
+name kept as the `@testing`/chroot branch. The substitution is printed
+on stderr on every run. Passing `-r` yourself turns it off, so
+`-b c9s -r @epel` compares against CentOS Stream instead. The
+minor-release branches (`epel10.1`) have no assumed base — c10s runs
+ahead of a RHEL minor — and still require `-b` and `-r`.
 
 For EPEL side tags, the testing branch is auto-detected from the
 side tag name (e.g. `epel9-build-side-*` uses `epel9`). Use
@@ -690,7 +693,7 @@ skips the prompts). So the Bodhi page ends up with both the update and
 its review checklist in one pass.
 
 ```sh
-ebranch check-update epel9-build-side-134436 -b al9 -r @epel \
+ebranch check-update epel9-build-side-134436 \
     --submit --type enhancement --bug 2482250 \
     --notes "Update uutils to 0.2 and rebuild dependent crates"
 ```
