@@ -473,6 +473,23 @@ struct CheckCrateArgs {
     #[arg(long, requires = "transitive")]
     include_optional: bool,
 
+    /// Non-default features the Fedora build enables for an
+    /// application root, as `%cargo_generate_buildrequires -f`
+    /// (CSV or repeated). Default: read from the package's rawhide
+    /// spec when it already exists.
+    #[arg(long, value_delimiter = ',', value_name = "FEATURE,...")]
+    features: Vec<String>,
+
+    /// Build without default features (`-n`).
+    #[arg(long)]
+    no_default_features: bool,
+
+    /// Fedora package name when it is not `rust-<crate>` (e.g. the
+    /// `coreutils` crate is `uutils-coreutils`): used for the spec
+    /// lookup and as the report's package name.
+    #[arg(long, value_name = "NAME")]
+    package: Option<String>,
+
     /// Exclude unmet-version deps from transitive expansion.
     #[arg(
         long,
@@ -925,6 +942,9 @@ fn main() -> ExitCode {
                 .chain(config::check_crate_excludes())
                 .collect(),
             refresh: a.refresh,
+            features: a.features.clone(),
+            no_default_features: a.no_default_features,
+            package: a.package.clone(),
         };
         let outcome = match &a.from {
             Some(path) => check_crate::load_report(path),

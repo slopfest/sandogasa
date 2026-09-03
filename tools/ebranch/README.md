@@ -111,6 +111,16 @@ ebranch check-crate --from rbw.toml --copr > build.sh
   features regardless, because that is how Fedora builds them
   (`%cargo_generate_buildrequires -a`): an optional dependency of a
   library is a hard requirement for packaging it
+- `--features FEATURE,...` / `--no-default-features` — for an
+  application root, the features its Fedora build enables, as
+  `%cargo_generate_buildrequires -f` / `-n`. Without the flag, and when
+  `rust-<crate>` or `<crate>` already exists in rawhide, check-crate
+  reads that line from the spec on dist-git (so an update check of
+  uutils-coreutils picks up its `-f feat_acl,…` by itself; a
+  conditional `%global` is read as the union of its definitions)
+- `--package NAME` — the Fedora package when it is not `rust-<crate>`
+  (the `coreutils` crate is `uutils-coreutils`): used for the spec
+  lookup and as the report's package name
 - `--exclude-dev` — exclude dev deps from transitive expansion
 - `--include-optional` — include optional deps in transitive expansion
 - `--exclude-unmet` — exclude unmet-version deps (packaged but too old)

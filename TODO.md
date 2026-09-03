@@ -414,9 +414,6 @@ considered and rejected.)
   branch or rebase it in the stable series — check-crate serves (a)
   against rawhide, where source and target coincide and the
   delegation case cannot arise, and `resolve` already *is* step (b).
-  One small item remains: a `--features` flag for application roots,
-  naming the non-default features the Fedora build enables, so their
-  optional deps count too.
 - Second-level branch-request escalation: when a `needinfo?` ping
   (the level-1 escalation `escalate` already does) goes unanswered
   for another N days, file a releng ticket on Forgejo (releng's

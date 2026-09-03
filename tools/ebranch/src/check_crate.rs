@@ -29,6 +29,16 @@ pub struct CheckCrateOptions {
     pub exclude: HashSet<String>,
     /// Bypass the on-disk crates.io cache (re-fetch and re-store).
     pub refresh: bool,
+    /// Non-default features the Fedora build enables for an
+    /// application root (`%cargo_generate_buildrequires -f`). Empty:
+    /// read them from the package's rawhide spec when it exists.
+    pub features: Vec<String>,
+    /// Build without default features (`-n`).
+    pub no_default_features: bool,
+    /// The Fedora package name when it is not `rust-<crate>`
+    /// (`coreutils` → `uutils-coreutils`): used for the spec lookup
+    /// and as the report's package name.
+    pub package: Option<String>,
 }
 
 /// A dependency from crates.io.
@@ -161,21 +171,54 @@ pub fn check_crate(
         eprintln!("[check-crate] fetching dependencies for {name} {version}");
     }
 
-    let deps = rt.block_on(fetch_dependencies(name, &version))?;
     // Fedora builds an application with its default features and a
     // library with all of them, so a library root's optional deps are
     // as required as any other (same for every transitive crate).
     let library_root = !rt.block_on(is_application(name, &version));
+    // An application's Fedora build may enable more than the
+    // defaults: --features says which; otherwise the rawhide spec's
+    // own %cargo_generate_buildrequires line does, when the package
+    // already exists.
+    let mut seeds: Vec<String> = Vec::new();
+    let mut spec_all = false;
+    let mut source = "defaults";
+    let spec_label;
+    if library_root {
+        seeds.push("default".to_string());
+    } else if !opts.features.is_empty() || opts.no_default_features {
+        if !opts.no_default_features {
+            seeds.push("default".to_string());
+        }
+        seeds.extend(opts.features.iter().cloned());
+        source = "--features";
+    } else if let Some((pkg, sf)) =
+        rt.block_on(spec_features_from_rawhide(name, opts.package.as_deref()))
+    {
+        if !sf.no_default {
+            seeds.push("default".to_string());
+        }
+        seeds.extend(sf.features.iter().cloned());
+        spec_all = sf.all;
+        spec_label = format!("{pkg}.spec (rawhide)");
+        source = &spec_label;
+    } else {
+        seeds.push("default".to_string());
+    }
     if opts.verbose {
         eprintln!(
             "[check-crate] {name} is {}",
-            if library_root {
-                "a library: every feature counts, optional deps included"
-            } else {
-                "an application: default features (--include-optional for the rest)"
+            match (library_root, spec_all) {
+                (true, _) => "a library: every feature counts, optional deps included".to_string(),
+                (false, true) =>
+                    format!("an application built with all features (-a, from {source})"),
+                (false, false) => format!(
+                    "an application: features {} (from {source})",
+                    seeds.join(",")
+                ),
             }
         );
     }
+    let deps = rt.block_on(fetch_dependencies(name, &version, &seeds))?;
     // Excluded crates are ignored outright — direct or transitive —
     // as if they were not dependencies: Fedora drops them.
     let (deps, ignored): (Vec<CrateDep>, Vec<CrateDep>) = deps
@@ -216,7 +259,8 @@ pub fn check_crate(
         .collect();
 
     let (transitive_missing, transitive_build_order, transitive_edges) = if opts.transitive {
-        let (deps, edges) = expand_transitive(&rt, &fedrq, &dependencies, opts, library_root)?;
+        let (deps, edges) =
+            expand_transitive(&rt, &fedrq, &dependencies, opts, library_root || spec_all)?;
         let phases = if edges.is_empty() {
             vec![]
         } else {
@@ -259,7 +303,10 @@ pub fn check_crate(
     Ok(CheckCrateReport {
         crate_name: name.to_string(),
         crate_version: version.clone(),
-        package: format!("rust-{name}"),
+        package: opts
+            .package
+            .clone()
+            .unwrap_or_else(|| format!("rust-{name}")),
         branch: opts.label.clone(),
         dependencies,
         transitive_missing,
@@ -671,7 +718,11 @@ fn expand_transitive(
         };
         resolved_versions.insert(crate_name.clone(), version.clone());
 
-        let deps = match rt.block_on(fetch_dependencies(&crate_name, &version)) {
+        let deps = match rt.block_on(fetch_dependencies(
+            &crate_name,
+            &version,
+            &["default".to_string()],
+        )) {
             Ok(d) => d,
             Err(e) => {
                 if opts.verbose {
@@ -995,18 +1046,31 @@ async fn resolve_version(name: &str, partial: &str) -> Result<String, String> {
 /// In Cargo, enabling an optional dep `foo` implicitly creates a
 /// feature named `foo`. A feature can also list `dep:foo` to
 /// activate a dep. We follow both forms transitively from `default`.
+#[cfg(test)]
 fn resolve_default_deps(
     features: &std::collections::HashMap<String, Vec<String>>,
+    all_optional_deps: &HashSet<String>,
+) -> HashSet<String> {
+    resolve_activated_deps(features, &["default".to_string()], all_optional_deps)
+}
+
+/// The optional deps activated by enabling `seeds` — feature names,
+/// `dep:` entries or optional dep names — followed transitively
+/// through the crate's feature table.
+fn resolve_activated_deps(
+    features: &std::collections::HashMap<String, Vec<String>>,
+    seeds: &[String],
     all_optional_deps: &HashSet<String>,
 ) -> HashSet<String> {
     let mut activated = HashSet::new();
     let mut queue: VecDeque<&str> = VecDeque::new();
     let mut visited_features: HashSet<&str> = HashSet::new();
 
-    if let Some(defaults) = features.get("default") {
-        for f in defaults {
-            queue.push_back(f.as_str());
-        }
+    // Each seed is a feature to enable: it may name a table entry
+    // (`default`, `feat_acl`), an optional dep directly (Cargo's
+    // implicit feature), or a `dep:` entry.
+    for seed in seeds {
+        queue.push_back(seed.as_str());
     }
 
     while let Some(feat) = queue.pop_front() {
@@ -1019,7 +1083,6 @@ fn resolve_default_deps(
             activated.insert(dep_name.to_string());
             continue;
         }
-
         // A feature named after an optional dep activates it.
         if all_optional_deps.contains(feat) {
             activated.insert(feat.to_string());
@@ -1053,6 +1116,112 @@ async fn fetch_features(
     version: &str,
 ) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
     Ok(fetch_version_info(name, version).await?.features)
+}
+
+/// What a spec's `%cargo_generate_buildrequires` line enables.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SpecFeatures {
+    /// `-a`: every feature.
+    pub all: bool,
+    /// `-n`: without default features.
+    pub no_default: bool,
+    /// `-f a,b`: extra features, macros expanded (a conditional
+    /// `%global` takes the union of its definitions — a superset is
+    /// the safe reading).
+    pub features: Vec<String>,
+}
+
+/// Read the features a spec builds with from its
+/// `%cargo_generate_buildrequires` line. `None` when the spec has no
+/// such line (not a cargo package).
+pub fn parse_spec_features(spec: &str) -> Option<SpecFeatures> {
+    let mut globals: std::collections::HashMap<&str, Vec<String>> =
+        std::collections::HashMap::new();
+    for line in spec.lines() {
+        let mut it = line.split_whitespace();
+        if it.next() == Some("%global")
+            && let Some(name) = it.next()
+        {
+            let value: Vec<String> = it
+                .flat_map(|v| v.split(','))
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+                .collect();
+            globals.entry(name).or_default().extend(value);
+        }
+    }
+    let line = spec
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("%cargo_generate_buildrequires"))?;
+    let mut out = SpecFeatures::default();
+    let mut tokens = line.split_whitespace().skip(1).peekable();
+    while let Some(tok) = tokens.next() {
+        match tok {
+            "-a" => out.all = true,
+            "-n" => out.no_default = true,
+            "-f" => {
+                if let Some(list) = tokens.next() {
+                    out.features.extend(expand_feature_list(list, &globals));
+                }
+            }
+            t if t.starts_with("-f") => out.features.extend(expand_feature_list(&t[2..], &globals)),
+            _ => {}
+        }
+    }
+    out.features.sort();
+    out.features.dedup();
+    Some(out)
+}
+
+/// A comma-separated feature list, with `%{name}` / `%name` macros
+/// expanded from the spec's `%global` definitions.
+fn expand_feature_list(
+    list: &str,
+    globals: &std::collections::HashMap<&str, Vec<String>>,
+) -> Vec<String> {
+    let macro_name = list
+        .strip_prefix("%{")
+        .and_then(|l| l.strip_suffix('}'))
+        .or_else(|| list.strip_prefix('%'));
+    match macro_name.and_then(|n| globals.get(n)) {
+        Some(values) => values.clone(),
+        None => list
+            .split(',')
+            .filter(|f| !f.is_empty())
+            .map(str::to_string)
+            .collect(),
+    }
+}
+
+/// The features the rawhide package of `crate_name` builds with, from
+/// its spec on dist-git — tried as `rust-<crate>` then `<crate>`
+/// (applications are often packaged under the bare name). `None`
+/// when no such package exists or its spec is not a cargo package's.
+async fn spec_features_from_rawhide(
+    crate_name: &str,
+    package: Option<&str>,
+) -> Option<(String, SpecFeatures)> {
+    let candidates = match package {
+        Some(p) => vec![p.to_string()],
+        None => vec![format!("rust-{crate_name}"), crate_name.to_string()],
+    };
+    for pkg in candidates {
+        let url = format!("https://src.fedoraproject.org/rpms/{pkg}/raw/rawhide/f/{pkg}.spec");
+        let Ok(resp) = client().get(&url).send().await else {
+            continue;
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let Ok(text) = resp.text().await else {
+            continue;
+        };
+        if let Some(features) = parse_spec_features(&text) {
+            return Some((pkg, features));
+        }
+    }
+    None
 }
 
 /// Whether a crate version ships binaries — an application, built with
@@ -1100,7 +1269,11 @@ async fn resolve_matching_version(name: &str, version_req: &str) -> Result<Strin
 ///
 /// Resolves default features to mark optional deps activated by
 /// defaults as non-optional (since RPMs are built with defaults).
-async fn fetch_dependencies(name: &str, version: &str) -> Result<Vec<CrateDep>, String> {
+async fn fetch_dependencies(
+    name: &str,
+    version: &str,
+    seeds: &[String],
+) -> Result<Vec<CrateDep>, String> {
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}/dependencies");
     let resp: DepsResponse =
         get_json(&url, &format!("{name}/{version}/dependencies.json"), None).await?;
@@ -1118,7 +1291,7 @@ async fn fetch_dependencies(name: &str, version: &str) -> Result<Vec<CrateDep>, 
         HashSet::new()
     } else {
         let features = fetch_features(name, version).await.unwrap_or_default();
-        resolve_default_deps(&features, &all_optional)
+        resolve_activated_deps(&features, seeds, &all_optional)
     };
 
     Ok(resp
@@ -1374,6 +1547,9 @@ mod tests {
             include_too_old: false,
             exclude: HashSet::new(),
             refresh: false,
+            features: Vec::new(),
+            no_default_features: false,
+            package: None,
         }
     }
 
@@ -1493,6 +1669,56 @@ mod tests {
         ));
         // Kind filtering still applies under all-features.
         assert!(!should_expand(&make_dep("foo", "weird", true), &opts, true));
+    }
+
+    #[test]
+    fn spec_features_read_the_three_shapes_fedora_uses() {
+        // uutils-coreutils: -f with a conditional %global → union.
+        let uutils = "%if 0%{?el9}\n%global feature_flags feat_acl,feat_os_unix,uudoc\n%else\n\
+            %global feature_flags feat_acl,feat_os_unix,feat_systemd_logind,uudoc\n%endif\n\
+            %cargo_generate_buildrequires -f %{feature_flags}\n%cargo_build -f %{feature_flags}\n";
+        let sf = parse_spec_features(uutils).unwrap();
+        assert!(!sf.all && !sf.no_default);
+        assert_eq!(
+            sf.features,
+            ["feat_acl", "feat_os_unix", "feat_systemd_logind", "uudoc"]
+        );
+        // atuin: everything.
+        let atuin = "%cargo_generate_buildrequires -a\n%cargo_build -a\n";
+        assert!(parse_spec_features(atuin).unwrap().all);
+        // rbw: defaults; nushell: -t is not a feature flag.
+        assert_eq!(
+            parse_spec_features("%cargo_generate_buildrequires\n").unwrap(),
+            SpecFeatures::default()
+        );
+        assert_eq!(
+            parse_spec_features("%cargo_generate_buildrequires -t\n").unwrap(),
+            SpecFeatures::default()
+        );
+        // A literal list and -n.
+        let lit = parse_spec_features("%cargo_generate_buildrequires -n -f zstd,ssl\n").unwrap();
+        assert!(lit.no_default);
+        assert_eq!(lit.features, ["ssl", "zstd"]);
+        // Not a cargo package at all.
+        assert_eq!(parse_spec_features("%build\nmake\n"), None);
+    }
+
+    #[test]
+    fn enabled_features_activate_their_optional_deps() {
+        let features = std::collections::HashMap::from([
+            ("default".to_string(), vec!["std".to_string()]),
+            ("feat_acl".to_string(), vec!["dep:exacl".to_string()]),
+            ("feat_selinux".to_string(), vec!["selinux".to_string()]),
+        ]);
+        let optional: HashSet<String> = ["exacl", "selinux", "zstd"].map(String::from).into();
+        // Defaults alone activate nothing optional here.
+        assert!(resolve_default_deps(&features, &optional).is_empty());
+        // The Fedora build's -f list does: via dep: and via the
+        // feature-named-after-a-dep form; a seed naming an optional
+        // dep directly works too (Cargo's implicit feature).
+        let seeds = ["default", "feat_acl", "feat_selinux", "zstd"].map(String::from);
+        let on = resolve_activated_deps(&features, &seeds, &optional);
+        assert_eq!(on, ["exacl", "selinux", "zstd"].map(String::from).into());
     }
 
     #[test]

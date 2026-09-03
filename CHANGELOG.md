@@ -67,10 +67,26 @@ has to be packaged transitively is a library. crates.io says which a
 root is (a version's `bin_names`), so a library root's optional deps
 now count as required, transitive crates' optional deps always do,
 and `--include-optional` keeps its meaning only for an application
-root such as rbw. `--verbose` says which kind it decided. The rest of
-the hybrid design (rawhide-packaged crates through `resolve`'s
-real BuildRequires; a `--features` flag for application roots) stays
-in TODO.
+root such as rbw. `--verbose` says which kind it decided.
+
+An application's Fedora build may enable more than the defaults, and
+the specs show three shapes: rbw and difftastic take the defaults,
+atuin takes everything (`-a`, which `--include-optional` already
+matches), and uutils-coreutils takes a curated list
+(`-f feat_acl,feat_os_unix,feat_selinux,feat_systemd_logind,uudoc`),
+which neither defaults nor all-features describes. `--features` (and
+`--no-default-features`) now name those, mirroring
+`%cargo_generate_buildrequires -f`/`-n`; and when no flag is given
+and the package already exists in rawhide — the update case —
+check-crate reads that very line from the spec on dist-git, macros
+expanded (a conditional `%global` is read as the union of its
+definitions, the safe superset). `--package` names the Fedora package
+when it is not `rust-<crate>` — the `coreutils` crate is
+`uutils-coreutils` — for that lookup and for the report. The other
+half of the hybrid idea — answering rawhide-packaged crates through
+`resolve`'s real BuildRequires — is dropped: the Rust workflow updates
+rawhide with check-crate and branches the result with resolve, two
+tools for two steps.
 
 ### ebranch check-crate: one fedrq invocation per dependency list
 
