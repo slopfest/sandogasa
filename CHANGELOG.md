@@ -166,7 +166,9 @@ check-crate reads that very line from the spec on dist-git, macros
 expanded (a conditional `%global` is read as the union of its
 definitions, the safe superset). `--package` names the Fedora package
 when it is not `rust-<crate>` — the `coreutils` crate is
-`uutils-coreutils` — for that lookup and for the report. The other
+`uutils-coreutils` — for that lookup and for the report, including the
+build order's final phase, the Koji chain, the Copr script and the DOT
+graph, which had kept printing `rust-coreutils` there. The other
 half of the hybrid idea — answering rawhide-packaged crates through
 `resolve`'s real BuildRequires — is dropped: the Rust workflow updates
 rawhide with check-crate and branches the result with resolve, two

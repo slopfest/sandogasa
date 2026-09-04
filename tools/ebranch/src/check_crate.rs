@@ -184,6 +184,17 @@ impl CheckCrateReport {
     /// The stored `transitive_build_order` only contains transitive
     /// deps. This appends the root crate itself so the result is a
     /// complete build sequence for koji/copr/human output.
+    /// The Fedora package a crate in this report is built as: the
+    /// root's is `package` (`--package`, or `rust-<crate>`), every
+    /// other crate's `rust-<crate>`.
+    pub fn rpm_package(&self, crate_name: &str) -> String {
+        if crate_name == self.crate_name {
+            self.package.clone()
+        } else {
+            format!("rust-{crate_name}")
+        }
+    }
+
     pub fn full_build_phases(&self) -> Vec<dag::BuildPhase> {
         let mut phases = self.transitive_build_order.clone();
         let next = phases.last().map_or(1, |p| p.phase + 1);
@@ -565,7 +576,7 @@ pub fn check_crate(
 /// travels in the script itself.
 pub fn build_reason(pkg: &str, report: &CheckCrateReport) -> Option<String> {
     let crate_name = pkg.strip_prefix("rust-").unwrap_or(pkg);
-    if crate_name == report.crate_name {
+    if pkg == report.package || crate_name == report.crate_name {
         return Some(format!(
             "# {pkg}: the crate this run is about, {}",
             report.crate_version
@@ -768,10 +779,11 @@ pub fn render_report(report: &CheckCrateReport) -> String {
         for phase in &phases {
             let _ = writeln!(out, "\n  Phase {}:", phase.phase);
             for pkg in &phase.packages {
+                let rpm = report.rpm_package(pkg);
                 if let Some(ver) = versions.get(pkg.as_str()) {
-                    let _ = writeln!(out, "    - rust-{pkg} {ver}");
+                    let _ = writeln!(out, "    - {rpm} {ver}");
                 } else {
-                    let _ = writeln!(out, "    - rust-{pkg}");
+                    let _ = writeln!(out, "    - {rpm}");
                 }
             }
         }
@@ -812,8 +824,8 @@ pub fn print_dot(report: &CheckCrateReport) {
     println!("digraph {{");
     println!("  rankdir=BT;");
     println!(
-        "  label=\"rust-{} {} — {}\";",
-        report.crate_name, report.crate_version, report.branch
+        "  label=\"{} {} — {}\";",
+        report.package, report.crate_version, report.branch
     );
     println!("  labelloc=t;");
     println!("  node [shape=box, style=filled, fillcolor=lightyellow];");
@@ -834,10 +846,10 @@ pub fn print_dot(report: &CheckCrateReport) {
         }
     }
 
-    // Root crate as a distinct node.
+    // Root crate as a distinct node, under its Fedora package name.
     println!(
-        "  \"rust-{}\" [label=\"rust-{}\\n{}\", fillcolor=lightblue];",
-        report.crate_name, report.crate_name, report.crate_version
+        "  \"{}\" [label=\"{}\\n{}\", fillcolor=lightblue];",
+        report.package, report.package, report.crate_version
     );
 
     // Edges: package → dependency (dep must be built first).
@@ -852,10 +864,7 @@ pub fn print_dot(report: &CheckCrateReport) {
         if matches!(dr.status, DepStatus::Missing)
             && report.transitive_edges.contains_key(&dr.dep.name)
         {
-            println!(
-                "  \"rust-{}\" -> \"rust-{}\";",
-                report.crate_name, dr.dep.name
-            );
+            println!("  \"{}\" -> \"rust-{}\";", report.package, dr.dep.name);
         }
     }
 
@@ -2678,6 +2687,26 @@ mod tests {
             review_bugs: BTreeMap::new(),
             in_tree: vec![],
         }
+    }
+
+    #[test]
+    fn the_root_builds_as_its_package_not_rust_crate() {
+        let mut report = make_report();
+        report.crate_name = "coreutils".to_string();
+        report.package = "uutils-coreutils".to_string();
+        assert_eq!(report.rpm_package("coreutils"), "uutils-coreutils");
+        assert_eq!(report.rpm_package("phf"), "rust-phf");
+        let text = render_report(&report);
+        assert!(
+            text.contains("  Phase 3:\n    - uutils-coreutils"),
+            "{text}"
+        );
+        assert!(!text.contains("rust-coreutils"), "{text}");
+        assert!(
+            build_reason("uutils-coreutils", &report)
+                .unwrap()
+                .contains("the crate this run is about")
+        );
     }
 
     #[test]

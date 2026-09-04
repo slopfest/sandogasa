@@ -1062,7 +1062,7 @@ fn main() -> ExitCode {
                     // on stderr so you can still see what needs building.
                     check_crate::eprint_report(&report);
                     let rpm_phases = map_phase_packages(&report.full_build_phases(), |name| {
-                        format!("rust-{name}")
+                        report.rpm_package(name)
                     });
                     if a.copr {
                         print_copr_script(&rpm_phases, &|pkg| {
