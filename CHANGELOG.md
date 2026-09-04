@@ -17,20 +17,27 @@ assumed, the Matrix IDs on the FAS profile are added through FASJSON
 (`ircnicks`, in both its `matrix:/nick` and `matrix://server/nick`
 shapes; `--no-fas` skips), `--matrix` adds one FAS does not know — with
 an attended-of-total
-count and the last attended date. `forge USERNAME [--repo owner/repo]
+count and the last attended date. A member newer than the window is
+read off the data: when meetings in the window predate their first
+attendance the summary adds "since first seen <date>, N of M", and
+`--since YYYY-MM-DD` starts the window on a date — the day they joined
+— instead of `--days` back. `forge USERNAME [--repo owner/repo]
 --days N` reads the user's public Forgejo activity feed and groups it
 by repository: a summary line per repository, or with `--repo` every
 event in that tracker, newest first (opened, commented, closed,
 reopened, PRs, pushes). `last-seen` gains Forgejo as a sixth service
-and, with `--meeting`, the last attended meeting with a one-year
-count. Both take `--json`.
+— the newest event anywhere, or with `--repo` the newest in the given
+repositories, paging back only as far as needed — and, with
+`--meeting`, the last attended meeting with a one-year count. Both take
+`--json`.
 
 The crates grew what those need: `sandogasa_meetbot::attendees`
 (`parse_attendees`, `txt_url`, `fedora_localpart`) reads a meeting's
 text minutes, and fesco-chair's own `txt_url` now comes from there;
 `sandogasa_forgejo::Client::anonymous` talks to the public API without
 a token, and `user_activity` pages a user's own activity feed
-(`only-performed-by=true`) back to a date, with `Activity::issue_ref`
+(`only-performed-by=true`) back to a date and `first_activity_where`
+back to the first event matching a predicate, with `Activity::issue_ref`
 reading the issue number and text out of either content shape the API
 uses.
 

@@ -312,6 +312,33 @@ impl Client {
         username: &str,
         since: Option<&str>,
     ) -> Result<Vec<Activity>, Box<dyn std::error::Error>> {
+        let mut out =
+            self.feed_until(username, |a| since.is_some_and(|s| a.created.as_str() < s))?;
+        if let Some(s) = since {
+            out.retain(|a| a.created.as_str() >= s);
+        }
+        Ok(out)
+    }
+
+    /// The newest of a user's own activities that satisfies `pred` —
+    /// the last thing they did in one repository, say — paging back
+    /// only as far as needed (capped at [`FEED_PAGE_CAP`] pages).
+    pub fn first_activity_where(
+        &self,
+        username: &str,
+        pred: impl Fn(&Activity) -> bool,
+    ) -> Result<Option<Activity>, Box<dyn std::error::Error>> {
+        let events = self.feed_until(username, &pred)?;
+        Ok(events.into_iter().find(|a| pred(a)))
+    }
+
+    /// Pages of the user's own feed, newest first, until a page holds an
+    /// event for which `stop` is true, the feed ends, or the cap is hit.
+    fn feed_until(
+        &self,
+        username: &str,
+        stop: impl Fn(&Activity) -> bool,
+    ) -> Result<Vec<Activity>, Box<dyn std::error::Error>> {
         let url = format!("{}/api/v1/users/{username}/activities/feeds", self.base_url);
         let limit = PAGE_LIMIT.to_string();
         let mut out: Vec<Activity> = Vec::new();
@@ -329,14 +356,11 @@ impl Client {
             let batch: Vec<Activity> =
                 http::blocking_json_ok(resp, &format!("Forgejo activity of {username}"))?;
             let n = batch.len() as u32;
-            let reached_back = since.is_some_and(|s| batch.iter().any(|a| a.created.as_str() < s));
+            let done = batch.iter().any(&stop);
             out.extend(batch);
-            if n < PAGE_LIMIT || reached_back {
+            if n < PAGE_LIMIT || done {
                 break;
             }
-        }
-        if let Some(s) = since {
-            out.retain(|a| a.created.as_str() >= s);
         }
         Ok(out)
     }

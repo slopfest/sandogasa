@@ -202,28 +202,26 @@ pub async fn cmd_forge(
     Ok(())
 }
 
-/// The newest thing the user did on Forgejo, for `last-seen`.
-pub async fn check_forge(username: &str, url: &str) -> ServiceLastSeen {
-    let (u, base) = (username.to_string(), url.to_string());
+/// The newest thing the user did on Forgejo — in `repos` when given,
+/// anywhere otherwise — for `last-seen`.
+pub async fn check_forge(username: &str, url: &str, repos: &[String]) -> ServiceLastSeen {
+    let (u, base, wanted) = (username.to_string(), url.to_string(), repos.to_vec());
     let joined = tokio::task::spawn_blocking(move || {
         let client = Client::anonymous(&base).map_err(|e| e.to_string())?;
-        // Newest first: the first event is the answer.
         client
-            .user_activity(&u, None)
-            .map(|mut v| {
-                v.truncate(1);
-                v
+            .first_activity_where(&u, |a| {
+                wanted.is_empty() || a.repo_slug().is_some_and(|s| wanted.iter().any(|w| w == s))
             })
             .map_err(|e| e.to_string())
     })
     .await;
-    let result: Result<Vec<Activity>, String> = match joined {
+    let result: Result<Option<Activity>, String> = match joined {
         Ok(r) => r,
         Err(e) => Err(e.to_string()),
     };
     let service = "Forge".to_string();
     match result {
-        Ok(v) => match v.first() {
+        Ok(found) => match found.as_ref() {
             Some(a) => {
                 let it = item(a);
                 let detail = match it.number {
@@ -241,7 +239,11 @@ pub async fn check_forge(username: &str, url: &str) -> ServiceLastSeen {
             }
             None => ServiceLastSeen {
                 service,
-                detail: Some("no activity".to_string()),
+                detail: Some(if repos.is_empty() {
+                    "no activity".to_string()
+                } else {
+                    format!("no activity in {}", repos.join(", "))
+                }),
                 ..Default::default()
             },
         },

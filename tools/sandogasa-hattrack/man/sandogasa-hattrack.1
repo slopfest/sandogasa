@@ -363,7 +363,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 <\fIUSERNAME\fR>
 Forgejo username to look up
 .SS sandogasa-hattrack last-seen
-\fBsandogasa\-hattrack last\-seen\fR [\fB\-\-email\fR] [\fB\-\-json\fR] [\fB\-\-no\-fas\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-list\fR] [\fB\-\-max\-pages\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-skip\fR] [\fB\-\-only\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-meeting\fR] [\fB\-\-now\fR] [\fB\-\-matrix\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
+\fBsandogasa\-hattrack last\-seen\fR [\fB\-\-email\fR] [\fB\-\-json\fR] [\fB\-\-no\-fas\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-list\fR] [\fB\-\-max\-pages\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-skip\fR] [\fB\-\-only\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-meeting\fR] [\fB\-\-now\fR] [\fB\-\-repo\fR] [\fB\-\-matrix\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
 .PP
 .TP
 \fB\-\-email\fR \fI<EMAIL>\fR
@@ -472,6 +472,9 @@ Also report the last attended meetbot meeting with this topic (e.g. fesco)
 \fB\-\-now\fR \fI<NOW>\fR
 Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
 .TP
+\fB\-\-repo\fR \fI<OWNER/REPO>\fR
+Count Forgejo activity in these repositories only (`owner/repo`, e.g. fesco/tickets); repeatable
+.TP
 \fB\-\-matrix\fR \fI<MXID>\fR
 Extra Matrix ID(s) that are this user in meeting minutes, beyond `@<username>:fedora.im` and the FAS profile\*(Aqs; repeatable
 .TP
@@ -548,7 +551,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 [\fIUSERNAME\fR]
 FAS username to look up (used to discover email via FASJSON)
 .SS sandogasa-hattrack meetings
-\fBsandogasa\-hattrack meetings\fR [\fB\-\-json\fR] [\fB\-\-meeting\fR] [\fB\-\-days\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-matrix\fR] [\fB\-\-no\-fas\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-url\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
+\fBsandogasa\-hattrack meetings\fR [\fB\-\-json\fR] [\fB\-\-meeting\fR] [\fB\-\-days\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-since\fR] [\fB\-\-matrix\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-fas\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-url\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
 .PP
 Show a contributor\*(Aqs attendance at a recurring meetbot meeting
 .TP
@@ -591,23 +594,26 @@ always: Force colored output even when piped
 never: Disable colored output entirely
 .RE
 .TP
+\fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
+Look from this date instead of `\-\-days` back — e.g. the day the member joined, so earlier meetings do not count against them
+.TP
 \fB\-\-matrix\fR \fI<MXID>\fR
 Extra Matrix ID(s) that are this user, beyond `@<username>:fedora.im` and the FAS profile\*(Aqs; repeatable
-.TP
-\fB\-\-no\-fas\fR
-Skip the FASJSON lookup of the profile\*(Aqs Matrix IDs
 .TP
 \fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
 Working\-hours range `START\-END` (24h local). Outside is dimmed
 .TP
+\fB\-\-no\-fas\fR
+Skip the FASJSON lookup of the profile\*(Aqs Matrix IDs
+.TP
 \fB\-\-no\-holidays\fR
 Skip the Nager.Date public\-holiday lookup
 .TP
-\fB\-\-url\fR \fI<URL>\fR [default: https://meetbot.fedoraproject.org]
-meetbot instance base URL
-.TP
 \fB\-\-refresh\-holidays\fR
 Force\-refetch holiday data from Nager.Date even when a cached copy is present
+.TP
+\fB\-\-url\fR \fI<URL>\fR [default: https://meetbot.fedoraproject.org]
+meetbot instance base URL
 .TP
 \fB\-\-now\fR \fI<NOW>\fR
 Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos

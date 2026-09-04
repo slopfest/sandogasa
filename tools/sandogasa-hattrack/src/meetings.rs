@@ -29,15 +29,45 @@ pub struct Report {
     pub username: String,
     /// The meetbot topic (`!meetingname`), e.g. `fesco`.
     pub topic: String,
-    pub days: u32,
+    /// Start of the window, `YYYY-MM-DD`.
+    pub since: String,
     /// The Matrix IDs taken as the user.
     pub matrix_ids: Vec<String>,
     pub attended: usize,
     pub total: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_attended: Option<String>,
+    /// The oldest attended meeting in the window — where a member newer
+    /// than the window starts counting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_attended: Option<String>,
+    /// Attended and total from `first_attended` on (0, 0 when never).
+    pub attended_since_first: usize,
+    pub total_since_first: usize,
     /// Newest first.
     pub meetings: Vec<MeetingRow>,
+}
+
+/// How the window was asked for, for the heading.
+pub enum Window {
+    Days(u32),
+    Since(chrono::NaiveDate),
+}
+
+impl Window {
+    fn start(&self, now: DateTime<Utc>) -> DateTime<Utc> {
+        match self {
+            Window::Days(d) => now - Duration::days(i64::from(*d)),
+            Window::Since(date) => date.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc(),
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Window::Days(d) => format!("last {d} days"),
+            Window::Since(date) => format!("since {date}"),
+        }
+    }
 }
 
 /// The Matrix IDs that are this user: `@<fas>:fedora.im`, the ones the
@@ -115,20 +145,49 @@ fn fetch(
 fn report(
     username: &str,
     topic: &str,
-    days: u32,
+    since: DateTime<Utc>,
     ids: Vec<String>,
     rows: Vec<MeetingRow>,
 ) -> Report {
+    // Rows are newest first: the last present one is the first attended.
+    let first_attended = rows
+        .iter()
+        .rev()
+        .find(|r| r.present)
+        .map(|r| r.date.clone());
+    let since_first: Vec<&MeetingRow> = match &first_attended {
+        Some(f) => rows.iter().filter(|r| &r.date >= f).collect(),
+        None => Vec::new(),
+    };
     Report {
         username: username.to_string(),
         topic: topic.to_string(),
-        days,
+        since: since.format("%Y-%m-%d").to_string(),
         matrix_ids: ids,
         attended: rows.iter().filter(|r| r.present).count(),
         total: rows.len(),
         last_attended: rows.iter().find(|r| r.present).map(|r| r.date.clone()),
+        first_attended,
+        attended_since_first: since_first.iter().filter(|r| r.present).count(),
+        total_since_first: since_first.len(),
         meetings: rows,
     }
+}
+
+/// `attended 13 of 14; since first seen 2026-04-14, 13 of 13` — the
+/// second clause only when meetings in the window predate the first
+/// attendance, which is what a member newer than the window looks like.
+fn attendance_summary(r: &Report) -> String {
+    let mut s = format!("attended {} of {}", r.attended, r.total);
+    if let Some(first) = &r.first_attended
+        && r.total_since_first < r.total
+    {
+        s.push_str(&format!(
+            "; since first seen {first}, {} of {}",
+            r.attended_since_first, r.total_since_first
+        ));
+    }
+    s
 }
 
 /// The `meetings` subcommand.
@@ -136,14 +195,14 @@ fn report(
 pub async fn cmd_meetings(
     username: &str,
     topic: &str,
-    days: u32,
+    window: Window,
     extra_ids: &[String],
     no_fas: bool,
     url: &str,
     json: bool,
     now: DateTime<Utc>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let since = now - Duration::days(i64::from(days));
+    let since = window.start(now);
     let (u, t, x, base) = (
         username.to_string(),
         topic.to_string(),
@@ -160,19 +219,20 @@ pub async fn cmd_meetings(
         fetch(&Meetbot::with_base_url(&base), &t, &ids, since, now).map(|rows| (ids, rows))
     })
     .await??;
-    let r = report(username, topic, days, ids, rows);
+    let r = report(username, topic, since, ids, rows);
     if json {
         println!("{}", serde_json::to_string_pretty(&r)?);
         return Ok(());
     }
-    println!("Meetings: {username} in '{topic}' (last {days} days)\n");
+    println!("Meetings: {username} in '{topic}' ({})\n", window.label());
     println!("  Matrix IDs: {}", r.matrix_ids.join(", "));
+    let mut summary = attendance_summary(&r);
+    if let Some(first) = summary.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
     match &r.last_attended {
-        Some(d) => println!(
-            "  Attended {} of {} meeting(s); last attended {d}\n",
-            r.attended, r.total
-        ),
-        None => println!("  Attended 0 of {} meeting(s)\n", r.total),
+        Some(d) => println!("  {summary} meeting(s); last attended {d}\n"),
+        None => println!("  {summary} meeting(s)\n"),
     }
     for m in &r.meetings {
         if m.present {
@@ -201,14 +261,14 @@ pub async fn check_meetings(
     let service = "Meetings".to_string();
     match result {
         Ok(Ok(rows)) => {
-            let attended = rows.iter().filter(|r| r.present).count();
-            match rows.iter().find(|r| r.present) {
-                Some(r) => ServiceLastSeen {
+            let r = report(username, topic, since, Vec::new(), rows);
+            match &r.last_attended {
+                Some(d) => ServiceLastSeen {
                     service,
-                    last_active: Some(format!("{}T00:00:00+00:00", r.date)),
+                    last_active: Some(format!("{d}T00:00:00+00:00")),
                     detail: Some(format!(
-                        "{topic}: attended {attended} of {} in the last year",
-                        rows.len()
+                        "{topic}: {} in the last year",
+                        attendance_summary(&r)
                     )),
                     ..Default::default()
                 },
@@ -216,7 +276,7 @@ pub async fn check_meetings(
                     service,
                     detail: Some(format!(
                         "{topic}: attended none of {} in the last year",
-                        rows.len()
+                        r.total
                     )),
                     ..Default::default()
                 },
@@ -238,6 +298,41 @@ pub async fn check_meetings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(date: &str, lines: u32) -> MeetingRow {
+        MeetingRow {
+            date: date.to_string(),
+            present: lines > 0,
+            lines,
+            minutes_url: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_member_newer_than_the_window_is_counted_from_their_first_meeting() {
+        // Joined in July: absent from the two June meetings by definition.
+        let rows = vec![
+            row("2026-07-21", 5),
+            row("2026-07-14", 0),
+            row("2026-07-07", 3),
+            row("2026-06-30", 0),
+            row("2026-06-23", 0),
+        ];
+        let since = "2026-06-20T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let r = report("newbie", "fesco", since, Vec::new(), rows);
+        assert_eq!((r.attended, r.total), (2, 5));
+        assert_eq!(r.first_attended.as_deref(), Some("2026-07-07"));
+        assert_eq!((r.attended_since_first, r.total_since_first), (2, 3));
+        assert_eq!(
+            attendance_summary(&r),
+            "attended 2 of 5; since first seen 2026-07-07, 2 of 3"
+        );
+        assert_eq!(Window::Days(90).label(), "last 90 days");
+        assert_eq!(
+            Window::Since("2026-06-20".parse().unwrap()).label(),
+            "since 2026-06-20"
+        );
+    }
 
     #[test]
     fn report_counts_attendance_newest_first() {
@@ -266,10 +361,15 @@ mod tests {
             &["@salimma:fedora.im".into(), "@michel-slm:matrix.org".into()],
             &["@x:example.org".into()],
         );
-        let r = report("salimma", "fesco", 30, ids, rows);
+        let since = "2026-08-10T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let r = report("salimma", "fesco", since, ids, rows);
         assert_eq!(r.attended, 2);
         assert_eq!(r.total, 3);
+        assert_eq!(r.since, "2026-08-10");
         assert_eq!(r.last_attended.as_deref(), Some("2026-08-25"));
+        // Attended the oldest meeting in the window: no "since first seen".
+        assert_eq!(r.first_attended.as_deref(), Some("2026-08-18"));
+        assert_eq!(attendance_summary(&r), "attended 2 of 3");
         // fedora.im first, FAS's next (the duplicate dropped), then --matrix.
         assert_eq!(
             r.matrix_ids,

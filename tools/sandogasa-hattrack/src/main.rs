@@ -216,6 +216,11 @@ enum Command {
         #[arg(long, value_name = "TOPIC")]
         meeting: Option<String>,
 
+        /// Count Forgejo activity in these repositories only
+        /// (`owner/repo`, e.g. fesco/tickets); repeatable
+        #[arg(long, value_name = "OWNER/REPO")]
+        repo: Vec<String>,
+
         /// Extra Matrix ID(s) that are this user in meeting minutes,
         /// beyond `@<username>:fedora.im` and the FAS profile's; repeatable
         #[arg(long, value_name = "MXID")]
@@ -261,6 +266,12 @@ enum Command {
         /// How far back to look
         #[arg(long, default_value = "180", value_name = "DAYS")]
         days: u32,
+
+        /// Look from this date instead of `--days` back — e.g. the day
+        /// the member joined, so earlier meetings do not count against
+        /// them
+        #[arg(long, value_name = "YYYY-MM-DD", conflicts_with = "days")]
+        since: Option<chrono::NaiveDate>,
 
         /// Extra Matrix ID(s) that are this user, beyond
         /// `@<username>:fedora.im` and the FAS profile's; repeatable
@@ -397,6 +408,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             skip,
             only,
             meeting,
+            repo,
             matrix,
         } => {
             cmd_last_seen(
@@ -414,6 +426,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &skip,
                 &only,
                 meeting.as_deref(),
+                &repo,
                 &matrix,
             )
             .await
@@ -422,12 +435,19 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             username,
             meeting,
             days,
+            since,
             matrix,
             no_fas,
             url,
         } => {
-            meetings::cmd_meetings(&username, &meeting, days, &matrix, no_fas, &url, json, now)
-                .await
+            let window = match since {
+                Some(d) => meetings::Window::Since(d),
+                None => meetings::Window::Days(days),
+            };
+            meetings::cmd_meetings(
+                &username, &meeting, window, &matrix, no_fas, &url, json, now,
+            )
+            .await
         }
         Command::Mailman {
             username,
@@ -1206,6 +1226,7 @@ async fn cmd_last_seen(
     skip: &[Service],
     only: &[Service],
     meeting: Option<&str>,
+    forge_repos: &[String],
     matrix: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fas = resolve_fas(Some(username), email_overrides, no_fas)?;
@@ -1249,7 +1270,7 @@ async fn cmd_last_seen(
 
     if service_enabled(Service::Forge, skip, only) {
         eprintln!("Checking Forgejo...");
-        services.push(forge::check_forge(username, forge::DEFAULT_URL).await);
+        services.push(forge::check_forge(username, forge::DEFAULT_URL, forge_repos).await);
     }
 
     if let Some(topic) = meeting

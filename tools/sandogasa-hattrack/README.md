@@ -66,7 +66,11 @@ Meetings: salimma in 'fesco' (last 120 days)
 their FAS profile are added through FASJSON (Kerberos; `--no-fas`
 skips it, a failed lookup only warns). `--matrix @nirik:matrix.scrye.com`
 adds one FAS does not know. `--meeting` defaults to `fesco` and `--days`
-to 180.
+to 180; `--since 2026-07-01` starts the window on a date instead — the
+day a member joined, say. A member newer than the window is also read
+off the data: when meetings in the window predate their first
+attendance, the summary adds `since first seen 2026-07-07, 2 of 3`, so
+the meetings before they joined do not read as absences.
 
 `forge` answers the second from the user's public Forgejo activity
 feed, grouped by repository. Without `--repo` each repository gets one
@@ -84,9 +88,11 @@ Forge: salimma (last 60 days)
 
 `--days` defaults to 90. Both subcommands take `--json`.
 
-`last-seen` now includes Forgejo (the newest event anywhere) and, with
+`last-seen` now includes Forgejo — the newest event anywhere, or with
+`--repo fesco/tickets` the newest in those repositories — and, with
 `--meeting fesco`, the last attended meeting of that topic with a
-one-year attendance count; `--matrix` applies there too.
+one-year attendance count (and the since-first-seen count when that
+differs); `--matrix` applies there too.
 
 ### Email discovery
 
