@@ -8,8 +8,10 @@ use clap::{Parser, Subcommand};
 use sandogasa_fasjson::kerberos;
 use serde::Serialize;
 
+mod forge;
 mod holidays;
 mod locale;
+mod meetings;
 mod style;
 
 #[derive(Parser)]
@@ -74,7 +76,10 @@ enum Service {
     Bugzilla,
     Discourse,
     Distgit,
+    Forge,
     Mailman,
+    /// Only with `--meeting`.
+    Meetings,
 }
 
 /// Decide whether `svc` should run given the (mutually
@@ -155,6 +160,25 @@ enum Command {
     },
 
     /// Summary of a contributor's last activity across all services
+    /// Show a contributor's Forgejo activity, per repository
+    Forge {
+        /// Forgejo username to look up
+        username: String,
+
+        /// Only these repositories (`owner/repo`, e.g. fesco/tickets);
+        /// repeatable. Lists every event instead of a per-repo summary.
+        #[arg(long)]
+        repo: Vec<String>,
+
+        /// How far back to look
+        #[arg(long, default_value = "90", value_name = "DAYS")]
+        days: u32,
+
+        /// Forgejo instance base URL
+        #[arg(long, default_value = forge::DEFAULT_URL)]
+        url: String,
+    },
+
     LastSeen {
         /// FAS username to look up
         username: String,
@@ -186,6 +210,16 @@ enum Command {
         /// Inverse of `--skip`.
         #[arg(long, value_enum, value_delimiter = ',', conflicts_with = "skip")]
         only: Vec<Service>,
+
+        /// Also report the last attended meetbot meeting with this
+        /// topic (e.g. fesco)
+        #[arg(long, value_name = "TOPIC")]
+        meeting: Option<String>,
+
+        /// Extra Matrix ID(s) that are this user in meeting minutes,
+        /// beyond `@<username>:fedora.im` and the FAS profile's; repeatable
+        #[arg(long, value_name = "MXID")]
+        matrix: Vec<String>,
     },
 
     /// Show a contributor's mailing list activity
@@ -213,6 +247,33 @@ enum Command {
         /// may need 200+ to cover a week)
         #[arg(long, default_value = "200")]
         max_pages: u32,
+    },
+
+    /// Show a contributor's attendance at a recurring meetbot meeting
+    Meetings {
+        /// FAS username to look up (`@<username>:fedora.im` on Matrix)
+        username: String,
+
+        /// The meeting's meetbot topic (its `!meetingname`)
+        #[arg(long, default_value = "fesco", value_name = "TOPIC")]
+        meeting: String,
+
+        /// How far back to look
+        #[arg(long, default_value = "180", value_name = "DAYS")]
+        days: u32,
+
+        /// Extra Matrix ID(s) that are this user, beyond
+        /// `@<username>:fedora.im` and the FAS profile's; repeatable
+        #[arg(long, value_name = "MXID")]
+        matrix: Vec<String>,
+
+        /// Skip the FASJSON lookup of the profile's Matrix IDs
+        #[arg(long)]
+        no_fas: bool,
+
+        /// meetbot instance base URL
+        #[arg(long, default_value = sandogasa_meetbot::DEFAULT_BASE_URL)]
+        url: String,
     },
 }
 
@@ -321,6 +382,12 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             )
             .await
         }
+        Command::Forge {
+            username,
+            repo,
+            days,
+            url,
+        } => forge::cmd_forge(&username, &repo, days, &url, json, now).await,
         Command::LastSeen {
             username,
             email,
@@ -329,6 +396,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             max_pages,
             skip,
             only,
+            meeting,
+            matrix,
         } => {
             cmd_last_seen(
                 &username,
@@ -344,8 +413,21 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 now,
                 &skip,
                 &only,
+                meeting.as_deref(),
+                &matrix,
             )
             .await
+        }
+        Command::Meetings {
+            username,
+            meeting,
+            days,
+            matrix,
+            no_fas,
+            url,
+        } => {
+            meetings::cmd_meetings(&username, &meeting, days, &matrix, no_fas, &url, json, now)
+                .await
         }
         Command::Mailman {
             username,
@@ -1123,6 +1205,8 @@ async fn cmd_last_seen(
     now: DateTime<Utc>,
     skip: &[Service],
     only: &[Service],
+    meeting: Option<&str>,
+    matrix: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fas = resolve_fas(Some(username), email_overrides, no_fas)?;
     let emails = fas.emails.clone();
@@ -1161,6 +1245,23 @@ async fn cmd_last_seen(
     if service_enabled(Service::Mailman, skip, only) {
         eprintln!("Checking mailing lists...");
         services.push(check_mailman(&emails, lists, max_pages).await);
+    }
+
+    if service_enabled(Service::Forge, skip, only) {
+        eprintln!("Checking Forgejo...");
+        services.push(forge::check_forge(username, forge::DEFAULT_URL).await);
+    }
+
+    if let Some(topic) = meeting
+        && service_enabled(Service::Meetings, skip, only)
+    {
+        eprintln!("Checking '{topic}' meetings...");
+        let from_fas: Vec<String> = fas
+            .user
+            .as_ref()
+            .map(|u| u.matrix_ids())
+            .unwrap_or_default();
+        services.push(meetings::check_meetings(username, topic, &from_fas, matrix, now).await);
     }
 
     // Sort by most recent first (entries with dates before those without)

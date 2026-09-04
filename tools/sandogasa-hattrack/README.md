@@ -36,9 +36,57 @@ Last seen: salimma
 - `bugzilla` — recent Bugzilla activity
 - `distgit` — dist-git activity, PRs filed, and PRs awaiting review
 - `discourse` — Discourse profile and activity
+- `forge` — Forgejo activity per repository, e.g. in the FESCo tracker
 - `last-seen` — summary of last activity across all services, including
   Discourse custom status and expiration
 - `mailman` — mailing list posts via HyperKitty
+- `meetings` — attendance at a recurring meetbot meeting, e.g. FESCo
+
+### Activity in a meeting or an issue tracker
+
+Two questions a committee asks about its members: did they come to the
+meetings, and did they take part in the tickets. `meetings` answers the
+first from meetbot: every meeting with the given `!meetingname` topic in
+the window, and whether the user's Matrix ID appears in its minutes'
+"People Present" list, with how many lines they said:
+
+```
+$ sandogasa-hattrack meetings salimma --meeting fesco --days 120
+Meetings: salimma in 'fesco' (last 120 days)
+
+  Matrix IDs: @salimma:fedora.im
+  Attended 13 of 14 meeting(s); last attended 2026-09-01
+
+  2026-09-01  present  (127 line(s) said)
+  2026-08-25  present  (21 line(s) said)
+  2026-07-14  absent
+```
+
+`@<username>:fedora.im` is assumed to be the user, and the Matrix IDs on
+their FAS profile are added through FASJSON (Kerberos; `--no-fas`
+skips it, a failed lookup only warns). `--matrix @nirik:matrix.scrye.com`
+adds one FAS does not know. `--meeting` defaults to `fesco` and `--days`
+to 180.
+
+`forge` answers the second from the user's public Forgejo activity
+feed, grouped by repository. Without `--repo` each repository gets one
+summary line; with `--repo fesco/tickets` every event in that tracker
+is listed, newest first:
+
+```
+$ sandogasa-hattrack forge salimma --repo fesco/tickets --days 60
+Forge: salimma (last 60 days)
+
+  fesco/tickets                    9 closed, 38 commented, 1 opened, 1 reopened — last 2026-08-17
+    2026-08-17  commented    #3671  yeah, and unless there is a serious issue with a package, …
+    2026-08-12  commented    #3677  +1 (as Change owner)
+```
+
+`--days` defaults to 90. Both subcommands take `--json`.
+
+`last-seen` now includes Forgejo (the newest event anywhere) and, with
+`--meeting fesco`, the last attended meeting of that topic with a
+one-year attendance count; `--matrix` applies there too.
 
 ### Email discovery
 
@@ -95,8 +143,8 @@ repeat lookups never touch the network.
 
 ### Narrowing the `last-seen` service set
 
-`last-seen` queries five services (Bodhi, Bugzilla, Discourse,
-dist-git, Mailman). The Mailman scan is the slow path because
+`last-seen` queries six services (Bodhi, Bugzilla, Discourse,
+dist-git, Forgejo, Mailman), and meetings when asked. The Mailman scan is the slow path because
 it walks HyperKitty archives page by page, so skipping it is
 the common speed-up when the user clearly doesn't post:
 
@@ -108,7 +156,8 @@ sandogasa-hattrack last-seen alice --only discourse,bodhi
 
 `--skip` and `--only` are mutually exclusive. Both accept a
 comma-separated list (or can be repeated). Values:
-`bodhi`, `bugzilla`, `discourse`, `distgit`, `mailman`.
+`bodhi`, `bugzilla`, `discourse`, `distgit`, `forge`, `mailman`,
+`meetings` (the last only does anything with `--meeting`).
 
 ### JSON output
 

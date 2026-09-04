@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### sandogasa-hattrack: attendance at a meeting, activity in an issue tracker
+
+Asking whether a FESCo member had been coming to the meetings and
+taking part in the tickets meant reading meetbot minutes one by one
+and paging through forge.fedoraproject.org by hand; hattrack knew
+Bodhi, Bugzilla, Discourse, dist-git and the mailing lists, but neither
+of the two places a committee actually lives.
+
+`meetings USERNAME --meeting fesco --days N` lists every meetbot meeting
+with that topic in the window and whether the user's Matrix ID is in
+its minutes' "People Present (lines said)" — `@<username>:fedora.im` is
+assumed, the Matrix IDs on the FAS profile are added through FASJSON
+(`ircnicks`, in both its `matrix:/nick` and `matrix://server/nick`
+shapes; `--no-fas` skips), `--matrix` adds one FAS does not know — with
+an attended-of-total
+count and the last attended date. `forge USERNAME [--repo owner/repo]
+--days N` reads the user's public Forgejo activity feed and groups it
+by repository: a summary line per repository, or with `--repo` every
+event in that tracker, newest first (opened, commented, closed,
+reopened, PRs, pushes). `last-seen` gains Forgejo as a sixth service
+and, with `--meeting`, the last attended meeting with a one-year
+count. Both take `--json`.
+
+The crates grew what those need: `sandogasa_meetbot::attendees`
+(`parse_attendees`, `txt_url`, `fedora_localpart`) reads a meeting's
+text minutes, and fesco-chair's own `txt_url` now comes from there;
+`sandogasa_forgejo::Client::anonymous` talks to the public API without
+a token, and `user_activity` pages a user's own activity feed
+(`only-performed-by=true`) back to a date, with `Activity::issue_ref`
+reading the issue number and text out of either content shape the API
+uses.
+
 ### ebranch: side tags and COPRs are refetched on their own, not with everything
 
 A check against a side tag or a staging COPR could run on metadata

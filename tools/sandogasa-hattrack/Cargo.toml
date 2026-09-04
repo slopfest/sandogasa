@@ -19,7 +19,9 @@ sandogasa-bugzilla = { workspace = true }
 sandogasa-discourse = { workspace = true }
 sandogasa-distgit = { workspace = true }
 sandogasa-fasjson = { workspace = true }
+sandogasa-forgejo = { workspace = true }
 sandogasa-mailman = { workspace = true }
+sandogasa-meetbot = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

@@ -47,6 +47,8 @@ use serde::{Deserialize, Serialize};
 
 /// Gitea/Forgejo cap the page size on most list endpoints at 50.
 const PAGE_LIMIT: u32 = 50;
+/// Most activity-feed pages fetched per query (2 500 events).
+pub const FEED_PAGE_CAP: u32 = 50;
 
 /// A Forgejo user as returned by `/api/v1/user`. Only the fields
 /// downstream tools currently consume.
@@ -54,6 +56,60 @@ const PAGE_LIMIT: u32 = 50;
 pub struct User {
     pub id: u64,
     pub login: String,
+}
+
+/// One event of a user's activity feed.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Activity {
+    /// `create_issue`, `comment_issue`, `close_issue`, `reopen_issue`,
+    /// `create_pull_request`, `merge_pull_request`, `commit_repo`, …
+    pub op_type: String,
+    pub act_user: Option<UserRef>,
+    pub repo: Option<ActivityRepo>,
+    /// RFC 3339.
+    pub created: String,
+    /// Op-specific: for issue events the number and title (or comment
+    /// text), as `"123|title"` or a JSON array `["123","title"]`.
+    #[serde(default)]
+    pub content: String,
+    pub comment: Option<ActivityComment>,
+}
+
+/// The repository an activity happened in.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ActivityRepo {
+    pub full_name: String,
+    #[serde(default)]
+    pub html_url: Option<String>,
+}
+
+/// The comment an activity posted, when it did.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ActivityComment {
+    #[serde(default)]
+    pub html_url: Option<String>,
+}
+
+impl Activity {
+    /// `(issue number, title or comment text)` for issue and pull
+    /// request events; `None` for pushes and the like.
+    pub fn issue_ref(&self) -> Option<(u64, String)> {
+        let content = self.content.trim();
+        let (number, text) = if content.starts_with('[') {
+            let parts: Vec<String> = serde_json::from_str(content).ok()?;
+            let mut it = parts.into_iter();
+            (it.next()?, it.next().unwrap_or_default())
+        } else {
+            let (n, t) = content.split_once('|')?;
+            (n.to_string(), t.to_string())
+        };
+        Some((number.parse().ok()?, text.trim().to_string()))
+    }
+
+    /// The repository slug (`fesco/tickets`), when the event has one.
+    pub fn repo_slug(&self) -> Option<&str> {
+        self.repo.as_ref().map(|r| r.full_name.as_str())
+    }
 }
 
 /// The user reference embedded in a pull-request search result.
@@ -230,11 +286,59 @@ impl Client {
     /// authenticated with the given access token.
     pub fn new(base_url: &str, token: &str) -> Result<Self, Box<dyn std::error::Error>> {
         sandogasa_cli::ensure_secure_url(base_url)?;
-        let http = build_http_client(token)?;
+        let http = build_http_client(Some(token))?;
         Ok(Self {
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
         })
+    }
+
+    /// A client for the public, unauthenticated API — activity feeds,
+    /// public issues — with no token attached.
+    pub fn anonymous(base_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self {
+            http: build_http_client(None)?,
+            base_url: base_url.trim_end_matches('/').to_string(),
+        })
+    }
+
+    /// A user's own activity, newest first: pages of
+    /// `/users/{username}/activities/feeds?only-performed-by=true` until
+    /// one reaches back before `since` (RFC 3339) or the feed ends,
+    /// capped at [`FEED_PAGE_CAP`] pages. Events before `since` are
+    /// dropped.
+    pub fn user_activity(
+        &self,
+        username: &str,
+        since: Option<&str>,
+    ) -> Result<Vec<Activity>, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/v1/users/{username}/activities/feeds", self.base_url);
+        let limit = PAGE_LIMIT.to_string();
+        let mut out: Vec<Activity> = Vec::new();
+        for page in 1..=FEED_PAGE_CAP {
+            let page_str = page.to_string();
+            let resp = self
+                .http
+                .get(&url)
+                .query(&[
+                    ("only-performed-by", "true"),
+                    ("limit", limit.as_str()),
+                    ("page", page_str.as_str()),
+                ])
+                .send()?;
+            let batch: Vec<Activity> =
+                http::blocking_json_ok(resp, &format!("Forgejo activity of {username}"))?;
+            let n = batch.len() as u32;
+            let reached_back = since.is_some_and(|s| batch.iter().any(|a| a.created.as_str() < s));
+            out.extend(batch);
+            if n < PAGE_LIMIT || reached_back {
+                break;
+            }
+        }
+        if let Some(s) = since {
+            out.retain(|a| a.created.as_str() >= s);
+        }
+        Ok(out)
     }
 
     /// The pull requests the token owner created, paginated across all
@@ -481,7 +585,7 @@ impl Client {
 /// "couldn't reach the server").
 pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::error::Error>> {
     sandogasa_cli::ensure_secure_url(base_url)?;
-    let http = build_http_client(token)?;
+    let http = build_http_client(Some(token))?;
     let url = format!("{}/api/v1/user", base_url.trim_end_matches('/'));
     let resp = http.get(&url).send()?;
     let status = resp.status();
@@ -498,12 +602,16 @@ pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::
 /// Build a reqwest client preconfigured for the Forgejo API: the
 /// `token` auth scheme Gitea/Forgejo expect, a JSON Accept header, a
 /// User-Agent, and our standard request timeout.
-fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn std::error::Error>> {
+fn build_http_client(
+    token: Option<&str>,
+) -> Result<reqwest::blocking::Client, Box<dyn std::error::Error>> {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("token {token}"))?,
-    );
+    if let Some(token) = token {
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("token {token}"))?,
+        );
+    }
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
     Ok(http::blocking_builder(concat!(
         env!("CARGO_PKG_NAME"),
@@ -517,6 +625,28 @@ fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activity_issue_ref_reads_both_content_shapes() {
+        let mut a: Activity = serde_json::from_str(
+            r#"{"op_type":"comment_issue","created":"2026-09-03T22:15:00Z",
+                "repo":{"full_name":"fesco/tickets"},
+                "content":"[\"3677\",\"+1 (as Change owner)\\r\"]"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            a.issue_ref(),
+            Some((3677, "+1 (as Change owner)".to_string()))
+        );
+        assert_eq!(a.repo_slug(), Some("fesco/tickets"));
+        a.content = "700|New Branch \"epel9\"".to_string();
+        assert_eq!(
+            a.issue_ref(),
+            Some((700, "New Branch \"epel9\"".to_string()))
+        );
+        a.content = String::new();
+        assert_eq!(a.issue_ref(), None);
+    }
 
     #[test]
     fn new_rejects_plaintext_remote() {

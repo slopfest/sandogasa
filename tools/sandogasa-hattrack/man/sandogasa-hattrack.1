@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-hattrack 1 2026-08-26 "sandogasa 0.22.0" "Sandogasa Manual"
+.TH sandogasa-hattrack 1 2026-09-04 "sandogasa 0.22.0" "Sandogasa Manual"
 .SH NAME
 sandogasa\-hattrack \- Look up a Fedora contributor\*(Aqs activity across services
 .SH SYNOPSIS
@@ -298,10 +298,73 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIUSERNAME\fR>
 Discourse username to look up
-.SS sandogasa-hattrack last-seen
-\fBsandogasa\-hattrack last\-seen\fR [\fB\-\-email\fR] [\fB\-\-json\fR] [\fB\-\-no\-fas\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-list\fR] [\fB\-\-max\-pages\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-skip\fR] [\fB\-\-only\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
+.SS sandogasa-hattrack forge
+\fBsandogasa\-hattrack forge\fR [\fB\-\-json\fR] [\fB\-\-repo\fR] [\fB\-\-days\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-url\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
 .PP
-Summary of a contributor\*(Aqs last activity across all services
+Summary of a contributor\*(Aqs last activity across all services Show a contributor\*(Aqs Forgejo activity, per repository
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-\-repo\fR \fI<REPO>\fR
+Only these repositories (`owner/repo`, e.g. fesco/tickets); repeatable. Lists every event instead of a per\-repo summary
+.TP
+\fB\-\-days\fR \fI<DAYS>\fR [default: 90]
+How far back to look
+.TP
+\fB\-\-tz\-source\fR \fI<TZ_SOURCE>\fR [default: auto]
+Source for tzdb\*(Aqs zone1970.tab (country lookup table). `auto` picks the newer of system + bundled
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto
+.IP \(bu 2
+system
+.IP \(bu 2
+bundled
+.RE
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Colorize output. `auto` = TTY + NO_COLOR\-aware
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-\-url\fR \fI<URL>\fR [default: https://forge.fedoraproject.org]
+Forgejo instance base URL
+.TP
+\fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
+Working\-hours range `START\-END` (24h local). Outside is dimmed
+.TP
+\fB\-\-no\-holidays\fR
+Skip the Nager.Date public\-holiday lookup
+.TP
+\fB\-\-refresh\-holidays\fR
+Force\-refetch holiday data from Nager.Date even when a cached copy is present
+.TP
+\fB\-\-now\fR \fI<NOW>\fR
+Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIUSERNAME\fR>
+Forgejo username to look up
+.SS sandogasa-hattrack last-seen
+\fBsandogasa\-hattrack last\-seen\fR [\fB\-\-email\fR] [\fB\-\-json\fR] [\fB\-\-no\-fas\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-list\fR] [\fB\-\-max\-pages\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-skip\fR] [\fB\-\-only\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-meeting\fR] [\fB\-\-now\fR] [\fB\-\-matrix\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
+.PP
 .TP
 \fB\-\-email\fR \fI<EMAIL>\fR
 Email address(es) for Bugzilla/Mailman. Repeat for multiple: \-\-email a@x.org \-\-email b@y.org
@@ -370,7 +433,11 @@ discourse
 .IP \(bu 2
 distgit
 .IP \(bu 2
+forge
+.IP \(bu 2
 mailman
+.IP \(bu 2
+meetings: Only with `\-\-meeting`
 .RE
 .TP
 \fB\-\-only\fR \fI<ONLY>\fR
@@ -389,14 +456,24 @@ discourse
 .IP \(bu 2
 distgit
 .IP \(bu 2
+forge
+.IP \(bu 2
 mailman
+.IP \(bu 2
+meetings: Only with `\-\-meeting`
 .RE
 .TP
 \fB\-\-refresh\-holidays\fR
 Force\-refetch holiday data from Nager.Date even when a cached copy is present
 .TP
+\fB\-\-meeting\fR \fI<TOPIC>\fR
+Also report the last attended meetbot meeting with this topic (e.g. fesco)
+.TP
 \fB\-\-now\fR \fI<NOW>\fR
 Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
+.TP
+\fB\-\-matrix\fR \fI<MXID>\fR
+Extra Matrix ID(s) that are this user in meeting minutes, beyond `@<username>:fedora.im` and the FAS profile\*(Aqs; repeatable
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
@@ -470,3 +547,73 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 [\fIUSERNAME\fR]
 FAS username to look up (used to discover email via FASJSON)
+.SS sandogasa-hattrack meetings
+\fBsandogasa\-hattrack meetings\fR [\fB\-\-json\fR] [\fB\-\-meeting\fR] [\fB\-\-days\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-matrix\fR] [\fB\-\-no\-fas\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-url\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
+.PP
+Show a contributor\*(Aqs attendance at a recurring meetbot meeting
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-\-meeting\fR \fI<TOPIC>\fR [default: fesco]
+The meeting\*(Aqs meetbot topic (its `!meetingname`)
+.TP
+\fB\-\-days\fR \fI<DAYS>\fR [default: 180]
+How far back to look
+.TP
+\fB\-\-tz\-source\fR \fI<TZ_SOURCE>\fR [default: auto]
+Source for tzdb\*(Aqs zone1970.tab (country lookup table). `auto` picks the newer of system + bundled
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto
+.IP \(bu 2
+system
+.IP \(bu 2
+bundled
+.RE
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Colorize output. `auto` = TTY + NO_COLOR\-aware
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-\-matrix\fR \fI<MXID>\fR
+Extra Matrix ID(s) that are this user, beyond `@<username>:fedora.im` and the FAS profile\*(Aqs; repeatable
+.TP
+\fB\-\-no\-fas\fR
+Skip the FASJSON lookup of the profile\*(Aqs Matrix IDs
+.TP
+\fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
+Working\-hours range `START\-END` (24h local). Outside is dimmed
+.TP
+\fB\-\-no\-holidays\fR
+Skip the Nager.Date public\-holiday lookup
+.TP
+\fB\-\-url\fR \fI<URL>\fR [default: https://meetbot.fedoraproject.org]
+meetbot instance base URL
+.TP
+\fB\-\-refresh\-holidays\fR
+Force\-refetch holiday data from Nager.Date even when a cached copy is present
+.TP
+\fB\-\-now\fR \fI<NOW>\fR
+Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIUSERNAME\fR>
+FAS username to look up (`@<username>:fedora.im` on Matrix)

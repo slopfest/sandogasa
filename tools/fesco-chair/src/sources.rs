@@ -201,12 +201,7 @@ pub fn next_tuesday(today: NaiveDate) -> NaiveDate {
 
 /// The plain-text artefact for a meetbot HTML URL: `….html` → `….txt`
 /// (also turns `….log.html` into `….log.txt`).
-pub fn txt_url(html_url: &str) -> String {
-    match html_url.strip_suffix(".html") {
-        Some(base) => format!("{base}.txt"),
-        None => html_url.to_string(),
-    }
-}
+pub use sandogasa_meetbot::txt_url;
 
 /// Word-wrap one line to [`WRAP`], keeping its leading indent and
 /// `*` bullet on the first line and aligning continuations under the
