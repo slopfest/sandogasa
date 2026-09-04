@@ -32,7 +32,15 @@ with what pulled them, since they are the update's remaining road to
 rawhide. The branch picks the chroot, so a COPR building for several
 releases is checked one target at a time. The report records the COPR
 and each staged dependency carries `staged = true`; reports saved
-before this load unchanged.
+before this load unchanged. Re-running the check right after the
+crate's own build finished used to read as "buildable" all the same,
+so the header now says when the very version being checked is already
+built — in the branch, or only in the COPR, not yet landed — and the
+report is about a rebuild. For that to be true right after the build,
+the COPR's repository metadata is refetched on every run (it is small;
+a staging COPR changes by the minute) while the branch's stays cached,
+through the new `sandogasa_fedrq::expire_repo_cache` and
+`sandogasa_copr::repoid`.
 
 ### ebranch check-update: EPEL is checked against its base distro by default
 

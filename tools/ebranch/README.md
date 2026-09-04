@@ -152,7 +152,12 @@ ebranch check-crate --from rbw.toml --copr > build.sh
   in flight, and not expanded further; transitive crates the COPR
   provides are listed there too, with what pulled them. The branch picks the chroot
   (`-b rawhide` → `fedora-rawhide-*`), so a COPR building for several
-  releases is checked one target at a time
+  releases is checked one target at a time. The COPR's repository
+  metadata is refetched on every run (a staging COPR changes by the
+  minute; the branch's stays cached as usual), so a build that just
+  finished is seen without `--refresh`. When the very version being
+  checked is already built — in the branch, or only in the COPR — the
+  report's header says so, since a build would then be a rebuild
 - `--package NAME` — the Fedora package when it is not `rust-<crate>`
   (the `coreutils` crate is `uutils-coreutils`): used for the spec
   lookup and as the report's package name

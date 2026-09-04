@@ -103,6 +103,16 @@ pub struct DepResult {
     pub via: Option<String>,
 }
 
+/// Where a crate version is already built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltIn {
+    /// The branch itself provides it.
+    Branch,
+    /// Only the staging COPR provides it: built, not yet landed.
+    Copr,
+}
+
 /// A crate built from the root's own source tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InTreeCrate {
@@ -144,6 +154,10 @@ pub struct CheckCrateReport {
     /// The staging COPR layered over the branch, when one was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copr: Option<String>,
+    /// Where this very version of the crate is already built, if it is:
+    /// the report is then about a rebuild, not a first build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub already_built: Option<BuiltIn>,
     pub dependencies: Vec<DepResult>,
     /// Workspace members: built in-tree, not packaged; their
     /// dependencies appear in `dependencies` with `via` set.
@@ -283,6 +297,20 @@ pub fn check_crate(
         );
     }
 
+    // A staging COPR changes by the minute: refetch its metadata every
+    // run (it is small), while the branch's stays cached as usual.
+    if let Some(c) = &opts.copr
+        && let Some((owner, project)) = c.split_once('/')
+        && let Some(branch) = &opts.branch
+    {
+        match sandogasa_fedrq::expire_repo_cache(branch, &sandogasa_copr::repoid(owner, project)) {
+            Ok(n) if opts.verbose => {
+                eprintln!("[check-crate] expired {n} cached metadata file(s) of COPR {c}")
+            }
+            Err(e) => eprintln!("warning: could not expire the COPR's cached metadata: {e}"),
+            _ => {}
+        }
+    }
     let repos = RepoStack {
         base: sandogasa_fedrq::Fedrq {
             branch: opts.branch.clone(),
@@ -301,6 +329,28 @@ pub fn check_crate(
             ),
             None => eprintln!("[check-crate] checking dependencies against repo"),
         }
+    }
+
+    // Is this very version already built somewhere? Then the report is
+    // about a rebuild — say so before listing what a build would need.
+    let root = CrateDep {
+        name: name.to_string(),
+        version_req: format!("={version}"),
+        kind: "normal".to_string(),
+        optional: false,
+    };
+    let already_built = match repos.check(&[&root]).remove(0) {
+        DepStatus::Satisfied { staged: true, .. } => Some(BuiltIn::Copr),
+        DepStatus::Satisfied { .. } => Some(BuiltIn::Branch),
+        _ => None,
+    };
+    if opts.verbose
+        && let Some(where_) = already_built
+    {
+        eprintln!(
+            "[check-crate] {name} {version} is already built: {}",
+            built_label(where_, opts)
+        );
     }
 
     // One fedrq invocation for every direct dependency.
@@ -497,6 +547,7 @@ pub fn check_crate(
             .clone()
             .unwrap_or_else(|| format!("rust-{name}")),
         branch: opts.label.clone(),
+        already_built,
         dependencies,
         transitive_missing,
         transitive_staged,
@@ -565,6 +616,24 @@ pub fn render_report(report: &CheckCrateReport) -> String {
     let _ = writeln!(out, "Branch: {}", report.branch);
     if let Some(c) = &report.copr {
         let _ = writeln!(out, "Staging COPR: {c}");
+    }
+    match report.already_built {
+        Some(BuiltIn::Branch) => {
+            let _ = writeln!(
+                out,
+                "Already built: {} {} is in {} — this would be a rebuild",
+                report.crate_name, report.crate_version, report.branch
+            );
+        }
+        Some(BuiltIn::Copr) => {
+            let _ = writeln!(
+                out,
+                "Already built: {} {} is in the staging COPR, not yet in {} — nothing to \
+                 build there again",
+                report.crate_name, report.crate_version, report.branch
+            );
+        }
+        None => {}
     }
     let _ = writeln!(out);
 
@@ -1775,6 +1844,18 @@ async fn fetch_dependencies_with_features(
     Ok((deps, activation.dep_features))
 }
 
+/// `in rawhide` / `in the staging COPR @…, not yet in rawhide`.
+fn built_label(where_: BuiltIn, opts: &CheckCrateOptions) -> String {
+    let branch = opts.branch.as_deref().unwrap_or("the branch");
+    match where_ {
+        BuiltIn::Branch => format!("in {branch}"),
+        BuiltIn::Copr => format!(
+            "in the staging COPR {}, not yet in {branch}",
+            opts.copr.as_deref().unwrap_or("?")
+        ),
+    }
+}
+
 /// The repos a dependency is checked against: the branch, and the
 /// staging COPR layered over it (`--copr`), consulted for whatever the
 /// branch does not satisfy. fedrq's `@copr:` repo is standalone, so
@@ -1918,6 +1999,7 @@ mod tests {
             crate_version: "57.0.0".to_string(),
             package: "rust-arrow".to_string(),
             branch: "rawhide".to_string(),
+            already_built: None,
             dependencies: vec![],
             transitive_staged: vec![],
             transitive_missing: vec![
@@ -2289,8 +2371,14 @@ mod tests {
             version_req: "^0.14.0".to_string(),
             pulled_by: "phf_macros".to_string(),
         });
+        report.already_built = Some(BuiltIn::Copr);
         let text = render_report(&report);
         assert!(text.contains("Staging COPR: @rust/uutils-and-nushell"));
+        assert!(
+            text.contains(
+                "Already built: my-crate 1.0.0 is in the staging COPR, not yet in rawhide"
+            )
+        );
         assert!(text.contains("Staged in COPR, not yet in the branch (2):\n  - phf_shared"));
         assert!(text.contains("  - phf_generator ^0.14.0 (via phf_macros) — 0.14.0"));
         assert!(text.contains("2 staged in COPR."), "{text}");
@@ -2468,6 +2556,7 @@ mod tests {
             crate_version: "1.0.0".to_string(),
             package: "rust-test-crate".to_string(),
             branch: "rawhide".to_string(),
+            already_built: None,
             dependencies: vec![
                 DepResult {
                     dep: CrateDep {
@@ -2556,6 +2645,7 @@ mod tests {
             crate_version: "1.0.0".to_string(),
             package: "rust-my-crate".to_string(),
             branch: "rawhide".to_string(),
+            already_built: None,
             copr: None,
             dependencies: vec![
                 DepResult {

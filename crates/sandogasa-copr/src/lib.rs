@@ -113,6 +113,18 @@ impl Copr {
     }
 }
 
+/// The repoid fedrq gives a COPR's repo — `copr:<host>:<owner>:<project>`,
+/// a group owner `@rust` spelled `group_rust` — which is how its cached
+/// metadata is named.
+pub fn repoid(owner: &str, project: &str) -> String {
+    let host = DEFAULT_BASE_URL.trim_start_matches("https://");
+    let owner = match owner.strip_prefix('@') {
+        Some(group) => format!("group_{group}"),
+        None => owner.to_string(),
+    };
+    format!("copr:{host}:{owner}:{project}")
+}
+
 /// The COPR chroot-name prefix (trailing `-` included, so `epel-9-`
 /// can't match an `epel-10-*` chroot) for a Fedora-ecosystem branch:
 /// `f44` → `fedora-44-`, `rawhide` → `fedora-rawhide-`, `epel9` /
@@ -193,6 +205,18 @@ pub fn available_chroots(packages: &[PackageStatus]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repoid_spells_groups_the_way_fedrq_does() {
+        assert_eq!(
+            repoid("@rust", "uutils-and-nushell"),
+            "copr:copr.fedorainfracloud.org:group_rust:uutils-and-nushell"
+        );
+        assert_eq!(
+            repoid("michel", "tools"),
+            "copr:copr.fedorainfracloud.org:michel:tools"
+        );
+    }
 
     fn package(name: &str, chroots: &[(&str, &str, &str)]) -> PackageStatus {
         PackageStatus {

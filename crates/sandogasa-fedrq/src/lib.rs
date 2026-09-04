@@ -177,6 +177,39 @@ pub fn clear_all_caches() -> std::io::Result<()> {
     clear_libdnf5_cache()
 }
 
+/// Expire one repo's cached metadata for a branch — every entry under
+/// the branch's smartcache directory and under the libdnf5 cache whose
+/// name starts with `repoid_prefix` (`<repoid>-<hash>` and
+/// `<repoid>.solv`) — so the next query refetches just that repo. For
+/// repos that change by the minute, like a staging COPR, where the
+/// day-old cache of the branch itself is still fine.
+pub fn expire_repo_cache(branch: &str, repoid_prefix: &str) -> std::io::Result<usize> {
+    Ok(remove_prefixed(&cache_dir().join(branch), repoid_prefix)?
+        + remove_prefixed(&libdnf5_cache_dir(), repoid_prefix)?)
+}
+
+/// Remove `dir`'s entries whose file name starts with `prefix`;
+/// a missing `dir` is nothing to do.
+fn remove_prefixed(dir: &std::path::Path, prefix: &str) -> std::io::Result<usize> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(0);
+    };
+    let mut removed = 0;
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with(prefix) {
+            let path = entry.path();
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path)?;
+            } else {
+                std::fs::remove_file(&path)?;
+            }
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 fn remove_if_present(dir: &std::path::Path) -> std::io::Result<()> {
     if dir.exists() {
         std::fs::remove_dir_all(dir)?;
@@ -614,6 +647,24 @@ mod tests {
                 ("rust-foo".to_string(), "1.2.3-1.fc45".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn remove_prefixed_takes_only_the_named_repo() {
+        let dir = std::env::temp_dir().join(format!("sandogasa-fedrq-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("copr:x:group_rust:proj-abc")).unwrap();
+        std::fs::write(dir.join("copr:x:group_rust:proj.solv"), b"").unwrap();
+        std::fs::create_dir_all(dir.join("rawhide-def")).unwrap();
+        std::fs::write(dir.join("rawhide.solv"), b"").unwrap();
+        assert_eq!(remove_prefixed(&dir, "copr:x:group_rust:proj").unwrap(), 2);
+        let left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left.len(), 2);
+        assert!(left.iter().all(|n| n.starts_with("rawhide")));
+        assert_eq!(remove_prefixed(&dir.join("absent"), "x").unwrap(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

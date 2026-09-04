@@ -458,6 +458,7 @@ mod tests {
             crate_version: "1.0.0".to_string(),
             package: "rust-my-crate".to_string(),
             branch: "rawhide".to_string(),
+            already_built: None,
             dependencies: vec![check_crate::DepResult {
                 dep: check_crate::CrateDep {
                     name: "dep-a".to_string(),
