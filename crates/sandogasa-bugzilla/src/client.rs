@@ -8,6 +8,69 @@ pub struct BzClient {
     base_url: String,
     client: Client,
     api_key: Option<String>,
+    /// Pause before re-trying a failed write, multiplied by the
+    /// attempt number.
+    retry_backoff: std::time::Duration,
+}
+
+/// How a verified write ended: the bugs the change is on, the ones it
+/// could not be confirmed on after every attempt, how many retries it
+/// took, and the last request error when there was one.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct WriteOutcome {
+    pub done: Vec<u64>,
+    pub unconfirmed: Vec<u64>,
+    /// Bugs a failed request had in fact changed, found by reading
+    /// them back — never retried.
+    pub recovered: Vec<u64>,
+    pub retries: u32,
+    pub last_error: Option<String>,
+}
+
+impl WriteOutcome {
+    /// Every bug got the change.
+    pub fn complete(&self) -> bool {
+        self.unconfirmed.is_empty()
+    }
+
+    /// A line for the user when anything beyond a clean first try
+    /// happened; `None` for the plain case.
+    pub fn note(&self) -> Option<String> {
+        if self.retries == 0 && self.unconfirmed.is_empty() && self.recovered.is_empty() {
+            return None;
+        }
+        let mut s = String::new();
+        if !self.recovered.is_empty() {
+            s.push_str(&format!(
+                "a failed request had already applied the change to {} bug(s)",
+                self.recovered.len()
+            ));
+        }
+        if self.retries > 0 {
+            if !s.is_empty() {
+                s.push_str("; ");
+            }
+            s.push_str(&format!("retried {} time(s)", self.retries));
+        }
+        if !self.unconfirmed.is_empty() {
+            if !s.is_empty() {
+                s.push_str("; ");
+            }
+            s.push_str(&format!(
+                "not confirmed on {} bug(s): {}",
+                self.unconfirmed.len(),
+                self.unconfirmed
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            if let Some(e) = &self.last_error {
+                s.push_str(&format!(" (last error: {e})"));
+            }
+        }
+        Some(s)
+    }
 }
 
 impl BzClient {
@@ -16,7 +79,15 @@ impl BzClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: build_http_client(),
             api_key: None,
+            retry_backoff: std::time::Duration::from_secs(5),
         }
+    }
+
+    /// The pause before a retried write (default 5 s, times the
+    /// attempt number); zero in tests.
+    pub fn with_retry_backoff(mut self, backoff: std::time::Duration) -> Self {
+        self.retry_backoff = backoff;
+        self
     }
 
     /// Attach an API key for authenticated requests.
@@ -199,6 +270,84 @@ impl BzClient {
         Ok(())
     }
 
+    /// [`Self::update`] that does not take a failed request for a
+    /// failed write. Bugzilla has been dropping the connection after
+    /// applying the change, so on an error the bug is read back: if it
+    /// changed since before the write, the change is on it and nothing
+    /// is retried; otherwise the write is retried, up to `attempts`.
+    pub async fn update_verified(
+        &self,
+        id: u64,
+        body: &serde_json::Value,
+        attempts: u32,
+    ) -> WriteOutcome {
+        self.update_many_verified(&[id], body, attempts).await
+    }
+
+    /// [`Self::update_many`] with the same verification: after a failed
+    /// request the bugs are read back, those changed since the snapshot
+    /// taken before the write (or already showing the requested
+    /// `status`/`resolution`/`assigned_to`) count as done, and only the
+    /// rest are sent again — so a request the server processed but the
+    /// client lost is neither counted as failed nor repeated, which
+    /// would duplicate its comment.
+    pub async fn update_many_verified(
+        &self,
+        ids: &[u64],
+        body: &serde_json::Value,
+        attempts: u32,
+    ) -> WriteOutcome {
+        let mut outcome = WriteOutcome::default();
+        if ids.is_empty() {
+            return outcome;
+        }
+        // What the bugs looked like before: the honest baseline for
+        // "did this write land", whatever the body changes.
+        let before: std::collections::HashMap<u64, chrono::DateTime<chrono::Utc>> = self
+            .bugs(ids)
+            .await
+            .map(|bugs| {
+                bugs.into_iter()
+                    .map(|b| (b.id, b.last_change_time))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let expected = expectation(body);
+        let mut remaining: Vec<u64> = ids.to_vec();
+        for attempt in 1..=attempts.max(1) {
+            match self.update_many(&remaining, body).await {
+                Ok(()) => {
+                    outcome.done.extend(remaining);
+                    return outcome;
+                }
+                Err(e) => outcome.last_error = Some(e.to_string()),
+            }
+            // Read back before deciding anything failed.
+            if let Ok(bugs) = self.bugs(&remaining).await {
+                let landed: Vec<u64> = bugs
+                    .iter()
+                    .filter(|b| {
+                        before.get(&b.id).is_some_and(|t| b.last_change_time > *t)
+                            || (!expected.is_empty() && satisfies(b, &expected))
+                    })
+                    .map(|b| b.id)
+                    .collect();
+                remaining.retain(|id| !landed.contains(id));
+                outcome.done.extend(landed.iter().copied());
+                outcome.recovered.extend(landed);
+                if remaining.is_empty() {
+                    return outcome;
+                }
+            }
+            if attempt < attempts.max(1) {
+                outcome.retries += 1;
+                tokio::time::sleep(self.retry_backoff * attempt).await;
+            }
+        }
+        outcome.unconfirmed = remaining;
+        outcome
+    }
+
     /// Update multiple bugs in a single request. The `ids` are injected into the body.
     pub async fn update_many(
         &self,
@@ -218,6 +367,28 @@ impl BzClient {
             .error_for_status()?;
         Ok(())
     }
+}
+
+/// The fields a write body sets that a read can check:
+/// `status`, `resolution` and `assigned_to`.
+fn expectation(body: &serde_json::Value) -> Vec<(&'static str, String)> {
+    ["status", "resolution", "assigned_to"]
+        .iter()
+        .filter_map(|k| {
+            body.get(k)
+                .and_then(|v| v.as_str())
+                .map(|v| (*k, v.to_string()))
+        })
+        .collect()
+}
+
+fn satisfies(bug: &Bug, expected: &[(&str, String)]) -> bool {
+    expected.iter().all(|(k, v)| match *k {
+        "status" => bug.status == *v,
+        "resolution" => bug.resolution == *v,
+        "assigned_to" => bug.assigned_to == *v,
+        _ => true,
+    })
 }
 
 /// Build the crate's HTTP client with the shared sandogasa defaults
@@ -456,6 +627,141 @@ mod tests {
     }
 
     // ---- update ----
+
+    fn bug_json(id: u64, status: &str, changed: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "summary": "t", "status": status, "resolution": "",
+            "product": "Fedora", "component": ["x"], "severity": "medium",
+            "priority": "unspecified", "assigned_to": "nobody@fedoraproject.org",
+            "creator": "r@example.com", "creation_time": "2025-01-15T10:00:00Z",
+            "last_change_time": changed
+        })
+    }
+
+    #[tokio::test]
+    async fn a_failed_write_is_read_back_and_only_the_unchanged_bugs_are_retried() {
+        use wiremock::matchers::query_param;
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap()
+            .with_retry_backoff(std::time::Duration::ZERO);
+        // The snapshot before the write, then the read-back after the
+        // failure: bug 1 changed (the server applied it), bug 2 did not.
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("id", "1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": [
+                    bug_json(1, "NEW", "2025-01-16T12:00:00Z"),
+                    bug_json(2, "NEW", "2025-01-16T12:00:00Z"),
+                ]})),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("id", "1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": [
+                    bug_json(1, "CLOSED", "2025-01-17T12:00:00Z"),
+                    bug_json(2, "NEW", "2025-01-16T12:00:00Z"),
+                ]})),
+            )
+            .mount(&server)
+            .await;
+        // First PUT (both ids) fails; the retry carries only bug 2.
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/1"))
+            .and(body_json(
+                serde_json::json!({"status": "CLOSED", "ids": [1, 2]}),
+            ))
+            .respond_with(ResponseTemplate::new(502))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/2"))
+            .and(body_json(
+                serde_json::json!({"status": "CLOSED", "ids": [2]}),
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let out = client
+            .update_many_verified(&[1, 2], &serde_json::json!({"status": "CLOSED"}), 3)
+            .await;
+        assert_eq!(out.done, vec![1, 2]);
+        assert!(out.complete(), "{out:?}");
+        assert_eq!(out.retries, 1);
+        assert_eq!(out.recovered, vec![1]);
+        let note = out.note().unwrap();
+        assert!(
+            note.contains("applied the change to 1 bug(s)") && note.contains("retried 1 time(s)"),
+            "{note}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_write_that_never_lands_ends_unconfirmed_after_the_attempts() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap()
+            .with_retry_backoff(std::time::Duration::ZERO);
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": [
+                    bug_json(7, "NEW", "2025-01-16T12:00:00Z"),
+                ]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/7"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let out = client
+            .update_verified(7, &serde_json::json!({"status": "CLOSED"}), 2)
+            .await;
+        assert_eq!(out.unconfirmed, vec![7]);
+        assert!(out.done.is_empty());
+        assert!(out.last_error.is_some());
+        assert!(out.note().unwrap().contains("not confirmed on 1 bug(s): 7"));
+    }
+
+    #[tokio::test]
+    async fn a_clean_write_needs_no_note() {
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri())
+            .with_api_key("key".into())
+            .unwrap();
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": [
+                    bug_json(9, "NEW", "2025-01-16T12:00:00Z"),
+                ]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/9"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let out = client
+            .update_verified(9, &serde_json::json!({"status": "CLOSED"}), 3)
+            .await;
+        assert_eq!(out.done, vec![9]);
+        assert_eq!(out.note(), None);
+    }
 
     #[tokio::test]
     async fn update_sends_put_with_body() {

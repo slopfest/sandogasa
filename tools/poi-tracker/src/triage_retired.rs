@@ -408,18 +408,24 @@ pub async fn run(
             "comment": { "body": close_comment(&c.component, &c.branch) },
         });
         sandogasa_bugzilla::claim::apply_claim(&mut body, active_claim_email.as_deref());
-        match bz.update(c.bug_id, &body).await {
-            Ok(()) => {
-                report.closes_applied += 1;
-                eprintln!(
-                    "closed bug {} ({}): {} -> CLOSED/CANTFIX",
-                    c.bug_id, c.component, c.current_status
-                );
-            }
-            Err(e) => {
-                report.failures += 1;
-                eprintln!("error: bug {} ({}): {e}", c.bug_id, c.component);
-            }
+        let out = bz.update_verified(c.bug_id, &body, 3).await;
+        if let Some(note) = out.note() {
+            eprintln!("note: bug {}: {note}", c.bug_id);
+        }
+        if out.complete() {
+            report.closes_applied += 1;
+            eprintln!(
+                "closed bug {} ({}): {} -> CLOSED/CANTFIX",
+                c.bug_id, c.component, c.current_status
+            );
+        } else {
+            report.failures += 1;
+            eprintln!(
+                "error: bug {} ({}): {}",
+                c.bug_id,
+                c.component,
+                out.last_error.unwrap_or_default()
+            );
         }
     }
     Ok(report)

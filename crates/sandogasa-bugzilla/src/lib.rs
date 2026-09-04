@@ -4,4 +4,4 @@ pub mod claim;
 mod client;
 pub mod models;
 
-pub use client::BzClient;
+pub use client::{BzClient, WriteOutcome};

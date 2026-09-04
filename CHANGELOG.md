@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### sandogasa-bugzilla: a failed write is read back before it counts as failed
+
+Bugzilla has been closing connections after doing the work: a
+fedora-cve-triage run closing 24 bugs reported `Error closing bugs:
+error sending request` and `Closed 0 bug(s)`, while the bugs were in
+fact closed. Every tool took the request error at its word, so the
+honest response — check which bugs changed, redo only the rest — was
+the user's to do by hand.
+
+`BzClient::update_verified` and `update_many_verified` snapshot the
+bugs' last-change time before the write and, when the request fails,
+read them back: a bug that changed since (or already shows the
+requested status, resolution or assignee) has the change and is never
+sent again, which would duplicate its comment; the others are retried
+with a growing pause, up to the given attempts. The `WriteOutcome` says
+which bugs are done, which a failed request had already changed, how
+many retries it took and which are still unconfirmed, and its `note()`
+is the one line worth telling the user. fedora-cve-triage's five write
+paths (NOTABUG and ERRATA closes, late-filed blocking, version bumps)
+and poi-tracker's triage-updates and triage-retired use it; the plain
+`update`/`update_many` remain for callers that want the raw request.
+
 ### Every tool's `--version` names the checkout it was built from
 
 A binary built from the repository said only `poi-tracker 0.22.0`, the

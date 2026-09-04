@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+tokio = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 sandogasa-cli = { workspace = true, features = ["http"] }
@@ -15,4 +16,3 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }
-tokio = { workspace = true }

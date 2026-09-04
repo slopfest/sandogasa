@@ -711,21 +711,27 @@ pub async fn run(
 
     for u in &all_updates {
         let body = serde_json::json!({"priority": u.target_priority.as_bugzilla_str()});
-        match client.update(u.bug_id, &body).await {
-            Ok(()) => {
-                report.updates_applied += 1;
-                eprintln!(
-                    "updated bug {} ({}): {} -> {}",
-                    u.bug_id,
-                    u.component,
-                    u.current_priority,
-                    u.target_priority.as_bugzilla_str()
-                );
-            }
-            Err(e) => {
-                report.failures += 1;
-                eprintln!("error: bug {} ({}): {e}", u.bug_id, u.component);
-            }
+        let out = client.update_verified(u.bug_id, &body, 3).await;
+        if let Some(note) = out.note() {
+            eprintln!("note: bug {}: {note}", u.bug_id);
+        }
+        if out.complete() {
+            report.updates_applied += 1;
+            eprintln!(
+                "updated bug {} ({}): {} -> {}",
+                u.bug_id,
+                u.component,
+                u.current_priority,
+                u.target_priority.as_bugzilla_str()
+            );
+        } else {
+            report.failures += 1;
+            eprintln!(
+                "error: bug {} ({}): {}",
+                u.bug_id,
+                u.component,
+                out.last_error.unwrap_or_default()
+            );
         }
     }
 
@@ -746,18 +752,24 @@ pub async fn run(
                 "-> CLOSED/ERRATA"
             }
         };
-        match client.update(plan.bug_id, &body).await {
-            Ok(()) => {
-                report.stale_applied += 1;
-                eprintln!(
-                    "updated bug {} ({}): {outcome} (fixed in: {})",
-                    plan.bug_id, plan.component, plan.fixed_in
-                );
-            }
-            Err(e) => {
-                report.failures += 1;
-                eprintln!("error: bug {} ({}): {e}", plan.bug_id, plan.component);
-            }
+        let out = client.update_verified(plan.bug_id, &body, 3).await;
+        if let Some(note) = out.note() {
+            eprintln!("note: bug {}: {note}", plan.bug_id);
+        }
+        if out.complete() {
+            report.stale_applied += 1;
+            eprintln!(
+                "updated bug {} ({}): {outcome} (fixed in: {})",
+                plan.bug_id, plan.component, plan.fixed_in
+            );
+        } else {
+            report.failures += 1;
+            eprintln!(
+                "error: bug {} ({}): {}",
+                plan.bug_id,
+                plan.component,
+                out.last_error.unwrap_or_default()
+            );
         }
     }
     Ok(report)
