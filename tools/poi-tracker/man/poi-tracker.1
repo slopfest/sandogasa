@@ -10,16 +10,16 @@ Package\-of\-interest tracker for Fedora, EPEL, and CentOS SIGs
 .SH OPTIONS
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-C\fR, \fB\-\-directory\fR \fI<DIR>\fR
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -36,13 +36,13 @@ Print version
 Enact the standing cull verdicts interactively: orphan, remove own ACL, or give each package away, adjusting the inventories as you go
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-user\fR \fI<USER>\fR
 FAS username whose ACL actions these are
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-pattern\fR \fI<GLOB,...>\fR
 Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
@@ -57,7 +57,7 @@ Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration o
 Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a sub\-range
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -88,13 +88,13 @@ Print help
 Add a package to the inventory
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-poc\fR \fI<POC>\fR
 Point of contact ("Name <email>")
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-reason\fR \fI<REASON>\fR
 Reason for tracking
@@ -109,7 +109,7 @@ Team responsible
 Internal task/ticket reference
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -134,13 +134,13 @@ Source RPM name
 Adopt orphaned inventory packages on dist\-git
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-pattern\fR \fI<GLOB,...>\fR
 Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-start\-from\fR \fI<NAME>\fR
 Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
@@ -158,7 +158,7 @@ May also be specified with the \fBPAGURE_API_TOKEN\fR environment variable.
 .RE
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -180,13 +180,13 @@ Print help
 Render the standing cull verdicts as the grouped, announcement\-ready report with runnable ACL commands
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-user\fR \fI<USER>\fR
 FAS username whose access level routes each action
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-refresh\-acls\fR
 Ignore the day\-fresh ACL cache and look every level up again
@@ -201,7 +201,7 @@ Log each access lookup
 Output machine\-readable JSON
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -214,16 +214,16 @@ Print help
 Configure poi\-tracker (Bugzilla API key, etc.)
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-C\fR, \fB\-\-directory\fR \fI<DIR>\fR
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -239,10 +239,10 @@ Classify inventory packages by who depends on them, over a saved dependency grap
 Dependency graph JSON from a `deps \-\-graph` run
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-json\fR
 Output machine\-readable JSON
@@ -251,7 +251,7 @@ Output machine\-readable JSON
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -264,13 +264,13 @@ Print help
 Inventory the dependencies pulled from other repos (e.g. EPEL)
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-pattern\fR \fI<GLOB,...>\fR
 Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-start\-from\fR \fI<NAME>\fR
 Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
@@ -285,7 +285,7 @@ Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a s
 fedrq branch (e.g. hs.el9, epel9)
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -335,10 +335,10 @@ Recompute a derived dependency inventory offline from a saved graph: owned packa
 Dependency graph JSON from a `deps \-\-graph` run
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-owned\fR \fI<PATH>\fR
 Inventory of the packages you own (e.g. a sync\-distgit output); only owned packages enter the derived inventory
@@ -353,7 +353,7 @@ The derived inventory to recompute
 Replace the output file\*(Aqs packages; without it, report only
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -369,16 +369,16 @@ Print help
 Export inventory to another format
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-C\fR, \fB\-\-directory\fR \fI<DIR>\fR
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -391,13 +391,13 @@ Print help
 Export as content\-resolver YAML
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-workload\fR \fI<WORKLOAD>\fR
 Export only this workload
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
 Output file (default: {workload\-name}.yaml)
@@ -406,7 +406,7 @@ Output file (default: {workload\-name}.yaml)
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -419,13 +419,13 @@ Print help
 Export as hs\-relmon manifest TOML
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-workload\fR \fI<WORKLOAD>\fR
 Filter by workload
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
 Output file (default: stdout)
@@ -440,7 +440,7 @@ Default distros list
 Default tracking branch
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -456,16 +456,16 @@ Print help
 Find which inventory file(s) contain a package
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-C\fR, \fB\-\-directory\fR \fI<DIR>\fR
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -481,13 +481,13 @@ Source RPM name to search for
 Import from legacy JSON format
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR [default: inventory.toml]
 Output path for TOML inventory
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-private\-fields\fR \fI<FIELD,...>\fR
 Fields to mark as private (stripped on export)
@@ -499,7 +499,7 @@ Run as if started in DIR (like `git \-C`): the workspace file, relative inventor
 Workload tag(s) to apply to all imported packages
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -515,13 +515,13 @@ Path to legacy JSON inventory file
 Keep only the inventory packages also present in other inventories, optionally merging them into a file
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-with\fR \fI<WITH>\fR
 Inventory file(s) to intersect with: only packages of the main inventory also found in one of these survive (repeat the flag per file)
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
 Merge the intersection into this inventory TOML file (accumulates; existing entries win)
@@ -533,7 +533,7 @@ Run as if started in DIR (like `git \-C`): the workspace file, relative inventor
 Output as JSON instead of human\-readable
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -546,7 +546,7 @@ Print help
 Start keeping packages: walk them against the saved graph (fedrq only for what it lacks), merge, recompute the derived inventory
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-into\fR \fI<PATH>\fR
 Keep inventory to add them to (default: the first \-i)
@@ -555,7 +555,7 @@ Keep inventory to add them to (default: the first \-i)
 Saved dependency graph to extend (from `deps`); the walk resolves offline whatever it already knows
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-C\fR, \fB\-\-directory\fR \fI<DIR>\fR
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
@@ -567,7 +567,7 @@ Inventory of the packages you own — newly reached owned packages become fixpoi
 Derived inventory to recompute afterwards (optional)
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-b\fR, \fB\-\-branch\fR \fI<BRANCH>\fR
 fedrq branch (e.g. hs.el9, epel9)
@@ -608,13 +608,13 @@ Packages to start keeping
 Triage packages no essential inventory needs: keep as a cull candidate, file into an inventory, or drop
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-pattern\fR \fI<GLOB,...>\fR
 Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-start\-from\fR \fI<NAME>\fR
 Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
@@ -629,7 +629,7 @@ Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a s
 Essential inventory file(s): packages found in any of these are never cull candidates (repeat the flag per file)
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -669,10 +669,10 @@ Mark (or remove) packages no longer carried on any active branch (dist\-git proj
 Active branch(es) to check against (CSV or repeated; e.g. `rawhide,f44,epel9`). Default: queried from Bodhi\*(Aqs active releases, plus rawhide
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-pattern\fR \fI<GLOB,...>\fR
 Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
@@ -687,7 +687,7 @@ Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration o
 Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a sub\-range
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -715,13 +715,13 @@ Print help
 Bring the workspace\*(Aqs inventories up to date with its keeps: walk new keeps, recompute the derived inventories, ask the decisions a program cannot make, then triage what nothing justifies
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-into\fR \fI<PATH>\fR
 Essential inventory that promoted packages are filed into (default: the closure\*(Aqs first keeps inventory)
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-y\fR, \fB\-\-yes\fR
 Take every default without asking (ride, keep essential), and leave the triage candidates as cull candidates
@@ -736,7 +736,7 @@ Ignore the day\-fresh ACL cache in the triage
 Compute and report only: write no file, walk nothing, ask nothing (new keeps are listed instead of walked)
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -755,19 +755,19 @@ Print help
 Remove a package from the inventory
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-rpm\fR \fI<RPM>\fR
 Remove specific binary RPM(s) instead of the whole package
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-C\fR, \fB\-\-directory\fR \fI<DIR>\fR
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -783,13 +783,13 @@ Source RPM name to remove
 Audit pending upstream updates by semver impact, flagging which are non\-breaking, breaking, or need review
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-pattern\fR \fI<GLOB,...>\fR
 Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-start\-from\fR \fI<NAME>\fR
 Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
@@ -804,7 +804,7 @@ Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a s
 Batch mode: one Bugzilla query for bugs assigned to or CC\*(Aqing EMAIL (default: the configured email), matched against the inventory locally. Much faster on a large inventory, but misses bugs where EMAIL is neither assignee nor CC\*(Aqd
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -826,13 +826,13 @@ Print help
 Show inventory contents
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-workload\fR \fI<WORKLOAD>\fR
 Filter by workload
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-json\fR
 Output as JSON instead of human\-readable
@@ -841,7 +841,7 @@ Output as JSON instead of human\-readable
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -854,7 +854,7 @@ Print help
 Sync inventory from Fedora dist\-git (Pagure) access
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-user\fR \fI<USER>\fR
 Import packages for this dist\-git user
@@ -863,7 +863,7 @@ Import packages for this dist\-git user
 Import packages for this dist\-git group
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-C\fR, \fB\-\-directory\fR \fI<DIR>\fR
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
@@ -875,7 +875,7 @@ Output TOML file
 One owner\-alias request instead of a prefix scan. Direct owner/admin/commit only: collaborator/ticket grants are missed (and removed under \-\-prune). Implies \-\-no\-groups
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -933,13 +933,13 @@ Print help
 Sync inventory from a GitLab RPM group
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-url\fR \fI<URL>\fR
 GitLab group URL
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-preset\fR \fI<PRESET>\fR
 Preset: hyperscale, proposed\-updates, centos\-stream
@@ -954,7 +954,7 @@ Output TOML file
 Exclude packages by glob (CSV or repeated)
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -985,10 +985,10 @@ Close open release\-monitoring bugs as CANTFIX for any inventoried package that 
 Dist\-git branch(es) to check retirement against (CSV or repeated; e.g. `rawhide`, `epel10`, `f43`). Each branch scopes its own Bugzilla search — a `rawhide` retirement closes the Fedora/rawhide bug, an `epel9` retirement closes the Fedora EPEL/epel9 bug. A package retired on one branch but live on another only has bugs closed where it\*(Aqs dead
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-pattern\fR \fI<GLOB,...>\fR
 Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
@@ -1003,7 +1003,7 @@ Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration o
 Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a sub\-range
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-batch\fR [\fI<EMAIL>\fR]
 Batch mode: one Bugzilla query for bugs assigned to or CC\*(Aqing EMAIL (default: the configured email), matched against the inventory locally. Much faster on a large inventory, but misses bugs where EMAIL is neither assignee nor CC\*(Aqd
@@ -1043,13 +1043,13 @@ Print help
 Triage open release\-monitoring bugs for inventoried packages by bumping their Bugzilla priority to match the inventory
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-pattern\fR \fI<GLOB,...>\fR
 Only process packages matching this glob (e.g. `rust\-*`; a bare name matches exactly). Comma\-separated or repeated; default: all packages
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-start\-from\fR \fI<NAME>\fR
 Resume from this package onwards (inclusive), in the inventory\*(Aqs iteration order
@@ -1064,7 +1064,7 @@ Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a s
 Batch mode: one Bugzilla query for bugs assigned to or CC\*(Aqing EMAIL (default: the configured email), matched against the inventory locally. Much faster on a large inventory, but misses bugs where EMAIL is neither assignee nor CC\*(Aqd
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-close\-stale\fR
 Close partially\-addressed bugs without asking
@@ -1104,13 +1104,13 @@ Stop keeping packages: over a saved dependency graph, report what the removal fr
 Dependency graph JSON from a `deps \-\-graph` run
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-\-deps\fR \fI<PATH>\fR
 Derived dependency inventories (a `deps` output merged by `intersect`, say); freed packages leave these with \-\-apply
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-\-apply\fR
 Edit the inventories; without it, report only
@@ -1122,7 +1122,7 @@ Run as if started in DIR (like `git \-C`): the workspace file, relative inventor
 Output machine\-readable JSON
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
@@ -1138,16 +1138,16 @@ Packages to stop keeping
 Validate inventory consistency
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
-Path(s) to inventory TOML file(s)
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
-Directory to scan for *.toml inventory files
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
 .TP
 \fB\-C\fR, \fB\-\-directory\fR \fI<DIR>\fR
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
-Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)

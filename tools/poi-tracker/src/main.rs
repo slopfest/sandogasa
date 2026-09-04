@@ -32,11 +32,16 @@ use sandogasa_distgit::DistGitClient;
     before_help = sandogasa_cli::banner!()
 )]
 struct Cli {
-    /// Path(s) to inventory TOML file(s).
+    /// Exactly these inventory TOML file(s) (repeatable) — the most
+    /// specific of the three ways to name inventories, and always
+    /// honoured: it overrides whatever a workspace file would supply.
     #[arg(short, long, global = true)]
     inventory: Vec<String>,
 
-    /// Directory to scan for *.toml inventory files.
+    /// Every *.toml in DIR as an inventory, roles unknown — for
+    /// commands that treat inventories alike (show, find, validate,
+    /// export). Use -i to pick files, or a workspace to say which is
+    /// which.
     #[arg(short = 'I', long, value_name = "DIR", global = true)]
     inventory_dir: Vec<String>,
 
@@ -45,10 +50,11 @@ struct Cli {
     #[arg(short = 'C', long = "directory", value_name = "DIR", global = true)]
     directory: Option<String>,
 
-    /// Workspace file naming the inventories, graph and walk settings
-    /// (default: ./kondo.toml when present). Supplies the flags the
-    /// maintenance subcommands would otherwise need; the command line
-    /// wins, --no-defaults ignores it.
+    /// Workspace file (default: ./kondo.toml when present) naming which
+    /// inventory is which — owned, keeps, derived, retired, cull — plus
+    /// the graph and walk settings, so each subcommand knows its inputs
+    /// without -i. Only fills flags not given on the command line;
+    /// --no-defaults ignores it.
     #[arg(short = 'w', long, value_name = "PATH", global = true)]
     workspace: Option<String>,
 

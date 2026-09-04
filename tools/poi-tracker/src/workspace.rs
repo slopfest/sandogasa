@@ -236,6 +236,17 @@ impl Workspace {
                 );
                 set("user", user);
             }
+            // The commands about the packages you maintain: the owned
+            // inventory is their `-i`.
+            "semver-audit" | "triage-updates" | "triage-retired" | "prune-retired" | "show"
+            | "validate" => {
+                set(
+                    "inventory",
+                    self.owned
+                        .as_ref()
+                        .map(|o| self.resolved(std::slice::from_ref(o))),
+                );
+            }
             "keep" => {
                 let c = self.closure(closure)?;
                 set("inventory", Some(self.resolved(&c.keeps)));
@@ -362,6 +373,12 @@ mod tests {
         assert_eq!(t["repo"].as_str(), Some("stack"));
         assert!(t.get("graph").is_none(), "no graph configured for hs-el9");
         assert!(ws.defaults_for("keep", Some("nope")).is_err());
-        assert!(ws.defaults_for("show", None).unwrap().is_none());
+        // The owned inventory feeds the maintainer-side commands.
+        let t = ws.defaults_for("semver-audit", None).unwrap().unwrap();
+        assert_eq!(
+            t["inventory"].as_array().unwrap()[0].as_str(),
+            Some("/data/direct.toml")
+        );
+        assert!(ws.defaults_for("export", None).unwrap().is_none());
     }
 }

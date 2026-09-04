@@ -26,7 +26,7 @@ linking and pinging and review-deps, and fedora-review-digest's posting
 use it; the plain `update`/`update_many` remain for callers that want
 the raw request.
 
-### Every tool's `--version` names the checkout it was built from
+### Every tool's `--version` names the checkout it was built from (breaking)
 
 A binary built from the repository said only `poi-tracker 0.22.0`, the
 same as a crates.io install — no way to tell which of the seventy-odd
@@ -46,6 +46,12 @@ The new `sandogasa-build` crate is the build-script helper
 HEAD, the index, the tags or the tool's sources change), and
 `sandogasa_cli::version!()` / `banner!()` read what it emitted, in the
 tool's own crate.
+
+Breaking for users of `sandogasa_cli::man`: `check`, `render` and
+`render_dated` take the crate version as an extra argument (the tool's
+`env!("CARGO_PKG_VERSION")`), so the page never carries the command's
+own version string. A tool's man test becomes
+`sandogasa_cli::man::check::<Cli>(path, env!("CARGO_PKG_VERSION"))`.
 
 ### sandogasa-review: the prompt speaks each tool's words (breaking)
 
@@ -138,7 +144,9 @@ packages themselves are never offered for culling. `kondo`'s essential
 set is every closure's keeps, walk outputs and derived inventories plus
 the retired ones. `kondo`, `keep`, `unkeep`,
 `deps`, `derive`, `dependents`, `act` and `announce` read their flags
-from it, so `poi-tracker kondo` and `poi-tracker keep ripgrep` are
+from it, and `semver-audit`, `triage-updates`, `triage-retired`,
+`prune-retired`, `show` and `validate` take the owned inventory as
+their `-i`, so `poi-tracker kondo` and `poi-tracker keep ripgrep` are
 complete commands; `-w PATH` names another file, `--closure NAME`
 picks a closure other than the first, `-C DIR` runs as if started in
 the data directory (as `git -C` does), the command line wins, and

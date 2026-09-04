@@ -35,6 +35,17 @@ left open / reported as up to date).
 
 ## Usage
 
+### Naming inventories: `-i`, `-I`, or a workspace
+
+Three ways, from most to least specific. `-i FILE` (repeatable) names
+exactly these inventories and always wins. `-I DIR` takes every
+`*.toml` in a directory as an inventory, roles unknown — right for the
+commands that treat inventories alike (`show`, `find`, `validate`,
+`export`), wrong for the ones where it matters which file is the keeps
+and which the packages you own. A workspace file says which is which,
+once, so those subcommands need no `-i` at all; anything typed on the
+command line still overrides it.
+
 ### The workspace file
 
 The maintenance subcommands — `kondo`, `keep`, `unkeep`, `deps`,
@@ -86,7 +97,11 @@ file.
 With the file in place, `poi-tracker kondo`, `poi-tracker keep ripgrep`
 or `poi-tracker --closure hyperscale-el9 dependents` are complete
 commands, and `-C DIR` runs any of them as if started in the data
-directory, the way `git -C` does. A flag on the command line still wins, and `--no-defaults`
+directory, the way `git -C` does. The commands about the packages you
+maintain — `semver-audit`, `triage-updates`, `triage-retired`,
+`prune-retired`, `show`, `validate` — take the owned inventory as their
+`-i` from it too, so `poi-tracker -C ../data semver-audit --non-breaking`
+is the whole safe-updates question. A flag on the command line still wins, and `--no-defaults`
 ignores the file (and the config file's `[defaults]`) for one run.
 
 ### Act on the cull verdicts
@@ -95,8 +110,9 @@ The workflow's last verb — walk the standing verdicts and give the
 packages away, one confirmed action at a time:
 
 ```sh
+poi-tracker -C ../data act                     # with a workspace file
 poi-tracker -i cull.toml act --user salimma \
-    --personal personal.toml
+    --personal personal.toml                   # without one
 ```
 
 Each package is classified fresh (cache-first) and prompted by level:
@@ -182,7 +198,8 @@ report — the artifact the act phase posts to the mailing list before
 anything runs:
 
 ```sh
-poi-tracker -i cull.toml announce --user salimma
+poi-tracker -C ../data announce                        # with a workspace file
+poi-tracker -i cull.toml announce --user salimma       # without one
 ```
 
 The text report is for humans — the mailing list gets package names
@@ -215,9 +232,15 @@ a `deps --graph` run saved, classify every package of the given
 inventories by who needs it:
 
 ```sh
+poi-tracker -C ../data dependents                      # with a workspace file
+poi-tracker -C ../data --closure hyperscale-el9 dependents
 poi-tracker -i essential.toml -i essential-rust.toml \
-    dependents --graph fedora-build-deps-graph.json
+    dependents --graph fedora-build-deps-graph.json    # without one
 ```
+
+Reach for it when you want the whole picture — every keep classified —
+rather than the changes `reconcile` reports; the `[devel-only]` carried
+entries are the ones `reconcile` offers to demote.
 
 **Leaves** have no dependent in the closure: one shipping real
 binaries is presumably kept for its own sake, while a `[devel-only]`
@@ -244,8 +267,9 @@ pull from repos of interest — e.g. which EPEL 9 packages a Hyperscale
 inventory depends on:
 
 ```
+$ poi-tracker -C ../data --closure hyperscale-el9 deps   # with a workspace file
 $ poi-tracker -i hyperscale-packages.toml deps -b hs.el9 -r stack \
-    -o hyperscale-epel9-deps.toml
+    -o hyperscale-epel9-deps.toml                       # without one
 1 runtime dependency from [epel] for 2 package(s) on hs.el9:
   python-zstandard (epel) — systemd-ukify requires python3dist(zstandard)
 wrote hyperscale-epel9-deps.toml
@@ -313,10 +337,14 @@ The derived dependency inventory is a view the graph can rebuild:
 owned packages the keeps reach, minus the keeps themselves —
 
 ```sh
+poi-tracker -C ../data derive                          # with a workspace file
 poi-tracker -i essential.toml -i essential-rust.toml \
     derive --graph fedora-build-deps-graph.json \
-    --owned personal.toml -o essential-deps.toml
+    --owned personal.toml -o essential-deps.toml       # without one
 ```
+
+`reconcile` runs this for every closure; on its own it is the quick
+"is the derived inventory current?" check, report-only until `--apply`.
 
 The report is the diff against the file's current content (`+`/`-`
 lines); `--apply` replaces its packages wholesale, `reason` chains
@@ -401,12 +429,20 @@ Walk the new keeps' dependencies against the saved graph, so fedrq is
 only consulted for capabilities the graph has never seen:
 
 ```sh
+poi-tracker -C ../data keep ripgrep                    # with a workspace file
+poi-tracker -C ../data keep python-lazr-config         # a keep need not be yours
 poi-tracker -i essential.toml -i essential-rust.toml \
     keep ripgrep --into essential.toml \
     --graph fedora-build-deps-graph.json \
     --owned personal.toml --deps essential-deps.toml \
-    -b rawhide --from rawhide
+    -b rawhide --from rawhide                          # without one
 ```
+
+This is the one manual step `reconcile` cannot replace: `reconcile`
+walks keeps that are *new to the graph*, so a keep the graph has
+already seen — rust-totp-rs before and after its rawhide build grew a
+feature — is re-walked with `keep`, which records the new edges without
+re-filing anything.
 
 Known capabilities resolve offline from the graph (their providers'
 Requires come from the recorded edges, so the walk cascades through
@@ -437,10 +473,11 @@ it undecided for this run. Filing is immediate, so an interrupted triage loses
 nothing already decided.
 
 ```sh
+poi-tracker -C ../data kondo                           # with a workspace file
 poi-tracker -i personal.toml kondo --user salimma \
     --essential inventory-hyperscale.toml \
     --essential hs-el9-deps.toml --essential hs-el10-deps.toml \
-    -o cull.toml
+    -o cull.toml                                       # without one
 ```
 
 Confirmed candidates are then classified by your own (direct) dist-git
@@ -628,7 +665,8 @@ which updates are safe to push and which need care:
 
 ```sh
 # All pending updates, grouped by impact
-poi-tracker -i inventory.toml semver-audit
+poi-tracker -C ../data semver-audit           # with a workspace file
+poi-tracker -i inventory.toml semver-audit      # without one
 
 # Just the safe ones for your Rust packages
 poi-tracker -i inventory.toml semver-audit --pattern 'rust-*' --non-breaking
@@ -959,11 +997,15 @@ anything, what else stops being needed — over the dependency graph a
 `deps --graph` run saved:
 
 ```sh
+poi-tracker -C ../data unkeep neovim GraphicsMagick    # with a workspace file
 poi-tracker -i essential.toml -i essential-rust.toml \
     unkeep neovim GraphicsMagick \
     --graph fedora-build-deps-graph.json \
-    --deps essential-deps.toml
+    --deps essential-deps.toml                         # without one
 ```
+
+Use it before dropping a keep to see what the removal frees;
+`reconcile` only notices a keep that is already gone.
 
 The report names each freed package with its former requirers; adding
 `--apply` removes the unkept packages from the `-i` keep inventories
