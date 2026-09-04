@@ -282,6 +282,35 @@ than annotated as done.
   livable); build it the next time a prune session actually stalls on
   the walk.
 
+## poi-tracker: the kondo maintenance loop needs a user-facing design (2026-09-04)
+
+The first cycle closed today (releng removed the 39 ask-level ACLs;
+`sync-distgit --prune` dropped them and picked up 3 new grants), and
+what comes next is the part nobody can hold in their head. After any
+change to the keep set — a package released, a new grant, a
+retirement — the current procedure is: run `keep`/`unkeep` per
+package, iterate the dependency walk to a fixpoint so the new
+dependencies are known, run `dependents` to see what became a leaf or
+is only carried, decide which of the newly reachable packages deserve
+an *essential* entry of their own rather than riding along in
+essential-deps, run `derive --apply`, then `kondo` again for what fell
+out — each step a different subcommand with its own inventory
+arguments and ordering rules. It works, and it is convoluted: the
+user's words were "very convoluted and hard to keep track of".
+
+Nothing of this is released, so the design is still free to change.
+Sketch the loop as one thing the user drives rather than five they
+sequence: a single command (or `kondo` itself) that takes the
+inventories and the graph, recomputes what a change implies (new
+dependencies, orphaned carried packages, leaves that lost their
+reason), presents the decisions it cannot make — "X is now reachable
+only through Y; keep it as essential, let it ride, or cull?" — and
+writes every file itself. Decide where the fixpoint iteration lives
+(inside that command, with the graph as its memory), what the human is
+asked and in what order, and how a half-finished session resumes. The
+existing subcommands stay as the plumbing. Do this before the release
+that first ships kondo; it is a day's work, not an afternoon's.
+
 ## poi-tracker / sandogasa-pkg-health seam
 
 Decision (2026-07-21): keep both tools — pkg-health **observes**
