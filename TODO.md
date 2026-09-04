@@ -303,15 +303,9 @@ per dependency world, `external` for other people's keeps whose
 dependencies we track) supplies every maintenance subcommand's flags,
 and `reconcile` runs the loop over it — walk new keeps, recompute the
 derived inventories, ask ride/promote and keep/demote, hand what is
-left to kondo's triage. Still open:
+left to kondo's triage. The Hyperscale closures got their graphs and
+the README its workspace-era examples on 2026-09-05. Still open:
 
-- The Hyperscale closures have no graph yet; the first
-  `poi-tracker --closure hyperscale-el9 deps` (and el10) creates them,
-  and `reconcile` skips a closure until then. Run those once.
-- The manual subcommands want concrete, workspace-era examples in the
-  README: `keep foo` / `unkeep foo` / `--closure X dependents` with
-  nothing else on the line, and when to reach for each instead of
-  `reconcile` (the user asked for this explicitly).
 - `reconcile` re-asks nothing it has written, but a "since first seen"
   memory of decisions declined (ride now, ask again later?) does not
   exist; see whether the second real cycle wants one.
@@ -436,18 +430,6 @@ considered and rejected.)
   `rust_version` (crates.io exposes it) against the target's rustc and
   flag chains that are blocked on the toolchain before any branch
   requests/builds are attempted.
-- (2026-07-02, resolved 2026-09-03) check-crate: feature-aware
-  dependency resolution — done in the form that fits Fedora's
-  packaging, and deliberately no further. Root kind comes from
-  crates.io `bin_names` (application → default features; library →
-  all features), transitive crates always count all features
-  (rust2rpm `-a`), repo checks are batched per dependency list. A
-  "hybrid" that would delegate rawhide-packaged crates to `resolve`'s
-  real BuildRequires closure was designed and then dropped: the Rust
-  workflow is (a) bring or update the package in rawhide, then (b)
-  branch or rebase it in the stable series — check-crate serves (a)
-  against rawhide, where source and target coincide and the
-  delegation case cannot arise, and `resolve` already *is* step (b).
 - Second-level branch-request escalation: when a `needinfo?` ping
   (the level-1 escalation `escalate` already does) goes unanswered
   for another N days, file a releng ticket on Forgejo (releng's
@@ -635,6 +617,14 @@ considered and rejected.)
     and it is the piece that decides what to do next.
 
   Design settled so far (2026-08-07), the rest still open.
+
+  Status 2026-09-05: `check-wip` is the ledger and overview below;
+  `check-crate --staging-copr` (and the per-crate `[check-crate.
+  staging-copr]` config) reads a COPR as the layer over the branch, so
+  staged dependencies stop reading as missing; `copr-prune` shrinks the
+  COPR to what is still in flight. Still open of the wanted list: the
+  COPR recorded on the review request and found again from it, and
+  `fedora-review-digest` enabling it for the review run by itself.
 
   It goes in ebranch, as a `copr-status` subcommand. ebranch already
   owns every action the report dispatches to — `file-request`,
