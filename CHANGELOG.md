@@ -53,7 +53,7 @@ Breaking for users of `sandogasa_cli::man`: `check`, `render` and
 own version string. A tool's man test becomes
 `sandogasa_cli::man::check::<Cli>(path, env!("CARGO_PKG_VERSION"))`.
 
-### sandogasa-review: the prompt speaks each tool's words (breaking)
+### sandogasa-review: the prompt speaks each tool's words
 
 Filing a kondo candidate into an inventory took two prompts: `e`,
 Enter, then the path — the shared keep/explain/remove prompt only ever
@@ -83,11 +83,11 @@ and the finding reviews (ebranch check-update, fedora-review-digest)
 keep the default keep/explain/remove. The `Resolution` a tool gets back
 is unchanged.
 
-Removed: `resolve_interactive_noted` and `resolve_interactive_noted_with`
-— call `resolve` with `Prompt { notes: true, default_explanation, vocab
-}`; `resolve_interactive(items, summary)` stays as the default-words,
-no-notes shortcut. `Vocabulary`'s fields are `keep`, `explain`, `remove`
-(`Word`) and `explanation`.
+Against 0.22.0 this is additive: `resolve_interactive(items, summary)`
+is unchanged, and `Word`, `Vocabulary`, `Choice`, `Arg`, `Menu`,
+`Answer`, `Prompt`, `parse_answer`, `ask` and `resolve` are new. (The
+`resolve_interactive_noted` variants that existed between releases never
+shipped.)
 
 ### poi-tracker: reconcile, the maintenance loop as one command
 
@@ -156,7 +156,7 @@ through the new `parse_with_defaults_and`, which takes a second
 defaults source computed from the first parse and lays it over the
 config file's.
 
-### sandogasa-hattrack: attendance at a meeting, activity in an issue tracker
+### sandogasa-hattrack: attendance at a meeting, activity in an issue tracker (breaking)
 
 Asking whether a FESCo member had been coming to the meetings and
 taking part in the tickets meant reading meetbot minutes one by one
@@ -194,6 +194,11 @@ a token, and `user_activity` pages a user's own activity feed
 back to the first event matching a predicate, with `Activity::issue_ref`
 reading the issue number and text out of either content shape the API
 uses.
+
+sandogasa-fasjson's `FasUser` carries `ircnicks` and `matrix_ids()`
+turns them into Matrix IDs — the one breaking change here: a struct
+literal of `FasUser` must now name `ircnicks` too (add
+`ircnicks: Vec::new()`).
 
 ### ebranch: side tags and COPRs are refetched on their own, not with everything
 
