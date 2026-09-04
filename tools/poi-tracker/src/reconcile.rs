@@ -74,6 +74,18 @@ fn names_of(path: &str) -> Result<BTreeSet<String>, String> {
         .collect())
 }
 
+/// The keeps a file contributes as walk roots: its shipped packages —
+/// an unshipped one (a GitLab project nothing ships) is never a root,
+/// as `deps` skips it too.
+fn shipped_names_of(path: &str) -> Result<BTreeSet<String>, String> {
+    Ok(sandogasa_inventory::load(path)?
+        .package
+        .into_iter()
+        .filter(|p| !p.is_unshipped())
+        .map(|p| p.name)
+        .collect())
+}
+
 fn read_graph(path: &str) -> Result<deps::DepsGraph, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("reading {path}: {e}"))?;
     serde_json::from_slice(&bytes).map_err(|e| format!("parsing {path}: {e}"))
@@ -247,7 +259,7 @@ fn reconcile_closure(
         // Keeps per file, and the union.
         let mut keep_file_of: BTreeMap<String, String> = BTreeMap::new();
         for f in &keeps_files {
-            for n in names_of(f)? {
+            for n in shipped_names_of(f)? {
                 keep_file_of.entry(n).or_insert_with(|| f.clone());
             }
         }
