@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### sandogasa-review: `e <why>` explains in one line
+
+Filing a kondo candidate into an inventory took two prompts: `e`,
+Enter, then the path — the shared keep/explain/remove prompt only ever
+read the explanation on its own line, and rejected `e path.toml` as
+unrecognized. `e <why>` is now accepted on the answer line itself
+(`k <note>` already was, where notes are on); a bare `e` still asks.
+kondo's prompt hint and the review prompt say so.
+
 ### poi-tracker: reconcile, the maintenance loop as one command
 
 After the first Marie Kondo cycle closed, keeping the inventories true

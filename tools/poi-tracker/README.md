@@ -459,7 +459,8 @@ timescales — `--refresh-acls` forces a fresh look), so each candidate
 line carries its context — `old-toy (commit) — nothing essential needs it`
 reads differently from `(owner)`.
 
-`--explain-into PATH` sets a default: Enter at the explanation prompt
+`e path.toml` files the package in one line; a bare `e` asks for the
+path next. `--explain-into PATH` sets a default: Enter at that prompt
 files the package there, so a pass that sorts many packages into one
 inventory is two keystrokes each (`e`, Enter); an explicit path still
 wins.

@@ -84,8 +84,9 @@ pub fn resolve_interactive_noted<T>(
 
 /// Parse one answer line into a choice. Empty (Enter) defaults to Keep —
 /// the safe option that never silently drops or accepts a finding.
-/// With `notes`, `k <note>` keeps with the note. Returns None for
-/// unrecognized input (the caller should re-ask).
+/// `e <explanation>` explains in one line instead of being asked for
+/// the explanation next; with `notes`, `k <note>` keeps with the note.
+/// Returns None for unrecognized input (the caller should re-ask).
 fn parse_choice(line: &str, notes: bool) -> Option<(Choice, Option<String>)> {
     let line = line.trim();
     let (head, rest) = match line.split_once(char::is_whitespace) {
@@ -93,9 +94,10 @@ fn parse_choice(line: &str, notes: bool) -> Option<(Choice, Option<String>)> {
         None => (line, ""),
     };
     if !rest.is_empty() {
-        return match notes && matches!(head.to_ascii_lowercase().as_str(), "k" | "keep") {
-            true => Some((Choice::Keep, Some(rest.to_string()))),
-            false => None,
+        return match head.to_ascii_lowercase().as_str() {
+            "e" | "explain" => Some((Choice::Explain, Some(rest.to_string()))),
+            "k" | "keep" if notes => Some((Choice::Keep, Some(rest.to_string()))),
+            _ => None,
         };
     }
     let choice = match head.to_ascii_lowercase().as_str() {
@@ -148,12 +150,13 @@ fn prompt_one(
     let keep = if notes { "(k)eep [k <note>]" } else { "(k)eep" };
     loop {
         let _ = writeln!(err, "[{idx}/{total}] {summary}");
-        let _ = write!(err, "  {keep} / (e)xplain / (r)emove [k]: ");
+        let _ = write!(err, "  {keep} / (e)xplain [e <why>] / (r)emove [k]: ");
         let _ = err.flush();
         match parse_choice(&read()?, notes) {
             Some((Choice::Keep, note)) => return Ok((Resolution::Keep, note)),
             Some((Choice::Remove, _)) => return Ok((Resolution::Removed, None)),
-            Some((Choice::Explain, _)) => {
+            Some((Choice::Explain, Some(why))) => return Ok((Resolution::Explained(why), None)),
+            Some((Choice::Explain, None)) => {
                 match default_explanation {
                     Some(default) => {
                         let _ = write!(err, "    explanation [{default}]: ");
@@ -178,7 +181,7 @@ fn prompt_one(
                 return Ok((Resolution::Explained(why), None));
             }
             None => {
-                let _ = writeln!(err, "  enter k, e, or r");
+                let _ = writeln!(err, "  enter k, e [<why>], or r");
             }
         }
     }
@@ -213,6 +216,15 @@ mod tests {
     #[test]
     fn parse_choice_explain_and_remove() {
         assert_eq!(parse_choice("e", false), Some((Choice::Explain, None)));
+        // The explanation may ride on the same line.
+        assert_eq!(
+            parse_choice("e keep-rust.toml", false),
+            Some((Choice::Explain, Some("keep-rust.toml".to_string())))
+        );
+        assert_eq!(
+            parse_choice("explain because reasons", true),
+            Some((Choice::Explain, Some("because reasons".to_string())))
+        );
         assert_eq!(
             parse_choice("EXPLAIN", false),
             Some((Choice::Explain, None))

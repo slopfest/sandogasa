@@ -1843,8 +1843,9 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
     let resolutions = if interactive {
         eprintln!(
             "{} candidate(s). keep = cullable; explain = file it into an \
-             inventory (the explanation is the inventory path); remove = \
-             the analysis missed a real need.",
+             inventory (the explanation is the inventory path: `e path.toml` \
+             in one line, or `e` then the path); remove = the analysis \
+             missed a real need.",
             classified.len()
         );
         sandogasa_review::resolve_interactive_noted(
