@@ -2,14 +2,23 @@
 
 ## Unreleased
 
-### sandogasa-review: `e <why>` explains in one line
+### sandogasa-review: `e <why>` explains in one line, and kondo says cull
 
 Filing a kondo candidate into an inventory took two prompts: `e`,
 Enter, then the path — the shared keep/explain/remove prompt only ever
 read the explanation on its own line, and rejected `e path.toml` as
 unrecognized. `e <why>` is now accepted on the answer line itself
 (`k <note>` already was, where notes are on); a bare `e` still asks.
-kondo's prompt hint and the review prompt say so.
+
+And at kondo's prompt "keep" meant the opposite of what it says: the
+finding is "nothing essential needs this", so keeping the finding
+culls the package — confusing next to `reconcile`, where keep means
+keep. The prompt now takes a `Vocabulary` for its choices, and kondo's
+reads `(c)ull [c <note>] / (e)ssential [e <inventory>] / (s)kip` —
+"explain" was as misleading as "keep" there, since the explanation is
+the inventory the package becomes essential through, and "remove" only
+ever left a candidate undecided for the run. The other users of the
+prompt are unchanged.
 
 ### poi-tracker: reconcile, the maintenance loop as one command
 
@@ -33,8 +42,16 @@ derived inventory. Answers are written as given, `a` takes the default
 for the rest, `q` stops asking. External closures are brought up to
 date but never asked about. Then the owned packages no essential
 inventory justifies go through kondo's triage into the cull file.
-`--yes` takes every default, `--dry-run` reports without writing or
-walking, `--json` reports the closures and the triage candidates. A
+Before the triage, a candidate that a closure package you do not own
+needs — python-zope-testrunner, the test runner of the lazr-config
+mailman3 pulls in — can be kept by making that package essential instead:
+`e [<inventory>]`, the same answer as at the triage, files it as a
+keep, it is walked with its build dependencies, and the candidate
+becomes a derived entry instead of a cull. That is the deliberate
+alternative to seeding every collected package's BuildRequires, which
+would be Fedora's whole build closure. `--yes` takes every default,
+`--dry-run` reports without writing or walking, `--json` reports the
+closures and the triage candidates. A
 former keep is a graph root neither kept nor reached any more — not
 every root, since the fixpoint makes reached owned packages roots too.
 

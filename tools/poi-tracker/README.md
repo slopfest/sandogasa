@@ -428,12 +428,12 @@ machine-readably.
 The set difference between the inventory ("packages I maintain") and
 the union of *essential* inventories — work inventories, and the
 dependency inventories `deps` writes — is the list of packages nothing
-justifies. `kondo` walks that list with the shared keep/explain/remove
-prompt, under this reading: the finding is "nothing essential needs
-this package", so **keep** confirms it as a cull candidate, **explain**
-files the package into another inventory (the explanation *is* the
-inventory path; the file is created if needed), and **remove** drops a
-false positive. Filing is immediate, so an interrupted triage loses
+justifies. `kondo` walks that list with the shared review prompt, worded for
+what happens here: the finding is "nothing essential needs this
+package", so **cull** (`c`, or Enter) confirms it as a cull candidate,
+**essential** (`e path.toml`) files the package into the inventory that
+makes it so (the file is created if needed), and **skip** (`s`) leaves
+it undecided for this run. Filing is immediate, so an interrupted triage loses
 nothing already decided.
 
 ```sh
@@ -460,7 +460,7 @@ line carries its context — `old-toy (commit) — nothing essential needs it`
 reads differently from `(owner)`.
 
 `e path.toml` files the package in one line; a bare `e` asks for the
-path next. `--explain-into PATH` sets a default: Enter at that prompt
+inventory next. `--explain-into PATH` sets a default: Enter at that prompt
 files the package there, so a pass that sorts many packages into one
 inventory is two keystrokes each (`e`, Enter); an explicit path still
 wins.
@@ -468,7 +468,7 @@ wins.
 The cull file records why each package is condemned. The stock
 `reason` is `kondo cull candidate (<level>)`; `--reason TEXT` replaces
 the wording for packages culled this run (the sitting usually has one
-shared story — "retiring my GNOME extensions"), and `k <note>` at the
+shared story — "retiring my GNOME extensions"), and `c <note>` at the
 prompt records this one package's own words instead. The access level
 is always appended, entries already in the file keep their reason, and
 only names are ever read back — so hand-editing a reason later is
@@ -496,9 +496,9 @@ entry (a mistaken keep, say) and the next run asks about that package
 again. The reverse correction is automatic: a culled package that has
 since become essential — after a `deps` run justified it, say
 — is rescued from the file and reported, so the verdict never
-contradicts the inputs. `remove` decisions are deliberately not persisted — a remove
-is a temporary skip, and the dropped candidate returns on the next run
-until whatever the analysis missed is fixed in the essential inputs. Sessions
+contradicts the inputs. `skip` decisions are deliberately not persisted — a skipped
+candidate returns on the next run until whatever the analysis missed is
+fixed in the essential inputs. Sessions
 running at the same time should still write distinct files — the merge
 is load-modify-save, so simultaneous finishes can drop each other's
 additions — and let a later pass fold them together.
@@ -588,8 +588,18 @@ as answered so an interrupted run resumes where it stopped:
 `a` takes the default for the rest, `q` stops asking. External
 closures are walked and recomputed but never asked about: their keeps
 are not yours to promote or demote. Once every closure has had its
-say, the owned packages no essential inventory justifies go through
-kondo's keep/explain/remove triage into the cull file, exactly as
+say, the owned packages no essential inventory justifies are looked at
+once more before the triage: one that a closure package you do *not*
+own needs — python-zope-testrunner, the test runner of the
+python-lazr-config that mailman3 pulls in — can be kept by making
+that package essential instead: `e` files it as a keep in the closure's
+first keeps inventory (or `--into`), `e <inventory>` in that one — the
+same letter and word as at the triage, where `e` makes the candidate
+itself essential. It is walked with its build dependencies, and the
+candidate becomes a derived entry instead of a cull. When several
+packages need the candidate the first is offered; `poi-tracker keep
+<other>` takes a different one. What remains goes through
+kondo's cull/essential/skip triage into the cull file, exactly as
 `poi-tracker kondo` would.
 
 `--yes` takes every default without asking (and leaves the triage

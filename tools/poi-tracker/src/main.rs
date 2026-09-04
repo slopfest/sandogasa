@@ -386,7 +386,7 @@ struct KondoArgs {
 
     /// Reason recorded in the -o cull file for packages culled this
     /// run (the access level is always appended). A note typed at
-    /// the prompt as `k <note>` overrides it per package.
+    /// the prompt as `c <note>` overrides it per package.
     #[arg(long)]
     reason: Option<String>,
 
@@ -1842,16 +1842,16 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
     let interactive = !args.yes && !args.json && std::io::stdin().is_terminal();
     let resolutions = if interactive {
         eprintln!(
-            "{} candidate(s). keep = cullable; explain = file it into an \
-             inventory (the explanation is the inventory path: `e path.toml` \
-             in one line, or `e` then the path); remove = the analysis \
-             missed a real need.",
+            "{} candidate(s). cull = confirm it as a cull candidate; essential = \
+             file it into an inventory (`e path.toml` in one line, or `e` then \
+             the path); skip = leave it undecided for now (it comes back next run).",
             classified.len()
         );
-        sandogasa_review::resolve_interactive_noted(
+        sandogasa_review::resolve_interactive_noted_with(
             classified,
             kondo::triage_summary,
             args.explain_into.as_deref(),
+            &kondo::CULL_VOCABULARY,
         )?
     } else {
         classified

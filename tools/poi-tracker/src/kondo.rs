@@ -54,6 +54,21 @@ pub enum Action {
     Unknown,
 }
 
+/// The prompt's vocabulary for the triage: the finding is "nothing
+/// essential needs this", so confirming it means culling — `(c)ull`,
+/// not `(k)eep`, which reads as the opposite of what happens — and
+/// explaining it means naming the inventory that makes the package
+/// essential: `(e)ssential [e <inventory>]`; and removing it only
+/// leaves the candidate undecided for this run — `(s)kip`.
+pub const CULL_VOCABULARY: sandogasa_review::Vocabulary = sandogasa_review::Vocabulary {
+    keep_key: 'c',
+    keep_word: "cull",
+    explain_word: "essential",
+    explain_arg: "inventory",
+    remove_key: 's',
+    remove_word: "skip",
+};
+
 /// One triaged-and-classified cull candidate.
 #[derive(Debug, Clone, Serialize)]
 pub struct Culled {
@@ -64,7 +79,7 @@ pub struct Culled {
     pub level: String,
     pub action: Action,
     /// Why this one is being culled, in the user's words — typed at
-    /// the prompt as `k <note>`; carried into the cull file's
+    /// the prompt as `c <note>`; carried into the cull file's
     /// `reason`.
     pub note: Option<String>,
 }

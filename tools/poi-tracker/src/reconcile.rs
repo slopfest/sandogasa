@@ -57,10 +57,21 @@ pub struct ClosureReport {
     pub capabilities_online: usize,
 }
 
+/// A candidate kept off the triage by watching the closure package
+/// that needs it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Watched {
+    /// The owned package nothing justified.
+    pub candidate: String,
+    /// The foreign closure package now kept so its build needs count.
+    pub keep: String,
+}
+
 /// The whole run, as `--json` prints it.
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
     pub closures: Vec<ClosureReport>,
+    pub watched: Vec<Watched>,
     /// Owned packages no essential inventory justifies (not yet
     /// culled), for the triage; listed instead of prompted in JSON.
     pub triage_candidates: Vec<String>,
@@ -443,6 +454,130 @@ fn reconcile_closure(
     Ok(report)
 }
 
+/// The answer to "make X essential, or triage": Enter / `t` triages,
+/// `e` makes the offered package essential in the default keeps
+/// inventory, `e <inventory>` in that one — the same letter and word
+/// as at the triage, where `e` makes the candidate itself essential —
+/// and `q` stops asking. A different needer is what `poi-tracker keep
+/// <package>` is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WatchAnswer {
+    Triage,
+    Watch { into: Option<String> },
+    Quit,
+}
+
+fn parse_watch(line: &str) -> Option<WatchAnswer> {
+    let l = line.trim();
+    let (head, rest) = match l.split_once(char::is_whitespace) {
+        Some((h, r)) => (h.to_ascii_lowercase(), r.trim()),
+        None => (l.to_ascii_lowercase(), ""),
+    };
+    match (head.as_str(), rest) {
+        ("" | "t" | "triage", "") => Some(WatchAnswer::Triage),
+        ("q" | "quit", "") => Some(WatchAnswer::Quit),
+        ("e" | "essential", "") => Some(WatchAnswer::Watch { into: None }),
+        ("e" | "essential", inv) if !inv.contains(char::is_whitespace) => {
+            Some(WatchAnswer::Watch {
+                into: Some(inv.to_string()),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// For each triage candidate some closure package you do not own
+/// needs (to build, usually — its test runner), offer to make that
+/// package essential instead: its build needs then justify the
+/// candidate, and the walk carries the rest. Returns what was made
+/// essential; the caller re-runs the closure so the new keeps are
+/// walked.
+fn offer_watching(
+    opts: &Options,
+    c: &Closure,
+    candidates: &[String],
+    owned: &BTreeSet<String>,
+) -> Result<Vec<Watched>, String> {
+    let ws = opts.ws;
+    let resolve = |p: &str| ws.dir.join(p).to_string_lossy().into_owned();
+    // Every package any closure knows, ours excluded.
+    let mut foreign: BTreeSet<String> = BTreeSet::new();
+    for cl in &ws.closures {
+        for p in cl
+            .keeps
+            .iter()
+            .chain(cl.closure.iter())
+            .chain(cl.derived.iter())
+        {
+            let path = resolve(p);
+            if std::path::Path::new(&path).exists() {
+                foreign.extend(names_of(&path)?);
+            }
+        }
+    }
+    foreign.retain(|n| !owned.contains(n));
+    if foreign.is_empty() || candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])?;
+    let fedrq = sandogasa_fedrq::Fedrq {
+        branch: Some(c.branch.clone()),
+        repo: c.repo.clone(),
+    };
+    let into = opts.into.clone().unwrap_or_else(|| resolve(&c.keeps[0]));
+    let maintainer = sandogasa_inventory::load(&resolve(&c.keeps[0]))?
+        .inventory
+        .maintainer;
+    let mut watched = Vec::new();
+    for cand in candidates {
+        let bins = fedrq.subpkgs_names(cand).unwrap_or_default();
+        if bins.is_empty() {
+            continue;
+        }
+        let needers: Vec<String> = fedrq
+            .whatrequires(&bins)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| foreign.contains(s))
+            .collect();
+        let Some(first) = needers.first() else {
+            continue;
+        };
+        loop {
+            eprint!(
+                "{cand} is needed by closure package(s) you do not own: {}\n  (e)ssential {first} [e <inventory>] / (t)riage as usual [t] ",
+                needers.join(", ")
+            );
+            std::io::stderr().flush().ok();
+            let mut line = String::new();
+            if std::io::stdin()
+                .read_line(&mut line)
+                .map_err(|e| e.to_string())?
+                == 0
+            {
+                return Ok(watched);
+            }
+            match parse_watch(&line) {
+                Some(WatchAnswer::Triage) => break,
+                Some(WatchAnswer::Quit) => return Ok(watched),
+                Some(WatchAnswer::Watch { into: chosen }) => {
+                    let dest = chosen.unwrap_or_else(|| into.clone());
+                    if !opts.dry_run {
+                        kondo::file_into_inventory(&dest, first, &maintainer)?;
+                    }
+                    watched.push(Watched {
+                        candidate: cand.clone(),
+                        keep: first.clone(),
+                    });
+                    break;
+                }
+                None => eprintln!("  answer e [<inventory>], t, or q"),
+            }
+        }
+    }
+    Ok(watched)
+}
+
 fn interactive_off() {
     eprintln!("(taking the defaults from here on)");
 }
@@ -536,10 +671,69 @@ pub fn run(opts: &Options) -> Result<Report, String> {
         Some(p) if std::path::Path::new(&p).exists() => kondo::prior_culled(&p)?,
         _ => Default::default(),
     };
-    report.triage_candidates = owned
-        .iter()
-        .filter(|n| !essential.contains(*n) && !prior.contains(*n))
-        .cloned()
-        .collect();
+    let candidates_of = |essential: &BTreeSet<String>| -> Vec<String> {
+        owned
+            .iter()
+            .filter(|n| !essential.contains(*n) && !prior.contains(*n))
+            .cloned()
+            .collect()
+    };
+    report.triage_candidates = candidates_of(&essential);
+
+    // Before the triage: a candidate some foreign closure package
+    // needs can be kept by watching that package instead.
+    if interactive
+        && !opts.dry_run
+        && let Some(c) = ws
+            .closures
+            .iter()
+            .find(|c| !c.external && c.graph.is_some())
+    {
+        let watched = offer_watching(opts, c, &report.triage_candidates, &owned)?;
+        if !watched.is_empty() {
+            report.watched = watched;
+            // The new keeps get walked; what they justify leaves the triage.
+            let r = reconcile_closure(opts, c, &owned, &retired, interactive)?;
+            if !opts.json {
+                print!("{}", format_closure(&r));
+            }
+            report.closures.push(r);
+            let mut essential: BTreeSet<String> = BTreeSet::new();
+            for p in ws.essential() {
+                let path = resolve(&p);
+                if std::path::Path::new(&path).exists() {
+                    essential.extend(names_of(&path)?);
+                }
+            }
+            report.triage_candidates = candidates_of(&essential);
+        }
+    }
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_watch_reads_the_three_answers() {
+        assert_eq!(parse_watch(""), Some(WatchAnswer::Triage));
+        assert_eq!(parse_watch("t"), Some(WatchAnswer::Triage));
+        assert_eq!(parse_watch("e"), Some(WatchAnswer::Watch { into: None }));
+        assert_eq!(
+            parse_watch("essential"),
+            Some(WatchAnswer::Watch { into: None })
+        );
+        // The same letter and word as `e <inventory>` at the triage.
+        assert_eq!(
+            parse_watch("e watched.toml"),
+            Some(WatchAnswer::Watch {
+                into: Some("watched.toml".to_string())
+            })
+        );
+        assert_eq!(parse_watch("q"), Some(WatchAnswer::Quit));
+        assert_eq!(parse_watch("x"), None);
+        assert_eq!(parse_watch("w"), None);
+        assert_eq!(parse_watch("e a b"), None);
+    }
 }
