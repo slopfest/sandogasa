@@ -1536,30 +1536,24 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
                 }
             }
         }
+        let choices = act::menu(
+            actionable,
+            orphanable,
+            if orphanable {
+                "orphan"
+            } else {
+                "remove my ACL"
+            },
+        );
+        let menu = sandogasa_review::Menu {
+            choices: &choices,
+            default: Some('s'),
+            all: false,
+            quit: false,
+            default_arg: None,
+        };
         loop {
-            let prompt = match (orphanable, actionable) {
-                (true, _) => {
-                    "  (y) orphan / (g <user>) give / (u [inventory]) uncull / (s)kip / (q)uit [s]: "
-                }
-                (_, true) => "  (y) remove my ACL / (u [inventory]) uncull / (s)kip / (q)uit [s]: ",
-                _ => "  (u [inventory]) uncull / (s)kip / (q)uit [s]: ",
-            };
-            print!("{prompt}");
-            let _ = std::io::stdout().flush();
-            let choice = match act::parse_choice(&read_line()?, actionable, orphanable) {
-                Some(choice) => choice,
-                None => {
-                    println!(
-                        "  enter u, s, or q ('u <inventory>' also files it as essential{})",
-                        match (orphanable, actionable) {
-                            (true, _) => "; y enacts, g <user> gives",
-                            (_, true) => "; y enacts",
-                            _ => "",
-                        }
-                    );
-                    continue;
-                }
-            };
+            let choice = act::from_answer(sandogasa_review::ask("", &menu)?);
             let outcome = match &choice {
                 act::Choice::Skip => {
                     skipped += 1;
@@ -1845,11 +1839,14 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
              the path); skip = leave it undecided for now (it comes back next run).",
             classified.len()
         );
-        sandogasa_review::resolve_interactive_noted_with(
+        sandogasa_review::resolve(
             classified,
             kondo::triage_summary,
-            args.explain_into.as_deref(),
-            &kondo::CULL_VOCABULARY,
+            &sandogasa_review::Prompt {
+                vocab: kondo::CULL_VOCABULARY,
+                default_explanation: args.explain_into.as_deref(),
+                notes: true,
+            },
         )?
     } else {
         classified

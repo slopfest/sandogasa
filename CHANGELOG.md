@@ -23,7 +23,7 @@ HEAD, the index, the tags or the tool's sources change), and
 `sandogasa_cli::version!()` / `banner!()` read what it emitted, in the
 tool's own crate.
 
-### sandogasa-review: `e <why>` explains in one line, and kondo says cull
+### sandogasa-review: the prompt speaks each tool's words (breaking)
 
 Filing a kondo candidate into an inventory took two prompts: `e`,
 Enter, then the path — the shared keep/explain/remove prompt only ever
@@ -31,15 +31,33 @@ read the explanation on its own line, and rejected `e path.toml` as
 unrecognized. `e <why>` is now accepted on the answer line itself
 (`k <note>` already was, where notes are on); a bare `e` still asks.
 
-And at kondo's prompt "keep" meant the opposite of what it says: the
-finding is "nothing essential needs this", so keeping the finding
-culls the package — confusing next to `reconcile`, where keep means
-keep. The prompt now takes a `Vocabulary` for its choices, and kondo's
-reads `(c)ull [c <note>] / (e)ssential [e <inventory>] / (s)kip` —
-"explain" was as misleading as "keep" there, since the explanation is
-the inventory the package becomes essential through, and "remove" only
-ever left a candidate undecided for the run. The other users of the
-prompt are unchanged.
+And the words were wrong wherever the items were not findings. At
+kondo's prompt "keep" culled the package (the finding is "nothing
+essential needs this"), "explain" named the inventory that makes it
+essential, and "remove" left it undecided for the run; at
+fedora-cve-triage's, "keep" applied the planned bug action and "remove"
+left the bug alone. The crate now has one entry point for the
+three-answer review, `resolve(items, summary, &Prompt)`, and the
+`Prompt` carries a `Vocabulary` — a `Word` (letter and word) for each
+of the three answers plus what the attached text is called — along
+with the default explanation and whether notes are taken. Underneath
+it is a general one-question primitive, `ask(summary, &Menu)` over
+`Choice`s (a `Word` plus no argument, an optional one, or a required
+one asked for on its own line), with `a`-for-the-rest and `q`-to-stop
+as menu options; `poi-tracker act`'s orphan/give/uncull/skip/quit
+prompt and `reconcile`'s ride-or-essential, keep-or-demote and
+essential-or-triage questions moved onto it, so every prompt in the
+workspace parses, labels and re-asks the same way. kondo says `(c)ull [c <note>] / (e)ssential [e <inventory>]
+/ (s)kip`, fedora-cve-triage `(a)pply / (e)xplain [e <note>] / (s)kip`,
+and the finding reviews (ebranch check-update, fedora-review-digest)
+keep the default keep/explain/remove. The `Resolution` a tool gets back
+is unchanged.
+
+Removed: `resolve_interactive_noted` and `resolve_interactive_noted_with`
+— call `resolve` with `Prompt { notes: true, default_explanation, vocab
+}`; `resolve_interactive(items, summary)` stays as the default-words,
+no-notes shortcut. `Vocabulary`'s fields are `keep`, `explain`, `remove`
+(`Word`) and `explanation`.
 
 ### poi-tracker: reconcile, the maintenance loop as one command
 

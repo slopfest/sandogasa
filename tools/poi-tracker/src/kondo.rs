@@ -61,12 +61,10 @@ pub enum Action {
 /// essential: `(e)ssential [e <inventory>]`; and removing it only
 /// leaves the candidate undecided for this run — `(s)kip`.
 pub const CULL_VOCABULARY: sandogasa_review::Vocabulary = sandogasa_review::Vocabulary {
-    keep_key: 'c',
-    keep_word: "cull",
-    explain_word: "essential",
-    explain_arg: "inventory",
-    remove_key: 's',
-    remove_word: "skip",
+    keep: sandogasa_review::Word::new('c', "cull"),
+    explain: sandogasa_review::Word::new('e', "essential"),
+    remove: sandogasa_review::Word::new('s', "skip"),
+    explanation: "inventory",
 };
 
 /// One triaged-and-classified cull candidate.

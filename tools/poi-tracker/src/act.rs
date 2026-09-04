@@ -40,31 +40,39 @@ pub enum Choice {
     Quit,
 }
 
-/// Parse one prompt answer. Enter (or `s`) skips — the safe default
-/// for actions that change ownership on a server. `y` only where an
-/// action exists (ask-level packages have none), `g <user>` only
-/// where giving does (owner-level); unculling is always open.
-pub fn parse_choice(line: &str, allow_enact: bool, allow_give: bool) -> Option<Choice> {
-    let line = line.trim();
-    let (head, rest) = match line.split_once(char::is_whitespace) {
-        Some((head, rest)) => (head, rest.trim()),
-        None => (line, ""),
-    };
-    if !rest.is_empty() {
-        if allow_give && head.eq_ignore_ascii_case("g") {
-            return Some(Choice::Give(rest.to_string()));
-        }
-        if head.eq_ignore_ascii_case("u") {
-            return Some(Choice::Uncull(Some(rest.to_string())));
-        }
-        return None;
+/// The answers for one package: enacting only where an action exists
+/// (ask-level packages have none), giving only where giving does
+/// (owner-level); unculling, skipping and quitting are always open.
+pub fn menu(
+    allow_enact: bool,
+    allow_give: bool,
+    enact_word: &'static str,
+) -> Vec<sandogasa_review::Choice> {
+    use sandogasa_review::{Arg, Choice};
+    let mut m = Vec::new();
+    if allow_enact {
+        m.push(Choice::new('y', enact_word));
     }
-    match head.to_ascii_lowercase().as_str() {
-        "" | "s" | "skip" => Some(Choice::Skip),
-        "y" | "yes" if allow_enact => Some(Choice::Enact),
-        "u" | "uncull" => Some(Choice::Uncull(None)),
-        "q" | "quit" => Some(Choice::Quit),
-        _ => None,
+    if allow_give {
+        m.push(Choice::with('g', "give", Arg::Required("user")));
+    }
+    m.push(Choice::with('u', "uncull", Arg::Optional("inventory")));
+    m.push(Choice::new('s', "skip"));
+    m.push(Choice::new('q', "quit"));
+    m
+}
+
+/// The [`Choice`] an answer to [`menu`] means. Enter (the menu's
+/// default) and end of input skip — the safe default for actions that
+/// change ownership on a server.
+pub fn from_answer(answer: sandogasa_review::Answer) -> Choice {
+    use sandogasa_review::Answer;
+    match answer {
+        Answer::Pick { key: 'y', .. } => Choice::Enact,
+        Answer::Pick { key: 'g', arg } => Choice::Give(arg.unwrap_or_default()),
+        Answer::Pick { key: 'u', arg } => Choice::Uncull(arg),
+        Answer::Pick { key: 'q', .. } | Answer::Quit => Choice::Quit,
+        Answer::Pick { .. } | Answer::All => Choice::Skip,
     }
 }
 
@@ -160,45 +168,55 @@ pub fn probe_dependents(branch: &str, package: &str) -> Result<Probe, String> {
 mod tests {
     use super::*;
 
+    fn parse(line: &str, allow_enact: bool, allow_give: bool) -> Option<Choice> {
+        let choices = menu(allow_enact, allow_give, "orphan");
+        let m = sandogasa_review::Menu {
+            choices: &choices,
+            default: Some('s'),
+            all: false,
+            quit: false,
+            default_arg: None,
+        };
+        sandogasa_review::parse_answer(line, &m).map(from_answer)
+    }
+
     #[test]
     fn skip_is_the_default_and_junk_reasks() {
         for line in ["", "  ", "s", "Skip"] {
-            assert_eq!(parse_choice(line, true, true), Some(Choice::Skip));
+            assert_eq!(parse(line, true, true), Some(Choice::Skip));
         }
-        assert_eq!(parse_choice("y", true, true), Some(Choice::Enact));
-        assert_eq!(parse_choice("q", false, false), Some(Choice::Quit));
-        assert_eq!(parse_choice("x", true, true), None);
-        assert_eq!(parse_choice("orphan it", true, true), None);
+        assert_eq!(parse("y", true, true), Some(Choice::Enact));
+        assert_eq!(parse("q", false, false), Some(Choice::Quit));
+        assert_eq!(parse("x", true, true), None);
+        assert_eq!(parse("orphan it", true, true), None);
         // Ask-level prompts have no action to enact.
-        assert_eq!(parse_choice("y", false, false), None);
+        assert_eq!(parse("y", false, false), None);
     }
 
     #[test]
     fn give_names_a_user_and_only_where_giving_applies() {
         assert_eq!(
-            parse_choice("g decathorpe", true, true),
+            parse("g decathorpe", true, true),
             Some(Choice::Give("decathorpe".to_string()))
         );
         assert_eq!(
-            parse_choice("G  someone ", true, true),
+            parse("G  someone ", true, true),
             Some(Choice::Give("someone".to_string()))
         );
-        // Bare g has no target; admin-level prompts take no g at all.
-        assert_eq!(parse_choice("g", true, true), None);
-        assert_eq!(parse_choice("g someone", true, false), None);
+        // Bare g parses with no user yet (ask prompts for it); admin-level
+        // prompts take no g at all.
+        assert_eq!(parse("g", true, true), Some(Choice::Give(String::new())));
+        assert_eq!(parse("g someone", true, false), None);
     }
 
     #[test]
     fn uncull_is_always_open_and_optionally_files_as_essential() {
-        assert_eq!(parse_choice("u", true, true), Some(Choice::Uncull(None)));
+        assert_eq!(parse("u", true, true), Some(Choice::Uncull(None)));
         assert_eq!(
-            parse_choice("u keep-tools.toml", false, false),
+            parse("u keep-tools.toml", false, false),
             Some(Choice::Uncull(Some("keep-tools.toml".to_string())))
         );
-        assert_eq!(
-            parse_choice("uncull", false, false),
-            Some(Choice::Uncull(None))
-        );
+        assert_eq!(parse("uncull", false, false), Some(Choice::Uncull(None)));
     }
 
     #[test]

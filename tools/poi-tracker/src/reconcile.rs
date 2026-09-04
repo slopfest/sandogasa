@@ -6,9 +6,10 @@
 //! a program cannot make; then triage what nothing justifies.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{IsTerminal, Write as _};
+use std::io::IsTerminal;
 use std::sync::atomic::Ordering::Relaxed;
 
+use sandogasa_review::{Answer, Arg, Choice, Menu};
 use serde::Serialize;
 
 use crate::workspace::{Closure, Workspace};
@@ -140,53 +141,19 @@ fn add_packages(
     Ok(added)
 }
 
-/// One answer at the prompt: Enter takes `default`; `a` takes the
-/// default for the rest of the batch; `q` stops asking altogether.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Answer {
-    Choice(char),
-    AllDefault,
-    Quit,
-}
-
-fn parse_answer(line: &str, default: char, choices: &[char]) -> Option<Answer> {
-    let l = line.trim().to_ascii_lowercase();
-    match l.as_str() {
-        "" => Some(Answer::Choice(default)),
-        "a" | "all" => Some(Answer::AllDefault),
-        "q" | "quit" => Some(Answer::Quit),
-        s => s
-            .chars()
-            .next()
-            .filter(|c| s.len() == 1 && choices.contains(c))
-            .map(Answer::Choice),
-    }
-}
-
-fn ask(prompt: &str, default: char, choices: &[char]) -> Result<Answer, String> {
-    loop {
-        eprint!("{prompt} ");
-        std::io::stderr().flush().ok();
-        let mut line = String::new();
-        if std::io::stdin()
-            .read_line(&mut line)
-            .map_err(|e| e.to_string())?
-            == 0
-        {
-            return Ok(Answer::Quit);
-        }
-        if let Some(a) = parse_answer(&line, default, choices) {
-            return Ok(a);
-        }
-        eprintln!(
-            "  answer one of {} (Enter = {default}, a = default for all, q = quit)",
-            choices
-                .iter()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-                .join("/")
-        );
-    }
+/// A two-way question with `a` (this answer for the rest) and `q`
+/// (stop asking) open: `ask` over a fixed pair of choices.
+fn ask_pair(summary: &str, choices: &[Choice; 2], default: char) -> Result<Answer, String> {
+    sandogasa_review::ask(
+        summary,
+        &Menu {
+            choices,
+            default: Some(default),
+            all: true,
+            quit: true,
+            default_arg: None,
+        },
+    )
 }
 
 /// Walk `names` as new roots against the closure's repos, graph-first;
@@ -356,15 +323,13 @@ fn reconcile_closure(
                         .get(name.as_str())
                         .and_then(|r| r.as_deref())
                         .unwrap_or("reachable from the keeps");
-                    match ask(
-                        &format!(
-                            "{name} now rides in the derived inventory — {why}\n  (r)ide [default] / (e)ssential in its own right?"
-                        ),
+                    match ask_pair(
+                        &format!("{name} now rides in the derived inventory — {why}"),
+                        &[Choice::new('r', "ride"), Choice::new('e', "essential")],
                         'r',
-                        &['r', 'e'],
                     )? {
-                        Answer::Choice(ch) => choice = ch,
-                        Answer::AllDefault => quiet = true,
+                        Answer::Pick { key, .. } => choice = key,
+                        Answer::All => quiet = true,
                         Answer::Quit => {
                             quiet = true;
                             interactive_off();
@@ -412,18 +377,18 @@ fn reconcile_closure(
                 if quiet {
                     break;
                 }
-                match ask(
+                match ask_pair(
                     &format!(
-                        "{} is a keep only devel-only edges carry ({} → it)\n  (k)eep essential [default] / (d)emote to the derived inventory?",
+                        "{} is a keep only devel-only edges carry ({} → it)",
                         carried.name,
                         carried.dependents.join(", ")
                     ),
+                    &[Choice::new('k', "keep"), Choice::new('d', "demote")],
                     'k',
-                    &['k', 'd'],
                 )? {
-                    Answer::Choice('d') => demote.push(carried.name.clone()),
-                    Answer::Choice(_) => {}
-                    Answer::AllDefault | Answer::Quit => {
+                    Answer::Pick { key: 'd', .. } => demote.push(carried.name.clone()),
+                    Answer::Pick { .. } => {}
+                    Answer::All | Answer::Quit => {
                         quiet = true;
                         break;
                     }
@@ -452,38 +417,6 @@ fn reconcile_closure(
         }
     }
     Ok(report)
-}
-
-/// The answer to "make X essential, or triage": Enter / `t` triages,
-/// `e` makes the offered package essential in the default keeps
-/// inventory, `e <inventory>` in that one — the same letter and word
-/// as at the triage, where `e` makes the candidate itself essential —
-/// and `q` stops asking. A different needer is what `poi-tracker keep
-/// <package>` is for.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum WatchAnswer {
-    Triage,
-    Watch { into: Option<String> },
-    Quit,
-}
-
-fn parse_watch(line: &str) -> Option<WatchAnswer> {
-    let l = line.trim();
-    let (head, rest) = match l.split_once(char::is_whitespace) {
-        Some((h, r)) => (h.to_ascii_lowercase(), r.trim()),
-        None => (l.to_ascii_lowercase(), ""),
-    };
-    match (head.as_str(), rest) {
-        ("" | "t" | "triage", "") => Some(WatchAnswer::Triage),
-        ("q" | "quit", "") => Some(WatchAnswer::Quit),
-        ("e" | "essential", "") => Some(WatchAnswer::Watch { into: None }),
-        ("e" | "essential", inv) if !inv.contains(char::is_whitespace) => {
-            Some(WatchAnswer::Watch {
-                into: Some(inv.to_string()),
-            })
-        }
-        _ => None,
-    }
 }
 
 /// For each triage candidate some closure package you do not own
@@ -543,36 +476,38 @@ fn offer_watching(
         let Some(first) = needers.first() else {
             continue;
         };
-        loop {
-            eprint!(
-                "{cand} is needed by closure package(s) you do not own: {}\n  (e)ssential {first} [e <inventory>] / (t)riage as usual [t] ",
+        // `e` makes the offered needer essential, `e <inventory>` says
+        // where — the same answer as at the triage.
+        let choices = [
+            Choice::with('e', "essential", Arg::Optional("inventory")),
+            Choice::new('t', "triage"),
+        ];
+        let answer = sandogasa_review::ask(
+            &format!(
+                "{cand} is needed by closure package(s) you do not own: {} — make {first} essential?",
                 needers.join(", ")
-            );
-            std::io::stderr().flush().ok();
-            let mut line = String::new();
-            if std::io::stdin()
-                .read_line(&mut line)
-                .map_err(|e| e.to_string())?
-                == 0
-            {
-                return Ok(watched);
-            }
-            match parse_watch(&line) {
-                Some(WatchAnswer::Triage) => break,
-                Some(WatchAnswer::Quit) => return Ok(watched),
-                Some(WatchAnswer::Watch { into: chosen }) => {
-                    let dest = chosen.unwrap_or_else(|| into.clone());
-                    if !opts.dry_run {
-                        kondo::file_into_inventory(&dest, first, &maintainer)?;
-                    }
-                    watched.push(Watched {
-                        candidate: cand.clone(),
-                        keep: first.clone(),
-                    });
-                    break;
+            ),
+            &Menu {
+                choices: &choices,
+                default: Some('t'),
+                all: false,
+                quit: true,
+                default_arg: None,
+            },
+        )?;
+        match answer {
+            Answer::Pick { key: 'e', arg } => {
+                let dest = arg.unwrap_or_else(|| into.clone());
+                if !opts.dry_run {
+                    kondo::file_into_inventory(&dest, first, &maintainer)?;
                 }
-                None => eprintln!("  answer e [<inventory>], t, or q"),
+                watched.push(Watched {
+                    candidate: cand.clone(),
+                    keep: first.clone(),
+                });
             }
+            Answer::Quit => return Ok(watched),
+            Answer::Pick { .. } | Answer::All => {}
         }
     }
     Ok(watched)
@@ -709,31 +644,4 @@ pub fn run(opts: &Options) -> Result<Report, String> {
         }
     }
     Ok(report)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_watch_reads_the_three_answers() {
-        assert_eq!(parse_watch(""), Some(WatchAnswer::Triage));
-        assert_eq!(parse_watch("t"), Some(WatchAnswer::Triage));
-        assert_eq!(parse_watch("e"), Some(WatchAnswer::Watch { into: None }));
-        assert_eq!(
-            parse_watch("essential"),
-            Some(WatchAnswer::Watch { into: None })
-        );
-        // The same letter and word as `e <inventory>` at the triage.
-        assert_eq!(
-            parse_watch("e watched.toml"),
-            Some(WatchAnswer::Watch {
-                into: Some("watched.toml".to_string())
-            })
-        );
-        assert_eq!(parse_watch("q"), Some(WatchAnswer::Quit));
-        assert_eq!(parse_watch("x"), None);
-        assert_eq!(parse_watch("w"), None);
-        assert_eq!(parse_watch("e a b"), None);
-    }
 }
