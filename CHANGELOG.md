@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Every tool's `--version` names the checkout it was built from
+
+A binary built from the repository said only `poi-tracker 0.22.0`, the
+same as a crates.io install — no way to tell which of the seventy-odd
+commits since the tag it carried, or whether the tree had uncommitted
+changes, which matters when one is testing fixes as they land. `--version`
+and the `--help` header now read `poi-tracker v0.22.0-74-ge11cff1-dirty`
+when built from a checkout: `git describe --tags --dirty --always`, the
+convention for exactly this — last tag, commits on top, commit, and
+`-dirty` for uncommitted changes. A crates.io install or a distro build
+from the tarball has no checkout to describe and shows the crate version
+as before, so those builds stay reproducible; `-V` and the man pages
+keep the plain crate version too, so the pages do not rewrite
+themselves on every commit.
+
+The new `sandogasa-build` crate is the build-script helper
+(`emit_git_describe`, a no-op without git or a checkout, re-run when
+HEAD, the index, the tags or the tool's sources change), and
+`sandogasa_cli::version!()` / `banner!()` read what it emitted, in the
+tool's own crate.
+
 ### sandogasa-review: `e <why>` explains in one line, and kondo says cull
 
 Filing a kondo candidate into an inventory took two prompts: `e`,

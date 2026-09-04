@@ -4,6 +4,31 @@
 
 pub mod claim;
 pub mod date;
+/// The version a tool shows: the `git describe --tags --dirty --always`
+/// of the checkout it was built from (`v0.22.0-74-ge11cff1-dirty`),
+/// recorded by `sandogasa_build::emit_git_describe` in its `build.rs`;
+/// the crate version when there was no checkout. Expands in the tool's
+/// crate, which is where the build script's variable lives. Use it as
+/// clap's `version`, so `-V` and `--version` both show it; the man
+/// pages keep the plain crate version (`man::check` takes it).
+#[macro_export]
+macro_rules! version {
+    () => {
+        match option_env!("SANDOGASA_GIT_DESCRIBE") {
+            Some(describe) => describe,
+            None => env!("CARGO_PKG_VERSION"),
+        }
+    };
+}
+
+/// The `--help` header: the tool's name and [`version!`].
+#[macro_export]
+macro_rules! banner {
+    () => {
+        format!("{} {}", env!("CARGO_PKG_NAME"), $crate::version!())
+    };
+}
+
 pub mod defaults;
 #[cfg(feature = "http")]
 pub mod http;

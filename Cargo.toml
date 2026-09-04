@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/sandogasa-bodhi",
     "crates/sandogasa-bugclass",
+    "crates/sandogasa-build",
     "crates/sandogasa-bugzilla",
     "crates/sandogasa-cli",
     "crates/sandogasa-closure",
@@ -118,6 +119,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 schemars = { version = "1", features = ["chrono04"] }
 sandogasa-bodhi = { version = "0.22", path = "crates/sandogasa-bodhi" }
 sandogasa-bugclass = { version = "0.22", path = "crates/sandogasa-bugclass" }
+sandogasa-build = { version = "0.22", path = "crates/sandogasa-build" }
 sandogasa-bugzilla = { version = "0.22", path = "crates/sandogasa-bugzilla" }
 # `default-features = false` so a member that needs no TLS does not
 # get one: cargo forbids a member turning off a default its workspace

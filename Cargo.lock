@@ -296,6 +296,7 @@ dependencies = [
  "chrono",
  "clap",
  "rpassword",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-fedrq",
@@ -359,6 +360,7 @@ dependencies = [
  "anstream",
  "anstyle",
  "clap",
+ "sandogasa-build",
  "sandogasa-cli",
  "serde_json",
  "tempfile",
@@ -451,6 +453,7 @@ dependencies = [
  "sandogasa-bodhi",
  "sandogasa-bugclass",
  "sandogasa-bugzilla",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-closure",
  "sandogasa-config",
@@ -528,6 +531,7 @@ dependencies = [
  "reqwest",
  "sandogasa-bodhi",
  "sandogasa-bugzilla",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-distgit",
@@ -549,6 +553,7 @@ version = "0.22.0"
 dependencies = [
  "clap",
  "sandogasa-bugzilla",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-review",
@@ -565,6 +570,7 @@ dependencies = [
  "clap",
  "dirs",
  "reqwest",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-forgejo",
@@ -800,6 +806,7 @@ name = "hs-intake"
 version = "0.22.0"
 dependencies = [
  "clap",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-depfilter",
  "sandogasa-fedrq",
@@ -814,6 +821,7 @@ version = "0.22.0"
 dependencies = [
  "chrono",
  "clap",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-meetbot",
  "serde",
@@ -828,6 +836,7 @@ dependencies = [
  "mockito",
  "reqwest",
  "rpassword",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-gitlab",
@@ -1183,6 +1192,7 @@ version = "0.22.0"
 dependencies = [
  "clap",
  "reqwest",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-kojihub",
  "serde",
@@ -1198,6 +1208,7 @@ dependencies = [
  "clap",
  "quick-xml",
  "rusqlite",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-inventory",
  "sandogasa-koji",
@@ -1459,6 +1470,7 @@ dependencies = [
  "sandogasa-bodhi",
  "sandogasa-bugclass",
  "sandogasa-bugzilla",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-closure",
  "sandogasa-config",
@@ -1938,6 +1950,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandogasa-build"
+version = "0.22.0"
+
+[[package]]
 name = "sandogasa-cli"
 version = "0.22.0"
 dependencies = [
@@ -2083,6 +2099,7 @@ dependencies = [
  "reqwest",
  "sandogasa-bodhi",
  "sandogasa-bugzilla",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-discourse",
  "sandogasa-distgit",
@@ -2181,6 +2198,7 @@ name = "sandogasa-pkg-acl"
 version = "0.22.0"
 dependencies = [
  "clap",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-distgit",
@@ -2201,6 +2219,7 @@ dependencies = [
  "rayon",
  "sandogasa-bugclass",
  "sandogasa-bugzilla",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-distgit",
@@ -2237,6 +2256,7 @@ dependencies = [
  "sandogasa-bodhi",
  "sandogasa-bugclass",
  "sandogasa-bugzilla",
+ "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-fasjson",

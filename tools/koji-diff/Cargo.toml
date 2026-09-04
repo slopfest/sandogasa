@@ -15,5 +15,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
+[build-dependencies]
+sandogasa-build = { workspace = true }
+
 [dev-dependencies]
 sandogasa-cli = { workspace = true, features = ["man"] }

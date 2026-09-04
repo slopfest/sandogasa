@@ -23,11 +23,11 @@ use resolve::{
 
 #[derive(Parser)]
 #[command(
-    version,
     about,
     long_about = None,
     max_term_width = 80,
-    before_help = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"))
+    version = sandogasa_cli::version!(),
+    before_help = sandogasa_cli::banner!()
 )]
 struct Cli {
     #[command(subcommand)]
@@ -1819,9 +1819,9 @@ mod tests {
     /// `sandogasa_cli::man` and `scripts/gen-man.sh`.
     #[test]
     fn man_page_matches_cli() {
-        sandogasa_cli::man::check::<super::Cli>(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/man/ebranch.1"
-        ));
+        sandogasa_cli::man::check::<super::Cli>(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/man/ebranch.1"),
+            env!("CARGO_PKG_VERSION"),
+        );
     }
 }

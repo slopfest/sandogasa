@@ -32,6 +32,9 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 
+[build-dependencies]
+sandogasa-build = { workspace = true }
+
 [dev-dependencies]
 sandogasa-cli = { workspace = true, features = ["man"] }
 tempfile = { workspace = true }

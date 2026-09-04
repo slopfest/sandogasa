@@ -19,7 +19,7 @@
 //!         sandogasa_cli::man::check::<super::Cli>(concat!(
 //!             env!("CARGO_MANIFEST_DIR"),
 //!             "/man/koji-diff.1"
-//!         ));
+//!         ), env!("CARGO_PKG_VERSION"));
 //!     }
 //! }
 //! ```
@@ -51,17 +51,18 @@ const MANUAL: &str = "Sandogasa Manual";
 
 /// The `.TH` source field: the footer's left text, naming the
 /// project and its version the way `man bash` shows "GNU Bash 5.3".
-fn source(cmd: &Command) -> String {
-    match cmd.get_version() {
-        Some(version) => format!("sandogasa {version}"),
-        None => "sandogasa".to_string(),
-    }
+fn source(crate_version: &str) -> String {
+    format!("sandogasa {crate_version}")
 }
 
 /// Render `cmd` and its visible subcommands as one roff man page,
 /// dated `date` (`YYYY-MM-DD`, shown in the footer's centre).
-pub fn render_dated(cmd: Command, date: &str) -> Vec<u8> {
-    let mut cmd = cmd;
+pub fn render_dated(cmd: Command, date: &str, crate_version: &str) -> Vec<u8> {
+    // The command's version is the git describe of a developer's
+    // checkout (`sandogasa_cli::version!`); a committed page must carry
+    // the crate version only, or every commit would rewrite every page.
+    let leaked: &'static str = Box::leak(crate_version.to_string().into_boxed_str());
+    let mut cmd = cmd.version(leaked).long_version(None);
     cmd.build();
     // The date must be set: clap_mangen writes an unset date as bare
     // whitespace, which groff then parses as an *absent* field, so
@@ -69,7 +70,7 @@ pub fn render_dated(cmd: Command, date: &str) -> Vec<u8> {
     // the date's place and the manual in the source's.
     let man = Man::new(cmd.clone())
         .date(date)
-        .source(source(&cmd))
+        .source(source(crate_version))
         .manual(MANUAL);
     let mut out = Vec::new();
     // The title block carries the page's one roff preamble; every
@@ -90,8 +91,8 @@ pub fn render_dated(cmd: Command, date: &str) -> Vec<u8> {
 }
 
 /// Render `cmd` as a man page dated today.
-pub fn render(cmd: Command) -> Vec<u8> {
-    render_dated(cmd, &today())
+pub fn render(cmd: Command, crate_version: &str) -> Vec<u8> {
+    render_dated(cmd, &today(), crate_version)
 }
 
 /// Today's date in UTC, `YYYY-MM-DD`.
@@ -106,10 +107,10 @@ fn today() -> String {
 ///
 /// Panics with the regeneration command on any mismatch — it is
 /// called from tests, where a panic is the failure.
-pub fn check<C: CommandFactory>(path: &str) {
-    let source = source(&C::command());
+pub fn check<C: CommandFactory>(path: &str, crate_version: &str) {
+    let source = source(crate_version);
     if std::env::var_os("SANDOGASA_UPDATE_MAN").is_some() {
-        update::<C>(Path::new(path), &source);
+        update::<C>(Path::new(path), &source, crate_version);
         return;
     }
     let committed = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}\n{REGENERATE}"));
@@ -141,11 +142,11 @@ pub fn check<C: CommandFactory>(path: &str) {
 /// unconditionally would rewrite all of them whenever one tool's
 /// flags change. Keeping a page whose content still matches leaves
 /// `git diff` showing the tools that actually changed.
-fn update<C: CommandFactory>(path: &Path, source: &str) {
+fn update<C: CommandFactory>(path: &Path, source: &str, crate_version: &str) {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     }
-    let page = render(C::command());
+    let page = render(C::command(), crate_version);
     if let Ok(committed) = std::fs::read_to_string(path) {
         let fresh = String::from_utf8_lossy(&page);
         let (old_title, old_body) = split_title(&committed);
@@ -283,7 +284,7 @@ mod tests {
 
     #[test]
     fn render_documents_flags_and_subcommands() {
-        let page = String::from_utf8(render(cmd())).unwrap();
+        let page = String::from_utf8(render(cmd(), "0.0.0")).unwrap();
         assert!(page.contains(".TH demo 1"), "{page}");
         assert!(page.contains(".SH COMMANDS"));
         assert!(page.contains(".SS demo show"));
@@ -298,7 +299,7 @@ mod tests {
 
     #[test]
     fn render_titles_carry_the_date_and_version() {
-        let page = String::from_utf8(render_dated(cmd().version("1.2.3"), "2026-08-05")).unwrap();
+        let page = String::from_utf8(render_dated(cmd(), "2026-08-05", "1.2.3")).unwrap();
         let (title, _) = split_title(&page);
         // `.TH <title> <section> <date> <source> <manual>` — all five
         // fields present and in order, so groff does not shift them.
@@ -312,10 +313,18 @@ mod tests {
     }
 
     #[test]
-    fn render_without_a_version_still_names_the_project() {
-        let page = String::from_utf8(render_dated(cmd(), "2026-08-05")).unwrap();
+    fn render_names_the_project_and_the_crate_version_it_was_given() {
+        // Whatever the command's own version says (a git describe on a
+        // developer's checkout), the page carries the crate version.
+        let page = String::from_utf8(render_dated(
+            cmd().version("v0.0.0-74-gabcdef0-dirty"),
+            "2026-08-05",
+            "0.0.0",
+        ))
+        .unwrap();
         let (title, _) = split_title(&page);
-        assert!(title.contains(" sandogasa "), "{title}");
+        assert!(title.contains("sandogasa 0.0.0"), "{title}");
+        assert!(!page.contains("gabcdef0"), "{page}");
     }
 
     /// A `CommandFactory` for [`cmd`], since `update` is generic over
@@ -335,14 +344,14 @@ mod tests {
     fn update_keeps_a_page_whose_content_is_unchanged() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("demo.1");
-        let source = source(&Demo::command());
+        let source = source("1.2.3");
 
         // A page generated in the past, still current apart from its
         // date, is left alone — one tool's change must not restamp
         // every other tool's page.
-        let old = render_dated(Demo::command(), "2020-01-01");
+        let old = render_dated(Demo::command(), "2020-01-01", "1.2.3");
         std::fs::write(&path, &old).unwrap();
-        update::<Demo>(&path, &source);
+        update::<Demo>(&path, &source, "1.2.3");
         assert_eq!(std::fs::read(&path).unwrap(), old);
 
         // A stale version rewrites it, even with the body unchanged.
@@ -350,7 +359,7 @@ mod tests {
             .unwrap()
             .replace("sandogasa 1.2.3", "sandogasa 1.0.0");
         std::fs::write(&path, &stale).unwrap();
-        update::<Demo>(&path, &source);
+        update::<Demo>(&path, &source, "1.2.3");
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("sandogasa 1.2.3"), "{written}");
         assert!(!written.contains("2020-01-01"), "{written}");
@@ -361,7 +370,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // A nested path: the tool's `man/` directory may not exist.
         let path = dir.path().join("man").join("demo.1");
-        update::<Demo>(&path, &source(&Demo::command()));
+        update::<Demo>(&path, &source("0.0.0"), "0.0.0");
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains(".TH demo 1"), "{written}");
     }
