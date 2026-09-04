@@ -63,33 +63,86 @@ const NEVER_DEFAULTED: &[&str] = &["apply", "claim", "give-karma", "prune", "sub
 /// not given on the command line. Call with the tool's crate name:
 /// `parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"))`.
 pub fn parse_with_defaults<T: Parser>(tool: &str) -> T {
+    parse_with_defaults_and::<T>(tool, |_| Ok(None))
+}
+
+/// [`parse_with_defaults`] with a second source of defaults the tool
+/// computes from the first parse — a workspace file named on the
+/// command line, say. `extra` sees the matches of that first parse
+/// and returns a table shaped like `[defaults]` plus a description of
+/// where it came from; its keys win over the config file's, and the
+/// command line wins over both. `--no-defaults` skips both.
+pub fn parse_with_defaults_and<T: Parser>(
+    tool: &str,
+    extra: impl FnOnce(&ArgMatches) -> Result<Option<DefaultsTable>, String>,
+) -> T {
     let argv: Vec<OsString> = std::env::args_os().collect();
     let cmd = augment_command(T::command());
 
-    let matches = match cmd.clone().try_get_matches_from(&argv) {
-        Ok(m) => m,
-        // Includes --help / --version, which exit 0 from here.
-        Err(e) => e.exit(),
+    // A required flag may be one the defaults supply, so a strict
+    // parse that fails on a missing argument is not the last word:
+    // plan the injections on a lenient parse and try again with them.
+    // Help and version exit here as they always did.
+    let (matches, strict_error) = match cmd.clone().try_get_matches_from(&argv) {
+        Ok(m) => (m, None),
+        Err(e)
+            if matches!(
+                e.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) =>
+        {
+            e.exit()
+        }
+        Err(e) => match cmd.clone().ignore_errors(true).try_get_matches_from(&argv) {
+            Ok(m) => (m, Some(e)),
+            Err(_) => e.exit(),
+        },
     };
 
     let final_matches = if matches.get_flag(NO_DEFAULTS) {
-        matches
+        match strict_error {
+            Some(e) => e.exit(),
+            None => matches,
+        }
     } else {
-        match load_defaults(tool) {
-            Ok(None) => matches,
+        let combined = load_defaults(tool).and_then(|config| match extra(&matches)? {
+            None => Ok(config),
+            Some((over, over_sources)) => Ok(Some(match config {
+                None => (over, over_sources),
+                Some((mut base, sources)) => {
+                    merge_over(&mut base, over);
+                    (base, format!("{sources}, {over_sources}"))
+                }
+            })),
+        });
+        match combined {
+            Ok(None) => match strict_error {
+                Some(e) => e.exit(),
+                None => matches,
+            },
             Ok(Some((table, sources))) => {
                 let extra = match plan_injections(&cmd, &matches, &table) {
                     Ok(extra) => extra,
                     Err(e) => fail(&sources, &e),
                 };
                 if extra.is_empty() {
-                    matches
+                    match strict_error {
+                        Some(e) => e.exit(),
+                        None => matches,
+                    }
                 } else {
                     let mut full = argv;
                     full.extend(extra);
                     match cmd.try_get_matches_from(full) {
                         Ok(m) => m,
-                        Err(e) => fail(&sources, &e.to_string()),
+                        // The command line was already wrong on its own:
+                        // its own complaint is the useful one. Only a
+                        // parse that passed without the defaults and
+                        // fails with them is the defaults' fault.
+                        Err(e) => match strict_error {
+                            Some(orig) => orig.exit(),
+                            None => fail(&sources, &e.to_string()),
+                        },
                     }
                 }
             }
@@ -131,7 +184,20 @@ fn augment_command(cmd: Command) -> Command {
 /// `~/.config/<tool>/config.toml`). `Ok(None)` when there is no
 /// config dir, no file, or no table. The second tuple field
 /// describes the sources for error messages.
-type DefaultsTable = (toml::Table, String);
+pub type DefaultsTable = (toml::Table, String);
+
+/// Lay `over` on top of `base`, key by key; nested tables merge
+/// recursively, anything else is replaced.
+fn merge_over(base: &mut toml::Table, over: toml::Table) {
+    for (key, value) in over {
+        match (base.get_mut(&key), value) {
+            (Some(toml::Value::Table(b)), toml::Value::Table(o)) => merge_over(b, o),
+            (_, value) => {
+                base.insert(key, value);
+            }
+        }
+    }
+}
 fn load_defaults(tool: &str) -> Result<Option<DefaultsTable>, String> {
     let Some(cfg) = sandogasa_config::ConfigFile::try_for_tool(tool) else {
         return Ok(None);
@@ -335,6 +401,23 @@ mod tests {
     use clap::{CommandFactory, FromArgMatches};
 
     use super::*;
+
+    #[test]
+    fn merge_over_replaces_leaves_and_merges_tables() {
+        let mut base: toml::Table = toml::from_str(
+            "explain = true\nuser = \"a\"\n[keep]\ngraph = \"old\"\nverbose = true\n",
+        )
+        .unwrap();
+        let over: toml::Table =
+            toml::from_str("user = \"b\"\n[keep]\ngraph = \"new\"\n[kondo]\nuser = \"b\"\n")
+                .unwrap();
+        merge_over(&mut base, over);
+        assert_eq!(base["explain"], toml::Value::Boolean(true));
+        assert_eq!(base["user"].as_str(), Some("b"));
+        assert_eq!(base["keep"]["graph"].as_str(), Some("new"));
+        assert_eq!(base["keep"]["verbose"], toml::Value::Boolean(true));
+        assert_eq!(base["kondo"]["user"].as_str(), Some("b"));
+    }
 
     #[derive(Parser, Debug)]
     #[command(name = "demo")]

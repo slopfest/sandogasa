@@ -14,6 +14,7 @@ mod semver_audit;
 mod triage_retired;
 mod triage_updates;
 mod unkeep;
+mod workspace;
 
 use std::collections::BTreeMap;
 use std::process::ExitCode;
@@ -33,12 +34,24 @@ use sandogasa_distgit::DistGitClient;
 )]
 struct Cli {
     /// Path(s) to inventory TOML file(s).
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     inventory: Vec<String>,
 
     /// Directory to scan for *.toml inventory files.
-    #[arg(short = 'I', long, value_name = "DIR")]
+    #[arg(short = 'I', long, value_name = "DIR", global = true)]
     inventory_dir: Vec<String>,
+
+    /// Workspace file naming the inventories, graph and walk settings
+    /// (default: ./kondo.toml when present). Supplies the flags the
+    /// maintenance subcommands would otherwise need; the command line
+    /// wins, --no-defaults ignores it.
+    #[arg(short = 'w', long, value_name = "PATH", global = true)]
+    workspace: Option<String>,
+
+    /// Which [[closure]] of the workspace a walk subcommand works on
+    /// (default: the first).
+    #[arg(long, value_name = "NAME", global = true)]
+    closure: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -991,7 +1004,19 @@ fn resolve_inventory_paths(cli: &Cli) -> Vec<String> {
 
 fn main() -> ExitCode {
     sandogasa_cli::init();
-    let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
+    let cli = sandogasa_cli::parse_with_defaults_and::<Cli>(env!("CARGO_PKG_NAME"), |m| {
+        let explicit = m.get_one::<String>("workspace").map(String::as_str);
+        let Some((ws, path)) = workspace::Workspace::find(explicit)? else {
+            return Ok(None);
+        };
+        let Some((sub, _)) = m.subcommand() else {
+            return Ok(None);
+        };
+        let closure = m.get_one::<String>("closure").map(String::as_str);
+        Ok(ws
+            .defaults_for(sub, closure)?
+            .map(|table| (table, format!("workspace {}", path.display()))))
+    });
 
     // Import/sync commands produce new files and don't need existing
     // inventory paths. `Config` doesn't touch inventories at all.

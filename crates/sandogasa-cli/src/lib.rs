@@ -10,7 +10,7 @@ pub mod http;
 #[cfg(feature = "man")]
 pub mod man;
 
-pub use defaults::parse_with_defaults;
+pub use defaults::{DefaultsTable, parse_with_defaults, parse_with_defaults_and};
 
 use std::process::{Command, Stdio};
 

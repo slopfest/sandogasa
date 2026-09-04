@@ -305,6 +305,13 @@ Guarantees the helper enforces (don't reimplement them per tool):
   dist-git without asking. Add to that list when a tool gains a
   flag whose whole purpose is to skip a confirmation.
 
+A tool can add a second source of defaults computed from the command
+line itself — poi-tracker's workspace file, named by `-w` or found as
+`./kondo.toml` — through `parse_with_defaults_and`: its table is laid
+over the config file's `[defaults]`, and everything else (command line
+wins, conflicts skipped, `--no-defaults`, unknown keys are errors) is
+the same machinery.
+
 ### Booleans need a `--no-<flag>` partner to be overridable
 
 `false` in `[defaults]` is a no-op — a switch cannot be turned

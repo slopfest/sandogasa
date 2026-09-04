@@ -35,6 +35,59 @@ left open / reported as up to date).
 
 ## Usage
 
+### The workspace file
+
+The maintenance subcommands — `kondo`, `keep`, `unkeep`, `deps`,
+`derive`, `dependents`, `act`, `announce` — each take a handful of
+paths that never change between runs: which inventory is the packages
+you own, which ones are the keeps, where the graph is, what branch the
+walk runs against. Write them once in a `kondo.toml` next to the
+inventories, and the subcommands read them from there (`-w PATH` names
+another file; `./kondo.toml` is found on its own):
+
+```toml
+user = "salimma"                                  # routes kondo and act
+owned = "inventory-salimma-direct.toml"           # sync-distgit --no-groups
+cull = "cull.toml"                                # the standing verdicts
+retired = ["inventory-salimma-essential-retired.toml"]
+
+[[closure]]                                       # one dependency world
+name = "fedora"
+keeps = ["inventory-salimma-essential.toml", "inventory-salimma-essential-rust.toml"]
+closure = "fedora-build-deps.toml"                # deps -o
+derived = "inventory-salimma-essential-deps.toml" # derive -o
+graph = "fedora-build-deps-graph.json"
+branch = "rawhide"
+from = ["rawhide"]
+
+[[closure]]
+name = "hyperscale-el9"
+external = true                                   # not ours on dist-git
+keeps = ["inventory-hyperscale.toml"]
+closure = "inventory-hyperscale-el9-deps.toml"    # the walk output is the essential list
+graph = "hyperscale-el9-graph.json"               # written by the first deps run
+branch = "hs.el9"
+repo = "stack"
+```
+
+A *closure* is one set of keeps walked against one repo configuration.
+`external = true` marks keeps that are not yours on dist-git — another
+SIG's inventory, another distribution's — whose dependencies you track
+all the same: the walk's output counts as essential, and nothing will
+offer to cull or demote the keeps themselves. The essential set
+`kondo` uses is every closure's keeps, walk outputs and derived
+inventories plus the retired ones (a walk output names packages that
+are not yours too, which is harmless: only owned packages can be
+candidates). Walk subcommands take the first closure unless
+`--closure NAME` says otherwise; a closure whose graph does not exist
+yet is one `deps` run away from having it. Paths are relative to the
+file.
+
+With the file in place, `poi-tracker kondo`, `poi-tracker keep ripgrep`
+or `poi-tracker --closure hyperscale-el9 dependents` are complete
+commands. A flag on the command line still wins, and `--no-defaults`
+ignores the file (and the config file's `[defaults]`) for one run.
+
 ### Act on the cull verdicts
 
 The workflow's last verb — walk the standing verdicts and give the

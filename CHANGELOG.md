@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### poi-tracker: a workspace file, so the maintenance subcommands know their inputs
+
+Every kondo maintenance step took the same half-dozen paths — the owned
+inventory, the keeps, the derived inventory, the graph, the branch and
+repo — spelled out again on each command line, in the right order,
+with the right meaning of `-i` for that subcommand. After a month of
+it the user's verdict was that the loop was "very convoluted and hard
+to keep track of", and most of the convolution was flags.
+
+A `kondo.toml` next to the inventories now says what each file is,
+once: `user`, `owned`, `cull`, `retired`, and one `[[closure]]` per
+dependency world — its `keeps`, `closure` (the walk's output),
+`derived`, `graph`, and the `branch`/`repo`/`from`/`base-repo`/
+`runtime-only` the walk runs with. `external = true` marks a closure
+whose keeps are not ours on dist-git (the Hyperscale inventory): their
+dependencies are tracked and the walk output counts as essential, the
+packages themselves are never offered for culling. `kondo`'s essential
+set is every closure's keeps, walk outputs and derived inventories plus
+the retired ones. `kondo`, `keep`, `unkeep`,
+`deps`, `derive`, `dependents`, `act` and `announce` read their flags
+from it, so `poi-tracker kondo` and `poi-tracker keep ripgrep` are
+complete commands; `-w PATH` names another file, `--closure NAME`
+picks a closure other than the first, the command line wins, and
+`--no-defaults` ignores it for a run. The file is turned into the
+`[defaults]`-shaped table `sandogasa_cli::defaults` already injects,
+through the new `parse_with_defaults_and`, which takes a second
+defaults source computed from the first parse and lays it over the
+config file's.
+
 ### sandogasa-hattrack: attendance at a meeting, activity in an issue tracker
 
 Asking whether a FESCo member had been coming to the meetings and
