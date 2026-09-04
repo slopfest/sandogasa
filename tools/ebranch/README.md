@@ -580,7 +580,10 @@ side tag name (e.g. `epel9-build-side-*` uses `epel9`). Use
 
 A side tag's or a COPR's repository metadata is refetched on every run
 (both change as builds land, and are small); after an offered `koji
-regen-repo`, only the side tag's cached metadata is dropped. The
+regen-repo`, only the side tag's cached metadata is dropped; and when
+Bodhi says an update is in testing but the cached `@testing` metadata
+does not show it, that repo is refetched and probed once more before
+the reverse-dependency fallback. The
 branch's own metadata stays cached until `--refresh` clears everything.
 
 After the check, `--give-karma` casts karma on the update.
@@ -969,6 +972,16 @@ coreutils = ["uu_*", "uucore*", "uutests"]
 ```
 
 `--in-tree` adds to the entry for the crate being checked.
+
+A `[check-crate.staging-copr]` table names the staging COPR per crate,
+so `--staging-copr` need not be typed for a crate whose update lives
+there; the flag wins when given:
+
+```toml
+[check-crate.staging-copr]
+coreutils = "@rust/uutils-and-nushell"
+phf = "@rust/uutils-and-nushell"
+```
 
 `ebranch config` writes the user file only, with 700 on the
 directory and 600 on the file. Nothing writes under `/etc`: a system

@@ -48,7 +48,7 @@ Build without default features (`\-n`)
 Crates built in\-tree from the root\*(Aqs own source (a workspace\*(Aqs members, e.g. `uu_*,uucore*`): hidden as dependencies, their own dependencies checked as the workspace\*(Aqs. Globs, CSV or repeated; `@repository` also takes every crate published from the root\*(Aqs repository. Merged with the config file\*(Aqs `[check\-crate.in\-tree]` entry for the crate
 .TP
 \fB\-\-staging\-copr\fR \fI<OWNER/PROJECT>\fR
-Staging COPR (`owner/project`, `@group/project`) layered over the branch: dependencies the branch lacks are looked up there too and reported as staged — built, still in flight — instead of missing. The branch picks the chroot (rawhide → fedora\-rawhide)
+Staging COPR (`owner/project`, `@group/project`) layered over the branch: dependencies the branch lacks are looked up there too and reported as staged — built, still in flight — instead of missing. The branch picks the chroot (rawhide → fedora\-rawhide). Default: the config file\*(Aqs `[check\-crate.staging\-copr]` entry for the crate
 .TP
 \fB\-\-package\fR \fI<NAME>\fR
 Fedora package name when it is not `rust\-<crate>` (e.g. the `coreutils` crate is `uutils\-coreutils`): used for the spec lookup and as the report\*(Aqs package name

@@ -42,6 +42,15 @@ pub struct CheckCrateConfig {
         skip_serializing_if = "std::collections::BTreeMap::is_empty"
     )]
     pub in_tree: std::collections::BTreeMap<String, Vec<String>>,
+    /// Per-crate staging COPR (`owner/project`), keyed by crate name:
+    /// `--staging-copr` without typing it, for a crate whose update is
+    /// staged there.
+    #[serde(
+        default,
+        rename = "staging-copr",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub staging_copr: std::collections::BTreeMap<String, String>,
 }
 
 /// The benchmark harnesses `check-crate` ignores unless the config
@@ -100,6 +109,11 @@ fn load_check_crate() -> CheckCrateConfig {
 /// [`DEFAULT_EXCLUDES`] when no file sets one. The flag says which.
 pub fn check_crate_excludes() -> (Vec<String>, bool) {
     resolve_excludes(load_check_crate().exclude)
+}
+
+/// The configured staging COPR for a crate, if any.
+pub fn check_crate_staging_copr(crate_name: &str) -> Option<String> {
+    load_check_crate().staging_copr.remove(crate_name)
 }
 
 /// The configured `--in-tree` list for a crate; empty when none.
@@ -227,14 +241,22 @@ mod tests {
         let (list, set) = resolve_excludes(none.check_crate.exclude);
         assert!(list.is_empty());
         assert!(set);
-        // Per-crate in-tree lists live in their own table.
+        // Per-crate in-tree lists and staging COPRs live in their own tables.
         let cfg: EbranchConfig = toml::from_str(
             r#"
             [check-crate.in-tree]
             coreutils = ["uu_*", "uucore*", "uutests"]
+            [check-crate.staging-copr]
+            coreutils = "@rust/uutils-and-nushell"
+            phf = "@rust/uutils-and-nushell"
             "#,
         )
         .unwrap();
+        assert_eq!(
+            cfg.check_crate.staging_copr["phf"],
+            "@rust/uutils-and-nushell"
+        );
+        assert!(!cfg.check_crate.staging_copr.contains_key("serde"));
         assert_eq!(
             cfg.check_crate.in_tree["coreutils"],
             ["uu_*", "uucore*", "uutests"]

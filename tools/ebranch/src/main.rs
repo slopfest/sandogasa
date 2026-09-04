@@ -503,6 +503,8 @@ struct CheckCrateArgs {
     /// the branch: dependencies the branch lacks are looked up there
     /// too and reported as staged — built, still in flight — instead
     /// of missing. The branch picks the chroot (rawhide → fedora-rawhide).
+    /// Default: the config file's `[check-crate.staging-copr]` entry
+    /// for the crate.
     #[arg(long, value_name = "OWNER/PROJECT")]
     staging_copr: Option<String>,
 
@@ -1002,7 +1004,12 @@ fn main() -> ExitCode {
             Some(_) => String::new(),
             None => branch_repo_label(a.branch.as_deref(), a.repo.as_deref()),
         };
-        if let Some(c) = &a.staging_copr
+        // The flag, else the config file's entry for this crate.
+        let staging_copr = a
+            .staging_copr
+            .clone()
+            .or_else(|| config::check_crate_staging_copr(a.name.as_deref().unwrap_or_default()));
+        if let Some(c) = &staging_copr
             && check_update::parse_copr_spec(c).is_none()
         {
             return exit_code(Err(format!(
@@ -1031,7 +1038,7 @@ fn main() -> ExitCode {
             features: a.features.clone(),
             no_default_features: a.no_default_features,
             package: a.package.clone(),
-            copr: a.staging_copr.clone(),
+            copr: staging_copr,
             in_tree: a
                 .in_tree
                 .iter()

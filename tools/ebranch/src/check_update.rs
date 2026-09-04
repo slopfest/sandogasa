@@ -612,10 +612,35 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         None => true,
     };
     // COPR content never reaches @testing; skip the probe entirely.
+    let probe = || {
+        testing_has_update_nvrs(&nvrs, |src| {
+            testing_fedrq.subpkgs_nvrs(src).unwrap_or_default()
+        })
+    };
     let has_testing = copr_spec.is_none()
         && bodhi_in_testing
-        && testing_has_update_nvrs(&nvrs, |src| {
-            testing_fedrq.subpkgs_nvrs(src).unwrap_or_default()
+        && (probe() || {
+            // Bodhi says the update is in testing and the cached
+            // @testing metadata does not show it: the cache may simply
+            // predate the push. Refetch that one repo and look once
+            // more before blaming the mirrors.
+            let pushed = matches!(bodhi_status.as_deref(), Some("testing"));
+            pushed
+                && match sandogasa_fedrq::expire_repo_cache("updates-testing") {
+                    Ok(_) => {
+                        if opts.verbose {
+                            eprintln!(
+                                "[check-update] cached @testing metadata lacks the update's \
+                                 builds; refetched updates-testing and looking once more"
+                            );
+                        }
+                        probe()
+                    }
+                    Err(e) => {
+                        eprintln!("warning: could not expire the @testing metadata cache: {e}");
+                        false
+                    }
+                }
         });
 
     // The COPR path mirrors the @testing one: both repos index source
@@ -801,8 +826,8 @@ fn skip_note(report: &CheckUpdateReport) -> String {
             format!(
                 "**Note:** Provides weren't compared — the `@testing` \
                  metadata didn't return {what} (likely transient mirror \
-                 propagation, or a stale local metadata cache). Retry \
-                 shortly, or pass `--refresh`. Reverse dependencies are \
+                 propagation; the local @testing metadata was refetched \
+                 and looked at again). Reverse dependencies are \
                  listed below for manual review."
             )
         }

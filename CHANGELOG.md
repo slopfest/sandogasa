@@ -200,7 +200,12 @@ Repos that change as builds land are now refetched on every run and
 nothing else is: check-crate's `--staging-copr`, check-update's side
 tag and COPR input, and resolve's `--source-repo @koji:<tag>`, all a
 few tens of KB of metadata, while the branch's stays cached until
-`--refresh`. After a regen only the side tag's entries go.
+`--refresh`. After a regen only the side tag's entries go. And when
+Bodhi says an update is in testing but the cached `@testing` metadata
+does not show its builds, check-update refetches just `updates-testing`
+and looks once more before falling back to the reverse-dependency
+listing — the "mirror propagation" note now means the mirrors, not a
+cache that predated the push.
 `sandogasa_fedrq::expire_repo_cache(repoid_prefix)` removes one repo's
 `<repoid>-<hash>` and `<repoid>.solv` entries from every branch
 directory of the smartcache (fedrq names those by release number, `45`
@@ -235,7 +240,9 @@ branch" — built, still in flight — instead of missing, and not
 expanded; transitive crates the COPR provides are listed there too,
 with what pulled them, since they are the update's remaining road to
 rawhide. The branch picks the chroot, so a COPR building for several
-releases is checked one target at a time. The report records the COPR
+releases is checked one target at a time, and a
+`[check-crate.staging-copr]` table in the config file names the COPR
+per crate so the flag need not be typed. The report records the COPR
 and each staged dependency carries `staged = true`; reports saved
 before this load unchanged. Re-running the check right after the
 crate's own build finished used to read as "buildable" all the same,
