@@ -295,6 +295,18 @@ pub fn parse_copr_spec(input: &str) -> Option<(String, String)> {
         .then(|| (owner.to_string(), project.to_string()))
 }
 
+/// Expire one repo's cached metadata, saying so under `--verbose`; a
+/// failure is a warning, the query then runs on whatever is cached.
+fn expire_repo(repoid_prefix: &str, what: &str, verbose: bool) {
+    match sandogasa_fedrq::expire_repo_cache(repoid_prefix) {
+        Ok(n) if verbose => {
+            eprintln!("[check-update] expired {n} cached metadata file(s) of {what}")
+        }
+        Err(e) => eprintln!("warning: could not expire the cached metadata of {what}: {e}"),
+        _ => {}
+    }
+}
+
 /// List NVRs in a Koji tag via `koji list-tagged --quiet`.
 pub fn koji_list_tagged(tag: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
     // `--latest` (via `list_tagged`) so a side tag that accumulated
@@ -458,6 +470,23 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         ..opts.clone()
     };
     let opts = &effective;
+
+    // A side tag or a COPR changes as builds land, and its metadata is
+    // small: refetch it every run, leaving the branch's cache alone.
+    if let Some(tag) = &side_tag {
+        expire_repo(
+            &sandogasa_fedrq::koji_repoid_prefix(tag),
+            &format!("side tag {tag}"),
+            opts.verbose,
+        );
+    }
+    if let Some((owner, project)) = copr_spec.as_deref().and_then(|s| s.split_once('/')) {
+        expire_repo(
+            &sandogasa_copr::repoid(owner, project),
+            &format!("COPR {owner}/{project}"),
+            opts.verbose,
+        );
+    }
 
     // Extract unique source package names from NVRs.
     let updated_packages: Vec<String> = nvrs
@@ -2193,14 +2222,13 @@ where
     )? {
         eprintln!("waiting for koji to regenerate the {tag} repo...");
         sandogasa_koji::regen_repo(tag, profile)?;
-        // Drop *both* caches: clearing only the fedrq smartcache leaves
-        // libdnf5 serving the pre-regen side-tag metadata, so the
-        // re-check below (and the rest of the analysis) would still see
-        // stale repodata and re-warn despite the successful regen.
-        sandogasa_fedrq::clear_all_caches()
-            .map_err(|e| format!("failed to clear metadata caches: {e}"))?;
+        // Only the side tag's repo changed: drop its cached metadata
+        // (smartcache and libdnf5 alike) so the re-check below sees
+        // the regen, and leave the branch's metadata cached.
+        sandogasa_fedrq::expire_repo_cache(&sandogasa_fedrq::koji_repoid_prefix(tag))
+            .map_err(|e| format!("failed to expire the side tag's metadata cache: {e}"))?;
         if verbose {
-            eprintln!("cleared fedrq + libdnf5 caches after regen");
+            eprintln!("expired the cached metadata of {tag} after regen");
         }
         let still_stale = recheck();
         if !still_stale.is_empty() {

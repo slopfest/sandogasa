@@ -301,9 +301,8 @@ pub fn check_crate(
     // run (it is small), while the branch's stays cached as usual.
     if let Some(c) = &opts.copr
         && let Some((owner, project)) = c.split_once('/')
-        && let Some(branch) = &opts.branch
     {
-        match sandogasa_fedrq::expire_repo_cache(branch, &sandogasa_copr::repoid(owner, project)) {
+        match sandogasa_fedrq::expire_repo_cache(&sandogasa_copr::repoid(owner, project)) {
             Ok(n) if opts.verbose => {
                 eprintln!("[check-crate] expired {n} cached metadata file(s) of COPR {c}")
             }

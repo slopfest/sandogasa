@@ -1339,11 +1339,22 @@ fn main() -> ExitCode {
     configure_jobs(args.jobs);
 
     // When the source repo is a Koji repo, create a @koji-src:
-    // companion for source RPM queries (BuildRequires, subpkg Requires).
+    // companion for source RPM queries (BuildRequires, subpkg Requires),
+    // and refetch the tag's metadata every run: a side tag changes as
+    // builds land, and its metadata is small.
     let source_src = args.source_repo.as_deref().and_then(|r| {
-        r.strip_prefix("@koji:").map(|tag| sandogasa_fedrq::Fedrq {
-            branch: args.source.clone(),
-            repo: Some(format!("@koji-src:{tag}")),
+        r.strip_prefix("@koji:").map(|tag| {
+            match sandogasa_fedrq::expire_repo_cache(&sandogasa_fedrq::koji_repoid_prefix(tag)) {
+                Ok(n) if args.verbose => {
+                    eprintln!("[resolve] expired {n} cached metadata file(s) of {tag}")
+                }
+                Err(e) => eprintln!("warning: could not expire the cached metadata of {tag}: {e}"),
+                _ => {}
+            }
+            sandogasa_fedrq::Fedrq {
+                branch: args.source.clone(),
+                repo: Some(format!("@koji-src:{tag}")),
+            }
         })
     });
 

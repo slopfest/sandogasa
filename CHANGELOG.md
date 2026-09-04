@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### ebranch: side tags and COPRs are refetched on their own, not with everything
+
+A check against a side tag or a staging COPR could run on metadata
+fedrq had cached before the latest build landed — `check-crate phf`
+right after phf's COPR build read as not built — and the remedy,
+`--refresh`, dropped the whole cache and re-downloaded the branch's
+metadata too. check-update's own `koji regen-repo` step did the same
+wholesale clear to see its regen.
+
+Repos that change as builds land are now refetched on every run and
+nothing else is: check-crate's `--staging-copr`, check-update's side
+tag and COPR input, and resolve's `--source-repo @koji:<tag>`, all a
+few tens of KB of metadata, while the branch's stays cached until
+`--refresh`. After a regen only the side tag's entries go.
+`sandogasa_fedrq::expire_repo_cache(repoid_prefix)` removes one repo's
+`<repoid>-<hash>` and `<repoid>.solv` entries from every branch
+directory of the smartcache (fedrq names those by release number, `45`
+for f45) and from the libdnf5 cache; `koji_repoid_prefix` and
+`sandogasa_copr::repoid` spell the two repoids fedrq uses.
+
 ### ebranch copr-prune: keep a staging COPR down to what is still in flight
 
 Once rawhide catches up with some of a staging COPR's builds, the COPR
@@ -37,10 +57,7 @@ crate's own build finished used to read as "buildable" all the same,
 so the header now says when the very version being checked is already
 built — in the branch, or only in the COPR, not yet landed — and the
 report is about a rebuild. For that to be true right after the build,
-the COPR's repository metadata is refetched on every run (it is small;
-a staging COPR changes by the minute) while the branch's stays cached,
-through the new `sandogasa_fedrq::expire_repo_cache` and
-`sandogasa_copr::repoid`.
+the COPR's metadata is refetched on every run (see the entry above).
 
 ### ebranch check-update: EPEL is checked against its base distro by default
 

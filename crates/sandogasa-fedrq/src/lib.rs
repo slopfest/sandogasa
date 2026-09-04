@@ -177,15 +177,31 @@ pub fn clear_all_caches() -> std::io::Result<()> {
     clear_libdnf5_cache()
 }
 
-/// Expire one repo's cached metadata for a branch — every entry under
-/// the branch's smartcache directory and under the libdnf5 cache whose
-/// name starts with `repoid_prefix` (`<repoid>-<hash>` and
-/// `<repoid>.solv`) — so the next query refetches just that repo. For
-/// repos that change by the minute, like a staging COPR, where the
+/// Expire one repo's cached metadata — every entry named
+/// `<repoid>-<hash>` or `<repoid>.solv` under any branch directory of
+/// the smartcache (fedrq names those by release number, `45` for f45,
+/// so they are not looked up by branch) and under the libdnf5 cache —
+/// so the next query refetches just that repo. For repos that change
+/// by the minute, like a staging COPR or a Koji side tag, where the
 /// day-old cache of the branch itself is still fine.
-pub fn expire_repo_cache(branch: &str, repoid_prefix: &str) -> std::io::Result<usize> {
-    Ok(remove_prefixed(&cache_dir().join(branch), repoid_prefix)?
-        + remove_prefixed(&libdnf5_cache_dir(), repoid_prefix)?)
+pub fn expire_repo_cache(repoid_prefix: &str) -> std::io::Result<usize> {
+    let mut removed = remove_prefixed(&libdnf5_cache_dir(), repoid_prefix)?;
+    if let Ok(branches) = std::fs::read_dir(cache_dir()) {
+        for entry in branches {
+            let path = entry?.path();
+            if path.is_dir() {
+                removed += remove_prefixed(&path, repoid_prefix)?;
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// The start of the repoid fedrq gives a Koji tag's repo (`@koji:<tag>`):
+/// the repo URL with `/` and `$` flattened,
+/// `https:__kojipkgs.fedoraproject.org_repos_<tag>_latest__basearch`.
+pub fn koji_repoid_prefix(tag: &str) -> String {
+    format!("https:__kojipkgs.fedoraproject.org_repos_{tag}_")
 }
 
 /// Remove `dir`'s entries whose file name starts with `prefix`;
@@ -646,6 +662,19 @@ mod tests {
                 ("python-setuptools".to_string(), "69.0.3-9.el10".to_string()),
                 ("rust-foo".to_string(), "1.2.3-1.fc45".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn koji_repoid_prefix_covers_the_binary_and_source_repos() {
+        let prefix = koji_repoid_prefix("f46-build-side-150291");
+        assert!(
+            "https:__kojipkgs.fedoraproject.org_repos_f46-build-side-150291_latest__basearch"
+                .starts_with(&prefix)
+        );
+        assert!(
+            !"https:__kojipkgs.fedoraproject.org_repos_f46-build-side-1502910_latest__basearch"
+                .starts_with(&prefix)
         );
     }
 

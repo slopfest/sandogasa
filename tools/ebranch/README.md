@@ -187,7 +187,8 @@ ebranch check-crate --from rbw.toml --copr > build.sh
 - `--koji` — output as a Koji chain build string
 - `--copr` — generate a Copr batch build script, each package
   commented with why it is in it
-- `--refresh` — clear fedrq repo metadata cache before querying
+- `--refresh` — clear fedrq repo metadata cache before querying (a
+  `--source-repo @koji:<tag>` side tag is refetched every run anyway)
 - `--json` — machine-readable JSON output
 
 With `--koji`, `--copr`, or `--dot`, the machine output goes to stdout
@@ -576,6 +577,11 @@ ahead of a RHEL minor — and still require `-b` and `-r`.
 For EPEL side tags, the testing branch is auto-detected from the
 side tag name (e.g. `epel9-build-side-*` uses `epel9`). Use
 `--testing-branch` to override if needed.
+
+A side tag's or a COPR's repository metadata is refetched on every run
+(both change as builds land, and are small); after an offered `koji
+regen-repo`, only the side tag's cached metadata is dropped. The
+branch's own metadata stays cached until `--refresh` clears everything.
 
 After the check, `--give-karma` casts karma on the update.
 
