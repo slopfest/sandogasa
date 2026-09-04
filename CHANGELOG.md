@@ -20,9 +20,11 @@ with a growing pause, up to the given attempts. The `WriteOutcome` says
 which bugs are done, which a failed request had already changed, how
 many retries it took and which are still unconfirmed, and its `note()`
 is the one line worth telling the user. fedora-cve-triage's five write
-paths (NOTABUG and ERRATA closes, late-filed blocking, version bumps)
-and poi-tracker's triage-updates and triage-retired use it; the plain
-`update`/`update_many` remain for callers that want the raw request.
+paths (NOTABUG and ERRATA closes, late-filed blocking, version bumps),
+poi-tracker's triage-updates and triage-retired, ebranch's branch-request
+linking and pinging and review-deps, and fedora-review-digest's posting
+use it; the plain `update`/`update_many` remain for callers that want
+the raw request.
 
 ### Every tool's `--version` names the checkout it was built from
 

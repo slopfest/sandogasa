@@ -209,9 +209,19 @@ async fn check_pkg_reviews_async(opts: &CheckPkgReviewsOptions) -> Result<(), St
         }
         update.insert("depends_on".to_string(), serde_json::Value::Object(depends));
 
-        bz.update(change.bug_id, &serde_json::Value::Object(update))
-            .await
-            .map_err(|e| format!("failed to update bug {}: {e}", change.bug_id))?;
+        let out = bz
+            .update_verified(change.bug_id, &serde_json::Value::Object(update), 3)
+            .await;
+        if let Some(note) = out.note() {
+            eprintln!("note: bug {}: {note}", change.bug_id);
+        }
+        if !out.complete() {
+            return Err(format!(
+                "failed to update bug {}: {}",
+                change.bug_id,
+                out.last_error.unwrap_or_default()
+            ));
+        }
     }
 
     println!("Updated {} bug(s).", changes.len());

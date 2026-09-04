@@ -417,11 +417,20 @@ async fn link_requests(
                 req.rhbz, dep_ids
             );
         }
-        // Additive update so we never clobber unrelated links.
+        // Additive update so we never clobber unrelated links; a failed
+        // request is read back before it counts as failed.
         let body = serde_json::json!({ "depends_on": { "add": dep_ids } });
-        bz.update(req.rhbz, &body)
-            .await
-            .map_err(|e| format!("failed to link rhbz#{}: {e}", req.rhbz))?;
+        let out = bz.update_verified(req.rhbz, &body, 3).await;
+        if let Some(note) = out.note() {
+            eprintln!("note: rhbz#{}: {note}", req.rhbz);
+        }
+        if !out.complete() {
+            return Err(format!(
+                "failed to link rhbz#{}: {}",
+                req.rhbz,
+                out.last_error.unwrap_or_default()
+            ));
+        }
     }
     Ok(())
 }
@@ -496,9 +505,17 @@ pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool
                         "requestee": bug.assigned_to,
                     }],
                 });
-                bz.update(req.rhbz, &update)
-                    .await
-                    .map_err(|e| format!("failed to ping rhbz#{}: {e}", req.rhbz))?;
+                let out = bz.update_verified(req.rhbz, &update, 3).await;
+                if let Some(note) = out.note() {
+                    eprintln!("note: rhbz#{}: {note}", req.rhbz);
+                }
+                if !out.complete() {
+                    return Err(format!(
+                        "failed to ping rhbz#{}: {}",
+                        req.rhbz,
+                        out.last_error.unwrap_or_default()
+                    ));
+                }
                 println!("pinged {pkg} rhbz#{}", req.rhbz);
                 req.pinged = true;
                 changed = true;

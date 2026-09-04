@@ -330,8 +330,16 @@ fn post_to_bugzilla(
     }
 
     let body = bugzilla::update_body(digest, approved, current_flag, claim);
-    rt.block_on(client.update(bug_id, &body))
-        .map_err(|e| format!("posting to bug {bug_id}: {e}"))?;
+    let out = rt.block_on(client.update_verified(bug_id, &body, 3));
+    if let Some(note) = out.note() {
+        eprintln!("note: bug {bug_id}: {note}");
+    }
+    if !out.complete() {
+        return Err(format!(
+            "posting to bug {bug_id}: {}",
+            out.last_error.unwrap_or_default()
+        ));
+    }
     eprintln!("Posted to bug {bug_id}.");
     Ok(())
 }
