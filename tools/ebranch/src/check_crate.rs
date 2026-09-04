@@ -38,9 +38,10 @@ pub struct CheckCrateOptions {
     pub no_default_features: bool,
     /// Crates built in-tree from the root's own source (a workspace's
     /// members, `uu_*` for uutils-coreutils): not dependencies Fedora
-    /// packages, but their dependencies are the workspace's. Globs;
-    /// crates published from the root's repository are detected
-    /// without being listed.
+    /// packages, but their dependencies are the workspace's. Globs,
+    /// trusted as written, plus [`IN_TREE_REPOSITORY`] to also take
+    /// every crate published from the root's repository. Empty:
+    /// nothing is in-tree.
     pub in_tree: Vec<String>,
     /// The Fedora package name when it is not `rust-<crate>`
     /// (`coreutils` → `uutils-coreutils`): used for the spec lookup
@@ -289,17 +290,29 @@ pub fn check_crate(
     // packaged: they leave the dependency lists, and their own
     // dependencies join them as the workspace's — with the features
     // the root's enabled set requests of them (`uu_ls/selinux`).
-    let root_repo = rt.block_on(fetch_repository(name));
+    // Sharing the root's repository is only a hint, taken on request:
+    // phf's workspace publishes phf_shared and phf_macros as crates
+    // Fedora packages separately, while uutils' members are built from
+    // the coreutils tarball. The spec knows; crates.io does not — and
+    // neither does the repo: rawhide still carries stale rust-uu_*
+    // packages nobody retired, so the glob is trusted as written.
+    let root_repo = in_tree_repository_rule(&opts.in_tree)
+        .then(|| rt.block_on(fetch_repository(name)))
+        .flatten();
     let is_in_tree = |dep: &str| -> bool {
-        opts.in_tree.iter().any(|g| glob_match(g, dep))
+        matches_in_tree_glob(&opts.in_tree, dep)
             || (root_repo.is_some() && rt.block_on(fetch_repository(dep)) == root_repo)
     };
     let mut in_tree: Vec<InTreeCrate> = Vec::new();
     let mut queue: VecDeque<(String, String, Vec<String>)> = VecDeque::new();
     let mut visited_members: HashSet<String> = HashSet::new();
     let mut kept: Vec<DepResult> = Vec::new();
+    let mut packaged_anyway: Vec<String> = Vec::new();
     for dr in dependencies {
-        if !matches!(dr.status, DepStatus::Satisfied { .. }) && is_in_tree(&dr.dep.name) {
+        if is_in_tree(&dr.dep.name) {
+            if !matches!(dr.status, DepStatus::Missing) {
+                packaged_anyway.push(dr.dep.name.clone());
+            }
             // A member the root lists twice (normal and dev) is one crate.
             if visited_members.insert(dr.dep.name.clone()) {
                 queue.push_back((
@@ -317,6 +330,15 @@ pub fn check_crate(
         }
     }
     dependencies = kept;
+    if opts.verbose && !packaged_anyway.is_empty() {
+        packaged_anyway.sort();
+        packaged_anyway.dedup();
+        eprintln!(
+            "[check-crate] in-tree as told, though the repo packages them on their own \
+             (an over-broad glob, or stale packages to retire): {}",
+            packaged_anyway.join(", ")
+        );
+    }
     let mut member_deps: Vec<(CrateDep, String)> = Vec::new();
     let mut seen_member_deps: HashSet<(String, String)> = HashSet::new();
     while let Some((member, req, feats)) = queue.pop_front() {
@@ -1237,6 +1259,22 @@ fn split_top_level(s: &str) -> Vec<&str> {
     parts
 }
 
+/// The `--in-tree` entry that also takes every dependency published
+/// from the root's own repository (crates.io's `repository`, cut at
+/// the path a workspace member points into).
+pub const IN_TREE_REPOSITORY: &str = "@repository";
+
+/// Whether the in-tree list asks for the same-repository rule.
+fn in_tree_repository_rule(list: &[String]) -> bool {
+    list.iter().any(|g| g == IN_TREE_REPOSITORY)
+}
+
+/// Whether one of the in-tree globs (the sentinel aside) matches.
+fn matches_in_tree_glob(list: &[String], name: &str) -> bool {
+    list.iter()
+        .any(|g| g != IN_TREE_REPOSITORY && glob_match(g, name))
+}
+
 /// Shell-style `*` matching, enough for `uu_*` and `*-sys`.
 fn glob_match(pattern: &str, name: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
@@ -2082,6 +2120,17 @@ mod tests {
         assert!(!target_applies(Some(
             "cfg(all(unix, target_os = \"redox\"))"
         )));
+    }
+
+    #[test]
+    fn in_tree_list_separates_globs_from_the_repository_sentinel() {
+        let list = ["uucore*", "@repository"].map(String::from);
+        assert!(matches_in_tree_glob(&list, "uucore_procs"));
+        assert!(!matches_in_tree_glob(&list, "@repository"));
+        assert!(in_tree_repository_rule(&list));
+        let globs_only = ["uu_*".to_string()];
+        assert!(!in_tree_repository_rule(&globs_only));
+        assert!(!in_tree_repository_rule(&[]));
     }
 
     #[test]

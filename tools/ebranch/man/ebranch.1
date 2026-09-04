@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-09-03 "sandogasa 0.22.0" "Sandogasa Manual"
+.TH ebranch 1 2026-09-04 "sandogasa 0.22.0" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -45,7 +45,7 @@ Non\-default features the Fedora build enables for an application root, as `%car
 Build without default features (`\-n`)
 .TP
 \fB\-\-in\-tree\fR \fI<GLOB,...>\fR
-Crates built in\-tree from the root\*(Aqs own source (a workspace\*(Aqs members, e.g. `uu_*`): hidden as dependencies, their own dependencies checked as the workspace\*(Aqs. Globs, CSV or repeated. Crates published from the root\*(Aqs repository are detected without being listed
+Crates built in\-tree from the root\*(Aqs own source (a workspace\*(Aqs members, e.g. `uu_*,uucore*`): hidden as dependencies, their own dependencies checked as the workspace\*(Aqs. Globs, CSV or repeated; `@repository` also takes every crate published from the root\*(Aqs repository
 .TP
 \fB\-\-package\fR \fI<NAME>\fR
 Fedora package name when it is not `rust\-<crate>` (e.g. the `coreutils` crate is `uutils\-coreutils`): used for the spec lookup and as the report\*(Aqs package name

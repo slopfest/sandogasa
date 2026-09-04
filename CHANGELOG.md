@@ -120,17 +120,24 @@ That same crate showed the next gap: crates.io lists the hundred
 missing, while Fedora builds them from the workspace tarball — which
 is exactly why their `rust-uu_*` packages were retired. A workspace
 member is not a dependency Fedora packages; its dependencies are the
-workspace's. `--in-tree GLOB` names such crates, and a dependency
-published from the root's own repository (crates.io says) is
-recognized as one without being named. In-tree crates leave the
+workspace's. `--in-tree GLOB` names such crates
+(`uu_*,uucore*,uutests` for uutils-coreutils); the entry `@repository`
+also takes every dependency
+published from the root's own repository, on request only, because
+sharing a repository does not make a crate in-tree — an early cut
+applied that rule by itself and reported phf_shared, phf_macros and
+phf_generator as built inside phf, when Fedora packages each of them
+on its own. In-tree crates leave the
 missing/unmet lists into a "Built in-tree" line; their dependencies
 are checked as the root's, marked `via <member>` — and checked with
 the features the root's enabled set requests of each member, since
 `feat_selinux = ["uu_ls/selinux", …]` is Cargo's way of saying so, and
 `dep/feature` and `dep?/feature` entries are now understood. A
 member's own dev dependencies do not count — it is built as a
-dependency, not tested — and a member whose crates.io entry names no
-repository (`uu_checksum_common`) is only found through the glob.
+dependency, not tested. The globs are trusted as written, because the
+repo cannot arbitrate either: rawhide still carries stale `rust-uu_*`
+packages nobody retired, which a "packaged on its own" rule would have
+turned back into dependencies; `--verbose` lists such matches instead.
 Saved reports without these fields load unchanged.
 
 The first such run also listed `windows-sys` as missing, pulled by

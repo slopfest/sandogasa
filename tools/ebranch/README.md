@@ -122,13 +122,21 @@ ebranch check-crate --from rbw.toml --copr > build.sh
   (a workspace's members, `uu_*` for uutils-coreutils): not
   dependencies Fedora packages, so they leave the missing/unmet lists
   into a "Built in-tree" line, while *their* dependencies are checked
-  as the workspace's and marked `via <member>`. Members published from
-  the root's own repository are detected without being listed, and
-  each is checked with the features the root's enabled set requests
-  of it (`feat_selinux = ["uu_ls/selinux", …]`). A member's own dev
+  as the workspace's and marked `via <member>`. Each is checked with
+  the features the root's enabled set requests of it
+  (`feat_selinux = ["uu_ls/selinux", …]`), and a member's own dev
   dependencies do not count: it is built as a dependency, not tested.
-  A member whose crates.io entry names no repository is only found
-  through the glob
+  The entry `@repository` also takes every dependency published from
+  the root's own repository; it is not on by default, because sharing
+  a repository does not make a crate in-tree — phf's workspace
+  publishes phf_shared and phf_macros as crates Fedora packages on
+  their own. The globs are trusted as written — only the spec knows
+  what a package builds in-tree, and rawhide still carries stale
+  `rust-uu_*` packages nobody retired — so keep them precise:
+  `--in-tree 'uu_*,uucore*,uutests'` for uutils-coreutils, where a
+  bare `uu*` would also swallow `uutils_term_grid`, a dependency in
+  its own right. `--verbose` lists the glob matches the repo packages
+  on its own, which is either an over-broad glob or packages to retire
 - Dependencies limited to another target — `cfg(windows)`,
   `x86_64-pc-windows-msvc` — are not counted at any level; the
   crates.io `target` is evaluated for a Linux build the way

@@ -490,10 +490,10 @@ struct CheckCrateArgs {
     no_default_features: bool,
 
     /// Crates built in-tree from the root's own source (a
-    /// workspace's members, e.g. `uu_*`): hidden as dependencies,
+    /// workspace's members, e.g. `uu_*,uucore*`): hidden as dependencies,
     /// their own dependencies checked as the workspace's. Globs, CSV
-    /// or repeated. Crates published from the root's repository are
-    /// detected without being listed.
+    /// or repeated; `@repository` also takes every crate published
+    /// from the root's repository.
     #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
     in_tree: Vec<String>,
 
