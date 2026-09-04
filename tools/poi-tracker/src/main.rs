@@ -10,6 +10,7 @@ mod gitlab_unshipped;
 mod intersect;
 mod kondo;
 mod prune_retired;
+mod reconcile;
 mod semver_audit;
 mod triage_retired;
 mod triage_updates;
@@ -102,6 +103,11 @@ enum Command {
     /// active branch (dist-git project gone or retired
     /// everywhere).
     PruneRetired(PruneRetiredArgs),
+    /// Bring the workspace's inventories up to date with its keeps:
+    /// walk new keeps, recompute the derived inventories, ask the
+    /// decisions a program cannot make, then triage what nothing
+    /// justifies.
+    Reconcile(ReconcileArgs),
     /// Remove a package from the inventory.
     Remove(RemoveArgs),
     /// Audit pending upstream updates by semver impact, flagging
@@ -385,6 +391,49 @@ struct KondoArgs {
     output: Option<String>,
 
     /// Output as JSON instead of human-readable.
+    #[arg(long)]
+    json: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+/// The maintenance loop as one command. Needs a workspace file (`-w`,
+/// or `./kondo.toml`). For every closure in it: keeps the graph has
+/// never walked are walked (fedrq only for what the graph lacks) and
+/// merged in; the derived inventory is recomputed; each package that
+/// newly rides in it can be made essential in its own right instead;
+/// each keep only devel-only edges carry can be demoted to the derived
+/// inventory. Then the owned packages no essential inventory justifies
+/// go through kondo's keep/explain/remove triage into the cull file.
+/// Every answer is written as it is given, so an interrupted run
+/// resumes where it stopped; Enter takes the default (ride, keep),
+/// `a` takes it for the rest, `q` stops asking. `--yes` takes every
+/// default without asking; `--json` reports and asks nothing.
+#[derive(clap::Args)]
+struct ReconcileArgs {
+    /// Essential inventory that promoted packages are filed into
+    /// (default: the closure's first keeps inventory).
+    #[arg(long, value_name = "PATH")]
+    into: Option<String>,
+
+    /// Take every default without asking (ride, keep essential),
+    /// and leave the triage candidates as cull candidates.
+    #[arg(short, long)]
+    yes: bool,
+
+    /// Ignore the day-fresh ACL cache in the triage.
+    #[arg(long)]
+    refresh_acls: bool,
+
+    /// Compute and report only: write no file, walk nothing, ask
+    /// nothing (new keeps are listed instead of walked).
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Report as JSON; asks and triages nothing (files are still
+    /// written unless --dry-run).
     #[arg(long)]
     json: bool,
 
@@ -1022,7 +1071,11 @@ fn main() -> ExitCode {
     // inventory paths. `Config` doesn't touch inventories at all.
     let needs_paths = !matches!(
         cli.command,
-        Command::Config | Command::Import(_) | Command::SyncDistgit(_) | Command::SyncGitlab(_)
+        Command::Config
+            | Command::Import(_)
+            | Command::Reconcile(_)
+            | Command::SyncDistgit(_)
+            | Command::SyncGitlab(_)
     );
 
     let paths = resolve_inventory_paths(&cli);
@@ -1047,6 +1100,7 @@ fn main() -> ExitCode {
         Command::Derive(args) => cmd_derive(&paths, args),
         Command::Keep(args) => cmd_keep(&paths, args),
         Command::Kondo(args) => cmd_kondo(&paths, args),
+        Command::Reconcile(args) => cmd_reconcile(cli.workspace.as_deref(), args),
         Command::PruneRetired(args) => cmd_prune_retired(&paths, args),
         Command::Remove(args) => cmd_remove(&paths[0], args),
         Command::SemverAudit(args) => cmd_semver_audit(&paths, args),
@@ -2195,6 +2249,70 @@ fn cmd_keep(paths: &[String], args: &KeepArgs) -> CmdResult {
         eprintln!("warning: {warning}");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The maintenance loop over the workspace: see [`reconcile`].
+fn cmd_reconcile(workspace: Option<&str>, args: &ReconcileArgs) -> CmdResult {
+    use std::io::IsTerminal;
+
+    let Some((ws, path)) = workspace::Workspace::find(workspace)? else {
+        return Err(
+            "reconcile needs a workspace file: pass -w PATH or run where ./kondo.toml is".into(),
+        );
+    };
+    let resolve = |p: &str| ws.dir.join(p).to_string_lossy().into_owned();
+    let opts = reconcile::Options {
+        ws: &ws,
+        into: args.into.clone(),
+        yes: args.yes || args.dry_run,
+        json: args.json,
+        verbose: args.verbose,
+        dry_run: args.dry_run,
+    };
+    if !args.json {
+        println!("reconciling workspace {}", path.display());
+    }
+    let report = reconcile::run(&opts)?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(ExitCode::SUCCESS);
+    }
+    if args.dry_run {
+        println!(
+            "dry run: {} owned package(s) would go to the triage",
+            report.triage_candidates.len()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    if report.triage_candidates.is_empty() {
+        println!("nothing left to triage: every owned package is justified or already culled");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let (Some(owned), Some(user)) = (ws.owned.as_deref().map(resolve), ws.user.clone()) else {
+        println!(
+            "{} package(s) to triage, but the workspace names no `user`: run `poi-tracker kondo --user NAME`",
+            report.triage_candidates.len()
+        );
+        return Ok(ExitCode::SUCCESS);
+    };
+    println!(
+        "
+{} owned package(s) no essential inventory justifies — triaging with kondo",
+        report.triage_candidates.len()
+    );
+    let kondo_args = KondoArgs {
+        filter: WalkFilterArgs::default(),
+        essential: ws.essential().iter().map(|p| resolve(p)).collect(),
+        user,
+        explain_into: None,
+        yes: args.yes || !std::io::stdin().is_terminal(),
+        refresh_acls: args.refresh_acls,
+        reason: None,
+        output: ws.cull.as_deref().map(resolve),
+        json: false,
+        verbose: args.verbose,
+    };
+    cmd_kondo(&[owned], &kondo_args)
 }
 
 /// Report (and with `--apply`, enact) what unkeeping packages frees,

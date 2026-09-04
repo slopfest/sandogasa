@@ -298,18 +298,23 @@ out — each step a different subcommand with its own inventory
 arguments and ordering rules. It works, and it is convoluted: the
 user's words were "very convoluted and hard to keep track of".
 
-Nothing of this is released, so the design is still free to change.
-Sketch the loop as one thing the user drives rather than five they
-sequence: a single command (or `kondo` itself) that takes the
-inventories and the graph, recomputes what a change implies (new
-dependencies, orphaned carried packages, leaves that lost their
-reason), presents the decisions it cannot make — "X is now reachable
-only through Y; keep it as essential, let it ride, or cull?" — and
-writes every file itself. Decide where the fixpoint iteration lives
-(inside that command, with the graph as its memory), what the human is
-asked and in what order, and how a half-finished session resumes. The
-existing subcommands stay as the plumbing. Do this before the release
-that first ships kondo; it is a day's work, not an afternoon's.
+Built the same day: the workspace file (`kondo.toml`, one `[[closure]]`
+per dependency world, `external` for other people's keeps whose
+dependencies we track) supplies every maintenance subcommand's flags,
+and `reconcile` runs the loop over it — walk new keeps, recompute the
+derived inventories, ask ride/promote and keep/demote, hand what is
+left to kondo's triage. Still open:
+
+- The Hyperscale closures have no graph yet; the first
+  `poi-tracker --closure hyperscale-el9 deps` (and el10) creates them,
+  and `reconcile` skips a closure until then. Run those once.
+- The manual subcommands want concrete, workspace-era examples in the
+  README: `keep foo` / `unkeep foo` / `--closure X dependents` with
+  nothing else on the line, and when to reach for each instead of
+  `reconcile` (the user asked for this explicitly).
+- `reconcile` re-asks nothing it has written, but a "since first seen"
+  memory of decisions declined (ride now, ask again later?) does not
+  exist; see whether the second real cycle wants one.
 
 ## poi-tracker / sandogasa-pkg-health seam
 

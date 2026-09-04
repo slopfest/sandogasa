@@ -550,6 +550,55 @@ at all — harmless for a fresh inventory (it simply isn't added),
 but if an existing inventory recorded it before the project
 vanished, only `prune-retired` notices the 404.
 
+### Reconcile the workspace (reconcile)
+
+The maintenance loop as one command. `reconcile` reads the workspace
+file and, for every closure in it, brings the inventories up to date
+with the keeps:
+
+```
+$ poi-tracker reconcile
+reconciling workspace kondo.toml
+closure fedora:
+  new keeps walked (2): ripgrep, fd-find
+    41 capabilities answered from the graph, 3 resolved live
+  entered the derived inventory (3): rust-buf-min, rust-tree_magic_db, rust-ufmt-write
+closure hyperscale-el9 (external):
+  skipped — hyperscale-el9-deps-graph.json does not exist yet: run `poi-tracker --closure hyperscale-el9 deps` once
+
+12 owned package(s) no essential inventory justifies — triaging with kondo
+```
+
+Per closure: keeps the graph has never walked as roots are walked
+(graph first, fedrq only for what it lacks) and merged into the graph
+and the closure inventory; the derived inventory is recomputed; then
+the decisions a program cannot make are asked, one line each, written
+as answered so an interrupted run resumes where it stopped:
+
+- a package that newly rides in the derived inventory: Enter lets it
+  ride, `e` makes it essential in its own right (filed into the
+  closure's first keeps inventory, or `--into PATH`) and it is walked as
+  a keep in the next round;
+- a keep only devel-only edges carry — the library-only shape your
+  first prune demoted by hand: Enter keeps it essential, `d` demotes
+  it to the derived inventory.
+
+`a` takes the default for the rest, `q` stops asking. External
+closures are walked and recomputed but never asked about: their keeps
+are not yours to promote or demote. Once every closure has had its
+say, the owned packages no essential inventory justifies go through
+kondo's keep/explain/remove triage into the cull file, exactly as
+`poi-tracker kondo` would.
+
+`--yes` takes every default without asking (and leaves the triage
+candidates as cull candidates, as kondo's `-y` does); `--dry-run`
+computes and reports without writing, walking or asking; `--json`
+prints the per-closure report and the triage candidates instead of
+triaging. The manual subcommands remain for surgical use — `keep` for
+one package, `unkeep` to see what a removal frees before doing it,
+`dependents` for the full leaves/carried picture — and `deps` is the
+periodic full walk that refreshes a graph when Fedora has moved.
+
 ### Remove a package
 
 ```sh

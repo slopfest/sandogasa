@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### poi-tracker: reconcile, the maintenance loop as one command
+
+After the first Marie Kondo cycle closed, keeping the inventories true
+meant sequencing five subcommands by hand — `keep`/`unkeep` per
+package, a walk to the fixpoint, `dependents`, a judgment call per
+newly reachable package, `derive --apply`, `kondo` again — each with
+its own paths and its own meaning of `-i`; the user's verdict was
+"very convoluted and hard to keep track of", and a day after the last
+`keep` the derived inventory was already three packages stale without
+anything saying so.
+
+`poi-tracker reconcile` is that loop over the workspace file. For every
+closure: keeps the graph has never walked as roots are walked (graph
+first, fedrq for the frontier) and merged into the graph and the
+closure inventory; the derived inventory is recomputed; each package
+that newly rides in it can be made essential in its own right (Enter
+rides, `e` promotes, and a promotion is walked as a keep in the next
+round); each keep only devel-only edges carry can be demoted to the
+derived inventory. Answers are written as given, `a` takes the default
+for the rest, `q` stops asking. External closures are brought up to
+date but never asked about. Then the owned packages no essential
+inventory justifies go through kondo's triage into the cull file.
+`--yes` takes every default, `--dry-run` reports without writing or
+walking, `--json` reports the closures and the triage candidates. A
+former keep is a graph root neither kept nor reached any more — not
+every root, since the fixpoint makes reached owned packages roots too.
+
 ### poi-tracker: a workspace file, so the maintenance subcommands know their inputs
 
 Every kondo maintenance step took the same half-dozen paths — the owned

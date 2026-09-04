@@ -655,6 +655,43 @@ Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS poi-tracker reconcile
+\fBpoi\-tracker reconcile\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-into\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-refresh\-acls\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Bring the workspace\*(Aqs inventories up to date with its keeps: walk new keeps, recompute the derived inventories, ask the decisions a program cannot make, then triage what nothing justifies
+.TP
+\fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
+Path(s) to inventory TOML file(s)
+.TP
+\fB\-\-into\fR \fI<PATH>\fR
+Essential inventory that promoted packages are filed into (default: the closure\*(Aqs first keeps inventory)
+.TP
+\fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
+Directory to scan for *.toml inventory files
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Take every default without asking (ride, keep essential), and leave the triage candidates as cull candidates
+.TP
+\fB\-\-refresh\-acls\fR
+Ignore the day\-fresh ACL cache in the triage
+.TP
+\fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
+Workspace file naming the inventories, graph and walk settings (default: ./kondo.toml when present). Supplies the flags the maintenance subcommands would otherwise need; the command line wins, \-\-no\-defaults ignores it
+.TP
+\fB\-\-closure\fR \fI<NAME>\fR
+Which [[closure]] of the workspace a walk subcommand works on (default: the first)
+.TP
+\fB\-\-dry\-run\fR
+Compute and report only: write no file, walk nothing, ask nothing (new keeps are listed instead of walked)
+.TP
+\fB\-\-json\fR
+Report as JSON; asks and triages nothing (files are still written unless \-\-dry\-run)
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS poi-tracker remove
 \fBpoi\-tracker remove\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-rpm\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR> 
 .PP
