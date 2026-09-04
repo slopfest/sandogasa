@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### ebranch check-crate: a staging COPR layered over the branch
+
+A big update staged in a COPR — uutils-coreutils and its dependency
+bumps in `@rust/uutils-and-nushell` — still read as "missing" and
+"too old" against rawhide until every build had landed, so the report
+kept re-listing work that was already done, and expanding it.
+`--staging-copr OWNER/PROJECT` now layers the COPR over the branch: whatever the branch
+does not satisfy is looked up there too (fedrq's `@copr:` repo is
+standalone, so this is a second query, which is also what attributes
+the hit), and a hit is reported under "Staged in COPR, not yet in the
+branch" — built, still in flight — instead of missing, and not
+expanded; transitive crates the COPR provides are listed there too,
+with what pulled them, since they are the update's remaining road to
+rawhide. The branch picks the chroot, so a COPR building for several
+releases is checked one target at a time. The report records the COPR
+and each staged dependency carries `staged = true`; reports saved
+before this load unchanged.
+
 ### ebranch check-update: EPEL is checked against its base distro by default
 
 An EPEL update reached fedrq as its bare `epelN` branch, which cannot

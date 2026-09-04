@@ -498,6 +498,13 @@ struct CheckCrateArgs {
     #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
     in_tree: Vec<String>,
 
+    /// Staging COPR (`owner/project`, `@group/project`) layered over
+    /// the branch: dependencies the branch lacks are looked up there
+    /// too and reported as staged — built, still in flight — instead
+    /// of missing. The branch picks the chroot (rawhide → fedora-rawhide).
+    #[arg(long, value_name = "OWNER/PROJECT")]
+    staging_copr: Option<String>,
+
     /// Fedora package name when it is not `rust-<crate>` (e.g. the
     /// `coreutils` crate is `uutils-coreutils`): used for the spec
     /// lookup and as the report's package name.
@@ -942,6 +949,13 @@ fn main() -> ExitCode {
             Some(_) => String::new(),
             None => branch_repo_label(a.branch.as_deref(), a.repo.as_deref()),
         };
+        if let Some(c) = &a.staging_copr
+            && check_update::parse_copr_spec(c).is_none()
+        {
+            return exit_code(Err(format!(
+                "--staging-copr wants owner/project (e.g. @rust/uutils-and-nushell), got {c}"
+            )));
+        }
         let (standing, from_config) = config::check_crate_excludes();
         if a.verbose && !from_config {
             eprintln!(
@@ -964,6 +978,7 @@ fn main() -> ExitCode {
             features: a.features.clone(),
             no_default_features: a.no_default_features,
             package: a.package.clone(),
+            copr: a.staging_copr.clone(),
             in_tree: a
                 .in_tree
                 .iter()

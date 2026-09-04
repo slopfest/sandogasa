@@ -145,6 +145,14 @@ ebranch check-crate --from rbw.toml --copr > build.sh
   crates.io `target` is evaluated for a Linux build the way
   `%cargo_generate_buildrequires` does, with architecture predicates
   treated as true
+- `--staging-copr OWNER/PROJECT` — a staging COPR layered over the branch
+  (`@rust/uutils-and-nushell`): whatever the branch does not satisfy
+  is looked up in the COPR too, and a hit is reported under "Staged in
+  COPR, not yet in the branch" rather than as missing — built, still
+  in flight, and not expanded further; transitive crates the COPR
+  provides are listed there too, with what pulled them. The branch picks the chroot
+  (`-b rawhide` → `fedora-rawhide-*`), so a COPR building for several
+  releases is checked one target at a time
 - `--package NAME` — the Fedora package when it is not `rust-<crate>`
   (the `coreutils` crate is `uutils-coreutils`): used for the spec
   lookup and as the report's package name

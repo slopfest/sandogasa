@@ -43,6 +43,11 @@ pub struct CheckCrateOptions {
     /// every crate published from the root's repository. Empty:
     /// nothing is in-tree.
     pub in_tree: Vec<String>,
+    /// A staging COPR (`owner/project`, `--staging-copr`) layered over
+    /// the branch: what the branch does not satisfy is looked up there
+    /// too, and counts as staged — built, still in flight — rather
+    /// than missing.
+    pub copr: Option<String>,
     /// The Fedora package name when it is not `rust-<crate>`
     /// (`coreutils` → `uutils-coreutils`): used for the spec lookup
     /// and as the report's package name.
@@ -69,6 +74,10 @@ pub enum DepStatus {
         /// True when satisfied by a compat package, not the latest.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         compat: bool,
+        /// True when only the staging COPR (`--copr`) provides it:
+        /// built, but not yet in the branch — still in flight.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        staged: bool,
     },
     /// The RPM exists but no version satisfies the requirement.
     #[serde(rename = "unmet")]
@@ -120,6 +129,9 @@ pub enum TransitiveStatus {
     Missing,
     /// Available but no version satisfies the requirement.
     Unmet,
+    /// Built in the staging COPR (`--staging-copr`), not yet in the
+    /// branch: nothing to build, still in flight.
+    Staged,
 }
 
 /// Full report for a crate check.
@@ -129,6 +141,9 @@ pub struct CheckCrateReport {
     pub crate_version: String,
     pub package: String,
     pub branch: String,
+    /// The staging COPR layered over the branch, when one was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copr: Option<String>,
     pub dependencies: Vec<DepResult>,
     /// Workspace members: built in-tree, not packaged; their
     /// dependencies appear in `dependencies` with `via` set.
@@ -136,6 +151,10 @@ pub struct CheckCrateReport {
     pub in_tree: Vec<InTreeCrate>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transitive_missing: Vec<TransitiveDep>,
+    /// Transitive dependencies the staging COPR provides: built there,
+    /// not yet in the branch, and not expanded further.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transitive_staged: Vec<TransitiveDep>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transitive_build_order: Vec<dag::BuildPhase>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -264,17 +283,28 @@ pub fn check_crate(
         );
     }
 
-    let fedrq = sandogasa_fedrq::Fedrq {
-        branch: opts.branch.clone(),
-        repo: opts.repo.clone(),
+    let repos = RepoStack {
+        base: sandogasa_fedrq::Fedrq {
+            branch: opts.branch.clone(),
+            repo: opts.repo.clone(),
+        },
+        copr: opts.copr.as_ref().map(|c| sandogasa_fedrq::Fedrq {
+            branch: opts.branch.clone(),
+            repo: Some(format!("@copr:{c}")),
+        }),
     };
 
     if opts.verbose {
-        eprintln!("[check-crate] checking dependencies against repo");
+        match &opts.copr {
+            Some(c) => eprintln!(
+                "[check-crate] checking dependencies against repo, then COPR {c} for the rest"
+            ),
+            None => eprintln!("[check-crate] checking dependencies against repo"),
+        }
     }
 
     // One fedrq invocation for every direct dependency.
-    let statuses = check_deps_in_repo(&fedrq, &deps.iter().collect::<Vec<_>>());
+    let statuses = repos.check(&deps.iter().collect::<Vec<_>>());
     let mut dependencies: Vec<DepResult> = deps
         .iter()
         .cloned()
@@ -391,7 +421,7 @@ pub fn check_crate(
             );
         }
         let refs: Vec<&CrateDep> = member_deps.iter().map(|(d, _)| d).collect();
-        let statuses = check_deps_in_repo(&fedrq, &refs);
+        let statuses = repos.check(&refs);
         // A dependency the root already has directly needs no second entry.
         let direct: HashSet<(String, String)> = dependencies
             .iter()
@@ -409,34 +439,35 @@ pub fn check_crate(
     }
     let in_tree_names: HashSet<String> = in_tree.iter().map(|m| m.name.clone()).collect();
 
-    let (transitive_missing, transitive_build_order, transitive_edges) = if opts.transitive {
-        let mut expansion_opts = opts.clone();
-        expansion_opts.exclude.extend(in_tree_names.iter().cloned());
-        let (deps, edges) = expand_transitive(
-            &rt,
-            &fedrq,
-            &dependencies,
-            &expansion_opts,
-            library_root || spec_all,
-        )?;
-        let phases = if edges.is_empty() {
-            vec![]
-        } else {
-            match dag::topological_layers(&edges) {
-                Ok(p) => p,
-                Err(_) => {
-                    eprintln!(
-                        "warning: transitive dependency graph has cycles; \
+    let (transitive_missing, transitive_staged, transitive_build_order, transitive_edges) =
+        if opts.transitive {
+            let mut expansion_opts = opts.clone();
+            expansion_opts.exclude.extend(in_tree_names.iter().cloned());
+            let (deps, staged, edges) = expand_transitive(
+                &rt,
+                &repos,
+                &dependencies,
+                &expansion_opts,
+                library_root || spec_all,
+            )?;
+            let phases = if edges.is_empty() {
+                vec![]
+            } else {
+                match dag::topological_layers(&edges) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        eprintln!(
+                            "warning: transitive dependency graph has cycles; \
                          build order unavailable"
-                    );
-                    vec![]
+                        );
+                        vec![]
+                    }
                 }
-            }
+            };
+            (deps, staged, phases, edges)
+        } else {
+            (vec![], vec![], vec![], BTreeMap::new())
         };
-        (deps, phases, edges)
-    } else {
-        (vec![], vec![], BTreeMap::new())
-    };
 
     // Filter out excluded crates from the direct dependency list.
     let dependencies = if opts.exclude.is_empty() {
@@ -468,10 +499,12 @@ pub fn check_crate(
         branch: opts.label.clone(),
         dependencies,
         transitive_missing,
+        transitive_staged,
         transitive_build_order,
         transitive_edges,
         review_bugs: BTreeMap::new(),
         in_tree,
+        copr: opts.copr.clone(),
     })
 }
 
@@ -497,6 +530,8 @@ pub fn build_reason(pkg: &str, report: &CheckCrateReport) -> Option<String> {
         TransitiveStatus::Unmet => {
             format!("packaged, but nothing satisfies {}", dep.version_req)
         }
+        // Staged crates are never in transitive_missing.
+        TransitiveStatus::Staged => "staged in the COPR".to_string(),
     };
     Some(format!(
         "# {pkg}: build {} for {} — {why}, pulled in by {}",
@@ -527,7 +562,11 @@ pub fn render_report(report: &CheckCrateReport) -> String {
         "Checking crate: {} {}",
         report.crate_name, report.crate_version
     );
-    let _ = writeln!(out, "Branch: {}\n", report.branch);
+    let _ = writeln!(out, "Branch: {}", report.branch);
+    if let Some(c) = &report.copr {
+        let _ = writeln!(out, "Staging COPR: {c}");
+    }
+    let _ = writeln!(out);
 
     let normal = report
         .dependencies
@@ -571,7 +610,12 @@ pub fn render_report(report: &CheckCrateReport) -> String {
     let satisfied: Vec<&DepResult> = report
         .dependencies
         .iter()
-        .filter(|d| matches!(d.status, DepStatus::Satisfied { .. }))
+        .filter(|d| matches!(d.status, DepStatus::Satisfied { staged: false, .. }))
+        .collect();
+    let staged: Vec<&DepResult> = report
+        .dependencies
+        .iter()
+        .filter(|d| matches!(d.status, DepStatus::Satisfied { staged: true, .. }))
         .collect();
 
     if !missing.is_empty() {
@@ -607,21 +651,22 @@ pub fn render_report(report: &CheckCrateReport) -> String {
         let _ = writeln!(out);
     }
 
+    let n_staged = unique_crate_count(&staged) + report.transitive_staged.len();
+    if n_staged > 0 {
+        let _ = writeln!(out, "Staged in COPR, not yet in the branch ({n_staged}):");
+        write_satisfied_lines(&mut out, &staged);
+        for d in &report.transitive_staged {
+            let _ = writeln!(
+                out,
+                "  - {} {} (via {}) — {}",
+                d.name, d.version_req, d.pulled_by, d.version
+            );
+        }
+        let _ = writeln!(out);
+    }
     if !satisfied.is_empty() {
         write_section_header(&mut out, "Satisfied", &satisfied);
-        for d in &satisfied {
-            if let DepStatus::Satisfied { version, compat } = &d.status {
-                let compat_label = if *compat { " (compat)" } else { "" };
-                let _ = writeln!(
-                    out,
-                    "  - {} {} ({}{}) — {version}{compat_label}",
-                    d.dep.name,
-                    d.dep.version_req,
-                    d.dep.kind,
-                    opt_label(d)
-                );
-            }
-        }
+        write_satisfied_lines(&mut out, &satisfied);
         let _ = writeln!(out);
     }
 
@@ -668,16 +713,20 @@ pub fn render_report(report: &CheckCrateReport) -> String {
     let n_missing = unique_crate_count(&missing);
     let n_unmet = unique_crate_count(&unmet);
     let n_satisfied = unique_crate_count(&satisfied);
+    let staged_note = match n_staged {
+        0 => String::new(),
+        n => format!(", {n} staged in COPR"),
+    };
     if report.transitive_missing.is_empty() {
         let _ = writeln!(
             out,
-            "Summary: {n_missing} missing, {n_unmet} unmet, {n_satisfied} satisfied."
+            "Summary: {n_missing} missing, {n_unmet} unmet, {n_satisfied} satisfied{staged_note}."
         );
     } else {
         let _ = writeln!(
             out,
             "Summary: {n_missing} missing (+ {} transitive), \
-             {n_unmet} unmet, {n_satisfied} satisfied.",
+             {n_unmet} unmet, {n_satisfied} satisfied{staged_note}.",
             report.transitive_missing.len(),
         );
     }
@@ -806,6 +855,27 @@ fn unique_crate_count(deps: &[&DepResult]) -> usize {
 }
 
 /// Print a section header with entry count and unique crate count.
+/// One `  - name req (kind) — version` line per satisfied dependency.
+fn write_satisfied_lines(out: &mut String, deps: &[&DepResult]) {
+    use std::fmt::Write as _;
+    for d in deps {
+        if let DepStatus::Satisfied {
+            version, compat, ..
+        } = &d.status
+        {
+            let compat_label = if *compat { " (compat)" } else { "" };
+            let _ = writeln!(
+                out,
+                "  - {} {} ({}{}) — {version}{compat_label}",
+                d.dep.name,
+                d.dep.version_req,
+                d.dep.kind,
+                opt_label(d)
+            );
+        }
+    }
+}
+
 fn write_section_header(out: &mut String, label: &str, deps: &[&DepResult]) {
     use std::fmt::Write as _;
     let unique = unique_crate_count(deps);
@@ -843,13 +913,16 @@ fn should_expand(dep: &CrateDep, opts: &CheckCrateOptions, all_features: bool) -
 /// and a dependency edge map for build-order computation.
 fn expand_transitive(
     rt: &tokio::runtime::Runtime,
-    fedrq: &sandogasa_fedrq::Fedrq,
+    repos: &RepoStack,
     direct_results: &[DepResult],
     opts: &CheckCrateOptions,
     library_root: bool,
-) -> Result<(Vec<TransitiveDep>, DepEdges), String> {
+) -> Result<(Vec<TransitiveDep>, Vec<TransitiveDep>, DepEdges), String> {
     let mut visited: HashSet<String> = opts.exclude.clone();
     let mut result: Vec<TransitiveDep> = Vec::new();
+    // What the staging COPR provides along the way: reported, not built.
+    let mut staged: Vec<TransitiveDep> = Vec::new();
+    let mut staged_seen: HashSet<String> = HashSet::new();
     // Resolved versions: crate name → latest version from crates.io.
     let mut resolved_versions: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
@@ -918,7 +991,7 @@ fn expand_transitive(
             .iter()
             .filter(|d| should_expand(d, opts, true))
             .collect();
-        let statuses = check_deps_in_repo(fedrq, &relevant);
+        let statuses = repos.check(&relevant);
         let results: Vec<DepResult> = relevant
             .iter()
             .zip(statuses)
@@ -932,6 +1005,22 @@ fn expand_transitive(
         let mut rebuild_deps_of_crate: Vec<String> = Vec::new();
 
         for dr in &results {
+            if let DepStatus::Satisfied {
+                staged: true,
+                version,
+                ..
+            } = &dr.status
+                && staged_seen.insert(dr.dep.name.clone())
+            {
+                staged.push(TransitiveDep {
+                    name: dr.dep.name.clone(),
+                    package: format!("rust-{}", dr.dep.name),
+                    status: TransitiveStatus::Staged,
+                    version: version.clone(),
+                    version_req: dr.dep.version_req.clone(),
+                    pulled_by: crate_name.clone(),
+                });
+            }
             if !needs_rebuild(&dr.status) {
                 continue;
             }
@@ -990,7 +1079,7 @@ fn expand_transitive(
         );
     }
 
-    Ok((result, edges))
+    Ok((result, staged, edges))
 }
 
 /// crates.io API response for crate info.
@@ -1686,6 +1775,47 @@ async fn fetch_dependencies_with_features(
     Ok((deps, activation.dep_features))
 }
 
+/// The repos a dependency is checked against: the branch, and the
+/// staging COPR layered over it (`--copr`), consulted for whatever the
+/// branch does not satisfy. fedrq's `@copr:` repo is standalone, so
+/// the layering is two queries, which is also what attributes a hit.
+struct RepoStack {
+    base: sandogasa_fedrq::Fedrq,
+    copr: Option<sandogasa_fedrq::Fedrq>,
+}
+
+impl RepoStack {
+    fn check(&self, deps: &[&CrateDep]) -> Vec<DepStatus> {
+        let mut statuses = check_deps_in_repo(&self.base, deps);
+        let Some(copr) = &self.copr else {
+            return statuses;
+        };
+        let rest: Vec<usize> = statuses
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !matches!(s, DepStatus::Satisfied { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        if rest.is_empty() {
+            return statuses;
+        }
+        let subset: Vec<&CrateDep> = rest.iter().map(|&i| deps[i]).collect();
+        for (i, s) in rest.into_iter().zip(check_deps_in_repo(copr, &subset)) {
+            if let DepStatus::Satisfied {
+                version, compat, ..
+            } = s
+            {
+                statuses[i] = DepStatus::Satisfied {
+                    version,
+                    compat,
+                    staged: true,
+                };
+            }
+        }
+        statuses
+    }
+}
+
 /// Check if a dependency is available in the target repo and if
 /// the version satisfies the requirement.
 #[cfg(test)]
@@ -1732,6 +1862,7 @@ fn status_from_provides(dep: &CrateDep, provides: &[String]) -> DepStatus {
         return DepStatus::Satisfied {
             version: versions[0].clone(),
             compat: false,
+            staged: false,
         };
     };
 
@@ -1751,6 +1882,7 @@ fn status_from_provides(dep: &CrateDep, provides: &[String]) -> DepStatus {
             return DepStatus::Satisfied {
                 version: ver_str.clone(),
                 compat: is_compat,
+                staged: false,
             };
         }
     }
@@ -1787,6 +1919,7 @@ mod tests {
             package: "rust-arrow".to_string(),
             branch: "rawhide".to_string(),
             dependencies: vec![],
+            transitive_staged: vec![],
             transitive_missing: vec![
                 TransitiveDep {
                     name: "quick-xml".to_string(),
@@ -1809,6 +1942,7 @@ mod tests {
             transitive_edges: Default::default(),
             review_bugs: Default::default(),
             in_tree: vec![],
+            copr: None,
         };
 
         // Packaged but too old: the requirement is the interesting part.
@@ -1929,6 +2063,7 @@ mod tests {
             no_default_features: false,
             package: None,
             in_tree: Vec::new(),
+            copr: None,
         }
     }
 
@@ -2030,7 +2165,7 @@ mod tests {
         // both versions listed, serde 1.0.228 satisfied, ureq missing.
         assert!(matches!(&statuses[0], DepStatus::Unmet { available, .. } if available.len() == 2));
         assert!(
-            matches!(&statuses[1], DepStatus::Satisfied { version, compat: false } if version == "1.0.228")
+            matches!(&statuses[1], DepStatus::Satisfied { version, compat: false, .. } if version == "1.0.228")
         );
         assert!(matches!(statuses[2], DepStatus::Missing));
     }
@@ -2131,6 +2266,38 @@ mod tests {
         let globs_only = ["uu_*".to_string()];
         assert!(!in_tree_repository_rule(&globs_only));
         assert!(!in_tree_repository_rule(&[]));
+    }
+
+    #[test]
+    fn staged_deps_render_in_their_own_section_and_load_from_old_reports() {
+        let mut report = make_report();
+        report.copr = Some("@rust/uutils-and-nushell".to_string());
+        report.dependencies.push(DepResult {
+            dep: make_dep("phf_shared", "normal", false),
+            status: DepStatus::Satisfied {
+                version: "0.14.0".to_string(),
+                compat: false,
+                staged: true,
+            },
+            via: None,
+        });
+        report.transitive_staged.push(TransitiveDep {
+            name: "phf_generator".to_string(),
+            package: "rust-phf_generator".to_string(),
+            status: TransitiveStatus::Staged,
+            version: "0.14.0".to_string(),
+            version_req: "^0.14.0".to_string(),
+            pulled_by: "phf_macros".to_string(),
+        });
+        let text = render_report(&report);
+        assert!(text.contains("Staging COPR: @rust/uutils-and-nushell"));
+        assert!(text.contains("Staged in COPR, not yet in the branch (2):\n  - phf_shared"));
+        assert!(text.contains("  - phf_generator ^0.14.0 (via phf_macros) — 0.14.0"));
+        assert!(text.contains("2 staged in COPR."), "{text}");
+        // A report saved before `staged` existed reads as not staged.
+        let old: DepStatus =
+            serde_json::from_str(r#"{"status":"satisfied","version":"1.0"}"#).unwrap();
+        assert!(matches!(old, DepStatus::Satisfied { staged: false, .. }));
     }
 
     #[test]
@@ -2312,6 +2479,7 @@ mod tests {
                     status: DepStatus::Satisfied {
                         version: "1.0.210".to_string(),
                         compat: false,
+                        staged: false,
                     },
                     via: None,
                 },
@@ -2339,6 +2507,7 @@ mod tests {
                     via: None,
                 },
             ],
+            transitive_staged: vec![],
             transitive_missing: vec![TransitiveDep {
                 name: "transitive-dep".to_string(),
                 package: "rust-transitive-dep".to_string(),
@@ -2360,6 +2529,7 @@ mod tests {
             ]),
             review_bugs: BTreeMap::new(),
             in_tree: vec![],
+            copr: None,
         };
 
         // Serialize via JSON intermediate to TOML string.
@@ -2386,6 +2556,7 @@ mod tests {
             crate_version: "1.0.0".to_string(),
             package: "rust-my-crate".to_string(),
             branch: "rawhide".to_string(),
+            copr: None,
             dependencies: vec![
                 DepResult {
                     dep: make_dep("dep-a", "normal", false),
@@ -2397,11 +2568,13 @@ mod tests {
                     status: DepStatus::Satisfied {
                         version: "1.0.0".to_string(),
                         compat: false,
+                        staged: false,
                     },
                     via: None,
                 },
             ],
             transitive_missing: vec![],
+            transitive_staged: vec![],
             transitive_build_order: vec![
                 dag::BuildPhase {
                     phase: 1,

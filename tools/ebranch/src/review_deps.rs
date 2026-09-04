@@ -477,12 +477,14 @@ mod tests {
                 version_req: "^0.5".to_string(),
                 pulled_by: "dep-a".to_string(),
             }],
+            transitive_staged: vec![],
             transitive_build_order: vec![],
             transitive_edges: BTreeMap::from([
                 ("dep-a".to_string(), BTreeSet::from(["dep-b".to_string()])),
                 ("dep-b".to_string(), BTreeSet::new()),
             ]),
             review_bugs: BTreeMap::new(),
+            copr: None,
         };
 
         let (pkgs, edges) = collect_packages_and_edges(&report);
