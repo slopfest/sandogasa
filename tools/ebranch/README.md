@@ -721,6 +721,39 @@ ebranch check-update epel9-build-side-134436 \
     --notes "Update uutils to 0.2 and rebuild dependent crates"
 ```
 
+### Prune a staging COPR
+
+A staging COPR such as `@rust/uutils-and-nushell` holds an update's
+builds until they land in the real releases. `copr-prune` says which
+of them have:
+
+```sh
+ebranch copr-prune @rust/uutils-and-nushell
+```
+
+For every package in the COPR and every release it builds for (the
+chroot names the branch: `fedora-rawhide-*` is rawhide, `epel-9-*` is
+epel9, `centos-stream-10-*` is c10s), the release's own version is
+compared with the COPR's build:
+
+```
+COPR @rust/uutils-and-nushell: 42 package(s); target releases: epel9, rawhide
+
+Caught up everywhere (3), safe to prune:
+  - rust-phf_shared: epel9 0.14.0-1.el9 ≥ 0.14.0-1; rawhide 0.14.0-2.fc46 ≥ 0.14.0-1
+
+Still in flight (39):
+  - rust-phf: rawhide has 0.13.1-2.fc46, COPR 0.14.0-1 (ahead)
+  - rust-uucore: epel9 absent, COPR 0.2.0-1; rawhide 0.2.0-1.fc46 ≥ 0.2.0-1
+```
+
+A package is prunable only when every release it builds for carries
+the COPR's version or newer; a failed build, a release without the
+package, or one still behind keeps it. On a terminal each prunable
+package is offered for deletion (`copr-cli delete-package`, answered
+one by one); `--yes` deletes them all without asking; `--json` prints
+the plan as data and, like a non-terminal run, never deletes.
+
 ### Detect dependency cycles
 
 ```sh

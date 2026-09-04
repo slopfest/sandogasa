@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### ebranch copr-prune: keep a staging COPR down to what is still in flight
+
+Once rawhide catches up with some of a staging COPR's builds, the COPR
+keeps carrying them, and nothing said which of its packages were still
+doing any work. `ebranch copr-prune OWNER/PROJECT` reads the COPR's
+monitor, names each chroot's branch (`fedora-rawhide-*` is rawhide,
+`epel-9-*` epel9, `centos-stream-10-*` c10s), asks fedrq once per
+release for every package's version there, and compares: a package is
+prunable when every release it builds for carries the COPR's version
+or newer, and stays when a build failed, a release lacks it, or one is
+still behind. On a terminal each prunable package is offered for
+deletion through `copr-cli delete-package`; `--yes` takes them all,
+`--json` prints the plan and never deletes.
+
 ### ebranch check-crate: a staging COPR layered over the branch
 
 A big update staged in a COPR — uutils-coreutils and its dependency

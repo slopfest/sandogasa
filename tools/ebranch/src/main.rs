@@ -8,6 +8,7 @@ mod branch_request;
 mod check_crate;
 mod check_update;
 mod config;
+mod copr_prune;
 mod dag;
 mod discover;
 mod karma;
@@ -586,6 +587,8 @@ enum Command {
     CheckWip(CheckWipArgs),
     /// Set up Bugzilla API key and other settings.
     Config,
+    /// Prune a staging COPR of what its target releases caught up on.
+    CoprPrune(CoprPruneArgs),
     /// Escalate (needinfo) stale branch requests in a report.
     Escalate(EscalateArgs),
     /// File a branch request for one package.
@@ -596,6 +599,34 @@ enum Command {
     FindCycles(ResolveArgs),
     /// Resolve the full dependency closure for porting.
     Resolve(ResolveArgs),
+}
+
+/// A staging COPR holds an update's builds until they land in the
+/// real releases. This lists, for every package in the COPR and every
+/// release it builds for (the chroot names the branch: fedora-rawhide
+/// is rawhide, epel-9 is epel9), whether the release now carries the
+/// COPR's version or newer — and offers to delete the packages every
+/// release has caught up on, so only what is still in flight stays.
+/// A failed build, a release without the package, or one still behind
+/// keeps a package. Deletions run `copr-cli delete-package` and are
+/// confirmed one by one; `--yes` skips the questions; `--json` and a
+/// non-terminal never delete.
+#[derive(clap::Args, Clone)]
+struct CoprPruneArgs {
+    /// COPR project: owner/project, @group/project, or its URL.
+    copr: String,
+
+    /// Delete every caught-up package without asking.
+    #[arg(short = 'y', long)]
+    yes: bool,
+
+    /// Print the plan as JSON (never deletes).
+    #[arg(long)]
+    json: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 /// Bugzilla connection + co-maintainer offer flags shared by the
@@ -882,6 +913,28 @@ fn main() -> ExitCode {
     if matches!(cli.command, Command::Config) {
         let rt = tokio::runtime::Runtime::new().expect("failed to create async runtime");
         return exit_code(rt.block_on(config::cmd_config()));
+    }
+
+    if let Command::CoprPrune(a) = &cli.command {
+        let check_update::InputKind::Copr { owner, project } =
+            check_update::detect_input_type(&a.copr)
+        else {
+            return exit_code(Err(format!(
+                "{} is not a COPR: pass owner/project (e.g. @rust/uutils-and-nushell) or its URL",
+                a.copr
+            )));
+        };
+        return exit_code(copr_prune::run(&copr_prune::Options {
+            owner,
+            project,
+            yes: a.yes,
+            json: a.json,
+            verbose: a.verbose,
+            interactive: {
+                use std::io::IsTerminal;
+                !a.json && std::io::stdin().is_terminal()
+            },
+        }));
     }
 
     if let Command::CheckWip(a) = &cli.command {
@@ -1262,6 +1315,7 @@ fn main() -> ExitCode {
         | Command::CheckUpdate(_)
         | Command::CheckWip(_)
         | Command::Config
+        | Command::CoprPrune(_)
         | Command::Escalate(_)
         | Command::FileRequest(_)
         | Command::FileRequests(_) => unreachable!(),

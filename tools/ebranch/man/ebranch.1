@@ -339,6 +339,25 @@ Set up Bugzilla API key and other settings
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS ebranch copr-prune
+\fBebranch copr\-prune\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fICOPR\fR> 
+.PP
+Prune a staging COPR of what its target releases caught up on
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Delete every caught\-up package without asking
+.TP
+\fB\-\-json\fR
+Print the plan as JSON (never deletes)
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fICOPR\fR>
+COPR project: owner/project, @group/project, or its URL
 .SS ebranch escalate
 \fBebranch escalate\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR> 
 .PP
