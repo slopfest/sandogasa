@@ -136,8 +136,13 @@ the features the root's enabled set requests of each member, since
 member's own dev dependencies do not count — it is built as a
 dependency, not tested. The globs are trusted as written, because the
 repo cannot arbitrate either: rawhide still carries stale `rust-uu_*`
-packages nobody retired, which a "packaged on its own" rule would have
-turned back into dependencies; `--verbose` lists such matches instead.
+packages nobody retired (nushell still needs them; in the workspace
+build the in-tree members win), which a "packaged on its own" rule
+would have turned back into dependencies; `--verbose` lists such
+matches instead. A `[check-crate.in-tree]` table in the config file
+carries the list per crate — `coreutils = ["uu_*", "uucore*",
+"uutests"]` — so a workspace checked repeatedly needs no flag;
+`--in-tree` adds to it.
 Saved reports without these fields load unchanged.
 
 The first such run also listed `windows-sys` as missing, pulled by

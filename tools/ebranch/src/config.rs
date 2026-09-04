@@ -32,6 +32,16 @@ pub struct CheckCrateConfig {
     /// crates can be added without retyping it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude: Option<Vec<String>>,
+    /// Per-crate `--in-tree` lists, keyed by crate name: the globs
+    /// (and `@repository`) naming the crates a package builds from
+    /// its own tree, so `check-crate coreutils` knows about `uu_*`
+    /// without being told each run. Merged with `--in-tree`.
+    #[serde(
+        default,
+        rename = "in-tree",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub in_tree: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// The benchmark harnesses `check-crate` ignores unless the config
@@ -77,16 +87,27 @@ pub fn resolve_excludes(configured: Option<Vec<String>>) -> (Vec<String>, bool) 
     }
 }
 
-/// The crates `check-crate` ignores: the config file's list (system
-/// file beneath user file, as usual), or [`DEFAULT_EXCLUDES`] when no
-/// file sets one. The flag says which.
+/// The `[check-crate]` table as configured (system file beneath user
+/// file, as usual); default when there is no file.
+fn load_check_crate() -> CheckCrateConfig {
+    sandogasa_config::ConfigFile::for_tool("ebranch")
+        .load::<EbranchConfig>()
+        .map(|c| c.check_crate)
+        .unwrap_or_default()
+}
+
+/// The crates `check-crate` ignores: the config file's list, or
+/// [`DEFAULT_EXCLUDES`] when no file sets one. The flag says which.
 pub fn check_crate_excludes() -> (Vec<String>, bool) {
-    resolve_excludes(
-        sandogasa_config::ConfigFile::for_tool("ebranch")
-            .load::<EbranchConfig>()
-            .ok()
-            .and_then(|c| c.check_crate.exclude),
-    )
+    resolve_excludes(load_check_crate().exclude)
+}
+
+/// The configured `--in-tree` list for a crate; empty when none.
+pub fn check_crate_in_tree(crate_name: &str) -> Vec<String> {
+    load_check_crate()
+        .in_tree
+        .remove(crate_name)
+        .unwrap_or_default()
 }
 
 /// Bugzilla configuration.
@@ -206,6 +227,20 @@ mod tests {
         let (list, set) = resolve_excludes(none.check_crate.exclude);
         assert!(list.is_empty());
         assert!(set);
+        // Per-crate in-tree lists live in their own table.
+        let cfg: EbranchConfig = toml::from_str(
+            r#"
+            [check-crate.in-tree]
+            coreutils = ["uu_*", "uucore*", "uutests"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.check_crate.in_tree["coreutils"],
+            ["uu_*", "uucore*", "uutests"]
+        );
+        assert!(!cfg.check_crate.in_tree.contains_key("phf"));
+        assert!(bare.check_crate.in_tree.is_empty());
         // "@default" inside the list stands for the built-in set.
         let (list, set) = resolve_excludes(Some(
             ["@default", "pretty_assertions"].map(String::from).to_vec(),

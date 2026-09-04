@@ -493,7 +493,8 @@ struct CheckCrateArgs {
     /// workspace's members, e.g. `uu_*,uucore*`): hidden as dependencies,
     /// their own dependencies checked as the workspace's. Globs, CSV
     /// or repeated; `@repository` also takes every crate published
-    /// from the root's repository.
+    /// from the root's repository. Merged with the config file's
+    /// `[check-crate.in-tree]` entry for the crate.
     #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
     in_tree: Vec<String>,
 
@@ -963,7 +964,14 @@ fn main() -> ExitCode {
             features: a.features.clone(),
             no_default_features: a.no_default_features,
             package: a.package.clone(),
-            in_tree: a.in_tree.clone(),
+            in_tree: a
+                .in_tree
+                .iter()
+                .cloned()
+                .chain(config::check_crate_in_tree(
+                    a.name.as_deref().unwrap_or_default(),
+                ))
+                .collect(),
         };
         let outcome = match &a.from {
             Some(path) => check_crate::load_report(path),

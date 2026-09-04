@@ -136,7 +136,10 @@ ebranch check-crate --from rbw.toml --copr > build.sh
   `--in-tree 'uu_*,uucore*,uutests'` for uutils-coreutils, where a
   bare `uu*` would also swallow `uutils_term_grid`, a dependency in
   its own right. `--verbose` lists the glob matches the repo packages
-  on its own, which is either an over-broad glob or packages to retire
+  on its own — an over-broad glob, or packages something else still
+  needs (nushell uses the old `rust-uu_*`; in the workspace build the
+  in-tree members win regardless). The list can live in the config
+  file per crate, see Configuration
 - Dependencies limited to another target — `cfg(windows)`,
   `x86_64-pc-windows-msvc` — are not counted at any level; the
   crates.io `target` is evaluated for a Linux build the way
@@ -904,6 +907,16 @@ exclude = ["@default", "pretty_assertions"]
 `--exclude` adds to whichever list is in force; all of them ignore the
 crate outright, and `--verbose` says when the built-in set is the one
 applying.
+
+A `[check-crate.in-tree]` table carries the `--in-tree` list per crate,
+keyed by crate name, so a workspace checked repeatedly needs no flag:
+
+```toml
+[check-crate.in-tree]
+coreutils = ["uu_*", "uucore*", "uutests"]
+```
+
+`--in-tree` adds to the entry for the crate being checked.
 
 `ebranch config` writes the user file only, with 700 on the
 directory and 600 on the file. Nothing writes under `/etc`: a system

@@ -335,7 +335,7 @@ pub fn check_crate(
         packaged_anyway.dedup();
         eprintln!(
             "[check-crate] in-tree as told, though the repo packages them on their own \
-             (an over-broad glob, or stale packages to retire): {}",
+             (an over-broad glob, or packages something else still needs): {}",
             packaged_anyway.join(", ")
         );
     }
