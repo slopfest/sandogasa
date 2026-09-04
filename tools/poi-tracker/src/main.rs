@@ -42,6 +42,11 @@ struct Cli {
     #[arg(short = 'I', long, value_name = "DIR", global = true)]
     inventory_dir: Vec<String>,
 
+    /// Run as if started in DIR (like `git -C`): the workspace file,
+    /// relative inventory paths and outputs are looked up there.
+    #[arg(short = 'C', long = "directory", value_name = "DIR", global = true)]
+    directory: Option<String>,
+
     /// Workspace file naming the inventories, graph and walk settings
     /// (default: ./kondo.toml when present). Supplies the flags the
     /// maintenance subcommands would otherwise need; the command line
@@ -1053,6 +1058,15 @@ fn resolve_inventory_paths(cli: &Cli) -> Vec<String> {
 
 fn main() -> ExitCode {
     sandogasa_cli::init();
+    // `-C DIR` first, before anything looks at a relative path — the
+    // way git does it: scanned off argv so the workspace lookup inside
+    // the parse already runs from there.
+    if let Some(dir) = directory_flag(std::env::args_os())
+        && let Err(e) = std::env::set_current_dir(&dir)
+    {
+        eprintln!("error: cannot change to {}: {e}", dir.to_string_lossy());
+        return ExitCode::FAILURE;
+    }
     let cli = sandogasa_cli::parse_with_defaults_and::<Cli>(env!("CARGO_PKG_NAME"), |m| {
         let explicit = m.get_one::<String>("workspace").map(String::as_str);
         let Some((ws, path)) = workspace::Workspace::find(explicit)? else {
@@ -2249,6 +2263,27 @@ fn cmd_keep(paths: &[String], args: &KeepArgs) -> CmdResult {
         eprintln!("warning: {warning}");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The `-C DIR` / `--directory DIR` value in `argv`, if given (also
+/// `--directory=DIR`); the first occurrence wins.
+fn directory_flag(
+    argv: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Option<std::ffi::OsString> {
+    let mut it = argv.into_iter().skip(1);
+    while let Some(arg) = it.next() {
+        let s = arg.to_string_lossy();
+        if s == "-C" || s == "--directory" {
+            return it.next();
+        }
+        if let Some(rest) = s.strip_prefix("--directory=") {
+            return Some(rest.to_string().into());
+        }
+        if let Some(rest) = s.strip_prefix("-C").filter(|r| !r.is_empty()) {
+            return Some(rest.to_string().into());
+        }
+    }
+    None
 }
 
 /// The maintenance loop over the workspace: see [`reconcile`].
@@ -3577,6 +3612,27 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn directory_flag_reads_the_git_style_forms() {
+        let argv = |v: &[&str]| v.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+        assert_eq!(
+            directory_flag(argv(&["poi-tracker", "-C", "/data", "reconcile"])),
+            Some("/data".into())
+        );
+        assert_eq!(
+            directory_flag(argv(&["poi-tracker", "reconcile", "--directory=/d"])),
+            Some("/d".into())
+        );
+        assert_eq!(
+            directory_flag(argv(&["poi-tracker", "-C/x", "show"])),
+            Some("/x".into())
+        );
+        assert_eq!(
+            directory_flag(argv(&["poi-tracker", "show", "-i", "a.toml"])),
+            None
+        );
+    }
     use sandogasa_distgit::ProjectInfo;
 
     fn make_project(name: &str, owner: &str, groups: &[&str]) -> ProjectInfo {

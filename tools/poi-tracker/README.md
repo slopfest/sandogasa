@@ -85,7 +85,8 @@ file.
 
 With the file in place, `poi-tracker kondo`, `poi-tracker keep ripgrep`
 or `poi-tracker --closure hyperscale-el9 dependents` are complete
-commands. A flag on the command line still wins, and `--no-defaults`
+commands, and `-C DIR` runs any of them as if started in the data
+directory, the way `git -C` does. A flag on the command line still wins, and `--no-defaults`
 ignores the file (and the config file's `[defaults]`) for one run.
 
 ### Act on the cull verdicts

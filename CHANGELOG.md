@@ -51,7 +51,8 @@ the retired ones. `kondo`, `keep`, `unkeep`,
 `deps`, `derive`, `dependents`, `act` and `announce` read their flags
 from it, so `poi-tracker kondo` and `poi-tracker keep ripgrep` are
 complete commands; `-w PATH` names another file, `--closure NAME`
-picks a closure other than the first, the command line wins, and
+picks a closure other than the first, `-C DIR` runs as if started in
+the data directory (as `git -C` does), the command line wins, and
 `--no-defaults` ignores it for a run. The file is turned into the
 `[defaults]`-shaped table `sandogasa_cli::defaults` already injects,
 through the new `parse_with_defaults_and`, which takes a second
