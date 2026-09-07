@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.23.0
 
 ### sandogasa-bugzilla: a failed write is read back before it counts as failed
 

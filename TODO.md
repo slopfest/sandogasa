@@ -310,6 +310,19 @@ the README its workspace-era examples on 2026-09-05. Still open:
   memory of decisions declined (ride now, ask again later?) does not
   exist; see whether the second real cycle wants one.
 
+## Major dependency bumps deferred at 0.23.0 (2026-09-07)
+
+`cargo update --dry-run --verbose` offered five majors; Fedora has the
+current major and nothing newer on every branch checked (rawhide, f45,
+f44, f43, epel10, epel9), so all five wait for the packaging to catch up.
+Re-check at the next breaking release:
+
+- clap_mangen 0.2.33 → 0.3.3 (Fedora: 0.2.33 everywhere)
+- dirs 6.0.0 → 7.0.0 (Fedora: 6.0.0 everywhere)
+- quick-xml 0.41.0 → 0.42.0 (Fedora: 0.41.0 everywhere)
+- rusqlite 0.38.0 → 0.40.2 (Fedora: 0.38.0 everywhere)
+- serial_test 3.4.0 → 4.0.1 (Fedora: 3.4.0 everywhere; dev-dependency)
+
 ## pkg-health after kondo: reuse the graph, score dependencies too (2026-09-06)
 
 Kondo left behind observations pkg-health should report over time, not
