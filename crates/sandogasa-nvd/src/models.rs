@@ -229,13 +229,16 @@ impl CveResponse {
     }
 
     /// [`affected_products`](Self::affected_products) without the
-    /// downstream entries: operating systems and hardware (CPE part
-    /// `o`/`h`) and the [`DOWNSTREAM_VENDORS`], which NVD lists as
-    /// shippers of the affected code rather than as its source. For
-    /// CVE-2026-0990 NVD names `xmlsoft:libxml2` alongside Red Hat
-    /// Enterprise Linux 6 through 10, OpenShift and IBM AIX; only
-    /// libxml2 is the library the CVE is in.
-    pub fn affected_upstream_products(&self) -> Vec<(String, String)> {
+    /// downstream entries, and with the CPE's `target_sw` — operating
+    /// systems and hardware (CPE part `o`/`h`) and the
+    /// [`DOWNSTREAM_VENDORS`] left out, which NVD lists as shippers of
+    /// the affected code rather than as its source. For CVE-2026-0990
+    /// NVD names `xmlsoft:libxml2` alongside Red Hat Enterprise Linux 6
+    /// through 10, OpenShift and IBM AIX; only libxml2 is the library
+    /// the CVE is in. The `target_sw` tells one ecosystem's `openssl`
+    /// from another's: `sfackler:openssl` with `target_sw` `rust` is
+    /// the Rust crate, `openssl:openssl` with none the C library.
+    pub fn affected_upstream(&self) -> Vec<AffectedProduct> {
         let all: Vec<&CpeMatch> = self
             .vulnerabilities
             .iter()
@@ -249,14 +252,38 @@ impl CveResponse {
         } else {
             &vulnerable
         };
-        let mut out: Vec<(String, String)> = Vec::new();
+        let mut out: Vec<AffectedProduct> = Vec::new();
         for m in chosen {
             if let Some((part, vendor, product)) = cpe_fields(&m.criteria)
                 && part == "a"
                 && !DOWNSTREAM_VENDORS.contains(&vendor.to_ascii_lowercase().as_str())
-                && !out.iter().any(|(v, p)| *v == vendor && *p == product)
             {
-                out.push((vendor.to_string(), product.to_string()));
+                let target_sw = m
+                    .criteria
+                    .split(':')
+                    .nth(10)
+                    .filter(|sw| !sw.is_empty() && *sw != "*" && *sw != "-")
+                    .map(|sw| sw.to_ascii_lowercase());
+                let ap = AffectedProduct {
+                    vendor: vendor.to_string(),
+                    product: product.to_string(),
+                    target_sw,
+                };
+                if !out.contains(&ap) {
+                    out.push(ap);
+                }
+            }
+        }
+        out
+    }
+
+    /// The `(vendor, product)` pairs of [`affected_upstream`](Self::affected_upstream).
+    pub fn affected_upstream_products(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for a in self.affected_upstream() {
+            let vp = (a.vendor, a.product);
+            if !out.contains(&vp) {
+                out.push(vp);
             }
         }
         out
@@ -435,6 +462,17 @@ impl CveResponse {
 /// Extract `(vendor, product)` from a CPE 2.3 string.
 /// `cpe:2.3:part:vendor:product:...` — vendor is index 3, product
 /// index 4.
+/// One upstream product a CVE affects, from its CPE name: the vendor
+/// and product fields, and the `target_sw` when NVD set one (`rust`,
+/// `node.js`, `python`), which is how the same product name in two
+/// ecosystems is told apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AffectedProduct {
+    pub vendor: String,
+    pub product: String,
+    pub target_sw: Option<String>,
+}
+
 /// Vendors NVD attaches to a CVE as shippers of someone else's code —
 /// distributions, platform and appliance vendors — rather than as the
 /// project the flaw is in. Lower case, matched case-insensitively.
@@ -711,6 +749,18 @@ mod tests {
         );
         // The full list is still there for callers who want it.
         assert_eq!(cve.affected_products().len(), 6);
+        // The crate and the C library share a product name; target_sw
+        // is what separates them.
+        let crate_cve = cve_with_cpe("cpe:2.3:a:sfackler:openssl:*:*:*:*:*:rust:*:*");
+        assert_eq!(
+            crate_cve.affected_upstream(),
+            vec![AffectedProduct {
+                vendor: "sfackler".into(),
+                product: "openssl".into(),
+                target_sw: Some("rust".into())
+            }]
+        );
+        assert_eq!(cve.affected_upstream()[0].target_sw, None);
         // A vendor's own product is not downstream of anyone.
         let own = cve_with_cpe("cpe:2.3:a:python:python:*:*:*:*:*:*:*:*");
         assert_eq!(

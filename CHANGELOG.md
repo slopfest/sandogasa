@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### fedora-cve-triage: the library a CVE is in carries its ecosystem
+
+CVE-2026-45784 is a heap corruption in the openssl *crate*, and NVD
+says so: its one CPE is `cpe:2.3:a:sfackler:openssl:*:*:*:*:*:rust:*:*`
+— vendor sfackler, `target_sw` rust — and its references go to the
+rust-openssl repository. The tool read only the product field, saw
+`openssl`, and took the CVE for one in the C library; the bugs against
+rust-openssl survived only because the bot's summary said `rust-openssl`
+and disagreed with that name. The library a CVE is in is now read with
+its CPE `target_sw`: `openssl` with `rust` is the crate, which Fedora
+packages as `rust-openssl` and a consumer bundles as
+`bundled(crate(openssl))`, and the check reasons in those terms —
+rust-openssl is the library itself and its bugs are its own, an
+application declaring a vendored copy is judged by that copy's version
+(bodhi-check reads `bundled(crate(<lib>))` as well as `bundled(<lib>)`
+from each update build), and an application declaring nothing gets no
+verdict, since a Rust package built against Fedora's crates links them
+statically without saying so. sandogasa-nvd gains `affected_upstream`,
+the `(vendor, product, target_sw)` triple behind
+`affected_upstream_products`.
+
 ### fedora-cve-triage bodhi-check: a bundled library's fix is judged by the bundled version
 
 sslscan bundles OpenSSL, and its update to a build bundling openssl
