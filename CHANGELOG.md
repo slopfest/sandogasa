@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a rejected CVE record is a closed bug (breaking config)
+
+Three of fossil's SQLite bugs track CVE records NVD marks `Rejected` —
+withdrawn by their CNA, "DO NOT USE THIS CVE RECORD" — and the run
+reported them as "No fixed version in NVD", a backlog, when there is no
+vulnerability and never will be a fix. The new `rejected-cve` check
+claims any bug whose CVE NVD has rejected and closes it as NOTABUG
+against the configured tracker; it reads one field the tool fetches
+anyway, so it runs first in the order, before any check that has to
+reason about the package.
+
+Breaking (config): `run` requires a `[check."rejected-cve"]` section
+whenever `checks` is unset, like every check; the shipped
+`configs/fedora-cve-triage/run.toml` carries one naming the tracker
+`CVE-Rejected`, which has to be filed in Bugzilla before `--apply`.
+
 ### fedora-cve-triage: an NVD API key, and the pace it buys
 
 Every NVD lookup waited six seconds, the pace NVD asks of anonymous
