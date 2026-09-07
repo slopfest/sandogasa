@@ -43,14 +43,14 @@ pub struct CheckCrateConfig {
     )]
     pub in_tree: std::collections::BTreeMap<String, Vec<String>>,
     /// Per-crate staging COPR (`owner/project`), keyed by crate name:
-    /// `--staging-copr` without typing it, for a crate whose update is
+    /// `--copr` without typing it, for a crate whose update is
     /// staged there.
     #[serde(
         default,
-        rename = "staging-copr",
+        rename = "copr",
         skip_serializing_if = "std::collections::BTreeMap::is_empty"
     )]
-    pub staging_copr: std::collections::BTreeMap<String, String>,
+    pub copr: std::collections::BTreeMap<String, String>,
 }
 
 /// The benchmark harnesses `check-crate` ignores unless the config
@@ -112,8 +112,8 @@ pub fn check_crate_excludes() -> (Vec<String>, bool) {
 }
 
 /// The configured staging COPR for a crate, if any.
-pub fn check_crate_staging_copr(crate_name: &str) -> Option<String> {
-    load_check_crate().staging_copr.remove(crate_name)
+pub fn check_crate_copr(crate_name: &str) -> Option<String> {
+    load_check_crate().copr.remove(crate_name)
 }
 
 /// The configured `--in-tree` list for a crate; empty when none.
@@ -246,17 +246,14 @@ mod tests {
             r#"
             [check-crate.in-tree]
             coreutils = ["uu_*", "uucore*", "uutests"]
-            [check-crate.staging-copr]
+            [check-crate.copr]
             coreutils = "@rust/uutils-and-nushell"
             phf = "@rust/uutils-and-nushell"
             "#,
         )
         .unwrap();
-        assert_eq!(
-            cfg.check_crate.staging_copr["phf"],
-            "@rust/uutils-and-nushell"
-        );
-        assert!(!cfg.check_crate.staging_copr.contains_key("serde"));
+        assert_eq!(cfg.check_crate.copr["phf"], "@rust/uutils-and-nushell");
+        assert!(!cfg.check_crate.copr.contains_key("serde"));
         assert_eq!(
             cfg.check_crate.in_tree["coreutils"],
             ["uu_*", "uucore*", "uutests"]

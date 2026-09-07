@@ -98,7 +98,7 @@ re-rendered later without touching the network or the repo:
 
 ```
 ebranch check-crate --from rbw.toml
-ebranch check-crate --from rbw.toml --copr > build.sh
+ebranch check-crate --from rbw.toml --copr-script > build.sh
 ```
 
 ### Useful flags
@@ -145,7 +145,7 @@ ebranch check-crate --from rbw.toml --copr > build.sh
   crates.io `target` is evaluated for a Linux build the way
   `%cargo_generate_buildrequires` does, with architecture predicates
   treated as true
-- `--staging-copr OWNER/PROJECT` — a staging COPR layered over the branch
+- `--copr OWNER/PROJECT` — a staging COPR layered over the branch
   (`@rust/uutils-and-nushell`): whatever the branch does not satisfy
   is looked up in the COPR too, and a hit is reported under "Staged in
   COPR, not yet in the branch" rather than as missing — built, still
@@ -185,13 +185,13 @@ ebranch check-crate --from rbw.toml --copr > build.sh
 - `-j N` / `--jobs N` — number of parallel fedrq queries
   (0 = number of CPUs, the default)
 - `--koji` — output as a Koji chain build string
-- `--copr` — generate a Copr batch build script, each package
+- `--copr-script` — generate a Copr batch build script, each package
   commented with why it is in it
 - `--refresh` — clear fedrq repo metadata cache before querying (a
   `--source-repo @koji:<tag>` side tag is refetched every run anyway)
 - `--json` — machine-readable JSON output
 
-With `--koji`, `--copr`, or `--dot`, the machine output goes to stdout
+With `--koji`, `--copr-script`, or `--dot`, the machine output goes to stdout
 and the human-readable report (what needs building, at which versions)
 goes to stderr — so `ebranch check-crate … --koji > build.sh` writes a
 clean script while you still see the report, and `… --koji | sh` works.
@@ -735,6 +735,37 @@ ebranch check-update epel9-build-side-134436 \
     --notes "Update uutils to 0.2 and rebuild dependent crates"
 ```
 
+### Staging an update in a COPR
+
+A big update — a new crate stack, a version bump that drags its
+dependencies along — is built in a COPR first and lands in Fedora
+piece by piece. The subcommands compose into one loop; `-b rawhide`
+throughout, and `@rust/uutils-and-nushell` standing for the COPR:
+
+1. **Plan** — `check-crate coreutils --package uutils-coreutils -t
+   --copr @rust/uutils-and-nushell`: what the update needs, with
+   whatever the COPR already built reported as *staged* rather than
+   missing, and the crate itself flagged when it is already built
+   there. `[check-crate.copr]` in the config names the COPR per crate
+   so the flag need not be typed. `--copr-script` turns the build order
+   into a `copr build-package` script.
+2. **Build** in the COPR, and re-run the check: the staged set grows,
+   the missing set shrinks, until the root itself reads as built.
+3. **Watch the effort** — `check-wip effort.toml --copr @rust/…`: the
+   ledger of every package involved and where each stands — staged,
+   under review, built for rawhide, branched, in an update. Run it
+   whenever you wonder what to do next.
+4. **Check breakage** — `check-update @rust/… -b rawhide`: what the
+   staged builds would break among reverse dependencies, before any
+   of it reaches a real repository.
+5. **Land** — review requests (`check-pkg-reviews`), imports, Rawhide
+   builds, branch requests (`file-request`), `resolve` for the stable
+   branches, Bodhi updates; `check-wip` tracks each.
+6. **Shrink** — `copr-prune @rust/…` deletes from the COPR what every
+   target release has caught up on, and `check-wip effort.toml --prune
+   packages` drops those from the ledger. What remains in both is what
+   is still in flight.
+
 ### Prune a staging COPR
 
 A staging COPR such as `@rust/uutils-and-nushell` holds an update's
@@ -801,23 +832,23 @@ Build order from rawhide to @koji:epel10.3-build-side-133542:
 4 package(s) in 3 phase(s).
 ```
 
-Add `--koji` for Koji chain-build output or `--copr` for a Copr
+Add `--koji` for Koji chain-build output or `--copr-script` for a Copr
 batch build script:
 
 ```sh
 ebranch resolve --koji rust-base64-simd \
     --source rawhide --target-repo '@koji:epel10.3-build-side-133542'
 
-ebranch resolve --copr rust-base64-simd \
+ebranch resolve --copr-script rust-base64-simd \
     --source rawhide --target-repo '@koji:epel10.3-build-side-133542' \
     > build.sh
 ```
 
-The same `--koji` and `--copr` flags work with `check-crate -t`:
+The same `--koji` and `--copr-script` flags work with `check-crate -t`:
 
 ```sh
 ebranch check-crate arrow 57 -b rawhide -t --koji
-ebranch check-crate arrow 57 -b rawhide -t --copr > build.sh
+ebranch check-crate arrow 57 -b rawhide -t --copr-script > build.sh
 ```
 
 Use `--check-install` to verify that every subpackage in the closure
@@ -973,12 +1004,12 @@ coreutils = ["uu_*", "uucore*", "uutests"]
 
 `--in-tree` adds to the entry for the crate being checked.
 
-A `[check-crate.staging-copr]` table names the staging COPR per crate,
-so `--staging-copr` need not be typed for a crate whose update lives
-there; the flag wins when given:
+A `[check-crate.copr]` table names the staging COPR per crate, so
+`--copr` need not be typed for a crate whose update lives there; the
+flag wins when given:
 
 ```toml
-[check-crate.staging-copr]
+[check-crate.copr]
 coreutils = "@rust/uutils-and-nushell"
 phf = "@rust/uutils-and-nushell"
 ```

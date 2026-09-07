@@ -210,7 +210,7 @@ metadata too. check-update's own `koji regen-repo` step did the same
 wholesale clear to see its regen.
 
 Repos that change as builds land are now refetched on every run and
-nothing else is: check-crate's `--staging-copr`, check-update's side
+nothing else is: check-crate's `--copr`, check-update's side
 tag and COPR input, and resolve's `--source-repo @koji:<tag>`, all a
 few tens of KB of metadata, while the branch's stays cached until
 `--refresh`. After a regen only the side tag's entries go. And when
@@ -239,13 +239,13 @@ still behind. On a terminal each prunable package is offered for
 deletion through `copr-cli delete-package`; `--yes` takes them all,
 `--json` prints the plan and never deletes.
 
-### ebranch check-crate: a staging COPR layered over the branch
+### ebranch check-crate: a staging COPR layered over the branch (breaking CLI)
 
 A big update staged in a COPR — uutils-coreutils and its dependency
 bumps in `@rust/uutils-and-nushell` — still read as "missing" and
 "too old" against rawhide until every build had landed, so the report
 kept re-listing work that was already done, and expanding it.
-`--staging-copr OWNER/PROJECT` now layers the COPR over the branch: whatever the branch
+`--copr OWNER/PROJECT` now layers the COPR over the branch: whatever the branch
 does not satisfy is looked up there too (fedrq's `@copr:` repo is
 standalone, so this is a second query, which is also what attributes
 the hit), and a hit is reported under "Staged in COPR, not yet in the
@@ -254,10 +254,16 @@ expanded; transitive crates the COPR provides are listed there too,
 with what pulled them, since they are the update's remaining road to
 rawhide. The branch picks the chroot, so a COPR building for several
 releases is checked one target at a time, and a
-`[check-crate.staging-copr]` table in the config file names the COPR
+`[check-crate.copr]` table in the config file names the COPR
 per crate so the flag need not be typed. The report records the COPR
 and each staged dependency carries `staged = true`; reports saved
-before this load unchanged. Re-running the check right after the
+before this load unchanged.
+
+Breaking (CLI): the flag that generates a Copr batch build script, in
+`check-crate` and `resolve`, is now `--copr-script`; `--copr` names the
+staging COPR a check reads from, the same word `check-wip --copr` uses.
+Scripts and aliases that passed `--copr` for the generator need the new
+name. Re-running the check right after the
 crate's own build finished used to read as "buildable" all the same,
 so the header now says when the very version being checked is already
 built — in the branch, or only in the COPR, not yet landed — and the

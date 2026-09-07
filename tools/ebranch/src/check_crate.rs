@@ -43,7 +43,7 @@ pub struct CheckCrateOptions {
     /// every crate published from the root's repository. Empty:
     /// nothing is in-tree.
     pub in_tree: Vec<String>,
-    /// A staging COPR (`owner/project`, `--staging-copr`) layered over
+    /// A staging COPR (`owner/project`, `--copr`) layered over
     /// the branch: what the branch does not satisfy is looked up there
     /// too, and counts as staged — built, still in flight — rather
     /// than missing.
@@ -139,7 +139,7 @@ pub enum TransitiveStatus {
     Missing,
     /// Available but no version satisfies the requirement.
     Unmet,
-    /// Built in the staging COPR (`--staging-copr`), not yet in the
+    /// Built in the staging COPR (`--copr`), not yet in the
     /// branch: nothing to build, still in flight.
     Staged,
 }

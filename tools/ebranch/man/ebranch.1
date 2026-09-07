@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-09-04 "sandogasa 0.22.0" "Sandogasa Manual"
+.TH ebranch 1 2026-09-07 "sandogasa 0.22.0" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS ebranch check-crate
-\fBebranch check\-crate\fR [\fB\-\-from\fR] [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-t\fR|\fB\-\-transitive\fR] [\fB\-\-exclude\-dev\fR] [\fB\-\-include\-optional\fR] [\fB\-\-features\fR] [\fB\-\-no\-default\-features\fR] [\fB\-\-in\-tree\fR] [\fB\-\-staging\-copr\fR] [\fB\-\-package\fR] [\fB\-\-exclude\-unmet\fR] [\fB\-\-exclude\fR] [\fB\-\-copr\fR] [\fB\-\-dot\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-toml\fR] [\fB\-\-refresh\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] [\fIVERSION\fR] 
+\fBebranch check\-crate\fR [\fB\-\-from\fR] [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-t\fR|\fB\-\-transitive\fR] [\fB\-\-exclude\-dev\fR] [\fB\-\-include\-optional\fR] [\fB\-\-features\fR] [\fB\-\-no\-default\-features\fR] [\fB\-\-in\-tree\fR] [\fB\-\-copr\fR] [\fB\-\-package\fR] [\fB\-\-exclude\-unmet\fR] [\fB\-\-exclude\fR] [\fB\-\-copr\-script\fR] [\fB\-\-dot\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-toml\fR] [\fB\-\-refresh\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] [\fIVERSION\fR] 
 .PP
 Analyze a crates.io crate\*(Aqs dependencies
 .TP
@@ -47,8 +47,8 @@ Build without default features (`\-n`)
 \fB\-\-in\-tree\fR \fI<GLOB,...>\fR
 Crates built in\-tree from the root\*(Aqs own source (a workspace\*(Aqs members, e.g. `uu_*,uucore*`): hidden as dependencies, their own dependencies checked as the workspace\*(Aqs. Globs, CSV or repeated; `@repository` also takes every crate published from the root\*(Aqs repository. Merged with the config file\*(Aqs `[check\-crate.in\-tree]` entry for the crate
 .TP
-\fB\-\-staging\-copr\fR \fI<OWNER/PROJECT>\fR
-Staging COPR (`owner/project`, `@group/project`) layered over the branch: dependencies the branch lacks are looked up there too and reported as staged — built, still in flight — instead of missing. The branch picks the chroot (rawhide → fedora\-rawhide). Default: the config file\*(Aqs `[check\-crate.staging\-copr]` entry for the crate
+\fB\-\-copr\fR \fI<OWNER/PROJECT>\fR
+Staging COPR (`owner/project`, `@group/project`) layered over the branch: dependencies the branch lacks are looked up there too and reported as staged — built, still in flight — instead of missing. The branch picks the chroot (rawhide → fedora\-rawhide). Default: the config file\*(Aqs `[check\-crate.copr]` entry for the crate. (The build\-script generator is \-\-copr\-script.)
 .TP
 \fB\-\-package\fR \fI<NAME>\fR
 Fedora package name when it is not `rust\-<crate>` (e.g. the `coreutils` crate is `uutils\-coreutils`): used for the spec lookup and as the report\*(Aqs package name
@@ -63,8 +63,10 @@ what needs (re)building.
 \fB\-\-exclude\fR \fI<CRATE,...>\fR
 Ignore these crates entirely, direct or transitive, as dependencies Fedora will not package (CSV or repeated). Added to the config file\*(Aqs `[check\-crate] exclude`, or, when no config sets one, to the built\-in benchmark set (criterion, codspeed\-*, divan, iai, count_instructions)
 .TP
-\fB\-\-copr\fR
-Generate a shell script for Copr batch builds.
+\fB\-\-copr\-script\fR
+Generate a shell script for Copr batch builds
+(check\-crate\*(Aqs \-\-copr names the staging COPR a
+check reads from).
 
 The script accepts the Copr repo as its first
 argument, followed by any extra flags to pass
@@ -506,7 +508,7 @@ check\-crate report TOML listing the missing packages
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch find-cycles
-\fBebranch find\-cycles\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-no\-auto\-exclude\-install\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR] 
+\fBebranch find\-cycles\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-no\-auto\-exclude\-install\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR] 
 .PP
 Detect dependency cycles in the build graph
 .TP
@@ -531,8 +533,10 @@ Write a TOML report (package list + dependency edges) for the branch\-request su
 \fB\-\-koji\fR
 Output build\-order as a Koji chain build string
 .TP
-\fB\-\-copr\fR
-Generate a shell script for Copr batch builds.
+\fB\-\-copr\-script\fR
+Generate a shell script for Copr batch builds
+(check\-crate\*(Aqs \-\-copr names the staging COPR a
+check reads from).
 
 The script accepts the Copr repo as its first
 argument, followed by any extra flags to pass
@@ -629,7 +633,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 [\fIPACKAGES\fR]
 Source RPM names to analyze
 .SS ebranch resolve
-\fBebranch resolve\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-no\-auto\-exclude\-install\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR] 
+\fBebranch resolve\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-no\-auto\-exclude\-install\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR] 
 .PP
 Resolve the full dependency closure for porting
 .TP
@@ -654,8 +658,10 @@ Write a TOML report (package list + dependency edges) for the branch\-request su
 \fB\-\-koji\fR
 Output build\-order as a Koji chain build string
 .TP
-\fB\-\-copr\fR
-Generate a shell script for Copr batch builds.
+\fB\-\-copr\-script\fR
+Generate a shell script for Copr batch builds
+(check\-crate\*(Aqs \-\-copr names the staging COPR a
+check reads from).
 
 The script accepts the Copr repo as its first
 argument, followed by any extra flags to pass
