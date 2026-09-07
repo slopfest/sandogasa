@@ -1,5 +1,76 @@
 # Changelog
 
+## Unreleased
+
+### sandogasa-nvd: the upstream products a CVE affects, without the distributions that ship them
+
+NVD's CPE list for a library CVE names the library and then everyone
+who ships it: for CVE-2026-0990 `xmlsoft:libxml2` sits beside Red Hat
+Enterprise Linux 6 through 10, OpenShift, IBM AIX and VIOS. A check
+that asks "is every affected product X" — interpreter-fps for the
+interpreter, the new bundled-library check for the library — saw five
+products and gave up, so pcem's four open libxml2 bugs matched no check
+at all. `affected_upstream_products` leaves out operating systems and
+hardware (CPE part `o`/`h`) and the vendors in the new
+`DOWNSTREAM_VENDORS` list, and fedora-cve-triage's checks now read
+that; `affected_products` is unchanged for callers who want the whole
+list.
+
+### sandogasa-koji: `list_builds`
+
+`list_builds(package, profile)` lists a package's completed builds as
+NVRs, via `koji list-builds --package`; `parse_list_builds` is the pure
+half. fedora-cve-triage's `bundled-library` check uses it to find the
+first build carrying a fix.
+
+### fedora-cve-triage: a CVE in a system library is the library's bug (breaking config)
+
+A CVE in OpenSSL was filed against `maturin`, and one in GStreamer
+against `fractal` (GitHub #7, #4). Neither package carries a copy of the
+library: they link whatever the distribution ships, so the fix arrives
+through the library's own update and the application's bug is a false
+positive. No check recognised the shape — `unshipped-tools` asks whether
+the package ships the affected *binary*, not whether it bundles the
+affected *library* — so each had to be closed by hand.
+
+The new `bundled-library` check claims such a bug when the CVE names
+exactly one product (per NVD's CPE data; for a CVE NVD has not analyzed
+yet, the library the bot's summary names, as in `pcem: libxml2: …`),
+that product is not the component itself (by name
+or by anything its binary packages provide), Fedora ships source
+packages named like the library — which the report lists as where the
+fix lands — and the component's relation to it is one the bug cannot
+survive: it links the system copy (its binaries require a shared
+library the library's packages provide, `libssl.so.4` — what catches a
+Rust or Go package, whose BuildRequires are generated from the crate
+graph at build time — or its source package requires the library), it
+neither bundles nor links it, or it declares
+`bundled(<library>) = <version>` at a version that already has the fix,
+judged as `bodhi-check` judges a build. A bundled copy below the fix is
+the real thing, and the check says so in a note rather than claiming
+the bug. A date-stamped snapshot such as pcem's `bundled(libxml2) =
+20190613` — which as a number is past every release there will ever be
+— is measured against a day instead: when upstream tagged the fixed
+version, read from the repository the CVE's NVD references point at
+(github.com or a GitLab instance) by trying the usual tag shapes.
+Before that day the bug is real; on or after it the snapshot has the
+fix. Without a repository to ask, the first Koji build with a fixed
+version stands in, and only to clear a snapshot dated after it — Fedora
+builds a release some unknown time after upstream tags it, so an
+earlier snapshot is left open rather than called real. A bundled copy
+it cannot judge, a spec that will not fetch, or a library with no
+Fedora package of its own leave the bug open with a note too, as a
+check that acts on a negative should. It runs after
+`unshipped-tools` and before `fix-version`, and has to stay after
+`cross-ecosystem`: NVD names node-tar's product plainly `tar`.
+
+Breaking (config): `run` requires a `[check."bundled-library"]` section,
+with `tracker_bug` and `reason`, whenever `checks` is unset — the same
+rule every check follows. Add the section (the shipped
+`configs/fedora-cve-triage/run.toml` has one) or list `checks`
+explicitly to leave it out. No Bugzilla tracker exists for this
+category yet; file one before running with `--apply`.
+
 ## v0.23.0
 
 ### sandogasa-bugzilla: a failed write is read back before it counts as failed

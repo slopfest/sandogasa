@@ -326,6 +326,32 @@ pub fn list_tagged(
     Ok(parse_list_tagged(&stdout))
 }
 
+/// Every completed build of `package`, as NVRs, in the order the hub
+/// lists them (`koji list-builds --package`).
+pub fn list_builds(package: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
+    let stdout = run_koji(
+        profile,
+        &[
+            "list-builds",
+            "--state",
+            "COMPLETE",
+            "--quiet",
+            "--package",
+            package,
+        ],
+    )?;
+    Ok(parse_list_builds(&stdout))
+}
+
+/// The NVR column of `koji list-builds --quiet` output.
+pub fn parse_list_builds(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Latest build of `package` in `tag`, following tag inheritance
 /// (`--inherit`), or `None` when the package has no build there.
 ///
@@ -648,6 +674,15 @@ pub fn build_rpms(nvr: &str, profile: Option<&str>) -> Result<Vec<String>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_list_builds_takes_the_nvr_column() {
+        let out = "libxml2-2.13.9-1.fc45                 mcatanzaro   COMPLETE\nlibxml2-2.13.9-2.fc45  x  COMPLETE\n\n";
+        assert_eq!(
+            parse_list_builds(out),
+            vec!["libxml2-2.13.9-1.fc45", "libxml2-2.13.9-2.fc45"]
+        );
+    }
 
     #[test]
     fn parse_list_tagged_rows() {

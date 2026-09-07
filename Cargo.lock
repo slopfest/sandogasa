@@ -535,6 +535,7 @@ dependencies = [
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-distgit",
+ "sandogasa-koji",
  "sandogasa-nvd",
  "sandogasa-review",
  "serde",

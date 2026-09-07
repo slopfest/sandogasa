@@ -202,6 +202,40 @@ impl CveResponse {
         out
     }
 
+    /// [`affected_products`](Self::affected_products) without the
+    /// downstream entries: operating systems and hardware (CPE part
+    /// `o`/`h`) and the [`DOWNSTREAM_VENDORS`], which NVD lists as
+    /// shippers of the affected code rather than as its source. For
+    /// CVE-2026-0990 NVD names `xmlsoft:libxml2` alongside Red Hat
+    /// Enterprise Linux 6 through 10, OpenShift and IBM AIX; only
+    /// libxml2 is the library the CVE is in.
+    pub fn affected_upstream_products(&self) -> Vec<(String, String)> {
+        let all: Vec<&CpeMatch> = self
+            .vulnerabilities
+            .iter()
+            .flat_map(|v| &v.cve.configurations)
+            .flat_map(|c| &c.nodes)
+            .flat_map(|n| &n.cpe_match)
+            .collect();
+        let vulnerable: Vec<&CpeMatch> = all.iter().copied().filter(|m| m.vulnerable).collect();
+        let chosen = if vulnerable.is_empty() {
+            &all
+        } else {
+            &vulnerable
+        };
+        let mut out: Vec<(String, String)> = Vec::new();
+        for m in chosen {
+            if let Some((part, vendor, product)) = cpe_fields(&m.criteria)
+                && part == "a"
+                && !DOWNSTREAM_VENDORS.contains(&vendor.to_ascii_lowercase().as_str())
+                && !out.iter().any(|(v, p)| *v == vendor && *p == product)
+            {
+                out.push((vendor.to_string(), product.to_string()));
+            }
+        }
+        out
+    }
+
     /// NVD's analysis state for the first CVE in the response — see
     /// [`CveItem::vuln_status`]. Empty when absent.
     pub fn vuln_status(&self) -> &str {
@@ -375,13 +409,42 @@ impl CveResponse {
 /// Extract `(vendor, product)` from a CPE 2.3 string.
 /// `cpe:2.3:part:vendor:product:...` — vendor is index 3, product
 /// index 4.
-fn cpe_vendor_product(criteria: &str) -> Option<(String, String)> {
+/// Vendors NVD attaches to a CVE as shippers of someone else's code —
+/// distributions, platform and appliance vendors — rather than as the
+/// project the flaw is in. Lower case, matched case-insensitively.
+pub const DOWNSTREAM_VENDORS: &[&str] = &[
+    "canonical",
+    "cisco",
+    "debian",
+    "dell",
+    "fedoraproject",
+    "hp",
+    "hpe",
+    "ibm",
+    "netapp",
+    "novell",
+    "opensuse",
+    "oracle",
+    "redhat",
+    "siemens",
+    "suse",
+];
+
+/// The `(part, vendor, product)` of a CPE 2.3 name
+/// (`cpe:2.3:a:xmlsoft:libxml2:*:…`).
+fn cpe_fields(criteria: &str) -> Option<(&str, &str, &str)> {
     let mut parts = criteria.split(':');
-    let vendor = parts.nth(3)?;
+    let part = parts.nth(2)?;
+    let vendor = parts.next()?;
     let product = parts.next()?;
     if vendor.is_empty() || product.is_empty() {
         return None;
     }
+    Some((part, vendor, product))
+}
+
+fn cpe_vendor_product(criteria: &str) -> Option<(String, String)> {
+    let (_, vendor, product) = cpe_fields(criteria)?;
     Some((vendor.to_string(), product.to_string()))
 }
 
@@ -585,6 +648,47 @@ mod tests {
         // Only the vulnerable match counts; deduped.
         assert_eq!(
             cve.affected_products(),
+            vec![("python".to_string(), "python".to_string())]
+        );
+    }
+
+    #[test]
+    fn affected_upstream_products_drops_the_shippers() {
+        // The CVE-2026-0990 shape: libxml2 beside everyone who ships it.
+        let criteria = [
+            "cpe:2.3:a:redhat:openshift_container_platform:4.0:*:*:*:*:*:*:*",
+            "cpe:2.3:o:redhat:enterprise_linux:9.0:*:*:*:*:*:*:*",
+            "cpe:2.3:o:ibm:aix:7.3.4:*:*:*:*:*:*:*",
+            "cpe:2.3:a:ibm:vios:4.1.2.0:*:*:*:*:*:*:*",
+            "cpe:2.3:a:xmlsoft:libxml2:*:*:*:*:*:*:*:*",
+            "cpe:2.3:h:acme:router:1:*:*:*:*:*:*:*",
+        ];
+        let cve = CveResponse {
+            vulnerabilities: vec![Vulnerability {
+                cve: CveItem {
+                    id: "CVE-2026-0990".to_string(),
+                    source_identifier: String::new(),
+                    vuln_status: String::new(),
+                    descriptions: vec![],
+                    configurations: vec![Configuration {
+                        nodes: vec![Node {
+                            cpe_match: criteria.iter().map(|c| cpe_match(c)).collect(),
+                        }],
+                    }],
+                    references: vec![],
+                },
+            }],
+        };
+        assert_eq!(
+            cve.affected_upstream_products(),
+            vec![("xmlsoft".to_string(), "libxml2".to_string())]
+        );
+        // The full list is still there for callers who want it.
+        assert_eq!(cve.affected_products().len(), 6);
+        // A vendor's own product is not downstream of anyone.
+        let own = cve_with_cpe("cpe:2.3:a:python:python:*:*:*:*:*:*:*:*");
+        assert_eq!(
+            own.affected_upstream_products(),
             vec![("python".to_string(), "python".to_string())]
         );
     }
