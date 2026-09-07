@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-hattrack 1 2026-09-04 "sandogasa 0.22.0" "Sandogasa Manual"
+.TH sandogasa-hattrack 1 2026-09-07 "sandogasa 0.22.0" "Sandogasa Manual"
 .SH NAME
 sandogasa\-hattrack \- Look up a Fedora contributor\*(Aqs activity across services
 .SH SYNOPSIS
@@ -301,7 +301,7 @@ Discourse username to look up
 .SS sandogasa-hattrack forge
 \fBsandogasa\-hattrack forge\fR [\fB\-\-json\fR] [\fB\-\-repo\fR] [\fB\-\-days\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-url\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
 .PP
-Summary of a contributor\*(Aqs last activity across all services Show a contributor\*(Aqs Forgejo activity, per repository
+Show a contributor\*(Aqs Forgejo activity, per repository
 .TP
 \fB\-\-json\fR
 Output machine\-readable JSON
@@ -365,6 +365,7 @@ Forgejo username to look up
 .SS sandogasa-hattrack last-seen
 \fBsandogasa\-hattrack last\-seen\fR [\fB\-\-email\fR] [\fB\-\-json\fR] [\fB\-\-no\-fas\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-list\fR] [\fB\-\-max\-pages\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-skip\fR] [\fB\-\-only\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-meeting\fR] [\fB\-\-now\fR] [\fB\-\-repo\fR] [\fB\-\-matrix\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR> 
 .PP
+Summary of a contributor\*(Aqs last activity across all services
 .TP
 \fB\-\-email\fR \fI<EMAIL>\fR
 Email address(es) for Bugzilla/Mailman. Repeat for multiple: \-\-email a@x.org \-\-email b@y.org

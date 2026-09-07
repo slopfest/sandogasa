@@ -157,7 +157,6 @@ enum Command {
         url: String,
     },
 
-    /// Summary of a contributor's last activity across all services
     /// Show a contributor's Forgejo activity, per repository
     Forge {
         /// Forgejo username to look up
@@ -177,6 +176,7 @@ enum Command {
         url: String,
     },
 
+    /// Summary of a contributor's last activity across all services
     LastSeen {
         /// FAS username to look up
         username: String,
