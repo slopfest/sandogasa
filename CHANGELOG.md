@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a refused NVD lookup is retried, and reported if refused again
+
+Two runs on one machine share NVD's per-IP rate limit, and when it bit,
+the losing run printed a warning per CVE and then reported those bugs
+as having matched no check — indistinguishable from a clean run that
+found nothing, which is the one thing a triage tool must not do. A
+refused request (403, 429 or 503) is now retried once after a 30-second
+wait, the width of NVD's window; a second refusal is recorded and the
+run ends by naming the CVEs whose bugs went unjudged for it, with the
+note that refusals are not cached, so the next run fetches only those.
+
 ### fedora-cve-triage: NVD answers are kept on disk for a day
 
 Every run started from nothing: NVD's answer for each CVE lived in
