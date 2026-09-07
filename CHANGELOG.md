@@ -176,7 +176,8 @@ that product is not the component itself (by name
 or by anything its binary packages provide), Fedora ships source
 packages named like the library (under NVD's spelling and the lowercase
 one, since fedrq's globs are case-sensitive and `SQLite` is Fedora's
-`sqlite`) — which the report lists as where the fix lands — and the
+`sqlite`; the report then uses Fedora's spelling) — which the report
+lists as where the fix lands — and the
 component's relation to it is one the bug cannot
 survive: it links the system copy (its binaries require a shared
 library the library's packages provide, `libssl.so.4` — what catches a
