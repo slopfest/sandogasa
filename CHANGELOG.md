@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### fedora-cve-triage: NVD answers are kept on disk for a day
+
+Every run started from nothing: NVD's answer for each CVE lived in
+memory for the run and was fetched again the next time, at NVD's one
+unauthenticated request per six seconds — a sweep of the 65 open
+rust-* bugs took nine minutes, nearly all of it waiting, and took nine
+minutes again when re-run to try a fix. Responses are now written under
+`$XDG_CACHE_HOME/fedora-cve-triage/nvd/` and reused for a day, long
+enough for the try-fix-rerun loop and short enough that a CVE moving
+from "Awaiting Analysis" to analyzed is picked up; `--refresh-nvd`
+ignores the cache. sandogasa-nvd gains `cve_json`, the raw body for
+callers that keep it.
+
+### fedora-cve-triage: `-c 'rust-*'`, a component glob
+
+Running a check over every Rust crate meant naming them: `-c` took
+exact component names, and Bugzilla's `component=` parameter is an
+exact match, so there was no way to say "everything starting with
+`rust-`" short of pasting the list. A component may now be a glob
+(`rust-*`, `python3.1?`), sent to Bugzilla as a regular-expression
+boolean chart so the server does the matching; once one component is a
+glob every component becomes a chart, ORed, since plain `component=`
+parameters would be ANDed with them. `--skip-component` takes globs too.
+
 ### sandogasa-nvd: the upstream products a CVE affects, without the distributions that ship them
 
 NVD's CPE list for a library CVE names the library and then everyone

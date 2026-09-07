@@ -42,6 +42,19 @@ impl NvdClient {
             .json()
             .await
     }
+
+    /// The raw JSON body NVD returns for `cve_id`, for callers that
+    /// keep it — a disk cache that outlives the process, say — and
+    /// parse it into a [`CveResponse`] themselves.
+    pub async fn cve_json(&self, cve_id: &str) -> Result<String, reqwest::Error> {
+        self.client
+            .get(format!("{}?cveId={cve_id}", self.base_url))
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await
+    }
 }
 
 /// Build the crate's HTTP client with the shared sandogasa defaults

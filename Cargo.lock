@@ -528,6 +528,7 @@ version = "0.23.0"
 dependencies = [
  "chrono",
  "clap",
+ "dirs",
  "reqwest",
  "sandogasa-bodhi",
  "sandogasa-bugzilla",
