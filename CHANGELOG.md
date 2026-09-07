@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### fedora-cve-triage bodhi-check: a bundled library's fix is judged by the bundled version
+
+sslscan bundles OpenSSL, and its update to a build bundling openssl
+3.5.5 fixed CVE-2025-66199; the new `bundled-library` check read that
+as a false positive — the bundled copy has the fix — and would have
+closed the bug NOTABUG, when the truth is that the bug was real when
+filed (or filed late) and the update fixed it, which is bodhi-check's
+verdict to give, as ERRATA or CVE-AlreadyFixed. Meanwhile bodhi-check
+itself, on a product that matched the component only through a
+`bundled(<library>)` provide, compared the package's *own* version with
+the library's fixed version — pcem 17 read as past libxml2 2.13.8, and
+sslscan 2.2.2 as short of openssl 3.5.5 — so it would have closed the
+wrong bugs and missed the right ones the moment either package had an
+update.
+
+`bundled-library` now declines every declared bundle: below the fix it
+says the bug is real, at or past the fix it says the bug is
+bodhi-check's to close against the update that brought the copy. And
+bodhi-check, when the match came through a bundled provide, asks Koji
+what each update build bundles (`getRPMDeps` on its binary RPMs, one
+per subpackage) and compares that version; a build whose bundled version
+cannot be read proves nothing. And of several updates carrying a fix,
+bodhi-check now judges a bug against the earliest, where it used to
+take the first Bodhi listed — sslscan's fix arrived in April's
+2.2.2-1 and was rebuilt in June's mass update, and only the April date
+tells whether the bug was filed late. The library in another build —
+`mingw-openssl`, `compat-openssl10` — is left alone, being the library
+and not a consumer. A Rust crate package requiring `crate(<library>-sys)`
+counts as linking the system copy, having no shared object to require by
+name — rust-openssl included, judged only when NVD's CPE data pins the
+CVE on the library and the CVE does not read as a Rust one by the
+ecosystem signals cross-ecosystem uses (sandogasa-nvd gains
+`targets_rust`: crates.io, docs.rs or RUSTSEC references, a `rust`
+target_sw), since the openssl crate has CVEs of its own that the bot
+files with the same word, and those NVD leaves without CPE data. The review
+item for a late filing now names the tracker it will block — "mark bug N as blocking
+CVE-AlreadyFixed (late-filed)" — where it used to say only "blocking",
+leaving the reader to learn which tracker from the plan after agreeing.
+sandogasa-koji gains `rpm_provides`, `build_rpm_nvras` and their pure
+parsers.
+
 ### fedora-cve-triage: a refused NVD lookup is retried, and reported if refused again
 
 Two runs on one machine share NVD's per-IP rate limit, and when it bit,
@@ -78,24 +119,25 @@ fix lands — and the component's relation to it is one the bug cannot
 survive: it links the system copy (its binaries require a shared
 library the library's packages provide, `libssl.so.4` — what catches a
 Rust or Go package, whose BuildRequires are generated from the crate
-graph at build time — or its source package requires the library), it
-neither bundles nor links it, or it declares
-`bundled(<library>) = <version>` at a version that already has the fix,
-judged as `bodhi-check` judges a build. A bundled copy below the fix is
-the real thing, and the check says so in a note rather than claiming
-the bug. A date-stamped snapshot such as pcem's `bundled(libxml2) =
-20190613` — which as a number is past every release there will ever be
-— is measured against a day instead: when upstream tagged the fixed
-version, read from the repository the CVE's NVD references point at
-(github.com or a GitLab instance) by trying the usual tag shapes.
-Before that day the bug is real; on or after it the snapshot has the
-fix. Without a repository to ask, the first Koji build with a fixed
-version stands in, and only to clear a snapshot dated after it — Fedora
-builds a release some unknown time after upstream tags it, so an
+graph at build time — or its source package requires the library), or
+it neither bundles nor links it. A declared `bundled(<library>) =
+<version>` is never claimed: below the fix, judged as `bodhi-check`
+judges a build, the bug is real and the check says so; at or past it,
+the bug is bodhi-check's to close against the update that brought the
+fixed copy, and the check says that. A date-stamped snapshot such as
+pcem's `bundled(libxml2) = 20190613` — which as a number is past every
+release there will ever be — is measured against a day instead: when
+upstream tagged the fixed version, read from the repository the CVE's
+NVD references point at (github.com or a GitLab instance) by trying the
+usual tag shapes. Without a repository to ask, the first Koji build with
+a fixed version stands in, and only to place a snapshot dated after it —
+Fedora builds a release some unknown time after upstream tags it, so an
 earlier snapshot is left open rather than called real. A bundled copy
-it cannot judge, a spec that will not fetch, or a library with no
+it cannot judge, a component fedrq cannot list, or a library with no
 Fedora package of its own leave the bug open with a note too, as a
-check that acts on a negative should. It runs after
+check that acts on a negative should. Everything about the component
+comes from the repository through fedrq, `--notsrc` and `--src`; the
+spec is never read. It runs after
 `unshipped-tools` and before `fix-version`, and has to stay after
 `cross-ecosystem`: NVD names node-tar's product plainly `tar`.
 

@@ -641,10 +641,25 @@ pub fn build_creation_date(
 /// Parses the RPMs section, returning binary package names
 /// (excluding `.src.rpm` entries).
 pub fn build_rpms(nvr: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
-    let stdout = run_koji(profile, &["buildinfo", "--", nvr])?;
+    Ok(build_rpm_nvras(nvr, profile)?
+        .iter()
+        .filter_map(|nvra| parse_nvr_name(&nvra[..nvra.rfind('.')?]))
+        .map(str::to_string)
+        .collect())
+}
 
+/// The binary RPMs of a build as `name-version-release.arch`, the
+/// form `getRPMDeps` and `rpminfo` take (`sslscan-2.2.2-1.fc45.x86_64`);
+/// the source RPM is left out.
+pub fn build_rpm_nvras(nvr: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
+    let stdout = run_koji(profile, &["buildinfo", "--", nvr])?;
+    Ok(parse_buildinfo_rpms(&stdout))
+}
+
+/// The `RPMs:` section of `koji buildinfo`, as NVRAs without `.rpm`.
+pub fn parse_buildinfo_rpms(stdout: &str) -> Vec<String> {
     let mut in_rpms = false;
-    let mut names = Vec::new();
+    let mut nvras = Vec::new();
     for line in stdout.lines() {
         if line.starts_with("RPMs:") {
             in_rpms = true;
@@ -654,26 +669,82 @@ pub fn build_rpms(nvr: &str, profile: Option<&str>) -> Result<Vec<String>, Strin
             continue;
         }
         let path = line.split('\t').next().unwrap_or("").trim();
-        if path.is_empty() {
-            continue;
-        }
         let filename = path.rsplit('/').next().unwrap_or(path);
         if filename.ends_with(".src.rpm") {
             continue;
         }
-        if let Some(without_rpm) = filename.strip_suffix(".rpm")
-            && let Some(dot_pos) = without_rpm.rfind('.')
-            && let Some(name) = parse_nvr_name(&without_rpm[..dot_pos])
-        {
-            names.push(name.to_string());
+        if let Some(nvra) = filename.strip_suffix(".rpm") {
+            nvras.push(nvra.to_string());
         }
     }
-    Ok(names)
+    nvras
+}
+
+/// What one binary RPM provides, as `(name, version)` pairs — the
+/// hub's `getRPMDeps` filtered to provides. `bundled(openssl) = 3.5.5`
+/// comes back as `("bundled(openssl)", Some("3.5.5"))`; a provide
+/// without a version has `None`.
+pub fn rpm_provides(
+    nvra: &str,
+    profile: Option<&str>,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let stdout = run_koji(
+        profile,
+        &["call", "getRPMDeps", "--json-output", "--", nvra],
+    )?;
+    parse_rpm_deps(&stdout, 1)
+}
+
+/// The deps of `dep_type` (0 requires, 1 provides, 2 obsoletes,
+/// 3 conflicts) in a `getRPMDeps` JSON answer.
+pub fn parse_rpm_deps(json: &str, dep_type: u64) -> Result<Vec<(String, Option<String>)>, String> {
+    let deps: Vec<serde_json::Value> =
+        serde_json::from_str(json).map_err(|e| format!("getRPMDeps answer did not parse: {e}"))?;
+    Ok(deps
+        .iter()
+        .filter(|d| d["type"].as_u64() == Some(dep_type))
+        .filter_map(|d| {
+            let name = d["name"].as_str()?.to_string();
+            let version = d["version"]
+                .as_str()
+                .filter(|v| !v.is_empty())
+                .map(str::to_string);
+            Some((name, version))
+        })
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_buildinfo_rpms_lists_binary_nvras() {
+        let out = "Build: x\nRPMs:\n/mnt/koji/packages/sslscan/2.2.2/1.fc45/src/sslscan-2.2.2-1.fc45.src.rpm\tSignatures: f5\n/mnt/koji/packages/sslscan/2.2.2/1.fc45/x86_64/sslscan-2.2.2-1.fc45.x86_64.rpm\tSignatures: f5\n/mnt/koji/packages/sslscan/2.2.2/1.fc45/x86_64/sslscan-debuginfo-2.2.2-1.fc45.x86_64.rpm\n";
+        assert_eq!(
+            parse_buildinfo_rpms(out),
+            vec![
+                "sslscan-2.2.2-1.fc45.x86_64",
+                "sslscan-debuginfo-2.2.2-1.fc45.x86_64"
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_rpm_deps_keeps_one_type() {
+        let json = r#"[{"name": "libc.so.6()(64bit)", "version": "", "type": 0, "flags": 0},
+            {"name": "bundled(openssl)", "version": "3.5.5", "type": 1, "flags": 8},
+            {"name": "sslscan", "version": "2.2.2-1.fc45", "type": 1, "flags": 8}]"#;
+        assert_eq!(
+            parse_rpm_deps(json, 1).unwrap(),
+            vec![
+                ("bundled(openssl)".to_string(), Some("3.5.5".to_string())),
+                ("sslscan".to_string(), Some("2.2.2-1.fc45".to_string())),
+            ]
+        );
+        assert_eq!(parse_rpm_deps(json, 0).unwrap()[0].1, None);
+        assert!(parse_rpm_deps("nope", 1).is_err());
+    }
 
     #[test]
     fn parse_list_builds_takes_the_nvr_column() {

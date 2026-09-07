@@ -202,6 +202,32 @@ impl CveResponse {
         out
     }
 
+    /// Whether the CVE reads as a Rust crate's own: a CPE `target_sw`
+    /// of `rust`, or a reference into crates.io, docs.rs or the RUSTSEC
+    /// database. CVE-2025-24898 (`ssl::select_next_proto` in the
+    /// openssl crate) has no CPE data at all and points at
+    /// crates.io/crates/openssl; CVE-2026-28390 in OpenSSL itself has
+    /// `openssl:openssl` CPEs and points at github.com/openssl/openssl.
+    pub fn targets_rust(&self) -> bool {
+        let cpe_rust = self
+            .vulnerabilities
+            .iter()
+            .flat_map(|v| &v.cve.configurations)
+            .flat_map(|c| &c.nodes)
+            .flat_map(|n| &n.cpe_match)
+            .any(|m| {
+                m.criteria
+                    .split(':')
+                    .nth(10)
+                    .is_some_and(|sw| sw.eq_ignore_ascii_case("rust"))
+            });
+        cpe_rust
+            || self.reference_urls().iter().any(|u| {
+                let u = u.to_ascii_lowercase();
+                u.contains("crates.io/") || u.contains("docs.rs/") || u.contains("rustsec.org/")
+            })
+    }
+
     /// [`affected_products`](Self::affected_products) without the
     /// downstream entries: operating systems and hardware (CPE part
     /// `o`/`h`) and the [`DOWNSTREAM_VENDORS`], which NVD lists as
@@ -1027,6 +1053,18 @@ mod tests {
     fn has_npm_references_empty() {
         let resp = empty_cve();
         assert!(!resp.has_npm_references());
+    }
+
+    #[test]
+    fn targets_rust_via_crates_io_reference_or_target_sw() {
+        let mut cve = cve_with_cpe("cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*");
+        assert!(!cve.targets_rust());
+        cve.vulnerabilities[0].cve.references.push(CveReference {
+            url: "https://crates.io/crates/openssl".to_string(),
+        });
+        assert!(cve.targets_rust());
+        let by_sw = cve_with_cpe("cpe:2.3:a:sfackler:openssl:*:*:*:*:*:rust:*:*");
+        assert!(by_sw.targets_rust());
     }
 
     #[test]

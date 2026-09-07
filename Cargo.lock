@@ -2144,6 +2144,7 @@ name = "sandogasa-koji"
 version = "0.23.0"
 dependencies = [
  "chrono",
+ "serde_json",
  "wait-timeout",
 ]
 
