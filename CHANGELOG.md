@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a library named only by the summary, and a fix supplied by hand
+
+CVE-2025-3416, a use-after-free in the openssl crate, sits in NVD as
+Deferred with no CPE data, and the bot's summary for rust-bootupd's bug
+reads `rust-bootupd: rust-openssl Use-After-Free in …` — the library
+named plainly, but not in the `Library:` form the check knew. It said
+nothing about the bug. Now a lowercase hyphenated word opening the
+title is read as a package name, `rust-openssl` as the openssl crate,
+and a library the summary names without an ecosystem takes the CVE's
+when the CVE reads as Rust. With no fixed version from NVD the verdict
+would still have stopped at "review by hand", so the fixed versions
+supplied by hand for bodhi-check — the config's `fixed_versions` table
+and the recorded answers — now serve bundled-library too: with
+`"CVE-2025-3416" = "0.10.72"` in the config, rust-bootupd's copy at
+0.10.64 is called real.
+
 ### fedora-cve-triage: the library a CVE is in carries its ecosystem
 
 CVE-2026-45784 is a heap corruption in the openssl *crate*, and NVD
@@ -38,8 +54,8 @@ sslscan 2.2.2 as short of openssl 3.5.5 — so it would have closed the
 wrong bugs and missed the right ones the moment either package had an
 update.
 
-`bundled-library` now declines every declared bundle: below the fix it
-says the bug is real, at or past the fix it says the bug is
+`bundled-library` now declines every declared bundle: older than the
+fix it says the bug is real, at or past the fix it says the bug is
 bodhi-check's to close against the update that brought the copy. And
 bodhi-check, when the match came through a bundled provide, asks Koji
 what each update build bundles (`getRPMDeps` on its binary RPMs, one
@@ -142,7 +158,7 @@ library the library's packages provide, `libssl.so.4` — what catches a
 Rust or Go package, whose BuildRequires are generated from the crate
 graph at build time — or its source package requires the library), or
 it neither bundles nor links it. A declared `bundled(<library>) =
-<version>` is never claimed: below the fix, judged as `bodhi-check`
+<version>` is never claimed: older than the fix, judged as `bodhi-check`
 judges a build, the bug is real and the check says so; at or past it,
 the bug is bodhi-check's to close against the update that brought the
 fixed copy, and the check says that. A date-stamped snapshot such as
