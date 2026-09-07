@@ -100,9 +100,15 @@ rust-* bugs took nine minutes, nearly all of it waiting, and took nine
 minutes again when re-run to try a fix. Responses are now written under
 `$XDG_CACHE_HOME/fedora-cve-triage/nvd/` and reused for a day, long
 enough for the try-fix-rerun loop and short enough that a CVE moving
-from "Awaiting Analysis" to analyzed is picked up; `--refresh-nvd`
+from "Awaiting Analysis" to analyzed is picked up; `--refresh`
 ignores the cache. sandogasa-nvd gains `cve_json`, the raw body for
-callers that keep it.
+callers that keep it. The advisory pages the fixed-version resolver
+reads for CVEs NVD has no fixed version for — dozens of them for a run
+over OpenSSL's consumers, the Siemens portal slowest — are kept the same
+way for a day, and what each Koji build's RPMs provide, which
+bodhi-check reads to judge a bundled copy, is kept for good, since a
+build never changes; `--refresh` (the flag was `--refresh-nvd` while
+only NVD was cached) bypasses every cache.
 
 ### fedora-cve-triage: `-c 'rust-*'`, a component glob
 
