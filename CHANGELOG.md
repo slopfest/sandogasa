@@ -140,7 +140,12 @@ reads for CVEs NVD has no fixed version for — dozens of them for a run
 over OpenSSL's consumers, the Siemens portal slowest — are kept the same
 way for a day, and what each Koji build's RPMs provide, which
 bodhi-check reads to judge a bundled copy, is kept for good, since a
-build never changes; `--refresh` (the flag was `--refresh-nvd` while
+build never changes; and fedrq's answers — a component's provides,
+requires and source requires per branch, the packages named like a
+library, which were the whole remaining cost of a re-run once NVD was
+cached, a burst of a second or two each between one lookup and the next
+— for a day, an empty answer included, since a package absent from a
+branch stays absent. `--refresh` (the flag was `--refresh-nvd` while
 only NVD was cached) bypasses every cache.
 
 ### fedora-cve-triage: `-c 'rust-*'`, a component glob
