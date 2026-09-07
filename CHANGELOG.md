@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### fedora-cve-triage: an NVD API key, and the pace it buys
+
+Every NVD lookup waited six seconds, the pace NVD asks of anonymous
+clients (5 requests per rolling 30 seconds), and a sweep fetching 65
+CVEs spent nine minutes mostly waiting. NVD hands out API keys free
+(https://nvd.nist.gov/developers/request-an-api-key) that raise the
+limit to 50 per 30 seconds. `fedora-cve-triage config` now offers to
+record one under `[nvd]` beside the Bugzilla credentials and checks it
+against NVD; with a key configured, lookups carry it as the `apiKey`
+header and pace at 0.6 seconds. NVD answers 404, not 401, to a key it
+does not know — mistyped or not yet activated by the mailed link — so
+`config` reads a 404 as that, and a run whose key is refused warns once
+and carries on without it at the keyless pace rather than failing every
+lookup. sandogasa-nvd's `NvdClient` gains `with_api_key`, `has_api_key`
+and `clear_api_key`; sandogasa-config gains `prompt_optional_field`, a
+prompt whose empty answer is a clean "no" rather than an error.
+
 ### fedora-cve-triage: a library named only by the summary, and a fix supplied by hand
 
 CVE-2025-3416, a use-after-free in the openssl crate, sits in NVD as

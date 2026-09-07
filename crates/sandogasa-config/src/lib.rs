@@ -247,6 +247,27 @@ pub fn prompt_field(
     }
 }
 
+/// Prompt for an optional field: an empty answer is a clean "no",
+/// returned as `Ok(None)`, where [`prompt_field`] would refuse it.
+/// The label should say the field is optional.
+pub fn prompt_optional_field(
+    section: &str,
+    label: &str,
+    sensitive: bool,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    print!("Enter {section} {label}: ");
+    io::stdout().flush()?;
+    let raw = if sensitive {
+        rpassword::read_password()?
+    } else {
+        let mut buf = String::new();
+        io::stdin().read_line(&mut buf)?;
+        buf
+    };
+    let value = raw.trim().to_string();
+    Ok((!value.is_empty()).then_some(value))
+}
+
 /// Validate that a string looks like an email address.
 ///
 /// Suitable for use as a `validate` callback in [`prompt_field`].
