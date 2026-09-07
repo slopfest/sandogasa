@@ -335,6 +335,11 @@ fields on the edge structures, so a walk that knows nothing about
 health still merges cleanly), which checks write which keys, and how
 staleness is dated. Half a day to a day; for the release after 0.23.0.
 
+Then, in this order: GitHub #4 (a CVE in a C library filed against a
+package that links the distro's copy — #7 was folded into it), and only
+after that re-evaluate #6 (hattrack per-SIG activity) and #8 (openSUSE
+in sandogasa-report), both commented to that effect on 2026-09-07.
+
 ## poi-tracker / sandogasa-pkg-health seam
 
 Decision (2026-07-21): keep both tools — pkg-health **observes**
