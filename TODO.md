@@ -310,6 +310,31 @@ the README its workspace-era examples on 2026-09-05. Still open:
   memory of decisions declined (ride now, ask again later?) does not
   exist; see whether the second real cycle wants one.
 
+## pkg-health after kondo: reuse the graph, score dependencies too (2026-09-06)
+
+Kondo left behind observations pkg-health should report over time, not
+just poi-tracker act on once: whether an owned package is justified (in
+some essential inventory), what carries it and whether only through
+devel-only edges (`dependents`), whether it is retired in rawhide yet
+still kept, and the python-usort shape — orphaned but with an ACL of
+yours lingering. The first two are offline once pkg-health can read the
+workspace file and the graph; that code lives in poi-tracker
+(`workspace.rs`, `derive.rs`, `dependents.rs`), so the honest version
+extracts it into a crate (sandogasa-inventory is the natural home) and
+gives pkg-health `-w` beside `-i`.
+
+On top of that: a package is less healthy when its *dependencies* have
+maintenance issues — an orphaned or unmaintained crate three edges down
+is the package's problem too. The graph already has the edges; the plan
+is to annotate the graph itself, adding keys per source as needed
+(maintainers, orphaned, retired, open bugs, last build), so pkg-health
+walks each component's subgraph and folds the annotations into the
+score, and any other tool reading the graph sees them. Decide the
+annotation shape (a sidecar map keyed by source name rather than new
+fields on the edge structures, so a walk that knows nothing about
+health still merges cleanly), which checks write which keys, and how
+staleness is dated. Half a day to a day; for the release after 0.23.0.
+
 ## poi-tracker / sandogasa-pkg-health seam
 
 Decision (2026-07-21): keep both tools — pkg-health **observes**
