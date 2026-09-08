@@ -304,7 +304,13 @@ dependencies we track) supplies every maintenance subcommand's flags,
 and `reconcile` runs the loop over it — walk new keeps, recompute the
 derived inventories, ask ride/promote and keep/demote, hand what is
 left to kondo's triage. The Hyperscale closures got their graphs and
-the README its workspace-era examples on 2026-09-05. Still open:
+the README its workspace-era examples on 2026-09-05; the releng
+follow-through (prune, cull.toml emptied, reports regenerated) and the
+first real `reconcile` run are done as of 2026-09-08. Still open:
+
+- A Hyperscale closure has not been run yet (2026-09-08): the
+  `[[closure]]` entries for hyperscale-el9/el10 exist, but no
+  reconcile cycle has exercised them end to end.
 
 - `reconcile` re-asks nothing it has written, but a "since first seen"
   memory of decisions declined (ride now, ask again later?) does not
