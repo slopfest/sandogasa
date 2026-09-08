@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### clap_mangen 0.3
+
+The workspace requires clap_mangen 0.3 (`features = ["env"]`), following
+Fedora's move of rust-clap_mangen to 0.3 across branches; contributed
+by the Fedora maintainer in PR #12. 0.3 renders the "may also be
+specified with the … environment variable" notes only with its `env`
+feature — the first cut, a range spanning 0.2, would have dropped eight
+of them from the pages silently — and lists required options after the
+optional ones in the synopsis. The committed pages are regenerated at
+release time, as the man-page test tolerates formatting drift between
+clap_mangen versions by design.
+
 ### sandogasa-pkg-health: the health of a package's dependencies
 
 A package can be in good shape itself while a library it depends on is

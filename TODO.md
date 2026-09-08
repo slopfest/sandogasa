@@ -312,12 +312,18 @@ the README its workspace-era examples on 2026-09-05. Still open:
 
 ## Major dependency bumps deferred at 0.23.0 (2026-09-07)
 
-`cargo update --dry-run --verbose` offered five majors; Fedora has the
+`cargo update --dry-run --verbose` offered five majors; Fedora had the
 current major and nothing newer on every branch checked (rawhide, f45,
-f44, f43, epel10, epel9), so all five wait for the packaging to catch up.
+f44, f43, epel10, epel9), so they wait for the packaging to catch up.
 Re-check at the next breaking release:
 
-- clap_mangen 0.2.33 → 0.3.3 (Fedora: 0.2.33 everywhere)
+- clap_mangen 0.2.33 → 0.3.3: **taken 2026-09-08** (PR #12, from the
+  Fedora maintainer moving rust-clap_mangen to 0.3 in side tags for
+  every branch, no compat package). Requires `features = ["env"]`: 0.3
+  put the environment-variable notes in man pages behind its own `env`
+  feature, which 0.2 lacked, so no range could carry it. The pages
+  regenerate at the next release (synopsis lists required options last
+  now); the man-page test tolerates the formatting change meanwhile.
 - dirs 6.0.0 → 7.0.0 (Fedora: 6.0.0 everywhere)
 - quick-xml 0.41.0 → 0.42.0 (Fedora: 0.41.0 everywhere)
 - rusqlite 0.38.0 → 0.40.2 (Fedora: 0.38.0 everywhere)
