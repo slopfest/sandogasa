@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### sandogasa-bugzilla: a stock Bugzilla 5's bugs decode
+
+Every search on bugzilla.opensuse.org failed with "error decoding
+response body": a stock Bugzilla 5 serves a bug's `component` and
+`version` as one string each, where Red Hat's serves lists, and the
+model only read lists. Both fields now read either shape as a list, so
+a report on openSUSE's Bugzilla renders its bugs (sixteen of one
+contributor's, back to 2007) the same way as Red Hat's.
+
+
 ## v0.23.1
 
 ### fedora-cve-triage: a check needs a config section only to write

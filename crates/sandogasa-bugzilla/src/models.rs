@@ -36,6 +36,9 @@ pub struct Bug {
     pub status: String,
     pub resolution: String,
     pub product: String,
+    /// Red Hat's Bugzilla lists a bug's components; a stock Bugzilla
+    /// 5 (openSUSE's) names one. Both read as a list.
+    #[serde(deserialize_with = "one_or_many")]
     pub component: Vec<String>,
     pub severity: String,
     pub priority: String,
@@ -57,7 +60,8 @@ pub struct Bug {
     pub cc: Vec<String>,
     #[serde(default)]
     pub flags: Vec<Flag>,
-    #[serde(default)]
+    /// A list on Red Hat's, one string on a stock Bugzilla 5.
+    #[serde(default, deserialize_with = "one_or_many")]
     pub version: Vec<String>,
     #[serde(default)]
     pub cf_fixed_in: String,
@@ -96,9 +100,48 @@ pub struct Comment {
     pub is_private: bool,
 }
 
+/// A field Red Hat's Bugzilla serves as a list of strings and a stock
+/// Bugzilla 5 as one string, read either way.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(s) => vec![s],
+        OneOrMany::Many(v) => v,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deserialize_bug_from_a_stock_bugzilla_5() {
+        // bugzilla.opensuse.org names one component and one version
+        // where Red Hat's lists them.
+        let json = serde_json::json!({
+            "id": 349057,
+            "summary": "Moonlight should offer GStreamer",
+            "status": "RESOLVED",
+            "resolution": "WONTFIX",
+            "product": "Moonlight",
+            "component": "media",
+            "version": "unspecified",
+            "severity": "Enhancement",
+            "priority": "P5 - None",
+            "assigned_to": "mono-bugs@lists.ximian.com",
+            "creator": "ngompa13@gmail.com",
+            "creation_time": "2007-12-15T15:39:51Z",
+            "last_change_time": "2022-10-22T17:55:35Z"
+        });
+        let bug: Bug = serde_json::from_value(json).unwrap();
+        assert_eq!(bug.component, ["media"]);
+        assert_eq!(bug.version, ["unspecified"]);
+    }
 
     #[test]
     fn deserialize_flag_with_all_fields() {

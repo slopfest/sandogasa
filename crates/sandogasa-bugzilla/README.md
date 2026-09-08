@@ -1,7 +1,9 @@
 # sandogasa-bugzilla
 
 A Rust client for the [Bugzilla REST API](https://bugzilla.readthedocs.io/en/latest/api/),
-targeting Red Hat Bugzilla.
+targeting Red Hat Bugzilla and working against a stock Bugzilla 5 such as
+bugzilla.opensuse.org (a bug's `component` and `version` read as lists
+either way, though a stock instance serves one string).
 
 ## Features
 
