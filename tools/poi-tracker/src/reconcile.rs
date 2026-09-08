@@ -99,8 +99,7 @@ fn shipped_names_of(path: &str) -> Result<BTreeSet<String>, String> {
 }
 
 fn read_graph(path: &str) -> Result<deps::DepsGraph, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("reading {path}: {e}"))?;
-    serde_json::from_slice(&bytes).map_err(|e| format!("parsing {path}: {e}"))
+    deps::DepsGraph::load(path)
 }
 
 fn write_graph(path: &str, graph: &deps::DepsGraph) -> Result<(), String> {

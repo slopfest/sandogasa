@@ -336,17 +336,22 @@ workspace file and the graph; that code lives in poi-tracker
 extracts it into a crate (sandogasa-inventory is the natural home) and
 gives pkg-health `-w` beside `-i`.
 
-On top of that: a package is less healthy when its *dependencies* have
-maintenance issues — an orphaned or unmaintained crate three edges down
-is the package's problem too. The graph already has the edges; the plan
-is to annotate the graph itself, adding keys per source as needed
-(maintainers, orphaned, retired, open bugs, last build), so pkg-health
-walks each component's subgraph and folds the annotations into the
-score, and any other tool reading the graph sees them. Decide the
-annotation shape (a sidecar map keyed by source name rather than new
-fields on the edge structures, so a walk that knows nothing about
-health still merges cleanly), which checks write which keys, and how
-staleness is dated. Half a day to a day; for the release after 0.23.0.
+Done 2026-09-08: `-w` and `--graph` on pkg-health `run`, the
+`dependency_health` reading (worst offender with attribution, counts,
+pooled security-bug age p50/p90, direct run-time vs build-only vs
+transitive, `--dependency-depth`), the workspace model moved into
+sandogasa-inventory, `DepsGraph::dependencies{,_by_kind}`. The
+dependencies' facts live in the health report itself (the same
+per-package entries, reused under `--max-age`) rather than as graph
+annotations — the report is already the store other runs read, and the
+graph stays a description of edges.
+
+Still to do from the kondo observations: a `justified` check (the
+package is in some essential inventory), `dependents` (what carries
+it, devel-only edges marked), `retired-but-kept`, and the
+python-usort shape (orphaned with a lingering ACL of yours). Each is
+offline given the workspace and the graph; each is a small check now
+that pkg-health reads both.
 
 Then re-evaluate GitHub #6 (hattrack per-SIG activity) and #8 (openSUSE
 in sandogasa-report), both commented to that effect on 2026-09-07. (#4,

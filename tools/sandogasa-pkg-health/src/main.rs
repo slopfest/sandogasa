@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use sandogasa_pkg_health::checks::dependency_health::{self, DepFacts};
 use sandogasa_pkg_health::{Context, CostTier, HealthReport, duration, registry::default_registry};
 
 #[derive(Parser)]
@@ -32,9 +33,40 @@ enum Command {
 
 #[derive(clap::Args)]
 struct RunArgs {
-    /// Path to inventory TOML file.
+    /// Path to inventory TOML file (default: the workspace's `owned`
+    /// inventory when -w is given).
+    #[arg(
+        short,
+        long,
+        value_name = "PATH",
+        required_unless_present = "workspace"
+    )]
+    inventory: Option<String>,
+
+    /// A poi-tracker workspace file (kondo.toml): its `owned` inventory
+    /// is the default -i, and the saved graphs of its closures for
+    /// --branch feed the dependency_health check.
     #[arg(short, long, value_name = "PATH")]
-    inventory: String,
+    workspace: Option<String>,
+
+    /// The branch whose closures -w reads graphs from. Graphs of
+    /// different branches are never merged: a binary's source package
+    /// differs between them (CentOS Stream 9 ships rust-srpm-macros
+    /// as its own package; rawhide has it in cargo-rpm-macros).
+    #[arg(long, value_name = "BRANCH", default_value = "rawhide")]
+    branch: String,
+
+    /// A dependency graph saved by `poi-tracker deps --graph`
+    /// (repeatable); with one, each package's dependencies are
+    /// checked too and dependency_health is computed.
+    #[arg(long, value_name = "PATH")]
+    graph: Vec<String>,
+
+    /// How many levels of dependencies to walk for dependency_health:
+    /// 1 is the direct ones. Through build dependencies nearly every
+    /// package reaches the whole toolchain within a few levels.
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    dependency_depth: usize,
 
     /// Path to report TOML file (read if exists, written after run).
     #[arg(short, long, value_name = "PATH")]
@@ -206,13 +238,90 @@ fn cmd_show(args: &ShowArgs) -> ExitCode {
 }
 
 async fn cmd_run(args: &RunArgs) -> ExitCode {
-    let inventory = match sandogasa_inventory::load(&args.inventory) {
+    // The workspace names the inventory and the graphs; flags win.
+    let workspace = match args.workspace.as_deref() {
+        Some(path) => match sandogasa_inventory::workspace::Workspace::find(Some(path)) {
+            Ok(Some((ws, _))) => Some(ws),
+            Ok(None) => unreachable!("an explicit workspace path is always looked up"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+    let inventory_path = match (&args.inventory, &workspace) {
+        (Some(p), _) => p.clone(),
+        (None, Some(ws)) => match &ws.owned {
+            Some(owned) => ws.resolve(owned),
+            None => {
+                eprintln!("error: the workspace names no `owned` inventory; pass -i");
+                return ExitCode::FAILURE;
+            }
+        },
+        (None, None) => unreachable!("clap requires -i or -w"),
+    };
+    let inventory = match sandogasa_inventory::load(&inventory_path) {
         Ok(inv) => inv,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
     };
+    // The graphs to read: --graph as given, and the workspace's closures
+    // for --branch. One branch only — a source name from another
+    // branch's graph would be looked up in the wrong dist-git.
+    let mut graph_paths: Vec<String> = args.graph.clone();
+    if let Some(ws) = &workspace {
+        let on_branch: Vec<&sandogasa_inventory::workspace::Closure> = ws
+            .closures
+            .iter()
+            .filter(|c| c.branch == args.branch)
+            .collect();
+        if on_branch.is_empty() && args.graph.is_empty() {
+            eprintln!(
+                "error: the workspace has no closure for branch {}; it has: {}",
+                args.branch,
+                ws.closures
+                    .iter()
+                    .map(|c| format!("{} ({})", c.name, c.branch))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            return ExitCode::FAILURE;
+        }
+        graph_paths.extend(
+            on_branch
+                .iter()
+                .filter_map(|c| c.graph.as_deref().map(|g| ws.resolve(g))),
+        );
+    }
+    // A graph is a snapshot of the repositories; say how old.
+    for path in &graph_paths {
+        if let Some(days) = file_age_days(path) {
+            if days > 30 {
+                eprintln!(
+                    "note: {path} is {days} days old; the repositories have moved on — regenerate \
+                     it with poi-tracker deps --graph"
+                );
+            } else if args.verbose {
+                eprintln!("[pkg-health] {path}: {days} day(s) old");
+            }
+        }
+    }
+    let mut graph: Option<sandogasa_closure::DepsGraph> = None;
+    for path in &graph_paths {
+        match sandogasa_closure::DepsGraph::load(path) {
+            Ok(g) => match &mut graph {
+                Some(all) => all.merge(g),
+                None => graph = Some(g),
+            },
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
 
     let reg = default_registry();
 
@@ -263,8 +372,35 @@ async fn cmd_run(args: &RunArgs) -> ExitCode {
         args.packages.iter().map(|s| s.as_str()).collect()
     };
 
+    // With a graph, each package's dependencies are read off it: the
+    // direct ones and the transitive closure, at the source level. The
+    // dependencies not in the inventory are checked too — the two
+    // facts the dependency reading is built from — so the reading can
+    // be computed from stored results once every check has run.
+    let dependencies = sandogasa_closure_deps(graph.as_ref(), &packages, args.dependency_depth);
+    let inventory_set: std::collections::BTreeSet<&str> = packages.iter().copied().collect();
+    let dependency_packages: Vec<String> = dependencies
+        .values()
+        .flat_map(|(d, t)| d.iter().map(|(n, _)| n).chain(t.iter()))
+        .filter(|p| !inventory_set.contains(p.as_str()))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
     if args.verbose {
-        eprintln!("[pkg-health] {} package(s) to check", packages.len());
+        eprintln!(
+            "[pkg-health] {} package(s) to check{}",
+            packages.len(),
+            if dependency_packages.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ", and {} dependenc(y|ies) of theirs",
+                    dependency_packages.len()
+                )
+            }
+        );
     }
 
     // Parse --max-age if given.
@@ -283,7 +419,38 @@ async fn cmd_run(args: &RunArgs) -> ExitCode {
     let epel_versions = dedup_versions(&args.epel_versions, "epel");
 
     let ctx = Context::new(&fedora_versions, &epel_versions, args.verbose).await;
-    let total = packages.len();
+
+    // The work: every selected check over the inventory's packages —
+    // dependency_health excepted, it is computed afterwards — and the
+    // two facts the dependency reading needs over the dependencies,
+    // bug_count on rawhide only to bound the cost.
+    const DEP_CHECKS: &[(&str, Option<&str>)] =
+        &[("maintainer_count", None), ("bug_count", Some("rawhide"))];
+    let mut work: Work<'_> = Vec::new();
+    for pkg in &packages {
+        let mut items = Vec::new();
+        for check_id in &selected_ids {
+            if *check_id == "dependency_health" {
+                continue;
+            }
+            let Some(check) = reg.get(check_id) else {
+                eprintln!("warning: unknown check '{check_id}'");
+                continue;
+            };
+            items.extend(check.variants(&ctx).into_iter().map(|v| (*check_id, v)));
+        }
+        work.push((pkg, items));
+    }
+    for pkg in &dependency_packages {
+        work.push((
+            pkg.as_str(),
+            DEP_CHECKS
+                .iter()
+                .map(|(c, v)| (*c, v.map(str::to_string)))
+                .collect(),
+        ));
+    }
+    let total = work.len();
     let width = total.to_string().len();
     let completed = std::sync::atomic::AtomicUsize::new(0);
 
@@ -292,20 +459,19 @@ async fn cmd_run(args: &RunArgs) -> ExitCode {
     // - PackageOutcome::Ran { key, data }: needs to be written to report
     // - PackageOutcome::Failed: logged, counted
     use rayon::prelude::*;
-    let outcomes: Vec<(String, PackageOutcome)> = packages
+    let outcomes: Vec<(String, PackageOutcome)> = work
         .par_iter()
-        .flat_map_iter(|pkg| {
+        .flat_map_iter(|(pkg, checks)| {
             let i = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             if args.verbose {
                 eprintln!("[pkg-health] [{i:>width$}/{total}] {pkg}", width = width,);
             }
             let mut items: Vec<(String, PackageOutcome)> = Vec::new();
-            for check_id in &selected_ids {
+            for (check_id, variant) in checks {
                 let Some(check) = reg.get(check_id) else {
-                    eprintln!("warning: unknown check '{check_id}'");
                     continue;
                 };
-                for variant in check.variants(&ctx) {
+                {
                     let key = sandogasa_pkg_health::entry_key(check_id, variant.as_deref());
 
                     if let Some(age) = max_age
@@ -348,6 +514,51 @@ async fn cmd_run(args: &RunArgs) -> ExitCode {
         }
     }
 
+    // The dependency reading, from what is now stored about each
+    // dependency; a run without a graph leaves any earlier reading as
+    // it was.
+    // A graph is a snapshot: a dependency it names may have been
+    // retired since (or, in a graph of the wrong branch, never existed
+    // here — a first cut merged CentOS Stream 9's rust-srpm-macros into
+    // rawhide's reading). Before a dependency is reported as needing
+    // attention, confirm the branch still has a package of that name;
+    // one that is gone is listed as such rather than counted.
+    let mut gone_cache: std::collections::BTreeMap<String, bool> =
+        std::collections::BTreeMap::new();
+    let fedrq_available = dependencies.is_empty()
+        || sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])
+            .is_ok();
+    if !fedrq_available {
+        eprintln!(
+            "note: fedrq is not installed, so dependencies the graph names cannot be checked \
+             against the branch; a retired one would still be reported"
+        );
+    }
+    for (pkg, (direct, transitive)) in &dependencies {
+        let mut facts: std::collections::BTreeMap<String, DepFacts> = direct
+            .iter()
+            .map(|(n, _)| n)
+            .chain(transitive.iter())
+            .filter_map(|d| DepFacts::from_report(&report, d).map(|f| (d.clone(), f)))
+            .collect();
+        if fedrq_available {
+            for (name, f) in facts.iter_mut() {
+                if !f.reasons().is_empty() {
+                    let gone = *gone_cache
+                        .entry(name.clone())
+                        .or_insert_with(|| !on_branch(name, &args.branch));
+                    f.gone = gone;
+                }
+            }
+        }
+        report.update(
+            pkg,
+            "dependency_health",
+            dependency_health::aggregate(direct, transitive, &facts),
+        );
+        ran += 1;
+    }
+
     if let Err(e) = report.save(&args.output) {
         eprintln!("error: {e}");
         return ExitCode::FAILURE;
@@ -371,6 +582,80 @@ async fn cmd_run(args: &RunArgs) -> ExitCode {
 }
 
 /// Print a human-readable per-package summary using each check's
+/// Whether `branch` still has a *source* package named `name`, per
+/// fedrq. The source is what the facts are about (dist-git ACLs, bugs),
+/// and a binary of that name may well live on under another source —
+/// rawhide's `rust-srpm-macros` binary is cargo-rpm-macros'. `true` on
+/// a fedrq failure: a package cannot be called gone on no evidence.
+fn on_branch(name: &str, branch: &str) -> bool {
+    let out = std::process::Command::new("fedrq")
+        .args(["pkgs", "-b", branch, "--src", "-F", "name", "--", name])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => !String::from_utf8_lossy(&o.stdout).trim().is_empty(),
+        _ => true,
+    }
+}
+
+/// How many days ago `path` was last written, when the file says.
+fn file_age_days(path: &str) -> Option<u64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    Some(modified.elapsed().ok()?.as_secs() / 86_400)
+}
+
+/// The checks to run per package: `(check id, variant)` pairs.
+type Work<'a> = Vec<(&'a str, Vec<(&'a str, Option<String>)>)>;
+
+/// Each package's dependencies off the graph, `depth` levels deep:
+/// the direct ones with their kind, then everything reached beyond
+/// them within the depth. Empty without a graph, and a package the
+/// graph never saw has no entry.
+fn sandogasa_closure_deps(
+    graph: Option<&sandogasa_closure::DepsGraph>,
+    packages: &[&str],
+    depth: usize,
+) -> std::collections::BTreeMap<String, (Vec<dependency_health::Direct>, Vec<String>)> {
+    let mut out = std::collections::BTreeMap::new();
+    let Some(graph) = graph else {
+        return out;
+    };
+    let deps = graph.dependencies_by_kind();
+    for pkg in packages {
+        let Some(direct) = deps.get(*pkg) else {
+            continue;
+        };
+        let mut seen: std::collections::BTreeSet<&str> =
+            direct.keys().map(String::as_str).collect();
+        seen.insert(pkg);
+        let mut frontier: Vec<&str> = direct.keys().map(String::as_str).collect();
+        let mut transitive: Vec<String> = Vec::new();
+        for _ in 1..depth.max(1) {
+            let mut next_frontier = Vec::new();
+            for cur in frontier {
+                for next in deps.get(cur).into_iter().flat_map(|m| m.keys()) {
+                    if seen.insert(next.as_str()) {
+                        transitive.push(next.clone());
+                        next_frontier.push(next.as_str());
+                    }
+                }
+            }
+            frontier = next_frontier;
+        }
+        transitive.sort();
+        out.insert(
+            pkg.to_string(),
+            (
+                direct
+                    .iter()
+                    .map(|(n, k)| (n.clone(), *k == sandogasa_closure::DepKind::Runtime))
+                    .collect(),
+                transitive,
+            ),
+        );
+    }
+    out
+}
+
 /// format_result override.
 fn print_summary(report: &HealthReport, reg: &sandogasa_pkg_health::Registry, packages: &[&str]) {
     println!("Health summary ({})\n", report.report.inventory);

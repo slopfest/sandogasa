@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### sandogasa-pkg-health: the health of a package's dependencies
+
+A package can be in good shape itself while a library it depends on is
+orphaned with a year-old security bug, and pkg-health had no way to say
+so: it checked the packages of an inventory and nothing around them.
+`run` now takes the dependency graph a `poi-tracker deps --graph` walk
+saved — `--graph`, or the closures of a workspace file with `-w
+kondo.toml`, whose `owned` inventory also becomes the default `-i` —
+reads each package's dependencies off it at the source level, runs
+`maintainer_count` and `bug_count` on the ones outside the inventory,
+and stores a `dependency_health` reading per package, apart from the
+package's own results.
+
+The reading aggregates by worst offender with attribution rather than
+by average, since one orphaned dependency among fifty healthy ones is
+the finding: the worst dependency and why (as a direct run-time, direct
+build-only or transitive dependency), counts with open security bugs,
+orphaned or single-maintained, and the age of open security bugs pooled
+over the bugs across the set as median and p90 with the n. Direct
+dependencies are read in full; deeper levels only to
+`--dependency-depth` (default 1), because through build dependencies
+nearly every package reaches the whole toolchain — about 930 sources
+even for lua-rpm-macros — within a few levels. `bug_count` now records
+`security_age_days`, the ages of the open security bugs, which the
+reading pools. A graph is a snapshot of the repositories, so `run`
+notes one older than a month and, before reporting a dependency as
+needing attention, asks fedrq whether the branch still has a package of
+that name; one that is gone — retired since the walk — is listed as
+such and not counted.
+
+Behind it: the workspace file's model moved from poi-tracker into
+sandogasa-inventory as `workspace` (poi-tracker keeps the CLI defaults
+it derives from it, as an extension trait; nothing changes for its
+users), and sandogasa-closure's `DepsGraph` gains `dependencies`,
+`dependencies_by_kind` with `DepKind::{Runtime, Build}` — a `src:`
+pseudo-requirer marks a build-only edge — and `load`.
+
 ### fedora-cve-triage: a rejected CVE record is a closed bug (breaking config)
 
 Three of fossil's SQLite bugs track CVE records NVD marks `Rejected` —

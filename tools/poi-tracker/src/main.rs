@@ -1073,6 +1073,7 @@ fn main() -> ExitCode {
     }
     let cli = sandogasa_cli::parse_with_defaults_and::<Cli>(env!("CARGO_PKG_NAME"), |m| {
         let explicit = m.get_one::<String>("workspace").map(String::as_str);
+        use workspace::WorkspaceDefaults as _;
         let Some((ws, path)) = workspace::Workspace::find(explicit)? else {
             return Ok(None);
         };

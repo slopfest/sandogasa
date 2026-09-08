@@ -58,6 +58,14 @@ sandogasa-pkg-health run -i inventory.toml -o health.toml \
 # Only refresh one package.
 sandogasa-pkg-health run -i inventory.toml -o health.toml \
     --all --package rust-arrow
+
+# From a poi-tracker workspace: its `owned` inventory, and its closures'
+# saved dependency graphs feed the dependency_health check.
+sandogasa-pkg-health run -w kondo.toml -o health.toml --cheap
+
+# The same with an explicit graph, two levels of dependencies deep.
+sandogasa-pkg-health run -i inventory.toml -o health.toml --cheap \
+    --graph fedora-build-deps-graph.json --dependency-depth 2
 ```
 
 ## Checks
@@ -84,6 +92,57 @@ sandogasa-pkg-health run -i inventory.toml -o health.toml \
   available (`sudo dnf install koji`; queries are anonymous — no
   credentials involved) and degrades to the spec-only verdict
   with a startup warning when it's missing
+- `dependency_health` (Cheap) — the health of what a package depends
+  on, from a saved dependency graph; see below. Computed after the
+  other checks rather than run on its own, and only when a graph is
+  given (`--graph`, or the closures of a `-w` workspace)
+
+### Dependency health
+
+A package can be in good shape itself while a library it depends on is
+orphaned with a year-old security bug, and that is the package's
+problem too. Given a graph saved by `poi-tracker deps --graph` — passed
+with `--graph`, or found through the closures of a workspace file
+(`-w kondo.toml`, which also supplies the `owned` inventory as the
+default `-i`) — `run` reads each package's dependencies off it at the
+source level, runs `maintainer_count` and `bug_count` (rawhide) on the
+dependencies that are not in the inventory, and stores a
+`dependency_health` reading per package, kept apart from the package's
+own results so the report can say "the package is fine, its
+dependencies are not".
+
+The reading aggregates by worst offender with attribution, not by
+average — one orphaned dependency among fifty healthy ones is the
+finding — and names the fix's shape: the worst dependency and why, as
+a direct run-time dependency, a direct build-only one, or a transitive
+one; counts of dependencies with open security bugs, orphaned, or down
+to a single maintainer; and the age of open security bugs pooled over
+the bugs across the set, median and p90 with the n. Direct
+dependencies are read in full. Deeper levels are walked only to
+`--dependency-depth` (default 1, the direct ones): through build
+dependencies nearly every package reaches the whole toolchain within a
+few levels, and a dependency's own dependency problems belong in its
+row rather than up every path.
+
+```
+rust-radix-heap:
+  dependency_health: 34 (8 direct, 26 transitive)
+    worst: rust-srpm-macros  orphaned  [transitive]
+    6 with open security bugs, 1 orphaned
+    security bug age across deps: p50 35 d, p90 70 d (n=37)
+    transitive: 7 need attention (curl, gawk, glibc, libssh2, openssl, rust-srpm-macros, sqlite)
+  maintainer_count: 10 effective (1 direct via rust-sig)
+```
+
+The dependencies' own results are stored in the report too, under
+their names, so `show` lists them and a later run reuses them under
+`--max-age`. A dependency the graph names but no check has reached yet
+is counted as "not yet checked". A graph is a snapshot of the
+repositories: `run` says when one is more than a month old, and before
+a dependency is reported as needing attention it asks fedrq whether the
+branch still has a package of that name — one that is gone (retired
+since the walk, or a name from another branch's repositories) is
+listed as such and not counted.
 
 ### Show a previously-generated report
 

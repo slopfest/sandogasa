@@ -110,6 +110,64 @@ impl DepsGraph {
         out
     }
 
+    /// Dependency sources per source — the inverse of
+    /// [`dependents`](Self::dependents): for every capability, each
+    /// requirer's source gains every provider's source, self-edges
+    /// dropped. A package's direct dependencies, at the source level.
+    pub fn dependencies(&self) -> BTreeMap<String, BTreeSet<String>> {
+        let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (capability, providers) in &self.providers {
+            for requirer in self.requirers.get(capability).into_iter().flatten() {
+                let source = self.binary_sources.get(requirer).unwrap_or(requirer);
+                for p in providers {
+                    if &p.source != source {
+                        out.entry(source.clone())
+                            .or_default()
+                            .insert(p.source.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Dependency sources per source with how each is needed: at run
+    /// time (a binary of the source requires it) or only to build (the
+    /// `src:` pseudo-requirer carrying the source's BuildRequires). A
+    /// dependency needed both ways is `Runtime`.
+    pub fn dependencies_by_kind(&self) -> BTreeMap<String, BTreeMap<String, DepKind>> {
+        let mut out: BTreeMap<String, BTreeMap<String, DepKind>> = BTreeMap::new();
+        for (capability, providers) in &self.providers {
+            for requirer in self.requirers.get(capability).into_iter().flatten() {
+                let kind = if requirer.starts_with("src:") {
+                    DepKind::Build
+                } else {
+                    DepKind::Runtime
+                };
+                let source = self.binary_sources.get(requirer).unwrap_or(requirer);
+                for p in providers {
+                    if &p.source != source {
+                        let slot = out
+                            .entry(source.clone())
+                            .or_default()
+                            .entry(p.source.clone())
+                            .or_insert(kind);
+                        if kind == DepKind::Runtime {
+                            *slot = DepKind::Runtime;
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Read a graph a `deps --graph` walk saved.
+    pub fn load(path: &str) -> Result<DepsGraph, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("reading {path}: {e}"))?;
+        serde_json::from_slice(&bytes).map_err(|e| format!("parsing {path}: {e}"))
+    }
+
     /// Entity → the capabilities it required, per the recorded edges:
     /// the inverse of `requirers`. For a `src:<name>` entity that is a
     /// source's BuildRequires, complete whenever the entity exists
@@ -295,6 +353,15 @@ impl<Q: PkgQuery> PkgQuery for GraphBackedQuery<'_, Q> {
 }
 
 /// One provider of a capability, as the graph records it.
+/// How a source needs a dependency, per the graph's edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
+pub enum DepKind {
+    /// A binary of the source requires it: it ships with the package.
+    Runtime,
+    /// Only the source's BuildRequires name it.
+    Build,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
 pub struct GraphProvider {
     pub binary: String,
@@ -741,6 +808,54 @@ impl<Q: PkgQuery> engine::Policy for DepsPolicy<'_, Q> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dependencies_are_the_inverse_of_dependents_with_their_kind() {
+        let mut g = DepsGraph::default();
+        // app (binary `app`) requires libfoo's capability at run time;
+        // app's BuildRequires (`src:app`) name libbar; libbar also
+        // requires libfoo, so libfoo is a run-time dependency of both.
+        for (b, s) in [
+            ("app", "app"),
+            ("src:app", "app"),
+            ("libfoo", "libfoo"),
+            ("libbar", "libbar"),
+        ] {
+            g.binary_sources.insert(b.into(), s.into());
+        }
+        g.requirers.insert(
+            "libfoo.so".into(),
+            ["app".to_string(), "libbar".to_string()].into(),
+        );
+        g.requirers
+            .insert("bar-devel".into(), ["src:app".to_string()].into());
+        let prov = |binary: &str, source: &str| GraphProvider {
+            binary: binary.into(),
+            source: source.into(),
+            repoid: "rawhide".into(),
+        };
+        g.providers
+            .insert("libfoo.so".into(), [prov("libfoo", "libfoo")].into());
+        g.providers
+            .insert("bar-devel".into(), [prov("libbar-devel", "libbar")].into());
+
+        let deps = g.dependencies();
+        assert_eq!(
+            deps["app"],
+            ["libbar".to_string(), "libfoo".to_string()].into()
+        );
+        assert_eq!(deps["libbar"], ["libfoo".to_string()].into());
+        assert!(!deps.contains_key("libfoo"));
+        let kinds = g.dependencies_by_kind();
+        assert_eq!(kinds["app"]["libfoo"], DepKind::Runtime);
+        assert_eq!(kinds["app"]["libbar"], DepKind::Build);
+        // The two directions agree.
+        let dependents = g.dependents();
+        assert_eq!(
+            dependents["libfoo"],
+            ["app".to_string(), "libbar".to_string()].into()
+        );
+    }
 
     /// Canned query: `PkgInfo` can only be built through serde (the
     /// struct is `#[non_exhaustive]`), which doubles as a check that

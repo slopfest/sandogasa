@@ -2224,6 +2224,7 @@ dependencies = [
  "sandogasa-bugzilla",
  "sandogasa-build",
  "sandogasa-cli",
+ "sandogasa-closure",
  "sandogasa-config",
  "sandogasa-distgit",
  "sandogasa-inventory",

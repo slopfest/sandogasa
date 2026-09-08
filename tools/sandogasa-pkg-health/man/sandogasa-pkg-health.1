@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-pkg-health 1 2026-09-07 "sandogasa 0.23.0" "Sandogasa Manual"
+.TH sandogasa-pkg-health 1 2026-09-08 "sandogasa 0.23.0" "Sandogasa Manual"
 .SH NAME
 sandogasa\-pkg\-health \- Audit package health across a sandogasa inventory
 .SH SYNOPSIS
@@ -23,12 +23,24 @@ List registered health checks and their cost tiers
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS sandogasa-pkg-health run
-\fBsandogasa\-pkg\-health run\fR <\fB\-i\fR|\fB\-\-inventory\fR> <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-check\fR] [\fB\-\-cheap\fR] [\fB\-\-medium\fR] [\fB\-\-expensive\fR] [\fB\-\-all\fR] [\fB\-\-max\-age\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-\-fedora\-version\fR] [\fB\-\-epel\-version\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBsandogasa\-pkg\-health run\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-branch\fR] [\fB\-\-graph\fR] [\fB\-\-dependency\-depth\fR] <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-check\fR] [\fB\-\-cheap\fR] [\fB\-\-medium\fR] [\fB\-\-expensive\fR] [\fB\-\-all\fR] [\fB\-\-max\-age\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-\-fedora\-version\fR] [\fB\-\-epel\-version\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Run health checks against an inventory
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<PATH>\fR
-Path to inventory TOML file
+Path to inventory TOML file (default: the workspace\*(Aqs `owned` inventory when \-w is given)
+.TP
+\fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
+A poi\-tracker workspace file (kondo.toml): its `owned` inventory is the default \-i, and the saved graphs of its closures for \-\-branch feed the dependency_health check
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR [default: rawhide]
+The branch whose closures \-w reads graphs from. Graphs of different branches are never merged: a binary\*(Aqs source package differs between them (CentOS Stream 9 ships rust\-srpm\-macros as its own package; rawhide has it in cargo\-rpm\-macros)
+.TP
+\fB\-\-graph\fR \fI<PATH>\fR
+A dependency graph saved by `poi\-tracker deps \-\-graph` (repeatable); with one, each package\*(Aqs dependencies are checked too and dependency_health is computed
+.TP
+\fB\-\-dependency\-depth\fR \fI<N>\fR [default: 1]
+How many levels of dependencies to walk for dependency_health: 1 is the direct ones. Through build dependencies nearly every package reaches the whole toolchain within a few levels
 .TP
 \fB\-o\fR, \fB\-\-output\fR \fI<PATH>\fR
 Path to report TOML file (read if exists, written after run)

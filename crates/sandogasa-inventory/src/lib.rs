@@ -11,6 +11,7 @@ pub mod content_resolver;
 pub mod hs_relmon;
 pub mod import_json;
 mod model;
+pub mod workspace;
 
 pub use model::{Inventory, InventoryMeta, Package, Priority, WorkloadMeta};
 

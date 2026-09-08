@@ -63,15 +63,23 @@ impl HealthCheck for BugCount {
             .map_err(|e| format!("Bugzilla search failed: {e}"))?;
 
         let mut by_kind: BTreeMap<&str, u64> = BTreeMap::new();
+        // How long each security bug has been open, for the dependency
+        // reading's median and p90 across a package's dependencies.
+        let mut security_age_days: Vec<i64> = Vec::new();
+        let now = chrono::Utc::now();
         for bug in &bugs {
             let kind = classify(bug, trackers);
             *by_kind.entry(kind.as_str()).or_insert(0) += 1;
+            if kind.as_str() == "security" {
+                security_age_days.push((now - bug.creation_time).num_days().max(0));
+            }
         }
 
         Ok(CheckResult {
             data: serde_json::json!({
                 "open": bugs.len(),
                 "by_kind": by_kind,
+                "security_age_days": security_age_days,
             }),
         })
     }
