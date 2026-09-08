@@ -46,6 +46,13 @@ pub trait HealthCheck: Send + Sync {
     /// runs this check.
     fn cost_tier(&self) -> CostTier;
 
+    /// Whether the check reads the workspace's facts (`-w`) rather
+    /// than a service alone; `run` skips such checks when no
+    /// workspace was given.
+    fn needs_workspace(&self) -> bool {
+        false
+    }
+
     /// Return the list of variants to run for this check given the
     /// current context. Default: a single `None` variant (check is
     /// not parametrized). Variant-aware checks return e.g.

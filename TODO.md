@@ -352,12 +352,9 @@ per-package entries, reused under `--max-age`) rather than as graph
 annotations — the report is already the store other runs read, and the
 graph stays a description of edges.
 
-Still to do from the kondo observations: a `justified` check (the
-package is in some essential inventory), `dependents` (what carries
-it, devel-only edges marked), `retired-but-kept`, and the
-python-usort shape (orphaned with a lingering ACL of yours). Each is
-offline given the workspace and the graph; each is a small check now
-that pkg-health reads both.
+Done 2026-09-08 as well: `justified`, `dependents`, `retired_kept` and
+`orphan_acl`, the kondo observations as standing checks, skipped when
+`run` has no workspace.
 
 Then re-evaluate GitHub #6 (hattrack per-SIG activity) and #8 (openSUSE
 in sandogasa-report), both commented to that effect on 2026-09-07. (#4,

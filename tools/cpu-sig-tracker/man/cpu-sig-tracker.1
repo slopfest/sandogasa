@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cpu-sig-tracker 1 2026-09-07 "sandogasa 0.23.0" "Sandogasa Manual"
+.TH cpu-sig-tracker 1 2026-09-08 "sandogasa 0.23.0" "Sandogasa Manual"
 .SH NAME
 cpu\-sig\-tracker \- Track CentOS Proposed Updates (CPU) SIG package state across Koji, GitLab, and JIRA
 .SH SYNOPSIS
@@ -23,7 +23,7 @@ Set up GitLab and JIRA authentication tokens
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker dump-inventory
-\fBcpu\-sig\-tracker dump\-inventory\fR [\fB\-r\fR|\fB\-\-release\fR] <\fB\-o\fR|\fB\-\-output\fR> [\fB\-\-koji\-profile\fR] [\fB\-\-prune\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBcpu\-sig\-tracker dump\-inventory\fR [\fB\-r\fR|\fB\-\-release\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-prune\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-o\fR|\fB\-\-output\fR> 
 .PP
 Enumerate packages in a proposed_updates Koji tag and emit a sandogasa\-inventory TOML file
 .TP
@@ -164,7 +164,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker untag
-\fBcpu\-sig\-tracker untag\fR <\fB\-\-release\fR> [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR> 
+\fBcpu\-sig\-tracker untag\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-release\fR> <\fITARGET\fR> 
 .PP
 Untag a proposed_updates build from its CBS \-release tag after verifying the JIRA is resolved
 .TP

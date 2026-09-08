@@ -55,5 +55,9 @@ pub fn default_registry() -> Registry {
     reg.register(Box::new(crate::checks::bug_count::BugCount));
     reg.register(Box::new(crate::checks::pending_update::PendingUpdate));
     reg.register(Box::new(crate::checks::dependency_health::DependencyHealth));
+    reg.register(Box::new(crate::checks::justified::Justified));
+    reg.register(Box::new(crate::checks::dependents::Dependents));
+    reg.register(Box::new(crate::checks::retired_kept::RetiredKept));
+    reg.register(Box::new(crate::checks::orphan_acl::OrphanAcl));
     reg
 }

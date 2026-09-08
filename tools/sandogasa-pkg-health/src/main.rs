@@ -361,6 +361,19 @@ async fn cmd_run(args: &RunArgs) -> ExitCode {
         args.checks.iter().map(|s| s.as_str()).collect()
     };
 
+    // The checks that read the workspace have nothing to read without
+    // one; leave them out rather than fail each package on them.
+    let selected_ids: Vec<&str> = selected_ids
+        .into_iter()
+        .filter(|id| {
+            let needs = reg.get(id).is_some_and(|c| c.needs_workspace());
+            if needs && workspace.is_none() && args.verbose {
+                eprintln!("[pkg-health] skipping {id}: needs a workspace (-w)");
+            }
+            !needs || workspace.is_some()
+        })
+        .collect();
+
     if args.verbose {
         eprintln!("[pkg-health] running checks: {}", selected_ids.join(", "));
     }
@@ -418,7 +431,37 @@ async fn cmd_run(args: &RunArgs) -> ExitCode {
     let fedora_versions = dedup_versions(&args.fedora_versions, "fedora");
     let epel_versions = dedup_versions(&args.epel_versions, "epel");
 
-    let ctx = Context::new(&fedora_versions, &epel_versions, args.verbose).await;
+    let mut ctx = Context::new(&fedora_versions, &epel_versions, args.verbose).await;
+    // What the workspace and its graph say, for the checks that read
+    // them: the essential inventories' packages, the retired ones kept
+    // knowingly, who depends on whom.
+    if let Some(ws) = &workspace {
+        let mut facts = sandogasa_pkg_health::context::WorkspaceFacts {
+            user: ws.user.clone(),
+            inventory: inventory.package.iter().map(|p| p.name.clone()).collect(),
+            ..Default::default()
+        };
+        let names = |path: &str| -> Result<Vec<String>, String> {
+            sandogasa_inventory::load(path)
+                .map(|inv| inv.package.into_iter().map(|p| p.name).collect())
+        };
+        for path in ws.essential() {
+            match names(&ws.resolve(&path)) {
+                Ok(n) => facts.essential.extend(n),
+                Err(e) => eprintln!("warning: {e}"),
+            }
+        }
+        for path in &ws.retired {
+            match names(&ws.resolve(path)) {
+                Ok(n) => facts.retired_kept.extend(n),
+                Err(e) => eprintln!("warning: {e}"),
+            }
+        }
+        if let Some(g) = &graph {
+            facts.add_graph(g);
+        }
+        ctx.workspace = Some(std::sync::Arc::new(facts));
+    }
 
     // The work: every selected check over the inventory's packages —
     // dependency_health excepted, it is computed afterwards — and the

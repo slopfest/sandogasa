@@ -97,6 +97,26 @@ sandogasa-pkg-health run -i inventory.toml -o health.toml --cheap \
   other checks rather than run on its own, and only when a graph is
   given (`--graph`, or the closures of a `-w` workspace)
 
+Four checks read the workspace file (`-w kondo.toml`) rather than a
+service, and are skipped when no workspace is given; they are the
+kondo maintenance loop's questions asked as standing facts:
+
+- `justified` (Cheap) — whether any essential inventory of the
+  workspace names the package: a keep, a walked closure, a derived
+  dependency inventory, a retired-but-kept list. One that none does is
+  one `poi-tracker kondo` would offer to cull
+- `dependents` (Cheap) — who depends on the package, off the branch's
+  graph: a leaf nothing needs, one carried by other inventory packages,
+  one needed only from outside the inventory; a package whose binaries
+  are all `-devel` is marked `[devel-only]`, the library shape that is
+  almost always a mere dependency
+- `retired_kept` (Cheap) — retired in rawhide (dist-git says) yet kept
+  as essential outside a `retired` inventory: a keep nobody revisited,
+  which the walk will never find
+- `orphan_acl` (Cheap) — orphaned in dist-git while the workspace's
+  user still holds an ACL on it, the shape that keeps a package you gave
+  up on your lists; adopt it back or drop the ACL
+
 ### Dependency health
 
 A package can be in good shape itself while a library it depends on is

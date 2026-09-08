@@ -14,6 +14,20 @@ optional ones in the synopsis. The committed pages are regenerated at
 release time, as the man-page test tolerates formatting drift between
 clap_mangen versions by design.
 
+### sandogasa-pkg-health: the kondo questions as standing checks
+
+Kondo asks four questions once, at cull time, and pkg-health could not
+ask them at all: whether a package is kept on purpose, who depends on
+it, whether it is retired yet still listed as essential, and whether it
+is orphaned while you still hold an ACL on it — the python-usort shape
+that kept a given-up package on the owned inventory. Given `-w`, four
+new checks answer them as facts the report carries over time:
+`justified` (some essential inventory names it), `dependents` (leaf,
+carried by inventory packages, or needed only from outside, with the
+`[devel-only]` library marker), `retired_kept` (retired in rawhide but
+kept outside a `retired` inventory) and `orphan_acl`. Checks that need
+the workspace are skipped, not failed, when `run` has none.
+
 ### sandogasa-pkg-health: the health of a package's dependencies
 
 A package can be in good shape itself while a library it depends on is

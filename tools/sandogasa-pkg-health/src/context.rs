@@ -2,7 +2,7 @@
 
 //! Shared context passed to each HealthCheck.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 use sandogasa_bugclass::bugzilla::TrackerIds;
@@ -19,6 +19,53 @@ const BUGZILLA_URL: &str = "https://bugzilla.redhat.com";
 /// unavailable and dependent checks degrade (with a warning at
 /// startup, not per package).
 pub type KojiLookup = dyn Fn(&str, &str) -> Result<Option<String>, String> + Send + Sync;
+
+/// What a workspace file (`-w kondo.toml`) and its branch's graph say
+/// about the packages, for the checks that read them rather than a
+/// service: which packages are kept on purpose, who depends on whom.
+#[derive(Debug, Default)]
+pub struct WorkspaceFacts {
+    /// The dist-git user the workspace routes maintenance through.
+    pub user: Option<String>,
+    /// Every package an essential inventory names — keeps, closures,
+    /// derived and retired alike: the ones kept on purpose.
+    pub essential: BTreeSet<String>,
+    /// The packages of the `retired` inventories: retired in rawhide
+    /// and kept knowingly for older releases.
+    pub retired_kept: BTreeSet<String>,
+    /// The packages of the inventory being checked.
+    pub inventory: BTreeSet<String>,
+    /// Source → the sources that depend on it, off the branch's graph.
+    pub dependents: BTreeMap<String, BTreeSet<String>>,
+    /// Source → its binary packages, as the graph saw them.
+    pub binaries: BTreeMap<String, Vec<String>>,
+    /// Every source the graph knows, so "no dependents" can be told
+    /// from "never walked".
+    pub graph_known: BTreeSet<String>,
+}
+
+impl WorkspaceFacts {
+    /// Fold a graph in: dependents, binaries and the sources known.
+    pub fn add_graph(&mut self, graph: &sandogasa_closure::DepsGraph) {
+        for (source, deps) in graph.dependents() {
+            self.dependents.entry(source).or_default().extend(deps);
+        }
+        for (binary, source) in &graph.binary_sources {
+            self.graph_known.insert(source.clone());
+            if !binary.starts_with("src:") {
+                self.binaries
+                    .entry(source.clone())
+                    .or_default()
+                    .push(binary.clone());
+            }
+        }
+        self.graph_known.extend(graph.roots.iter().cloned());
+        for b in self.binaries.values_mut() {
+            b.sort();
+            b.dedup();
+        }
+    }
+}
 
 /// Context bundles API clients and a tokio runtime handle so
 /// checks can reuse them across packages without re-initializing.
@@ -47,6 +94,9 @@ pub struct Context {
     /// Koji tag lookup for shipped-build verification, or `None`
     /// when the koji CLI is unavailable.
     pub koji: Option<Arc<KojiLookup>>,
+    /// The workspace's facts, when `run` was given `-w`; the checks
+    /// that need them are skipped otherwise.
+    pub workspace: Option<Arc<WorkspaceFacts>>,
 }
 
 impl Context {
@@ -101,6 +151,7 @@ impl Context {
             epel_versions: epel_versions.to_vec(),
             trackers,
             koji,
+            workspace: None,
         }
     }
 
@@ -123,6 +174,7 @@ impl Context {
             epel_versions: vec![],
             trackers,
             koji,
+            workspace: None,
         }
     }
 
