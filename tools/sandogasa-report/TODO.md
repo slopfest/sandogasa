@@ -65,3 +65,25 @@ touched repo.
 See DEVELOPMENT.md for the original write-up. Still applies —
 both forges now hit external APIs sequentially and a late
 failure wastes earlier successful fetches.
+
+## openSUSE: OBS, Pagure and Mailman sources (2026-09-08)
+
+GitHub #8 asks for openSUSE. Bugzilla and Gitea (src.opensuse.org) landed
+token-free; `README.openSUSE.md` documents the three that did not, and
+why:
+
+- **OBS** (build.opensuse.org): every request query on api.opensuse.org
+  is 401 anonymously, so this needs an account credential and a new
+  `sandogasa-obs` crate. Count submit requests created / accepted /
+  reviewed in the window; collect the credential in `config` like the
+  forge tokens. Nobody on the project has an openSUSE account, so test
+  against a volunteer's.
+- **Pagure** (code.opensuse.org): the client exists (`sandogasa-distgit`
+  with `with_base_url`), but the site's proof-of-work challenge answers
+  API calls with 403 + HTML. Nothing to do until the API is exempt.
+- **Mailman** (lists.opensuse.org, and lists.fedoraproject.org with it):
+  HyperKitty's per-list `emails/` endpoint took over two minutes on
+  lists.opensuse.org (threads: 33 s; Fedora's: 0.4 s). `sandogasa-mailman`
+  already takes a base URL; what is missing is a cheap way to find one
+  sender's posts — `find_sender_id` scans list pages — or a faster
+  archive. Skipped for now at the user's request.

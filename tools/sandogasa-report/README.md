@@ -1,7 +1,8 @@
 # sandogasa-report
 
 Activity reporting for Fedora, EPEL, CentOS SIG and openSUSE packaging
-work.
+work. openSUSE's services, what works there and what each needs, are
+in [README.openSUSE.md](README.openSUSE.md).
 
 Generates Markdown or JSON reports summarizing a contributor's
 packaging activity across multiple systems:

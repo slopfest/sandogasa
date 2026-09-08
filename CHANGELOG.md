@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### sandogasa-report: an openSUSE setup guide
+
+`tools/sandogasa-report/README.openSUSE.md` walks through reporting on
+openSUSE: the one domain that carries bugzilla.opensuse.org and
+src.opensuse.org, the identities to put on the profile, what each
+section means there (closed is `RESOLVED`; reviews happen in OBS, not
+Bugzilla), and where the other three services stand — OBS needs an
+account, code.opensuse.org's API is behind a proof-of-work challenge,
+and lists.opensuse.org's HyperKitty answers too slowly to scan.
+
 ### sandogasa-report: a Forgejo domain works without a token where the API is public
 
 A Forgejo domain refused to run without a token, though the Gitea at
