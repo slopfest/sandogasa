@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### sandogasa-hattrack group: a FAS group's members through last-seen
+
+"Has the Btrfs SIG been responding?" (GitHub #6) had to be asked one
+member at a time, each with their own `last-seen` invocation and the
+flags to go with it. `group <name>` reads the group's members from FAS
+and runs `last-seen` for each, listing them most recent first with
+their local time, so both "is the SIG responsive" and "who is around
+right now" read off one table. Each member costs a round of service
+queries, so a group FAS counts as larger than `--max-members` (25) is
+refused after the first page of members rather than looked up by
+accident (`packager` has thousands), and Mailman — an archive walk per
+member — is skipped unless asked for. `--json` returns every member's
+summary. sandogasa-fasjson gains `group_members` with its paging
+(`FasjsonPage`, `PageInfo`).
+
 ### clap_mangen 0.3
 
 The workspace requires clap_mangen 0.3 (`features = ["env"]`), following

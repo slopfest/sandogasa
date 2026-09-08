@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-use crate::models::{FasUser, FasjsonResponse};
+use crate::models::{FasUser, FasjsonPage, FasjsonResponse};
 
 const FASJSON_BASE: &str = "https://fasjson.fedoraproject.org";
 
@@ -68,8 +68,55 @@ impl FasjsonClient {
     /// that avoids a build-time dependency on system krb5 libraries.
     pub fn user(&self, username: &str) -> Result<FasUser, Box<dyn std::error::Error>> {
         let url = format!("{}/v1/users/{}/", self.base_url, username);
+        let resp: FasjsonResponse<FasUser> = self.get_json(&url)?;
+        Ok(resp.result)
+    }
+
+    /// Every member of the FAS group `group`, walking FASJSON's pages.
+    /// Membership is what FAS says today; sponsors are members too.
+    /// With `max`, a group FAS counts as larger is refused after the
+    /// first page, before the rest is fetched — the caller's cap on
+    /// how many people it means to look up.
+    pub fn group_members(
+        &self,
+        group: &str,
+        max: Option<usize>,
+    ) -> Result<Vec<FasUser>, Box<dyn std::error::Error>> {
+        let mut members = Vec::new();
+        let mut page_number = 1;
+        loop {
+            let url = format!(
+                "{}/v1/groups/{}/members/?page_size=100&page_number={page_number}",
+                self.base_url, group
+            );
+            let page: FasjsonPage<FasUser> = self.get_json(&url)?;
+            if let (Some(max), Some(p)) = (max, &page.page)
+                && p.total_results as usize > max
+            {
+                return Err(format!(
+                    "{group} has {} members and the cap is {max}; raise --max-members if you mean \
+                     to look up every one of them",
+                    p.total_results
+                )
+                .into());
+            }
+            members.extend(page.result);
+            match page.page {
+                Some(p) if p.page_number < p.total_pages => page_number = p.page_number + 1,
+                _ => break,
+            }
+        }
+        Ok(members)
+    }
+
+    /// GET a FASJSON URL through curl (Kerberos rides on `--negotiate`)
+    /// and parse the JSON.
+    fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> Result<T, Box<dyn std::error::Error>> {
         let output = Command::new("curl")
-            .args(curl_args(&url))
+            .args(curl_args(url))
             .output()
             .map_err(|e| format!("failed to run curl: {e}"))?;
 
@@ -81,16 +128,26 @@ impl FasjsonClient {
             return Err(format!("curl failed (exit {}): {}", output.status, stderr.trim()).into());
         }
 
-        let resp: FasjsonResponse<FasUser> = serde_json::from_slice(&output.stdout)
-            .map_err(|e| format!("failed to parse FASJSON response: {e}"))?;
-
-        Ok(resp.result)
+        serde_json::from_slice(&output.stdout)
+            .map_err(|e| format!("failed to parse FASJSON response: {e}").into())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_members_page_parses_with_its_paging_block() {
+        let json = r#"{"result": [{"username": "decathorpe"}, {"username": "zbyszek"}],
+            "page": {"total_results": 10, "page_size": 2, "page_number": 1, "total_pages": 5,
+                     "next_page": "https://fasjson.fedoraproject.org/v1/groups/rust-sig/members/?page_size=2&page_number=2"}}"#;
+        let page: FasjsonPage<FasUser> = serde_json::from_str(json).unwrap();
+        assert_eq!(page.result.len(), 2);
+        assert_eq!(page.result[1].username, "zbyszek");
+        let p = page.page.unwrap();
+        assert_eq!((p.page_number, p.total_pages, p.total_results), (1, 5, 10));
+    }
 
     #[test]
     fn curl_is_told_who_is_calling() {

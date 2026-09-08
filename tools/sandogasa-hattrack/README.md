@@ -37,6 +37,8 @@ Last seen: salimma
 - `distgit` — dist-git activity, PRs filed, and PRs awaiting review
 - `discourse` — Discourse profile and activity
 - `forge` — Forgejo activity per repository, e.g. in the FESCo tracker
+- `group` — last activity of every member of a FAS group, most recent
+  first, with a cap on group size
 - `last-seen` — summary of last activity across all services, including
   Discourse custom status and expiration
 - `mailman` — mailing list posts via HyperKitty
@@ -93,6 +95,39 @@ Forge: salimma (last 60 days)
 `--meeting fesco`, the last attended meeting of that topic with a
 one-year attendance count (and the since-first-seen count when that
 differs); `--matrix` applies there too.
+
+### A whole group at a glance
+
+"Has the Btrfs SIG been responding?" and "who in the SIG is around right
+now?" are the same question asked of every member, so `group` runs
+`last-seen` for each member of a FAS group and lists them most recent
+first, each with their local time:
+
+```
+$ sandogasa-hattrack group rust-sig
+Group: rust-sig (10 members)
+
+  music       Dist-git       2026-09-08T23:59:59+00:00 (today)
+              local: 2026-09-08 11:08:04 BST (Tue — weekday)
+  decathorpe  Dist-git       2026-09-07T23:59:59+00:00 (10 hours ago)
+              local: 2026-09-08 12:08:04 CEST (Tue — weekday)
+  ngompa      Forge          2026-09-07T16:49:21+00:00 (17 hours ago)
+              local: 2026-09-08 06:08:04 EDT (Tue — weekday)
+  …
+  blinxen     Bodhi          2026-07-09T20:19:35+00:00 (2 months ago)
+              local: 2026-09-08 12:08:04 CEST (Tue — weekday)
+```
+
+Ten members took about three minutes, Mailman skipped.
+
+Membership is FAS's, read live, so the group's Matrix IDs, emails and
+time zones come along without flags. Each member costs a round of
+service queries, so a group larger than `--max-members` (25) is refused
+before anything is fetched — `packager` has thousands — and Mailman is
+skipped unless asked for with `--only`, its archive walk per member
+being what would dominate the run. `--skip`, `--only`, `--meeting` and
+`--repo` mean what they mean for `last-seen`; `--json` returns every
+member's `last-seen` summary under `members`.
 
 ### Email discovery
 

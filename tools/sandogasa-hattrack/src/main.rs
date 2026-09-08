@@ -176,6 +176,43 @@ enum Command {
         url: String,
     },
 
+    /// Last activity of every member of a FAS group, most recent first
+    Group {
+        /// FAS group name (e.g. rust-sig)
+        group: String,
+
+        /// Refuse a group with more members than this: each member
+        /// costs a round of service queries. Raise it on purpose.
+        #[arg(long, default_value = "25", value_name = "N")]
+        max_members: usize,
+
+        /// Skip these services (comma-separated, repeatable). Mailman
+        /// is skipped unless asked for: its archive walk per member
+        /// would dominate the run.
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            conflicts_with = "only",
+            default_value = "mailman"
+        )]
+        skip: Vec<Service>,
+
+        /// Run only these services (comma-separated, repeatable).
+        #[arg(long, value_enum, value_delimiter = ',', conflicts_with = "skip")]
+        only: Vec<Service>,
+
+        /// Also report each member's last attended meetbot meeting
+        /// with this topic (e.g. fesco)
+        #[arg(long, value_name = "TOPIC")]
+        meeting: Option<String>,
+
+        /// Count Forgejo activity in these repositories only
+        /// (`owner/repo`); repeatable
+        #[arg(long, value_name = "OWNER/REPO")]
+        repo: Vec<String>,
+    },
+
     /// Summary of a contributor's last activity across all services
     LastSeen {
         /// FAS username to look up
@@ -397,6 +434,30 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             days,
             url,
         } => forge::cmd_forge(&username, &repo, days, &url, json, now).await,
+        Command::Group {
+            group,
+            max_members,
+            skip,
+            only,
+            meeting,
+            repo,
+        } => {
+            cmd_group(
+                &group,
+                max_members,
+                json,
+                color,
+                working_hours,
+                holidays_enabled,
+                holidays_refresh,
+                now,
+                &skip,
+                &only,
+                meeting.as_deref(),
+                &repo,
+            )
+            .await
+        }
         Command::LastSeen {
             username,
             email,
@@ -1209,15 +1270,14 @@ struct ServiceLastSeen {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn cmd_last_seen(
+/// Everything `last-seen` learns about one user, without printing it:
+/// the FAS lookup, every enabled service, the local-time entries.
+async fn gather_last_seen(
     username: &str,
     email_overrides: &[String],
     no_fas: bool,
     lists: &[String],
     max_pages: u32,
-    json: bool,
-    color: bool,
-    working_hours: (u8, u8),
     holidays_enabled: bool,
     holidays_refresh: bool,
     now: DateTime<Utc>,
@@ -1226,7 +1286,7 @@ async fn cmd_last_seen(
     meeting: Option<&str>,
     forge_repos: &[String],
     matrix: &[String],
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<LastSeenSummary, Box<dyn std::error::Error>> {
     let fas = resolve_fas(Some(username), email_overrides, no_fas)?;
     let emails = fas.emails.clone();
     let fas_tz = fas
@@ -1307,11 +1367,55 @@ async fn cmd_last_seen(
         local_times: entries,
         services,
     };
+    Ok(summary)
+}
 
+#[allow(clippy::too_many_arguments)]
+async fn cmd_last_seen(
+    username: &str,
+    email_overrides: &[String],
+    no_fas: bool,
+    lists: &[String],
+    max_pages: u32,
+    json: bool,
+    color: bool,
+    working_hours: (u8, u8),
+    holidays_enabled: bool,
+    holidays_refresh: bool,
+    now: DateTime<Utc>,
+    skip: &[Service],
+    only: &[Service],
+    meeting: Option<&str>,
+    forge_repos: &[String],
+    matrix: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let summary = gather_last_seen(
+        username,
+        email_overrides,
+        no_fas,
+        lists,
+        max_pages,
+        holidays_enabled,
+        holidays_refresh,
+        now,
+        skip,
+        only,
+        meeting,
+        forge_repos,
+        matrix,
+    )
+    .await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&summary)?);
         return Ok(());
     }
+    print_last_seen(&summary, color, working_hours);
+    Ok(())
+}
+
+/// The human-readable `last-seen` report.
+fn print_last_seen(summary: &LastSeenSummary, color: bool, working_hours: (u8, u8)) {
+    let username = &summary.username;
 
     println!("Last seen: {username}\n");
     let show_source_label = summary.local_times.len() > 1;
@@ -1369,7 +1473,148 @@ async fn cmd_last_seen(
             println!("  {:<14} no activity found", svc.service);
         }
     }
+}
 
+/// Machine-readable shape of `group`.
+#[derive(Serialize)]
+struct GroupSummary {
+    group: String,
+    members: Vec<LastSeenSummary>,
+}
+
+/// The most recent activity across a member's services: when, and on
+/// which service. `None` when no service found anything.
+fn most_recent(summary: &LastSeenSummary) -> Option<(DateTime<Utc>, &str)> {
+    summary
+        .services
+        .iter()
+        .filter_map(|s| {
+            let ts = s.last_active.as_deref()?;
+            let dt = ts
+                .parse::<DateTime<Utc>>()
+                .or_else(|_| {
+                    ts.parse::<DateTime<chrono::FixedOffset>>()
+                        .map(|d| d.with_timezone(&Utc))
+                })
+                .ok()?;
+            Some((dt, s.service.as_str()))
+        })
+        .max_by_key(|(dt, _)| *dt)
+}
+
+/// Every member of a FAS group through `last-seen`, most recent first:
+/// the question "has this SIG been responding" answered per person,
+/// with each one's local time so "who is around right now" reads off
+/// the same table. Bounded by `--max-members`, since each member costs
+/// a round of service queries.
+#[allow(clippy::too_many_arguments)]
+async fn cmd_group(
+    group: &str,
+    max_members: usize,
+    json: bool,
+    color: bool,
+    working_hours: (u8, u8),
+    holidays_enabled: bool,
+    holidays_refresh: bool,
+    now: DateTime<Utc>,
+    skip: &[Service],
+    only: &[Service],
+    meeting: Option<&str>,
+    forge_repos: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_kerberos_ticket()?;
+    let client = sandogasa_fasjson::FasjsonClient::new();
+    // The cap is checked against FAS's own count before the second page
+    // is fetched: `packager` has thousands of members and nobody means
+    // to query them all by accident.
+    let mut members = client
+        .group_members(group, Some(max_members))
+        .map_err(|e| format!("FAS group {group}: {e}"))?;
+    members.sort_by(|a, b| a.username.cmp(&b.username));
+    members.dedup_by(|a, b| a.username == b.username);
+    eprintln!("{group}: {} member(s)", members.len());
+
+    let mut summaries = Vec::with_capacity(members.len());
+    for (i, member) in members.iter().enumerate() {
+        eprintln!("[{}/{}] {}", i + 1, members.len(), member.username);
+        let summary = gather_last_seen(
+            &member.username,
+            &[],
+            false,
+            &[],
+            0,
+            holidays_enabled,
+            holidays_refresh,
+            now,
+            skip,
+            only,
+            meeting,
+            forge_repos,
+            &[],
+        )
+        .await?;
+        summaries.push(summary);
+    }
+    // Most recent first; members with nothing found last, by name.
+    summaries.sort_by(|a, b| {
+        let (ra, rb) = (
+            most_recent(a).map(|(d, _)| d),
+            most_recent(b).map(|(d, _)| d),
+        );
+        rb.cmp(&ra).then_with(|| a.username.cmp(&b.username))
+    });
+
+    if json {
+        let out = GroupSummary {
+            group: group.to_string(),
+            members: summaries,
+        };
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    println!("Group: {group} ({} members)\n", summaries.len());
+    let width = summaries
+        .iter()
+        .map(|s| s.username.len())
+        .max()
+        .unwrap_or(8)
+        .max(8);
+    for s in &summaries {
+        // Dist-git knows activity to the day and reports it as that
+        // day's last second, which would read as "in 13 hours".
+        let activity = match most_recent(s) {
+            Some((dt, service)) if dt > now => {
+                format!("{:<14} {} (today)", service, dt.to_rfc3339())
+            }
+            Some((dt, service)) => format!(
+                "{:<14} {} ({})",
+                service,
+                dt.to_rfc3339(),
+                relative_time_from(dt, now)
+            ),
+            None => "no activity found".to_string(),
+        };
+        let local = s.local_times.first().map(|entry| {
+            let kind = style::classify_day(entry.is_weekend, !entry.holidays.is_empty());
+            style::local_time_line(
+                &entry.display,
+                entry.hour,
+                entry.weekday_enum,
+                kind,
+                working_hours,
+                color,
+            )
+        });
+        println!("  {:<width$}  {activity}", s.username);
+        if let Some(local) = local {
+            println!("  {:<width$}  local: {local}", "");
+        }
+        let errors = s.services.iter().filter(|x| x.error.is_some()).count();
+        if errors > 0 {
+            println!("  {:<width$}  ({errors} service(s) failed)", "");
+        }
+    }
     Ok(())
 }
 
@@ -1721,6 +1966,36 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_member_is_ranked_by_the_latest_service() {
+        let svc = |service: &str, last: Option<&str>| ServiceLastSeen {
+            service: service.to_string(),
+            last_active: last.map(str::to_string),
+            detail: None,
+            error: None,
+            status: None,
+            status_expires: None,
+        };
+        let summary = LastSeenSummary {
+            username: "alice".into(),
+            local_times: vec![],
+            services: vec![
+                svc("Bodhi", Some("2026-03-01T10:00:00+00:00")),
+                svc("Dist-git", Some("2026-03-20T23:59:59Z")),
+                svc("Bugzilla", None),
+            ],
+        };
+        let (when, service) = most_recent(&summary).unwrap();
+        assert_eq!(service, "Dist-git");
+        assert_eq!(when.to_rfc3339(), "2026-03-20T23:59:59+00:00");
+        let quiet = LastSeenSummary {
+            username: "bob".into(),
+            local_times: vec![],
+            services: vec![svc("Bodhi", None)],
+        };
+        assert!(most_recent(&quiet).is_none());
+    }
     use chrono::TimeZone;
 
     // ---- build_local_time_entries ----

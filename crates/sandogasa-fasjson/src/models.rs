@@ -8,6 +8,24 @@ pub struct FasjsonResponse<T> {
     pub result: T,
 }
 
+/// One page of a FASJSON list (`/v1/groups/<name>/members/`, …):
+/// the items, and where the page sits in the whole.
+#[derive(Debug, Deserialize)]
+pub struct FasjsonPage<T> {
+    pub result: Vec<T>,
+    #[serde(default)]
+    pub page: Option<PageInfo>,
+}
+
+/// FASJSON's paging block.
+#[derive(Debug, Deserialize)]
+pub struct PageInfo {
+    pub total_results: u32,
+    pub page_size: u32,
+    pub page_number: u32,
+    pub total_pages: u32,
+}
+
 /// A Fedora Account System user profile.
 #[derive(Debug, Deserialize)]
 pub struct FasUser {
