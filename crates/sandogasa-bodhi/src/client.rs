@@ -202,9 +202,13 @@ impl BodhiClient {
             }
             s
         };
+        // A page carries full update objects — builds, comments, karma —
+        // so a caller wanting one row must not be sent a hundred (1.7 MB
+        // and ten seconds against 5 KB and under half a second).
+        let rows = limit.clamp(1, 100);
         loop {
             let url = format!(
-                "{}/updates/?user={}{}&rows_per_page=100&chrome=0&page={}",
+                "{}/updates/?user={}{}&rows_per_page={rows}&chrome=0&page={}",
                 self.base_url, username, date_filters, page
             );
             let resp: UpdatesResponse = self
@@ -605,6 +609,30 @@ mod tests {
         assert!(!pages.is_empty());
         assert_eq!(updates[0].alias, "FEDORA-2026-b600f85be9");
         assert_eq!(updates[0].release.as_ref().unwrap().name, "F44");
+    }
+
+    #[tokio::test]
+    async fn updates_for_user_asks_for_only_the_rows_wanted() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+        // A last-seen check wants one update; a page of a hundred full
+        // update objects is 1.7 MB and ten seconds for nothing.
+        Mock::given(method("GET"))
+            .and(path_regex("/updates/.*"))
+            .and(wiremock::matchers::query_param("rows_per_page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": [],
+                "total": 0,
+                "page": 1,
+                "pages": 0
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        client
+            .updates_for_user("nobody", 1, None, None, |_, _, _| {})
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
