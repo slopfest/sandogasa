@@ -29,6 +29,27 @@ pub(crate) struct TokenSpec {
     pub hint: &'static str,
 }
 
+/// The level-1 rendering of an item list: one line per group — repo,
+/// project, component, list — with a count, largest first and ties by
+/// name. Level 2 lists the items themselves; see DEVELOPMENT.md,
+/// "Detail levels".
+pub(crate) fn write_counts_by<'a, T>(
+    out: &mut String,
+    items: &'a [T],
+    group: impl Fn(&'a T) -> &'a str,
+) {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for item in items {
+        *counts.entry(group(item)).or_default() += 1;
+    }
+    let mut rows: Vec<(&str, usize)> = counts.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    for (group, n) in rows {
+        out.push_str(&format!("- `{group}`: {n}\n"));
+    }
+    out.push('\n');
+}
+
 /// A commit as the rebased-landing check sees it: its title and author,
 /// whichever forge it came from.
 #[derive(Debug, Clone, PartialEq)]
@@ -156,6 +177,14 @@ mod tests {
             author_name: name.into(),
             author_email: email.into(),
         }
+    }
+
+    #[test]
+    fn write_counts_by_groups_largest_first_then_by_name() {
+        let items = [("b", 1), ("a", 2), ("c", 2), ("a", 3)];
+        let mut out = String::new();
+        super::write_counts_by(&mut out, &items, |i| i.0);
+        assert_eq!(out, "- `a`: 2\n- `b`: 1\n- `c`: 1\n\n");
     }
 
     #[test]

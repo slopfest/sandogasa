@@ -94,12 +94,10 @@ struct ReportArgs {
     #[arg(long)]
     no_sourcehut: bool,
 
-    /// Include per-item details. Repeat for deeper detail —
-    /// level 1 (`--detailed`) lists each Bodhi update but
-    /// summarizes multi-build ones as "N builds", level 2
-    /// (`--detailed --detailed`) lists every build. Koji,
-    /// GitLab, and Bugzilla ignore the difference between
-    /// levels 1 and 2 (no deeper layer to expose).
+    /// Add detail. Once: counts per repo, project or component
+    /// under each heading. Twice: the items themselves — every
+    /// PR, bug, patch and ticket, and every build of a Bodhi
+    /// update.
     #[arg(long, action = clap::ArgAction::Count)]
     detailed: u8,
 

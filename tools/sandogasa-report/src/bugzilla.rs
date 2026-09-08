@@ -451,8 +451,18 @@ pub fn format_markdown(report: &BugzillaReport, detail: u8) -> String {
     if !detailed {
         return out;
     }
+    // Level 1 counts by component; level 2 lists the bugs
+    // (DEVELOPMENT.md, "Detail levels"). The review lists have no
+    // grouping to count by — every review is one bug against
+    // `Package Review` and the summary already counts them — so they
+    // appear at level 2 only.
+    let deep = detail >= 2;
 
     let format_bugs = |out: &mut String, bugs: &[BugEntry]| {
+        if !deep {
+            crate::forge::write_counts_by(out, bugs, |b| b.component.as_str());
+            return;
+        }
         for b in bugs {
             let status = if b.resolution.is_empty() {
                 b.status.clone()
@@ -473,7 +483,7 @@ pub fn format_markdown(report: &BugzillaReport, detail: u8) -> String {
     let reviews = report.reviews.as_ref().unwrap_or(&none);
     let completed_ids: HashSet<u64> = reviews.completed.iter().map(|b| b.id).collect();
 
-    if !reviews.submitted.is_empty() {
+    if deep && !reviews.submitted.is_empty() {
         out.push_str("#### Review requests submitted\n\n");
         for b in &reviews.submitted {
             let status = if b.resolution.is_empty() {
@@ -492,7 +502,7 @@ pub fn format_markdown(report: &BugzillaReport, detail: u8) -> String {
         }
         out.push('\n');
     }
-    if !reviews.done_for_others.is_empty() {
+    if deep && !reviews.done_for_others.is_empty() {
         let done_completed_ids: HashSet<u64> =
             reviews.done_completed.iter().map(|b| b.id).collect();
         out.push_str("#### Reviews done for others\n\n");
@@ -623,7 +633,7 @@ mod tests {
             fti: BugCategory::default(),
             other: BugCategory::default(),
         };
-        let md = format_markdown(&report, 1);
+        let md = format_markdown(&report, 2);
         assert!(md.contains("(1 completed)"));
         assert!(md.contains("Completed"));
         assert!(md.contains("#### Review requests submitted"));
@@ -738,6 +748,45 @@ mod tests {
         assert!(!report.branches.filed.is_empty() || !report.branches.closed.is_empty());
     }
 
+    #[test]
+    fn level_one_counts_bugs_by_component_and_lists_no_reviews() {
+        let bug = |id: u64, component: &str| BugEntry {
+            id,
+            summary: format!("bug {id}"),
+            status: "CLOSED".into(),
+            resolution: "ERRATA".into(),
+            component: component.into(),
+        };
+        let mut reviews = ReviewSection::default();
+        reviews.submitted.push(bug(9, "Package Review"));
+        let report = BugzillaReport {
+            instance: crate::config::REDHAT_BUGZILLA.to_string(),
+            after: 0,
+            reviews: Some(reviews),
+            security: BugCategory {
+                filed: vec![],
+                closed: vec![bug(1, "fossil"), bug(2, "fossil"), bug(3, "pcem")],
+            },
+            updates: Default::default(),
+            branches: Default::default(),
+            ftbfs: Default::default(),
+            fti: Default::default(),
+            other: Default::default(),
+        };
+        let md = format_markdown(&report, 1);
+        assert!(
+            md.contains("**Closed:**\n\n- `fossil`: 2\n- `pcem`: 1\n"),
+            "{md}"
+        );
+        assert!(!md.contains("bug 1"), "{md}");
+        // The summary counts reviews; the list waits for level 2.
+        assert!(md.contains("- **1** review request(s) submitted"), "{md}");
+        assert!(!md.contains("#### Review requests submitted"), "{md}");
+        let deep = format_markdown(&report, 2);
+        assert!(deep.contains("#### Review requests submitted"), "{deep}");
+        assert!(deep.contains("show_bug.cgi?id=1) bug 1"), "{deep}");
+    }
+
     #[tokio::test]
     async fn another_instance_skips_the_review_flow_and_links_to_itself() {
         let server = MockServer::start().await;
@@ -781,7 +830,7 @@ mod tests {
 
         assert!(report.reviews.is_none(), "no review section off Red Hat's");
         assert_eq!(report.other.filed.len(), 2);
-        let md = format_markdown(&report, 1);
+        let md = format_markdown(&report, 2);
         assert!(!md.contains("Package reviews"), "{md}");
         assert!(
             md.contains(&format!(

@@ -117,20 +117,33 @@ sr.ht is unlike the GitHub-ish forges and its quirks shape the
   fetcher** — sr.ht UA-blocks some of them (see the crate's notes and
   `scripts/update-srht-schemas.sh`).
 
-## Commit detail levels
+## Detail levels
 
-The forge sections show commits at three depths, kept consistent across
-backends (`--detailed` is level 1, `--detailed --detailed` is level 2):
+Every section shows its data at three depths, the same three whatever
+the source (`--detailed` is level 1, `--detailed --detailed` is level 2):
 
-- **summary (no flag):** a total plus repo count — e.g. "Commits: N
-  across K repo(s)".
-- **level 1 (`--detailed`):** a per-repo count breakdown ("Commits by
-  repo"). GitHub and GitLab only ever fetch counts, so this is their
-  deepest commit view (they collapse levels 1 and 2).
-- **level 2 (`--detailed --detailed`):** individual commits with hash +
-  subject, for backends that have per-commit data (currently Sourcehut).
-  A bare hash without a subject is never shown — if there's no subject to
-  pair it with, the level stays at counts.
+- **summary (no flag):** totals — "PRs opened: N", "Commits: N across K
+  repo(s)", the Bugzilla category table.
+- **level 1 (`--detailed`):** counts by group under each heading — PRs
+  and issues by repo or project, bugs by component, patches by list,
+  tickets by tracker, commits by repo (`forge::write_counts_by`, largest
+  group first, ties by name). GitHub and GitLab only ever fetch commit
+  counts, so for commits this is their deepest view.
+- **level 2 (`--detailed --detailed`):** the items themselves — every
+  PR with its fate marker, every bug with its link and status, the
+  Bugzilla review lists (which have no group to count by: every review
+  is one bug against `Package Review`, and the summary already counts
+  them), individual commits with hash and subject where the source has
+  them (Sourcehut). A bare hash without a subject is never shown.
+
+A list that would be one line at level 2 is still a count at level 1:
+the rule is about what a level *means*, not about saving space, and a
+reader who wants the items types the flag twice.
+
+Bodhi and Koji keep their own tiers for now: Bodhi's level 1 lists
+updates with a build count and level 2 adds every build, Koji's level 1
+lists packages by group. Their summaries already carry the per-release
+and new/updated counts a level 1 would show.
 
 ## The applied label: authorship is decisive
 

@@ -420,23 +420,24 @@ pub fn format_markdown(report: &GitlabReport, detail: u8) -> String {
     if !detailed {
         return out;
     }
-
-    if !report.opened_mrs.is_empty() {
-        out.push_str("#### Opened\n\n");
-        write_mr_list(&mut out, &report.opened_mrs, &report.instance);
-    }
-    if !report.merged_mrs.is_empty() {
-        out.push_str("#### Merged\n\n");
-        write_mr_list(&mut out, &report.merged_mrs, &report.instance);
-    }
-    if !report.approved_mrs.is_empty() {
-        out.push_str("#### Approved\n\n");
-        write_mr_list(&mut out, &report.approved_mrs, &report.instance);
-    }
-    if !report.commented_mrs.is_empty() {
-        out.push_str("#### Commented on\n\n");
-        write_mr_list(&mut out, &report.commented_mrs, &report.instance);
-    }
+    // Level 1 counts by project; level 2 lists the items
+    // (DEVELOPMENT.md, "Detail levels").
+    let deep = detail >= 2;
+    let mrs = |out: &mut String, heading: &str, mrs: &[MrRef]| {
+        if mrs.is_empty() {
+            return;
+        }
+        out.push_str(&format!("#### {heading}\n\n"));
+        if deep {
+            write_mr_list(out, mrs, &report.instance);
+        } else {
+            forge::write_counts_by(out, mrs, |m| m.project.as_str());
+        }
+    };
+    mrs(&mut out, "Opened", &report.opened_mrs);
+    mrs(&mut out, "Merged", &report.merged_mrs);
+    mrs(&mut out, "Approved", &report.approved_mrs);
+    mrs(&mut out, "Commented on", &report.commented_mrs);
     if !report.commits_pushed.is_empty() {
         out.push_str("#### Commits by project\n\n");
         for (project, pushed) in &report.commits_pushed {
@@ -447,7 +448,11 @@ pub fn format_markdown(report: &GitlabReport, detail: u8) -> String {
         }
         out.push('\n');
     }
-    if !report.tags_pushed.is_empty() {
+    if !report.tags_pushed.is_empty() && !deep {
+        out.push_str("#### Tags pushed\n\n");
+        forge::write_counts_by(&mut out, &report.tags_pushed, |t| t.project.as_str());
+    }
+    if !report.tags_pushed.is_empty() && deep {
         out.push_str("#### Tags pushed\n\n");
         let base = report.instance.trim_end_matches('/');
         let mut by_project: BTreeMap<&str, Vec<&TagRef>> = BTreeMap::new();
@@ -463,7 +468,11 @@ pub fn format_markdown(report: &GitlabReport, detail: u8) -> String {
         }
         out.push('\n');
     }
-    if !report.releases_published.is_empty() {
+    if !report.releases_published.is_empty() && !deep {
+        out.push_str("#### Releases published\n\n");
+        forge::write_counts_by(&mut out, &report.releases_published, |r| r.project.as_str());
+    }
+    if !report.releases_published.is_empty() && deep {
         out.push_str("#### Releases published\n\n");
         for r in &report.releases_published {
             let upcoming = if r.upcoming { " (upcoming)" } else { "" };
@@ -884,6 +893,31 @@ mod tests {
     }
 
     #[test]
+    fn level_one_counts_mrs_by_project() {
+        let mut report = GitlabReport {
+            instance: "https://gitlab.com".into(),
+            ..Default::default()
+        };
+        for (iid, project) in [(1, "g/a"), (2, "g/b"), (3, "g/b")] {
+            report.opened_mrs.push(MrRef {
+                project: project.into(),
+                iid,
+                title: format!("mr {iid}"),
+                state: "opened".into(),
+                merged: false,
+                applied: false,
+            });
+        }
+        let md = format_markdown(&report, 1);
+        assert!(
+            md.contains("#### Opened\n\n- `g/b`: 2\n- `g/a`: 1\n"),
+            "{md}"
+        );
+        assert!(!md.contains("mr 1"), "{md}");
+        assert!(format_markdown(&report, 2).contains("merge_requests/1) mr 1"));
+    }
+
+    #[test]
     fn opened_list_marks_closed_merged_and_applied_state() {
         let mut report = GitlabReport {
             instance: "https://gitlab.com".into(),
@@ -913,7 +947,7 @@ mod tests {
         report
             .approved_mrs
             .push(mr(5, "looked at", "", false, false));
-        let md = format_markdown(&report, 1);
+        let md = format_markdown(&report, 2);
         assert!(md.contains("merge_requests/1) declined (closed)\n"), "{md}");
         assert!(md.contains("merge_requests/2) still going\n"), "{md}");
         assert!(
@@ -943,7 +977,7 @@ mod tests {
             merged: false,
             applied: false,
         });
-        let md = format_markdown(&report, 1);
+        let md = format_markdown(&report, 2);
         assert!(md.contains("### GitLab\n"));
         assert!(md.contains("**MRs opened:** 1"));
         assert!(md.contains("#### Opened"));

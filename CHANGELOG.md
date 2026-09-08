@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### sandogasa-report: `--detailed` counts by group, `--detailed --detailed` lists (breaking CLI)
+
+`--detailed` listed every pull request, bug, patch and ticket one per
+line — a three-month Fedora report ran to 743 lines, 585 of them the
+closed Bugzilla bugs — while the commit sections already answered the
+same flag with per-repo counts and kept individual commits for a second
+`--detailed`. The lists now follow the commits: one `--detailed` gives
+counts by group under each heading (PRs and issues by repo or project,
+bugs by component, patches by list, tickets by tracker), two give the
+items. The same report is 302 lines at level 1, and reads
+"fbthrift: 96, cachelib: 92, rust-coreutils: 43" where it listed them.
+Bodhi and Koji keep their own tiers, whose summaries already carry
+the counts a level 1 would show. `DEVELOPMENT.md`'s "Commit detail
+levels" becomes "Detail levels", the rule for every section.
+
+Breaking (CLI): a single `--detailed` no longer lists items; anyone
+reading the PR, issue, patch, ticket or Bugzilla lists — or the
+Bugzilla review lists, which have no group to count by and now appear
+at level 2 only — passes `--detailed --detailed`. JSON output is
+unchanged.
+
 ### sandogasa-report: a rebased PR counts as applied, a redone one does not
 
 A closed-unmerged PR was marked `(applied)` only when its own head

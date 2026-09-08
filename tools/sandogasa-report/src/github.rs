@@ -319,23 +319,24 @@ pub fn format_markdown(report: &GithubReport, detail: u8) -> String {
     if !detailed {
         return out;
     }
-
-    if !report.opened_prs.is_empty() {
-        out.push_str("#### Opened\n\n");
-        write_pr_list(&mut out, &report.opened_prs);
-    }
-    if !report.merged_prs.is_empty() {
-        out.push_str("#### Merged\n\n");
-        write_pr_list(&mut out, &report.merged_prs);
-    }
-    if !report.reviewed_prs.is_empty() {
-        out.push_str("#### Reviewed\n\n");
-        write_pr_list(&mut out, &report.reviewed_prs);
-    }
-    if !report.commented_prs.is_empty() {
-        out.push_str("#### Commented on\n\n");
-        write_pr_list(&mut out, &report.commented_prs);
-    }
+    // Level 1 counts by repo; level 2 lists the items (DEVELOPMENT.md,
+    // "Detail levels").
+    let deep = detail >= 2;
+    let prs = |out: &mut String, heading: &str, prs: &[PrRef]| {
+        if prs.is_empty() {
+            return;
+        }
+        out.push_str(&format!("#### {heading}\n\n"));
+        if deep {
+            write_pr_list(out, prs);
+        } else {
+            forge::write_counts_by(out, prs, |p| p.repo.as_str());
+        }
+    };
+    prs(&mut out, "Opened", &report.opened_prs);
+    prs(&mut out, "Merged", &report.merged_prs);
+    prs(&mut out, "Reviewed", &report.reviewed_prs);
+    prs(&mut out, "Commented on", &report.commented_prs);
     if !report.commits_authored.is_empty() {
         out.push_str("#### Commits by repo\n\n");
         for (repo, count) in &report.commits_authored {
@@ -345,11 +346,19 @@ pub fn format_markdown(report: &GithubReport, detail: u8) -> String {
     }
     if !report.tags_pushed.is_empty() {
         out.push_str("#### Tags pushed\n\n");
-        write_tag_list(&mut out, &report.tags_pushed);
+        if deep {
+            write_tag_list(&mut out, &report.tags_pushed);
+        } else {
+            forge::write_counts_by(&mut out, &report.tags_pushed, |t| t.repo.as_str());
+        }
     }
     if !report.releases_published.is_empty() {
         out.push_str("#### Releases published\n\n");
-        write_release_list(&mut out, &report.releases_published);
+        if deep {
+            write_release_list(&mut out, &report.releases_published);
+        } else {
+            forge::write_counts_by(&mut out, &report.releases_published, |r| r.repo.as_str());
+        }
     }
     out
 }
@@ -1175,6 +1184,36 @@ mod tests {
     }
 
     #[test]
+    fn level_one_counts_prs_by_repo() {
+        let mut report = GithubReport {
+            instance: "https://api.github.com".into(),
+            user: "octocat".into(),
+            ..Default::default()
+        };
+        for (n, repo) in [(1, "o/a"), (2, "o/b"), (3, "o/b")] {
+            report.opened_prs.push(PrRef {
+                repo: repo.into(),
+                number: n,
+                title: format!("pr {n}"),
+                url: format!("https://github.com/{repo}/pull/{n}"),
+                state: "open".into(),
+                merged: false,
+                applied: false,
+            });
+        }
+        let md = format_markdown(&report, 1);
+        assert!(
+            md.contains("#### Opened\n\n- `o/b`: 2\n- `o/a`: 1\n"),
+            "{md}"
+        );
+        assert!(
+            !md.contains("pr 1"),
+            "level 1 counts, it does not list: {md}"
+        );
+        assert!(format_markdown(&report, 2).contains("pull/1) pr 1"));
+    }
+
+    #[test]
     fn opened_list_marks_closed_merged_and_applied_state() {
         let mut report = GithubReport {
             instance: "https://api.github.com".into(),
@@ -1206,7 +1245,7 @@ mod tests {
         report
             .reviewed_prs
             .push(pr(5, "looked at", "", false, false));
-        let md = format_markdown(&report, 1);
+        let md = format_markdown(&report, 2);
         assert!(md.contains("pull/1) declined (closed)\n"), "{md}");
         assert!(md.contains("pull/2) still going\n"), "{md}");
         assert!(
@@ -1241,7 +1280,7 @@ mod tests {
         report
             .commits_authored
             .insert("slopfest/sandogasa".into(), 7);
-        let md = format_markdown(&report, 1);
+        let md = format_markdown(&report, 2);
         assert!(md.contains("### GitHub\n"));
         assert!(md.contains("**PRs opened:** 1"));
         assert!(md.contains("**Commits authored:** 7 across 1 repo(s)"));
@@ -1274,7 +1313,7 @@ mod tests {
             url: "https://github.com/slopfest/sandogasa/releases/tag/v0.11.0".into(),
             prerelease: false,
         });
-        let md = format_markdown(&report, 1);
+        let md = format_markdown(&report, 2);
         assert!(md.contains("**Tags pushed:** 2 across 1 repo(s)"));
         assert!(md.contains("**Releases published:** 1 across 1 repo(s)"));
         assert!(md.contains("#### Tags pushed"));

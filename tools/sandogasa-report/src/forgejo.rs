@@ -321,23 +321,35 @@ pub fn format_markdown(report: &ForgejoReport, detail: u8) -> String {
     if !detailed {
         return out;
     }
-
-    if !report.opened_prs.is_empty() {
-        out.push_str("#### PRs opened\n\n");
-        write_pr_list(&mut out, &report.opened_prs, true);
-    }
-    if !report.merged_prs.is_empty() {
-        out.push_str("#### PRs merged\n\n");
-        write_pr_list(&mut out, &report.merged_prs, false);
-    }
-    if !report.opened_issues.is_empty() {
-        out.push_str("#### Issues opened\n\n");
-        write_issue_list(&mut out, &report.opened_issues);
-    }
-    if !report.closed_issues.is_empty() {
-        out.push_str("#### Issues closed\n\n");
-        write_issue_list(&mut out, &report.closed_issues);
-    }
+    // Level 1 counts by repo; level 2 lists the items (DEVELOPMENT.md,
+    // "Detail levels").
+    let deep = detail >= 2;
+    let prs = |out: &mut String, heading: &str, prs: &[PrRef], markers: bool| {
+        if prs.is_empty() {
+            return;
+        }
+        out.push_str(&format!("#### {heading}\n\n"));
+        if deep {
+            write_pr_list(out, prs, markers);
+        } else {
+            forge::write_counts_by(out, prs, |p| p.repo.as_str());
+        }
+    };
+    let issues = |out: &mut String, heading: &str, issues: &[IssueRef]| {
+        if issues.is_empty() {
+            return;
+        }
+        out.push_str(&format!("#### {heading}\n\n"));
+        if deep {
+            write_issue_list(out, issues);
+        } else {
+            forge::write_counts_by(out, issues, |i| i.repo.as_str());
+        }
+    };
+    prs(&mut out, "PRs opened", &report.opened_prs, true);
+    prs(&mut out, "PRs merged", &report.merged_prs, false);
+    issues(&mut out, "Issues opened", &report.opened_issues);
+    issues(&mut out, "Issues closed", &report.closed_issues);
     out
 }
 
@@ -486,7 +498,7 @@ mod tests {
             merged: true,
             applied: false,
         });
-        let md = format_markdown(&report, 1);
+        let md = format_markdown(&report, 2);
         assert!(md.contains("### Forgejo\n"));
         assert!(md.contains("**PRs merged:** 1"));
         assert!(md.contains("#### PRs merged"));
@@ -533,7 +545,7 @@ mod tests {
             merged: false,
             applied: true,
         });
-        let md = format_markdown(&report, 1);
+        let md = format_markdown(&report, 2);
         assert!(md.contains("#92](https://codeberg.org/ptesarik/libkdumpfile/pulls/92) Drop removed bfd macros (closed)"));
         assert!(md.contains("#7](https://codeberg.org/o/r/pulls/7) still going\n"));
         assert!(!md.contains("still going ("));
@@ -577,7 +589,7 @@ mod tests {
             title: "build fails with binutils 2.46".into(),
             url: "https://codeberg.org/ptesarik/libkdumpfile/issues/91".into(),
         });
-        let md = format_markdown(&report, 1);
+        let md = format_markdown(&report, 2);
         assert!(md.contains("- **Issues opened:** 1"));
         // A zero line is left out entirely, rather than reported as 0.
         assert!(!md.contains("Issues closed"));

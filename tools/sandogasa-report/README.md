@@ -95,7 +95,7 @@ sandogasa-report config -c config.toml
 sandogasa-report report -c config.toml -d fedora \
     --user username --period 2026Q1
 
-# Detailed report with per-item listings
+# Counts per repo or component under each heading; --detailed twice lists the items
 sandogasa-report report -c config.toml -d fedora \
     --user username --period 2026Q1 --detailed
 
@@ -132,7 +132,9 @@ sandogasa-report report -c config.toml -d fedora \
 - `-u, --user <USER>` — FAS username to report on
 - `--period <PERIOD>` — reporting period (2026, 2026H1, 2026Q1)
 - `--since <DATE>` / `--until <DATE>` — date range (inclusive)
-- `--detailed` — include per-item details, not just counts
+- `--detailed` — counts per repo, project or component under each
+  heading; `--detailed --detailed` lists the items themselves (every
+  PR, bug, patch and ticket, and every build of a Bodhi update)
 - `--json` — output as JSON instead of Markdown
 - `-o, --output <PATH>` — write output to file
 - `--no-bugzilla` / `--no-bodhi` / `--no-koji` / `--no-gitlab` /

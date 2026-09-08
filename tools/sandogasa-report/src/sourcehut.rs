@@ -76,6 +76,14 @@ pub struct TicketItem {
     pub subject: String,
 }
 
+impl TicketItem {
+    /// The tracker the reference names: `~user/tracker` of
+    /// `~user/tracker#3`.
+    fn tracker(&self) -> &str {
+        self.reference.split('#').next().unwrap_or(&self.reference)
+    }
+}
+
 /// A commit in one of the user's repos, for the report's lists.
 #[derive(Debug, Clone, Serialize)]
 pub struct CommitItem {
@@ -359,22 +367,34 @@ pub fn format_markdown(report: &SourcehutReport, detail: u8) -> String {
     if detail < 1 {
         return out;
     }
+    // Level 1 counts by list or tracker; level 2 lists the items
+    // (DEVELOPMENT.md, "Detail levels").
+    let deep = detail >= 2;
 
     if !report.patches.is_empty() {
         out.push_str("#### Patches sent\n\n");
-        for p in &report.patches {
-            out.push_str(&format!("- {} → {} ({})\n", p.subject, p.list, p.status));
+        if deep {
+            for p in &report.patches {
+                out.push_str(&format!("- {} → {} ({})\n", p.subject, p.list, p.status));
+            }
+            out.push('\n');
+        } else {
+            forge::write_counts_by(&mut out, &report.patches, |p| p.list.as_str());
         }
-        out.push('\n');
     }
-    if !report.opened_tickets.is_empty() {
-        out.push_str("#### Tickets opened\n\n");
-        write_tickets(&mut out, &report.opened_tickets);
-    }
-    if !report.closed_tickets.is_empty() {
-        out.push_str("#### Tickets closed\n\n");
-        write_tickets(&mut out, &report.closed_tickets);
-    }
+    let tickets = |out: &mut String, heading: &str, tickets: &[TicketItem]| {
+        if tickets.is_empty() {
+            return;
+        }
+        out.push_str(&format!("#### {heading}\n\n"));
+        if deep {
+            write_tickets(out, tickets);
+        } else {
+            forge::write_counts_by(out, tickets, |t| t.tracker());
+        }
+    };
+    tickets(&mut out, "Tickets opened", &report.opened_tickets);
+    tickets(&mut out, "Tickets closed", &report.closed_tickets);
     // Commits: at `--detailed`, per-repo counts (like the other forges);
     // at `--detailed --detailed`, the individual commits with subjects.
     write_commits(&mut out, &own, &others, detail >= 2);
@@ -609,22 +629,23 @@ mod tests {
             ..Default::default()
         };
 
-        // --detailed (level 1): counts + per-repo commit breakdown.
+        // --detailed (level 1): counts by list, tracker and repo.
         let md = format_markdown(&report, 1);
         assert!(md.contains("- **Patches sent:** 1"));
         assert!(md.contains("- **Patches applied:** 1"));
         assert!(md.contains("- **Tickets opened:** 1"));
         assert!(md.contains("- **Commits by you:** 1 across 1 repo(s)"));
         assert!(md.contains("- **Commits by others (in your repos):** 1"));
-        assert!(md.contains("#### Patches sent"));
-        assert!(md.contains("[PATCH] x → devel (APPLIED)"));
+        assert!(md.contains("#### Patches sent\n\n- `devel`: 1\n"), "{md}");
+        assert!(!md.contains("[PATCH] x"), "{md}");
         // Per-repo counts, not individual hashes, at level 1.
         assert!(md.contains("#### Commits by repo"));
         assert!(md.contains("`dotfiles`: 1 (+1 by others)"));
         assert!(!md.contains("abcdef12"));
 
-        // --detailed --detailed (level 2): individual commits + subjects.
+        // --detailed --detailed (level 2): the items themselves.
         let deep = format_markdown(&report, 2);
+        assert!(deep.contains("[PATCH] x → devel (APPLIED)"));
         assert!(deep.contains("#### Commits\n"));
         assert!(deep.contains("`dotfiles` abcdef12 Add foo"));
         assert!(deep.contains("#### Commits by others (in your repos)"));
