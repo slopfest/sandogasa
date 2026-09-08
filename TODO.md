@@ -552,9 +552,6 @@ considered and rejected.)
   Decide whether they want the same three-tier treatment (e.g. `--detailed`
   = counts or a compact list, `--detailed --detailed` = full per-item
   detail) and apply it uniformly. Likely presentation-only.
-- Debug CVE/security bug reporting: the query may be too narrow or
-  the keyword filter may not match Bugzilla's actual keyword values.
-  Test with known CVE bugs and compare against manual Bugzilla search.
 - (2026-06-24) Forgejo: detect a closed PR whose work landed via a
   *reworded/rebased* commit (different SHA, so the `head.sha`-on-
   default-branch check used for the "applied" state misses it). Run it
