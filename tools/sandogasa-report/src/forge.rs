@@ -29,6 +29,34 @@ pub(crate) struct TokenSpec {
     pub hint: &'static str,
 }
 
+/// A commit as the rebased-landing check sees it: its title and author,
+/// whichever forge it came from.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Landed {
+    pub title: String,
+    pub author_name: String,
+    pub author_email: String,
+}
+
+/// Whether a PR's work landed as a rebased or reworded commit: one of
+/// the target branch's commits (already limited by the caller to those
+/// made after the PR was opened) carries the same title as one of the
+/// PR's commits **and the same author**. Authorship is the decisive
+/// check, not content: the same change redone by the maintainer — an
+/// identical `gbp import-orig` two days later, say — is theirs, and
+/// the PR it superseded stays closed.
+pub(crate) fn rebased_onto(pr_commits: &[Landed], branch_commits: &[Landed]) -> bool {
+    let same_author = |a: &Landed, b: &Landed| {
+        (!a.author_email.is_empty() && a.author_email.eq_ignore_ascii_case(&b.author_email))
+            || (!a.author_name.is_empty() && a.author_name == b.author_name)
+    };
+    pr_commits.iter().any(|pc| {
+        branch_commits
+            .iter()
+            .any(|bc| bc.title.trim() == pc.title.trim() && same_author(pc, bc))
+    })
+}
+
 /// Whether an RFC 3339 timestamp's date falls within
 /// `[since, until]` (inclusive). Only the date part is considered.
 pub(crate) fn date_in_range(ts: &str, since: NaiveDate, until: NaiveDate) -> bool {
@@ -120,6 +148,57 @@ pub fn stat_across(out: &mut String, label: &str, total: u64, n: usize, unit: &s
 
 #[cfg(test)]
 mod tests {
+    use super::{Landed, rebased_onto};
+
+    fn landed(title: &str, name: &str, email: &str) -> Landed {
+        Landed {
+            title: title.into(),
+            author_name: name.into(),
+            author_email: email.into(),
+        }
+    }
+
+    #[test]
+    fn rebased_onto_needs_the_same_title_and_the_same_author() {
+        let pr = [landed(
+            "New upstream version 3.2.16",
+            "Michel Lind",
+            "michel@example.org",
+        )];
+        // Rebased by the maintainer: same title, author preserved.
+        assert!(rebased_onto(
+            &pr,
+            &[landed(
+                "New upstream version 3.2.16",
+                "Michel Lind",
+                "michel@example.org"
+            )]
+        ));
+        // Reworded on a different email but the same name still counts.
+        assert!(rebased_onto(
+            &pr,
+            &[landed(
+                "New upstream version 3.2.16 ",
+                "Michel Lind",
+                "michel@fedoraproject.org"
+            )]
+        ));
+        // The maintainer redid the identical import themselves: superseded, not applied.
+        assert!(!rebased_onto(
+            &pr,
+            &[landed(
+                "New upstream version 3.2.16",
+                "Simon Quigley",
+                "simon@example.org"
+            )]
+        ));
+        // The author's own unrelated commit does not count either.
+        assert!(!rebased_onto(
+            &pr,
+            &[landed("Team upload.", "Michel Lind", "michel@example.org")]
+        ));
+        assert!(!rebased_onto(&pr, &[]));
+    }
 
     #[test]
     fn stat_omits_a_zero_and_keeps_a_count() {

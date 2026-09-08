@@ -132,6 +132,36 @@ backends (`--detailed` is level 1, `--detailed --detailed` is level 2):
   A bare hash without a subject is never shown — if there's no subject to
   pair it with, the level stays at counts.
 
+## The applied label: authorship is decisive
+
+A PR opened in the window but closed without merging may still have
+landed. Two checks, in order, on every forge (Forgejo, GitHub, GitLab):
+
+1. **The PR's own head commit is on the target branch** (the forge's
+   compare endpoint). Exact and cheap: a maintainer fast-forwarded or
+   cherry-picked the commit as-is.
+2. **Otherwise, a commit on the target branch, made after the PR was
+   opened, authored by the PR's author, with the same title as one of
+   the PR's commits** (`forge::rebased_onto`). A rebase, `git am` or
+   reword gives the commit a new sha but keeps the author.
+
+The second check must never match on content or title alone. The case
+that fixed the rule (salsa, ruby-mixlib-log !2–!4, 2026-09): the
+maintainer ran the same `gbp import-orig` two days after the MRs were
+opened — identical tree, identical title, their own name as author —
+and closed the MRs five weeks later. That work is theirs; the MRs were
+*superseded*, and stay `(closed)`. Author match is by email or by name,
+since people commit under several addresses.
+
+Any lookup failure leaves the plainer label, with a warning under
+`--verbose`. The label is only ever upgraded when certain: a false
+`(applied)` credits someone with work that did not land as theirs, a
+missed one merely understates.
+
+Cost: both checks run only for a closed-unmerged PR, and the second
+only after the first says no — two extra calls each, so a report pays
+for them a handful of times, not per PR.
+
 ## Future work
 
 ### Resumable / cacheable report generation

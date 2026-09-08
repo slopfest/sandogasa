@@ -102,6 +102,32 @@ pub struct MergeRequest {
     /// The head commit of the source branch.
     #[serde(default)]
     pub sha: Option<String>,
+    /// When the MR was opened (RFC 3339).
+    #[serde(default)]
+    pub created_at: Option<String>,
+    /// Who opened it.
+    #[serde(default)]
+    pub author: Option<MrAuthor>,
+}
+
+/// A merge request's author: account login and display name.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MrAuthor {
+    pub username: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+/// A commit from the repository or merge-request commit listings.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RepoCommit {
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub author_name: String,
+    #[serde(default)]
+    pub author_email: String,
 }
 
 /// What `/repository/compare?from=<branch>&to=<sha>` answers: the
@@ -161,6 +187,48 @@ impl Client {
             self.base_url, encoded, iid
         );
         let resp = self.http.get(&url).send()?;
+        Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
+    }
+
+    /// The commits a merge request carries (one page of up to a
+    /// hundred).
+    pub fn merge_request_commits(
+        &self,
+        iid: u64,
+    ) -> Result<Vec<RepoCommit>, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/merge_requests/{}/commits",
+            self.base_url, encoded, iid
+        );
+        let resp = self.http.get(&url).query(&[("per_page", "100")]).send()?;
+        Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
+    }
+
+    /// Commits on `branch` by `author` (a name or an email, GitLab's
+    /// own filter) since an RFC 3339 instant; one page of up to a
+    /// hundred, plenty for one person's commits since an MR was opened.
+    pub fn branch_commits_by(
+        &self,
+        branch: &str,
+        author: &str,
+        since: &str,
+    ) -> Result<Vec<RepoCommit>, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/repository/commits",
+            self.base_url, encoded
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[
+                ("ref_name", branch),
+                ("author", author),
+                ("since", since),
+                ("per_page", "100"),
+            ])
+            .send()?;
         Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
     }
 
@@ -1210,6 +1278,30 @@ mod tests {
             .create();
         let client = Client::new(&server.url(), "g/p", "tok").unwrap();
         assert!(!client.commit_contained("main", "other").unwrap());
+    }
+
+    #[test]
+    fn branch_commits_by_filters_by_author_and_since() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/projects/g%2Fp/repository/commits")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("ref_name".into(), "debian/latest".into()),
+                mockito::Matcher::UrlEncoded("author".into(), "Michel Lind".into()),
+                mockito::Matcher::UrlEncoded("since".into(), "2026-07-21T00:00:00Z".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"[{"id": "1aee7c31", "title": "New upstream version 3.2.16",
+                     "author_name": "Michel Lind", "author_email": "m@example.org"}]"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        let commits = client
+            .branch_commits_by("debian/latest", "Michel Lind", "2026-07-21T00:00:00Z")
+            .unwrap();
+        mock.assert();
+        assert_eq!(commits[0].title, "New upstream version 3.2.16");
     }
 
     #[test]

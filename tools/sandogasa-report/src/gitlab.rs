@@ -622,7 +622,7 @@ fn settle_opened_mr(base: &str, token: &str, mr: &mut MrRef, verbose: bool) {
             return;
         }
     };
-    mr.state = detail.state;
+    mr.state = detail.state.clone();
     mr.merged = mr.state == "merged";
     if mr.state != "closed" {
         return;
@@ -631,7 +631,8 @@ fn settle_opened_mr(base: &str, token: &str, mr: &mut MrRef, verbose: bool) {
         return;
     };
     match client.commit_contained(&detail.target_branch, sha) {
-        Ok(contained) => mr.applied = contained,
+        Ok(true) => mr.applied = true,
+        Ok(false) => mr.applied = landed_rebased(&client, mr, &detail, verbose),
         Err(e) => {
             if verbose {
                 eprintln!(
@@ -641,6 +642,61 @@ fn settle_opened_mr(base: &str, token: &str, mr: &mut MrRef, verbose: bool) {
             }
         }
     }
+}
+
+/// The fallback when the MR's own commit is not on the target branch:
+/// rebased or reworded, it lands under a new sha. GitLab lists a
+/// branch's commits by author name or email, so ask for the MR's
+/// commit author since the MR was opened and match by title and author
+/// (`forge::rebased_onto`). Two calls, spent only on an MR that has
+/// already failed the sha check.
+fn landed_rebased(
+    client: &sandogasa_gitlab::Client,
+    mr: &MrRef,
+    detail: &sandogasa_gitlab::MergeRequest,
+    verbose: bool,
+) -> bool {
+    let Some(since) = detail.created_at.as_deref() else {
+        return false;
+    };
+    let result = client.merge_request_commits(mr.iid).and_then(|mr_commits| {
+        // The git identity on the MR's own commits is what a rebase
+        // preserves; the account's display name is the fallback.
+        let author = mr_commits
+            .first()
+            .map(|c| c.author_name.clone())
+            .filter(|n| !n.is_empty())
+            .or_else(|| detail.author.as_ref().map(|a| a.name.clone()))
+            .unwrap_or_default();
+        if author.is_empty() {
+            return Ok(false);
+        }
+        let branch = client.branch_commits_by(&detail.target_branch, &author, since)?;
+        Ok(forge::rebased_onto(&landed(&mr_commits), &landed(&branch)))
+    });
+    match result {
+        Ok(applied) => applied,
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "[gitlab] applied-check: rebased lookup for {}!{} failed: {e}",
+                    mr.project, mr.iid
+                );
+            }
+            false
+        }
+    }
+}
+
+fn landed(commits: &[sandogasa_gitlab::RepoCommit]) -> Vec<forge::Landed> {
+    commits
+        .iter()
+        .map(|c| forge::Landed {
+            title: c.title.clone(),
+            author_name: c.author_name.clone(),
+            author_email: c.author_email.clone(),
+        })
+        .collect()
 }
 
 fn write_mr_list(out: &mut String, mrs: &[MrRef], instance: &str) {

@@ -143,6 +143,51 @@ pub struct PullRequestDetail {
     pub merged: bool,
     pub head: GitRef,
     pub base: GitRef,
+    /// When the PR was opened (RFC 3339).
+    #[serde(default)]
+    pub created_at: Option<String>,
+    /// Who opened it.
+    #[serde(default)]
+    pub user: Option<Login>,
+}
+
+/// An account named only by its login.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Login {
+    pub login: String,
+}
+
+/// A commit from `/pulls/{n}/commits` or `/commits`: the sha, the
+/// message and the author of the commit itself (not the GitHub account).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RepoCommit {
+    pub sha: String,
+    pub commit: CommitBody,
+}
+
+/// The git-level part of a commit.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommitBody {
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub author: Option<CommitAuthor>,
+}
+
+/// A commit's author as git recorded it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommitAuthor {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub email: String,
+}
+
+impl RepoCommit {
+    /// The message's first line.
+    pub fn title(&self) -> &str {
+        self.commit.message.lines().next().unwrap_or("")
+    }
 }
 
 /// One side of a pull request: the branch name and the commit it points at.
@@ -451,6 +496,48 @@ impl Client {
         Ok(http::blocking_json_ok(resp, &format!("GitHub GET {url}"))?)
     }
 
+    /// The commits a pull request carries, oldest first (one page; a
+    /// PR of more than a hundred commits is not what this is for).
+    pub fn pull_request_commits(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<RepoCommit>, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/repos/{owner}/{repo}/pulls/{number}/commits",
+            self.base_url
+        );
+        let resp = self.http.get(&url).query(&[("per_page", "100")]).send()?;
+        Ok(http::blocking_json_ok(resp, &format!("GitHub GET {url}"))?)
+    }
+
+    /// Commits on `branch` by `author` (a login or an email) since an
+    /// RFC 3339 instant, newest first; one page of up to a hundred,
+    /// which is plenty for one person's commits on one branch since a
+    /// PR was opened.
+    pub fn branch_commits_by(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        author: &str,
+        since: &str,
+    ) -> Result<Vec<RepoCommit>, Box<dyn std::error::Error>> {
+        let url = format!("{}/repos/{owner}/{repo}/commits", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[
+                ("sha", branch),
+                ("author", author),
+                ("since", since),
+                ("per_page", "100"),
+            ])
+            .send()?;
+        Ok(http::blocking_json_ok(resp, &format!("GitHub GET {url}"))?)
+    }
+
     /// Whether `sha` is already on `branch`: GitHub's compare of the
     /// branch to the sha reports how many commits the sha is ahead by,
     /// and zero means the branch has every one of them.
@@ -541,6 +628,34 @@ mod tests {
         assert_eq!(pr.head.sha, "8b8aa8b");
         assert_eq!(pr.base.ref_name, "main");
         assert!(!pr.merged);
+    }
+
+    #[test]
+    fn branch_commits_by_filters_by_author_and_since() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/repos/o/r/commits")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("sha".into(), "main".into()),
+                mockito::Matcher::UrlEncoded("author".into(), "michel-slm".into()),
+                mockito::Matcher::UrlEncoded("since".into(), "2026-03-04T00:00:00Z".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"[{"sha": "abc", "commit": {"message": "Ignore it\n\nbody",
+                     "author": {"name": "Michel Lind", "email": "m@example.org"}}}]"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let commits = client
+            .branch_commits_by("o", "r", "main", "michel-slm", "2026-03-04T00:00:00Z")
+            .unwrap();
+        mock.assert();
+        assert_eq!(commits[0].title(), "Ignore it");
+        assert_eq!(
+            commits[0].commit.author.as_ref().unwrap().name,
+            "Michel Lind"
+        );
     }
 
     #[test]

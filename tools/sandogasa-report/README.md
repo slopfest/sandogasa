@@ -24,14 +24,14 @@ packaging activity across multiple systems:
   scoped by group prefix (`CentOS/Hyperscale`,
   `CentOS/Hyperscale/rpms`, etc.). The opened list flags each
   MR's fate the way the Forgejo one does: `(merged)`, `(closed)`,
-  or `(applied)`
+  or `(applied)`, rebased commits included
 - **GitHub**: PRs opened / merged / reviewed / commented on,
   authored commit counts per repo, annotated tags cut, and
   GitHub Releases published. Optionally scoped by
   organisation. See `TODO.md` for why GitHub ships only the
   authored count today (mirror-pusher detection deferred). The
   opened list carries the same `(merged)` / `(closed)` /
-  `(applied)` markers
+  `(applied)` markers, rebased commits included
 - **Forgejo / Gitea** (e.g. codeberg.org, a Fedora Forgejo,
   src.opensuse.org): PRs opened / merged and issues opened / closed
   in the window, across every repo you contribute to. Sourced from
@@ -41,8 +41,11 @@ packaging activity across multiple systems:
   your own namespace. Optionally scoped by repo-owner.
   The opened list flags each PR's fate — `(merged)`, `(closed)`,
   or `(applied)` when a closed-unmerged PR's commit still landed
-  on the target branch (a maintainer cherry-picked or
-  fast-forwarded it instead of clicking merge).
+  on the target branch: as-is (a maintainer cherry-picked or
+  fast-forwarded it instead of clicking merge), or rebased or
+  reworded under a new sha, recognised by the same title *and the
+  same author*. The same change redone by the maintainer stays
+  `(closed)`.
 - **Sourcehut** (sr.ht): patches sent / applied (lists.sr.ht — the
   patch-based PR analog), tickets opened / closed (todo.sr.ht), and
   commits in your own repos (git.sr.ht), split into yours vs third-party.

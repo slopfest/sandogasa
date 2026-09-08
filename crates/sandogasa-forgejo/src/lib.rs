@@ -265,6 +265,42 @@ pub struct PullDetail {
     pub merged: bool,
     pub head: GitRef,
     pub base: GitRef,
+    /// When the PR was opened (RFC 3339).
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+/// A commit from `/pulls/{n}/commits` or `/commits`: the sha and the
+/// git-level message and author.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RepoCommit {
+    pub sha: String,
+    pub commit: CommitBody,
+}
+
+/// The git-level part of a commit.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommitBody {
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub author: Option<CommitAuthor>,
+}
+
+/// A commit's author as git recorded it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommitAuthor {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub email: String,
+}
+
+impl RepoCommit {
+    /// The message's first line.
+    pub fn title(&self) -> &str {
+        self.commit.message.lines().next().unwrap_or("")
+    }
 }
 
 /// The relevant slice of a `/compare/{base}...{head}` response.
@@ -496,6 +532,56 @@ impl Client {
     /// `sha` adds nothing, so it's already on the branch. Used to spot
     /// a closed-but-unmerged PR whose commit landed out-of-band (a
     /// maintainer cherry-picked or fast-forwarded it).
+    /// The commits a pull request carries (one page, Gitea's cap of 50).
+    pub fn pull_request_commits(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<RepoCommit>, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/v1/repos/{owner}/{repo}/pulls/{number}/commits",
+            self.base_url
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[
+                ("limit", "50"),
+                ("stat", "false"),
+                ("verification", "false"),
+                ("files", "false"),
+            ])
+            .send()?;
+        Ok(http::blocking_json_ok(resp, &format!("Forgejo GET {url}"))?)
+    }
+
+    /// Commits on `branch` since an RFC 3339 instant, newest first —
+    /// one page of Gitea's 50, without stats, verification or file
+    /// lists. Gitea has no author filter, so callers filter.
+    pub fn branch_commits_since(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        since: &str,
+    ) -> Result<Vec<RepoCommit>, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/v1/repos/{owner}/{repo}/commits", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[
+                ("sha", branch),
+                ("since", since),
+                ("limit", "50"),
+                ("stat", "false"),
+                ("verification", "false"),
+                ("files", "false"),
+            ])
+            .send()?;
+        Ok(http::blocking_json_ok(resp, &format!("Forgejo GET {url}"))?)
+    }
+
     pub fn commit_contained(
         &self,
         owner: &str,
@@ -807,6 +893,33 @@ mod tests {
         assert_eq!(pr.head.sha, "8b8aa8b");
         assert_eq!(pr.base.ref_name, "tip");
         assert!(!pr.merged);
+    }
+
+    #[test]
+    fn branch_commits_since_reads_titles_and_authors() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v1/repos/o/r/commits")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("sha".into(), "tip".into()),
+                mockito::Matcher::UrlEncoded("since".into(), "2026-03-04T00:00:00Z".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"[{"sha": "abc", "created": "2026-03-05T00:00:00Z", "commit": {"message": "Drop bfd macros\n\nmore",
+                     "author": {"name": "Michel Lind", "email": "m@example.org", "date": "2026-03-05T00:00:00Z"}}}]"#,
+            )
+            .create();
+        let client = Client::anonymous(&server.url()).unwrap();
+        let commits = client
+            .branch_commits_since("o", "r", "tip", "2026-03-04T00:00:00Z")
+            .unwrap();
+        mock.assert();
+        assert_eq!(commits[0].title(), "Drop bfd macros");
+        assert_eq!(
+            commits[0].commit.author.as_ref().unwrap().email,
+            "m@example.org"
+        );
     }
 
     #[test]

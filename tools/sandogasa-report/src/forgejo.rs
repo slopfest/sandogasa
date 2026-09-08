@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
-use sandogasa_forgejo::{Client, Issue, PullRequest};
+use sandogasa_forgejo::{Client, Issue, PullDetail, PullRequest, RepoCommit};
 use serde::Serialize;
 
 use crate::config::ForgejoConfig;
@@ -222,7 +222,8 @@ fn applied_out_of_band(client: &Client, pr: &PrRef, verbose: bool) -> bool {
         }
     };
     match client.commit_contained(owner, repo, &detail.base.ref_name, &detail.head.sha) {
-        Ok(contained) => contained,
+        Ok(true) => true,
+        Ok(false) => landed_rebased(client, owner, repo, pr, &detail, verbose),
         Err(e) => {
             if verbose {
                 eprintln!(
@@ -233,6 +234,63 @@ fn applied_out_of_band(client: &Client, pr: &PrRef, verbose: bool) -> bool {
             false
         }
     }
+}
+
+/// The fallback when the PR's own commit is not on the target branch:
+/// rebased or reworded, it lands under a new sha. Match the PR's
+/// commits against the branch's commits since the PR was opened, by
+/// title and author (`forge::rebased_onto`). Two calls, spent only on
+/// a PR that has already failed the sha check.
+fn landed_rebased(
+    client: &Client,
+    owner: &str,
+    repo: &str,
+    pr: &PrRef,
+    detail: &PullDetail,
+    verbose: bool,
+) -> bool {
+    let Some(since) = detail.created_at.as_deref() else {
+        return false;
+    };
+    let result = client
+        .pull_request_commits(owner, repo, pr.number)
+        .and_then(|pr_commits| {
+            let branch = client.branch_commits_since(owner, repo, &detail.base.ref_name, since)?;
+            Ok(forge::rebased_onto(&landed(&pr_commits), &landed(&branch)))
+        });
+    match result {
+        Ok(applied) => applied,
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "[forgejo] applied-check: rebased lookup for {}#{} failed: {e}",
+                    pr.repo, pr.number
+                );
+            }
+            false
+        }
+    }
+}
+
+fn landed(commits: &[RepoCommit]) -> Vec<forge::Landed> {
+    commits
+        .iter()
+        .map(|c| forge::Landed {
+            title: c.title().to_string(),
+            author_name: c
+                .commit
+                .author
+                .as_ref()
+                .map(|a| a.name.clone())
+                .unwrap_or_default(),
+            author_email: c
+                .commit
+                .author
+                .as_ref()
+                .map(|a| a.email.clone())
+                .unwrap_or_default(),
+        })
+        .collect()
 }
 
 /// Format the Forgejo section as Markdown.

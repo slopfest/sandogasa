@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
-use sandogasa_github::{Client, Event, PullRequest, User};
+use sandogasa_github::{Client, Event, PullRequest, PullRequestDetail, RepoCommit, User};
 use serde::Serialize;
 
 use crate::config::GithubConfig;
@@ -651,7 +651,8 @@ fn applied_out_of_band(client: &Client, pr: &PrRef, verbose: bool) -> bool {
         }
     };
     match client.commit_contained(owner, repo, &detail.base.ref_name, &detail.head.sha) {
-        Ok(contained) => contained,
+        Ok(true) => true,
+        Ok(false) => landed_rebased(client, owner, repo, pr, &detail, verbose),
         Err(e) => {
             if verbose {
                 eprintln!(
@@ -662,6 +663,68 @@ fn applied_out_of_band(client: &Client, pr: &PrRef, verbose: bool) -> bool {
             false
         }
     }
+}
+
+/// The fallback when the PR's own commit is not on the target branch:
+/// rebased or reworded, it lands under a new sha. GitHub lists a
+/// branch's commits by author, so ask for the PR author's since the PR
+/// was opened and match them against the PR's commits by title and
+/// author (`forge::rebased_onto`). Two calls, spent only on a PR that
+/// has already failed the sha check.
+fn landed_rebased(
+    client: &Client,
+    owner: &str,
+    repo: &str,
+    pr: &PrRef,
+    detail: &PullRequestDetail,
+    verbose: bool,
+) -> bool {
+    let (Some(since), Some(login)) = (
+        detail.created_at.as_deref(),
+        detail.user.as_ref().map(|u| u.login.as_str()),
+    ) else {
+        return false;
+    };
+    let result = client
+        .pull_request_commits(owner, repo, pr.number)
+        .and_then(|pr_commits| {
+            let branch =
+                client.branch_commits_by(owner, repo, &detail.base.ref_name, login, since)?;
+            Ok(forge::rebased_onto(&landed(&pr_commits), &landed(&branch)))
+        });
+    match result {
+        Ok(applied) => applied,
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "[github] applied-check: rebased lookup for {}#{} failed: {e}",
+                    pr.repo, pr.number
+                );
+            }
+            false
+        }
+    }
+}
+
+fn landed(commits: &[RepoCommit]) -> Vec<forge::Landed> {
+    commits
+        .iter()
+        .map(|c| forge::Landed {
+            title: c.title().to_string(),
+            author_name: c
+                .commit
+                .author
+                .as_ref()
+                .map(|a| a.name.clone())
+                .unwrap_or_default(),
+            author_email: c
+                .commit
+                .author
+                .as_ref()
+                .map(|a| a.email.clone())
+                .unwrap_or_default(),
+        })
+        .collect()
 }
 
 fn write_pr_list(out: &mut String, prs: &[PrRef]) {

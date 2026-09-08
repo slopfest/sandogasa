@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### sandogasa-report: a rebased PR counts as applied, a redone one does not
+
+A closed-unmerged PR was marked `(applied)` only when its own head
+commit sat on the target branch, so a maintainer who rebased or
+reworded the change before landing it — new sha, same work — left the
+PR reading `(closed)`: skyjake/the_Foundation#34 on codeberg, rebased
+onto master by its maintainer, was one. When the sha check says no,
+every forge's section now looks once more: the target branch's commits
+since the PR was opened, **authored by the PR's author**, matched
+against the PR's commits by title. Authorship is what makes it safe.
+The salsa case that shaped the rule — the maintainer ran the identical
+`gbp import-orig` two days after the MRs and closed them five weeks
+later — has the same titles under the maintainer's name, and stays
+`(closed)`: that work was theirs, the MRs superseded. Two calls per
+PR, spent only where the sha check already failed; a Forgejo domain
+with one such PR went from 14.2 s to 15.4 s. `DEVELOPMENT.md` records
+the rule. sandogasa-forgejo, -github and -gitlab gain the PR-commit and
+branch-commit listings (`pull_request_commits`/`merge_request_commits`,
+`branch_commits_since`/`branch_commits_by`).
+
 ### sandogasa-report: GitHub and GitLab tell a PR's fate the way Forgejo does
 
 A pull request opened in the window read the same whether it was still

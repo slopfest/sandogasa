@@ -552,37 +552,6 @@ considered and rejected.)
   Decide whether they want the same three-tier treatment (e.g. `--detailed`
   = counts or a compact list, `--detailed --detailed` = full per-item
   detail) and apply it uniformly. Likely presentation-only.
-- (2026-06-24) Forgejo: detect a closed PR whose work landed via a
-  *reworded/rebased* commit (different SHA, so the `head.sha`-on-
-  default-branch check used for the "applied" state misses it). Run it
-  as a FALLBACK only when the SHA check (#1) is negative, to keep that
-  path precise (zero false positives). Mechanics (verified against
-  rhbz-style codeberg data):
-  - The PR's `Fixes #N` link is FREE — the pulls search result already
-    includes `body` (and `state`/`closed_at`), so no fetch to find the
-    linked issue.
-  - `GET /repos/{o}/{r}/issues/{N}/timeline` is ONE call and yields
-    both a `pull_ref` (the PR) and a `commit_ref` (the landing commit
-    SHA) directly — exactly the join we want.
-  - Trusting the `commit_ref` alone is 1 call but fuzzy: it means "a
-    commit referenced the issue," not "your PR's commit is on the
-    default branch" — so a different person fixing the same issue would
-    falsely credit a declined PR. To stay safe, confirm the commit's
-    author is the user and/or that it's on the default branch
-    (`commit_contained`), which costs ~1 more call (back to ~2, same as
-    #1 but with reworded coverage). Gate on the PR carrying a
-    `Fixes #N` so we only spend calls where there's something to find.
-  - **Authorship is the decisive check, not content** (2026-09-08, from
-    salsa's ruby-mixlib-log !2–!4). The maintainer ran the same
-    `gbp import-orig` two days after the MRs were opened — identical
-    tree, identical title, their own name as author — and closed the
-    MRs five weeks later. A content or title match alone would credit
-    the contributor with work the maintainer redid. So the fallback,
-    on GitHub and GitLab as much as Forgejo, must require the landing
-    commit to be **authored by the PR/MR author** (cherry-pick, `am`
-    and rebase all preserve the author) and only then match by title
-    or patch-id; same content under another author is *superseded*,
-    not applied — worth its own marker if it turns out to be common.
 
 ## ebranch check-update (2026-08-07)
 
