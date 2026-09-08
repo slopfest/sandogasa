@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a check needs a config section only to write
+
+`run` refused to start when any check in the order had no
+`[check."<name>"]` section — so a config written for six checks stopped
+working the day `bundled-library` and `rejected-cve` were added, before
+a single request was spent, though nothing in either check needs
+configuring to look. The section holds what a check needs to write: the
+tracker to block and the reason to post. So it is now required for
+writing only. Without `--apply` every check in the order runs whether
+or not it has a section; with `--apply`, a check without one reports
+its findings and writes nothing, and the run says so up front. The two
+`(breaking config)` marks in this release's entries are withdrawn: an
+existing config keeps working, and gains the new checks' reports.
+`RunConfig::for_check` returns the section or the defaults, and
+`has_section` says which.
+
 ### sandogasa-hattrack group: a FAS group's members through last-seen
 
 "Has the Btrfs SIG been responding?" (GitHub #6) had to be asked one
@@ -99,7 +115,7 @@ users), and sandogasa-closure's `DepsGraph` gains `dependencies`,
 `dependencies_by_kind` with `DepKind::{Runtime, Build}` — a `src:`
 pseudo-requirer marks a build-only edge — and `load`.
 
-### fedora-cve-triage: a rejected CVE record is a closed bug (breaking config)
+### fedora-cve-triage: a rejected CVE record is a closed bug
 
 Three of fossil's SQLite bugs track CVE records NVD marks `Rejected` —
 withdrawn by their CNA, "DO NOT USE THIS CVE RECORD" — and the run
@@ -110,10 +126,10 @@ against the configured tracker; it reads one field the tool fetches
 anyway, so it runs first in the order, before any check that has to
 reason about the package.
 
-Breaking (config): `run` requires a `[check."rejected-cve"]` section
-whenever `checks` is unset, like every check; the shipped
-`configs/fedora-cve-triage/run.toml` carries one naming the tracker
-`CVE-Rejected`, which has to be filed in Bugzilla before `--apply`.
+The shipped `configs/fedora-cve-triage/run.toml` carries a
+`[check."rejected-cve"]` section naming the tracker `CVE-Rejected`; a
+config without one still runs the check, and needs the section only to
+close bugs (see below).
 
 ### fedora-cve-triage: an NVD API key, and the pace it buys
 
@@ -277,7 +293,7 @@ NVRs, via `koji list-builds --package`; `parse_list_builds` is the pure
 half. fedora-cve-triage's `bundled-library` check uses it to find the
 first build carrying a fix.
 
-### fedora-cve-triage: a CVE in a system library is the library's bug (breaking config)
+### fedora-cve-triage: a CVE in a system library is the library's bug
 
 A CVE in OpenSSL was filed against `maturin`, and one in GStreamer
 against `fractal` (GitHub #7, #4). Neither package carries a copy of the
@@ -322,12 +338,10 @@ spec is never read. It runs after
 `unshipped-tools` and before `fix-version`, and has to stay after
 `cross-ecosystem`: NVD names node-tar's product plainly `tar`.
 
-Breaking (config): `run` requires a `[check."bundled-library"]` section,
-with `tracker_bug` and `reason`, whenever `checks` is unset — the same
-rule every check follows. Add the section (the shipped
-`configs/fedora-cve-triage/run.toml` has one) or list `checks`
-explicitly to leave it out. No Bugzilla tracker exists for this
-category yet; file one before running with `--apply`.
+The shipped `configs/fedora-cve-triage/run.toml` carries a
+`[check."bundled-library"]` section naming the tracker
+`CVE-FalsePositive-BundledLibrary`; a config without one still runs the
+check, and needs the section only to close bugs (see below).
 
 ## v0.23.0
 
