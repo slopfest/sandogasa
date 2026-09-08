@@ -27,12 +27,13 @@ packaging activity across multiple systems:
   GitHub Releases published. Optionally scoped by
   organisation. See `TODO.md` for why GitHub ships only the
   authored count today (mirror-pusher detection deferred).
-- **Forgejo / Gitea** (e.g. codeberg.org, a Fedora Forgejo):
-  PRs opened / merged and issues opened / closed in the window,
-  across every repo you contribute to. Sourced from the token
-  owner's issue/pull search, so it captures contributions to
-  other people's repos, not just your own namespace. Optionally
-  scoped by repo-owner.
+- **Forgejo / Gitea** (e.g. codeberg.org, a Fedora Forgejo,
+  src.opensuse.org): PRs opened / merged and issues opened / closed
+  in the window, across every repo you contribute to. Sourced from
+  the token owner's issue/pull search — or, with no token, the public
+  search by username, on instances whose API answers anonymously —
+  so it captures contributions to other people's repos, not just
+  your own namespace. Optionally scoped by repo-owner.
   The opened list flags each PR's fate — `(merged)`, `(closed)`,
   or `(applied)` when a closed-unmerged PR's commit still landed
   on the target branch (a maintainer cherry-picked or
@@ -268,10 +269,14 @@ org = "platform-team"
 
 `[domains.X.forgejo]` takes the instance root URL and an optional
 `owner` (repo-owner filter, the Forgejo analogue of GitHub's
-`org`). The report queries the **token owner's** pull requests, so
-it captures contributions to anyone's repo — the usual case for
-upstream work on codeberg.org. The per-domain `user` is only for
-display; the actual scoping comes from the token.
+`org`). With a token, the report queries the **token owner's** pull
+requests, so it captures contributions to anyone's repo — the usual
+case for upstream work on codeberg.org — and the per-user login is
+only for display. Without a token, it runs the public search by that
+login instead (`[users.<key>.forgejo] "src.opensuse.org" =
+"Pharaoh_Atem"`, falling back to the FAS login), which works on an
+instance whose API answers anonymously, src.opensuse.org among them;
+an unknown login is an error, not an empty report.
 
 ```toml
 # Every repo you've opened/merged PRs in on codeberg.org.
@@ -373,7 +378,9 @@ fallback; the overlay's `[forgejo_tokens]` table is the third.
 Because the report queries "PRs *I* created", the token's owner is
 who the report is about — use your own token. Create one at your
 instance's `Settings → Applications → Access Tokens` (on codeberg,
-<https://codeberg.org/user/settings/applications>).
+<https://codeberg.org/user/settings/applications>). A token is
+optional where the instance's API answers anonymously: then the
+report searches by login (see the domain shorthand above).
 
 Forgejo tokens are **scoped by category** (activitypub, issue, misc,
 notification, organization, package, repository, user — each

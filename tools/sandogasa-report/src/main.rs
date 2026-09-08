@@ -366,11 +366,12 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             }
         }
 
-        // Forgejo (per-domain). The search is token-scoped, so the
-        // username is only for display; resolution mirrors the others
-        // (profile.forgejo[<host>] → profile.fas → raw --user) and a
-        // domain with no resolvable name still reports (it labels the
-        // section with whatever name we have, or the token owner).
+        // Forgejo (per-domain). With a token the search is the token
+        // owner's and the username only labels the section; without
+        // one the public search runs by this name. Resolution mirrors
+        // the others (profile.forgejo[<host>] → profile.fas → raw
+        // --user), and a domain with no resolvable name still reports
+        // when there is a token.
         if let Some(fj) = domain.forgejo.as_ref()
             && !cli.no_forgejo
         {

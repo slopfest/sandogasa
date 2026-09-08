@@ -16,7 +16,10 @@ owner/org filter).
 
 The pull-request search filters by `created=true`, i.e. it reports the
 activity of whoever owns the token — the self-reporting case. Point it
-at your own instance token.
+at your own instance token. `pull_requests_by` / `issues_by` search by a
+named user instead (`created_by`), which needs no token on an instance
+whose API answers anonymously, such as src.opensuse.org; pair them with
+`Client::anonymous`.
 
 ## Token scopes
 
@@ -24,6 +27,8 @@ Forgejo tokens are scoped by category (read/write). Per operation:
 
 - `my_pull_requests` / `my_issues` — `read:repository` + `read:issue`
   (the search lives under the `/repos` group and is an issue endpoint).
+  `pull_requests_by` / `issues_by` need the same, or no token at all
+  on an instance with anonymous API access.
 - `validate_token` — `read:user` (it calls `/api/v1/user`).
 - `create_issue` / `search_issues` — `write:issue` (create) /
   `read:issue` (search), plus `read:repository`.

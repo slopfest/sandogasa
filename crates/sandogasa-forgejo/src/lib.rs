@@ -7,7 +7,7 @@
 //! tools need:
 //!
 //! - `sandogasa-report`'s merged-PR accounting — the pull requests the
-//!   authenticated token owner created, across *every* repo they
+//!   authenticated token owner (or a named user) created, across *every* repo they
 //!   contribute to (not just their own org), via the global issue/pull
 //!   search ([`Client::my_pull_requests`]).
 //! - `ebranch`'s releng-ticket filing — [`Client::create_issue`] and
@@ -377,7 +377,19 @@ impl Client {
         state: &str,
         owner: Option<&str>,
     ) -> Result<Vec<PullRequest>, Box<dyn std::error::Error>> {
-        self.search_created("pulls", state, owner)
+        self.search_created("pulls", state, owner, None)
+    }
+
+    /// The pull requests `user` created, from the public search
+    /// (`created_by`), so no token is needed on an instance whose API
+    /// answers anonymously. Otherwise as [`Self::my_pull_requests`].
+    pub fn pull_requests_by(
+        &self,
+        user: &str,
+        state: &str,
+        owner: Option<&str>,
+    ) -> Result<Vec<PullRequest>, Box<dyn std::error::Error>> {
+        self.search_created("pulls", state, owner, Some(user))
     }
 
     /// The issues the token owner created, paginated across all repos
@@ -392,7 +404,18 @@ impl Client {
         state: &str,
         owner: Option<&str>,
     ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
-        self.search_created("issues", state, owner)
+        self.search_created("issues", state, owner, None)
+    }
+
+    /// The issues `user` created, from the public search; see
+    /// [`Self::pull_requests_by`].
+    pub fn issues_by(
+        &self,
+        user: &str,
+        state: &str,
+        owner: Option<&str>,
+    ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
+        self.search_created("issues", state, owner, Some(user))
     }
 
     /// Paginate a list endpoint: GET `url` with `base_query` plus
@@ -425,17 +448,22 @@ impl Client {
     }
 
     /// Paginate the global issue/pull search for items the token owner
-    /// created (`created=true`). `kind` is `pulls` or `issues`; the
-    /// result is deserialized into the caller's chosen type.
+    /// created (`created=true`), or those `by` a named user
+    /// (`created_by`). `kind` is `pulls` or `issues`; the result is
+    /// deserialized into the caller's chosen type.
     fn search_created<T: serde::de::DeserializeOwned>(
         &self,
         kind: &str,
         state: &str,
         owner: Option<&str>,
+        by: Option<&str>,
     ) -> Result<Vec<T>, Box<dyn std::error::Error>> {
         let url = format!("{}/api/v1/repos/issues/search", self.base_url);
-        let mut query: Vec<(&str, &str)> =
-            vec![("type", kind), ("state", state), ("created", "true")];
+        let mut query: Vec<(&str, &str)> = vec![("type", kind), ("state", state)];
+        match by {
+            Some(user) => query.push(("created_by", user)),
+            None => query.push(("created", "true")),
+        }
         if let Some(o) = owner {
             query.push(("owner", o));
         }

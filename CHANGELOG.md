@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### sandogasa-report: a Forgejo domain works without a token where the API is public
+
+A Forgejo domain refused to run without a token, though the Gitea at
+src.opensuse.org — openSUSE's git packaging, where a report for GitHub
+#8 has to look — answers its search API anonymously, and the search
+takes a username (`created_by`) as readily as "mine" (`created=true`).
+With no token and a login to go by (the profile's `forgejo` entry for
+the host, else the FAS login), the report now runs the public search by
+that login; an unknown login is a 404 from the instance, reported, not
+an empty section. A token still means the token owner's activity. On
+src.opensuse.org this lists a contributor's five PRs across `obs/fedora`
+and `obs/debian` with their merge state, no account needed.
+sandogasa-forgejo gains `pull_requests_by` and `issues_by`.
+
 ### sandogasa-bugzilla: a stock Bugzilla 5's bugs decode
 
 Every search on bugzilla.opensuse.org failed with "error decoding

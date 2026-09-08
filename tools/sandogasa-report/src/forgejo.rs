@@ -3,7 +3,8 @@
 //! Forgejo / Gitea activity reporting — pull requests the user
 //! opened and merged in a date window. Sourced from the global
 //! issue/pull search (`/repos/issues/search?type=pulls&created=true`),
-//! which returns the token owner's PRs across every repo they
+//! which returns the token owner's PRs (or, with no token, a named
+//! user's) across every repo they
 //! contribute to (e.g. on codeberg.org, where contributions land in
 //! other people's repos, not just the user's own org).
 //!
@@ -35,7 +36,8 @@ const TOKEN_SPEC: TokenSpec = TokenSpec {
 pub struct ForgejoReport {
     /// Instance root URL the report was fetched from.
     pub instance: String,
-    /// Forgejo login reported on (the token owner).
+    /// Forgejo login reported on: the token owner, or the name the
+    /// anonymous search was made by.
     pub user: String,
     /// Repo-owner filter, if set.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -114,19 +116,31 @@ pub fn forgejo_report(
     tokens: &BTreeMap<String, String>,
     verbose: bool,
 ) -> Result<ForgejoReport, String> {
-    let token = find_token(&cfg.instance, tokens)?;
     let base = cfg.instance.trim_end_matches('/');
-    let client =
-        Client::new(base, &token).map_err(|e| format!("Forgejo client setup on {base}: {e}"))?;
+    // With a token the search is "what I created"; without one, the
+    // public search by name, which instances such as src.opensuse.org
+    // answer anonymously. No token and no name is the old error.
+    let (client, by) = match find_token(&cfg.instance, tokens) {
+        Ok(token) => (Client::new(base, &token), None),
+        Err(_) if !user.is_empty() => (Client::anonymous(base), Some(user)),
+        Err(e) => return Err(e),
+    };
+    let client = client.map_err(|e| format!("Forgejo client setup on {base}: {e}"))?;
+    let whose = match by {
+        Some(u) => format!("{u} (anonymously)"),
+        None => "the token owner".to_string(),
+    };
 
     if verbose {
-        eprintln!("[forgejo] {base}: searching pulls created by the token owner");
+        eprintln!("[forgejo] {base}: searching pulls created by {whose}");
     }
     // One `state=all` search gives both opened and merged; we filter
     // each by the relevant timestamp.
-    let pulls = client
-        .my_pull_requests("all", cfg.owner.as_deref())
-        .map_err(|e| format!("Forgejo pull search on {base}: {e}"))?;
+    let pulls = match by {
+        Some(u) => client.pull_requests_by(u, "all", cfg.owner.as_deref()),
+        None => client.my_pull_requests("all", cfg.owner.as_deref()),
+    }
+    .map_err(|e| format!("Forgejo pull search on {base}: {e}"))?;
 
     let mut report = ForgejoReport {
         instance: base.to_string(),
@@ -159,11 +173,13 @@ pub fn forgejo_report(
     }
 
     if verbose {
-        eprintln!("[forgejo] {base}: searching issues created by the token owner");
+        eprintln!("[forgejo] {base}: searching issues created by {whose}");
     }
-    let issues = client
-        .my_issues("all", cfg.owner.as_deref())
-        .map_err(|e| format!("Forgejo issue search on {base}: {e}"))?;
+    let issues = match by {
+        Some(u) => client.issues_by(u, "all", cfg.owner.as_deref()),
+        None => client.my_issues("all", cfg.owner.as_deref()),
+    }
+    .map_err(|e| format!("Forgejo issue search on {base}: {e}"))?;
     for issue in issues {
         if issue
             .created_at

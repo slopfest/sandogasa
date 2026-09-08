@@ -51,6 +51,7 @@ bodhi_releases = ["EPEL-*"]
 [domains.opensuse.bugzilla]
 instance = "https://bugzilla.opensuse.org"
 products = ["openSUSE Tumbleweed", "openSUSE Distribution"]
+# (src.opensuse.org joins this domain under "Upstream forges" below.)
 
 # --- CentOS SIG domains ---
 
@@ -95,11 +96,19 @@ instance = "https://salsa.debian.org"
 # The query is token-scoped (it reports the token owner's PRs), so it
 # captures contributions across *every* repo you touch, not just your
 # own namespace. Add `owner = "..."` to restrict to one repo-owner.
+# With no token, the public search runs by your login on the instance
+# (`[users.<key>.forgejo] "<host>" = "..."`), where the API answers
+# anonymously.
 #
 # A domain targets a single Forgejo instance; for another instance
 # (e.g. a Fedora Forgejo) add it under a different domain.
 [domains.upstream.forgejo]
 instance = "https://codeberg.org"
+
+# openSUSE's git packaging, a Gitea: PRs and issues on src.opensuse.org,
+# by login, no token needed.
+[domains.opensuse.forgejo]
+instance = "https://src.opensuse.org"
 
 # Sourcehut (sr.ht): patches you sent (lists.sr.ht — the patch-based PR
 # analog, with `APPLIED` as the merged analog), tickets you opened /
