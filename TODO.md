@@ -6,6 +6,25 @@ completed work lives in `CHANGELOG.md` and the git history. An entry
 here that has stopped asking for something should be removed rather
 than annotated as done.
 
+## Fedora packaging: ship the fedrq Hyperscale config as its own subpackage (2026-09-08)
+
+`configs/fedrq/centos-hyperscale.toml` and `configs/fedrq/repos/
+centos-hyperscale.repo` make `fedrq -b hs.el9` / `-b hs.el10` (and
+`-r stack`, `-r base`, the per-flavor classes) work, and poi-tracker's
+Hyperscale closures, hs-relmon and the inventories' `distros` spelling
+all lean on them — but the Fedora spec never shipped them, so a
+packaged sandogasa cannot walk a Hyperscale closure and nobody outside
+this checkout gets the branches. Add a subpackage other people can pull
+in without the tools (something like `fedrq-config-centos-hyperscale`,
+`Requires: fedrq`, no other dependency) that installs the two files
+under fedrq's system config directory (`/etc/fedrq/` and
+`/etc/fedrq/repos/`, per the CHANGELOG's "copy the directory's
+contents to `/etc/fedrq/` or `~/.config/fedrq/`" — confirm against
+fedrq's own docs before committing the paths), and have the sandogasa
+package `Recommends:` it next to fedrq. Noticed while dry-running
+`reconcile` on the Hyperscale closures: `-b hs.el9 -r stack` resolves
+here only because `~/.config/fedrq/` carries the copies.
+
 ## koji-lag
 
 - (2026-08-22) **`fetch-store.sh` reaches only people with a checkout.**
@@ -308,9 +327,12 @@ the README its workspace-era examples on 2026-09-05; the releng
 follow-through (prune, cull.toml emptied, reports regenerated) and the
 first real `reconcile` run are done as of 2026-09-08. Still open:
 
-- A Hyperscale closure has not been run yet (2026-09-08): the
-  `[[closure]]` entries for hyperscale-el9/el10 exist, but no
-  reconcile cycle has exercised them end to end.
+- The Hyperscale closures reconcile cleanly (2026-09-08): a real
+  `reconcile` run walked two new Fedora keeps and reported "nothing
+  changed" for hyperscale-el9 and hyperscale-el10, whose graphs from
+  2026-09-04 cover every shipped keep (nvme-cli is `unshipped` and so
+  deliberately not walked). Their first real test comes when the SIG
+  inventory changes.
 
 - `reconcile` re-asks nothing it has written, but a "since first seen"
   memory of decisions declined (ride now, ask again later?) does not
