@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.23.1
 
 ### fedora-cve-triage: a check needs a config section only to write
 
