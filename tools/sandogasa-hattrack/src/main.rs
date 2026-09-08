@@ -1305,52 +1305,84 @@ async fn gather_last_seen(
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
 
-    let mut services = Vec::new();
-    let mut discourse_tz: Option<String> = None;
+    // Every service is asked at once — they are independent HTTP
+    // round trips, and a member's wall time is the slowest of them
+    // rather than their sum. Results are awaited in the order the
+    // checks were started, so equal timestamps keep a stable order.
+    let mut checks: Vec<tokio::task::JoinHandle<(ServiceLastSeen, Option<String>)>> = Vec::new();
+    let progress = |what: &str| eprintln!("{username}: checking {what}...");
 
     if service_enabled(Service::Discourse, skip, only) {
-        eprintln!("Checking Discourse...");
-        let (discourse_service, tz) = check_discourse(username).await;
-        services.push(discourse_service);
-        discourse_tz = tz;
+        progress("Discourse");
+        let u = username.to_string();
+        checks.push(tokio::spawn(async move { check_discourse(&u).await }));
     }
 
     if service_enabled(Service::Bodhi, skip, only) {
-        eprintln!("Checking Bodhi...");
-        services.push(check_bodhi(username).await);
+        progress("Bodhi");
+        let u = username.to_string();
+        checks.push(tokio::spawn(async move { (check_bodhi(&u).await, None) }));
     }
 
     if service_enabled(Service::Distgit, skip, only) {
-        eprintln!("Checking dist-git...");
-        services.push(check_distgit(username).await);
+        progress("dist-git");
+        let u = username.to_string();
+        checks.push(tokio::spawn(async move { (check_distgit(&u).await, None) }));
     }
 
     if service_enabled(Service::Bugzilla, skip, only) {
-        eprintln!("Checking Bugzilla...");
-        services.push(check_bugzilla(&emails).await);
+        progress("Bugzilla");
+        let e = emails.clone();
+        checks.push(tokio::spawn(
+            async move { (check_bugzilla(&e).await, None) },
+        ));
     }
 
     if service_enabled(Service::Mailman, skip, only) {
-        eprintln!("Checking mailing lists...");
-        services.push(check_mailman(&emails, lists, max_pages).await);
+        progress("mailing lists");
+        let (e, l) = (emails.clone(), lists.to_vec());
+        checks.push(tokio::spawn(async move {
+            (check_mailman(&e, &l, max_pages).await, None)
+        }));
     }
 
     if service_enabled(Service::Forge, skip, only) {
-        eprintln!("Checking Forgejo...");
-        services.push(forge::check_forge(username, forge::DEFAULT_URL, forge_repos).await);
+        progress("Forgejo");
+        let (u, repos) = (username.to_string(), forge_repos.to_vec());
+        checks.push(tokio::spawn(async move {
+            (
+                forge::check_forge(&u, forge::DEFAULT_URL, &repos).await,
+                None,
+            )
+        }));
     }
 
     if let Some(topic) = meeting
         && service_enabled(Service::Meetings, skip, only)
     {
-        eprintln!("Checking '{topic}' meetings...");
+        progress(&format!("'{topic}' meetings"));
         let from_fas: Vec<String> = fas
             .user
             .as_ref()
             .map(|u| u.matrix_ids())
             .unwrap_or_default();
-        services
-            .push(meetings::check_meetings(username, topic, &from_fas, matrix, now, refresh).await);
+        let (u, t, m) = (username.to_string(), topic.to_string(), matrix.to_vec());
+        checks.push(tokio::spawn(async move {
+            (
+                meetings::check_meetings(&u, &t, &from_fas, &m, now, refresh).await,
+                None,
+            )
+        }));
+    }
+
+    let mut services = Vec::with_capacity(checks.len());
+    let mut discourse_tz: Option<String> = None;
+    for check in checks {
+        let (service, tz) = check.await?;
+        services.push(service);
+        if tz.is_some() {
+            discourse_tz = tz;
+        }
     }
 
     // Sort by most recent first (entries with dates before those without)
@@ -1557,27 +1589,54 @@ async fn cmd_group(
     members.dedup_by(|a, b| a.username == b.username);
     eprintln!("{group}: {} member(s)", members.len());
 
+    // Members are gathered a few at a time: each is a fan-out of HTTP
+    // requests already, and every service here is shared Fedora
+    // infrastructure, so the group's whole membership at once would be
+    // rude to it. Results come back in completion order and are sorted
+    // below.
+    const AT_ONCE: usize = 4;
+    let mut in_flight = tokio::task::JoinSet::new();
     let mut summaries = Vec::with_capacity(members.len());
     for (i, member) in members.iter().enumerate() {
         eprintln!("[{}/{}] {}", i + 1, members.len(), member.username);
-        let summary = gather_last_seen(
-            &member.username,
-            &[],
-            false,
-            &[],
-            0,
-            holidays_enabled,
-            holidays_refresh,
-            now,
-            skip,
-            only,
-            meeting,
-            forge_repos,
-            &[],
-            refresh,
-        )
-        .await?;
-        summaries.push(summary);
+        let (username, skip, only, meeting, forge_repos) = (
+            member.username.clone(),
+            skip.to_vec(),
+            only.to_vec(),
+            meeting.map(str::to_string),
+            forge_repos.to_vec(),
+        );
+        in_flight.spawn(async move {
+            gather_last_seen(
+                &username,
+                &[],
+                false,
+                &[],
+                0,
+                holidays_enabled,
+                holidays_refresh,
+                now,
+                &skip,
+                &only,
+                meeting.as_deref(),
+                &forge_repos,
+                &[],
+                refresh,
+            )
+            .await
+            .map_err(|e| format!("{username}: {e}"))
+        });
+        if in_flight.len() >= AT_ONCE {
+            summaries.push(
+                in_flight
+                    .join_next()
+                    .await
+                    .expect("a task is in flight")??,
+            );
+        }
+    }
+    while let Some(done) = in_flight.join_next().await {
+        summaries.push(done??);
     }
     // Most recent first; members with nothing found last, by name.
     summaries.sort_by(|a, b| {

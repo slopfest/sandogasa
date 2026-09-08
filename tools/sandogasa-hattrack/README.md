@@ -124,7 +124,8 @@ Group: rust-sig (10 members)
   …
 ```
 
-Ten members took about three minutes, Mailman skipped.
+Each member's services are queried at once, and members four at a
+time, so ten members take about fifteen seconds, Mailman skipped.
 
 Membership is FAS's, read live, so the group's Matrix IDs, emails and
 time zones come along without flags. Each member costs a round of

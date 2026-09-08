@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### sandogasa-hattrack: a group in seconds, not minutes
+
+`group rust-sig` took three minutes for ten members — eighteen seconds
+each, eleven of them on Bodhi — and `last-seen` about fifteen seconds
+for one person. Two causes. The Bodhi client asked for a page of a
+hundred full update objects (builds, comments, karma: 1.7 MB, ten
+seconds) when the check wanted the most recent one; it now asks for as
+many rows as the caller wants, up to Bodhi's page cap (5 KB, under half
+a second). And every service was asked in turn, then every member in
+turn; a member's services are now queried at once and a group's
+members four at a time, a member's wall time being the slowest service
+rather than their sum. The rust-sig run dropped from 183 s to 13 s and
+`last-seen` from 15 s to 4 s, same output. Progress lines carry the
+username, since members' checks now interleave.
+
 ### sandogasa-report: an openSUSE setup guide
 
 `tools/sandogasa-report/README.openSUSE.md` walks through reporting on
