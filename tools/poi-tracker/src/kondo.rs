@@ -97,7 +97,8 @@ pub struct KondoReport {
     pub culled: Vec<Culled>,
     /// Filed into another inventory: (package, inventory path).
     pub explained: Vec<(String, String)>,
-    /// False positives dropped at the prompt.
+    /// Skipped at the prompt: left undecided, written nowhere, back as
+    /// candidates next run.
     pub removed: Vec<String>,
     pub warnings: Vec<String>,
 }

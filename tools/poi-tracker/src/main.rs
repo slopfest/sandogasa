@@ -1899,7 +1899,10 @@ fn cmd_kondo(paths: &[String], args: &KondoArgs) -> CmdResult {
         println!("filed {name} → {inv}");
     }
     if !report.removed.is_empty() {
-        println!("dropped as false positives: {}", report.removed.join(", "));
+        println!(
+            "skipped, undecided until next run: {}",
+            report.removed.join(", ")
+        );
     }
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
