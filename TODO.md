@@ -555,17 +555,6 @@ considered and rejected.)
 - Debug CVE/security bug reporting: the query may be too narrow or
   the keyword filter may not match Bugzilla's actual keyword values.
   Test with known CVE bugs and compare against manual Bugzilla search.
-- (2026-06-24) Apply the Forgejo "(applied)" detection (closed-unmerged
-  PR whose commit landed out-of-band) to GitHub and GitLab too. The
-  approach is identical — each forge has a compare endpoint
-  (GitHub `/compare/{base}...{head}` → `status`/`ahead_by`; GitLab
-  `/repository/compare?from=&to=` → empty `commits`) — but it's a
-  per-crate implementation: add `pull_request`/`merge_request` detail +
-  a `commit_contained` method to `sandogasa-github` and
-  `sandogasa-gitlab` (neither has them). GitHub slots in cheaply (its
-  reporter is search-based like Forgejo, so annotate the opened list the
-  same way); GitLab needs more (its reporter is *event*-based and
-  doesn't currently enumerate closed-unmerged MRs to annotate).
 - (2026-06-24) Forgejo: detect a closed PR whose work landed via a
   *reworded/rebased* commit (different SHA, so the `head.sha`-on-
   default-branch check used for the "applied" state misses it). Run it
@@ -586,6 +575,17 @@ considered and rejected.)
     (`commit_contained`), which costs ~1 more call (back to ~2, same as
     #1 but with reworded coverage). Gate on the PR carrying a
     `Fixes #N` so we only spend calls where there's something to find.
+  - **Authorship is the decisive check, not content** (2026-09-08, from
+    salsa's ruby-mixlib-log !2–!4). The maintainer ran the same
+    `gbp import-orig` two days after the MRs were opened — identical
+    tree, identical title, their own name as author — and closed the
+    MRs five weeks later. A content or title match alone would credit
+    the contributor with work the maintainer redid. So the fallback,
+    on GitHub and GitLab as much as Forgejo, must require the landing
+    commit to be **authored by the PR/MR author** (cherry-pick, `am`
+    and rebase all preserve the author) and only then match by title
+    or patch-id; same content under another author is *superseded*,
+    not applied — worth its own marker if it turns out to be common.
 
 ## ebranch check-update (2026-08-07)
 

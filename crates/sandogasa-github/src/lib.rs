@@ -133,6 +133,34 @@ pub struct PullRequestRef {
     pub merged_at: Option<String>,
 }
 
+/// The fuller pull-request object from `/repos/{owner}/{repo}/pulls/{n}`:
+/// the head and base refs the search result omits, and whether it merged.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PullRequestDetail {
+    pub number: u64,
+    pub state: String,
+    #[serde(default)]
+    pub merged: bool,
+    pub head: GitRef,
+    pub base: GitRef,
+}
+
+/// One side of a pull request: the branch name and the commit it points at.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitRef {
+    #[serde(rename = "ref")]
+    pub ref_name: String,
+    pub sha: String,
+}
+
+/// What `/compare/{base}...{head}` answers: `ahead_by` counts the commits
+/// on head that base lacks, so zero means base already has them all.
+#[derive(Debug, Deserialize)]
+struct CompareResult {
+    #[serde(default)]
+    ahead_by: u64,
+}
+
 /// Wire response wrapper for the Search Issues endpoint.
 #[derive(Debug, Deserialize)]
 struct SearchIssuesResponse {
@@ -408,6 +436,40 @@ impl Client {
         let resp = self.http.get(&url).send()?;
         Ok(http::blocking_json_ok(resp, &format!("GitHub GET {url}"))?)
     }
+
+    /// Fetch the fuller pull-request object for `owner/repo#number` — in
+    /// particular its `head` and `base` refs, which the search result
+    /// omits.
+    pub fn pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<PullRequestDetail, Box<dyn std::error::Error>> {
+        let url = format!("{}/repos/{owner}/{repo}/pulls/{number}", self.base_url);
+        let resp = self.http.get(&url).send()?;
+        Ok(http::blocking_json_ok(resp, &format!("GitHub GET {url}"))?)
+    }
+
+    /// Whether `sha` is already on `branch`: GitHub's compare of the
+    /// branch to the sha reports how many commits the sha is ahead by,
+    /// and zero means the branch has every one of them.
+    pub fn commit_contained(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        sha: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/repos/{owner}/{repo}/compare/{branch}...{sha}",
+            self.base_url
+        );
+        let resp = self.http.get(&url).send()?;
+        let cmp: CompareResult =
+            http::blocking_json_ok(resp, &format!("GitHub compare {branch}...{sha}"))?;
+        Ok(cmp.ahead_by == 0)
+    }
 }
 
 /// Check whether `token` works against `base_url` by hitting
@@ -460,6 +522,54 @@ fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pull_request_reads_head_and_base() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/repos/o/r/pulls/92")
+            .with_status(200)
+            .with_body(
+                r#"{"number": 92, "state": "closed", "merged": false,
+                    "head": {"ref": "fix", "sha": "8b8aa8b"},
+                    "base": {"ref": "main", "sha": "0000000"}}"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let pr = client.pull_request("o", "r", 92).unwrap();
+        mock.assert();
+        assert_eq!(pr.head.sha, "8b8aa8b");
+        assert_eq!(pr.base.ref_name, "main");
+        assert!(!pr.merged);
+    }
+
+    #[test]
+    fn commit_contained_reads_ahead_by() {
+        // ahead_by == 0 (status "identical" or "behind") → the sha is on
+        // the branch already.
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/repos/o/r/compare/main...8b8aa8b")
+            .with_status(200)
+            .with_body(r#"{"status": "behind", "ahead_by": 0, "behind_by": 4}"#)
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        assert!(
+            client
+                .commit_contained("o", "r", "main", "8b8aa8b")
+                .unwrap()
+        );
+        mock.assert();
+
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/repos/o/r/compare/main...other")
+            .with_status(200)
+            .with_body(r#"{"status": "diverged", "ahead_by": 2, "behind_by": 4}"#)
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        assert!(!client.commit_contained("o", "r", "main", "other").unwrap());
+    }
 
     #[test]
     fn new_rejects_plaintext_remote() {

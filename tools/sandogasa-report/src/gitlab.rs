@@ -83,6 +83,35 @@ pub struct MrRef {
     pub iid: u64,
     /// MR title.
     pub title: String,
+    /// Current state (`opened` / `merged` / `closed`) for the opened
+    /// list, looked up after the events; the other lists leave it
+    /// empty.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub state: String,
+    /// Whether the MR was merged (vs. closed without merging).
+    pub merged: bool,
+    /// Whether a closed-but-unmerged MR's commit nonetheless landed on
+    /// the target branch (a maintainer applied it out-of-band rather
+    /// than clicking merge). Determined by a follow-up API check.
+    #[serde(default)]
+    pub applied: bool,
+}
+
+impl MrRef {
+    /// A state marker for the **opened** list, so an MR that was opened
+    /// in the window but has since landed or been declined isn't shown
+    /// as if it were still open. Empty for an open MR.
+    fn status_marker(&self) -> &'static str {
+        if self.merged {
+            " (merged)"
+        } else if self.applied {
+            " (applied)"
+        } else if self.state == "closed" {
+            " (closed)"
+        } else {
+            ""
+        }
+    }
 }
 
 /// A tag the user pushed.
@@ -188,6 +217,13 @@ pub fn gitlab_report(
             tagged_project_ids.insert(ev.project_id);
         }
         dispatch_event(ev, path, &mut report, &mut commented_seen, &mut tags_seen);
+    }
+
+    // The events say an MR was opened, not what became of it: look each
+    // one up, and for one closed without merging ask whether its commit
+    // landed on the target branch anyway.
+    for mr in report.opened_mrs.iter_mut() {
+        settle_opened_mr(base, &token, mr, verbose);
     }
 
     // Fill in any tags we couldn't name from events alone by
@@ -336,6 +372,13 @@ pub fn format_markdown(report: &GitlabReport, detail: u8) -> String {
     let mut stats = String::new();
     stat(&mut stats, "MRs opened", report.opened_mrs.len());
     stat(&mut stats, "MRs merged", report.merged_mrs.len());
+    // A closed MR whose commit landed out-of-band — counted separately
+    // since the forge reports it as neither merged nor open.
+    stat(
+        &mut stats,
+        "MRs applied (landed unmerged)",
+        report.opened_mrs.iter().filter(|m| m.applied).count(),
+    );
     stat(&mut stats, "MRs approved", report.approved_mrs.len());
     stat(&mut stats, "MRs commented on", report.commented_mrs.len());
     stat_across(
@@ -519,6 +562,9 @@ fn dispatch_event(
                     project: path.to_string(),
                     iid,
                     title: ev.target_title.clone().unwrap_or_default(),
+                    state: String::new(),
+                    merged: false,
+                    applied: false,
                 });
             }
         }
@@ -548,7 +594,52 @@ fn push_mr(dest: &mut Vec<MrRef>, path: &str, ev: &Event) {
             project: path.to_string(),
             iid,
             title,
+            state: String::new(),
+            merged: false,
+            applied: false,
         });
+    }
+}
+
+/// Fill in an opened MR's fate: its current state, and for one closed
+/// without merging, whether its head commit is nonetheless on the
+/// target branch. Any lookup failure leaves the MR as the event
+/// described it (a warning under `--verbose`) — the label is only ever
+/// *upgraded* when we're certain, never falsely claiming a
+/// contribution landed.
+fn settle_opened_mr(base: &str, token: &str, mr: &mut MrRef, verbose: bool) {
+    let detail = sandogasa_gitlab::Client::new(base, &mr.project, token)
+        .and_then(|c| c.merge_request(mr.iid).map(|d| (c, d)));
+    let (client, detail) = match detail {
+        Ok(x) => x,
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "[gitlab] applied-check: fetch {}!{} failed: {e}",
+                    mr.project, mr.iid
+                );
+            }
+            return;
+        }
+    };
+    mr.state = detail.state;
+    mr.merged = mr.state == "merged";
+    if mr.state != "closed" {
+        return;
+    }
+    let Some(sha) = detail.sha.as_deref() else {
+        return;
+    };
+    match client.commit_contained(&detail.target_branch, sha) {
+        Ok(contained) => mr.applied = contained,
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "[gitlab] applied-check: compare for {}!{} failed: {e}",
+                    mr.project, mr.iid
+                );
+            }
+        }
     }
 }
 
@@ -556,8 +647,13 @@ fn write_mr_list(out: &mut String, mrs: &[MrRef], instance: &str) {
     let base = instance.trim_end_matches('/');
     for mr in mrs {
         out.push_str(&format!(
-            "- [{}!{}]({base}/{}/-/merge_requests/{}) {}\n",
-            mr.project, mr.iid, mr.project, mr.iid, mr.title,
+            "- [{}!{}]({base}/{}/-/merge_requests/{}) {}{}\n",
+            mr.project,
+            mr.iid,
+            mr.project,
+            mr.iid,
+            mr.title,
+            mr.status_marker(),
         ));
     }
     out.push('\n');
@@ -732,6 +828,51 @@ mod tests {
     }
 
     #[test]
+    fn opened_list_marks_closed_merged_and_applied_state() {
+        let mut report = GitlabReport {
+            instance: "https://gitlab.com".into(),
+            ..Default::default()
+        };
+        let mr = |iid: u64, title: &str, state: &str, merged: bool, applied: bool| MrRef {
+            project: "g/p".into(),
+            iid,
+            title: title.into(),
+            state: state.into(),
+            merged,
+            applied,
+        };
+        report
+            .opened_mrs
+            .push(mr(1, "declined", "closed", false, false));
+        report
+            .opened_mrs
+            .push(mr(2, "still going", "opened", false, false));
+        report
+            .opened_mrs
+            .push(mr(3, "taken via cherry-pick", "closed", false, true));
+        report
+            .opened_mrs
+            .push(mr(4, "landed", "merged", true, false));
+        // The other lists carry no state and get no marker.
+        report
+            .approved_mrs
+            .push(mr(5, "looked at", "", false, false));
+        let md = format_markdown(&report, 1);
+        assert!(md.contains("merge_requests/1) declined (closed)\n"), "{md}");
+        assert!(md.contains("merge_requests/2) still going\n"), "{md}");
+        assert!(
+            md.contains("merge_requests/3) taken via cherry-pick (applied)\n"),
+            "{md}"
+        );
+        assert!(md.contains("merge_requests/4) landed (merged)\n"), "{md}");
+        assert!(md.contains("merge_requests/5) looked at\n"), "{md}");
+        assert!(
+            md.contains("- **MRs applied (landed unmerged):** 1"),
+            "{md}"
+        );
+    }
+
+    #[test]
     fn format_non_empty() {
         let mut report = GitlabReport {
             instance: "https://gitlab.com".into(),
@@ -742,6 +883,9 @@ mod tests {
             project: "CentOS/Hyperscale/rpms/perf".into(),
             iid: 42,
             title: "Fix build".into(),
+            state: "opened".into(),
+            merged: false,
+            applied: false,
         });
         let md = format_markdown(&report, 1);
         assert!(md.contains("### GitLab\n"));

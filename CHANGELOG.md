@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### sandogasa-report: GitHub and GitLab tell a PR's fate the way Forgejo does
+
+A pull request opened in the window read the same whether it was still
+open, merged, declined, or closed by a maintainer who cherry-picked it
+instead of pressing merge — only the Forgejo section knew the
+difference, marking each opened PR `(merged)`, `(closed)` or
+`(applied)`. The GitHub and GitLab sections now do the same. GitHub's
+state and merge come with the search result; GitLab's events only say
+an MR was opened, so each opened MR is looked up once for its state.
+A closed-unmerged one is then checked against its target branch —
+`/compare/{base}...{head}` on GitHub (`ahead_by` zero), the project's
+`repository/compare` on GitLab (no missing commits) — and marked
+`(applied)` when the commit landed anyway; any lookup failure leaves
+the plainer label, so the upgrade is only ever made when certain.
+Both summaries gain "PRs applied (landed unmerged)" when the count is
+non-zero. A rebased or reworded commit still reads `(closed)`, the
+same limit Forgejo has (TODO.md). sandogasa-github gains
+`pull_request` and `commit_contained`; sandogasa-gitlab gains
+`commit_contained` and the merge request's `sha`.
+
 ### sandogasa-hattrack: a group in seconds, not minutes
 
 `group rust-sig` took three minutes for ten members — eighteen seconds

@@ -80,6 +80,35 @@ pub struct PrRef {
     pub title: String,
     /// PR URL (the canonical web link).
     pub url: String,
+    /// Current state (`open` / `closed`) where the source knows it; the
+    /// event-derived lists leave it empty. A merged PR is `closed` with
+    /// `merged = true`; a declined PR is `closed` with `merged = false`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub state: String,
+    /// Whether the PR was merged (vs. closed without merging).
+    pub merged: bool,
+    /// Whether a closed-but-unmerged PR's commit nonetheless landed on
+    /// the target branch (a maintainer applied it out-of-band rather
+    /// than clicking merge). Determined by a follow-up API check.
+    #[serde(default)]
+    pub applied: bool,
+}
+
+impl PrRef {
+    /// A state marker for the **opened** list, so a PR that was opened
+    /// in the window but has since landed or been declined isn't shown
+    /// as if it were still open. Empty for an open PR.
+    fn status_marker(&self) -> &'static str {
+        if self.merged {
+            " (merged)"
+        } else if self.applied {
+            " (applied)"
+        } else if self.state == "closed" {
+            " (closed)"
+        } else {
+            ""
+        }
+    }
 }
 
 /// A tag the user pushed.
@@ -152,6 +181,14 @@ pub fn github_report(
         .into_iter()
         .map(into_pr_ref)
         .collect();
+    // A PR opened in the window but now closed-without-merging may
+    // still have landed (commit applied out-of-band). Check whether
+    // its head commit is on the target branch.
+    for pr in report.opened_prs.iter_mut() {
+        if pr.state == "closed" && !pr.merged {
+            pr.applied = applied_out_of_band(&client, pr, verbose);
+        }
+    }
 
     // PRs by the user that were merged in window.
     let q = format!("type:pr author:{login} is:merged merged:{since}..{until}{org_clause}",);
@@ -241,6 +278,13 @@ pub fn format_markdown(report: &GithubReport, detail: u8) -> String {
     let mut stats = String::new();
     stat(&mut stats, "PRs opened", report.opened_prs.len());
     stat(&mut stats, "PRs merged", report.merged_prs.len());
+    // A closed PR whose commit landed out-of-band — counted separately
+    // since the forge reports it as neither merged nor open.
+    stat(
+        &mut stats,
+        "PRs applied (landed unmerged)",
+        report.opened_prs.iter().filter(|p| p.applied).count(),
+    );
     stat(&mut stats, "PRs reviewed", report.reviewed_prs.len());
     stat(&mut stats, "PRs commented on", report.commented_prs.len());
     stat_across(
@@ -530,6 +574,9 @@ fn pr_ref_from_pr_event(payload: &serde_json::Value, repo: &str) -> Option<PrRef
         number,
         title,
         url,
+        state: String::new(),
+        merged: false,
+        applied: false,
     })
 }
 
@@ -552,6 +599,9 @@ fn pr_ref_from_issue_event(payload: &serde_json::Value, repo: &str) -> Option<Pr
         number,
         title,
         url,
+        state: String::new(),
+        merged: false,
+        applied: false,
     })
 }
 
@@ -566,19 +616,63 @@ fn run_pr_search(client: &Client, query: &str, verbose: bool) -> Result<Vec<Pull
 
 fn into_pr_ref(pr: PullRequest) -> PrRef {
     let repo = pr.repo_slug().unwrap_or_default();
+    let merged = pr.merged_at().is_some();
     PrRef {
         repo,
         number: pr.number,
         title: pr.title,
         url: pr.html_url,
+        state: pr.state,
+        merged,
+        applied: false,
+    }
+}
+
+/// Whether a closed-unmerged PR's commit nonetheless landed on its
+/// target branch. Fetches the PR's head/base refs (the search result
+/// omits them), then asks whether the head commit is contained in the
+/// base branch. Any lookup failure is treated as "not applied" (a
+/// warning under `--verbose`) — we only ever *upgrade* the label when
+/// we're certain, never falsely claim a contribution landed.
+fn applied_out_of_band(client: &Client, pr: &PrRef, verbose: bool) -> bool {
+    let Some((owner, repo)) = pr.repo.split_once('/') else {
+        return false;
+    };
+    let detail = match client.pull_request(owner, repo, pr.number) {
+        Ok(d) => d,
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "[github] applied-check: fetch {}#{} failed: {e}",
+                    pr.repo, pr.number
+                );
+            }
+            return false;
+        }
+    };
+    match client.commit_contained(owner, repo, &detail.base.ref_name, &detail.head.sha) {
+        Ok(contained) => contained,
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "[github] applied-check: compare for {}#{} failed: {e}",
+                    pr.repo, pr.number
+                );
+            }
+            false
+        }
     }
 }
 
 fn write_pr_list(out: &mut String, prs: &[PrRef]) {
     for pr in prs {
         out.push_str(&format!(
-            "- [{}#{}]({}) {}\n",
-            pr.repo, pr.number, pr.url, pr.title,
+            "- [{}#{}]({}) {}{}\n",
+            pr.repo,
+            pr.number,
+            pr.url,
+            pr.title,
+            pr.status_marker(),
         ));
     }
     out.push('\n');
@@ -1018,6 +1112,53 @@ mod tests {
     }
 
     #[test]
+    fn opened_list_marks_closed_merged_and_applied_state() {
+        let mut report = GithubReport {
+            instance: "https://api.github.com".into(),
+            user: "octocat".into(),
+            ..Default::default()
+        };
+        let pr = |number: u64, title: &str, state: &str, merged: bool, applied: bool| PrRef {
+            repo: "o/r".into(),
+            number,
+            title: title.into(),
+            url: format!("https://github.com/o/r/pull/{number}"),
+            state: state.into(),
+            merged,
+            applied,
+        };
+        report
+            .opened_prs
+            .push(pr(1, "declined", "closed", false, false));
+        report
+            .opened_prs
+            .push(pr(2, "still going", "open", false, false));
+        report
+            .opened_prs
+            .push(pr(3, "taken via cherry-pick", "closed", false, true));
+        report
+            .opened_prs
+            .push(pr(4, "landed", "closed", true, false));
+        // The event-derived lists carry no state and get no marker.
+        report
+            .reviewed_prs
+            .push(pr(5, "looked at", "", false, false));
+        let md = format_markdown(&report, 1);
+        assert!(md.contains("pull/1) declined (closed)\n"), "{md}");
+        assert!(md.contains("pull/2) still going\n"), "{md}");
+        assert!(
+            md.contains("pull/3) taken via cherry-pick (applied)\n"),
+            "{md}"
+        );
+        assert!(md.contains("pull/4) landed (merged)\n"), "{md}");
+        assert!(md.contains("pull/5) looked at\n"), "{md}");
+        assert!(
+            md.contains("- **PRs applied (landed unmerged):** 1"),
+            "{md}"
+        );
+    }
+
+    #[test]
     fn format_non_empty() {
         let mut report = GithubReport {
             instance: "https://api.github.com".into(),
@@ -1030,6 +1171,9 @@ mod tests {
             number: 42,
             title: "Fix build".into(),
             url: "https://github.com/slopfest/sandogasa/pull/42".into(),
+            state: "open".into(),
+            merged: false,
+            applied: false,
         });
         report
             .commits_authored

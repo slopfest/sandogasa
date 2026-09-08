@@ -99,6 +99,17 @@ pub struct MergeRequest {
     pub web_url: String,
     pub source_branch: String,
     pub target_branch: String,
+    /// The head commit of the source branch.
+    #[serde(default)]
+    pub sha: Option<String>,
+}
+
+/// What `/repository/compare?from=<branch>&to=<sha>` answers: the
+/// commits the branch lacks. Only their presence matters here.
+#[derive(Debug, Deserialize)]
+struct CompareResult {
+    #[serde(default)]
+    commits: Vec<serde::de::IgnoredAny>,
 }
 
 /// Client for the GitLab REST API v4.
@@ -151,6 +162,29 @@ impl Client {
         );
         let resp = self.http.get(&url).send()?;
         Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
+    }
+
+    /// Whether `sha` is already on `branch`: GitLab's compare from the
+    /// branch to the sha lists the commits the branch lacks, and an
+    /// empty list means none.
+    pub fn commit_contained(
+        &self,
+        branch: &str,
+        sha: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/repository/compare",
+            self.base_url, encoded
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("from", branch), ("to", sha)])
+            .send()?;
+        let cmp: CompareResult =
+            blocking_json_ok(resp, &format!("GitLab compare {branch}..{sha}"))?;
+        Ok(cmp.commits.is_empty())
     }
 
     /// Fetch a single issue by its internal ID (iid).
@@ -1149,6 +1183,44 @@ pub fn project_releases(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commit_contained_reads_the_missing_commits() {
+        // No commits between the branch and the sha → already on it.
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/projects/g%2Fp/repository/compare")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("from".into(), "main".into()),
+                mockito::Matcher::UrlEncoded("to".into(), "8b8aa8b".into()),
+            ]))
+            .with_status(200)
+            .with_body(r#"{"commits": [], "diffs": [], "compare_same_ref": false}"#)
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        assert!(client.commit_contained("main", "8b8aa8b").unwrap());
+        mock.assert();
+
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v4/projects/g%2Fp/repository/compare")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(r#"{"commits": [{"id": "other"}], "diffs": []}"#)
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        assert!(!client.commit_contained("main", "other").unwrap());
+    }
+
+    #[test]
+    fn merge_request_reads_sha_when_present() {
+        let mr: MergeRequest = serde_json::from_str(
+            r#"{"iid": 5, "title": "t", "state": "closed", "web_url": "u",
+                "source_branch": "fix", "target_branch": "main", "sha": "8b8aa8b"}"#,
+        )
+        .unwrap();
+        assert_eq!(mr.sha.as_deref(), Some("8b8aa8b"));
+    }
 
     fn status(archived: bool, access: Option<&str>, enabled: Option<bool>) -> ProjectStatus {
         ProjectStatus {

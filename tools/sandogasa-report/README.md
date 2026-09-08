@@ -22,12 +22,16 @@ packaging activity across multiple systems:
   pushed, and GitLab Releases authored. The gap between
   pushed/authored commits flags mirror activity. Optionally
   scoped by group prefix (`CentOS/Hyperscale`,
-  `CentOS/Hyperscale/rpms`, etc.)
+  `CentOS/Hyperscale/rpms`, etc.). The opened list flags each
+  MR's fate the way the Forgejo one does: `(merged)`, `(closed)`,
+  or `(applied)`
 - **GitHub**: PRs opened / merged / reviewed / commented on,
   authored commit counts per repo, annotated tags cut, and
   GitHub Releases published. Optionally scoped by
   organisation. See `TODO.md` for why GitHub ships only the
-  authored count today (mirror-pusher detection deferred).
+  authored count today (mirror-pusher detection deferred). The
+  opened list carries the same `(merged)` / `(closed)` /
+  `(applied)` markers
 - **Forgejo / Gitea** (e.g. codeberg.org, a Fedora Forgejo,
   src.opensuse.org): PRs opened / merged and issues opened / closed
   in the window, across every repo you contribute to. Sourced from
