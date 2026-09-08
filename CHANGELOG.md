@@ -17,6 +17,25 @@ member — is skipped unless asked for. `--json` returns every member's
 summary. sandogasa-fasjson gains `group_members` with its paging
 (`FasjsonPage`, `PageInfo`).
 
+Each member is listed with every service that was asked for, most
+recent first, not only the one they were last seen on: a SIG that
+answers Bugzilla but never touches Bodhi shows as exactly that, where
+a single line per member would have hidden it.
+
+With `--meeting`, a group run used to fetch the same meetbot listing
+and the same meeting logs once per member — ten members of rust-sig
+against the FESCo topic meant the last year's logs ten times over, and
+the meeting check dominated the run. The meetbot client now keeps what
+it fetched under `~/.cache/sandogasa-hattrack/` (`$XDG_CACHE_HOME`):
+the listing of meetings for a topic for a day, each meeting's log
+indefinitely, since a past meeting's log does not change. Ten members
+dropped from 30 s to 8 s on the second run, and `meetings`,
+`last-seen --meeting` and `group --meeting` share the cache. A global
+`--refresh` ignores it and fetches afresh. `Meetbot::with_cache(tool,
+refresh)` turns it on; the on-disk cache fedora-cve-triage used for its
+NVD, Koji, advisory and fedrq answers moved to `sandogasa_cli::cache`
+(`DiskCache`, `url_key`) so both share one implementation.
+
 ### clap_mangen 0.3
 
 The workspace requires clap_mangen 0.3 (`features = ["env"]`), following

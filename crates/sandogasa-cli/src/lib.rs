@@ -2,6 +2,7 @@
 
 //! Shared CLI utilities for sandogasa tools.
 
+pub mod cache;
 pub mod claim;
 pub mod date;
 /// The version a tool shows: the `git describe --tags --dirty --always`

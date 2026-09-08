@@ -101,21 +101,27 @@ differs); `--matrix` applies there too.
 "Has the Btrfs SIG been responding?" and "who in the SIG is around right
 now?" are the same question asked of every member, so `group` runs
 `last-seen` for each member of a FAS group and lists them most recent
-first, each with their local time:
+first, each with their local time and every service that was asked
+for — a SIG that answers Bugzilla but never Bodhi shows as exactly that:
 
 ```
 $ sandogasa-hattrack group rust-sig
 Group: rust-sig (10 members)
 
-  music       Dist-git       2026-09-08T23:59:59+00:00 (today)
-              local: 2026-09-08 11:08:04 BST (Tue — weekday)
-  decathorpe  Dist-git       2026-09-07T23:59:59+00:00 (10 hours ago)
-              local: 2026-09-08 12:08:04 CEST (Tue — weekday)
-  ngompa      Forge          2026-09-07T16:49:21+00:00 (17 hours ago)
-              local: 2026-09-08 06:08:04 EDT (Tue — weekday)
+  music  local: 2026-09-08 11:29:04 BST (Tue — weekday)
+      Dist-git       2026-09-08T23:59:59+00:00 (today)
+      Bodhi          2026-09-08T06:42:47+00:00 (3 hours ago)
+      Forge          2026-09-07T21:28:06+00:00 (13 hours ago)
+      Bugzilla       2026-09-05T10:19:58+00:00 (3 days ago)
+      Discourse      2026-07-14T20:24:13.063+00:00 (1 month ago)
+
+  decathorpe  local: 2026-09-08 12:29:04 CEST (Tue — weekday)
+      Dist-git       2026-09-07T23:59:59+00:00 (10 hours ago)
+      Bodhi          2026-09-07T21:10:58+00:00 (13 hours ago)
+      Forge          2026-09-07T21:02:34+00:00 (13 hours ago)
+      Bugzilla       2026-09-05T13:45:55+00:00 (2 days ago)
+      Discourse      2026-09-02T21:21:37.786+00:00 (5 days ago)
   …
-  blinxen     Bodhi          2026-07-09T20:19:35+00:00 (2 months ago)
-              local: 2026-09-08 12:08:04 CEST (Tue — weekday)
 ```
 
 Ten members took about three minutes, Mailman skipped.
@@ -128,6 +134,13 @@ skipped unless asked for with `--only`, its archive walk per member
 being what would dominate the run. `--skip`, `--only`, `--meeting` and
 `--repo` mean what they mean for `last-seen`; `--json` returns every
 member's `last-seen` summary under `members`.
+
+With `--meeting`, the meetbot listing for the topic and each meeting's
+log are kept under `~/.cache/sandogasa-hattrack/` (`$XDG_CACHE_HOME`):
+the listing for a day, the logs indefinitely, since a past meeting's
+log does not change. A group run therefore fetches each log once
+rather than once per member, and `meetings` and `last-seen --meeting`
+read the same cache. `--refresh` ignores it and fetches afresh.
 
 ### Email discovery
 

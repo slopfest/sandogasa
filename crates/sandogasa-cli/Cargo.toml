@@ -10,6 +10,7 @@ repository.workspace = true
 chrono = { workspace = true }
 clap = { workspace = true }
 clap_mangen = { workspace = true, optional = true }
+dirs = { workspace = true }
 reqwest = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 sandogasa-config = { workspace = true }

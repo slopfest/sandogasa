@@ -55,6 +55,11 @@ struct Cli {
     #[arg(long, global = true)]
     refresh_holidays: bool,
 
+    /// Ignore the meeting listings and logs kept under the cache
+    /// directory and fetch them afresh
+    #[arg(long, global = true)]
+    refresh: bool,
+
     /// Override "now" used for local-time / holiday lookups.
     /// Accepts `YYYY-MM-DD` (midnight UTC) or full RFC 3339
     /// (e.g. `2026-03-17T10:00:00Z`). For testing / demos.
@@ -405,6 +410,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let working_hours = cli.working_hours;
     let holidays_enabled = !cli.no_holidays;
     let holidays_refresh = cli.refresh_holidays;
+    let refresh = cli.refresh;
     let now = cli.now.unwrap_or_else(Utc::now);
     match cli.command {
         Command::Bodhi { username, url } => cmd_bodhi(&username, &url, json).await,
@@ -455,6 +461,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &only,
                 meeting.as_deref(),
                 &repo,
+                refresh,
             )
             .await
         }
@@ -487,6 +494,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 meeting.as_deref(),
                 &repo,
                 &matrix,
+                refresh,
             )
             .await
         }
@@ -504,7 +512,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 None => meetings::Window::Days(days),
             };
             meetings::cmd_meetings(
-                &username, &meeting, window, &matrix, no_fas, &url, json, now,
+                &username, &meeting, window, &matrix, no_fas, &url, json, now, refresh,
             )
             .await
         }
@@ -1286,6 +1294,7 @@ async fn gather_last_seen(
     meeting: Option<&str>,
     forge_repos: &[String],
     matrix: &[String],
+    refresh: bool,
 ) -> Result<LastSeenSummary, Box<dyn std::error::Error>> {
     let fas = resolve_fas(Some(username), email_overrides, no_fas)?;
     let emails = fas.emails.clone();
@@ -1340,7 +1349,8 @@ async fn gather_last_seen(
             .as_ref()
             .map(|u| u.matrix_ids())
             .unwrap_or_default();
-        services.push(meetings::check_meetings(username, topic, &from_fas, matrix, now).await);
+        services
+            .push(meetings::check_meetings(username, topic, &from_fas, matrix, now, refresh).await);
     }
 
     // Sort by most recent first (entries with dates before those without)
@@ -1388,6 +1398,7 @@ async fn cmd_last_seen(
     meeting: Option<&str>,
     forge_repos: &[String],
     matrix: &[String],
+    refresh: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let summary = gather_last_seen(
         username,
@@ -1403,6 +1414,7 @@ async fn cmd_last_seen(
         meeting,
         forge_repos,
         matrix,
+        refresh,
     )
     .await?;
     if json {
@@ -1482,6 +1494,16 @@ struct GroupSummary {
     members: Vec<LastSeenSummary>,
 }
 
+/// A service's timestamp as UTC, whichever offset it was written with.
+fn parse_when(ts: &str) -> Option<DateTime<Utc>> {
+    ts.parse::<DateTime<Utc>>()
+        .or_else(|_| {
+            ts.parse::<DateTime<chrono::FixedOffset>>()
+                .map(|d| d.with_timezone(&Utc))
+        })
+        .ok()
+}
+
 /// The most recent activity across a member's services: when, and on
 /// which service. `None` when no service found anything.
 fn most_recent(summary: &LastSeenSummary) -> Option<(DateTime<Utc>, &str)> {
@@ -1521,6 +1543,7 @@ async fn cmd_group(
     only: &[Service],
     meeting: Option<&str>,
     forge_repos: &[String],
+    refresh: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     ensure_kerberos_ticket()?;
     let client = sandogasa_fasjson::FasjsonClient::new();
@@ -1551,6 +1574,7 @@ async fn cmd_group(
             meeting,
             forge_repos,
             &[],
+            refresh,
         )
         .await?;
         summaries.push(summary);
@@ -1574,27 +1598,7 @@ async fn cmd_group(
     }
 
     println!("Group: {group} ({} members)\n", summaries.len());
-    let width = summaries
-        .iter()
-        .map(|s| s.username.len())
-        .max()
-        .unwrap_or(8)
-        .max(8);
     for s in &summaries {
-        // Dist-git knows activity to the day and reports it as that
-        // day's last second, which would read as "in 13 hours".
-        let activity = match most_recent(s) {
-            Some((dt, service)) if dt > now => {
-                format!("{:<14} {} (today)", service, dt.to_rfc3339())
-            }
-            Some((dt, service)) => format!(
-                "{:<14} {} ({})",
-                service,
-                dt.to_rfc3339(),
-                relative_time_from(dt, now)
-            ),
-            None => "no activity found".to_string(),
-        };
         let local = s.local_times.first().map(|entry| {
             let kind = style::classify_day(entry.is_weekend, !entry.holidays.is_empty());
             style::local_time_line(
@@ -1606,14 +1610,28 @@ async fn cmd_group(
                 color,
             )
         });
-        println!("  {:<width$}  {activity}", s.username);
-        if let Some(local) = local {
-            println!("  {:<width$}  local: {local}", "");
+        match local {
+            Some(local) => println!("  {}  local: {local}", s.username),
+            None => println!("  {}", s.username),
         }
-        let errors = s.services.iter().filter(|x| x.error.is_some()).count();
-        if errors > 0 {
-            println!("  {:<width$}  ({errors} service(s) failed)", "");
+        // Every service asked for, most recent first — a SIG that
+        // answers Bugzilla but never Bodhi shows as exactly that.
+        for svc in &s.services {
+            let line = match (&svc.last_active, &svc.error) {
+                (Some(ts), _) => match parse_when(ts) {
+                    // Dist-git knows activity to the day and reports it as
+                    // that day's last second, which would read as "in 13
+                    // hours".
+                    Some(dt) if dt > now => format!("{ts} (today)"),
+                    Some(dt) => format!("{ts} ({})", relative_time_from(dt, now)),
+                    None => ts.clone(),
+                },
+                (None, Some(err)) => format!("error: {err}"),
+                (None, None) => "no activity found".to_string(),
+            };
+            println!("      {:<14} {line}", svc.service);
         }
+        println!();
     }
     Ok(())
 }

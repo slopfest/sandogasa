@@ -8,6 +8,9 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
 use sandogasa_meetbot::Meetbot;
+
+/// The cache directory the meeting answers live under.
+const TOOL_NAME: &str = "sandogasa-hattrack";
 use serde::Serialize;
 
 use crate::ServiceLastSeen;
@@ -201,6 +204,7 @@ pub async fn cmd_meetings(
     url: &str,
     json: bool,
     now: DateTime<Utc>,
+    refresh: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let since = window.start(now);
     let (u, t, x, base) = (
@@ -216,7 +220,8 @@ pub async fn cmd_meetings(
             fas_matrix_ids(&u)
         };
         let ids = matrix_ids(&u, &from_fas, &x);
-        fetch(&Meetbot::with_base_url(&base), &t, &ids, since, now).map(|rows| (ids, rows))
+        let meetbot = Meetbot::with_base_url(&base).with_cache(TOOL_NAME, refresh);
+        fetch(&meetbot, &t, &ids, since, now).map(|rows| (ids, rows))
     })
     .await??;
     let r = report(username, topic, since, ids, rows);
@@ -252,12 +257,21 @@ pub async fn check_meetings(
     from_fas: &[String],
     extra_ids: &[String],
     now: DateTime<Utc>,
+    refresh: bool,
 ) -> ServiceLastSeen {
     let ids = matrix_ids(username, from_fas, extra_ids);
     let (t, i) = (topic.to_string(), ids);
     let since = now - Duration::days(365);
-    let result =
-        tokio::task::spawn_blocking(move || fetch(&Meetbot::new(), &t, &i, since, now)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        fetch(
+            &Meetbot::new().with_cache(TOOL_NAME, refresh),
+            &t,
+            &i,
+            since,
+            now,
+        )
+    })
+    .await;
     let service = "Meetings".to_string();
     match result {
         Ok(Ok(rows)) => {

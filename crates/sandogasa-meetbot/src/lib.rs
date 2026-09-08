@@ -89,6 +89,11 @@ pub fn parse_attendees(minutes: &str) -> Vec<Attendee> {
 pub struct Meetbot {
     http: reqwest::blocking::Client,
     base_url: String,
+    /// Search answers, kept for a day: new meetings appear, old ones
+    /// do not move.
+    search_cache: Option<sandogasa_cli::cache::DiskCache>,
+    /// Minutes, kept for good: a finished meeting's log never changes.
+    log_cache: Option<sandogasa_cli::cache::DiskCache>,
 }
 
 impl Default for Meetbot {
@@ -118,7 +123,29 @@ impl Meetbot {
         Self {
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
+            search_cache: None,
+            log_cache: None,
         }
+    }
+
+    /// Keep answers under `tool`'s cache directory between runs and
+    /// between callers within one: a group of twenty people attending
+    /// the same meetings reads each log once. `refresh` bypasses reads.
+    pub fn with_cache(mut self, tool: &str, refresh: bool) -> Self {
+        let day = Some(std::time::Duration::from_secs(24 * 60 * 60));
+        self.search_cache = Some(sandogasa_cli::cache::DiskCache::new(
+            tool,
+            "meetbot-search",
+            day,
+            refresh,
+        ));
+        self.log_cache = Some(sandogasa_cli::cache::DiskCache::new(
+            tool,
+            "meetbot-logs",
+            None,
+            refresh,
+        ));
+        self
     }
 
     /// Fetch the `Content-Length` header for a meetbot artefact
@@ -143,17 +170,29 @@ impl Meetbot {
     /// ascending.
     pub fn search(&self, topic: &str) -> Result<Vec<Meeting>, Box<dyn std::error::Error>> {
         let url = format!("{}/fragedpt/", self.base_url);
-        let resp = self
-            .http
-            .get(&url)
-            .query(&[("rqstdata", "srchmeet"), ("srchtext", topic)])
-            .send()?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text()?;
-            return Err(format!("meetbot GET {url} failed: {status}: {text}").into());
-        }
-        let raw: Vec<RawMeeting> = resp.json()?;
+        let key =
+            sandogasa_cli::cache::url_key(&format!("{url}?rqstdata=srchmeet&srchtext={topic}"));
+        let body = match self.search_cache.as_ref().and_then(|c| c.load(&key)) {
+            Some(body) => body,
+            None => {
+                let resp = self
+                    .http
+                    .get(&url)
+                    .query(&[("rqstdata", "srchmeet"), ("srchtext", topic)])
+                    .send()?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let text = resp.text()?;
+                    return Err(format!("meetbot GET {url} failed: {status}: {text}").into());
+                }
+                let body = resp.text()?;
+                if let Some(c) = &self.search_cache {
+                    c.store(&key, &body);
+                }
+                body
+            }
+        };
+        let raw: Vec<RawMeeting> = serde_json::from_str(&body)?;
         let mut meetings: Vec<Meeting> = raw
             .into_iter()
             .filter_map(|r| r.into_meeting(&self.base_url))
@@ -168,12 +207,20 @@ impl Meetbot {
         meeting: &Meeting,
     ) -> Result<Vec<Attendee>, Box<dyn std::error::Error>> {
         let url = txt_url(&meeting.summary_url);
+        let key = sandogasa_cli::cache::url_key(&url);
+        if let Some(text) = self.log_cache.as_ref().and_then(|c| c.load(&key)) {
+            return Ok(parse_attendees(&text));
+        }
         let resp = self.http.get(&url).send()?;
         let status = resp.status();
         if !status.is_success() {
             return Err(format!("meetbot GET {url} failed: {status}").into());
         }
-        Ok(parse_attendees(&resp.text()?))
+        let text = resp.text()?;
+        if let Some(c) = &self.log_cache {
+            c.store(&key, &text);
+        }
+        Ok(parse_attendees(&text))
     }
 }
 
