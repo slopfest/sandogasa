@@ -1,13 +1,17 @@
 # sandogasa-report
 
-Activity reporting for Fedora, EPEL, and CentOS SIG packaging work.
+Activity reporting for Fedora, EPEL, CentOS SIG and openSUSE packaging
+work.
 
 Generates Markdown or JSON reports summarizing a contributor's
 packaging activity across multiple systems:
 
-- **Bugzilla**: review requests submitted/completed, reviews done for
-  others, CVE/security fixes, update requests, branch requests,
-  FTBFS/FTI bugs
+- **Bugzilla**: bugs filed and closed, split into CVE/security fixes,
+  update requests, branch requests, FTBFS/FTI bugs and the rest, on any
+  instance — Red Hat's for Fedora and EPEL, bugzilla.opensuse.org for
+  openSUSE, each with its own products. On Red Hat's, also review
+  requests submitted/completed and reviews done for others (the Fedora
+  package-review flow)
 - **Bodhi**: updates submitted, pushed to testing, pushed to stable,
   per-release breakdown
 - **Koji CBS**: new packages and version updates in CentOS SIG
@@ -88,8 +92,8 @@ sandogasa-report report -c config.toml -d fedora \
 
 # Multiple domains in one report. Each domain is its own section
 # (with Bodhi/Koji/GitLab/GitHub nested beneath), in the order
-# given. Bugzilla is aggregated into one section placed after the
-# last domain that uses it.
+# given. Bugzilla is aggregated per instance into one section each,
+# placed after the last domain that uses that instance.
 sandogasa-report report -c config.toml -d fedora -d hyperscale \
     --user username --period 2026Q1
 
@@ -160,6 +164,14 @@ bugzilla = true
 bodhi = true
 bodhi_releases = ["EPEL-*"]
 
+# Another Bugzilla: a table instead of `true`, with its products.
+# A stock Bugzilla parks done bugs at RESOLVED, so that counts as
+# closed there (Red Hat's closes outright); `closed_statuses`
+# overrides either default.
+[domains.opensuse.bugzilla]
+instance = "https://bugzilla.opensuse.org"
+products = ["openSUSE Tumbleweed", "openSUSE Distribution"]
+
 [domains.hyperscale]
 koji_profile = "cbs"
 koji_tags = [
@@ -202,6 +214,11 @@ might look like:
 [users.michel]
 fas = "salimma"                       # default if omitted: the profile key
 bugzilla_email = "michel@example.com" # optional; FASJSON fallback otherwise
+
+# Emails on other Bugzilla instances, by host. No fallback: FASJSON
+# only knows Red Hat's.
+[users.michel.bugzilla_emails]
+"bugzilla.opensuse.org" = "michel@example.com"
 
 [users.michel.gitlab]
 "gitlab.com" = "michel-slm"

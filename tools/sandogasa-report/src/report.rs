@@ -13,8 +13,9 @@ use crate::{bodhi, bugzilla, forgejo, github, gitlab, koji, sourcehut};
 ///
 /// Per-domain activity (Bodhi, Koji, GitLab, GitHub) is rendered as
 /// one section per domain in CLI `--domain` order. Bugzilla is
-/// aggregated across all domains into a single section, placed
-/// after the last domain block that references it.
+/// aggregated per instance across the domains that share it, each
+/// instance's section placed after the last domain block that
+/// references it.
 #[derive(Debug, Serialize)]
 pub struct Report {
     /// FAS username (if filtered).
@@ -28,16 +29,10 @@ pub struct Report {
     /// Per-domain activity blocks, in CLI `--domain` order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub domains: Vec<DomainReport>,
-    /// Aggregated Bugzilla section (one query across all domains
-    /// that enable Bugzilla).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bugzilla: Option<bugzilla::BugzillaReport>,
-    /// Render hint (not serialized): the aggregated Bugzilla section
-    /// is emitted after this many domain blocks, matching the
-    /// position of the last domain that references Bugzilla. `0`
-    /// renders it before all blocks.
-    #[serde(skip)]
-    pub bugzilla_after: usize,
+    /// Bugzilla sections, one per instance (one query each across the
+    /// domains that share it), in the order the domains introduce them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub bugzilla: Vec<bugzilla::BugzillaReport>,
 }
 
 /// One domain's per-domain activity. Each service is present only
@@ -164,22 +159,22 @@ pub fn format_markdown(
         report.since, report.until
     ));
 
-    // One section per domain, in CLI --domain order. The aggregated
-    // Bugzilla section is emitted after `bugzilla_after` blocks, so
-    // it lands right after the last domain that references it.
+    // One section per domain, in CLI --domain order. Each Bugzilla
+    // section is emitted after `after` blocks, so it lands right after
+    // the last domain that references its instance.
     for (i, dr) in report.domains.iter().enumerate() {
-        if i == report.bugzilla_after
-            && let Some(ref bz_report) = report.bugzilla
-        {
-            out.push_str(&bugzilla::format_markdown(bz_report, detail));
+        for bz in report.bugzilla.iter().filter(|bz| bz.after == i) {
+            out.push_str(&bugzilla::format_markdown(bz, detail));
         }
         out.push_str(&format_domain(dr, detail, groups));
     }
     // Bugzilla placed after every block (or when there are none).
-    if report.bugzilla_after >= report.domains.len()
-        && let Some(ref bz_report) = report.bugzilla
+    for bz in report
+        .bugzilla
+        .iter()
+        .filter(|bz| bz.after >= report.domains.len())
     {
-        out.push_str(&bugzilla::format_markdown(bz_report, detail));
+        out.push_str(&bugzilla::format_markdown(bz, detail));
     }
 
     out
@@ -230,8 +225,7 @@ mod tests {
             since: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             until: NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
             domains,
-            bugzilla: None,
-            bugzilla_after: 0,
+            bugzilla: Vec::new(),
         }
     }
 
@@ -271,6 +265,8 @@ mod tests {
 
     fn empty_bugzilla() -> bugzilla::BugzillaReport {
         bugzilla::BugzillaReport {
+            instance: crate::config::REDHAT_BUGZILLA.to_string(),
+            after: 0,
             reviews: Default::default(),
             security: Default::default(),
             updates: Default::default(),
@@ -335,8 +331,9 @@ mod tests {
             "fedora + epel + upstream",
             vec![fedora, epel, upstream],
         );
-        r.bugzilla = Some(empty_bugzilla());
-        r.bugzilla_after = 2; // after fedora + epel blocks
+        let mut bz = empty_bugzilla();
+        bz.after = 2; // after fedora + epel blocks
+        r.bugzilla = vec![bz];
         let md = format_markdown(&r, 0, &BTreeMap::new());
         let epel_pos = md.find("## epel").unwrap();
         let bz_pos = md.find("## Bugzilla").unwrap();
@@ -356,8 +353,7 @@ mod tests {
         let mut d = domain("upstream");
         d.gitlab = Some(gitlab_with("https://gitlab.com", "u"));
         let mut r = report(Some("u"), "upstream", vec![d]);
-        r.bugzilla = Some(empty_bugzilla());
-        r.bugzilla_after = 0;
+        r.bugzilla = vec![empty_bugzilla()];
         let md = format_markdown(&r, 0, &BTreeMap::new());
         assert!(md.find("## Bugzilla").unwrap() < md.find("## upstream").unwrap());
     }

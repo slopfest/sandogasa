@@ -37,6 +37,21 @@ bugzilla = true
 bodhi = true
 bodhi_releases = ["EPEL-*"]
 
+# --- openSUSE ---
+
+# `bugzilla = true` is Red Hat's Bugzilla with the Fedora products; a
+# table names another instance and the products to count. The Fedora
+# review flow (Package Review bugs) is Red Hat's alone, so no review
+# section is produced elsewhere. The email on this instance goes on the
+# profile: `[users.<key>.bugzilla_emails] "bugzilla.opensuse.org" = "..."`.
+# A stock Bugzilla parks done bugs at RESOLVED, so RESOLVED, VERIFIED and
+# CLOSED count as closed here (Red Hat's: CLOSED alone); set
+# `closed_statuses` to override. Add "openSUSE.org" or "openSUSE
+# Backports" to `products` if you file there too.
+[domains.opensuse.bugzilla]
+instance = "https://bugzilla.opensuse.org"
+products = ["openSUSE Tumbleweed", "openSUSE Distribution"]
+
 # --- CentOS SIG domains ---
 
 [domains.hyperscale]

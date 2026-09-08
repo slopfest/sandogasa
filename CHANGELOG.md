@@ -11,6 +11,33 @@ model only read lists. Both fields now read either shape as a list, so
 a report on openSUSE's Bugzilla renders its bugs (sixteen of one
 contributor's, back to 2007) the same way as Red Hat's.
 
+### sandogasa-report: Bugzilla is any instance, not Red Hat's (breaking JSON)
+
+A report could count bugs on bugzilla.redhat.com and nowhere else —
+GitHub #8 asks for openSUSE, whose bugs live on bugzilla.opensuse.org
+— and every Bugzilla query hardcoded the Fedora products and the Fedora
+review flow. A domain's `bugzilla` now takes a table as well as `true`:
+`[domains.opensuse.bugzilla]` with `instance` and `products` names
+another instance and what to count there, while `bugzilla = true` keeps
+meaning Red Hat's with `Fedora` and `Fedora EPEL`. Queries are
+aggregated per instance across the domains that share it, each
+instance's section landing after the last domain that references it.
+The package-review queries and section — `Package Review` bugs, the
+Fedora flow — run on Red Hat's Bugzilla only. What counts as closed
+follows the instance too: Red Hat's closes bugs outright (`CLOSED`),
+a stock Bugzilla parks them at `RESOLVED`, so a section there counts
+`RESOLVED`, `VERIFIED` and `CLOSED`; `closed_statuses` overrides
+either. A user's email on another instance goes on the profile under
+`bugzilla_emails`, keyed by host,
+since FASJSON can only supply Red Hat's; `sandogasa-report config`
+prompts for it when a domain names such an instance.
+
+Breaking (JSON): `bugzilla` is an array of per-instance sections, each
+with an `instance` URL, instead of one object; `reviews` in a section
+is `null` off Red Hat's Bugzilla. The Markdown heading names the host
+(`## Bugzilla (bugzilla.redhat.com)`) and bug links use the instance.
+Consumers reading `.bugzilla.reviews` should read `.bugzilla[0]`, or
+select by `instance`.
 
 ## v0.23.1
 

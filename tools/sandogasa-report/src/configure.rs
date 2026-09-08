@@ -15,6 +15,7 @@ use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
 use crate::config;
+use crate::forge;
 
 #[derive(clap::Args)]
 pub struct ConfigArgs {
@@ -63,6 +64,15 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
         .values()
         .filter_map(|d| d.sourcehut.as_ref().map(|s| s.instance.clone()))
         .collect();
+    // Bugzilla instances other than Red Hat's, whose email FASJSON
+    // cannot supply.
+    let bugzilla_instances: BTreeSet<String> = merged
+        .domains
+        .values()
+        .filter_map(|d| d.bugzilla())
+        .filter(|b| !b.is_redhat())
+        .map(|b| b.instance)
+        .collect();
 
     // Load the raw overlay toml::Value so hand-authored keys are
     // preserved across the round trip.
@@ -106,6 +116,7 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
         &github_instances,
         &forgejo_instances,
         &sourcehut_instances,
+        &bugzilla_instances,
     )?;
 
     // Token section: one prompt per unique instance, per forge.
@@ -180,6 +191,7 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Prompt for every field of a user profile, writing into the
 /// overlay. Returns `true` if any value was changed.
+#[allow(clippy::too_many_arguments)]
 fn prompt_profile(
     overlay: &mut toml::Value,
     profile_key: &str,
@@ -188,6 +200,7 @@ fn prompt_profile(
     github_instances: &BTreeSet<String>,
     forgejo_instances: &BTreeSet<String>,
     sourcehut_instances: &BTreeSet<String>,
+    bugzilla_instances: &BTreeSet<String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut changed = false;
     let fas_default = existing
@@ -210,6 +223,16 @@ fn prompt_profile(
         overlay_set_str(overlay, &["users", profile_key, "bugzilla_email"], &bz);
         changed = true;
     }
+    changed |= prompt_per_instance_usernames(
+        overlay,
+        profile_key,
+        existing,
+        bugzilla_instances,
+        "Bugzilla emails on other instances",
+        "bugzilla_emails",
+        |p, host| p.bugzilla_emails.get(host),
+        forge::instance_host,
+    )?;
 
     // Git author emails for Sourcehut commit attribution — only relevant
     // when a domain enables Sourcehut.

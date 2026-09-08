@@ -73,6 +73,12 @@ pub struct User {
     #[serde(default)]
     pub bugzilla_email: Option<String>,
 
+    /// Emails on other Bugzilla instances, keyed by hostname (e.g.
+    /// `"bugzilla.opensuse.org" = "me@example.org"`). Red Hat's is
+    /// `bugzilla_email` above, the one FASJSON can supply.
+    #[serde(default)]
+    pub bugzilla_emails: BTreeMap<String, String>,
+
     /// Per-instance GitLab usernames, keyed by hostname (e.g.
     /// `"gitlab.com" = "michel-slm"`). The lookup uses the domain
     /// config's `instance` URL.
@@ -154,9 +160,10 @@ pub struct GroupConfig {
 /// Configuration for a reporting domain.
 #[derive(Debug, Default, Deserialize)]
 pub struct DomainConfig {
-    /// Include Bugzilla queries.
+    /// Bugzilla: `true` for Red Hat's with the Fedora products, or a
+    /// table naming another instance and its products.
     #[serde(default)]
-    pub bugzilla: bool,
+    pub bugzilla: Option<BugzillaSetting>,
 
     /// Fedora versions for FTBFS/FTI tracker lookup (e.g. [43, 44, 45]).
     #[serde(default)]
@@ -193,6 +200,97 @@ pub struct DomainConfig {
     /// Include Sourcehut (sr.ht) activity (patches, tickets, commits).
     #[serde(default)]
     pub sourcehut: Option<SourcehutConfig>,
+}
+
+/// Red Hat's Bugzilla, where Fedora's bugs live: what `bugzilla = true`
+/// means, and the one instance whose email FASJSON can supply.
+pub const REDHAT_BUGZILLA: &str = "https://bugzilla.redhat.com";
+
+/// A domain's Bugzilla: `bugzilla = true` for Red Hat's with the
+/// Fedora products, or a table naming another instance.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum BugzillaSetting {
+    Enabled(bool),
+    Instance(BugzillaConfig),
+}
+
+/// One Bugzilla instance and the products to report on.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct BugzillaConfig {
+    /// Base URL, e.g. `https://bugzilla.opensuse.org`.
+    #[serde(default = "default_bugzilla_instance")]
+    pub instance: String,
+    /// Products whose bugs count, e.g. `["openSUSE Tumbleweed"]`.
+    #[serde(default = "default_bugzilla_products")]
+    pub products: Vec<String>,
+    /// Statuses that mean a bug is done. Red Hat's closes bugs
+    /// outright (`CLOSED`); a stock Bugzilla parks them at `RESOLVED`
+    /// and rarely moves on. Unset, the default follows the instance.
+    #[serde(default)]
+    pub closed_statuses: Vec<String>,
+}
+
+impl BugzillaConfig {
+    /// The instance's hostname: the key for per-user emails.
+    pub fn host(&self) -> String {
+        crate::forge::instance_host(&self.instance)
+    }
+
+    /// Whether this is Red Hat's Bugzilla.
+    pub fn is_redhat(&self) -> bool {
+        self.instance.trim_end_matches('/') == REDHAT_BUGZILLA
+    }
+
+    /// Whether the Fedora package-review flow (`Package Review`
+    /// bugs) exists here: it is Red Hat Bugzilla's alone.
+    pub fn reviews(&self) -> bool {
+        self.is_redhat()
+    }
+
+    /// The statuses that count a bug as closed: the configured list,
+    /// else `CLOSED` on Red Hat's and `RESOLVED`, `VERIFIED`, `CLOSED`
+    /// on a stock Bugzilla.
+    pub fn closed_statuses(&self) -> Vec<String> {
+        if !self.closed_statuses.is_empty() {
+            self.closed_statuses.clone()
+        } else if self.is_redhat() {
+            vec!["CLOSED".to_string()]
+        } else {
+            ["RESOLVED", "VERIFIED", "CLOSED"]
+                .map(String::from)
+                .to_vec()
+        }
+    }
+}
+
+impl Default for BugzillaConfig {
+    fn default() -> Self {
+        Self {
+            instance: default_bugzilla_instance(),
+            products: default_bugzilla_products(),
+            closed_statuses: Vec::new(),
+        }
+    }
+}
+
+impl DomainConfig {
+    /// The Bugzilla this domain reports on, if any.
+    pub fn bugzilla(&self) -> Option<BugzillaConfig> {
+        match &self.bugzilla {
+            Some(BugzillaSetting::Enabled(true)) => Some(BugzillaConfig::default()),
+            Some(BugzillaSetting::Instance(c)) => Some(c.clone()),
+            _ => None,
+        }
+    }
+}
+
+fn default_bugzilla_instance() -> String {
+    REDHAT_BUGZILLA.to_string()
+}
+
+fn default_bugzilla_products() -> Vec<String> {
+    vec!["Fedora".to_string(), "Fedora EPEL".to_string()]
 }
 
 /// Per-domain GitLab settings. If `group` is set, activity events
@@ -372,6 +470,49 @@ mod tests {
     }
 
     #[test]
+    fn bugzilla_table_names_another_instance() {
+        let cfg: ReportConfig = toml::from_str(
+            r#"
+[domains.opensuse.bugzilla]
+instance = "https://bugzilla.opensuse.org/"
+products = ["openSUSE Tumbleweed", "openSUSE Distribution"]
+
+[domains.off]
+bugzilla = false
+
+[domains.none]
+bodhi = true
+"#,
+        )
+        .unwrap();
+        let bz = cfg.domains["opensuse"].bugzilla().unwrap();
+        assert_eq!(bz.host(), "bugzilla.opensuse.org");
+        assert!(!bz.is_redhat(), "another instance is not Red Hat's");
+        assert!(
+            !bz.reviews(),
+            "the Fedora review flow is Red Hat Bugzilla's alone"
+        );
+        assert_eq!(
+            bz.products,
+            ["openSUSE Tumbleweed", "openSUSE Distribution"]
+        );
+        assert_eq!(bz.closed_statuses(), ["RESOLVED", "VERIFIED", "CLOSED"]);
+        assert_eq!(BugzillaConfig::default().closed_statuses(), ["CLOSED"]);
+        let own: BugzillaConfig = toml::from_str(
+            "instance = \"https://bugzilla.example.org\"\nclosed_statuses = [\"DONE\"]",
+        )
+        .unwrap();
+        assert_eq!(own.closed_statuses(), ["DONE"]);
+        assert!(cfg.domains["off"].bugzilla().is_none());
+        assert!(cfg.domains["none"].bugzilla().is_none());
+        // A table with only the instance keeps the Fedora products
+        // out: the defaults are Red Hat's, and are what `true` means.
+        let bare: BugzillaConfig =
+            toml::from_str(r#"instance = "https://bugzilla.example.org""#).unwrap();
+        assert_eq!(bare.products, ["Fedora", "Fedora EPEL"]);
+    }
+
+    #[test]
     fn merge_overlay_overrides_scalar() {
         let base = toml_table("[a]\nx = 1\ny = 2\n");
         let overlay = toml_table("[a]\nx = 99\n");
@@ -462,7 +603,11 @@ packages = ["pkg1", "pkg2"]
         .unwrap();
         let cfg = load_layered(Some(&path), None).unwrap();
         assert!(cfg.domains.contains_key("test"));
-        assert!(cfg.domains["test"].bugzilla);
+        let bz = cfg.domains["test"]
+            .bugzilla()
+            .expect("bugzilla = true enables Red Hat's");
+        assert!(bz.is_redhat() && bz.reviews());
+        assert_eq!(bz.products, ["Fedora", "Fedora EPEL"]);
         assert_eq!(cfg.groups["mygroup"].packages, vec!["pkg1", "pkg2"]);
     }
 

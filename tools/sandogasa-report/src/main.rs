@@ -127,6 +127,15 @@ fn resolve_date_range(cli: &ReportArgs) -> Result<(NaiveDate, NaiveDate), String
     sandogasa_cli::date::resolve_date_range(cli.since, cli.until, cli.period.as_deref())
 }
 
+/// One Bugzilla instance's share of a run: the products and Fedora
+/// versions of every domain that names it, and the CLI position of the
+/// last one, where its section goes.
+struct BugzillaAggregate {
+    config: config::BugzillaConfig,
+    fedora_versions: Vec<u32>,
+    last_idx: usize,
+}
+
 fn main() -> ExitCode {
     sandogasa_cli::init();
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
@@ -205,26 +214,50 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
     let rt = tokio::runtime::Runtime::new().expect("failed to create async runtime");
 
     // Build one report block per domain, in CLI --domain order.
-    // Bugzilla is aggregated across all domains into a single query;
-    // we record the merged Fedora versions and the position of the
-    // last domain that references it so the section can be placed
-    // there. The header's "primary" identity is the resolved FAS
-    // login — the profile key is a CLI shorthand, not a username on
-    // any service, so rendering it would be misleading.
+    // Bugzilla is aggregated per instance into a single query each;
+    // we record the merged products and Fedora versions and the
+    // position of the last domain that references the instance so
+    // its section can be placed there. The header's "primary"
+    // identity is the resolved FAS login — the profile key is a CLI
+    // shorthand, not a username on any service, so rendering it
+    // would be misleading.
     let mut domain_reports: Vec<report::DomainReport> = Vec::new();
     let mut block_cli_idx: Vec<usize> = Vec::new();
-    let mut fedora_versions: Vec<u32> = Vec::new();
-    let mut last_bugzilla_idx: Option<usize> = None;
+    let mut bugzillas: Vec<BugzillaAggregate> = Vec::new();
 
     for (cli_idx, (name, domain)) in domains.iter().enumerate() {
         // Bugzilla is aggregated; just record membership here.
-        if domain.bugzilla && !cli.no_bugzilla {
-            for &v in &domain.fedora_versions {
-                if !fedora_versions.contains(&v) {
-                    fedora_versions.push(v);
+        if let Some(bzc) = domain.bugzilla()
+            && !cli.no_bugzilla
+        {
+            let agg = match bugzillas
+                .iter()
+                .position(|a| a.config.instance == bzc.instance)
+            {
+                Some(i) => &mut bugzillas[i],
+                None => {
+                    bugzillas.push(BugzillaAggregate {
+                        config: config::BugzillaConfig {
+                            products: Vec::new(),
+                            ..bzc.clone()
+                        },
+                        fedora_versions: Vec::new(),
+                        last_idx: 0,
+                    });
+                    bugzillas.last_mut().expect("just pushed")
+                }
+            };
+            for p in &bzc.products {
+                if !agg.config.products.contains(p) {
+                    agg.config.products.push(p.clone());
                 }
             }
-            last_bugzilla_idx = Some(cli_idx);
+            for &v in &domain.fedora_versions {
+                if !agg.fedora_versions.contains(&v) {
+                    agg.fedora_versions.push(v);
+                }
+            }
+            agg.last_idx = cli_idx;
         }
 
         let mut dr = report::DomainReport {
@@ -389,31 +422,56 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             block_cli_idx.push(cli_idx);
         }
     }
-    fedora_versions.sort();
-
-    // Aggregated Bugzilla query (one per run, across all domains
-    // that enable it).
-    let mut bugzilla = None;
-    if last_bugzilla_idx.is_some() {
+    // One Bugzilla query per instance, across the domains that share
+    // it. Red Hat's email comes from the profile or FASJSON; any other
+    // instance's has to be on the profile, keyed by host.
+    let mut bugzilla = Vec::new();
+    if !bugzillas.is_empty() {
         if let Some(ref user) = fas_user {
-            let email = match bugzilla::resolve_email(user, bz_email_override, cli.verbose) {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            match rt.block_on(bugzilla::bugzilla_report(
-                &email,
-                &fedora_versions,
-                since,
-                until,
-                cli.verbose,
-            )) {
-                Ok(bz_report) => bugzilla = Some(bz_report),
-                Err(e) => {
-                    eprintln!("error: bugzilla: {e}");
-                    return ExitCode::FAILURE;
+            for agg in &mut bugzillas {
+                agg.fedora_versions.sort();
+                let host = agg.config.host();
+                let email = if agg.config.is_redhat() {
+                    bugzilla::resolve_email(user, bz_email_override, cli.verbose)
+                } else {
+                    profile
+                        .and_then(|p| p.bugzilla_emails.get(&host).cloned())
+                        .ok_or_else(|| {
+                            format!(
+                                "no Bugzilla email for {host}: set \
+                                 `bugzilla_emails.\"{host}\"` on the user \
+                                 profile in the config"
+                            )
+                        })
+                };
+                let email = match email {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                match rt.block_on(bugzilla::bugzilla_report(
+                    &agg.config,
+                    &email,
+                    &agg.fedora_versions,
+                    since,
+                    until,
+                    cli.verbose,
+                )) {
+                    Ok(mut bz_report) => {
+                        // Place the section after the last domain block
+                        // (in CLI order) that references this instance:
+                        // count the rendered blocks falling at or before
+                        // that domain's CLI position.
+                        bz_report.after =
+                            block_cli_idx.iter().filter(|&&i| i <= agg.last_idx).count();
+                        bugzilla.push(bz_report);
+                    }
+                    Err(e) => {
+                        eprintln!("error: bugzilla ({host}): {e}");
+                        return ExitCode::FAILURE;
+                    }
                 }
             }
         } else {
@@ -421,15 +479,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         }
     }
 
-    // Place the aggregated Bugzilla section after the last domain
-    // block (in CLI order) that references it: count the rendered
-    // blocks falling at or before that domain's CLI position.
-    let bugzilla_after = match last_bugzilla_idx {
-        Some(idx) if bugzilla.is_some() => block_cli_idx.iter().filter(|&&i| i <= idx).count(),
-        _ => 0,
-    };
-
-    if domain_reports.is_empty() && bugzilla.is_none() {
+    if domain_reports.is_empty() && bugzilla.is_empty() {
         eprintln!("No data sources configured for the selected domain(s).");
         return ExitCode::FAILURE;
     }
@@ -441,7 +491,6 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         until,
         domains: domain_reports,
         bugzilla,
-        bugzilla_after,
     };
 
     // Format output.

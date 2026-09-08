@@ -11,11 +11,21 @@ use sandogasa_bugclass::bugzilla::{classify, lookup_trackers};
 use sandogasa_bugzilla::BzClient;
 use serde::Serialize;
 
+use crate::config::BugzillaConfig;
+
 /// Bugzilla activity report.
 #[derive(Debug, Serialize)]
 pub struct BugzillaReport {
-    /// Package reviews section.
-    pub reviews: ReviewSection,
+    /// The instance queried (base URL).
+    pub instance: String,
+    /// Render hint (not serialized): the section is emitted after
+    /// this many domain blocks, the position of the last domain that
+    /// references this instance. `0` renders it before all blocks.
+    #[serde(skip)]
+    pub after: usize,
+    /// Package reviews: Red Hat Bugzilla only, where Fedora's review
+    /// flow lives. `None` on any other instance.
+    pub reviews: Option<ReviewSection>,
     /// Security / CVE bugs.
     pub security: BugCategory,
     /// Package update requests.
@@ -146,6 +156,7 @@ pub fn resolve_email(
 
 /// Run Bugzilla activity reporting.
 pub async fn bugzilla_report(
+    cfg: &BugzillaConfig,
     email: &str,
     fedora_versions: &[u32],
     since: NaiveDate,
@@ -153,7 +164,8 @@ pub async fn bugzilla_report(
     verbose: bool,
 ) -> Result<BugzillaReport, String> {
     bugzilla_report_with_client(
-        &BzClient::new("https://bugzilla.redhat.com"),
+        &BzClient::new(&cfg.instance),
+        cfg,
         email,
         fedora_versions,
         since,
@@ -181,14 +193,20 @@ async fn search(
 
 async fn bugzilla_report_with_client(
     bz: &BzClient,
+    cfg: &BugzillaConfig,
     email: &str,
     fedora_versions: &[u32],
     since: NaiveDate,
     until: NaiveDate,
     verbose: bool,
 ) -> Result<BugzillaReport, String> {
-    // Look up FTBFS and FTI tracker bug IDs.
-    let trackers = lookup_trackers(bz, fedora_versions, verbose).await;
+    // Look up FTBFS and FTI tracker bug IDs — Fedora's trackers, so
+    // only on Red Hat's Bugzilla.
+    let trackers = if cfg.is_redhat() {
+        lookup_trackers(bz, fedora_versions, verbose).await
+    } else {
+        Default::default()
+    };
 
     let since_str = since.format("%Y-%m-%d").to_string();
     let until_str = until
@@ -197,6 +215,13 @@ async fn bugzilla_report_with_client(
         .format("%Y-%m-%d")
         .to_string();
 
+    let products = cfg
+        .products
+        .iter()
+        .map(|p| format!("product={p}"))
+        .collect::<Vec<_>>()
+        .join("&");
+
     // Query 1: Bugs filed by the user in the period.
     if verbose {
         eprintln!("[bugzilla] searching bugs filed by {email}");
@@ -204,7 +229,7 @@ async fn bugzilla_report_with_client(
     let bugs_filed = search(
         bz,
         &format!(
-            "product=Fedora&product=Fedora EPEL\
+            "{products}\
              &creator={email}\
              &creation_time={since_str}\
              &chfieldfrom={since_str}&chfieldto={until_str}"
@@ -212,80 +237,94 @@ async fn bugzilla_report_with_client(
     )
     .await?;
 
-    // Query 2: Bugs assigned to the user, closed during the period.
+    // Query 2: Bugs assigned to the user that reached a closed status
+    // during the period — one query per status the instance closes
+    // with, since `chfieldvalue` takes one.
     if verbose {
         eprintln!("[bugzilla] searching bugs closed (assigned to {email})");
     }
-    let bugs_closed = search(
-        bz,
-        &format!(
-            "product=Fedora&product=Fedora EPEL\
-             &assigned_to={email}\
-             &bug_status=CLOSED\
-             &chfield=bug_status&chfieldvalue=CLOSED\
-             &chfieldfrom={since_str}&chfieldto={until_str}"
-        ),
-    )
-    .await?;
-
-    // Query 3: Package Review bugs assigned to user (reviews done)
-    // that had activity in the period.
-    if verbose {
-        eprintln!("[bugzilla] searching reviews assigned to {email}");
+    let mut bugs_closed = Vec::new();
+    for status in cfg.closed_statuses() {
+        bugs_closed.extend(
+            search(
+                bz,
+                &format!(
+                    "{products}\
+                     &assigned_to={email}\
+                     &bug_status={status}\
+                     &chfield=bug_status&chfieldvalue={status}\
+                     &chfieldfrom={since_str}&chfieldto={until_str}"
+                ),
+            )
+            .await?,
+        );
     }
-    let reviews_assigned = search(
-        bz,
-        &format!(
-            "product=Fedora&component=Package Review\
-             &assigned_to={email}\
-             &chfieldfrom={since_str}&chfieldto={until_str}"
-        ),
-    )
-    .await?;
 
-    // Query 4: Review requests filed by user that reached
-    // CLOSED or RELEASE_PENDING during the period.
-    if verbose {
-        eprintln!("[bugzilla] searching completed review requests by {email}");
-    }
+    // Queries 3-5 are the Fedora review flow, which only Red Hat's
+    // Bugzilla has.
+    let mut reviews_assigned = Vec::new();
     let mut reviews_completed_ids: HashSet<u64> = HashSet::new();
-    for status in COMPLETED_STATUSES {
-        let bugs = search(
-            bz,
-            &format!(
-                "product=Fedora&component=Package Review\
-                 &creator={email}\
-                 &chfield=bug_status&chfieldvalue={status}\
-                 &chfieldfrom={since_str}&chfieldto={until_str}"
-            ),
-        )
-        .await?;
-        reviews_completed_ids.extend(bugs.iter().map(|b| b.id));
-    }
-
-    // Query 5: Reviews done for others that reached
-    // CLOSED or RELEASE_PENDING during the period.
-    if verbose {
-        eprintln!("[bugzilla] searching reviews done for others by {email}");
-    }
     let mut reviews_done_completed_ids: HashSet<u64> = HashSet::new();
-    for status in COMPLETED_STATUSES {
-        let bugs = search(
+    if cfg.reviews() {
+        // Query 3: Package Review bugs assigned to user (reviews done)
+        // that had activity in the period.
+        if verbose {
+            eprintln!("[bugzilla] searching reviews assigned to {email}");
+        }
+        reviews_assigned = search(
             bz,
             &format!(
-                "product=Fedora&component=Package Review\
+                "{products}&component=Package Review\
                  &assigned_to={email}\
-                 &chfield=bug_status&chfieldvalue={status}\
                  &chfieldfrom={since_str}&chfieldto={until_str}"
             ),
         )
         .await?;
-        reviews_done_completed_ids.extend(bugs.iter().map(|b| b.id));
+
+        // Query 4: Review requests filed by user that reached
+        // CLOSED or RELEASE_PENDING during the period.
+        if verbose {
+            eprintln!("[bugzilla] searching completed review requests by {email}");
+        }
+        for status in COMPLETED_STATUSES {
+            let bugs = search(
+                bz,
+                &format!(
+                    "{products}&component=Package Review\
+                     &creator={email}\
+                     &chfield=bug_status&chfieldvalue={status}\
+                     &chfieldfrom={since_str}&chfieldto={until_str}"
+                ),
+            )
+            .await?;
+            reviews_completed_ids.extend(bugs.iter().map(|b| b.id));
+        }
+
+        // Query 5: Reviews done for others that reached
+        // CLOSED or RELEASE_PENDING during the period.
+        if verbose {
+            eprintln!("[bugzilla] searching reviews done for others by {email}");
+        }
+        for status in COMPLETED_STATUSES {
+            let bugs = search(
+                bz,
+                &format!(
+                    "{products}&component=Package Review\
+                     &assigned_to={email}\
+                     &chfield=bug_status&chfieldvalue={status}\
+                     &chfieldfrom={since_str}&chfieldto={until_str}"
+                ),
+            )
+            .await?;
+            reviews_done_completed_ids.extend(bugs.iter().map(|b| b.id));
+        }
     }
 
     // Build the report.
     let mut report = BugzillaReport {
-        reviews: ReviewSection::default(),
+        instance: cfg.instance.trim_end_matches('/').to_string(),
+        after: 0,
+        reviews: cfg.reviews().then(ReviewSection::default),
         security: BugCategory::default(),
         updates: BugCategory::default(),
         branches: BugCategory::default(),
@@ -294,30 +333,32 @@ async fn bugzilla_report_with_client(
         other: BugCategory::default(),
     };
 
-    // Reviews: submitted by user (from bugs_filed, component=Package Review).
-    // Completed = status changed to CLOSED or RELEASE_PENDING during period.
     let mut seen: HashSet<u64> = HashSet::new();
-    for bug in &bugs_filed {
-        if !seen.insert(bug.id) {
-            continue;
-        }
-        if bug.component.iter().any(|c| c == "Package Review") {
-            let entry = BugEntry::from(bug);
-            if reviews_completed_ids.contains(&bug.id) {
-                report.reviews.completed.push(entry.clone());
+    if let Some(reviews) = report.reviews.as_mut() {
+        // Reviews: submitted by user (from bugs_filed, component=Package Review).
+        // Completed = status changed to CLOSED or RELEASE_PENDING during period.
+        for bug in &bugs_filed {
+            if !seen.insert(bug.id) {
+                continue;
             }
-            report.reviews.submitted.push(entry);
+            if bug.component.iter().any(|c| c == "Package Review") {
+                let entry = BugEntry::from(bug);
+                if reviews_completed_ids.contains(&bug.id) {
+                    reviews.completed.push(entry.clone());
+                }
+                reviews.submitted.push(entry);
+            }
         }
-    }
 
-    // Reviews done for others (assigned to user).
-    for bug in &reviews_assigned {
-        if seen.insert(bug.id) {
-            let entry = BugEntry::from(bug);
-            if reviews_done_completed_ids.contains(&bug.id) {
-                report.reviews.done_completed.push(entry.clone());
+        // Reviews done for others (assigned to user).
+        for bug in &reviews_assigned {
+            if seen.insert(bug.id) {
+                let entry = BugEntry::from(bug);
+                if reviews_done_completed_ids.contains(&bug.id) {
+                    reviews.done_completed.push(entry.clone());
+                }
+                reviews.done_for_others.push(entry);
             }
-            report.reviews.done_for_others.push(entry);
         }
     }
 
@@ -349,30 +390,32 @@ pub fn format_markdown(report: &BugzillaReport, detail: u8) -> String {
     let detailed = detail >= 1;
     let mut out = String::new();
 
-    out.push_str("## Bugzilla\n\n");
+    out.push_str(&format!(
+        "## Bugzilla ({})\n\n",
+        crate::forge::instance_host(&report.instance)
+    ));
 
-    // Reviews summary.
-    out.push_str("### Package reviews\n\n");
-    out.push_str(&format!(
-        "- **{}** review request(s) submitted",
-        report.reviews.submitted.len()
-    ));
-    if !report.reviews.completed.is_empty() {
-        out.push_str(&format!(" ({} completed)", report.reviews.completed.len()));
-    }
-    out.push('\n');
-    out.push_str(&format!(
-        "- **{}** review(s) done for others",
-        report.reviews.done_for_others.len()
-    ));
-    if !report.reviews.done_completed.is_empty() {
+    // Reviews summary, where the review flow exists.
+    if let Some(reviews) = &report.reviews {
+        out.push_str("### Package reviews\n\n");
         out.push_str(&format!(
-            " ({} completed)",
-            report.reviews.done_completed.len()
+            "- **{}** review request(s) submitted",
+            reviews.submitted.len()
         ));
+        if !reviews.completed.is_empty() {
+            out.push_str(&format!(" ({} completed)", reviews.completed.len()));
+        }
+        out.push('\n');
+        out.push_str(&format!(
+            "- **{}** review(s) done for others",
+            reviews.done_for_others.len()
+        ));
+        if !reviews.done_completed.is_empty() {
+            out.push_str(&format!(" ({} completed)", reviews.done_completed.len()));
+        }
+        out.push('\n');
+        out.push('\n');
     }
-    out.push('\n');
-    out.push('\n');
 
     // Other categories table.
     if !report.security.is_empty()
@@ -417,29 +460,31 @@ pub fn format_markdown(report: &BugzillaReport, detail: u8) -> String {
                 format!("{} {}", b.status, b.resolution)
             };
             out.push_str(&format!(
-                "- [#{}](https://bugzilla.redhat.com/show_bug.cgi?id={}) \
+                "- [#{}]({}/show_bug.cgi?id={}) \
                  {} ({})\n",
-                b.id, b.id, b.summary, status
+                b.id, report.instance, b.id, b.summary, status
             ));
         }
         out.push('\n');
     };
 
-    // Detailed review lists.
-    let completed_ids: HashSet<u64> = report.reviews.completed.iter().map(|b| b.id).collect();
+    // Detailed review lists (empty where there is no review flow).
+    let none = ReviewSection::default();
+    let reviews = report.reviews.as_ref().unwrap_or(&none);
+    let completed_ids: HashSet<u64> = reviews.completed.iter().map(|b| b.id).collect();
 
-    if !report.reviews.submitted.is_empty() {
+    if !reviews.submitted.is_empty() {
         out.push_str("#### Review requests submitted\n\n");
-        for b in &report.reviews.submitted {
+        for b in &reviews.submitted {
             let status = if b.resolution.is_empty() {
                 b.status.clone()
             } else {
                 format!("{} {}", b.status, b.resolution)
             };
             out.push_str(&format!(
-                "- [#{}](https://bugzilla.redhat.com/show_bug.cgi?id={}) \
+                "- [#{}]({}/show_bug.cgi?id={}) \
                  {} ({})\n",
-                b.id, b.id, b.summary, status
+                b.id, report.instance, b.id, b.summary, status
             ));
             if completed_ids.contains(&b.id) {
                 out.push_str("  - Completed\n");
@@ -447,20 +492,20 @@ pub fn format_markdown(report: &BugzillaReport, detail: u8) -> String {
         }
         out.push('\n');
     }
-    if !report.reviews.done_for_others.is_empty() {
+    if !reviews.done_for_others.is_empty() {
         let done_completed_ids: HashSet<u64> =
-            report.reviews.done_completed.iter().map(|b| b.id).collect();
+            reviews.done_completed.iter().map(|b| b.id).collect();
         out.push_str("#### Reviews done for others\n\n");
-        for b in &report.reviews.done_for_others {
+        for b in &reviews.done_for_others {
             let status = if b.resolution.is_empty() {
                 b.status.clone()
             } else {
                 format!("{} {}", b.status, b.resolution)
             };
             out.push_str(&format!(
-                "- [#{}](https://bugzilla.redhat.com/show_bug.cgi?id={}) \
+                "- [#{}]({}/show_bug.cgi?id={}) \
                  {} ({})\n",
-                b.id, b.id, b.summary, status
+                b.id, report.instance, b.id, b.summary, status
             ));
             if done_completed_ids.contains(&b.id) {
                 out.push_str("  - Completed\n");
@@ -504,7 +549,9 @@ mod tests {
     #[test]
     fn format_summary_shows_table() {
         let report = BugzillaReport {
-            reviews: ReviewSection {
+            instance: crate::config::REDHAT_BUGZILLA.to_string(),
+            after: 0,
+            reviews: Some(ReviewSection {
                 submitted: vec![BugEntry {
                     id: 1,
                     summary: "Review Request: rust-foo".to_string(),
@@ -515,7 +562,7 @@ mod tests {
                 completed: vec![],
                 done_for_others: vec![],
                 done_completed: vec![],
-            },
+            }),
             security: BugCategory::default(),
             updates: BugCategory::default(),
             branches: BugCategory::default(),
@@ -531,7 +578,9 @@ mod tests {
     #[test]
     fn format_detailed_shows_sections() {
         let report = BugzillaReport {
-            reviews: ReviewSection {
+            instance: crate::config::REDHAT_BUGZILLA.to_string(),
+            after: 0,
+            reviews: Some(ReviewSection {
                 submitted: vec![BugEntry {
                     id: 100,
                     summary: "Review Request: rust-foo - Foo library".to_string(),
@@ -548,7 +597,7 @@ mod tests {
                 }],
                 done_for_others: vec![],
                 done_completed: vec![],
-            },
+            }),
             security: BugCategory {
                 filed: vec![],
                 closed: vec![BugEntry {
@@ -588,7 +637,9 @@ mod tests {
     #[test]
     fn format_table_only_shows_nonempty() {
         let report = BugzillaReport {
-            reviews: ReviewSection::default(),
+            instance: crate::config::REDHAT_BUGZILLA.to_string(),
+            after: 0,
+            reviews: Some(ReviewSection::default()),
             security: BugCategory::default(),
             updates: BugCategory::default(),
             branches: BugCategory::default(),
@@ -659,6 +710,7 @@ mod tests {
 
         let report = bugzilla_report_with_client(
             &bz,
+            &BugzillaConfig::default(),
             "test@example.com",
             &[],
             NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
@@ -669,8 +721,12 @@ mod tests {
         .unwrap();
 
         // Review filed by user.
-        assert_eq!(report.reviews.submitted.len(), 1);
-        assert_eq!(report.reviews.submitted[0].id, 1);
+        let reviews = report
+            .reviews
+            .as_ref()
+            .expect("Red Hat's has the review flow");
+        assert_eq!(reviews.submitted.len(), 1);
+        assert_eq!(reviews.submitted[0].id, 1);
 
         // CVE closed (assigned to user).
         assert!(!report.security.closed.is_empty());
@@ -680,6 +736,65 @@ mod tests {
 
         // Branch request.
         assert!(!report.branches.filed.is_empty() || !report.branches.closed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn another_instance_skips_the_review_flow_and_links_to_itself() {
+        let server = MockServer::start().await;
+        let bz = BzClient::new(&server.uri());
+        let cfg = BugzillaConfig {
+            instance: server.uri(),
+            products: vec!["openSUSE Tumbleweed".to_string()],
+            closed_statuses: Vec::new(),
+        };
+        let bugs = serde_json::json!({
+            "bugs": [
+                bug_json(7, "foo fails to start", "foo", "NEW", &[], "test@example.com"),
+                bug_json(8, "qux crashes on startup", "qux", "NEW", &[], "test@example.com"),
+            ],
+            "total_matches": 2
+        });
+        // Only the product the config names is asked for, and the
+        // review flow (Red Hat's) is not: one filed query, then one
+        // closed query per status a stock Bugzilla closes with.
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::query_param(
+                "product",
+                "openSUSE Tumbleweed",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&bugs))
+            .expect(4)
+            .mount(&server)
+            .await;
+
+        let report = bugzilla_report_with_client(
+            &bz,
+            &cfg,
+            "test@example.com",
+            &[],
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert!(report.reviews.is_none(), "no review section off Red Hat's");
+        assert_eq!(report.other.filed.len(), 2);
+        let md = format_markdown(&report, 1);
+        assert!(!md.contains("Package reviews"), "{md}");
+        assert!(
+            md.contains(&format!(
+                "## Bugzilla ({})",
+                crate::forge::instance_host(&server.uri())
+            )),
+            "{md}"
+        );
+        assert!(
+            md.contains(&format!("{}/show_bug.cgi?id=8", server.uri())),
+            "{md}"
+        );
+        assert!(!md.contains("bugzilla.redhat.com"), "{md}");
     }
 
     #[tokio::test]
@@ -760,6 +875,7 @@ mod tests {
 
         let report = bugzilla_report_with_client(
             &bz,
+            &BugzillaConfig::default(),
             "test@example.com",
             &[],
             NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
