@@ -19,6 +19,42 @@ Proposed Update's progress until stock carries it — at which point the
 `hs-relmon retire` flow above applies. Scope and the JIRA fields to
 fill are the user's to define before anything is built.
 
+What has to exist first:
+
+- **Jira writes.** `sandogasa-jira` today fetches one issue
+  (`JiraClient::new`, `with_api_key`); filing needs issue creation,
+  a JQL search (is there already an issue for this package and
+  release?), the create-metadata endpoint for the project's required
+  fields, and transitions to follow the issue's progress. Grow the
+  crate, with wiremock coverage, before touching the tool.
+- **Repo setup, shared by Hyperscale and CPU.** SIG repos are
+  created by *mirroring* the `redhat/centos-stream/rpms/<pkg>` project
+  into the SIG namespace, not by forking — so a push to the SIG repo
+  makes GitLab suggest a merge request against the SIG repo, which is
+  what SIG work wants. Upstreaming a Proposed Update additionally
+  needs a *fork* of the upstream project in the user's own namespace:
+  only a fork carries the relationship that makes the new-MR page
+  GitLab links to on push default to targeting
+  `redhat/centos-stream/rpms/<pkg>`. One `new-repo`-style command
+  (home to be decided — hs-relmon knows the GitLab project settings
+  already, from `check-repos`) should create the mirror in a given
+  namespace and, on request, the personal fork, then print the clone
+  commands. Check whether pull mirroring is available to the group
+  via the API (`POST /projects` with `import_url` + `mirror`; it is
+  a paid-tier feature on gitlab.com) or whether the mirror has to be
+  set up by hand, in which case the command prints that step.
+- **Checkout layout: one clone, three remotes.** `origin` is the SIG
+  mirror (SIG branches track it), `upstream` is
+  `redhat/centos-stream/rpms/<pkg>` (fetch only), `fork` is the
+  personal fork. Upstreaming is then a cherry-pick from the SIG branch
+  onto `upstream/cNs` in the same tree, and `git push -u fork <topic>`
+  makes GitLab print the right new-MR URL because the URL comes from
+  the remote pushed to. Two clones would need the patch carried
+  across by hand and offer nothing in return. The setup command should
+  emit exactly these remote-add lines, and the upstreaming step the
+  `checkout -b … upstream/cNs` / `cherry-pick` / `push -u fork`
+  sequence.
+
 ## Fedora packaging: ship the fedrq Hyperscale config as its own subpackage (2026-09-08)
 
 `configs/fedrq/centos-hyperscale.toml` and `configs/fedrq/repos/
