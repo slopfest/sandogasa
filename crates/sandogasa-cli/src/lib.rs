@@ -35,6 +35,7 @@ pub mod defaults;
 pub mod http;
 #[cfg(feature = "man")]
 pub mod man;
+pub mod style;
 
 pub use defaults::{DefaultsTable, parse_with_defaults, parse_with_defaults_and};
 

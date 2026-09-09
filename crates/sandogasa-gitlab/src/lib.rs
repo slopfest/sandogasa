@@ -311,6 +311,18 @@ impl Client {
         Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
     }
 
+    /// Archive the project (`POST /projects/:id/archive`): read-only
+    /// from then on, listed as archived, reversible from the project
+    /// settings. Archiving an archived project is a no-op on GitLab's
+    /// side too.
+    pub fn archive_project(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!("{}/api/v4/projects/{}/archive", self.base_url, encoded);
+        let resp = self.http.post(&url).send()?;
+        blocking_ok(resp, &format!("GitLab POST {url}"))?;
+        Ok(())
+    }
+
     /// Add a note (comment) to an issue.
     pub fn add_note(&self, iid: u64, body: &str) -> Result<(), Box<dyn std::error::Error>> {
         let payload = serde_json::json!({ "body": body });
@@ -1302,6 +1314,19 @@ mod tests {
             .unwrap();
         mock.assert();
         assert_eq!(commits[0].title, "New upstream version 3.2.16");
+    }
+
+    #[test]
+    fn archive_project_posts_to_the_archive_endpoint() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("POST", "/api/v4/projects/g%2Fp/archive")
+            .with_status(201)
+            .with_body(r#"{"id": 1, "archived": true}"#)
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        client.archive_project().unwrap();
+        mock.assert();
     }
 
     #[test]

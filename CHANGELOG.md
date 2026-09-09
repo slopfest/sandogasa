@@ -2,6 +2,80 @@
 
 ## Unreleased
 
+### hs-relmon: the managed tags are read once per run, and Repology is asked at its own pace
+
+A manifest-wide command — `prune-manifest`, `prune-archived`, now
+`check-stock` — asked CBS for "builds of this package in this tag" once
+per package per candidate tag: four EL tokens times the repositories
+times two stages, most naming tags that do not exist (`hyperscale9-*`
+is the Facebook repository's alone, `-kernel-` is `10s` only), so four
+repositories over 65 packages was over two thousand calls and the run
+took minutes. The candidate tags are now filtered by one `listTags`
+against what the hub has (`existing_managed_tags`; `prune-tags` uses
+it too), and the manifest-wide commands read each existing tag's
+contents once (`TagIndex`, one `listTagged` per tag: 18 calls for four
+repositories) and answer every package from memory. That left Repology
+as the pace-setter — and, no longer spaced out by CBS round trips, its
+lookups ran into throttling, which the client reported as "error
+decoding response body" because it parsed the answer without looking
+at the status. `sandogasa-repology` now spaces requests a second apart
+(Repology's terms), retries a 429 or 503 after `Retry-After`, and
+names any other failing status. `check-stock` over four repositories
+takes 73 s, all 65 packages judged.
+
+### hs-relmon: `check-stock` says whether a package is to retire or rebase, and `retire` does the former
+
+A package the SIG carried only until CentOS Stream caught up had no way
+out but hand work: untag each build, edit the manifest, archive the
+repo. And nothing told a package like that apart from one carrying SIG
+packaging changes, which stock catching up means should be *rebased* —
+CBS and Repology show the same thing for both. The manifest now
+declares it: `divergent = true` on a package means rebase when stock
+moves, `false` means retire, unset means nobody has said (`poi-tracker
+export hs-relmon` preserves the field across re-exports).
+
+`hs-relmon check-stock <manifest>` compares every package's builds in
+the managed `-release`/`-testing` tags against the stock version for
+each tag's channel — `prune-archived`'s rule, now restricted to what
+stands in for the package: a stock source of the same name, or one
+shipping a binary of that name. Repology files CentOS Stream 9's
+`autoconf-latest` 2.71 (binaries `autoconf-latest`, `autoconf271`)
+under the `autoconf` project beside `autoconf` 2.69, and the first run
+called the SIG's autoconf 2.71 caught up with when stock's `autoconf`
+is still 2.69; `prune-archived` gains the same restriction. And the
+comparison reads stock's release too, from Repology's full
+`version-release`: gdal 3.10.3-103.hs.el9 against stock's 3.10.3-3.el9
+was "caught up" by version, when retiring it would have left every
+system running the SIG build on it until stock's version moves — dnf
+does not downgrade, a configuration manager told to upgrade would. Such
+a build is `release`-ahead, its own verdict and its own prompt, never
+untagged under `--yes`, in `prune-archived` as well — and lists one
+verdict
+word per package, aligned and colored on a terminal (`--color[=WHEN]`
+as in `ls`): `ahead`, then the caught-up `retire`, `rebase` and
+`declare`, then `none` for no build in the managed tags, with tags
+shown as `10s-main-release` and a legend at the foot. On a terminal
+the `declare` packages are then asked about one by one and the answer
+written to the manifest entry (`t` temporary, `d` divergent, `s` skip,
+`q` stop), so the declaration is made where the evidence is. The color
+handling — choice, TTY and `NO_COLOR` detection, painting — moved to
+`sandogasa_cli::style`; sandogasa-hattrack uses it, and koji-diff's
+auto-detection now honours `NO_COLOR` through it. `hs-relmon retire
+<package> --manifest <path>` does the
+retirement in one confirmation (`--yes` for none, `--dry-run` for the
+plan): every hyperscale tag the package's builds are in — candidate
+tags included — is untagged, the manifest entry removed with comments
+preserved, and the GitLab repo archived (`sandogasa-gitlab` gains
+`archive_project`). Builds in the tags of a release the SIG no longer
+tracks (`hyperscale8s-*`) stay tagged, listed as such — no stock to
+compare against, nothing gained by rewriting history — while the
+manifest entry and the repo are retired all the same. It refuses a
+divergent package unless `--force`; a build newer than stock is
+prompted for individually and never untagged under `--yes`, and while
+one stays tagged the package is not retired.
+On the SIG manifest, stock has caught up with 10 of 65 packages, crun
+among them.
+
 ### poi-tracker reconcile: a keep the graph never expanded is walked, not left to send its dependencies to the triage
 
 `reconcile` sent rust-qrcodegen and rust-qrcodegen-image to the kondo

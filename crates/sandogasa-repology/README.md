@@ -9,6 +9,9 @@ tracking API.
 - Filter by repository, find newest version, find latest Fedora stable or
   CentOS Stream entry
 - Status-aware sorting with RPM version comparison for tie-breaking
+- Requests paced a second apart, as Repology's API terms ask, with a
+  throttled (429) or unavailable (503) answer retried after
+  `Retry-After`
 
 ## Usage
 

@@ -17,6 +17,7 @@ use hs_relmon::manifest;
 use hs_relmon::prune_archived;
 use hs_relmon::prune_tags;
 use hs_relmon::repology;
+use hs_relmon::retire;
 use hs_relmon::review;
 
 #[derive(Parser)]
@@ -450,6 +451,84 @@ repository is not in this list are not touched."
 
     /// Interactively review builds in hyperscale `-testing` tags
     /// and promote (+1), reject (-1), or skip (0) each one.
+    /// Compare every manifest package's Hyperscale builds against
+    /// stock: still ahead, or caught up — and then whether to
+    /// retire it or rebase it, per the manifest's `divergent`.
+    CheckStock {
+        /// Path to the TOML manifest file.
+        manifest: PathBuf,
+
+        /// Comma-separated Hyperscale repositories to judge by.
+        #[arg(
+            long,
+            default_value = prune_tags::DEFAULT_REPOSITORY,
+            long_help = "\
+Comma-separated Hyperscale repositories whose
+`-release`/`-testing` tags are compared against
+stock. The repository is the segment between
+`-packages-` and the stage suffix, e.g. `main` in
+`hyperscale10s-packages-main-release`."
+        )]
+        repositories: String,
+
+        /// Comma-separated packages to skip.
+        #[arg(long, value_name = "LIST")]
+        skip: Option<String>,
+
+        /// Colorize the verdicts, as `ls --color`: `--color` alone
+        /// is `always`; `auto` (the default) colors a TTY unless
+        /// NO_COLOR is set; `never`.
+        #[arg(
+            long,
+            value_enum,
+            value_name = "WHEN",
+            default_value_t = sandogasa_cli::style::ColorChoice::Auto,
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "always"
+        )]
+        color: sandogasa_cli::style::ColorChoice,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Retire package(s) stock now carries: untag their builds
+    /// from every hyperscale tag, drop them from the manifest,
+    /// archive their GitLab repos.
+    Retire {
+        /// Package(s) to retire.
+        #[arg(required = true, value_name = "PACKAGE")]
+        packages: Vec<String>,
+
+        /// Path to the TOML manifest file to drop them from.
+        #[arg(long, value_name = "PATH")]
+        manifest: PathBuf,
+
+        /// GitLab group the packages' repos live under.
+        #[arg(long, default_value = retire::DEFAULT_GITLAB_GROUP, value_name = "URL")]
+        gitlab_group: String,
+
+        /// Show the plan without untagging, editing or archiving.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Retire a package the manifest declares `divergent`
+        /// (carrying SIG changes), which is otherwise refused.
+        #[arg(long)]
+        force: bool,
+
+        /// Retire without confirming; never untags a build newer
+        /// than stock, and then leaves the package in place.
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
     Review {
         /// Optional package name or build NVR. With a package
         /// name, reviews its latest build in each testing tag;
@@ -904,7 +983,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 repositories: prune_tags::parse_repositories(&repositories),
             };
             let client = cbs::Client::new();
-            run_prune_one(&client, &package, &opts, dry_run, yes, verbose)?;
+            let tag_builds = prune_tags::fetch_managed_tags(&client, &package, &opts, verbose);
+            run_prune_one(&package, &tag_builds, &opts, dry_run, yes, verbose)?;
         }
         Command::PruneArchived {
             manifest: path,
@@ -930,6 +1010,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let m = manifest::Manifest::load(&path)?;
             let cbs_client = cbs::Client::new();
             let repology_client = repology::Client::new();
+            let index = prune_tags::TagIndex::load(&cbs_client, &opts.repositories, verbose)?;
             let mut total_failures = 0usize;
             for pkg in &m.packages {
                 // Only archived-upstream packages are in scope.
@@ -943,11 +1024,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 let plan = match prune_archived::plan_for_package(
-                    &cbs_client,
                     &pkg.name,
-                    &opts,
+                    &index.for_package(&pkg.name),
                     |n| repology_client.get_project(n),
-                    verbose,
                 ) {
                     Ok(p) => p,
                     Err(e) => {
@@ -996,6 +1075,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             let m = manifest::Manifest::load(&path)?;
             let client = cbs::Client::new();
+            let index = prune_tags::TagIndex::load(&client, &opts.repositories, verbose)?;
             let mut total_failures = 0usize;
             for pkg in &m.packages {
                 if skip_set.contains(&pkg.name) {
@@ -1004,12 +1084,156 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     continue;
                 }
-                if let Err(e) = run_prune_one(&client, &pkg.name, &opts, dry_run, yes, verbose) {
+                if let Err(e) = run_prune_one(
+                    &pkg.name,
+                    &index.for_package(&pkg.name),
+                    &opts,
+                    dry_run,
+                    yes,
+                    verbose,
+                ) {
                     eprintln!("{}: {e}", pkg.name);
                     total_failures += 1;
                 }
             }
             if total_failures > 0 {
+                std::process::exit(1);
+            }
+        }
+        Command::CheckStock {
+            manifest: path,
+            repositories,
+            skip,
+            color,
+            verbose,
+        } => {
+            let color = sandogasa_cli::style::use_color(color);
+            let opts = prune_tags::PruneOptions {
+                repositories: prune_tags::parse_repositories(&repositories),
+                ..prune_tags::PruneOptions::default()
+            };
+            let skip: Vec<String> = skip
+                .as_deref()
+                .unwrap_or("")
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            let m = manifest::Manifest::load(&path)?;
+            let cbs_client = cbs::Client::new();
+            let repology_client = repology::Client::new();
+            let index = prune_tags::TagIndex::load(&cbs_client, &opts.repositories, verbose)?;
+            let (reports, failures) =
+                retire::run_check_stock(&index, &m, &skip, |n| repology_client.get_project(n))?;
+            for r in &reports {
+                print!("{}", retire::render_standing(r, color));
+            }
+            println!();
+            print!("{}", retire::legend(color));
+            let count = |s: retire::Standing| reports.iter().filter(|r| r.standing() == s).count();
+            println!(
+                "{} package(s): {} ahead of stock, {} ahead by release alone, {} to retire, {} to \
+                 rebase, {} caught up but undeclared, {} without builds{}",
+                reports.len(),
+                reports
+                    .iter()
+                    .filter(|r| matches!(r.standing(), retire::Standing::Ahead(_)))
+                    .count(),
+                reports
+                    .iter()
+                    .filter(|r| matches!(r.standing(), retire::Standing::ReleaseAhead(_)))
+                    .count(),
+                count(retire::Standing::Retire),
+                count(retire::Standing::Rebase),
+                count(retire::Standing::Undeclared),
+                count(retire::Standing::NoBuilds),
+                if failures > 0 {
+                    format!("; {failures} could not be judged")
+                } else {
+                    String::new()
+                }
+            );
+            // The undeclared ones are a question only the maintainer can
+            // answer; ask it here, where the evidence is on screen, and
+            // write the answers to the manifest. Piped runs just list.
+            if count(retire::Standing::Undeclared) > 0 && std::io::stdin().is_terminal() {
+                let declared = retire::declare_interactively(&path, &reports)?;
+                if declared > 0 {
+                    println!("{declared} declaration(s) written to {}", path.display());
+                }
+            }
+            if failures > 0 {
+                std::process::exit(1);
+            }
+        }
+        Command::Retire {
+            packages,
+            manifest: path,
+            gitlab_group,
+            dry_run,
+            force,
+            yes,
+            verbose,
+        } => {
+            ensure_cbs_auth(dry_run)?;
+            // The token is the one precondition worth failing on before
+            // any request: a dry run only reads, so it may go without.
+            let token_ok = gitlab::load_token().is_ok();
+            if !dry_run && !token_ok {
+                gitlab::load_token()?;
+            }
+            let m = manifest::Manifest::load(&path)?;
+            let cbs_client = cbs::Client::new();
+            let repology_client = repology::Client::new();
+            let repo_archived = |url: &str| -> Option<bool> {
+                if !token_ok {
+                    return None;
+                }
+                gitlab::client_from_project_url(url)
+                    .and_then(|c| c.project_status())
+                    .ok()
+                    .map(|s| s.archived)
+            };
+            let archive = |url: &str| -> Result<(), Box<dyn std::error::Error>> {
+                gitlab::client_from_project_url(url)?.archive_project()
+            };
+            let mut failures = 0usize;
+            for package in &packages {
+                let plan = match retire::plan_for_package(
+                    &cbs_client,
+                    package,
+                    Some(&m),
+                    &gitlab_group,
+                    |n| repology_client.get_project(n),
+                    repo_archived,
+                    verbose,
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("{package}: {e}");
+                        failures += 1;
+                        continue;
+                    }
+                };
+                print!("{}", retire::render_plan(&plan));
+                if dry_run {
+                    continue;
+                }
+                if plan.divergent() && !force {
+                    eprintln!(
+                        "{package}: declared divergent in the manifest — rebase it onto \
+                         stock instead, or pass --force to retire it anyway"
+                    );
+                    failures += 1;
+                    continue;
+                }
+                let outcome = retire::apply_plan(&plan, Some(&path), archive, yes, verbose);
+                if outcome.left_tagged > 0 || outcome.errors > 0 {
+                    failures += 1;
+                }
+            }
+            if failures > 0 {
                 std::process::exit(1);
             }
         }
@@ -1074,15 +1298,14 @@ fn ensure_cbs_auth(dry_run: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_prune_one(
-    client: &cbs::Client,
     package: &str,
+    tag_builds: &[prune_tags::TagBuilds],
     opts: &prune_tags::PruneOptions,
     dry_run: bool,
     yes: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let tag_builds = prune_tags::fetch_managed_tags(client, package, opts, verbose);
-    let plan = prune_tags::build_plan(package, &tag_builds, opts);
+    let plan = prune_tags::build_plan(package, tag_builds, opts);
     print!("{}", prune_tags::render_plan(&plan));
     let total = plan.total_untags();
     if total == 0 {

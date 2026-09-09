@@ -166,6 +166,40 @@ impl Client {
         builds_from(&self.hub.call("listBuilds", &params)?)
     }
 
+    /// Tag names matching a Koji glob, e.g. `hyperscale*` — one
+    /// call, where probing candidate names one by one costs a call
+    /// (and an error) per name that does not exist.
+    pub fn list_tags_matching(
+        &self,
+        pattern: &str,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        // listTags(build=nil, package=nil, perms=true, queryOpts=nil,
+        //   pattern=...)
+        let params = [
+            Value::Nil,
+            Value::Nil,
+            Value::Boolean(true),
+            Value::Nil,
+            Value::String(pattern.to_string()),
+        ];
+        tag_names_from(&self.hub.call("listTags", &params)?)
+    }
+
+    /// Every build currently tagged directly in `tag`, all packages
+    /// — one call per tag, which for a manifest-wide command beats
+    /// one call per package per tag.
+    pub fn list_tagged(&self, tag: &str) -> Result<Vec<Build>, Box<dyn std::error::Error>> {
+        // listTagged(tag, event=nil, inherit=False, prefix=nil, latest=False)
+        let params = [
+            Value::String(tag.to_string()),
+            Value::Nil,
+            Value::Boolean(false),
+            Value::Nil,
+            Value::Boolean(false),
+        ];
+        builds_from(&self.hub.call("listTagged", &params)?)
+    }
+
     /// List builds of `package` currently in `tag`. Equivalent
     /// to `koji list-tagged --package=<pkg> <tag>` but via the
     /// XML-RPC `listTagged` method, which returns full Build

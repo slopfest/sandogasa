@@ -48,6 +48,13 @@ pub struct PackageEntry {
     /// stale CBS builds should be untagged).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
+    /// The SIG copy differs from stock in more than its version —
+    /// patches, configuration, subpackage layout — so when stock
+    /// catches up the action is a rebase, never a retirement. `false`
+    /// declares a package tracked only until stock catches up; unset
+    /// is undeclared, and `check-stock` says so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub divergent: Option<bool>,
 }
 
 /// A package entry with all defaults resolved.
@@ -85,6 +92,7 @@ impl Manifest {
                     file_issue: None,
                     issue_url: None,
                     archived: None,
+                    divergent: None,
                 });
             }
         }
@@ -166,7 +174,61 @@ pub fn add_packages_to_file(
     path: &Path,
     names: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use std::collections::HashSet;
+    edit_packages_in_file(path, |tables| {
+        use std::collections::HashSet;
+        let existing: HashSet<String> = tables.iter().map(|(name, _)| name.clone()).collect();
+        for name in names {
+            if !existing.contains(name) {
+                let mut table = toml_edit::Table::new();
+                table.insert("name", toml_edit::value(name.as_str()));
+                tables.push((name.clone(), table));
+            }
+        }
+    })
+}
+
+/// Remove packages from a manifest file. Returns the names that were
+/// actually present. Preserves comments and formatting via `toml_edit`.
+pub fn remove_packages_from_file(
+    path: &Path,
+    names: &[String],
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut removed = Vec::new();
+    edit_packages_in_file(path, |tables| {
+        tables.retain(|(name, _)| {
+            let gone = names.contains(name);
+            if gone {
+                removed.push(name.clone());
+            }
+            !gone
+        });
+    })?;
+    Ok(removed)
+}
+
+/// Declare `divergent` on one manifest entry, in place, comments
+/// preserved. `Ok(false)` when the package is not listed.
+pub fn set_divergent_in_file(
+    path: &Path,
+    name: &str,
+    divergent: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let mut found = false;
+    edit_packages_in_file(path, |tables| {
+        if let Some((_, table)) = tables.iter_mut().find(|(n, _)| n == name) {
+            table.insert("divergent", toml_edit::value(divergent));
+            found = true;
+        }
+    })?;
+    Ok(found)
+}
+
+/// Rewrite the manifest's `[[package]]` tables through `edit`, then
+/// sort them by name and write the file back, comments preserved.
+fn edit_packages_in_file(
+    path: &Path,
+    edit: impl FnOnce(&mut Vec<(String, toml_edit::Table)>),
+) -> Result<(), Box<dyn std::error::Error>> {
     use toml_edit::DocumentMut;
 
     let contents = std::fs::read_to_string(path)?;
@@ -194,16 +256,7 @@ pub fn add_packages_to_file(
         }
     }
 
-    let existing: HashSet<String> = pkg_tables.iter().map(|(name, _)| name.clone()).collect();
-
-    for name in names {
-        if !existing.contains(name) {
-            let mut table = toml_edit::Table::new();
-            table.insert("name", toml_edit::value(name.as_str()));
-            pkg_tables.push((name.clone(), table));
-        }
-    }
-
+    edit(&mut pkg_tables);
     pkg_tables.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut new_arr = toml_edit::ArrayOfTables::new();
@@ -490,6 +543,67 @@ repology_name = "linux"
         assert_eq!(m.packages[0].name, "ethtool");
         assert_eq!(m.packages[1].name, "perf");
         assert_eq!(m.packages[1].repology_name.as_deref(), Some("linux"));
+    }
+
+    #[test]
+    fn divergent_is_read_and_left_alone_when_unset() {
+        let m: Manifest = toml::from_str(
+            "[[package]]\nname = \"pykickstart\"\ndivergent = true\n\n[[package]]\nname = \"crun\"\n",
+        )
+        .unwrap();
+        assert_eq!(m.packages[0].divergent, Some(true));
+        assert_eq!(m.packages[1].divergent, None);
+    }
+
+    #[test]
+    fn set_divergent_in_file_writes_the_flag_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.toml");
+        std::fs::write(
+            &path,
+            "# Packages.\n\n[[package]]\nname = \"crun\"\n\n[[package]]\nname = \"rpm\"\nrepology_name = \"rpm\"\n",
+        )
+        .unwrap();
+        assert!(set_divergent_in_file(&path, "rpm", true).unwrap());
+        assert!(!set_divergent_in_file(&path, "nope", true).unwrap());
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("# Packages."));
+        let m = Manifest::load(&path).unwrap();
+        let rpm = m.packages.iter().find(|p| p.name == "rpm").unwrap();
+        assert_eq!(rpm.divergent, Some(true));
+        assert_eq!(rpm.repology_name.as_deref(), Some("rpm"));
+        assert_eq!(m.packages[0].divergent, None, "crun untouched");
+    }
+
+    #[test]
+    fn remove_packages_from_file_keeps_comments_and_reports_what_went() {
+        let original = "\
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+
+# Packages to monitor.
+
+[[package]]
+name = \"crun\"
+
+[[package]]
+name = \"ethtool\"
+repology_name = \"ethtool-linux\"
+";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.toml");
+        std::fs::write(&path, original).unwrap();
+        let removed =
+            remove_packages_from_file(&path, &["crun".into(), "not-there".into()]).unwrap();
+        assert_eq!(removed, ["crun"]);
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("# Packages to monitor."));
+        let reloaded = Manifest::load(&path).unwrap();
+        assert_eq!(reloaded.packages.len(), 1);
+        assert_eq!(reloaded.packages[0].name, "ethtool");
+        assert_eq!(
+            reloaded.packages[0].repology_name.as_deref(),
+            Some("ethtool-linux")
+        );
     }
 
     #[test]

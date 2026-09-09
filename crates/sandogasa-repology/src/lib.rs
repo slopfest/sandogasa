@@ -56,7 +56,17 @@ pub struct Package {
 pub struct Client {
     http: reqwest::blocking::Client,
     base_url: String,
+    /// The least time between two requests: Repology asks for no
+    /// more than one a second, and throttles with 429 past that.
+    min_interval: std::time::Duration,
+    last_request: std::sync::Mutex<Option<std::time::Instant>>,
 }
+
+/// Repology's request pace, as its API terms ask.
+pub const REQUEST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Retries on a throttled or unavailable answer before giving up.
+const RETRIES: u32 = 3;
 
 impl Default for Client {
     fn default() -> Self {
@@ -82,14 +92,60 @@ impl Client {
         Self {
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
+            min_interval: REQUEST_INTERVAL,
+            last_request: std::sync::Mutex::new(None),
         }
     }
 
+    /// Space requests at least `interval` apart (default
+    /// [`REQUEST_INTERVAL`]; zero for a test against a local server).
+    pub fn with_min_interval(mut self, interval: std::time::Duration) -> Self {
+        self.min_interval = interval;
+        self
+    }
+
     /// Fetch all package entries for a given project name.
+    ///
+    /// Requests are paced [`REQUEST_INTERVAL`] apart, and a throttled
+    /// (429) or unavailable (503) answer is retried after `Retry-After`
+    /// — or a growing pause when the header is absent — a few times
+    /// before it is an error. Any other non-success status is an error
+    /// naming it, rather than a failure to parse the error page.
     pub fn get_project(&self, name: &str) -> Result<Vec<Package>, Box<dyn std::error::Error>> {
         let url = format!("{}/project/{}", self.base_url, name);
-        let packages = self.http.get(&url).send()?.json::<Vec<Package>>()?;
-        Ok(packages)
+        for attempt in 0..=RETRIES {
+            self.pace();
+            let resp = self.http.get(&url).send()?;
+            let status = resp.status();
+            if matches!(status.as_u16(), 429 | 503) && attempt < RETRIES {
+                let wait = resp
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .map(std::time::Duration::from_secs)
+                    .unwrap_or_else(|| self.min_interval * 2u32.pow(attempt + 1));
+                std::thread::sleep(wait);
+                continue;
+            }
+            return Ok(sandogasa_cli::http::blocking_json_ok(
+                resp,
+                &format!("Repology GET {url}"),
+            )?);
+        }
+        unreachable!("the last attempt returns")
+    }
+
+    /// Wait until `min_interval` has passed since the previous request.
+    fn pace(&self) {
+        let mut last = self.last_request.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(prev) = *last {
+            let since = prev.elapsed();
+            if since < self.min_interval {
+                std::thread::sleep(self.min_interval - since);
+            }
+        }
+        *last = Some(std::time::Instant::now());
     }
 }
 
@@ -192,6 +248,43 @@ fn centos_stream_release_number(package: &Package) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn get_project_retries_a_throttled_answer_then_parses() {
+        let mut server = mockito::Server::new();
+        let throttled = server
+            .mock("GET", "/project/crun")
+            .with_status(429)
+            .with_header("Retry-After", "0")
+            .with_body("<html>too many requests</html>")
+            .expect(1)
+            .create();
+        let ok = server
+            .mock("GET", "/project/crun")
+            .with_status(200)
+            .with_body(r#"[{"repo":"centos_stream_9","version":"1.29.1","status":"newest"}]"#)
+            .create();
+        let client =
+            Client::with_base_url(&server.url()).with_min_interval(std::time::Duration::ZERO);
+        let packages = client.get_project("crun").unwrap();
+        throttled.assert();
+        ok.assert();
+        assert_eq!(packages[0].version, "1.29.1");
+    }
+
+    #[test]
+    fn get_project_names_a_failing_status_instead_of_a_parse_error() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/project/nope")
+            .with_status(404)
+            .with_body("not found")
+            .create();
+        let client =
+            Client::with_base_url(&server.url()).with_min_interval(std::time::Duration::ZERO);
+        let err = client.get_project("nope").unwrap_err().to_string();
+        assert!(err.contains("HTTP 404"), "{err}");
+    }
 
     fn fixture_packages() -> Vec<Package> {
         let json = include_str!("../tests/fixtures/ethtool.json");

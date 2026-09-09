@@ -107,6 +107,86 @@ impl PrunePlan {
 /// with the builds Koji currently has tagged under it.
 pub type TagBuilds = (String, Vec<Build>);
 
+/// The managed tags' contents, read once per run: the candidate
+/// tags that exist (one `listTags`) and every build in each (one
+/// `listTagged` per tag). A manifest-wide command then answers
+/// "which of this package's builds are in which tag" from memory,
+/// instead of asking Koji once per package per candidate tag — most
+/// of which name tags that do not exist (`hyperscale9-*` is the
+/// Facebook repository's alone, `-kernel-` is `10s` only).
+#[derive(Debug, Default)]
+pub struct TagIndex {
+    builds: std::collections::BTreeMap<String, Vec<Build>>,
+}
+
+impl TagIndex {
+    /// Read the existing candidate tags for `repositories` and their
+    /// contents.
+    pub fn load(
+        client: &Client,
+        repositories: &[String],
+        verbose: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let tags = existing_managed_tags(client, repositories)?;
+        if verbose {
+            eprintln!(
+                "[hs-relmon] {} of {} candidate tag(s) exist; reading their contents",
+                tags.len(),
+                candidate_tags(repositories).len()
+            );
+        }
+        let mut index = Self::default();
+        for tag in tags {
+            let builds = client.list_tagged(&tag)?;
+            if verbose {
+                eprintln!("[hs-relmon] {tag}: {} build(s)", builds.len());
+            }
+            index.builds.insert(tag, builds);
+        }
+        Ok(index)
+    }
+
+    /// An index over given contents (tests, or a caller that already
+    /// has them).
+    pub fn from_tags(tags: Vec<TagBuilds>) -> Self {
+        Self {
+            builds: tags.into_iter().collect(),
+        }
+    }
+
+    /// `package`'s builds per tag, tags with none left out — the shape
+    /// [`fetch_managed_tags`] returns.
+    pub fn for_package(&self, package: &str) -> Vec<TagBuilds> {
+        self.builds
+            .iter()
+            .filter_map(|(tag, builds)| {
+                let mine: Vec<Build> = builds
+                    .iter()
+                    .filter(|b| b.name == package)
+                    .cloned()
+                    .collect();
+                (!mine.is_empty()).then(|| (tag.clone(), mine))
+            })
+            .collect()
+    }
+}
+
+/// The candidate tags for `repositories` that exist on the hub, from
+/// one `listTags` call.
+pub fn existing_managed_tags(
+    client: &Client,
+    repositories: &[String],
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let existing: std::collections::BTreeSet<String> = client
+        .list_tags_matching("hyperscale*")?
+        .into_iter()
+        .collect();
+    Ok(candidate_tags(repositories)
+        .into_iter()
+        .filter(|t| existing.contains(t))
+        .collect())
+}
+
 /// Enumerate the managed-tag names this run will consider.
 /// We cross-multiply EL-version-suffix (`9`, `9s`, `10`, `10s`),
 /// repository (from `--repositories`), and stage (`release`,
@@ -141,7 +221,10 @@ pub fn fetch_managed_tags(
     opts: &PruneOptions,
     verbose: bool,
 ) -> Vec<TagBuilds> {
-    let candidates = candidate_tags(&opts.repositories);
+    // One listTags call spares a failing listTagged per candidate
+    // that does not exist; if even that fails, probe them all.
+    let candidates = existing_managed_tags(client, &opts.repositories)
+        .unwrap_or_else(|_| candidate_tags(&opts.repositories));
     if verbose {
         eprintln!(
             "[hs-relmon] {package}: querying {} candidate tag(s)",
@@ -426,6 +509,31 @@ mod tests {
     /// would after talking to Koji.
     fn tb(tag: &str, builds: Vec<Build>) -> TagBuilds {
         (tag.to_string(), builds)
+    }
+
+    #[test]
+    fn tag_index_answers_per_package_from_memory() {
+        let index = TagIndex::from_tags(vec![
+            tb(
+                "hyperscale10s-packages-main-release",
+                vec![
+                    make_build(5000, "ethtool-6.18-1.hs.el10"),
+                    make_build(4900, "crun-1.28-1.1.hs.el10"),
+                ],
+            ),
+            tb(
+                "hyperscale9s-packages-main-testing",
+                vec![make_build(4800, "crun-1.28-1.1.hs.el9")],
+            ),
+        ]);
+        let crun = index.for_package("crun");
+        assert_eq!(crun.len(), 2);
+        assert_eq!(crun[0].0, "hyperscale10s-packages-main-release");
+        assert_eq!(crun[0].1[0].nvr, "crun-1.28-1.1.hs.el10");
+        assert_eq!(crun[1].1[0].nvr, "crun-1.28-1.1.hs.el9");
+        let ethtool = index.for_package("ethtool");
+        assert_eq!(ethtool.len(), 1, "tags without the package are left out");
+        assert!(index.for_package("nothing").is_empty());
     }
 
     #[test]

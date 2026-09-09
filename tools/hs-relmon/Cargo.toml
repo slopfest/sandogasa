@@ -18,6 +18,7 @@ sandogasa-config = { workspace = true }
 sandogasa-gitlab = { workspace = true }
 sandogasa-koji = { workspace = true }
 sandogasa-repology = { workspace = true }
+sandogasa-review = { workspace = true }
 sandogasa-rpmvercmp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

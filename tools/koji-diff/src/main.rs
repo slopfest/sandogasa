@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -226,7 +225,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        let color = std::io::stdout().is_terminal();
+        let color = sandogasa_cli::style::use_color(sandogasa_cli::style::ColorChoice::Auto);
         let label1 = format!("task {}", arch_task1.id);
         let label2 = format!("task {}", arch_task2.id);
         diff::print_diff(&pkg_diff, &label1, &label2, color);

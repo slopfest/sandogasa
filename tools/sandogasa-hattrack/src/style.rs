@@ -1,45 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Minimal ANSI styling for terminal output.
-//!
-//! Auto mode follows the `grep`/`ls` convention: colorize only
-//! when stdout is a TTY and `NO_COLOR` is unset
-//! (<https://no-color.org/>).
+//! Terminal styling for hattrack's lines, on the shared
+//! `sandogasa_cli::style` (color choice, constants).
 
-use std::io::IsTerminal;
-
-const GREEN: &str = "\x1b[32m";
-const YELLOW: &str = "\x1b[33m";
-// SGR 2 ("faint") alone is unreliable — gnome-terminal and a
-// few others render it identically to normal. Use SGR 90
-// ("bright black" / gray foreground) instead — universally
-// rendered as a distinct gray without doubling the dimming.
-const DIM: &str = "\x1b[90m";
-const RESET: &str = "\x1b[0m";
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
-pub enum ColorChoice {
-    /// Auto-detect: enable on a TTY when `NO_COLOR` is unset.
-    #[default]
-    Auto,
-    /// Force colored output even when piped.
-    Always,
-    /// Disable colored output entirely.
-    Never,
-}
-
-/// Resolve the user's color preference into a concrete bool.
-pub fn use_color(choice: ColorChoice) -> bool {
-    match choice {
-        ColorChoice::Always => true,
-        ColorChoice::Never => false,
-        ColorChoice::Auto => no_color_unset() && std::io::stdout().is_terminal(),
-    }
-}
-
-fn no_color_unset() -> bool {
-    std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
-}
+pub use sandogasa_cli::style::{ColorChoice, use_color};
+use sandogasa_cli::style::{DIM, GREEN, RESET, YELLOW};
 
 /// Parse a `START-END` working-hours range as two 0–24 ints.
 /// Both ends are local-clock hours; start is inclusive, end is

@@ -845,6 +845,7 @@ dependencies = [
  "sandogasa-koji",
  "sandogasa-kojihub",
  "sandogasa-repology",
+ "sandogasa-review",
  "sandogasa-rpmvercmp",
  "serde",
  "serde_json",
@@ -2243,6 +2244,7 @@ dependencies = [
 name = "sandogasa-repology"
 version = "0.23.1"
 dependencies = [
+ "mockito",
  "reqwest",
  "sandogasa-cli",
  "sandogasa-rpmvercmp",

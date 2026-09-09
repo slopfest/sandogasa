@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH hs-relmon 1 2026-09-08 "sandogasa 0.23.1" "Sandogasa Manual"
+.TH hs-relmon 1 2026-09-09 "sandogasa 0.23.1" "Sandogasa Manual"
 .SH NAME
 hs\-relmon \- Release monitoring tool for CentOS Hyperscale SIG packages
 .SH SYNOPSIS
@@ -306,10 +306,75 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIPACKAGE\fR>
 Source package name (e.g. ethtool)
+.SS hs-relmon check-stock
+\fBhs\-relmon check\-stock\fR [\fB\-\-repositories\fR] [\fB\-\-skip\fR] [\fB\-\-color\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMANIFEST\fR> 
+.PP
+Interactively review builds in hyperscale `\-testing` tags and promote (+1), reject (\-1), or skip (0) each one. Compare every manifest package\*(Aqs Hyperscale builds against stock: still ahead, or caught up — and then whether to retire it or rebase it, per the manifest\*(Aqs `divergent`
+.TP
+\fB\-\-repositories\fR \fI<REPOSITORIES>\fR [default: main]
+Comma\-separated Hyperscale repositories whose
+`\-release`/`\-testing` tags are compared against
+stock. The repository is the segment between
+`\-packages\-` and the stage suffix, e.g. `main` in
+`hyperscale10s\-packages\-main\-release`.
+.TP
+\fB\-\-skip\fR \fI<LIST>\fR
+Comma\-separated packages to skip
+.TP
+\fB\-\-color\fR[=\fI<WHEN>\fR] [default: auto]
+Colorize the verdicts, as `ls \-\-color`: `\-\-color` alone is `always`; `auto` (the default) colors a TTY unless NO_COLOR is set; `never`
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIMANIFEST\fR>
+Path to the TOML manifest file
+.SS hs-relmon retire
+\fBhs\-relmon retire\fR [\fB\-\-gitlab\-group\fR] [\fB\-\-dry\-run\fR] [\fB\-\-force\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-manifest\fR> <\fIPACKAGE\fR> 
+.PP
+Retire package(s) stock now carries: untag their builds from every hyperscale tag, drop them from the manifest, archive their GitLab repos
+.TP
+\fB\-\-manifest\fR \fI<PATH>\fR
+Path to the TOML manifest file to drop them from
+.TP
+\fB\-\-gitlab\-group\fR \fI<URL>\fR [default: https://gitlab.com/CentOS/Hyperscale/rpms]
+GitLab group the packages\*(Aq repos live under
+.TP
+\fB\-\-dry\-run\fR
+Show the plan without untagging, editing or archiving
+.TP
+\fB\-\-force\fR
+Retire a package the manifest declares `divergent` (carrying SIG changes), which is otherwise refused
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Retire without confirming; never untags a build newer than stock, and then leaves the package in place
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIPACKAGE\fR>
+Package(s) to retire
 .SS hs-relmon review
 \fBhs\-relmon review\fR [\fB\-\-repositories\fR] [\fB\-\-skip\fR] [\fB\-\-changelog\-lines\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fITARGET\fR] 
 .PP
-Interactively review builds in hyperscale `\-testing` tags and promote (+1), reject (\-1), or skip (0) each one
 .TP
 \fB\-\-repositories\fR \fI<REPOSITORIES>\fR [default: main]
 Comma\-separated Hyperscale repositories to scan.
