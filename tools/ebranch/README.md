@@ -567,8 +567,10 @@ correct comparison baseline).
 can't resolve base-OS dependencies, so a plain EPEL branch — inferred
 from a side tag or a Bodhi release, or given as `-b epel9` for a COPR —
 is replaced by its base plus the EPEL repo: epel8 → `-b al8 -r @epel`,
-epel9 → `-b al9 -r @epel`, epel10 → `-b c10s -r @epel`, with the EPEL
-name kept as the `@testing`/chroot branch. The substitution is printed
+epel9 → `-b al9 -r @epel`, epel9-next → `-b c9s -r @epel` (fedrq's
+CentOS Stream `@epel` group carries epel-next too), epel10 →
+`-b c10s -r @epel`, with the EPEL name kept as the `@testing`/chroot
+branch. The substitution is printed
 on stderr on every run. Passing `-r` yourself turns it off, so
 `-b c9s -r @epel` compares against CentOS Stream instead. The
 minor-release branches (`epel10.1`) have no assumed base — c10s runs

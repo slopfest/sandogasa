@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### ebranch: `check-update` handles EPEL 10.4 and EPEL 9 Next updates without `-b`
+
+`ebranch check-update` given a Bodhi update for EPEL-10.4 stopped with
+"epel10.4 can't resolve base-OS dependencies on its own and has no
+assumed base", although every EPEL 10 minor release ships from the
+single `epel10` dist-git branch and that branch has an assumed base
+(c10s). The branch was being derived from the release *name*; Bodhi's
+release object records the dist-git branch itself, so that is now
+used first, with the name-derived form kept as the fallback for
+releases that lack it. Older minors (EPEL-10.2, 10.3) record
+`epel10.2`/`epel10.3` there and still need `-b c10s -r @epel`.
+
+EPEL 9 Next updates failed the same way (as `epel9n` before, from the
+name). `epel9-next` now has an assumed base like the other plain EPEL
+branches: c9s with `-r @epel`, since fedrq's CentOS Stream `@epel`
+group carries epel-next alongside epel and crb, with `epel9-next` kept
+as the `@testing`/chroot branch.
+
 ### hs-meetings: `script` prints the day-of zodbot script
 
 Chairing a Hyperscale SIG meeting meant retyping the zodbot template

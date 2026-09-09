@@ -373,8 +373,11 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             InputKind::BodhiAlias(alias) => {
                 let info = fetch_bodhi_update(&alias)?;
 
-                let branch =
-                    resolve_bodhi_branch(opts.branch.clone(), info.release_name.as_deref())?;
+                let branch = resolve_bodhi_branch(
+                    opts.branch.clone(),
+                    info.release_branch.as_deref(),
+                    info.release_name.as_deref(),
+                )?;
 
                 // If backed by a side tag, use koji to get the full list —
                 // unless the tag is gone (deleted once the update went
@@ -1583,18 +1586,22 @@ fn is_fedora_branch(b: &str) -> bool {
 fn epel_guard_error(branch: &str) -> String {
     format!(
         "{branch} can't resolve base-OS dependencies on its own and has no \
-         assumed base (epel8, epel9 and epel10 map to al8, al9 and c10s); \
+         assumed base (epel8, epel9, epel9-next and epel10 map to al8, al9, c9s \
+         and c10s); \
          pass a base branch plus the EPEL repo, e.g. -b c10s -r @epel"
     )
 }
 
 /// The base distro a plain EPEL branch is checked against — exact
-/// matches only. `epel10.Y` targets a RHEL minor release that c10s
-/// runs ahead of, so the minor-release branches are not assumed.
+/// matches only. EPEL Next builds against CentOS Stream, whose fedrq
+/// `@epel` group carries epel-next too. `epel10.Y` targets a RHEL
+/// minor release that c10s runs ahead of, so the minor-release
+/// branches are not assumed.
 fn epel_base(branch: &str) -> Option<&'static str> {
     match branch {
         "epel8" => Some("al8"),
         "epel9" => Some("al9"),
+        "epel9-next" => Some("c9s"),
         "epel10" => Some("c10s"),
         _ => None,
     }
@@ -1670,18 +1677,22 @@ fn infer_branch_for_side_tag(tag: &str) -> Result<String, String> {
 }
 
 /// Resolve the branch for a Bodhi update: an explicit `--branch` wins;
-/// otherwise it's derived from the release name (e.g. "EPEL-9" →
-/// "epel9", "F44" → "f44"); [`apply_epel_defaults`] pairs a derived
-/// EPEL branch with its base distro.
+/// otherwise the release's dist-git branch as Bodhi records it (EPEL 10
+/// minor releases such as EPEL-10.4 all ship from `epel10`), falling
+/// back to deriving it from the release name (e.g. "EPEL-9" → "epel9",
+/// "F44" → "f44"); [`apply_epel_defaults`] pairs a derived EPEL branch
+/// with its base distro.
 fn resolve_bodhi_branch(
     user: Option<String>,
+    release_branch: Option<&str>,
     release_name: Option<&str>,
 ) -> Result<String, String> {
     if let Some(b) = user {
         return Ok(b);
     }
-    release_name
-        .map(|r| r.to_lowercase().replace('-', ""))
+    release_branch
+        .map(str::to_string)
+        .or_else(|| release_name.map(|r| r.to_lowercase().replace('-', "")))
         .ok_or_else(|| "could not determine branch from Bodhi release; use --branch".to_string())
 }
 
@@ -3115,7 +3126,12 @@ mod tests {
 
     #[test]
     fn epel_defaults_pair_a_plain_epel_branch_with_its_base() {
-        for (epel, base) in [("epel8", "al8"), ("epel9", "al9"), ("epel10", "c10s")] {
+        for (epel, base) in [
+            ("epel8", "al8"),
+            ("epel9", "al9"),
+            ("epel9-next", "c9s"),
+            ("epel10", "c10s"),
+        ] {
             let d = apply_epel_defaults(epel.to_string(), None, None).unwrap();
             assert_eq!(d.branch, base);
             assert_eq!(d.repo.as_deref(), Some("@epel"));
@@ -3171,7 +3187,7 @@ mod tests {
     fn resolve_bodhi_branch_explicit_wins() {
         // An explicit --branch is honored even for an EPEL release.
         assert_eq!(
-            resolve_bodhi_branch(Some("al9".to_string()), Some("EPEL-9")),
+            resolve_bodhi_branch(Some("al9".to_string()), Some("epel9"), Some("EPEL-9")),
             Ok("al9".to_string())
         );
     }
@@ -3179,7 +3195,7 @@ mod tests {
     #[test]
     fn resolve_bodhi_branch_fedora_derived() {
         assert_eq!(
-            resolve_bodhi_branch(None, Some("F44")),
+            resolve_bodhi_branch(None, None, Some("F44")),
             Ok("f44".to_string())
         );
     }
@@ -3188,14 +3204,24 @@ mod tests {
     fn resolve_bodhi_branch_epel_derived() {
         // Derived as epel9; apply_epel_defaults pairs it with al9.
         assert_eq!(
-            resolve_bodhi_branch(None, Some("EPEL-9")),
+            resolve_bodhi_branch(None, None, Some("EPEL-9")),
             Ok("epel9".to_string())
         );
     }
 
     #[test]
+    fn resolve_bodhi_branch_prefers_the_dist_git_branch() {
+        // EPEL 10 minor releases ship from the epel10 branch; the name
+        // alone would give the unmapped epel10.4.
+        assert_eq!(
+            resolve_bodhi_branch(None, Some("epel10"), Some("EPEL-10.4")),
+            Ok("epel10".to_string())
+        );
+    }
+
+    #[test]
     fn resolve_bodhi_branch_missing_release_errors() {
-        assert!(resolve_bodhi_branch(None, None).is_err());
+        assert!(resolve_bodhi_branch(None, None, None).is_err());
     }
 
     // --- testing_branch_from_side_tag ---
