@@ -229,6 +229,32 @@ where
     })
 }
 
+/// The one question `retire` asks up front: what goes without further
+/// ado, what will be asked about build by build, and what happens to
+/// the manifest entry and the repo.
+pub fn confirmation(plan: &RetirePlan) -> String {
+    let package = &plan.builds.package;
+    let ahead = plan.builds.total_ahead();
+    format!(
+        "retire {package}: untag {} build(s) at or behind stock{}, {}, {}?",
+        plan.builds.total_untag(),
+        if ahead > 0 {
+            format!(" (then ask about {ahead} newer than stock, one by one)")
+        } else {
+            String::new()
+        },
+        if plan.in_manifest {
+            "remove it from the manifest"
+        } else {
+            "leave the manifest (not listed)"
+        },
+        match plan.repo_archived {
+            Some(true) => "leave the repo (archived)",
+            _ => "archive the repo",
+        },
+    )
+}
+
 /// Outcome of retiring one package.
 #[derive(Debug, Default)]
 pub struct RetireOutcome {
@@ -256,23 +282,7 @@ pub fn apply_plan(
     let package = &plan.builds.package;
     let mut out = RetireOutcome::default();
     if !assume_yes {
-        let approved = sandogasa_cli::confirm(
-            &format!(
-                "retire {package}: untag {} build(s), {}, {}?",
-                plan.builds.total_untag(),
-                if plan.in_manifest {
-                    "remove it from the manifest"
-                } else {
-                    "leave the manifest (not listed)"
-                },
-                match plan.repo_archived {
-                    Some(true) => "leave the repo (archived)",
-                    _ => "archive the repo",
-                },
-            ),
-            false,
-        )
-        .unwrap_or(false);
+        let approved = sandogasa_cli::confirm(&confirmation(plan), false).unwrap_or(false);
         if !approved {
             return out;
         }
@@ -703,6 +713,15 @@ mod tests {
             repo_archived: None,
         };
         assert!(!ahead.eligible());
+        assert_eq!(
+            confirmation(&ahead),
+            "retire socat: untag 0 build(s) at or behind stock (then ask about 1 newer than \
+             stock, one by one), leave the manifest (not listed), archive the repo?"
+        );
+        assert_eq!(
+            confirmation(&retirable),
+            "retire crun: untag 1 build(s) at or behind stock, remove it from the manifest, archive the repo?"
+        );
         let md = render_plan(&ahead);
         assert!(
             md.contains(
