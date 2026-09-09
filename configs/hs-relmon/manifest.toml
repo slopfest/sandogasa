@@ -77,9 +77,6 @@ track = "upstream"
 name = "fio"
 
 [[package]]
-name = "fluent-bit"
-
-[[package]]
 name = "freetype"
 divergent = false
 
