@@ -1,12 +1,18 @@
 # hs-meetings
 
-List and sync CentOS Hyperscale SIG meeting archives from
-[meetbot.fedoraproject.org](https://meetbot.fedoraproject.org).
+Helper for running [CentOS Hyperscale SIG
+meetings](https://sigs.centos.org/hyperscale/communication/meetings/):
+the day-of zodbot script for whoever chairs, and the meeting archive
+list in the SIG docs, both built from
+[meetbot.fedoraproject.org](https://meetbot.fedoraproject.org) (and,
+for the script, the SIG's open GitLab issues). It prepares text for
+you to paste — it does not post to Matrix.
 
 The SIG holds biweekly meetings on Matrix; zodbot logs them as
-`centos-hyperscale-sig` topic sessions. This tool wraps meetbot's
-search endpoint so the archive list in the SIG docs can be
-maintained from the command line rather than by hand.
+`centos-hyperscale-sig` topic sessions. `list` and `sync` wrap
+meetbot's search endpoint so the archive list can be maintained from
+the command line rather than by hand; `script` is the counterpart of
+`fesco-chair script` for the SIG's own meeting checklist.
 
 ## Installation
 
@@ -33,6 +39,38 @@ Fetches every meeting whose topic contains the search string (default
 accepts `YYYY`, `YYYYQ1..Q4`, `YYYYH1..H2`; `--since` / `--until`
 take `YYYY-MM-DD`. Output is a two-line-per-meeting table (date +
 stacked summary/logs URLs) or a JSON array with `--json`.
+
+### `script`
+
+```sh
+hs-meetings script > meeting.txt       # the coming Wednesday's meeting
+hs-meetings script --date 2026-09-23   # an explicit meeting date
+hs-meetings script --json              # the script plus its sources
+```
+
+Prints the meeting checklist context to stderr and the zodbot
+command script to stdout, `!startmeeting CentOS Hyperscale SIG`
+through `!endmeeting`, with the checklist's topics pre-filled:
+
+- **Followups** links the previous meeting's minutes (the newest
+  `centos-hyperscale-sig` meeting before the date) and carries each
+  of its action items as an `!info followup from <date>: …` line.
+- **Tickets** links the group's open-issue view on GitLab, then each
+  open issue in the [CentOS/Hyperscale](https://gitlab.com/CentOS/Hyperscale)
+  group, `meeting`-labelled ones first and then newest first.
+  hs-relmon's automated `rfe::new-version` issues and the frozen
+  Pagure imports under the `archive` subgroup are left out.
+- **Membership** appears only when a `membership`-labelled issue is
+  open, and links those.
+
+The stderr side names the date, counts the followups, and lists every
+linked ticket with its reference, title and labels, marking the ones
+opened since the previous meeting `new`, then reminds you to run
+`sync` on the docs checkout afterwards. Copy/paste the stdout lines
+into #meeting:fedoraproject.org as the meeting progresses. Either
+source being unreachable is a warning: the script still prints with
+that topic empty. The GitLab reads are anonymous — no token is
+needed.
 
 ### `sync`
 

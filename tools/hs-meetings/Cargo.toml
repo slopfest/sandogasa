@@ -1,6 +1,6 @@
 [package]
 name = "hs-meetings"
-description = "List and sync CentOS Hyperscale SIG meeting archives from meetbot"
+description = "Chair CentOS Hyperscale SIG meetings: day-of script, meetbot archive list and sync"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,7 @@ repository.workspace = true
 chrono = { workspace = true }
 clap = { workspace = true }
 sandogasa-cli = { workspace = true }
+sandogasa-gitlab = { workspace = true }
 sandogasa-meetbot = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

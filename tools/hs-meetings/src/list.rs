@@ -10,7 +10,7 @@ use sandogasa_meetbot::{Meetbot, Meeting};
 /// Default topic searched. Hyperscale SIG meetings start with
 /// `!startmeeting CentOS Hyperscale SIG`, which zodbot records
 /// under the `centos-hyperscale-sig` slug.
-const DEFAULT_TOPIC: &str = "centos-hyperscale-sig";
+pub const DEFAULT_TOPIC: &str = "centos-hyperscale-sig";
 
 #[derive(clap::Args)]
 pub struct ListArgs {

@@ -25,6 +25,8 @@ pub struct Issue {
     pub state: String,
     pub web_url: String,
     #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
     pub assignees: Vec<Assignee>,
     /// ISO-8601 date string (YYYY-MM-DD) or None.
     #[serde(default)]
@@ -170,13 +172,16 @@ pub struct Client {
     project_path: String,
 }
 
-/// Build an HTTP client with the given token.
+/// Build an HTTP client with the given token. An empty token sends no
+/// credentials: public groups and projects are readable anonymously.
 fn build_http_client(token: &str) -> Result<reqwest::blocking::Client, Box<dyn std::error::Error>> {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        HeaderName::from_static("private-token"),
-        HeaderValue::from_str(token)?,
-    );
+    if !token.is_empty() {
+        headers.insert(
+            HeaderName::from_static("private-token"),
+            HeaderValue::from_str(token)?,
+        );
+    }
     Ok(sandogasa_cli::http::blocking_builder(USER_AGENT)
         .default_headers(headers)
         .build()?)
@@ -652,14 +657,27 @@ impl GroupClient {
         label: &str,
         state: Option<&str>,
     ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
+        let mut query = vec![("labels", label)];
+        if let Some(s) = state {
+            query.push(("state", s));
+        }
+        self.list_issues_where(&query)
+    }
+
+    /// List all issues in the group matching arbitrary [issue list
+    /// filters](https://docs.gitlab.com/api/issues/#list-group-issues)
+    /// — e.g. `("state", "opened")`, `("not[labels]", "wontfix")` —
+    /// handling pagination automatically.
+    pub fn list_issues_where(
+        &self,
+        filters: &[(&str, &str)],
+    ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
         let mut all_issues = Vec::new();
         let mut page = 1u32;
         loop {
             let page_str = page.to_string();
-            let mut query = vec![("labels", label), ("per_page", "100"), ("page", &page_str)];
-            if let Some(s) = state {
-                query.push(("state", s));
-            }
+            let mut query = filters.to_vec();
+            query.extend([("per_page", "100"), ("page", &page_str)]);
             let url = self.issues_url();
             let resp = self.http.get(&url).query(&query).send()?;
             let resp = blocking_ok(resp, &format!("GitLab GET {url}"))?;
@@ -1325,6 +1343,32 @@ pub fn project_releases(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_issues_where_passes_filters_and_reads_labels() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/groups/g/issues")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("state".into(), "opened".into()),
+                mockito::Matcher::UrlEncoded("not[labels]".into(), "rfe::new-version".into()),
+                mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"[{"iid": 7, "title": "t", "state": "opened", "labels": ["kernel"],
+                     "web_url": "https://gitlab.example.com/g/p/-/issues/7"}]"#,
+            )
+            .create();
+        // No token: public groups are readable anonymously.
+        let client = GroupClient::new(&server.url(), "g", "").unwrap();
+        let issues = client
+            .list_issues_where(&[("state", "opened"), ("not[labels]", "rfe::new-version")])
+            .unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].labels, ["kernel"]);
+        mock.assert();
+    }
 
     #[test]
     fn commit_contained_reads_the_missing_commits() {

@@ -1784,6 +1784,7 @@ mod tests {
     fn test_issue_ref_from_gitlab_issue_with_status() {
         use crate::gitlab;
         let issue = gitlab::Issue {
+            labels: vec![],
             iid: 7,
             title: "t".into(),
             description: None,
@@ -1813,6 +1814,7 @@ mod tests {
     fn test_issue_ref_from_gitlab_issue_no_status() {
         use crate::gitlab;
         let issue = gitlab::Issue {
+            labels: vec![],
             iid: 1,
             title: "t".into(),
             description: None,

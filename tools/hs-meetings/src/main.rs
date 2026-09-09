@@ -5,9 +5,11 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 mod list;
+mod script;
 mod sync;
 
 use list::ListArgs;
+use script::ScriptArgs;
 use sync::SyncArgs;
 
 #[derive(Parser)]
@@ -27,6 +29,8 @@ struct Cli {
 enum Command {
     /// List SIG meetings recorded on meetbot.
     List(ListArgs),
+    /// Print the day-of zodbot script for chairing a SIG meeting.
+    Script(ScriptArgs),
     /// Sync SIG meetings into a tool-managed markdown list file.
     Sync(SyncArgs),
 }
@@ -36,6 +40,7 @@ fn main() -> ExitCode {
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     match cli.command {
         Command::List(args) => list::run(&args),
+        Command::Script(args) => script::run(&args),
         Command::Sync(args) => sync::run(&args),
     }
 }

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### hs-meetings: `script` prints the day-of zodbot script
+
+Chairing a Hyperscale SIG meeting meant retyping the zodbot template
+from the docs page, opening the previous minutes to read back the
+action items, and pasting GitLab links for the open tickets one by
+one. `hs-meetings script` now does the assembly: it prints the
+template with Followups linking the previous meeting's minutes and
+carrying its action items as `!info` lines, Tickets linking the
+group's open-issue view and then every open issue (automated
+`rfe::new-version` issues and the archived Pagure imports excluded,
+`meeting`-labelled ones first), and a Membership topic only when a
+`membership` request is open. The checklist context — date, ticket
+titles and labels, which tickets are new since the last meeting, the
+`sync` reminder — goes to stderr so stdout stays a pipeable script,
+as `fesco-chair script` does; `--json` bundles both. The GitLab
+reads are anonymous, so the tool still needs no configuration.
+
+Underneath: `sandogasa_meetbot::Meetbot::minutes` fetches (and
+caches) a meeting's text minutes and `parse_action_items` reads its
+"Action items" block; `sandogasa_gitlab::GroupClient::list_issues_where`
+lists group issues by arbitrary API filters (paged), `Issue` gains
+`labels`, and an empty token now sends no credentials so public
+groups can be read anonymously; `sandogasa_cli::date::next_weekday`
+is the shared "coming Wednesday/Tuesday" helper fesco-chair's
+`next_tuesday` now calls.
+
 ### hs-relmon: `check-repos` sets the SIG's repos up the same way
 
 The SIG's GitLab repos were set up one by one and drifted: a repo

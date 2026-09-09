@@ -10,7 +10,7 @@ use std::process::ExitCode;
 use chrono::{Datelike, NaiveDate};
 use sandogasa_meetbot::{Meetbot, Meeting, dedup_by_longest_log};
 
-const DEFAULT_TOPIC: &str = "centos-hyperscale-sig";
+use crate::list::DEFAULT_TOPIC;
 
 /// SIG meetings from 2023 and earlier predate the meetbot archive
 /// and often carry hand-curated `[agenda](...)` links in the docs;

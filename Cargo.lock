@@ -825,6 +825,7 @@ dependencies = [
  "clap",
  "sandogasa-build",
  "sandogasa-cli",
+ "sandogasa-gitlab",
  "sandogasa-meetbot",
  "serde",
  "serde_json",

@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 use sandogasa_meetbot::{Meetbot, Meeting};
 
 /// The Forgejo instance hosting the FESCo tracker.
@@ -193,10 +193,7 @@ pub fn split_sections(
 /// The date of "Tuesday's meeting": today when run on a Tuesday, else
 /// the coming Tuesday.
 pub fn next_tuesday(today: NaiveDate) -> NaiveDate {
-    // Mon=0 … Sun=6; Tuesday is 1.
-    let weekday = today.weekday().num_days_from_monday() as i64;
-    let ahead = (1 - weekday).rem_euclid(7);
-    today + chrono::Duration::days(ahead)
+    sandogasa_cli::date::next_weekday(today, chrono::Weekday::Tue)
 }
 
 /// The plain-text artefact for a meetbot HTML URL: `….html` → `….txt`

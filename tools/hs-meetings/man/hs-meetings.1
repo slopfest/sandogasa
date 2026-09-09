@@ -1,12 +1,12 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH hs-meetings 1 2026-09-08 "sandogasa 0.23.1" "Sandogasa Manual"
+.TH hs-meetings 1 2026-09-09 "sandogasa 0.23.1" "Sandogasa Manual"
 .SH NAME
-hs\-meetings \- List and sync CentOS Hyperscale SIG meeting archives from meetbot
+hs\-meetings \- Chair CentOS Hyperscale SIG meetings: day\-of script, meetbot archive list and sync
 .SH SYNOPSIS
 \fBhs\-meetings\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
 .SH DESCRIPTION
-List and sync CentOS Hyperscale SIG meeting archives from meetbot
+Chair CentOS Hyperscale SIG meetings: day\-of script, meetbot archive list and sync
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
@@ -34,6 +34,22 @@ Calendar period filter — e.g. `2026`, `2026Q1`, `2026H1`
 .TP
 \fB\-\-json\fR
 Emit JSON instead of the human\-readable table
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS hs-meetings script
+\fBhs\-meetings script\fR [\fB\-\-date\fR] [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Print the day\-of zodbot script for chairing a SIG meeting
+.TP
+\fB\-\-date\fR \fI<DATE>\fR
+Meeting date (YYYY\-MM\-DD, default: the coming Wednesday)
+.TP
+\fB\-t\fR, \fB\-\-topic\fR \fI<TOPIC>\fR [default: centos\-hyperscale\-sig]
+Meetbot topic the previous meeting was recorded under
+.TP
+\fB\-\-json\fR
+Emit JSON (the script plus what it was built from)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

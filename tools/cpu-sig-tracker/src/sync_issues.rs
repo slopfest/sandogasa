@@ -251,6 +251,7 @@ mod tests {
 
     fn issue(url: &str, title: &str) -> gitlab::Issue {
         gitlab::Issue {
+            labels: vec![],
             iid: 1,
             title: title.to_string(),
             description: None,

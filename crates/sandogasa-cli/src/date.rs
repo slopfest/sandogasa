@@ -27,7 +27,16 @@
 //! assert_eq!(e, NaiveDate::from_ymd_opt(2026, 12, 31).unwrap());
 //! ```
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate, Weekday};
+
+/// The next `weekday` on or after `today` (today itself when it is
+/// one) — the default date of a weekly or biweekly meeting.
+pub fn next_weekday(today: NaiveDate, weekday: Weekday) -> NaiveDate {
+    let ahead = (weekday.num_days_from_monday() as i64
+        - today.weekday().num_days_from_monday() as i64)
+        .rem_euclid(7);
+    today + chrono::Duration::days(ahead)
+}
 
 /// Resolve a `(--since, --until, --period)` triple into an
 /// inclusive date range.

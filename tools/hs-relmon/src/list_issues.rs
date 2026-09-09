@@ -337,6 +337,7 @@ mod tests {
         assignees: Vec<&str>,
     ) -> gitlab::Issue {
         gitlab::Issue {
+            labels: vec![],
             iid,
             title: format!("{package}-1.0 is available"),
             description: None,
@@ -389,6 +390,7 @@ mod tests {
     #[test]
     fn test_entry_from_issue_bad_url() {
         let issue = gitlab::Issue {
+            labels: vec![],
             iid: 1,
             title: "t".into(),
             description: None,
