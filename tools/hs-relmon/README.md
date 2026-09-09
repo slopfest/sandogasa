@@ -20,6 +20,8 @@ hs-relmon check-latest <package> [--distros <list>] [--track <distro>]
     [--repology-name <project>] [--json] [--file-issue [<url>]]
 hs-relmon check-manifest <manifest> [--json]
     [--issue-status <status>] [--issue-assignee <username>]
+hs-relmon check-repos <manifest> [--package <list>] [--gitlab-group <url>]
+    [--apply] [--yes] [--json] [--verbose]
 hs-relmon config
 hs-relmon dupe-subpkgs [--repositories <list>] [--release <list>]
     [--package <list>] [--fix] [--json] [--verbose]
@@ -165,6 +167,43 @@ $ hs-relmon check-manifest packages.toml --issue-assignee alice
 ```
 
 Available issue statuses: `To do`, `In progress`, `Done`, `Canceled`.
+
+### Checking the repos' settings
+
+Repos forked in from Fedora or created by hand drift from the SIG's
+conventions in two settings: the default branch, which should be the
+newest release's Hyperscale branch rather than the `rawhide` or `c10s`
+the fork arrived with, and the merge method, which should be
+fast-forward so branch history stays linear. `check-repos <manifest>`
+reads every manifest package's repo under `--gitlab-group` and reports
+what differs; `--apply` then asks per repo — `y` sets it, `s` (Enter)
+skips it, `a` sets the rest, `q` stops — and `--yes` sets every one
+unasked, since a change right for most repos can be wrong for one
+whose builds have moved elsewhere:
+
+```
+$ hs-relmon check-repos packages.toml
+awscli2: default branch c10s → c9s-hs; merge method merge → ff
+dnsmasq: default branch rawhide → c10s-hs; merge method merge → ff
+kernel: merge method merge → ff
+mesa: default branch c10s → c10s-hs+asahi; merge method merge → ff
+socat: merge method merge → ff [archived: read-only, not changed]
+atuin: merge method merge → ff; no Hyperscale branch (c*s-hs, -hsx, -hs+fb, -sig-hyperscale…)
+crun: ok
+63 repo(s): 48 to change, 14 ok, 1 archived
+```
+
+Hyperscale branches come in several spellings — `c10s-hs`, the
+variants `c10s-hsx` and `c10s-hsk`, the flavors `c10s-hs+fb` and
+`c10s-hs+asahi`, and the older `c10s-sig-hyperscale[-…]` — and all
+count. The newest release wins; within it, a default that already is
+one of its Hyperscale branches stays (a kernel repo on `c10s-hsk` is
+deliberate), otherwise `-hs` is preferred, then a variant, then a
+flavor, then the old spelling. A repo with no Hyperscale branch at all
+keeps its default and is said so; its merge method is still set.
+Archived repos are read-only and only reported. Needs a GitLab token
+with Maintainer access on the repos (`GITLAB_TOKEN` or `hs-relmon
+config`).
 
 ### Configuration
 

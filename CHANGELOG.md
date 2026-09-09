@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### hs-relmon: `check-repos` sets the SIG's repos up the same way
+
+The SIG's GitLab repos were set up one by one and drifted: a repo
+forked from Fedora kept `rawhide` as its default branch, one created
+from CentOS Stream kept `c10s`, and merge requests landed as merge
+commits everywhere, when the conventions are the newest release's
+Hyperscale branch and fast-forward merges. An earlier attempt to set
+this once at the group level found no API for it; per project the
+Projects API has both fields, `default_branch` and `merge_method`.
+`hs-relmon check-repos <manifest>` reads every manifest package's repo
+and reports what differs — 48 of 63 on the SIG manifest, 29 of them
+on the wrong default branch — and `--apply` sets it, asking per repo
+(`a` for the rest, `q` to stop) unless `--yes`, since a change right
+for most repos can be wrong for one whose builds moved to EPEL.
+Hyperscale branches in all their spellings count
+(`c10s-hs`, `-hsx`, `-hsk`, `-hs+fb`, `-hs+asahi`, the old
+`c10s-sig-hyperscale`); the newest release wins, a default that is
+already one of its Hyperscale branches stays, and otherwise `-hs`
+comes before a variant, a flavor, the old spelling. A repo with no
+Hyperscale branch keeps its default and is said so. `sandogasa-gitlab`
+gains `list_branches`, `update_project` (`ProjectUpdate`) and the
+project's `default_branch` and `merge_method`.
+
 ### hs-relmon: the managed tags are read once per run, and Repology is asked at its own pace
 
 A manifest-wide command — `prune-manifest`, `prune-archived`, now

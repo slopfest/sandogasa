@@ -56,6 +56,31 @@ pub struct ProjectStatus {
     /// GitLab alongside `issues_access_level`.
     #[serde(default)]
     pub issues_enabled: Option<bool>,
+    /// The branch the project opens on and merge requests target by
+    /// default.
+    #[serde(default)]
+    pub default_branch: Option<String>,
+    /// How merge requests land: `merge`, `rebase_merge` or `ff`.
+    #[serde(default)]
+    pub merge_method: Option<String>,
+}
+
+/// The project fields `Client::update_project` can set; `None` leaves
+/// a field as it is.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct ProjectUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_method: Option<String>,
+}
+
+/// A branch as the repository branches endpoint lists it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Branch {
+    pub name: String,
+    #[serde(default)]
+    pub default: bool,
 }
 
 impl ProjectStatus {
@@ -309,6 +334,43 @@ impl Client {
         let url = self.issues_url();
         let resp = self.http.get(&url).query(&query).send()?;
         Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
+    }
+
+    /// Every branch of the project, paged a hundred at a time.
+    pub fn list_branches(&self) -> Result<Vec<Branch>, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/repository/branches",
+            self.base_url, encoded
+        );
+        let mut out = Vec::new();
+        let mut page = 1u32;
+        loop {
+            let page_str = page.to_string();
+            let resp = self
+                .http
+                .get(&url)
+                .query(&[("per_page", "100"), ("page", page_str.as_str())])
+                .send()?;
+            let batch: Vec<Branch> = blocking_json_ok(resp, &format!("GitLab GET {url}"))?;
+            let n = batch.len();
+            out.extend(batch);
+            if n < 100 {
+                break;
+            }
+            page += 1;
+        }
+        Ok(out)
+    }
+
+    /// Change project settings (`PUT /projects/:id`): only the fields
+    /// set in `update` are sent.
+    pub fn update_project(&self, update: &ProjectUpdate) -> Result<(), Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!("{}/api/v4/projects/{}", self.base_url, encoded);
+        let resp = self.http.put(&url).json(update).send()?;
+        blocking_ok(resp, &format!("GitLab PUT {url}"))?;
+        Ok(())
     }
 
     /// Archive the project (`POST /projects/:id/archive`): read-only
@@ -1317,6 +1379,45 @@ mod tests {
     }
 
     #[test]
+    fn update_project_puts_only_the_fields_set() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("PUT", "/api/v4/projects/g%2Fp")
+            .match_body(mockito::Matcher::Json(serde_json::json!({
+                "default_branch": "c10s-hs",
+                "merge_method": "ff",
+            })))
+            .with_status(200)
+            .with_body("{}")
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        client
+            .update_project(&ProjectUpdate {
+                default_branch: Some("c10s-hs".into()),
+                merge_method: Some("ff".into()),
+            })
+            .unwrap();
+        mock.assert();
+    }
+
+    #[test]
+    fn list_branches_pages_and_reads_the_default_flag() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/projects/g%2Fp/repository/branches")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(r#"[{"name": "c10s", "default": true}, {"name": "c9s-hs"}]"#)
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        let branches = client.list_branches().unwrap();
+        mock.assert();
+        let names: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["c10s", "c9s-hs"]);
+        assert!(branches[0].default && !branches[1].default);
+    }
+
+    #[test]
     fn archive_project_posts_to_the_archive_endpoint() {
         let mut server = mockito::Server::new();
         let mock = server
@@ -1344,6 +1445,8 @@ mod tests {
             archived,
             issues_access_level: access.map(String::from),
             issues_enabled: enabled,
+            default_branch: None,
+            merge_method: None,
         }
     }
 

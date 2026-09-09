@@ -17,6 +17,7 @@ use hs_relmon::manifest;
 use hs_relmon::prune_archived;
 use hs_relmon::prune_tags;
 use hs_relmon::repology;
+use hs_relmon::repos;
 use hs_relmon::retire;
 use hs_relmon::review;
 
@@ -454,6 +455,39 @@ repository is not in this list are not touched."
     /// Compare every manifest package's Hyperscale builds against
     /// stock: still ahead, or caught up — and then whether to
     /// retire it or rebase it, per the manifest's `divergent`.
+    /// Check every manifest package's GitLab repo against the SIG's
+    /// conventions — default branch the newest Hyperscale branch,
+    /// merge requests fast-forwarded — and set them with `--apply`.
+    CheckRepos {
+        /// Path to the TOML manifest file.
+        manifest: PathBuf,
+
+        /// Comma-separated packages to check (default: all).
+        #[arg(long, value_name = "LIST")]
+        package: Option<String>,
+
+        /// GitLab group the packages' repos live under.
+        #[arg(long, default_value = retire::DEFAULT_GITLAB_GROUP, value_name = "URL")]
+        gitlab_group: String,
+
+        /// Set what differs, asking per repo (`a` for the rest, `q`
+        /// to stop).
+        #[arg(long)]
+        apply: bool,
+
+        /// Apply to every repo without asking.
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Output as JSON instead of human-readable.
+        #[arg(long)]
+        json: bool,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
     CheckStock {
         /// Path to the TOML manifest file.
         manifest: PathBuf,
@@ -1097,6 +1131,88 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             if total_failures > 0 {
+                std::process::exit(1);
+            }
+        }
+        Command::CheckRepos {
+            manifest: path,
+            package,
+            gitlab_group,
+            apply,
+            yes,
+            json,
+            verbose,
+        } => {
+            let m = manifest::Manifest::load(&path)?;
+            let only: Vec<String> = package
+                .as_deref()
+                .unwrap_or("")
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            let group = gitlab_group.trim_end_matches('/');
+            let mut plans = Vec::new();
+            let mut failures = 0usize;
+            for pkg in m
+                .packages
+                .iter()
+                .filter(|p| only.is_empty() || only.contains(&p.name))
+            {
+                let url = format!("{group}/{}", pkg.name);
+                if verbose {
+                    eprintln!("[hs-relmon] {url}");
+                }
+                match gitlab::client_from_project_url(&url)
+                    .and_then(|c| repos::plan_for_repo(&c, &pkg.name))
+                {
+                    Ok(p) => plans.push(p),
+                    Err(e) => {
+                        eprintln!("{}: {e}", pkg.name);
+                        failures += 1;
+                    }
+                }
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&plans)?);
+            } else {
+                for p in &plans {
+                    print!("{}", repos::render(p));
+                }
+                let off = plans.iter().filter(|p| p.needs_change()).count();
+                println!(
+                    "{} repo(s): {off} to change, {} ok, {} archived{}",
+                    plans.len(),
+                    plans
+                        .iter()
+                        .filter(|p| !p.archived && !p.needs_change())
+                        .count(),
+                    plans.iter().filter(|p| p.archived).count(),
+                    if failures > 0 {
+                        format!("; {failures} could not be read")
+                    } else {
+                        String::new()
+                    }
+                );
+            }
+            if apply {
+                // One question per repo — a change may be right for most
+                // and wrong for one (a repo whose builds moved to EPEL) —
+                // with `a` for the rest and `q` to stop; --yes answers
+                // them all.
+                let outcome = repos::apply(&plans, yes, |p| {
+                    let url = format!("{group}/{}", p.package);
+                    gitlab::client_from_project_url(&url)
+                        .and_then(|c| c.update_project(&p.update()))
+                })?;
+                println!(
+                    "{} repo(s) set, {} skipped, {} failed",
+                    outcome.set, outcome.skipped, outcome.failed
+                );
+                failures += outcome.failed;
+            }
+            if failures > 0 {
                 std::process::exit(1);
             }
         }

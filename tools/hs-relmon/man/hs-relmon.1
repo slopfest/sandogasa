@@ -306,10 +306,37 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIPACKAGE\fR>
 Source package name (e.g. ethtool)
+.SS hs-relmon check-repos
+\fBhs\-relmon check\-repos\fR [\fB\-\-package\fR] [\fB\-\-gitlab\-group\fR] [\fB\-\-apply\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMANIFEST\fR> 
+.PP
+Interactively review builds in hyperscale `\-testing` tags and promote (+1), reject (\-1), or skip (0) each one. Compare every manifest package\*(Aqs Hyperscale builds against stock: still ahead, or caught up — and then whether to retire it or rebase it, per the manifest\*(Aqs `divergent`. Check every manifest package\*(Aqs GitLab repo against the SIG\*(Aqs conventions — default branch the newest Hyperscale branch, merge requests fast\-forwarded — and set them with `\-\-apply`
+.TP
+\fB\-\-package\fR \fI<LIST>\fR
+Comma\-separated packages to check (default: all)
+.TP
+\fB\-\-gitlab\-group\fR \fI<URL>\fR [default: https://gitlab.com/CentOS/Hyperscale/rpms]
+GitLab group the packages\*(Aq repos live under
+.TP
+\fB\-\-apply\fR
+Set what differs, asking per repo (`a` for the rest, `q` to stop)
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Apply to every repo without asking
+.TP
+\fB\-\-json\fR
+Output as JSON instead of human\-readable
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIMANIFEST\fR>
+Path to the TOML manifest file
 .SS hs-relmon check-stock
 \fBhs\-relmon check\-stock\fR [\fB\-\-repositories\fR] [\fB\-\-skip\fR] [\fB\-\-color\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMANIFEST\fR> 
 .PP
-Interactively review builds in hyperscale `\-testing` tags and promote (+1), reject (\-1), or skip (0) each one. Compare every manifest package\*(Aqs Hyperscale builds against stock: still ahead, or caught up — and then whether to retire it or rebase it, per the manifest\*(Aqs `divergent`
 .TP
 \fB\-\-repositories\fR \fI<REPOSITORIES>\fR [default: main]
 Comma\-separated Hyperscale repositories whose
