@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### poi-tracker: the closure inventory is recomputed from the graph, by `reconcile` and `keep` alike
+
+A `reconcile` run reported three packages "added to the closure
+inventory" — ansible-packaging, lua, lua-rpm-macros — when nothing in
+Fedora had changed: the graph had known their edges since the first
+walk, and all three were keeps already. The closure inventory (the
+walk's output, `deps -o`) was only ever *appended to* with what the
+newest walk collected, while `keep` recorded its edges in the graph and
+never touched the file, so the two drifted: a package the graph reached
+entered the file only when some later walk happened to pass through it,
+a keep that a walk collected was listed twice over, and eight packages
+the graph reached from the keeps were in no file at all.
+
+Both commands now recompute the closure inventory from the graph the
+way the derived inventory always was — `derive::closure`, one
+implementation — as what a walk of the keeps collects, replayed with
+the walk's own rules (`DepsGraph::collectable`: base-distro providers
+end the walk, only the `--from` repos are collected) less the keeps and,
+where a derived inventory holds them, the owned packages; an external
+closure without one keeps its owned fixpoint roots. `keep` takes the
+file as `-o`, which the workspace supplies. Replayed against the
+Hyperscale closures the recompute changes nothing, which is the check
+that it collects what the walk did. Entries the graph does not reach
+are kept and listed — "in the closure inventory but not reached by the
+graph" — rather than dropped: forty-five of them here, and every one
+traces to a provider the walk could not attribute to a requirement and
+so recorded no edge for (TODO.md has the fix). The workspace state
+committed today gains eight packages and loses the sixteen keeps and
+owned packages that had strayed into the file.
+
 ### sandogasa-report: `--detailed` counts by group, `--detailed --detailed` lists (breaking CLI)
 
 `--detailed` listed every pull request, bug, patch and ticket one per

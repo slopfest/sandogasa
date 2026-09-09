@@ -450,8 +450,9 @@ the known world for free); only the frontier goes to fedrq, and the
 summary says how many went each way. The new edges merge into the
 graph file, the names are filed into `--into` (default: the first
 `-i`; a name already kept in any `-i` inventory is walked but not
-re-filed, since the keep set is their union), and `--deps` recomputes
-the derived inventory in the same run —
+re-filed, since the keep set is their union), `--deps` recomputes
+the derived inventory in the same run, and `-o` brings the closure
+inventory (the `deps -o` file) up to date with the graph the same way —
 one command instead of an hour-long walk plus three edits. The new
 roots themselves always expand live, every feature subpackage
 included: a package the graph met as a mere dependency carries only
@@ -609,8 +610,17 @@ closure hyperscale-el9 (external):
 ```
 
 Per closure: keeps the graph has never walked as roots are walked
-(graph first, fedrq only for what it lacks) and merged into the graph
-and the closure inventory; the derived inventory is recomputed; then
+(graph first, fedrq only for what it lacks) and merged into the graph;
+the closure inventory and the derived inventory are both recomputed
+from the graph — the closure one as what a walk of the keeps collects
+(the closure's `--from` repos, ending at its base-distro prefixes),
+less the keeps and, where a derived inventory holds them, the owned
+packages — so a package the graph reaches enters whichever file it
+belongs in whether or not this run's walk touched it, and a keep or
+owned package that strayed into the closure file leaves it. An entry
+the graph does not reach at all is kept and listed as such: the graph
+is what is incomplete there (a walk records no edge for a provider it
+could not attribute), and the next full `deps` walk settles it. Then
 the decisions a program cannot make are asked, one line each, written
 as answered so an interrupted run resumes where it stopped:
 

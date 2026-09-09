@@ -285,6 +285,30 @@ here only because `~/.config/fedrq/` carries the copies.
   v1): median build time per (host, arch) to spot sick builders —
   host names are already captured in the dataset.
 
+## poi-tracker deps: record an edge for every provider a walk collects (2026-09-08)
+
+The closure-inventory recompute (`reconcile`, `keep -o`) found 45
+entries in the Fedora closure file that the graph does not reach from
+the keeps: esmtp, exim, gdb, kernel, msmtp, opensmtpd, socat, xmlto and
+their dependents, every one with the unattributed reason `runtime
+dependency (rawhide)` — no "X requires Y". The walk fetches a wave's
+providers in one batched query and attributes each to a requirement by
+`PkgInfo::satisfies`; a provider that matched nothing (file-path
+requirements such as `/usr/sbin/sendmail`, alternatives, some rich
+leaves) is still *collected*, but `providers` gets no edge for it, so
+the graph cannot explain it and nothing downstream of it is reachable
+either (libgsasl and libidn hang off exim). Until fixed, the recompute
+keeps such entries and lists them; it cannot tell them from stale ones.
+
+Fix: make attribution exact rather than heuristic — resolve file-path
+and otherwise unmatchable requirements individually (they are few per
+wave) so the requirement each provider answers is known, or have the
+batched resolver return providers per requirement; then record the
+edge. After that, one full `deps` walk of the Fedora closure makes the
+graph complete, and the recompute may drop unreached entries as the
+derived one already does. Reasons in the closure file with no
+"requires" clause are the tell: 21 of 2914 today.
+
 ## poi-tracker: essential-deps as a materialized view (2026-09-01)
 
 - The offline recompute is built (`poi-tracker derive`, 2026-09-01):

@@ -76,7 +76,7 @@ impl PkgQuery for sandogasa_fedrq::Fedrq {
 /// Normalized: capabilities map to every binary that required them
 /// and every provider that satisfied them; `binary_sources` maps
 /// binaries (and `src:`-prefixed sources) back to source packages.
-#[derive(Debug, Default, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize)]
 pub struct DepsGraph {
     /// Source packages the walk started from.
     pub roots: Vec<String>,
@@ -214,6 +214,58 @@ impl DepsGraph {
             }
         }
         reached
+    }
+
+    /// What a walk of `keeps` collects, replayed over the recorded
+    /// edges with the walk's own rules: a provider whose repo id one of
+    /// `base_prefixes` prefixes ends the walk (the base distro is a
+    /// given — neither reached nor traversed; empty prefixes are
+    /// ignored); every other provider is traversed; and a source is
+    /// *collected* when a provider of it from a `from` repo was
+    /// reached. Returns `(traversed, collected)` — the first is what
+    /// [`Self::witness_reason`] wants as `within`.
+    pub fn collectable(
+        &self,
+        keeps: &BTreeSet<String>,
+        from: &BTreeSet<String>,
+        base_prefixes: &[String],
+    ) -> (BTreeSet<String>, BTreeSet<String>) {
+        let is_base = |repoid: &str| {
+            base_prefixes
+                .iter()
+                .any(|b| !b.is_empty() && repoid.starts_with(b))
+        };
+        let mut entities: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (binary, source) in &self.binary_sources {
+            entities.entry(source).or_default().push(binary);
+        }
+        let mut requires: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (capability, requirers) in &self.requirers {
+            for requirer in requirers {
+                requires.entry(requirer).or_default().push(capability);
+            }
+        }
+        let mut reached: BTreeSet<String> = keeps.clone();
+        let mut collected: BTreeSet<String> = BTreeSet::new();
+        let mut frontier: Vec<String> = keeps.iter().cloned().collect();
+        while let Some(source) = frontier.pop() {
+            for entity in entities.get(source.as_str()).into_iter().flatten() {
+                for capability in requires.get(entity).into_iter().flatten() {
+                    for provider in self.providers.get(*capability).into_iter().flatten() {
+                        if is_base(&provider.repoid) {
+                            continue;
+                        }
+                        if from.contains(&provider.repoid) && !keeps.contains(&provider.source) {
+                            collected.insert(provider.source.clone());
+                        }
+                        if reached.insert(provider.source.clone()) {
+                            frontier.push(provider.source.clone());
+                        }
+                    }
+                }
+            }
+        }
+        (reached, collected)
     }
 
     /// One witness edge for `name` whose requirer is in `within` —

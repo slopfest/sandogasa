@@ -93,6 +93,7 @@ impl WorkspaceDefaults for Workspace {
                 set("graph", s(&c.graph));
                 set("owned", s(&self.owned));
                 set("deps", s(&c.derived));
+                set("output", s(&c.closure));
                 walk_flags(c, &mut set);
             }
             "deps" => {
@@ -200,6 +201,7 @@ mod tests {
         let ws = sample();
         let t = ws.defaults_for("keep", None).unwrap().unwrap();
         assert_eq!(t["graph"].as_str(), Some("/data/graph.json"));
+        assert_eq!(t["output"].as_str(), Some("/data/closure.toml"));
         assert_eq!(t["branch"].as_str(), Some("rawhide"));
         assert_eq!(t["from"].as_array().unwrap()[0].as_str(), Some("rawhide"));
         assert!(t.get("repo").is_none());

@@ -541,7 +541,7 @@ Which [[closure]] of the workspace a walk subcommand works on (default: the firs
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker keep
-\fBpoi\-tracker keep\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-into\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-deps\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-from\fR] [\fB\-\-base\-repo\fR] [\fB\-\-runtime\-only\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-graph\fR> <\fB\-\-owned\fR> <\fB\-b\fR|\fB\-\-branch\fR> <\fIPACKAGE\fR> 
+\fBpoi\-tracker keep\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-into\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-deps\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-from\fR] [\fB\-\-base\-repo\fR] [\fB\-\-runtime\-only\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-graph\fR> <\fB\-\-owned\fR> <\fB\-b\fR|\fB\-\-branch\fR> <\fIPACKAGE\fR> 
 .PP
 Start keeping packages: walk them against the saved graph (fedrq only for what it lacks), merge, recompute the derived inventory
 .TP
@@ -569,11 +569,14 @@ Derived inventory to recompute afterwards (optional)
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
 Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
 .TP
-\fB\-b\fR, \fB\-\-branch\fR \fI<BRANCH>\fR
-fedrq branch (e.g. hs.el9, epel9)
-.TP
 \fB\-\-closure\fR \fI<NAME>\fR
 Which [[closure]] of the workspace a walk subcommand works on (default: the first)
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<PATH>\fR
+Closure inventory (the `deps \-o` file) to bring up to date with the graph afterwards (optional)
+.TP
+\fB\-b\fR, \fB\-\-branch\fR \fI<BRANCH>\fR
+fedrq branch (e.g. hs.el9, epel9)
 .TP
 \fB\-r\fR, \fB\-\-repo\fR \fI<REPO>\fR
 fedrq repo class (e.g. stack)

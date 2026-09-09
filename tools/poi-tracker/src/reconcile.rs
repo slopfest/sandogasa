@@ -52,8 +52,17 @@ pub struct ClosureReport {
     pub promoted: Vec<String>,
     /// Keeps the user demoted to the derived inventory.
     pub demoted: Vec<String>,
-    /// Packages added to the closure's walk-output inventory.
+    /// Packages that entered the closure's walk-output inventory: the
+    /// graph reaches them from the keeps and they are neither keeps
+    /// nor owned (owned ones are the derived inventory's).
     pub closure_added: Vec<String>,
+    /// Packages that left it: keeps, or owned packages the derived
+    /// inventory holds.
+    pub closure_removed: Vec<String>,
+    /// Packages in it that the graph does not reach — kept, since the
+    /// graph is what is incomplete there (a walk records no edge for a
+    /// provider it could not attribute); a full walk settles them.
+    pub closure_unreached: Vec<String>,
     pub capabilities_offline: usize,
     pub capabilities_online: usize,
 }
@@ -107,39 +116,6 @@ fn write_graph(path: &str, graph: &deps::DepsGraph) -> Result<(), String> {
     std::fs::write(path, bytes).map_err(|e| format!("writing {path}: {e}"))
 }
 
-/// Add packages (with reasons) to an inventory file, creating it from
-/// `meta_from`'s header when absent; returns the names actually added.
-fn add_packages(
-    path: &str,
-    meta_from: &str,
-    packages: &[(String, String)],
-) -> Result<Vec<String>, String> {
-    let mut inv = match std::path::Path::new(path).exists() {
-        true => sandogasa_inventory::load(path)?,
-        false => sandogasa_inventory::Inventory {
-            inventory: sandogasa_inventory::load(meta_from)?.inventory,
-            package: Vec::new(),
-        },
-    };
-    let have: BTreeSet<String> = inv.package.iter().map(|p| p.name.clone()).collect();
-    let mut added = Vec::new();
-    for (name, reason) in packages {
-        if have.contains(name) {
-            continue;
-        }
-        inv.package.push(sandogasa_inventory::Package {
-            name: name.clone(),
-            reason: Some(reason.clone()),
-            ..Default::default()
-        });
-        added.push(name.clone());
-    }
-    if !added.is_empty() {
-        sandogasa_inventory::save(&inv, path)?;
-    }
-    Ok(added)
-}
-
 /// A two-way question with `a` (this answer for the rest) and `q`
 /// (stop asking) open: `ask` over a fixed pair of choices.
 fn ask_pair(summary: &str, choices: &[Choice; 2], default: char) -> Result<Answer, String> {
@@ -157,6 +133,24 @@ fn ask_pair(summary: &str, choices: &[Choice; 2], default: char) -> Result<Answe
 
 /// Walk `names` as new roots against the closure's repos, graph-first;
 /// merges the edges into `graph` and returns the walk report.
+/// The closure's `--from` repos and base-distro prefixes, with the
+/// `deps` defaults where the workspace leaves them unset — used by the
+/// walk and by the closure inventory's recompute alike, so the two
+/// cannot disagree about what a walk collects.
+fn walk_filters(c: &Closure) -> (BTreeSet<String>, Vec<String>) {
+    let from: BTreeSet<String> = if c.from.is_empty() {
+        ["epel".to_string()].into()
+    } else {
+        c.from.iter().cloned().collect()
+    };
+    let base: Vec<String> = if c.base_repo.is_empty() {
+        vec!["fedrq-centos-stream-".to_string()]
+    } else {
+        c.base_repo.clone()
+    };
+    (from, base)
+}
+
 fn walk_new(
     c: &Closure,
     graph: &mut deps::DepsGraph,
@@ -170,16 +164,7 @@ fn walk_new(
         repo: c.repo.clone(),
     };
     let query = deps::GraphBackedQuery::new(&fedrq, graph);
-    let from: BTreeSet<String> = if c.from.is_empty() {
-        ["epel".to_string()].into()
-    } else {
-        c.from.iter().cloned().collect()
-    };
-    let base: Vec<String> = if c.base_repo.is_empty() {
-        vec!["fedrq-centos-stream-".to_string()]
-    } else {
-        c.base_repo.clone()
-    };
+    let (from, base) = walk_filters(c);
     let (report, new_graph) = deps::walk(
         &query,
         names,
@@ -274,25 +259,43 @@ fn reconcile_closure(
             report.capabilities_online += online;
             write_graph(&graph_path, &graph)?;
             report.new_keeps.extend(new_keeps.iter().cloned());
-            if let Some(closure_file) = c.closure.as_deref().map(resolve) {
-                let pkgs: Vec<(String, String)> = walk
-                    .collected
-                    .iter()
-                    .map(|d| {
-                        let reason = if d.via.is_empty() {
-                            format!("runtime dependency ({})", d.repoid)
-                        } else {
-                            format!(
-                                "runtime dependency ({}): {} requires {}",
-                                d.repoid, d.required_by, d.via
-                            )
-                        };
-                        (d.source.clone(), reason)
-                    })
-                    .collect();
-                report
-                    .closure_added
-                    .extend(add_packages(&closure_file, &keeps_files[0], &pkgs)?);
+            let _ = walk;
+        }
+
+        // 1b. The closure inventory — the walk's output — is recomputed
+        // from the graph like the derived one, not appended to from
+        // whatever this walk collected: `keep` records edges in the
+        // graph without touching this file, so the two drift apart
+        // otherwise (three packages surfaced here on 2026-09-08 that
+        // the graph had known since 2026-09-02 — and were keeps).
+        if let Some(closure_file) = c.closure.as_deref().map(resolve) {
+            let current = match std::path::Path::new(&closure_file).exists() {
+                true => names_of(&closure_file)?,
+                false => Default::default(),
+            };
+            let (from, base) = walk_filters(c);
+            // Owned packages live in the derived inventory when the
+            // closure has one; an external closure without one keeps
+            // them here (they are its fixpoint roots).
+            let owned_elsewhere = c.derived.is_some().then_some(owned);
+            let cl = derive::closure(&graph, &keeps, owned_elsewhere, &current, &from, &base);
+            for name in &cl.added {
+                if !report.closure_added.contains(name) {
+                    report.closure_added.push(name.clone());
+                }
+            }
+            for name in &cl.removed {
+                if !report.closure_removed.contains(name) {
+                    report.closure_removed.push(name.clone());
+                }
+            }
+            for name in &cl.unreached {
+                if !report.closure_unreached.contains(name) {
+                    report.closure_unreached.push(name.clone());
+                }
+            }
+            if !opts.dry_run && !(cl.added.is_empty() && cl.removed.is_empty()) {
+                derive::apply_merge(&closure_file, &keeps_files[0], &cl)?;
             }
         }
 
@@ -555,6 +558,11 @@ fn format_closure(r: &ClosureReport) -> String {
     }
     out.push_str(&list("former keeps nothing reaches now", &r.dropped_keeps));
     out.push_str(&list("added to the closure inventory", &r.closure_added));
+    out.push_str(&list("left the closure inventory", &r.closure_removed));
+    out.push_str(&list(
+        "in the closure inventory but not reached by the graph (kept; a full walk settles them)",
+        &r.closure_unreached,
+    ));
     out.push_str(&list("entered the derived inventory", &r.derived_added));
     out.push_str(&list("left the derived inventory", &r.derived_removed));
     out.push_str(&list("promoted to essential", &r.promoted));

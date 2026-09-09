@@ -510,6 +510,11 @@ struct KeepArgs {
     #[arg(long, value_name = "PATH")]
     deps: Option<String>,
 
+    /// Closure inventory (the `deps -o` file) to bring up to date
+    /// with the graph afterwards (optional).
+    #[arg(short, long, value_name = "PATH")]
+    output: Option<String>,
+
     #[command(flatten)]
     walk: WalkRepoArgs,
 
@@ -2230,6 +2235,30 @@ fn cmd_keep(paths: &[String], args: &KeepArgs) -> CmdResult {
         }
         None => None,
     };
+    // The closure inventory is the same view for the packages that
+    // are not owned; recomputed here too, so a kondo run before the
+    // next reconcile sees what this walk taught the graph.
+    let closure = match &args.output {
+        Some(path) => {
+            let current = match std::path::Path::new(path).exists() {
+                true => names_of(path)?,
+                false => Default::default(),
+            };
+            let from: BTreeSet<String> = args.walk.from.iter().cloned().collect();
+            let owned_elsewhere = args.deps.is_some().then_some(&owned);
+            let cl = derive::closure(
+                &graph,
+                &keeps,
+                owned_elsewhere,
+                &current,
+                &from,
+                &args.walk.base_repo,
+            );
+            derive::apply_merge(path, &paths[0], &cl)?;
+            Some(cl)
+        }
+        None => None,
+    };
 
     if args.json {
         println!(
@@ -2241,6 +2270,7 @@ fn cmd_keep(paths: &[String], args: &KeepArgs) -> CmdResult {
                 "resolved_online": online,
                 "filed_into": into,
                 "derived": derived,
+                "closure": closure,
             }))?
         );
         return Ok(ExitCode::SUCCESS);
@@ -2264,6 +2294,12 @@ fn cmd_keep(paths: &[String], args: &KeepArgs) -> CmdResult {
     println!("filed {filed} into {into}; graph updated at {}", args.graph);
     if let Some(d) = &derived {
         print!("{}", derive::format_report(d, true));
+    }
+    if let Some(cl) = &closure {
+        print!(
+            "{}",
+            derive::format_report_of("closure inventory", cl, true)
+        );
     }
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
