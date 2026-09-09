@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 
 # Default settings applied to all packages unless overridden.
+#
+# Per package, `divergent = true` says the SIG copy carries packaging
+# changes of its own, so when stock catches up it is rebased, not
+# retired; `false` says it is tracked only until stock catches up.
+# `hs-relmon check-stock` asks for the field where it is unset.
 [defaults]
 distros = "upstream,fedora,centos,hyperscale"
 track = "centos"
@@ -40,9 +45,6 @@ name = "chkconfig"
 name = "createrepo_c"
 
 [[package]]
-name = "crun"
-
-[[package]]
 name = "dbus-broker"
 
 [[package]]
@@ -62,6 +64,7 @@ name = "e2fsprogs"
 [[package]]
 name = "elfutils"
 track = "centos"
+divergent = true
 
 [[package]]
 name = "emacs"
@@ -81,6 +84,7 @@ name = "fluent-bit"
 
 [[package]]
 name = "freetype"
+divergent = false
 
 [[package]]
 name = "gdal"
@@ -93,6 +97,7 @@ name = "iperf3"
 
 [[package]]
 name = "iptables"
+divergent = true
 
 [[package]]
 name = "kernel"
@@ -102,24 +107,28 @@ name = "kernel-headers"
 
 [[package]]
 name = "kexec-tools"
+divergent = true
 
 [[package]]
 name = "kpatch"
 
 [[package]]
 name = "libblockdev"
+divergent = true
 
 [[package]]
 name = "libbpf"
 
 [[package]]
 name = "librepo"
+divergent = true
 
 [[package]]
 name = "libvirt"
 
 [[package]]
 name = "linux-firmware"
+divergent = true
 
 [[package]]
 name = "mesa"
@@ -132,6 +141,7 @@ name = "neovim"
 
 [[package]]
 name = "openssh"
+divergent = true
 
 [[package]]
 name = "pciutils"
@@ -146,6 +156,7 @@ name = "pinentry"
 
 [[package]]
 name = "pykickstart"
+divergent = true
 
 [[package]]
 name = "python-blivet"
@@ -168,6 +179,7 @@ name = "repo"
 
 [[package]]
 name = "rpm"
+divergent = true
 
 [[package]]
 name = "rubygem-asciidoctor"
