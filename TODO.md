@@ -6,6 +6,45 @@ completed work lives in `CHANGELOG.md` and the git history. An entry
 here that has stopped asking for something should be removed rather
 than annotated as done.
 
+## hs-relmon: a `retire` command, and a list of retirement candidates (2026-09-09)
+
+Some Hyperscale packages are tracked only until CentOS Stream catches
+up; once it has, the SIG copy should go. There is no command for that
+today. `hs-relmon retire <package>` should, with one confirmation
+unless `--yes` (and a `--dry-run`):
+
+1. **confirm the package is in the matching CentOS Stream release** for
+   every hyperscale tag it is built in (`hyperscale9s-*` → CentOS Stream
+   9, `hyperscale10s-*` → 10; RHEL tags against AlmaLinux, as
+   `prune-archived` already maps them), and that stock's version is at
+   least the SIG's — a build ahead of stock is the `prune-archived`
+   "ahead" case and must be an explicit per-build decision, never taken
+   under `--yes`;
+2. remove the package from the manifest;
+3. archive its GitLab repo (`CentOS/Hyperscale/rpms/<name>`; the
+   sandogasa-gitlab client needs `archive_project`);
+4. untag its builds from every hyperscale tag (`sandogasa_koji::
+   untag_build`, `cbs` profile), the way `prune-archived` does.
+
+Bonus: `hs-relmon retirable <manifest>` (or a `--candidates` listing)
+naming the manifest packages whose every channel's stock version is at
+or above the SIG's latest build — the packages that *can* be retired.
+Test case: crun. Reuse `prune_archived::{parse_tag_release,
+stock_version, build_plan}`; the Repology lookup is the stock source.
+
+## cpu-sig-tracker: automate the Proposed Updates paperwork (2026-09-09)
+
+When a Hyperscale change is worth upstreaming, the SIG builds it as a
+CentOS Proposed Update and sends a merge request upstream, with a JIRA
+issue and the rest of the paperwork; when upstream will get there on
+its own, it goes straight into Hyperscale and skips all of that. The
+paperwork half could be automated: from a Hyperscale build (or a
+retire-candidate that is *ahead* of stock), file the JIRA issue, open
+the merge request against the CentOS Stream package, and track the
+Proposed Update's progress until stock carries it — at which point the
+`hs-relmon retire` flow above applies. Scope and the JIRA fields to
+fill are the user's to define before anything is built.
+
 ## Fedora packaging: ship the fedrq Hyperscale config as its own subpackage (2026-09-08)
 
 `configs/fedrq/centos-hyperscale.toml` and `configs/fedrq/repos/
