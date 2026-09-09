@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### poi-tracker reconcile: a keep the graph never expanded is walked, not left to send its dependencies to the triage
+
+`reconcile` sent rust-qrcodegen and rust-qrcodegen-image to the kondo
+triage as packages nothing essential needs, while rust-totp-rs — a keep
+in the essential-rust inventory, and the one thing in rawhide that
+requires them — sat in the graph as a root with not a single recorded
+requirement: it had been filed as a keep at a prompt (`u <inventory>`)
+without the walk that records edges, so nothing led from it to anything.
+`reconcile` only walked keeps that were not roots. It now also walks a
+keep whose source the graph never expanded (`DepsGraph::walked`), so a
+keep filed without a walk gets one on the next run and its dependencies
+land in the derived inventory instead of the triage; `keep <name>`
+remains the way to re-walk a keep whose build has since changed.
+
 ### poi-tracker: the closure inventory is recomputed from the graph, by `reconcile` and `keep` alike
 
 A `reconcile` run reported three packages "added to the closure

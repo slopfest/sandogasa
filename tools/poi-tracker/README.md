@@ -609,8 +609,10 @@ closure hyperscale-el9 (external):
 12 owned package(s) no essential inventory justifies — triaging with kondo
 ```
 
-Per closure: keeps the graph has never walked as roots are walked
-(graph first, fedrq only for what it lacks) and merged into the graph;
+Per closure: keeps the graph has never walked — not a root, or a root
+with no recorded requirements, as a keep filed with `u` at a prompt is —
+are walked (graph first, fedrq only for what it lacks) and merged into
+the graph;
 the closure inventory and the derived inventory are both recomputed
 from the graph — the closure one as what a walk of the keeps collects
 (the closure's `--from` repos, ending at its base-distro prefixes),

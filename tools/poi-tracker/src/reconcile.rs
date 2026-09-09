@@ -38,7 +38,9 @@ pub struct ClosureReport {
     /// Why nothing was done, when nothing was.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skipped: Option<String>,
-    /// Keeps the graph had never walked as roots — walked now.
+    /// Keeps the graph had never walked — not a root, or a root with
+    /// no recorded entities (filed at a prompt without a walk) — walked
+    /// now.
     pub new_keeps: Vec<String>,
     /// Former keeps: graph roots that are neither kept, nor retired,
     /// nor reached from the keeps any more (fixpoint roots — owned
@@ -228,9 +230,18 @@ fn reconcile_closure(
         let keeps: BTreeSet<String> = keep_file_of.keys().cloned().collect();
         let roots: BTreeSet<String> = graph.roots.iter().cloned().collect();
 
-        // 1. New keeps: walk them. A root nothing reaches any more was
-        // a keep once; the derived recompute below drops its tail.
-        let new_keeps: Vec<String> = keeps.difference(&roots).cloned().collect();
+        // 1. New keeps: walk them. A keep the graph lists as a root but
+        // never expanded — `u <inventory>` at a prompt files without
+        // walking — counts as new too: with no edges from it, its
+        // dependencies would go to the triage as unjustified (rust-totp-rs
+        // sent rust-qrcodegen there on 2026-09-08). A root nothing
+        // reaches any more was a keep once; the derived recompute below
+        // drops its tail.
+        let new_keeps: Vec<String> = keeps
+            .iter()
+            .filter(|k| !roots.contains(*k) || !graph.walked(k))
+            .cloned()
+            .collect();
         let reachable = graph.reachable(&keeps);
         // Retired keeps are essential but deliberately not walked: not
         // dropped, just parked.
@@ -542,7 +553,7 @@ fn format_closure(r: &ClosureReport) -> String {
             format!("  {label} ({}): {}{more}\n", v.len(), shown.join(", "))
         }
     };
-    out.push_str(&list("new keeps walked", &r.new_keeps));
+    out.push_str(&list("new or never-walked keeps walked", &r.new_keeps));
     if !r.new_keeps.is_empty() {
         let _ = writeln!(
             out,

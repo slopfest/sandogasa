@@ -216,6 +216,14 @@ impl DepsGraph {
         reached
     }
 
+    /// Whether a walk ever expanded `source`: some entity of it — a
+    /// binary, or its `src:` pseudo-entry — is on record. A root with
+    /// none was filed as a keep without a walk (`u <inventory>` at a
+    /// prompt) and has no edges for anything to follow.
+    pub fn walked(&self, source: &str) -> bool {
+        self.binary_sources.values().any(|s| s == source)
+    }
+
     /// What a walk of `keeps` collects, replayed over the recorded
     /// edges with the walk's own rules: a provider whose repo id one of
     /// `base_prefixes` prefixes ends the walk (the base distro is a
@@ -860,6 +868,19 @@ impl<Q: PkgQuery> engine::Policy for DepsPolicy<'_, Q> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn walked_means_some_entity_is_on_record() {
+        let mut g = DepsGraph {
+            roots: vec!["walked".into(), "filed-only".into()],
+            ..Default::default()
+        };
+        g.binary_sources
+            .insert("src:walked".into(), "walked".into());
+        assert!(g.walked("walked"));
+        assert!(!g.walked("filed-only"), "a root nothing expanded");
+        assert!(!g.walked("unknown"));
+    }
 
     #[test]
     fn dependencies_are_the_inverse_of_dependents_with_their_kind() {
