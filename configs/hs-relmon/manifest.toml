@@ -24,9 +24,6 @@ name = "asahi-scripts"
 name = "atuin"
 
 [[package]]
-name = "autoconf"
-
-[[package]]
 name = "awscli2"
 
 [[package]]
