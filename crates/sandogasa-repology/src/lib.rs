@@ -208,6 +208,13 @@ pub fn centos_stream_release(packages: &[Package], release: u32) -> Option<&Pack
     latest_for_repo(packages, &format!("centos_stream_{release}"))
 }
 
+/// Find the package in a specific EPEL release (`epel_<release>`),
+/// best entry by status then version. EPEL sits on top of both the
+/// Stream and the RHEL lifecycles, so it is stock for either.
+pub fn epel_release(packages: &[Package], release: u32) -> Option<&Package> {
+    latest_for_repo(packages, &format!("epel_{release}"))
+}
+
 /// Find the package in a specific AlmaLinux release
 /// (`almalinux_<release>`), best entry by status then version.
 /// AlmaLinux is the RHEL-`N` stand-in for Hyperscale's non-stream
@@ -485,6 +492,17 @@ mod tests {
             "6.15"
         );
         assert!(centos_stream_release(&packages, 8).is_none());
+    }
+
+    #[test]
+    fn test_epel_release_picks_named_release() {
+        let packages: Vec<Package> = serde_json::from_str(
+            r#"[{"repo":"epel_9","version":"1.0","status":"outdated"},
+                {"repo":"epel_10","version":"2.0","status":"newest"}]"#,
+        )
+        .unwrap();
+        assert_eq!(epel_release(&packages, 10).unwrap().version, "2.0");
+        assert!(epel_release(&packages, 8).is_none());
     }
 
     #[test]

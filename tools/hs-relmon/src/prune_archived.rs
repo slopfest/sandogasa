@@ -10,9 +10,14 @@
 //! version for that tag's channel:
 //!
 //! - Stream tags (`hyperscaleNs-…`) compare against CentOS Stream
-//!   N (`centos_stream_N` on Repology).
+//!   N (`centos_stream_N` on Repology) plus EPEL N (`epel_N`).
 //! - RHEL tags (`hyperscaleN-…`) compare against AlmaLinux N
-//!   (`almalinux_N`).
+//!   (`almalinux_N`) plus EPEL N.
+//!
+//! EPEL counts because it sits on top of either base: a package the
+//! SIG carried until "stock" caught up is just as redundant once EPEL
+//! ships it — wprof's el10 builds, once EPEL 10 had 0.5-3.el10_3.
+//! Whichever of the two carries the newer package is the stock version.
 //!
 //! A build whose version is **not newer** than stock is safe to
 //! untag — stock carries it now, so the archived build is
@@ -80,7 +85,8 @@ impl Stock {
 }
 
 /// The stock version for a tag's channel: CentOS Stream N for a
-/// Stream tag, AlmaLinux N for a RHEL tag — of what stands in for the
+/// Stream tag, AlmaLinux N for a RHEL tag, either plus EPEL N,
+/// whichever is newer — of what stands in for the
 /// SIG package named `source`: a stock source of the same name, or one
 /// that ships a binary of that name, since a consumer needs the binary
 /// `autoconf`, whoever builds it. Repology files every source it deems
@@ -103,12 +109,19 @@ pub fn stock_version(
     };
     let same_source: Vec<repology::Package> =
         packages.iter().filter(|p| stands_in(p)).cloned().collect();
-    let pkg = if is_stream {
+    // The base distro of the channel, and EPEL on top of it: whichever
+    // carries the newer package is what a system would get.
+    let base = if is_stream {
         repology::centos_stream_release(&same_source, major)
     } else {
         repology::almalinux_release(&same_source, major)
     };
-    pkg.map(Stock::from)
+    let epel = repology::epel_release(&same_source, major);
+    [base, epel]
+        .into_iter()
+        .flatten()
+        .map(Stock::from)
+        .max_by(|a, b| sandogasa_rpmvercmp::compare_evr(&a.label(), &b.label()))
 }
 
 /// Per-tag decision for an archived package.
@@ -417,6 +430,37 @@ mod tests {
             r#"{{"repo":"{repo}","version":"{version}","status":"outdated"{srcname}{binnames}}}"#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn epel_is_stock_too_and_the_newer_of_the_two_wins() {
+        // wprof: CentOS Stream 10 has nothing, EPEL 10 has 0.5-3.el10_3.
+        let pkgs = vec![serde_json::from_str::<repology::Package>(
+            r#"{"repo":"epel_10","srcname":"wprof","version":"0.5","origversion":"0.5-3.el10_3","status":"outdated"}"#,
+        )
+        .unwrap()];
+        let stock = stock_version(&pkgs, 10, true, "wprof").unwrap();
+        assert_eq!(
+            (stock.version.as_str(), stock.release.as_deref()),
+            ("0.5", Some("3.el10_3"))
+        );
+        assert!(
+            stock_version(&pkgs, 9, true, "wprof").is_none(),
+            "EPEL 9 has none"
+        );
+        // Both carry it: the newer one is stock.
+        let pkgs = vec![
+            rpkg_src("centos_stream_9", "1.0", Some("x"), &[]),
+            rpkg_src("epel_9", "1.2", Some("x"), &[]),
+            rpkg_src("almalinux_9", "1.1", Some("x"), &[]),
+        ];
+        assert_eq!(stock_version(&pkgs, 9, true, "x").unwrap().version, "1.2");
+        assert_eq!(stock_version(&pkgs, 9, false, "x").unwrap().version, "1.2");
+        let pkgs = vec![
+            rpkg_src("centos_stream_9", "2.0", Some("x"), &[]),
+            rpkg_src("epel_9", "1.2", Some("x"), &[]),
+        ];
+        assert_eq!(stock_version(&pkgs, 9, true, "x").unwrap().version, "2.0");
     }
 
     #[test]

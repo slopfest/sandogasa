@@ -436,8 +436,18 @@ each build in their `-release`/`-testing` tags, compares the
 build version against the **stock** distro version for that
 tag's channel:
 
-- Stream tags (`hyperscaleNs-…`) compare against CentOS Stream N.
-- RHEL tags (`hyperscaleN-…`) compare against AlmaLinux N.
+- Stream tags (`hyperscaleNs-…`) compare against CentOS Stream N
+  plus EPEL N.
+- RHEL tags (`hyperscaleN-…`) compare against AlmaLinux N plus EPEL N.
+
+EPEL counts because it sits on top of either base — a package the SIG
+carried until stock caught up is just as redundant once EPEL ships it
+— and whichever of the two carries the newer package is the stock
+version. Repology reports EPEL 10 at the minor release matching the
+released RHEL, not the leading one that tracks CentOS Stream, so its
+EPEL version can lag a point release; that understates stock, never
+overstates it, so a verdict is at worst conservative. fedrq against
+the live repo is the authority when a point release is what decides.
 
 ```
 $ hs-relmon prune-archived packages.toml --dry-run
@@ -490,7 +500,8 @@ divergent = false    # tracked until stock catches up: then retire
 `check-stock <manifest>` compares every manifest package's builds in
 its `-release`/`-testing` tags against the stock version for each
 tag's channel (CentOS Stream N for a Stream tag, AlmaLinux N for a
-RHEL tag, from Repology, the rule `prune-archived` applies) and says
+RHEL tag, either plus EPEL N, from Repology — the rule `prune-archived`
+applies) and says
 what follows, one verdict word per line: `ahead` (the SIG is newer
 than stock, its live work) first, then `release` (stock has the
 version but the SIG's release is newer — retiring would leave a system

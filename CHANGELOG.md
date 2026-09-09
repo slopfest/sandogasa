@@ -78,7 +78,12 @@ was "caught up" by version, when retiring it would have left every
 system running the SIG build on it until stock's version moves — dnf
 does not downgrade, a configuration manager told to upgrade would. Such
 a build is `release`-ahead, its own verdict and its own prompt, never
-untagged under `--yes`, in `prune-archived` as well — and lists one
+untagged under `--yes`, in `prune-archived` as well. And EPEL is stock
+too: the SIG's stack is CentOS Stream plus EPEL, so a package EPEL now
+ships is as redundant as one CentOS Stream ships — wprof's el10 builds
+(0.5-2.hsx.el10) read as ahead of a CentOS Stream 10 that has no wprof,
+when EPEL 10 has 0.5-3.el10_3; each channel now takes the newer of its
+base distro and EPEL N, in `prune-archived` as well — and lists one
 verdict
 word per package, aligned and colored on a terminal (`--color[=WHEN]`
 as in `ls`): `ahead`, then the caught-up `retire`, `rebase` and

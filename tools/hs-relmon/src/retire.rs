@@ -25,7 +25,8 @@
 //! the repo are still retired. The gate on the
 //! builds is `prune-archived`'s: each is compared against the stock
 //! version for its tag's channel (CentOS Stream N for a Stream tag,
-//! AlmaLinux N for a RHEL tag, via Repology); a build *ahead* of stock
+//! AlmaLinux N for a RHEL tag, either plus EPEL N, via Repology); a
+//! build *ahead* of stock
 //! is prompted for individually and never untagged under `--yes`, and
 //! if any stays tagged the package is not retired — the manifest entry
 //! and the repo remain, since the SIG is still its only source.
