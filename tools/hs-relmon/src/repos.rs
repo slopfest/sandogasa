@@ -14,12 +14,19 @@
 //! Hyperscale branches come in several spellings: `c10s-hs` (the
 //! main one), `c10s-hsx` and `c10s-hsk` (experimental, kernel),
 //! `c10s-hs+fb` and `c10s-hs+asahi` (flavors), and the older
-//! `c10s-sig-hyperscale[-…]`. The newest release wins; within it a
-//! default that already is one of its Hyperscale branches stays (a
-//! kernel repo defaulting to `c10s-hsk` is deliberate), otherwise
-//! `-hs`, then a lettered variant, then a flavor, then the old spelling.
+//! `c10s-sig-hyperscale[-…]`. Only a branch somebody builds from
+//! counts: a build's release tag names its branch (`hsx.el10` came
+//! from `c10s-hsx`), so a branch with no tagged build in CBS — wprof's
+//! `c10s-hsx` after its builds moved to EPEL — is passed over and a
+//! default pointing at one is flagged. Among the live branches the
+//! newest release wins; within it a default that already is one of
+//! them stays (a kernel repo defaulting to `c10s-hsk` is deliberate),
+//! otherwise `-hs`, then a lettered variant, then a flavor, then the
+//! old spelling.
 
 use sandogasa_gitlab::{Client, ProjectUpdate};
+
+use crate::cbs::Build;
 
 /// The merge method every SIG repo should use.
 pub const MERGE_METHOD: &str = "ff";
@@ -60,10 +67,57 @@ pub fn parse_hs_branch(name: &str) -> Option<(u32, Spelling)> {
     Some((version, spelling))
 }
 
+/// The dist tag a build carries for its Hyperscale branch, as
+/// `(release, suffix)`: `wprof-0.6-2.hsx.el9` → `(9, "hsx")`,
+/// `perf-6.19~rc6-3.hs+fb.el9` → `(9, "hs+fb")`. The last such pair in
+/// the release string wins (`hs+asahi.1.hs+asahi.el10s` has two).
+pub fn build_branch_tag(release: &str) -> Option<(u32, String)> {
+    release.rmatch_indices(".el").find_map(|(i, _)| {
+        let version: u32 = release[i + 3..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .ok()?;
+        let head = &release[..i];
+        let suffix = head.rsplit('.').next()?;
+        (suffix.starts_with("hs")).then(|| (version, suffix.to_string()))
+    })
+}
+
+/// The dist suffix builds from a branch carry: `hs` for `c10s-hs` and
+/// the old `c10s-sig-hyperscale`, `hsx` for `c10s-hsx`, `hs+fb` for
+/// `c10s-hs+fb`.
+fn branch_suffix(name: &str, spelling: Spelling) -> &str {
+    match spelling {
+        Spelling::Main | Spelling::Legacy => "hs",
+        Spelling::Variant | Spelling::Flavor => name.rsplit("s-").next().unwrap_or("hs"),
+    }
+}
+
+/// The Hyperscale branches of `branches` with a tagged build in CBS.
+pub fn live_branches<'a>(
+    branches: impl IntoIterator<Item = &'a str>,
+    builds: &[Build],
+) -> Vec<&'a str> {
+    let tags: std::collections::BTreeSet<(u32, String)> = builds
+        .iter()
+        .filter_map(|b| build_branch_tag(&b.release))
+        .collect();
+    branches
+        .into_iter()
+        .filter(|b| {
+            parse_hs_branch(b)
+                .is_some_and(|(v, s)| tags.contains(&(v, branch_suffix(b, s).to_string())))
+        })
+        .collect()
+}
+
 /// The branch the repo should open on: among the newest release's
-/// Hyperscale branches, the current default if it is one of them
-/// (a chosen variant stays chosen), else the best spelling, ties by
-/// name. `None` when the repo has no Hyperscale branch at all.
+/// Hyperscale branches (of those given — the caller passes the live
+/// ones), the current default if it is one of them (a chosen variant
+/// stays chosen), else the best spelling, ties by name. `None` when
+/// there is none.
 pub fn pick_default_branch<'a>(
     branches: impl IntoIterator<Item = &'a str>,
     current: Option<&str>,
@@ -98,6 +152,10 @@ pub struct RepoPlan {
     pub merge_method: Option<(String, String)>,
     /// The repo has no Hyperscale branch to default to.
     pub no_hs_branch: bool,
+    /// Hyperscale branches exist but none has a tagged build in CBS.
+    pub no_live_branch: bool,
+    /// The current default is a Hyperscale branch with no tagged build.
+    pub default_has_no_builds: bool,
 }
 
 impl RepoPlan {
@@ -115,15 +173,24 @@ impl RepoPlan {
     }
 }
 
-/// Judge one repo from what GitLab reports.
+/// Judge one repo from what GitLab reports and what CBS has tagged.
 pub fn plan(
     package: &str,
     archived: bool,
     default_branch: Option<&str>,
     merge_method: Option<&str>,
     branches: &[String],
+    builds: &[Build],
 ) -> RepoPlan {
-    let wanted = pick_default_branch(branches.iter().map(String::as_str), default_branch);
+    let hs: Vec<&str> = branches
+        .iter()
+        .map(String::as_str)
+        .filter(|b| parse_hs_branch(b).is_some())
+        .collect();
+    let live = live_branches(hs.iter().copied(), builds);
+    let wanted = pick_default_branch(live.iter().copied(), default_branch);
+    let default_has_no_builds =
+        default_branch.is_some_and(|d| hs.contains(&d) && !live.contains(&d));
     let default_branch_change = match (default_branch, wanted) {
         (Some(cur), Some(want)) if cur != want => Some((cur.to_string(), want.to_string())),
         (None, Some(want)) => Some((String::new(), want.to_string())),
@@ -138,7 +205,9 @@ pub fn plan(
         archived,
         default_branch: default_branch_change,
         merge_method: merge_change,
-        no_hs_branch: wanted.is_none(),
+        no_hs_branch: hs.is_empty(),
+        no_live_branch: !hs.is_empty() && live.is_empty(),
+        default_has_no_builds,
     }
 }
 
@@ -157,6 +226,16 @@ pub fn changes(plan: &RepoPlan) -> String {
     }
     if plan.no_hs_branch {
         parts.push("no Hyperscale branch (c*s-hs, -hsx, -hs+fb, -sig-hyperscale…)".to_string());
+    }
+    if plan.no_live_branch {
+        parts.push("no Hyperscale branch has a tagged build".to_string());
+    }
+    if plan.default_has_no_builds
+        && let Some(d) = plan.default_branch.as_ref().map(|(from, _)| from.as_str())
+    {
+        parts.push(format!("{d} has no tagged builds"));
+    } else if plan.default_has_no_builds {
+        parts.push("the default branch has no tagged builds".to_string());
     }
     if parts.is_empty() {
         "ok".to_string()
@@ -239,10 +318,12 @@ pub fn apply(
     Ok(out)
 }
 
-/// Fetch a repo's settings and branches and judge them.
+/// Fetch a repo's settings and branches and judge them against the
+/// package's tagged builds.
 pub fn plan_for_repo(
     client: &Client,
     package: &str,
+    builds: &[Build],
 ) -> Result<RepoPlan, Box<dyn std::error::Error>> {
     let status = client.project_status()?;
     let branches: Vec<String> = client
@@ -256,12 +337,97 @@ pub fn plan_for_repo(
         status.default_branch.as_deref(),
         status.merge_method.as_deref(),
         &branches,
+        builds,
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One tagged build per Hyperscale branch named, so every such
+    /// branch counts as live.
+    fn hs_builds(branches: &[String]) -> Vec<Build> {
+        branches
+            .iter()
+            .filter_map(|b| {
+                let (v, s) = parse_hs_branch(b)?;
+                let suffix = branch_suffix(b, s);
+                Some(Build {
+                    build_id: 1,
+                    name: "pkg".into(),
+                    version: "1.0".into(),
+                    release: format!("1.{suffix}.el{v}"),
+                    nvr: format!("pkg-1.0-1.{suffix}.el{v}"),
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_build_names_its_branch_by_its_dist_tag() {
+        assert_eq!(build_branch_tag("2.hsx.el9"), Some((9, "hsx".into())));
+        assert_eq!(build_branch_tag("3.hs+fb.el9"), Some((9, "hs+fb".into())));
+        assert_eq!(
+            build_branch_tag("1.hs+asahi.1.hs+asahi.el10s"),
+            Some((10, "hs+asahi".into()))
+        );
+        assert_eq!(build_branch_tag("1.hs1.hsk.el10"), Some((10, "hsk".into())));
+        assert_eq!(
+            build_branch_tag("3.el9"),
+            None,
+            "stock, no Hyperscale suffix"
+        );
+        assert_eq!(build_branch_tag("13.hs.el9"), Some((9, "hs".into())));
+    }
+
+    #[test]
+    fn only_branches_with_tagged_builds_are_live_and_a_dead_default_is_flagged() {
+        // wprof: branches for both releases, builds only from c9s-hsx,
+        // default left on c10s-hsx by hand.
+        let branches: Vec<String> = ["c10s-hsx", "c9s-hsx", "main"].map(String::from).to_vec();
+        let builds = vec![Build {
+            build_id: 1,
+            name: "wprof".into(),
+            version: "0.6".into(),
+            release: "2.hsx.el9".into(),
+            nvr: "wprof-0.6-2.hsx.el9".into(),
+        }];
+        assert_eq!(
+            live_branches(branches.iter().map(String::as_str), &builds),
+            ["c9s-hsx"]
+        );
+        let p = plan(
+            "wprof",
+            false,
+            Some("c10s-hsx"),
+            Some("ff"),
+            &branches,
+            &builds,
+        );
+        assert_eq!(
+            p.default_branch,
+            Some(("c10s-hsx".into(), "c9s-hsx".into()))
+        );
+        assert!(p.default_has_no_builds && !p.no_live_branch && !p.no_hs_branch);
+        assert_eq!(
+            render(&p),
+            "wprof: default branch c10s-hsx → c9s-hsx; c10s-hsx has no tagged builds\n"
+        );
+        // No build from any Hyperscale branch: the default stays, flagged.
+        let p = plan("gone", false, Some("c10s-hsx"), Some("ff"), &branches, &[]);
+        assert!(p.default_branch.is_none() && p.no_live_branch && p.default_has_no_builds);
+        assert!(
+            render(&p).contains("no Hyperscale branch has a tagged build"),
+            "{}",
+            render(&p)
+        );
+        assert!(
+            render(&p).contains("the default branch has no tagged builds"),
+            "{}",
+            render(&p)
+        );
+    }
 
     #[test]
     fn hyperscale_branches_parse_in_every_spelling() {
@@ -334,7 +500,14 @@ mod tests {
     #[test]
     fn plan_names_what_differs_and_nothing_else() {
         let branches: Vec<String> = ["c10s", "c9s", "c9s-hs"].map(String::from).to_vec();
-        let p = plan("tar", false, Some("c10s"), Some("merge"), &branches);
+        let p = plan(
+            "tar",
+            false,
+            Some("c10s"),
+            Some("merge"),
+            &branches,
+            &hs_builds(&branches),
+        );
         assert_eq!(p.default_branch, Some(("c10s".into(), "c9s-hs".into())));
         assert_eq!(p.merge_method, Some(("merge".into(), "ff".into())));
         assert!(p.needs_change() && !p.no_hs_branch);
@@ -346,23 +519,27 @@ mod tests {
         assert_eq!(update.default_branch.as_deref(), Some("c9s-hs"));
         assert_eq!(update.merge_method.as_deref(), Some("ff"));
 
+        let one = ["c10s-hs".to_string()];
         let fine = plan(
             "crun",
             false,
             Some("c10s-hs"),
             Some("ff"),
-            &["c10s-hs".to_string()],
+            &one,
+            &hs_builds(&one),
         );
         assert!(!fine.needs_change());
         assert_eq!(render(&fine), "crun: ok\n");
 
         // Archived: reported, never changed.
+        let one9 = ["c9s-hs".to_string()];
         let archived = plan(
             "old",
             true,
             Some("c10s"),
             Some("merge"),
-            &["c9s-hs".to_string()],
+            &one9,
+            &hs_builds(&one9),
         );
         assert!(!archived.needs_change());
         assert!(render(&archived).ends_with("[archived: read-only, not changed]\n"));
@@ -374,6 +551,7 @@ mod tests {
             Some("main"),
             Some("merge"),
             &["main".to_string()],
+            &[],
         );
         assert!(none.no_hs_branch && none.default_branch.is_none() && none.needs_change());
         assert!(render(&none).contains("no Hyperscale branch"));
@@ -383,10 +561,38 @@ mod tests {
     fn apply_with_yes_sets_every_repo_that_needs_it_and_nothing_else() {
         let branches: Vec<String> = ["c10s", "c9s-hs"].map(String::from).to_vec();
         let plans = vec![
-            plan("tar", false, Some("c10s"), Some("merge"), &branches),
-            plan("fine", false, Some("c9s-hs"), Some("ff"), &branches),
-            plan("old", true, Some("c10s"), Some("merge"), &branches),
-            plan("broken", false, Some("c10s"), Some("merge"), &branches),
+            plan(
+                "tar",
+                false,
+                Some("c10s"),
+                Some("merge"),
+                &branches,
+                &hs_builds(&branches),
+            ),
+            plan(
+                "fine",
+                false,
+                Some("c9s-hs"),
+                Some("ff"),
+                &branches,
+                &hs_builds(&branches),
+            ),
+            plan(
+                "old",
+                true,
+                Some("c10s"),
+                Some("merge"),
+                &branches,
+                &hs_builds(&branches),
+            ),
+            plan(
+                "broken",
+                false,
+                Some("c10s"),
+                Some("merge"),
+                &branches,
+                &hs_builds(&branches),
+            ),
         ];
         let touched = std::cell::RefCell::new(Vec::new());
         let outcome = apply(&plans, true, |p| {

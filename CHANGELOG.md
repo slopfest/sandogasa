@@ -18,10 +18,16 @@ on the wrong default branch — and `--apply` sets it, asking per repo
 for most repos can be wrong for one whose builds moved to EPEL.
 Hyperscale branches in all their spellings count
 (`c10s-hs`, `-hsx`, `-hsk`, `-hs+fb`, `-hs+asahi`, the old
-`c10s-sig-hyperscale`); the newest release wins, a default that is
-already one of its Hyperscale branches stays, and otherwise `-hs`
-comes before a variant, a flavor, the old spelling. A repo with no
-Hyperscale branch keeps its default and is said so. `sandogasa-gitlab`
+`c10s-sig-hyperscale`), but only branches somebody builds from: a
+build's release tag names its branch (`hsx.el9` came from `c9s-hsx`),
+and a branch with no build in any hyperscale release or testing tag is
+passed over — the first run proposed wprof's `c10s-hsx` while its
+newest build is `hsx.el9`, which is what showed the rule was missing.
+Among the live branches the newest release wins, a default that is
+already one of them stays, and otherwise `-hs` comes before a variant,
+a flavor, the old spelling; a default pointing at a branch nobody
+builds from is flagged. A repo with no Hyperscale branch keeps its
+default and is said so. `sandogasa-gitlab`
 gains `list_branches`, `update_project` (`ProjectUpdate`) and the
 project's `default_branch` and `merge_method`.
 

@@ -146,6 +146,34 @@ impl TagIndex {
         Ok(index)
     }
 
+    /// Read every existing `hyperscale*-packages-*-{release,testing}`
+    /// tag, whatever its repository — for a question about the SIG as
+    /// a whole rather than one repository's channels.
+    pub fn load_all(client: &Client, verbose: bool) -> Result<Self, Box<dyn std::error::Error>> {
+        let tags: Vec<String> = client
+            .list_tags_matching("hyperscale*")?
+            .into_iter()
+            .filter(|t| {
+                t.contains("-packages-") && (t.ends_with("-release") || t.ends_with("-testing"))
+            })
+            .collect();
+        if verbose {
+            eprintln!(
+                "[hs-relmon] {} release/testing tag(s); reading their contents",
+                tags.len()
+            );
+        }
+        let mut index = Self::default();
+        for tag in tags {
+            let builds = client.list_tagged(&tag)?;
+            if verbose {
+                eprintln!("[hs-relmon] {tag}: {} build(s)", builds.len());
+            }
+            index.builds.insert(tag, builds);
+        }
+        Ok(index)
+    }
+
     /// An index over given contents (tests, or a caller that already
     /// has them).
     pub fn from_tags(tags: Vec<TagBuilds>) -> Self {

@@ -1153,6 +1153,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(String::from)
                 .collect();
             let group = gitlab_group.trim_end_matches('/');
+            // Which branches anyone builds from comes from CBS: every
+            // release/testing tag, read once.
+            let index = prune_tags::TagIndex::load_all(&cbs::Client::new(), verbose)?;
             let mut plans = Vec::new();
             let mut failures = 0usize;
             for pkg in m
@@ -1164,8 +1167,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if verbose {
                     eprintln!("[hs-relmon] {url}");
                 }
+                let builds: Vec<cbs::Build> = index
+                    .for_package(&pkg.name)
+                    .into_iter()
+                    .flat_map(|(_, b)| b)
+                    .collect();
                 match gitlab::client_from_project_url(&url)
-                    .and_then(|c| repos::plan_for_repo(&c, &pkg.name))
+                    .and_then(|c| repos::plan_for_repo(&c, &pkg.name, &builds))
                 {
                     Ok(p) => plans.push(p),
                     Err(e) => {

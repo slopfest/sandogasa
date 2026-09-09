@@ -196,11 +196,18 @@ crun: ok
 Hyperscale branches come in several spellings — `c10s-hs`, the
 variants `c10s-hsx` and `c10s-hsk`, the flavors `c10s-hs+fb` and
 `c10s-hs+asahi`, and the older `c10s-sig-hyperscale[-…]` — and all
-count. The newest release wins; within it, a default that already is
-one of its Hyperscale branches stays (a kernel repo on `c10s-hsk` is
-deliberate), otherwise `-hs` is preferred, then a variant, then a
-flavor, then the old spelling. A repo with no Hyperscale branch at all
-keeps its default and is said so; its merge method is still set.
+count, but only when somebody builds from them: a build's release tag
+names its branch (`wprof-0.6-2.hsx.el9` came from `c9s-hsx`), and a
+branch with no build tagged in any hyperscale `-release`/`-testing`
+tag is passed over. The newest live release wins; within it, a default
+that already is one of its live branches stays (a kernel repo on
+`c10s-hsk` is deliberate), otherwise `-hs` is preferred, then a
+variant, then a flavor, then the old spelling. A default pointing at a
+Hyperscale branch nobody builds from is flagged, as is a repo none of
+whose Hyperscale branches has a build; a repo with no Hyperscale branch
+at all keeps its default and is said so. The merge method is set in
+every case. CBS is read once for all of this, every release and testing
+tag.
 Archived repos are read-only and only reported. Needs a GitLab token
 with Maintainer access on the repos (`GITLAB_TOKEN` or `hs-relmon
 config`).
