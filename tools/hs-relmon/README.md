@@ -578,9 +578,18 @@ stock is never untagged under `--yes`,
 and is prompted for individually otherwise (default no); while any such
 build stays tagged the package is not retired — the untags already done
 stand, but the manifest entry and the repo remain, since the SIG is
-still that build's only source. `retire` requires `koji` with the
-`cbs` profile and a GitLab token (`GITLAB_TOKEN` or `hs-relmon
-config`); a dry run needs neither.
+still that build's only source.
+
+That stopping-short is also how to retire a package **for one release
+only**. When stock has caught up on el10 but not on el9 — wprof once
+EPEL 10 shipped it while EPEL 9 had nothing — `retire wprof` untags
+every el10 build at or behind stock, candidate tag included, then asks
+about each el9 build; decline those and it leaves the manifest entry
+and the repo alone. The el9 side stays the SIG's, and `check-repos`
+then moves the default branch to the release that still has builds.
+
+`retire` requires `koji` with the `cbs` profile and a GitLab token
+(`GITLAB_TOKEN` or `hs-relmon config`); a dry run needs neither.
 
 ### Reviewing testing builds
 
