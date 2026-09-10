@@ -10,7 +10,7 @@ cov = [
     "test",
     "--workspace",
     "--fail-under-lines",
-    "80",
+    "81.5",
     "--ignore-filename-regex",
     "src/main\\.rs$",
 ]

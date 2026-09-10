@@ -41,7 +41,7 @@ man: ## Regenerate every tool's man page from its clap definition
 	./scripts/gen-man.sh
 
 .PHONY: cov
-cov: ## Report test coverage, failing under 80% lines
+cov: ## Report test coverage, failing under 81.5% lines
 	$(CARGO) cov
 
 .PHONY: audit
