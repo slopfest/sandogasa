@@ -45,6 +45,13 @@ naming the advisory; several distinct patched versions become
 candidates for the prompt instead. The lookup is anonymous within
 GitHub's sixty requests an hour, and honours `GITHUB_TOKEN`.
 
+Tracker bugs are left out of the population: the trackers the checks
+close bugs against (`CVE-Misfiled-Version` and friends) carry the
+`Security` keyword like the bugs they track, so a sweep that reached
+their component ran every lookup against `rpms/distribution` and
+reported the failures. A bug with a non-CVE alias, or a summary that
+calls itself a tracker, is now skipped before any check sees it.
+
 Also, `run -v` now says it is searching Bugzilla before the search:
 the run printed nothing until the bug list was back, and a component
 glob such as `python*` resolves server-side, so a quiet minute or two
