@@ -10,6 +10,13 @@ const PYTHON_NAME_PREFIXES: &[&str] = &["python-"];
 /// BuildRequires and macro patterns that indicate a JavaScript package.
 const JS_BUILD_INDICATORS: &[&str] = &["nodejs", "npm("];
 const JS_MACRO_INDICATORS: &[&str] = &["%nodejs_"];
+/// The same for a Python package (`pyproject-rpm-macros`, the legacy
+/// `%py3_` macros) and a Rust one (`rust-packaging`'s `%cargo_` macros,
+/// `crate(…)` BuildRequires).
+const PYTHON_BUILD_INDICATORS: &[&str] = &["python3-devel", "pyproject", "python3dist("];
+const PYTHON_MACRO_INDICATORS: &[&str] = &["%pyproject_", "%py3_"];
+const RUST_BUILD_INDICATORS: &[&str] = &["cargo", "crate("];
+const RUST_MACRO_INDICATORS: &[&str] = &["%cargo_"];
 
 /// Check whether a package is a JavaScript/Node.js package.
 ///
@@ -24,6 +31,34 @@ pub fn is_js_package(name: &str, spec: Option<&str>) -> Option<bool> {
         return Some(false);
     }
     spec.map(|s| spec_matches(s, JS_BUILD_INDICATORS, JS_MACRO_INDICATORS))
+}
+
+/// Whether a package is a Python package, the way [`is_js_package`]
+/// decides for JavaScript: `python-` names say yes, another
+/// ecosystem's prefix says no, otherwise the spec's BuildRequires and
+/// macros decide — `None` without one.
+pub fn is_python_package(name: &str, spec: Option<&str>) -> Option<bool> {
+    if name_matches_any(name, PYTHON_NAME_PREFIXES) {
+        return Some(true);
+    }
+    if name_matches_other_ecosystem(name, PYTHON_NAME_PREFIXES) {
+        return Some(false);
+    }
+    spec.map(|s| spec_matches(s, PYTHON_BUILD_INDICATORS, PYTHON_MACRO_INDICATORS))
+}
+
+/// Whether a package is a Rust package, by the same rules: `rust-`
+/// names, then the spec's `%cargo_` macros and `crate(…)`
+/// BuildRequires — which a binary such as nushell has without the
+/// prefix.
+pub fn is_rust_package(name: &str, spec: Option<&str>) -> Option<bool> {
+    if name_matches_any(name, RUST_NAME_PREFIXES) {
+        return Some(true);
+    }
+    if name_matches_other_ecosystem(name, RUST_NAME_PREFIXES) {
+        return Some(false);
+    }
+    spec.map(|s| spec_matches(s, RUST_BUILD_INDICATORS, RUST_MACRO_INDICATORS))
 }
 
 /// Check if a package name matches any of the given prefixes.
@@ -611,5 +646,20 @@ Name:           foo
     #[test]
     fn extract_binary_plain_path() {
         assert_eq!(extract_binary("/usr/bin/foo", None), None);
+    }
+
+    #[test]
+    fn python_and_rust_packages_by_name_then_spec() {
+        assert_eq!(is_python_package("python-django", None), Some(true));
+        assert_eq!(is_python_package("rust-serde", None), Some(false));
+        assert_eq!(is_python_package("nushell", None), None);
+        let cargo = "Name: nushell\nBuildRequires: cargo-rpm-macros\n%build\n%cargo_build\n";
+        assert_eq!(is_rust_package("nushell", Some(cargo)), Some(true));
+        assert_eq!(is_python_package("nushell", Some(cargo)), Some(false));
+        let py = "Name: ansible\nBuildRequires: python3-devel\n%build\n%pyproject_wheel\n";
+        assert_eq!(is_python_package("ansible", Some(py)), Some(true));
+        assert_eq!(is_rust_package("ansible", Some(py)), Some(false));
+        assert_eq!(is_rust_package("rust-serde", None), Some(true));
+        assert_eq!(is_rust_package("nodejs-left-pad", None), Some(false));
     }
 }

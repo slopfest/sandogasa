@@ -6,6 +6,9 @@ ACL management and RPM spec file parsing utilities.
 ## Features
 
 - Fetch spec files for a package on any dist-git branch
+- Tell a package's ecosystem from its name or its spec's build system
+  (`spec::is_js_package`, `spec::is_python_package`,
+  `spec::is_rust_package`)
 - Parse spec preamble fields (`spec::parse_field`,
   `spec::parse_version`, package name extraction)
 - List shipped binaries from `%{_bindir}` and `%{_libexecdir}` entries

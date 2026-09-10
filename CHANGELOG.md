@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### Public API additions to library crates (breaking)
+
+Fields added to exhaustively constructible structs, and two changed
+function signatures, which break code that builds those structs with a
+literal or calls those functions. Add the new fields (all `Option` or
+`Vec`, so `None`/`vec![]` restores the old shape) and pass the new
+arguments:
+
+- **sandogasa-gitlab**: `Issue.labels: Vec<String>`; `MergeRequest.sha`,
+  `.created_at`, `.author`; `ProjectStatus.default_branch`,
+  `.merge_method`.
+- **sandogasa-forgejo**: `PullDetail.created_at`.
+- **hs-relmon** (library part): `PackageEntry.divergent: Option<bool>`;
+  `ArchivedTagPlan.stock_release`, `.release_ahead`;
+  `prune_archived::stock_version` takes a fourth argument (the base
+  distro's `is_stream` flag) and `prune_archived::plan_for_package`
+  takes three (`package`, the package's tagged builds, a Repology
+  fetcher) instead of five.
+
+### fedora-cve-triage: `cross-ecosystem` knows Python and Rust, and a product NVD misnames still matches
+
+Six bugs filed CVEs in the Python module `eml_parser` against nushell,
+which is a Rust program with an `eml-parser` crate in its tree — the
+name collision `cross-ecosystem` exists for, except the check only
+knew JavaScript. It now reads the ecosystem GitHub's advisory database
+files the CVE's package under (`npm`, `pip`, `rust`) and, for Python
+and Rust, claims the bug only when the component positively belongs
+to another of the three — by name, or by its spec's build system
+(`%cargo_*`, `%pyproject_*`, `%nodejs_*`), which is what places
+nushell — so a C package that might carry a module is left to a
+person. `sandogasa_distgit::spec` gained `is_python_package` and
+`is_rust_package` beside `is_js_package` for it.
+
+A django-allauth bug sat under "product mismatch" because NVD names
+the product `allauth` while PyPI, GitHub and Fedora's
+`python3dist(django-allauth)` provide all say `django-allauth`. A
+product that matches neither the component's name nor its provides is
+tried once more under the names GitHub's advisory gives the CVE's
+packages, and the line says which name NVD used.
+
 ### fedora-cve-triage: EPEL 10 bugs and capitalised Python packages
 
 Thirteen CVE bugs against GitPython in August 2026 were each closed by
