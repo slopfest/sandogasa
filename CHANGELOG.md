@@ -38,12 +38,26 @@ Two GitPython bugs for CVE-2026-78679 were reported under "No fixed
 version in NVD" although the GHSA every reference pointed at says
 "Patched versions: >= 3.1.59" — in a table the `fixed in …` prose
 scrape does not read. GitHub's advisory database serves that as data
-(`first_patched_version` per affected package), so `bodhi-check` now
-fetches the record for any GHSA among a CVE's references and uses its
-patched version as it would NVD's, without a prompt and with a line
-naming the advisory; several distinct patched versions become
-candidates for the prompt instead. The lookup is anonymous within
-GitHub's sixty requests an hour, and honours `GITHUB_TOKEN`.
+(`first_patched_version` and the vulnerable range per affected
+series), so `bodhi-check` now asks it by CVE — NVD did not list the
+GHSA for protobuf's CVE-2026-0994 among the references at all — and
+uses the patched versions as it would NVD's, without a prompt and with
+a line naming the advisory. An advisory with several series
+(protobuf 6.33.5 and 5.29.6) contributes each as a fixed version with
+its range, so a build is judged against its own series. One that
+records no patched version but closes its affected range at the top,
+as uutils coreutils' CVE-2026-35354 does with `<= 0.8.0`, is read as
+saying everything above the bound is not affected: the bound stands in
+for the fix with the range kept alongside, so 0.8.0 itself stays
+affected and 0.9.0 clears, and the line says the inference out loud.
+NVD's `versionEndIncluding` with no `versionEndExcluding` — protobuf's
+`<= 33.4` — is the same missing arm and is read the same way. Only an
+advisory with no upper bound is left as "records no patched version"
+under the bug. The lookup is anonymous
+within GitHub's sixty requests an hour, and honours `GITHUB_TOKEN`.
+And a component named after NVD's `vendor:product` pair —
+`uutils-coreutils` for `uutils:coreutils` — now matches the bare
+product, where it used to be reported as a product mismatch.
 
 Tracker bugs are left out of the population: the trackers the checks
 close bugs against (`CVE-Misfiled-Version` and friends) carry the
