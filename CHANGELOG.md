@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### fedora-cve-triage: EPEL 10 bugs and capitalised Python packages
+
+Thirteen CVE bugs against GitPython in August 2026 were each closed by
+hand within hours, with the same reasons the tool exists to apply, yet
+a run would have settled only the Fedora ones. Two lookups fell short:
+
+- **EPEL 10 bugs found no updates.** A bug's `epel10` version field
+  became the Bodhi release `EPEL-10`, which Bodhi rejects — its
+  releases are EPEL-10.2, 10.3 and 10.4 — and the rejection was
+  swallowed as "no updates", so five bugs whose fix had been stable in
+  EPEL 10 for two weeks read as unfixed. A release Bodhi does not know
+  by that name is now expanded to every active minor release under it,
+  the way `[epel-all]` summaries already were, and a stable fix on any
+  of them counts.
+- **A Python library was not found under its package name.** The same
+  CVE was filed against python-smmap, a dependency *of* GitPython that
+  carries none of its code — `bundled-library`'s "neither bundles nor
+  links it" verdict. The check declined the bug because it looks for the
+  library's Fedora package by name (`python-gitpython`), and fedrq's
+  globs are case-sensitive while the package is `GitPython`. A library
+  of an ecosystem is now also resolved through the provide its packages
+  carry regardless of naming — `python3dist(gitpython)`,
+  `crate(openssl)`, `npm(elliptic)` — with `fedrq pkgs -P`. Python
+  names are normalised the way the provide is (PEP 503: lowercase,
+  `.`/`_` as `-`), so `jaraco.context` is looked for as
+  `python3dist(jaraco-context)` — in that lookup, in
+  `bundled-library`'s "the component is the library" test and in
+  `bodhi-check`'s product match, all of which compared the dotted name
+  against the hyphenated provide and missed.
+
+Also, `run -v` now says it is searching Bugzilla before the search:
+the run printed nothing until the bug list was back, and a component
+glob such as `python*` resolves server-side, so a quiet minute or two
+looked like a hang.
+
 ### ebranch: `check-update` handles EPEL 10.4 and EPEL 9 Next updates without `-b`
 
 `ebranch check-update` given a Bodhi update for EPEL-10.4 stopped with
