@@ -57,7 +57,11 @@ under the bug. The lookup is anonymous
 within GitHub's sixty requests an hour, and honours `GITHUB_TOKEN`.
 And a component named after NVD's `vendor:product` pair —
 `uutils-coreutils` for `uutils:coreutils` — now matches the bare
-product, where it used to be reported as a product mismatch.
+product, where it used to be reported as a product mismatch; and the
+reverse collision, a product NVD tags as Rust, Python or Node filed
+against a component of the same bare name that is not of that
+ecosystem (a uutils CVE on GNU coreutils), is reported as a mismatch
+instead of the wrong project's builds being measured against the fix.
 
 Tracker bugs are left out of the population: the trackers the checks
 close bugs against (`CVE-Misfiled-Version` and friends) carry the
