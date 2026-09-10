@@ -13,7 +13,18 @@
 # Flavors are per-stream: main, experimental, facebook, spin exist on
 # both 9 and 10; hotfixes and intel on 9 only; kernel and asahi on 10
 # only. Enabling a flavor on a stream that lacks it fails on metadata.
-# Testing repos live on buildlogs.centos.org and are not defined here.
+#
+# Testing repos (the CBS `-testing` destination tags) are published to
+# buildlogs.centos.org, binaries only, and are defined at the end in
+# the form the centos-release-hyperscale-*-testing subpackages use
+# (same ids, baseurls and priority). The release package ships testing
+# repos for main, experimental, facebook, spin, kernel and asahi;
+# hotfixes and intel have none, but their testing directories exist on
+# buildlogs for 9, so they are defined here too. The gpgcheck/gpgkey
+# lines mirror the release package; fedrq never installs a package, so
+# they are inert for queries. Testing content exists on buildlogs for
+# main, experimental and facebook on both streams, hotfixes, intel and
+# spin on 9 only, asahi on 10 only.
 
 [centos-hyperscale]
 name=CentOS Stream $releasever - Hyperscale
@@ -169,6 +180,80 @@ enabled=0
 name=CentOS Stream $releasever - Hyperscale Asahi - Source  (10 only)
 metalink=https://mirrors.centos.org/metalink?repo=centos-hyperscale-sig-packages-asahi-source-$releasever-stream&arch=source&protocol=https,http
 #baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/hyperscale/source/packages-asahi/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+## Testing repos, from buildlogs.centos.org (no source repos there)
+
+[centos-hyperscale-testing]
+name=CentOS Stream $releasever - Hyperscale - Testing
+baseurl=https://buildlogs.centos.org/centos/$releasever-stream/hyperscale/$basearch/packages-main/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-experimental-testing]
+name=CentOS Stream $releasever - Hyperscale Experimental - Testing
+baseurl=https://buildlogs.centos.org/centos/$releasever-stream/hyperscale/$basearch/packages-experimental/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-facebook-testing]
+name=CentOS Stream $releasever - Hyperscale Facebook - Testing
+baseurl=https://buildlogs.centos.org/centos/$releasever-stream/hyperscale/$basearch/packages-facebook/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-spin-testing]
+name=CentOS Stream $releasever - Hyperscale Spin - Testing  (9 only on buildlogs)
+baseurl=https://buildlogs.centos.org/centos/$releasever-stream/hyperscale/$basearch/packages-spin/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-hotfixes-testing]
+name=CentOS Stream $releasever - Hyperscale Hotfixes - Testing  (9 only)
+baseurl=https://buildlogs.centos.org/centos/$releasever-stream/hyperscale/$basearch/packages-hotfixes/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-intel-testing]
+name=CentOS Stream $releasever - Hyperscale Intel - Testing  (9 only)
+baseurl=https://buildlogs.centos.org/centos/$releasever-stream/hyperscale/$basearch/packages-intel/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-kernel-testing]
+name=CentOS Stream $releasever - Hyperscale Kernel - Testing  (10 only; no testing content on buildlogs today)
+baseurl=https://buildlogs.centos.org/centos/$releasever-stream/hyperscale/$basearch/packages-kernel/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
+gpgcheck=1
+repo_gpgcheck=0
+priority=50
+enabled=0
+
+[centos-hyperscale-asahi-testing]
+name=CentOS Stream $releasever - Hyperscale Asahi - Testing  (10 only)
+baseurl=https://buildlogs.centos.org/centos/$releasever-stream/hyperscale/$basearch/packages-asahi/
 gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-HyperScale
 gpgcheck=1
 repo_gpgcheck=0

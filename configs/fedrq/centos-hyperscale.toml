@@ -4,6 +4,10 @@
 #   fedrq pkgs -b hs.el9 -r stack systemd   # base + EPEL + SIG main,
 #                                           # i.e. what a Hyperscale
 #                                           # machine actually resolves
+#   fedrq pkgs -b hs.el9 -r testing systemd # main plus its testing repo
+#                                           # (builds tagged -testing,
+#                                           # on buildlogs.centos.org)
+#   fedrq pkgs -b hs.el9 -r testing-only systemd   # testing repo alone
 #
 # The branch spelling matches the `distros` values sandogasa's
 # inventories already use (hs.el9, hs.el10). The capture group becomes
@@ -29,6 +33,13 @@ defpaths = ["centos-hyperscale.repo", "centos-stream.repo", "epel.repo"]
 system_repos = false
 
 defs.base = ["centos-hyperscale", "centos-hyperscale-source"]
+# fedrq's own names for the testing layer: @testing is base plus the
+# testing repo, @testing-only the testing repo alone (binaries only —
+# buildlogs publishes no source). Flavor testing repos are defined in
+# the repo file too; enable one ad hoc with
+# `-e centos-hyperscale-experimental-testing`.
+defs.testing = ["@base", "centos-hyperscale-testing"]
+defs.testing-only = ["centos-hyperscale-testing"]
 defs.experimental = ["@base", "centos-hyperscale-experimental", "centos-hyperscale-experimental-source"]
 defs.facebook = ["@base", "centos-hyperscale-facebook", "centos-hyperscale-facebook-source"]
 defs.spin = ["@base", "centos-hyperscale-spin", "centos-hyperscale-spin-source"]
@@ -48,3 +59,6 @@ defs.stack = [
     "epel", "epel-source",
     "centos-hyperscale", "centos-hyperscale-source",
 ]
+# The same stack with the SIG's testing repo on top: what a machine
+# with centos-release-hyperscale-testing resolves.
+defs.stack-testing = ["@stack", "centos-hyperscale-testing"]

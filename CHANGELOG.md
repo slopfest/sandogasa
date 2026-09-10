@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### fedrq Hyperscale config: the testing repos
+
+`fedrq -b hs.el9` and `hs.el10` could see what the SIG had released
+but not what sat in testing, so a build tagged `-testing` on CBS was
+invisible to the same queries — and to ebranch's `check-update`, whose
+fixed-in-testing probe is fedrq's `@testing`. The repo file now
+defines the testing repos as the `centos-release-hyperscale-*-testing`
+subpackages do (buildlogs.centos.org, binaries only, one per flavor),
+and the release config gains fedrq's own group names for them:
+`testing` (main plus its testing repo), `testing-only`, and
+`stack-testing` (the full CentOS Stream + EPEL + SIG stack with the
+testing repo on top). Flavor testing repos are enabled ad hoc with
+`-e centos-hyperscale-<flavor>-testing`. Ships in the
+`fedrq-config-hyperscale` subpackage of the Fedora package.
+
 ## v0.24.0
 
 ### Public API additions to library crates (breaking)
