@@ -32,6 +32,19 @@ a run would have settled only the Fedora ones. Two lookups fell short:
   `bodhi-check`'s product match, all of which compared the dotted name
   against the hyphenated provide and missed.
 
+### fedora-cve-triage: a GitHub advisory's patched version counts as a fixed version
+
+Two GitPython bugs for CVE-2026-78679 were reported under "No fixed
+version in NVD" although the GHSA every reference pointed at says
+"Patched versions: >= 3.1.59" — in a table the `fixed in …` prose
+scrape does not read. GitHub's advisory database serves that as data
+(`first_patched_version` per affected package), so `bodhi-check` now
+fetches the record for any GHSA among a CVE's references and uses its
+patched version as it would NVD's, without a prompt and with a line
+naming the advisory; several distinct patched versions become
+candidates for the prompt instead. The lookup is anonymous within
+GitHub's sixty requests an hour, and honours `GITHUB_TOKEN`.
+
 Also, `run -v` now says it is searching Bugzilla before the search:
 the run printed nothing until the bug list was back, and a component
 glob such as `python*` resolves server-side, so a quiet minute or two
