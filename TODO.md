@@ -497,39 +497,6 @@ one-shot view. Follow-ups:
   - Optionally curate stale-side-tag via keep/explain/remove too (it
     keeps its own regen flow for now).
 
-## sandogasa-review adoption
-
-- (2026-06-29) Surveyed the workspace for other tools that could adopt the
-  keep/explain/remove resolver. Possible future fits (per-item interactive
-  loops, but their decisions are *actions* not finding-validity, so adoption
-  would reshape semantics — lower priority):
-  - hs-relmon `prune-archived` / `review` — add an "explain" reason when
-    keeping an ahead-of-stock build / skipping a karma vote.
-  - poi-tracker `triage-updates` AskClose — per-bug explain instead of one
-    batch y/N.
-  - hs-intake `safe-to-backport` — only if it grows an interactive mode that
-    breaks the aggregated "concerns" into per-item findings.
-  Not applicable: sandogasa-pkg-health, koji-diff, cpu-sig-tracker, dbranch.
-
-## hs-relmon
-
-- (2026-06-26) add retire command to archive repo and untag builds. Test with sqlite
-- (2026-06-26) check-latest tar --file-issue and check-manifest both
-  do not close the issue even though it's up to date. 
-  This is likely because it is not built for hs.el10 but that's because
-  CentOS 10 is already up to date. Figure out how to handle it
-
-## fedora-review-digest
-
-- (2026-06-23) pyp2spec support: a Python checklist + post-import
-  boilerplate (terminology: "Python package (from PyPI)", not module).
-  Generator detection is already wired; `infer`/`render_post_import`
-  just need the Python branch.
-- (2026-06-23, later) Run `fedora-review -b <id>` ourselves instead of
-  only pointing at an existing result dir.
-
-## ebranch
-
 - (2026-07-02) check-crate: MSRV awareness for EPEL targets. The
   base-distro guard does NOT apply to check-crate — RHEL/CentOS Stream
   don't ship crates as RPMs (their Rust binaries vendor dependencies),
@@ -572,7 +539,9 @@ one-shot view. Follow-ups:
   - What DOES work, fully mirror-immune: `koji call getRPMDeps <rpmID>
     1` returns a binary RPM's Provides straight from koji's DB (proven
     on build 3022363). Path: `getBuild <nvr>` → `listRPMs <buildID>` →
-    `getRPMDeps` per binary RPM. Needs a new `sandogasa-koji` method.
+    `getRPMDeps` per binary RPM. The koji side exists now:
+    `sandogasa_koji::rpm_provides` (used by fedora-cve-triage); ebranch
+    does not call it yet.
   - If we do it, use getRPMDeps on BOTH sides — ask koji for the stable
     (old) build's Provides too, not just the new one — so old vs new are
     apples-to-apples from the same source (don't mix koji-new with
@@ -591,10 +560,37 @@ one-shot view. Follow-ups:
     was transient mirror-propagation skew (different queries hitting
     differently-synced mirrors; he, on better US mirrors, saw them
     agree). So this is propagation, not a deterministic `subpkgs` bug.
-  - DONE already this session: the accurate `skip_reason` note, and
-    `--refresh` now also clears `~/.cache/libdnf5` (the libdnf5 system
-    cache was a separate culprit — it made the *native* branch return
-    stale data; `fedrq make-cache` only touches `~/.cache/fedrq`).
+
+## sandogasa-review adoption
+
+- (2026-06-29) Surveyed the workspace for other tools that could adopt the
+  keep/explain/remove resolver. Possible future fits (per-item interactive
+  loops, but their decisions are *actions* not finding-validity, so adoption
+  would reshape semantics — lower priority):
+  - hs-relmon `prune-archived` / `review` — add an "explain" reason when
+    keeping an ahead-of-stock build / skipping a karma vote.
+  - poi-tracker `triage-updates` AskClose — per-bug explain instead of one
+    batch y/N.
+  - hs-intake `safe-to-backport` — only if it grows an interactive mode that
+    breaks the aggregated "concerns" into per-item findings.
+  Not applicable: sandogasa-pkg-health, koji-diff, cpu-sig-tracker, dbranch.
+
+## hs-relmon
+
+- (2026-06-26) add retire command to archive repo and untag builds. Test with sqlite
+- (2026-06-26) check-latest tar --file-issue and check-manifest both
+  do not close the issue even though it's up to date. 
+  This is likely because it is not built for hs.el10 but that's because
+  CentOS 10 is already up to date. Figure out how to handle it
+
+## fedora-review-digest
+
+- (2026-06-23) pyp2spec support: a Python checklist + post-import
+  boilerplate (terminology: "Python package (from PyPI)", not module).
+  Generator detection is already wired; `infer`/`render_post_import`
+  just need the Python branch.
+- (2026-06-23, later) Run `fedora-review -b <id>` ourselves instead of
+  only pointing at an existing result dir.
 
 ## sandogasa-report
 
