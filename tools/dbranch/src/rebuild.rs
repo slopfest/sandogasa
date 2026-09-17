@@ -20,6 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::git;
 use crate::plan::{self, GitLabProject, changelog_commit_message};
 use crate::ui::{StageFailure, Ui};
+use crate::upstream::{self, UpstreamGit};
 use crate::{changelog, distroinfo, gbpconf, host, salsaci};
 
 /// How often to re-poll `glab ci status` while a pipeline runs.
@@ -204,6 +205,12 @@ pub struct UpdateOptions {
     /// `pbuilder-dist` distribution to build against (default
     /// `testing`; `unstable` when testing is too broken).
     pub build_suite: String,
+    /// Remote holding upstream's git when packaging from its tags;
+    /// `None` looks for one named `upstream` (see [`upstream::detect`]).
+    pub upstream_remote: Option<String>,
+    /// Upstream release to merge in that mode; `None` takes the newest
+    /// tag.
+    pub upstream_version: Option<String>,
     /// In the push stage, push but don't wait for / watch CI.
     pub nowait: bool,
     /// dput target; `None` uploads to dput's default (the Debian
@@ -371,7 +378,7 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             )
             .into());
         }
-        let remote = resolve_remote(ui, repo, target, opts.remote.as_deref())?;
+        let remote = resolve_remote(ui, repo, target, opts.remote.as_deref(), None)?;
         // glab keeps a token per host; check the one this branch's
         // remote lives on.
         if need_glab
@@ -430,14 +437,18 @@ fn classify_target(repo: &Path, local: &[String], target: &str, remote: &str) ->
 /// The remotes a target branch could belong to, most specific rule
 /// first: an explicit `--remote` (must exist); the remote the branch is
 /// configured to push to or track; the remote(s) already holding a
-/// `<remote>/<target>` ref; else every configured remote. One entry
-/// means the choice is settled; several need the user (a rebuild
-/// branch often lives on a fork while `origin` is the team project the
-/// user cannot configure, so `origin` is never assumed).
+/// `<remote>/<target>` ref; else every configured remote except the one
+/// holding upstream's git (`upstream` by convention, or `exclude`),
+/// which is never somewhere to push packaging. One entry means the
+/// choice is settled; several need the user (a rebuild branch often
+/// lives on a fork while `origin` is the team project the user cannot
+/// configure, so `origin` is never assumed). Empty means only
+/// upstream's remote exists.
 fn remote_candidates(
     repo: &Path,
     target: &str,
     explicit: Option<&str>,
+    exclude: Option<&str>,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let all = git::remotes(repo);
     if let Some(r) = explicit {
@@ -449,12 +460,18 @@ fn remote_candidates(
     if let Some(r) = git::branch_remote(repo, target) {
         return Ok(vec![r]);
     }
-    let holding: Vec<String> = all
+    // Upstream's remote is out even when it happens to carry a branch of
+    // the same name (antifennel's upstream has a debian/latest).
+    let others: Vec<String> = all
+        .into_iter()
+        .filter(|r| r != "upstream" && Some(r.as_str()) != exclude)
+        .collect();
+    let holding: Vec<String> = others
         .iter()
         .filter(|r| git::remote_branch_exists(repo, r, target))
         .cloned()
         .collect();
-    Ok(if holding.is_empty() { all } else { holding })
+    Ok(if holding.is_empty() { others } else { holding })
 }
 
 /// Settle which remote `target` is pushed to and has its CI configured:
@@ -465,10 +482,18 @@ fn resolve_remote(
     repo: &Path,
     target: &str,
     explicit: Option<&str>,
+    exclude: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let candidates = remote_candidates(repo, target, explicit)?;
+    let candidates = remote_candidates(repo, target, explicit, exclude)?;
     match candidates.as_slice() {
-        [] => Err(format!("no git remote configured in {}", repo.display()).into()),
+        [] if git::remotes(repo).is_empty() => {
+            Err(format!("no git remote configured in {}", repo.display()).into())
+        }
+        [] => Err(
+            "only upstream's remote is configured; add the packaging remote \
+                   (git remote add origin <url>) or pass --remote <name>"
+                .into(),
+        ),
         [one] => Ok(one.clone()),
         _ => {
             let list = candidates.join(", ");
@@ -508,7 +533,7 @@ pub fn watch_ci(
         Some(b) => b,
         None => git::current_branch(repo)?,
     };
-    let remote = resolve_remote(ui, repo, &branch, None)?;
+    let remote = resolve_remote(ui, repo, &branch, None, None)?;
     if !ui.dry_run {
         git::ensure_tools(false, false, false, true, false, false, false)?;
         if let Some(host) = git::remote_host(repo, &remote) {
@@ -553,7 +578,7 @@ pub fn fixup(
     };
     let all = git::local_branches(repo)?;
     for target in &targets {
-        let remote = resolve_remote(ui, repo, target, None)?;
+        let remote = resolve_remote(ui, repo, target, None, None)?;
         match classify_target(repo, &all, target, &remote) {
             TargetLocation::New => {
                 return Err(format!("branch {target} does not exist").into());
@@ -607,13 +632,17 @@ pub fn update(
         .into());
     }
 
+    // Packaging from upstream's git (an upstream remote + gbp.conf's
+    // upstream-tag) swaps the import for a merge and adds export-orig
+    // to the source stage; detected once, cheaply, before any work.
+    let upstream_git = upstream::detect(repo, opts.upstream_remote.as_deref())?;
     // glab is only needed when the push stage actually waits on CI.
     let need_glab = opts.stages.push && !opts.nowait;
     if !ui.dry_run {
         // gbp drives import-orig, dch, and tag; uscan + pristine-tar are
-        // the import-orig backends.
+        // the import-orig backends; export-orig needs it too.
         git::ensure_tools(
-            opts.stages.import || opts.stages.tag,
+            opts.stages.import || opts.stages.tag || (opts.stages.source && upstream_git.is_some()),
             opts.stages.build,
             opts.stages.lint,
             need_glab,
@@ -630,7 +659,13 @@ pub fn update(
         Some(b) => b.clone(),
         None => git::current_branch(repo)?,
     };
-    let remote = resolve_remote(ui, repo, &branch, None)?;
+    // Only the push stage needs the packaging remote; a fresh `clone`
+    // has just upstream's, and its import/source stages must still run.
+    let upstream_remote = upstream_git.as_ref().map(|u| u.remote.as_str());
+    let remote = match opts.stages.push {
+        true => resolve_remote(ui, repo, &branch, None, upstream_remote)?,
+        false => String::new(),
+    };
     if need_glab
         && !ui.dry_run
         && let Some(host) = git::remote_host(repo, &remote)
@@ -639,7 +674,14 @@ pub fn update(
     }
 
     if opts.stages.import {
-        import_stage(ui, repo, &branch, &opts.urgency)?;
+        import_stage(
+            ui,
+            repo,
+            &branch,
+            upstream_git.as_ref(),
+            opts.upstream_version.as_deref(),
+            &opts.urgency,
+        )?;
     } else if opts.stages.any_tail() {
         ensure_on_branch(ui, repo, &branch)?;
     }
@@ -660,6 +702,7 @@ pub fn update(
         &branch,
         &remote,
         None,
+        upstream_git.as_ref(),
         &opts.build_suite,
         None,
         opts.stages,
@@ -684,9 +727,16 @@ fn import_stage(
     ui: &Ui,
     repo: &Path,
     branch: &str,
+    upstream_git: Option<&UpstreamGit>,
+    upstream_version: Option<&str>,
     urgency: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     ensure_on_branch(ui, repo, branch)?;
+    // Packaged from upstream's git: merge the release tag instead of
+    // importing a tarball (the changelog entry is written there too).
+    if let Some(up) = upstream_git {
+        return upstream::merge_release(ui, repo, up, upstream_version, urgency);
+    }
     ui.step(&format!("Import the new upstream release onto {branch}"));
     import_orig(ui, repo)?;
     ui.step("Generate the new-version changelog entry");
@@ -936,6 +986,7 @@ fn rebuild_one(
         target,
         remote,
         Some(target_type),
+        None,
         &build_suite,
         rebuilt_version,
         stages,
@@ -1059,6 +1110,7 @@ fn build_pipeline(
     target: &str,
     remote: &str,
     target_type: Option<TargetType>,
+    upstream_git: Option<&UpstreamGit>,
     build_suite: &str,
     rebuilt_version: Option<String>,
     stages: Stages,
@@ -1079,7 +1131,7 @@ fn build_pipeline(
     };
 
     if stages.source {
-        source_stage(ui, repo, include_orig)?;
+        source_stage(ui, repo, include_orig, upstream_git)?;
     }
     if stages.build {
         let (package, version) = pkg_ver.as_ref().unwrap();
@@ -1088,7 +1140,15 @@ fn build_pipeline(
         // what is lying there before spending a chroot build on it.
         if !stages.source {
             let dsc = format!("../{}", plan::dsc_filename(package, version));
-            ensure_source(ui, repo, &dsc, false, include_orig, assume_yes)?;
+            ensure_source(
+                ui,
+                repo,
+                &dsc,
+                false,
+                include_orig,
+                upstream_git,
+                assume_yes,
+            )?;
         }
         build_stage(ui, repo, build_suite, package, version, chroot_refresh)?;
     }
@@ -1105,7 +1165,15 @@ fn build_pipeline(
         // to be on offer if the destination can't supply it.
         if !stages.source {
             let changes = format!("../{}", plan::changes_filename(package, version));
-            ensure_source(ui, repo, &changes, include_orig, include_orig, assume_yes)?;
+            ensure_source(
+                ui,
+                repo,
+                &changes,
+                include_orig,
+                include_orig,
+                upstream_git,
+                assume_yes,
+            )?;
         }
         upload_stage(ui, repo, package, version, upload, assume_yes)?;
     }
@@ -1244,6 +1312,7 @@ fn ensure_source(
     file: &str,
     need_orig: bool,
     include_orig: bool,
+    upstream_git: Option<&UpstreamGit>,
     assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if ui.dry_run {
@@ -1270,7 +1339,7 @@ fn ensure_source(
         ui.confirm(&format!("{reason} — rebuild the source package first?"))
     };
     if rebuild {
-        return source_stage(ui, repo, include_orig);
+        return source_stage(ui, repo, include_orig, upstream_git);
     }
     if missing {
         return Err(format!("{reason}: run the source stage first (--stage source)").into());
@@ -1819,7 +1888,7 @@ fn adjust_branch_packaging(
 /// `git commit <file>`, so it is staged, its staged diff shown, then
 /// committed. In `--dry-run` nothing is written but the commands are
 /// still narrated.
-fn create_packaging_file(
+pub(crate) fn create_packaging_file(
     ui: &Ui,
     repo: &Path,
     name: &str,
@@ -1828,6 +1897,7 @@ fn create_packaging_file(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let rel = format!("debian/{name}");
     if !ui.dry_run {
+        std::fs::create_dir_all(repo.join("debian"))?;
         std::fs::write(repo.join(&rel), contents)?;
     }
     ui.run_required(&plan::git_add_argv(&rel), repo)?;
@@ -1875,7 +1945,15 @@ fn source_stage(
     ui: &Ui,
     repo: &Path,
     include_orig: bool,
+    upstream_git: Option<&UpstreamGit>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Packaged from upstream's git: there is no downloaded tarball, so
+    // generate the orig from the upstream tag first (and record it on
+    // the pristine-tar branch) for debuild to pick up from `..`.
+    if upstream_git.is_some() {
+        ui.step("Generate the orig tarball from the upstream tag");
+        ui.run_required(&plan::gbp_export_orig_argv(), repo)?;
+    }
     ui.step(if include_orig {
         "Build the source package, orig tarball included (-sa)"
     } else {
@@ -2321,6 +2399,8 @@ mod tests {
             branch: None,
             stages: parse_update_stages(&[]).unwrap(), // import
             build_suite: "testing".to_string(),
+            upstream_remote: None,
+            upstream_version: None,
             nowait: false,
             upload_target: None,
             debusine: None,
@@ -2446,30 +2526,58 @@ mod tests {
         let dir = setup();
         let p = dir.path();
         // One remote: settled without asking.
-        assert_eq!(remote_candidates(p, "ubuntu/x", None).unwrap(), ["origin"]);
+        assert_eq!(
+            remote_candidates(p, "ubuntu/x", None, None).unwrap(),
+            ["origin"]
+        );
+        // Upstream's own remote is never a push candidate, by name or
+        // when named explicitly as the upstream remote.
+        git(
+            p,
+            &["remote", "add", "upstream", "https://git.example/damo.git"],
+        );
+        assert_eq!(
+            remote_candidates(p, "ubuntu/x", None, None).unwrap(),
+            ["origin"]
+        );
+        git(p, &["remote", "rename", "upstream", "src"]);
+        assert_eq!(
+            remote_candidates(p, "ubuntu/x", None, Some("src")).unwrap(),
+            ["origin"]
+        );
+        git(p, &["remote", "remove", "src"]);
         git(
             p,
             &["remote", "add", "fork", "git@salsa.debian.org:me/damo.git"],
         );
         // A new branch with two remotes is ambiguous (both listed).
         assert_eq!(
-            remote_candidates(p, "ubuntu/x", None).unwrap(),
+            remote_candidates(p, "ubuntu/x", None, None).unwrap(),
             ["fork", "origin"]
         );
         // --remote settles it; an unknown name is an error.
         assert_eq!(
-            remote_candidates(p, "ubuntu/x", Some("fork")).unwrap(),
+            remote_candidates(p, "ubuntu/x", Some("fork"), None).unwrap(),
             ["fork"]
         );
-        assert!(remote_candidates(p, "ubuntu/x", Some("nope")).is_err());
+        assert!(remote_candidates(p, "ubuntu/x", Some("nope"), None).is_err());
         // A ref on exactly one remote picks that remote.
         git(p, &["update-ref", "refs/remotes/fork/ubuntu/x", "HEAD"]);
-        assert_eq!(remote_candidates(p, "ubuntu/x", None).unwrap(), ["fork"]);
+        assert_eq!(
+            remote_candidates(p, "ubuntu/x", None, None).unwrap(),
+            ["fork"]
+        );
         // A configured push/tracking remote wins over everything.
         git(p, &["config", "branch.ubuntu/x.remote", "origin"]);
-        assert_eq!(remote_candidates(p, "ubuntu/x", None).unwrap(), ["origin"]);
+        assert_eq!(
+            remote_candidates(p, "ubuntu/x", None, None).unwrap(),
+            ["origin"]
+        );
         git(p, &["config", "branch.ubuntu/x.pushRemote", "fork"]);
-        assert_eq!(remote_candidates(p, "ubuntu/x", None).unwrap(), ["fork"]);
+        assert_eq!(
+            remote_candidates(p, "ubuntu/x", None, None).unwrap(),
+            ["fork"]
+        );
         // And the project glab is pointed at follows the remote.
         let project = gitlab_project(p, "fork").unwrap();
         assert_eq!(
@@ -2477,6 +2585,21 @@ mod tests {
             ("salsa.debian.org", "me/damo")
         );
         assert!(gitlab_project(p, "nope").is_err());
+        // Only upstream's remote: nothing to push to, and said so — even
+        // when upstream carries a branch of that name.
+        let lone = setup();
+        git(lone.path(), &["remote", "rename", "origin", "upstream"]);
+        git(
+            lone.path(),
+            &["update-ref", "refs/remotes/upstream/ubuntu/x", "HEAD"],
+        );
+        assert!(
+            remote_candidates(lone.path(), "ubuntu/x", None, None)
+                .unwrap()
+                .is_empty()
+        );
+        let err = resolve_remote(&ui_dry(), lone.path(), "ubuntu/x", None, None).unwrap_err();
+        assert!(err.to_string().contains("packaging remote"), "{err}");
     }
 
     #[test]
@@ -3019,6 +3142,8 @@ mod tests {
                 ..Stages::default()
             },
             build_suite: "testing".to_string(),
+            upstream_remote: None,
+            upstream_version: None,
             nowait: false,
             upload_target: None,
             debusine: Some("michelin".to_string()),
@@ -3042,6 +3167,8 @@ mod tests {
                 ..Stages::default()
             },
             build_suite: "testing".to_string(),
+            upstream_remote: None,
+            upstream_version: None,
             nowait: false,
             upload_target: None,
             debusine: Some("michelin".to_string()),
@@ -3111,7 +3238,7 @@ mod tests {
         let changes = "damo_3.2.8-1_source.changes";
         build_artifact(dir.path(), changes, FULL_CHANGES, -60);
         assert_eq!(source_state(dir.path(), changes, true), SourceState::Stale);
-        ensure_source(&ui_dry(), dir.path(), changes, true, true, true).unwrap();
+        ensure_source(&ui_dry(), dir.path(), changes, true, true, None, true).unwrap();
     }
 
     #[test]
@@ -3125,9 +3252,17 @@ mod tests {
             dry_run: false,
             quiet: false,
         };
-        let err = ensure_source(&ui, dir.path(), "nope_1_source.changes", true, true, false)
-            .unwrap_err()
-            .to_string();
+        let err = ensure_source(
+            &ui,
+            dir.path(),
+            "nope_1_source.changes",
+            true,
+            true,
+            None,
+            false,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("--stage source"), "{err}");
     }
 
@@ -3407,5 +3542,65 @@ E: damo: an-error\n";
             include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn update_dry_run_merges_from_upstream_git() {
+        // The layout `dbranch clone` leaves behind: an `upstream` remote
+        // and gbp.conf's upstream-tag. The import stage then narrates a
+        // fetch + merge + `gbp dch -N`, and the source stage an
+        // export-orig before debuild, instead of import-orig.
+        let dir = setup();
+        let p = dir.path();
+        git(
+            p,
+            &["remote", "add", "upstream", "https://git.example/thing.git"],
+        );
+        std::fs::write(
+            p.join("debian/gbp.conf"),
+            "[DEFAULT]\ndebian-branch = debian/unstable\nupstream-tag = v%(version)s\n",
+        )
+        .unwrap();
+        let opts = UpdateOptions {
+            branch: None,
+            stages: Stages {
+                import: true,
+                source: true,
+                ..Stages::default()
+            },
+            build_suite: "testing".to_string(),
+            upstream_remote: None,
+            upstream_version: Some("1.2".to_string()),
+            nowait: false,
+            upload_target: None,
+            debusine: None,
+            debusine_project: None,
+            chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
+        };
+        update(&ui_dry(), p, &opts).unwrap();
+        // Naming a remote that does not exist is an error, not a fallback.
+        let bad = UpdateOptions {
+            upstream_remote: Some("nope".to_string()),
+            ..opts
+        };
+        assert!(update(&ui_dry(), p, &bad).is_err());
+        // A fresh clone has only upstream's remote: import and source
+        // still run, and only the push stage asks for a packaging remote.
+        git(p, &["remote", "remove", "origin"]);
+        let fresh = UpdateOptions {
+            upstream_remote: None,
+            ..bad
+        };
+        update(&ui_dry(), p, &fresh).unwrap();
+        let push = UpdateOptions {
+            stages: Stages {
+                push: true,
+                ..Stages::default()
+            },
+            ..fresh
+        };
+        let err = update(&ui_dry(), p, &push).unwrap_err().to_string();
+        assert!(err.contains("packaging remote"), "{err}");
     }
 }

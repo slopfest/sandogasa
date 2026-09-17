@@ -375,6 +375,49 @@ release) is the not-EOL set; the complement within `--all` is EOL.
 
 ## Design decisions
 
+### Packaging from upstream's git (`upstream.rs`: `clone`, merge-based `update`)
+
+Some upstreams (antifennel) ask not to be packaged from tarballs — they
+publish none of their own, and the forge-generated archives are not
+release artefacts — but from something tied to their git tags. That is
+gbp's "when upstream uses git, no tarballs" flow: the Debian branch
+descends from upstream's release tag, a new release is `git merge
+<tag>`, and the orig tarball is *generated* from the tag with
+`gbp export-orig --pristine-tar-commit` (recorded on the pristine-tar
+branch, so it is reproducible) rather than imported. tuiwidgets on salsa
+is the halfway house — tarballs imported with `--upstream-vcs-tag` so
+upstream's history is linked — and is what the tarball flow already
+handles; this is the full version the debian-mentors regulars
+recommended.
+
+- **Detection is the remote plus the tag format.** `upstream::detect`
+  wants a remote named `upstream` (or `--upstream-remote`) *and*
+  gbp.conf's `upstream-tag`. No such remote → the tarball flow,
+  unchanged. Remote but no `upstream-tag` → an error naming the key,
+  since the release tags cannot be named. Only a plain `%(version)s`
+  placeholder is supported; gbp's character-mangling variants
+  (`%(version%~%.)s`) are refused rather than half-parsed.
+- **The tag style is detected, not assumed.** antifennel tags `0.3.1`,
+  most projects `v0.3.1`; `clone` writes whichever the newest
+  version-looking tag uses. Newest is by `git tag --sort=-version:refname`
+  (so `v0.10` beats `v0.9`), scoped by the format's glob (`v[0-9]*`).
+- **The upstream remote is never a push candidate.** `remote_candidates`
+  drops `upstream` (and the detected upstream remote) from the
+  all-remotes fallback; a repo with only that remote gets "add the
+  packaging remote" instead of a push to upstream.
+- **Version comes from the tag**, so the changelog entry is
+  `gbp dch -N <version>-1 …` rather than letting dch guess. A tag already
+  merged (a re-run after a later failure) is noted and skipped, mirroring
+  the tarball flow's `import_already_done`.
+- **export-orig runs in the source stage**, not the import stage: it is
+  what makes `debuild -S` find `../<pkg>_<v>.orig.tar.*`, and a source
+  stage re-run should regenerate it. gbp is therefore required for the
+  source stage in this mode (`ensure_tools`).
+- `clone` commits only `debian/gbp.conf`; the rest of `debian/` is the
+  packager's (dh_make or by hand) and dbranch says so. A `debian/watch`
+  with `mode=git` is worth adding so the tracker sees new tags, but
+  nothing in dbranch reads it.
+
 ### Which remote a branch belongs to (`resolve_remote`)
 
 `origin` was hard-wired everywhere — `git push -u origin`, the

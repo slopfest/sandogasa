@@ -14,3 +14,4 @@ pub mod plan;
 pub mod rebuild;
 pub mod salsaci;
 pub mod ui;
+pub mod upstream;

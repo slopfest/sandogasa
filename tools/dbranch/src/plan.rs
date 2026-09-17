@@ -256,6 +256,28 @@ pub fn gbp_tag_argv() -> Vec<String> {
     argv(&["gbp", "tag"])
 }
 
+/// [`gbp_dch_release_argv`] plus `-N <version>`: the new-upstream entry
+/// for a release merged from upstream's git, where the version comes
+/// from the tag rather than a tarball name.
+pub fn gbp_dch_new_upstream_argv(version: &str, urgency: &str) -> Vec<String> {
+    let mut a = gbp_dch_release_argv(urgency);
+    a.extend(["-N".to_string(), version.to_string()]);
+    a
+}
+
+/// `gbp export-orig --pristine-tar --pristine-tar-commit` — generate the
+/// orig tarball from the upstream tag (`upstream-tag` in gbp.conf) into
+/// `..` and record it on the pristine-tar branch, for a package built
+/// from upstream's git rather than a downloaded tarball.
+pub fn gbp_export_orig_argv() -> Vec<String> {
+    argv(&[
+        "gbp",
+        "export-orig",
+        "--pristine-tar",
+        "--pristine-tar-commit",
+    ])
+}
+
 /// `pbuilder-dist <codename> ../<pkg>_<version>.dsc` — scratch-build
 /// the source package in the codename's chroot.
 pub fn pbuilder_argv(codename: &str, dsc_relpath: &str) -> Vec<String> {
@@ -304,6 +326,30 @@ pub fn push_argv() -> Vec<String> {
 /// until this push). Later pushes use the plain [`push_argv`].
 pub fn push_set_upstream_argv(remote: &str, branch: &str) -> Vec<String> {
     argv(&["git", "push", "-u", remote, branch])
+}
+
+/// `git clone --no-checkout -o <remote> <url> <dir>` — clone upstream
+/// with itself as remote `remote` (gbp's `-o upstream` convention), not
+/// checked out yet so the Debian branch can be started at a tag.
+pub fn git_clone_argv(url: &str, remote: &str, dir: &str) -> Vec<String> {
+    argv(&["git", "clone", "--no-checkout", "-o", remote, url, dir])
+}
+
+/// `git fetch --tags <remote>` — bring in upstream's release tags.
+pub fn git_fetch_tags_argv(remote: &str) -> Vec<String> {
+    argv(&["git", "fetch", "--tags", remote])
+}
+
+/// The repository name a git URL clones into by default: the last path
+/// segment without `.git` (`https://h/g/thing.git` → `thing`,
+/// `git@h:g/thing` → `thing`, `/tmp/thing.git` → `thing`).
+pub fn repo_name_from_url(url: &str) -> String {
+    let last = url
+        .trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or(url);
+    last.strip_suffix(".git").unwrap_or(last).to_string()
 }
 
 /// `git config <key> <value>` — e.g. record a new branch's chosen
@@ -912,6 +958,45 @@ mod tests {
         assert_eq!(
             git_config_argv("branch.noble.pushRemote", "fork"),
             ["git", "config", "branch.noble.pushRemote", "fork"]
+        );
+    }
+
+    #[test]
+    fn upstream_git_argvs() {
+        assert_eq!(
+            git_clone_argv("https://h/g/thing.git", "upstream", "thing"),
+            [
+                "git",
+                "clone",
+                "--no-checkout",
+                "-o",
+                "upstream",
+                "https://h/g/thing.git",
+                "thing"
+            ]
+        );
+        assert_eq!(
+            git_fetch_tags_argv("upstream"),
+            ["git", "fetch", "--tags", "upstream"]
+        );
+        assert_eq!(repo_name_from_url("https://h/g/thing.git"), "thing");
+        assert_eq!(repo_name_from_url("git@h:g/thing"), "thing");
+        assert_eq!(repo_name_from_url("/tmp/thing.git/"), "thing");
+        assert_eq!(
+            repo_name_from_url("https://git.sr.ht/~technomancy/antifennel"),
+            "antifennel"
+        );
+        let dch = gbp_dch_new_upstream_argv("0.3.1-1", "medium");
+        assert!(dch.starts_with(&gbp_dch_release_argv("medium")));
+        assert_eq!(&dch[dch.len() - 2..], ["-N", "0.3.1-1"]);
+        assert_eq!(
+            gbp_export_orig_argv(),
+            [
+                "gbp",
+                "export-orig",
+                "--pristine-tar",
+                "--pristine-tar-commit"
+            ]
         );
     }
 

@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use dbranch::plan;
 use dbranch::rebuild::{self, ChrootRefresh, Options, UpdateOptions};
 use dbranch::ui::Ui;
+use dbranch::upstream::{self, CloneOptions};
 
 #[derive(Parser)]
 #[command(
@@ -24,6 +25,50 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Clone upstream's git to package it straight from its tags.
+    #[command(long_about = "\
+Clone upstream's git to package it straight from its tags (gbp's
+\"upstream uses git, no tarballs\" flow): clone with upstream as
+remote `upstream`, start the Debian branch at the newest release tag,
+and commit a debian/gbp.conf naming the tag style (upstream-tag) with
+pristine-tar enabled. Later releases are then merged in by `update`,
+which detects this layout, and the source stage generates the orig
+tarball from the tag with `gbp export-orig`. Writing the rest of
+debian/ is left to you.")]
+    Clone {
+        /// Upstream git URL.
+        #[arg(value_name = "URL")]
+        url: String,
+
+        /// Directory to clone into (default: the repository's name).
+        #[arg(value_name = "DIR")]
+        dir: Option<PathBuf>,
+
+        /// Upstream release to start from (default: the newest tag).
+        #[arg(long, value_name = "VERSION")]
+        upstream_version: Option<String>,
+
+        /// Debian packaging branch to create.
+        #[arg(long, value_name = "BRANCH", default_value = "debian/latest")]
+        debian_branch: String,
+
+        /// Name for the remote holding upstream's git.
+        #[arg(long, value_name = "NAME", default_value = "upstream")]
+        upstream_remote: String,
+
+        /// Print the commands without running anything (a tutorial).
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Run, but narrate each step + command first (follow along).
+        #[arg(long)]
+        explain: bool,
+
+        /// Suppress tool output, showing it only when a step fails.
+        #[arg(short, long, conflicts_with = "explain")]
+        quiet: bool,
+    },
+
     /// Fix up gbp.conf / salsa-ci.yml on existing PPA branch(es).
     Fixup {
         /// Branch(es) to fix up (default: the current branch).
@@ -210,7 +255,9 @@ names its project here. Requires --debusine."
             help_heading = "Stages",
             long_help = "\
 Stages to run, repeatable or comma-separated:
-  import  gbp import-orig --uscan + gbp dch -c -R
+  import  gbp import-orig --uscan + gbp dch -c -R; or,
+          when packaging from upstream's git (see
+          `clone`), merge its release tag instead
   source  debuild -S the source package (-si for the
           Debian archive, -sa for anywhere else)
   build   pbuilder-dist scratch build of the .dsc
@@ -231,6 +278,15 @@ Defaults to `import`."
             help_heading = "Stages"
         )]
         build_suite: String,
+
+        /// Remote holding upstream's git, to merge releases from
+        /// (default: one named `upstream`, if present).
+        #[arg(long, value_name = "NAME", help_heading = "Stages")]
+        upstream_remote: Option<String>,
+
+        /// Upstream release to merge in (default: the newest tag).
+        #[arg(long, value_name = "VERSION", help_heading = "Stages")]
+        upstream_version: Option<String>,
 
         /// In the push stage, push but don't wait for / watch CI.
         #[arg(long, help_heading = "Stages")]
@@ -408,11 +464,39 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             };
             rebuild::run(&ui, &repo, &opts)
         }
+        Command::Clone {
+            url,
+            dir,
+            upstream_version,
+            debian_branch,
+            upstream_remote,
+            dry_run,
+            explain,
+            quiet,
+        } => {
+            let ui = Ui {
+                explain,
+                dry_run,
+                quiet,
+            };
+            upstream::clone(
+                &ui,
+                &CloneOptions {
+                    url,
+                    dir,
+                    upstream_version,
+                    debian_branch,
+                    upstream_remote,
+                },
+            )
+        }
         Command::Update {
             branch,
             repo,
             stage,
             build_suite,
+            upstream_remote,
+            upstream_version,
             nowait,
             refresh_chroot,
             no_refresh_chroot,
@@ -441,6 +525,8 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 branch,
                 stages,
                 build_suite,
+                upstream_remote,
+                upstream_version,
                 nowait,
                 upload_target,
                 debusine,

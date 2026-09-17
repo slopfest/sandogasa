@@ -15,6 +15,44 @@ Print help
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
+.SS dbranch clone
+\fBdbranch clone\fR [\fB\-\-upstream\-version\fR] [\fB\-\-debian\-branch\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR] 
+.PP
+Clone upstream\*(Aqs git to package it straight from its tags (gbp\*(Aqs
+"upstream uses git, no tarballs" flow): clone with upstream as
+remote `upstream`, start the Debian branch at the newest release tag,
+and commit a debian/gbp.conf naming the tag style (upstream\-tag) with
+pristine\-tar enabled. Later releases are then merged in by `update`,
+which detects this layout, and the source stage generates the orig
+tarball from the tag with `gbp export\-orig`. Writing the rest of
+debian/ is left to you.
+.TP
+\fB\-\-upstream\-version\fR \fI<VERSION>\fR
+Upstream release to start from (default: the newest tag)
+.TP
+\fB\-\-debian\-branch\fR \fI<BRANCH>\fR [default: debian/latest]
+Debian packaging branch to create
+.TP
+\fB\-\-upstream\-remote\fR \fI<NAME>\fR [default: upstream]
+Name for the remote holding upstream\*(Aqs git
+.TP
+\fB\-\-dry\-run\fR
+Print the commands without running anything (a tutorial)
+.TP
+\fB\-\-explain\fR
+Run, but narrate each step + command first (follow along)
+.TP
+\fB\-q\fR, \fB\-\-quiet\fR
+Suppress tool output, showing it only when a step fails
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIURL\fR>
+Upstream git URL
+.TP
+[\fIDIR\fR]
+Directory to clone into (default: the repository\*(Aqs name)
 .SS dbranch fixup
 \fBdbranch fixup\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
 .PP
@@ -136,7 +174,7 @@ Run, but narrate each step + command first (follow along)
 \fB\-q\fR, \fB\-\-quiet\fR
 Suppress tool output, showing it only when a step fails
 .SS dbranch update
-\fBdbranch update\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-build\-suite\fR] [\fB\-\-nowait\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
+\fBdbranch update\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-build\-suite\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-upstream\-version\fR] [\fB\-\-nowait\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
 .PP
 Update the Debian branch to a new upstream release
 .TP
@@ -152,7 +190,9 @@ Debian branch to update (defaults to the current branch)
 .TP
 \fB\-\-stage\fR \fI<STAGE>\fR
 Stages to run, repeatable or comma\-separated:
-  import  gbp import\-orig \-\-uscan + gbp dch \-c \-R
+  import  gbp import\-orig \-\-uscan + gbp dch \-c \-R; or,
+          when packaging from upstream\*(Aqs git (see
+          `clone`), merge its release tag instead
   source  debuild \-S the source package (\-si for the
           Debian archive, \-sa for anywhere else)
   build   pbuilder\-dist scratch build of the .dsc
@@ -165,6 +205,12 @@ Defaults to `import`.
 .TP
 \fB\-\-build\-suite\fR \fI<SUITE>\fR [default: testing]
 Debian suite to build against (e.g. `unstable`)
+.TP
+\fB\-\-upstream\-remote\fR \fI<NAME>\fR
+Remote holding upstream\*(Aqs git, to merge releases from (default: one named `upstream`, if present)
+.TP
+\fB\-\-upstream\-version\fR \fI<VERSION>\fR
+Upstream release to merge in (default: the newest tag)
 .TP
 \fB\-\-nowait\fR
 In the push stage, push but don\*(Aqt wait for / watch CI

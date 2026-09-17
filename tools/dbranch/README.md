@@ -86,7 +86,15 @@ dbranch update [<branch>] [--stage <list>] [-C <dir>]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
 ```
 
-`rebuild` is the main command (below). `fixup [<branch>...]` applies
+`rebuild` is the main command (below). `clone <url> [<dir>]` starts a
+package from upstream's git rather than from tarballs (gbp's "upstream
+uses git" flow): it clones with upstream as remote `upstream`, starts
+the Debian branch (`debian/latest`; `--debian-branch` to change) at the
+newest release tag (`--upstream-version` to pick another), and commits a
+`debian/gbp.conf` naming the tag style — `upstream-tag = v%(version)s`
+or `%(version)s`, detected from the tags — with pristine-tar and
+`pristine-tar-commit` on. Writing the rest of `debian/` is up to you;
+from then on `update` merges new releases in (below). `fixup [<branch>...]` applies
 the PPA-branch packaging adjustments — gbp.conf's `debian-branch` /
 `debian-tag` and the salsa-ci.yml preset, the same ones the `merge`
 stage makes for a new branch — to **existing** branches, to repair
@@ -98,7 +106,16 @@ branch).
 `debian/unstable`, default the current branch) to a new upstream:
 `gbp import-orig --uscan --pristine-tar` then `gbp dch -c -R -D
 unstable`, then the same `source → build → lint → push → upload → tag`
-tail as `rebuild`. Unlike a rebuild the changelog is left as gbp writes it (a
+tail as `rebuild`. In a repository packaged from upstream's git (an
+`upstream` remote — `--upstream-remote` to name another — plus
+`upstream-tag` in gbp.conf, the layout `clone` leaves) there is no
+tarball to import: the import stage runs `git fetch --tags upstream`,
+merges the newest release tag (`--upstream-version` for another) into
+the Debian branch and writes the entry with `gbp dch -N <version>-1`,
+and the source stage first runs `gbp export-orig --pristine-tar
+--pristine-tar-commit` to generate the orig tarball from that tag, so
+the tarball is reproducible from git and never downloaded. The
+upstream remote is never a push candidate. Unlike a rebuild the changelog is left as gbp writes it (a
 real new-upstream entry — your other commits since the last release
 show up as bullets, nothing is normalized away); the distribution is
 pinned to `unstable` so dch's release heuristic can't substitute the

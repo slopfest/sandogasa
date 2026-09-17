@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### dbranch: package from upstream's git tags — `clone`, and `update` merges releases
+
+Some upstreams publish no tarballs and ask to be packaged from their
+git tags instead (antifennel: the only archives are the ones sourcehut
+generates). dbranch could only import tarballs (`gbp import-orig
+--uscan`). It now supports gbp's "upstream uses git" flow end to end.
+`dbranch clone <url> [<dir>]` clones upstream with itself as remote
+`upstream`, starts the Debian branch (`debian/latest`, or
+`--debian-branch`) at the newest release tag (or `--upstream-version`),
+and commits a `debian/gbp.conf` naming the tag style it found
+(`upstream-tag = v%(version)s` or `%(version)s`) with pristine-tar and
+`pristine-tar-commit` enabled; writing the rest of `debian/` is left to
+the packager. In such a repository — an upstream remote plus
+`upstream-tag`, with `--upstream-remote` to name a differently named
+remote — `update`'s import stage fetches upstream's tags, merges the
+newest release tag (or `--upstream-version`) into the Debian branch and
+writes the changelog entry with `gbp dch -N <version>-1`, and the
+source stage first generates the orig tarball from the tag with
+`gbp export-orig --pristine-tar --pristine-tar-commit`, so it is
+reproducible from git and never downloaded. A tag already merged is
+noted and skipped on a re-run. The upstream remote is never offered as
+a push destination, and a repository with only that remote is told to
+add its packaging remote.
+
 ### dbranch: push to, and configure CI on, the branch's own remote
 
 dbranch assumed every branch belonged to `origin`: it pushed there,

@@ -167,6 +167,39 @@ pub fn remote_url(repo: &Path, remote: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Tags matching `glob` (all tags when `None`), newest first by
+/// version order (`git tag --list --sort=-version:refname`, so `v0.10`
+/// sorts above `v0.9`).
+pub fn tags_by_version(repo: &Path, glob: Option<&str>) -> Vec<String> {
+    let mut cmd = Command::new("git");
+    cmd.args(["tag", "--list", "--sort=-version:refname"]);
+    if let Some(g) = glob {
+        cmd.arg(g);
+    }
+    cmd.current_dir(repo)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether `rev` is an ancestor of (or equal to) `of`
+/// (`git merge-base --is-ancestor`).
+pub fn is_ancestor(repo: &Path, rev: &str, of: &str) -> bool {
+    Command::new("git")
+        .args(["merge-base", "--is-ancestor", rev, of])
+        .current_dir(repo)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// The configured remotes (`git remote`), in git's (sorted) order.
 pub fn remotes(repo: &Path) -> Vec<String> {
     Command::new("git")

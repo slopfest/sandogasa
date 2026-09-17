@@ -19,6 +19,8 @@ use std::path::Path;
 pub struct GbpConfig {
     pub debian_branch: Option<String>,
     pub upstream_branch: Option<String>,
+    /// The format naming upstream's release tags (`v%(version)s`).
+    pub upstream_tag: Option<String>,
     pub pristine_tar: Option<bool>,
 }
 
@@ -29,6 +31,7 @@ impl GbpConfig {
         GbpConfig {
             debian_branch: self.debian_branch.or(fallback.debian_branch),
             upstream_branch: self.upstream_branch.or(fallback.upstream_branch),
+            upstream_tag: self.upstream_tag.or(fallback.upstream_tag),
             pristine_tar: self.pristine_tar.or(fallback.pristine_tar),
         }
     }
@@ -60,6 +63,7 @@ pub fn parse(text: &str) -> GbpConfig {
         match key.trim() {
             "debian-branch" => cfg.debian_branch = Some(val),
             "upstream-branch" => cfg.upstream_branch = Some(val),
+            "upstream-tag" => cfg.upstream_tag = Some(val),
             "pristine-tar" => cfg.pristine_tar = Some(is_truthy(&val)),
             _ => {}
         }
@@ -136,6 +140,17 @@ pub fn new_config(debian_branch: &str, debian_tag: Option<&str>) -> String {
         }
         None => format!("[DEFAULT]\ndebian-branch = {debian_branch}\n"),
     }
+}
+
+/// A fresh gbp.conf for a repository packaged from upstream's git tags
+/// (`dbranch clone`): the Debian branch, the tag format naming
+/// upstream's releases, and pristine-tar with `pristine-tar-commit` so
+/// `gbp export-orig` records the tarball it generates from the tag.
+pub fn upstream_git_config(debian_branch: &str, tag_format: &str) -> String {
+    format!(
+        "[DEFAULT]\ndebian-branch = {debian_branch}\nupstream-tag = {tag_format}\n\
+         pristine-tar = True\npristine-tar-commit = True\n"
+    )
 }
 
 /// ConfigParser booleans: `1/yes/true/on` are true.
