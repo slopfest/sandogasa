@@ -55,25 +55,6 @@ What has to exist first:
   `checkout -b … upstream/cNs` / `cherry-pick` / `push -u fork`
   sequence.
 
-## Fedora packaging: ship the fedrq Hyperscale config as its own subpackage (2026-09-08)
-
-`configs/fedrq/centos-hyperscale.toml` and `configs/fedrq/repos/
-centos-hyperscale.repo` make `fedrq -b hs.el9` / `-b hs.el10` (and
-`-r stack`, `-r base`, the per-flavor classes) work, and poi-tracker's
-Hyperscale closures, hs-relmon and the inventories' `distros` spelling
-all lean on them — but the Fedora spec never shipped them, so a
-packaged sandogasa cannot walk a Hyperscale closure and nobody outside
-this checkout gets the branches. Add a subpackage other people can pull
-in without the tools (something like `fedrq-config-centos-hyperscale`,
-`Requires: fedrq`, no other dependency) that installs the two files
-under fedrq's system config directory (`/etc/fedrq/` and
-`/etc/fedrq/repos/`, per the CHANGELOG's "copy the directory's
-contents to `/etc/fedrq/` or `~/.config/fedrq/`" — confirm against
-fedrq's own docs before committing the paths), and have the sandogasa
-package `Recommends:` it next to fedrq. Noticed while dry-running
-`reconcile` on the Hyperscale closures: `-b hs.el9 -r stack` resolves
-here only because `~/.config/fedrq/` carries the copies.
-
 ## koji-lag
 
 - (2026-08-22) **`fetch-store.sh` reaches only people with a checkout.**
@@ -492,6 +473,18 @@ one-shot view. Follow-ups:
   Debian); kept simple and symmetric for now with a full up-front host
   guard
 
+- (2026-06-19) Rename the `codename` value → `distribution` (what
+  pbuilder/gbp/changelog call it), keeping "codename" only for the
+  `~<codename>` version suffix. A target has both a changelog
+  *distribution* and a *build suite* on top of its version scheme.
+
+- (2026-06-19, low priority) Optional per-package waiving of a specific
+  salsa-ci job (e.g. `test-uscan` fails on trixie when the watch file
+  uses a uscan standard newer than trixie's uscan). Not blocking: `push`
+  (CI watch) is separate from `upload`/`tag`, so a red job doesn't stop
+  an upload. Keep it a targeted job-skip, not a blanket relaxation
+  (proposed-updates should face the normal checks).
+
 ## ebranch
 
 - (2026-06-29) Follow-ups to the review-issue unification (deferred from
@@ -525,39 +518,6 @@ one-shot view. Follow-ups:
   do not close the issue even though it's up to date. 
   This is likely because it is not built for hs.el10 but that's because
   CentOS 10 is already up to date. Figure out how to handle it
-
-## dbranch
-
-- (2026-06-19) Target-type / version-scheme abstraction — the rest of
-  the big piece. Live-test it when updating `archlinux-keyring`'s
-  `debian/trixie`. A per-target notion driving `changelog::
-  rebuild_version` + `normalize_top_stanza`: Ubuntu PPA `~<codename>+N`;
-  Debian backports `~bpoN+M`; proposed-updates `+debNuM`;
-  unstable/testing = no suffix. Branch taxonomy → target: `master`/
-  `main`/`debian/unstable` → Debian unstable (`dput` default, or
-  mentors for a new pkg / proposed NMU); `ubuntu/*` or an Ubuntu-release
-  codename → PPA; `debian/<codename>` (e.g. archlinux-keyring's
-  `debian/trixie`) → special, kept current in stable. Also rename the
-  `codename` value → `distribution` (what pbuilder/gbp/changelog call
-  it), keeping "codename" only for the `~<codename>` version suffix.
-  The build-suite decoupling means a target has both a changelog
-  *distribution* and a *build suite*, on top of the version scheme.
-
-- (2026-06-19, low priority) Optional per-package waiving of a specific
-  salsa-ci job (e.g. `test-uscan` fails on trixie when the watch file
-  uses a uscan standard newer than trixie's uscan). Not blocking: `push`
-  (CI watch) is separate from `upload`/`tag`, so a red job doesn't stop
-  an upload. Keep it a targeted job-skip, not a blanket relaxation
-  (proposed-updates should face the normal checks).
-
-  (Proposed-updates themselves — `~debNuM` version, `gbp dch --stable`,
-  salsa-ci preset, Debian-host gate, dput-default upload — and the
-  `update` default-target upload guard are all done.)
-
-Note (2026-06-19): bulk is deliberately **local-branch only** — a local
-branch *is* the opt-in. To include a release, check it out once; to
-drop it, delete the local branch. (Remote-inclusive bulk was
-considered and rejected.)
 
 ## fedora-review-digest
 
