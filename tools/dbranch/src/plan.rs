@@ -475,6 +475,32 @@ pub fn parse_jobs(json: &str) -> Vec<JobInfo> {
     jobs
 }
 
+/// Where Salsa's README recommends pointing a project's CI config path,
+/// and the file dbranch creates / adjusts on a rebuild branch.
+pub const SALSA_CI_PATH: &str = "debian/salsa-ci.yml";
+
+/// `glab api projects/:id` — the current project's settings as JSON,
+/// read for its `ci_config_path`.
+pub fn glab_project_argv() -> Vec<String> {
+    argv(&["glab", "api", "projects/:id"])
+}
+
+/// `glab api -X PUT projects/:id -f ci_config_path=<path>` — point the
+/// project's CI config path at `path`. Needs Maintainer on the project.
+pub fn glab_set_ci_config_path_argv(path: &str) -> Vec<String> {
+    let field = format!("ci_config_path={path}");
+    argv(&["glab", "api", "-X", "PUT", "projects/:id", "-f", &field])
+}
+
+/// The project's `ci_config_path` from `glab api projects/:id` JSON;
+/// `None` when unset (`null` / empty — GitLab then looks for a root
+/// `.gitlab-ci.yml`, so a Salsa project runs nothing) or on junk.
+pub fn ci_config_path(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let path = v.get("ci_config_path")?.as_str()?.trim();
+    (!path.is_empty()).then(|| path.to_string())
+}
+
 /// Whether a pipeline status is terminal (the pipeline has finished);
 /// the complement of the in-progress states glab keeps polling
 /// through. Mirrors GitLab's pipeline status vocabulary.
@@ -845,6 +871,42 @@ mod tests {
         assert_eq!(jobs[1].status, "running");
         assert!(parse_jobs("not json").is_empty());
         assert!(parse_jobs("{}").is_empty());
+    }
+
+    #[test]
+    fn glab_ci_config_path_argvs() {
+        assert_eq!(glab_project_argv(), ["glab", "api", "projects/:id"]);
+        assert_eq!(
+            glab_set_ci_config_path_argv(SALSA_CI_PATH),
+            [
+                "glab",
+                "api",
+                "-X",
+                "PUT",
+                "projects/:id",
+                "-f",
+                "ci_config_path=debian/salsa-ci.yml"
+            ]
+        );
+    }
+
+    #[test]
+    fn ci_config_path_unset_is_none() {
+        assert_eq!(
+            ci_config_path(r#"{"id": 1, "ci_config_path": "debian/salsa-ci.yml"}"#).as_deref(),
+            Some("debian/salsa-ci.yml")
+        );
+        // A remote include is a real, different setting.
+        assert_eq!(
+            ci_config_path(r#"{"ci_config_path": "recipes/debian.yml@salsa-ci-team/pipeline"}"#)
+                .as_deref(),
+            Some("recipes/debian.yml@salsa-ci-team/pipeline")
+        );
+        // Unset comes back as null or "" depending on the GitLab version.
+        assert_eq!(ci_config_path(r#"{"ci_config_path": null}"#), None);
+        assert_eq!(ci_config_path(r#"{"ci_config_path": ""}"#), None);
+        assert_eq!(ci_config_path(r#"{"id": 1}"#), None);
+        assert_eq!(ci_config_path("not json"), None);
     }
 
     #[test]

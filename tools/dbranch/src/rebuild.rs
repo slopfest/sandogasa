@@ -579,6 +579,7 @@ pub fn update(
         ui,
         repo,
         &branch,
+        None,
         &opts.build_suite,
         None,
         opts.stages,
@@ -851,6 +852,7 @@ fn rebuild_one(
         ui,
         repo,
         target,
+        Some(target_type),
         &build_suite,
         rebuilt_version,
         stages,
@@ -972,6 +974,7 @@ fn build_pipeline(
     ui: &Ui,
     repo: &Path,
     target: &str,
+    target_type: Option<TargetType>,
     build_suite: &str,
     rebuilt_version: Option<String>,
     stages: Stages,
@@ -1010,7 +1013,7 @@ fn build_pipeline(
         lint_stage(ui, repo, build_suite, version)?;
     }
     if stages.push {
-        push_stage(ui, repo, target, nowait)?;
+        push_stage(ui, repo, target, target_type, nowait, assume_yes)?;
     }
     if stages.upload {
         let (package, version) = pkg_ver.as_ref().unwrap();
@@ -1245,14 +1248,100 @@ fn ppa_preflight(
     }
 }
 
-/// The push stage: publish the branch, then (unless `nowait`) attach
-/// to its CI pipeline via `glab` and wait for the result.
+/// Make sure the branch's `debian/salsa-ci.yml` is what CI will run:
+/// Salsa starts a pipeline only when the project's CI config path
+/// points at it, and a project that never had the file (the branch's
+/// copy was just created) has the setting unset — the push would start
+/// nothing, and fixing the setting afterwards needs a re-push. So read
+/// `glab api projects/:id` *before* pushing and offer to set the path
+/// (`-y` sets it unasked; a non-interactive run warns with the command).
+/// A path deliberately set to something else (typically the stock
+/// pipeline, a remote `recipes/debian.yml@salsa-ci-team/pipeline`) is
+/// left alone — the setting is project-wide, so switching it would also
+/// change what the Debian branch runs — but reported: a note for a
+/// Debian branch, where the stock pipeline is a fair build and only the
+/// `RELEASE` pin goes unused, and a warning for a PPA branch, whose
+/// backports-style relaxations the stock pipeline lacks. Best-effort: a
+/// failed query or update warns and lets the push go ahead; the CI
+/// watch then ends with its benign "no pipeline".
+fn ensure_ci_config_path(ui: &Ui, repo: &Path, target_type: Option<TargetType>, assume_yes: bool) {
+    let want = plan::SALSA_CI_PATH;
+    ui.step(&format!("Check the project's CI config path is {want}"));
+    let query = plan::glab_project_argv();
+    let set = plan::glab_set_ci_config_path_argv(want);
+    ui.show_command(&query);
+    if ui.dry_run {
+        eprintln!("    (if unset, offers to set it)");
+        ui.show_command(&set);
+        return;
+    }
+    let current = match ui.run_query(&query, repo) {
+        Ok((0, out, _)) => plan::ci_config_path(&out),
+        Ok((_, out, err)) => {
+            eprintln!(
+                "warning: `glab api projects/:id` failed: {}; skipping the CI config path check",
+                first_nonempty(&err, &out)
+            );
+            return;
+        }
+        Err(e) => {
+            eprintln!("warning: could not run glab: {e}; skipping the CI config path check");
+            return;
+        }
+    };
+    match current {
+        Some(p) if p == want => return,
+        Some(other) if target_type == Some(TargetType::Ppa) => {
+            eprintln!(
+                "warning: the project's CI config path is {other}, not {want}: CI runs \
+                 the stock pipeline without the PPA preset (RELEASE pin, backports-style \
+                 relaxations) and will likely fail its version and lintian checks. \
+                 Switch it with: {}",
+                set.join(" ")
+            );
+            return;
+        }
+        Some(other) => {
+            eprintln!(
+                "note: the project's CI config path is {other}, not {want}; \
+                 the branch's salsa-ci.yml (its RELEASE pin) is not used by CI"
+            );
+            return;
+        }
+        None => {}
+    }
+    let reason = "the project's CI config path is unset, so the push will start no pipeline";
+    if !assume_yes {
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            eprintln!("warning: {reason}; set it with: {}", set.join(" "));
+            return;
+        }
+        if !ui.confirm(&format!("{reason} — point it at {want}?")) {
+            return;
+        }
+    }
+    if !matches!(ui.run_status(&set, repo), Ok(0)) {
+        eprintln!(
+            "warning: could not set the CI config path (Maintainer access needed); \
+             the push will start no pipeline"
+        );
+    }
+}
+
+/// The push stage: check the project's CI config path when the branch
+/// carries a salsa-ci.yml, publish the branch, then (unless `nowait`)
+/// attach to its CI pipeline via `glab` and wait for the result.
 fn push_stage(
     ui: &Ui,
     repo: &Path,
     branch: &str,
+    target_type: Option<TargetType>,
     nowait: bool,
+    assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if repo.join(plan::SALSA_CI_PATH).exists() {
+        ensure_ci_config_path(ui, repo, target_type, assume_yes);
+    }
     ui.step(&format!("Push {branch} to origin"));
     // Once the branch tracks origin/<branch> a plain `git push` (of the
     // checked-out branch) suffices; the first push sets the upstream.
@@ -1576,20 +1665,8 @@ fn adjust_branch_packaging(
         // otherwise default `debian-branch` to the Debian branch and
         // refuse: "not on branch <x>").
         ui.step(&format!("Create gbp.conf ({keys_label}) for {target}"));
-        if !ui.dry_run {
-            std::fs::write(
-                repo.join("debian/gbp.conf"),
-                gbpconf::new_config(target, tag_format.as_deref()),
-            )?;
-        }
-        // A new file isn't picked up by `git commit <file>`; stage it,
-        // show the staged diff, then commit.
-        ui.run_required(&plan::git_add_argv("debian/gbp.conf"), repo)?;
-        ui.explain_diff_cached(repo, &["debian/gbp.conf"]);
-        ui.run_required(
-            &plan::commit_file_argv(&format!("Create gbp.conf for {target}"), "debian/gbp.conf"),
-            repo,
-        )?;
+        let text = gbpconf::new_config(target, tag_format.as_deref());
+        create_packaging_file(ui, repo, "gbp.conf", target, &text)?;
         changes.created.push("gbp.conf".to_string());
     }
     if repo.join("debian/salsa-ci.yml").exists() {
@@ -1608,8 +1685,40 @@ fn adjust_branch_packaging(
             )?;
             changes.adjusted.push("salsa-ci.yml".to_string());
         }
+    } else {
+        // No salsa-ci.yml either: create one from the upstream template
+        // plus the preset, so the push stage has a pipeline to watch
+        // rather than waiting for one that never appears.
+        ui.step(&format!("Create salsa-ci.yml for {target}"));
+        let text = salsaci::new_config(&release, add_backports);
+        create_packaging_file(ui, repo, "salsa-ci.yml", target, &text)?;
+        changes.created.push("salsa-ci.yml".to_string());
     }
     Ok(changes)
+}
+
+/// Create `debian/<name>` from scratch with `contents` and commit it as
+/// "Create <name> for <target>". A new file isn't picked up by
+/// `git commit <file>`, so it is staged, its staged diff shown, then
+/// committed. In `--dry-run` nothing is written but the commands are
+/// still narrated.
+fn create_packaging_file(
+    ui: &Ui,
+    repo: &Path,
+    name: &str,
+    target: &str,
+    contents: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rel = format!("debian/{name}");
+    if !ui.dry_run {
+        std::fs::write(repo.join(&rel), contents)?;
+    }
+    ui.run_required(&plan::git_add_argv(&rel), repo)?;
+    ui.explain_diff_cached(repo, &[&rel]);
+    ui.run_required(
+        &plan::commit_file_argv(&format!("Create {name} for {target}"), &rel),
+        repo,
+    )
 }
 
 /// Apply an in-place text transform to a repo file, returning whether
@@ -2320,11 +2429,13 @@ mod tests {
     }
 
     #[test]
-    fn creates_gbp_conf_when_source_branch_has_none() {
-        // The reported case: the maintainer keeps the Debian branch clean
+    fn creates_gbp_conf_and_salsa_ci_when_source_branch_has_none() {
+        // The reported cases: the maintainer keeps the Debian branch clean
         // (no debian/gbp.conf), so a rebuild branch must get one created —
         // otherwise `gbp dch` defaults debian-branch to the Debian branch
-        // and refuses. setup() has no gbp.conf.
+        // and refuses; and a branch with no debian/salsa-ci.yml (#13) gets
+        // the upstream template plus the preset, so the push stage has a
+        // pipeline to watch. setup() has neither file.
         let dir = setup();
         let p = dir.path();
         // Repo-local identity so the real commit works without depending
@@ -2341,17 +2452,22 @@ mod tests {
         };
         let changes = adjust_branch_packaging(&ui, p, "ubuntu/resolute", TargetType::Ppa).unwrap();
 
-        assert!(changes.created.contains(&"gbp.conf".to_string()));
+        assert_eq!(changes.created, ["gbp.conf", "salsa-ci.yml"]);
+        assert!(changes.adjusted.is_empty());
         let text = std::fs::read_to_string(p.join("debian/gbp.conf")).unwrap();
         assert!(text.contains("debian-branch = ubuntu/resolute"), "{text}");
         assert!(text.contains("debian-tag = ubuntu/%(version)s"), "{text}");
-        // The created file was committed (nothing left uncommitted).
+        let ci = std::fs::read_to_string(p.join("debian/salsa-ci.yml")).unwrap();
+        assert!(ci.contains("recipes/debian.yml"), "{ci}");
+        assert!(ci.contains("RELEASE: \"unstable\""), "{ci}");
+        assert!(ci.contains("SALSA_CI_DISABLE_PIUPARTS"), "{ci}");
+        // The created files were committed (nothing left uncommitted).
         let status = Command::new("git")
-            .args(["status", "--porcelain", "debian/gbp.conf"])
+            .args(["status", "--porcelain", "debian"])
             .current_dir(p)
             .output()
             .unwrap();
-        assert!(status.stdout.is_empty(), "gbp.conf not committed");
+        assert!(status.stdout.is_empty(), "created files not committed");
     }
 
     #[test]
@@ -2514,6 +2630,9 @@ mod tests {
     #[test]
     fn push_stage_dry_run_pushes_and_watches() {
         let dir = setup();
+        // With a salsa-ci.yml on the branch the CI config path check is
+        // narrated before the push (dry-run: both glab commands shown).
+        std::fs::write(dir.path().join("debian/salsa-ci.yml"), "---\n").unwrap();
         let opts = Options {
             branches: vec!["noble".to_string()],
             stages: Stages {

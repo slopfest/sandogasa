@@ -8,6 +8,16 @@
 //! straight against the stable suite and a Debian backports branch
 //! against `<codename>-backports` (a supported salsa-ci release whose
 //! image enables the backports apt repo), so those get only `RELEASE`.
+//! A source branch with no salsa-ci.yml at all gets one created from
+//! the upstream template plus the same preset.
+
+/// The upstream template's minimal `debian/salsa-ci.yml`: a single
+/// `include:` of `recipes/debian.yml`.
+const TEMPLATE: &str = "\
+---
+include:
+  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/recipes/debian.yml
+";
 
 /// The backports-style relaxations appended after the existing
 /// variables (with their explanatory comment), for a downstream Ubuntu
@@ -88,6 +98,14 @@ pub fn adjust_salsa_ci(text: &str, release: &str, add_backports: bool) -> Option
         result.push('\n');
     }
     Some(result)
+}
+
+/// A fresh salsa-ci.yml for a rebuild branch whose source branch has
+/// none: [`TEMPLATE`] plus the rebuild preset [`adjust_salsa_ci`] would
+/// inject. Salsa only runs it if the project's CI config path points at
+/// `debian/salsa-ci.yml` (the recommended setting).
+pub fn new_config(release: &str, add_backports: bool) -> String {
+    append_variables_block(TEMPLATE, release, add_backports)
 }
 
 /// Append a fresh `variables:` block (2-space indent) to a salsa-ci.yml
@@ -236,6 +254,22 @@ variables:
         assert!(!out.contains("RELEASE: \"unstable\""));
         // The backports relaxations are still appended.
         assert!(out.contains("SALSA_CI_DISABLE_PIUPARTS: 1"));
+    }
+
+    #[test]
+    fn new_config_is_template_plus_preset() {
+        let out = new_config("unstable", true);
+        assert!(out.starts_with(TEMPLATE), "{out}");
+        assert!(out.contains("variables:\n  RELEASE: \"unstable\""));
+        assert!(out.contains("  SALSA_CI_DISABLE_PIUPARTS: 1"));
+        // Already complete: a later adjust pass leaves it alone.
+        assert_eq!(
+            adjust_salsa_ci(&out, "unstable", true).as_deref(),
+            Some(out.as_str())
+        );
+        let out = new_config("trixie-backports", false);
+        assert!(out.contains("RELEASE: \"trixie-backports\""));
+        assert!(!out.contains("adjust for backports"));
     }
 
     #[test]

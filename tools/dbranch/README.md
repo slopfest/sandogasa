@@ -164,7 +164,11 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   Debian branch and two one-time packaging tweaks are committed first:
   `debian/gbp.conf`'s `debian-branch` is pointed at the new branch,
   and `debian/salsa-ci.yml` gets the PPA-rebuild `variables` preset
-  (`RELEASE: "unstable"` plus the backports-style relaxations). A
+  (`RELEASE: "unstable"` plus the backports-style relaxations). Either
+  file missing from the source branch is created on the new branch
+  instead — gbp.conf with just those keys, salsa-ci.yml from the
+  upstream template (an `include:` of `recipes/debian.yml`) plus the
+  preset — so the Debian branch stays untouched. A
   branch that already exists locally or only on `origin` is checked
   out and merged into instead (no recreation). The packaging tweaks are
   re-checked on **every** merge, not just at creation — they're
@@ -246,7 +250,19 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   lintian is quiet when clean, so its output is echoed with a
   tag-count summary. It uses lintian's default exit convention
   (non-zero on error-level tags) and propagates that status.
-- **`push`** — push the branch (`git push -u origin <branch>` the
+- **`push`** — when the branch carries a `debian/salsa-ci.yml`, first
+  check the project's CI config path (`glab api projects/:id`): Salsa
+  only runs the file when that setting points at it, and a project
+  that never had the file has it unset, so the push would start no
+  pipeline and setting it afterwards needs a re-push. If unset, dbranch
+  offers to set it (`glab api -X PUT projects/:id -f
+  ci_config_path=debian/salsa-ci.yml`, needs Maintainer; `-y` sets it
+  unasked, a non-interactive run only warns with the command). A path
+  set to something else (the stock pipeline) is left alone, since the
+  setting is project-wide, but reported: a note on a `debian/*` branch,
+  where only the `RELEASE` pin goes unused, a warning on a PPA branch,
+  whose relaxations the stock pipeline lacks. Then push the
+  branch (`git push -u origin <branch>` the
   first time, to set the upstream tracking the new remote ref didn't
   have yet; a plain `git push` once it tracks `origin/<branch>`), then
   (unless `--nowait`)

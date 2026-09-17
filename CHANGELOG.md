@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### dbranch: a source branch without salsa-ci.yml gets one created
+
+A rebuild branch cut from a Debian branch that had no
+`debian/salsa-ci.yml` (e.g. gnome-shell-extension-paperwm) got no CI
+preset at all, and the `push` stage then waited three minutes for a
+pipeline that never appeared before giving up. dbranch now creates the
+file on the rebuild branch the way it already created a missing
+`gbp.conf`: the upstream template (an `include:` of
+`recipes/debian.yml`) plus the per-target preset (`RELEASE` pin, and the
+backports-style relaxations for a PPA), committed as "Create
+salsa-ci.yml for <branch>" and listed in the rebuild changelog entry
+alongside gbp.conf. `fixup` applies the same to an existing branch. The
+Debian branch is untouched.
+
+The file alone is not enough: Salsa runs it only when the project's CI
+config path points at `debian/salsa-ci.yml`, a project that never had
+the file has that setting unset, and fixing it after the push needs a
+re-push. So when the branch carries a salsa-ci.yml the `push` stage now
+reads the setting (`glab api projects/:id`) before `git push` and, if
+it is unset, offers to point it at the file (`-y` does so unasked; a
+non-interactive run warns and prints the command). A path set to
+something else, typically the stock pipeline, is left alone — the
+setting is project-wide — but reported: a note on a `debian/*` branch,
+where only the `RELEASE` pin goes unused, and a warning on a PPA branch,
+whose relaxations the stock pipeline lacks. Closes #13.
+
 ### fedrq Hyperscale config: the testing repos
 
 `fedrq -b hs.el9` and `hs.el10` could see what the SIG had released

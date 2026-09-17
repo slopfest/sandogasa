@@ -333,6 +333,30 @@ suite for an old Ubuntu LTS (better signal), and that is left untouched.
   `variables:` block at all. `adjust_salsa_ci` used to bail ("unexpected
   format") in that case; it now appends a fresh `variables:` block instead
   of only extending an existing one.
+- **No `salsa-ci.yml` at all? Create one** (`salsaci::new_config`, the
+  upstream template plus the preset), mirroring the gbp.conf rule: the
+  rebuilder often isn't the maintainer and must not touch the Debian
+  branch, and without the file the push stage sits out `CREATE_TIMEOUT`
+  waiting for a pipeline that never appears.
+- **The file alone runs nothing: the project's CI config path must point
+  at it.** Salsa has no instance default; a project that never had a
+  salsa-ci.yml has `ci_config_path` unset (GitLab then looks for a root
+  `.gitlab-ci.yml`), the push starts no pipeline, and fixing the setting
+  afterwards needs a re-push. So the push stage checks
+  `glab api projects/:id` *before* `git push` whenever the branch has the
+  file (`ensure_ci_config_path`) and offers to `PUT ci_config_path`
+  (default yes; `-y` unasked; non-interactive warns with the command).
+  A path set to something else — e.g. a remote
+  `recipes/debian.yml@salsa-ci-team/pipeline` include — is a deliberate,
+  **project-wide** maintainer choice (switching it changes what the
+  Debian branch runs too), so never override it; report it by branch
+  type instead. On a `debian/*` branch the stock pipeline is a fair
+  build and only the `RELEASE` pin goes unused: a note. On a PPA branch
+  the stock pipeline lacks the backports-style relaxations and will
+  likely fail the version-bump and lintian checks: a warning with the
+  switch command. Best-effort throughout:
+  glab absent, no Maintainer access or a failed query only warn, and the
+  watch then ends with its benign "no CI pipeline found".
 
 ### ubuntu-distro-info
 
