@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### dbranch: push to, and configure CI on, the branch's own remote
+
+dbranch assumed every branch belonged to `origin`: it pushed there,
+looked there for a remote-only branch, and let glab pick the project
+for the CI watch and (new below) the CI config path — glab, left to
+guess among several remotes, also picks `origin`. In the common layout
+where `origin` is a team project the rebuilder cannot configure and the
+rebuild branch lives on a fork, that pushed to the wrong place and would
+have changed the team project's CI settings. Each target branch now
+resolves its own remote — `--remote <name>` if given, else the remote it
+pushes to or tracks, else the one remote already holding it, else the
+only remote; several possible remotes prompt for a choice (a
+non-interactive run errors out and asks for `--remote`) — and a branch
+dbranch creates records the answer as `branch.<name>.pushRemote`. glab
+is pointed at that remote's project explicitly (`glab ci -R <url>`,
+`glab api --hostname <host> projects/<path>`), so the watch and the CI
+settings follow the branch. `fixup`, `watch-ci` and `update` resolve the
+remote the same way.
+
 ### dbranch: a source branch without salsa-ci.yml gets one created
 
 A rebuild branch cut from a Debian branch that had no

@@ -45,6 +45,15 @@ timestamp in the same session.
   previous commit's). Per-job progress polls `glab api
   projects/:id/pipelines/<id>/jobs`. glab is spawned with stdin on
   `/dev/null` as a backstop against prompts.
+- **glab guesses the project from the remotes, and guesses `origin`.**
+  With an `origin` (team project) and a `fork` remote, `glab api
+  projects/:id` and a bare `glab ci list` resolve to `origin` — the
+  project the rebuilder often cannot configure. So every glab call takes
+  the branch's remote explicitly: `glab ci … -R <remote url>` (glab
+  accepts a git URL) and `glab api --hostname <host>
+  projects/<group%2Frepo>` (`glab api` has no `-R`; the project path is
+  parsed from the remote URL by `plan::GitLabProject`). The remote itself
+  comes from `resolve_remote`, see the design decisions.
 - **`glab auth status` misreports** on older glab (1.53 flags a valid
   token as "Invalid token provided"). Auth is also **per host** (token
   stored per host in glab's config). We capture its output and only
@@ -365,6 +374,26 @@ to process **newest release first**. `--supported` (includes the devel
 release) is the not-EOL set; the complement within `--all` is EOL.
 
 ## Design decisions
+
+### Which remote a branch belongs to (`resolve_remote`)
+
+`origin` was hard-wired everywhere — `git push -u origin`, the
+`origin/<branch>` remote-only check, glab's host — which broke the
+common layout where `origin` is the team project the rebuilder cannot
+configure and the rebuild branch lives on a fork (paperwm: `origin` =
+gnome-team, `fork` = the user's). `remote_candidates` applies the most
+specific rule that decides: an explicit `--remote` (validated against
+`git remote`); the branch's `pushRemote`, else its upstream `remote`; the
+remote(s) already holding `<remote>/<branch>`; else all remotes. One
+candidate settles it; several go to `Ui::choose` when stdin is a
+terminal, otherwise the run errors out asking for `--remote` — there is
+no safe default, and `-y` does not pick one. The merge stage records the
+answer for a branch it creates as `branch.<b>.pushRemote` so the push
+stage, `watch-ci` and later runs need not ask (`git push -u` then sets
+the upstream as usual). `classify_target` and `checkout_existing` use
+the resolved remote, so a branch that exists only on the fork is
+tracked from the fork, and the CI config path check / watch run against
+the fork's project.
 
 - **`rebuild` vs `update`.** Both share the `build → lint → push →
   upload → tag` tail (`build_pipeline`); only the head differs.

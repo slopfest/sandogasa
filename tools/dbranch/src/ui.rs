@@ -134,6 +134,23 @@ impl Ui {
         sandogasa_cli::confirm(question, false).unwrap_or(false)
     }
 
+    /// Offer a numbered choice on stderr and read the pick from stdin;
+    /// `None` on EOF or a non-answer. The caller is responsible for
+    /// only prompting when interactive.
+    pub fn choose(&self, question: &str, options: &[String]) -> Option<usize> {
+        use std::io::Write;
+        let mut err = std::io::stderr();
+        for (i, option) in options.iter().enumerate() {
+            let _ = writeln!(err, "  {}) {option}", i + 1);
+        }
+        let _ = write!(err, "{question} [1-{}]: ", options.len());
+        let _ = err.flush();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).ok()?;
+        let n: usize = line.trim().parse().ok()?;
+        (1..=options.len()).contains(&n).then(|| n - 1)
+    }
+
     /// In `--explain`, wait for the user to press Enter before
     /// running the command just shown (a step-through walkthrough).
     /// A non-interactive stdin (EOF) continues without blocking.

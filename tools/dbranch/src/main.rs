@@ -97,6 +97,11 @@ Defaults to `merge` (the others are opt-in for now)."
         #[arg(long, value_name = "BRANCH", help_heading = "Stages")]
         source: Option<String>,
 
+        /// Git remote to push to and configure CI on (default: the
+        /// branch's own, else the only one; asks when several could).
+        #[arg(long, value_name = "NAME", help_heading = "Stages")]
+        remote: Option<String>,
+
         /// In the push stage, push but don't wait for / watch CI.
         #[arg(long, help_heading = "Stages")]
         nowait: bool,
@@ -357,6 +362,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             repo,
             stage,
             source,
+            remote,
             nowait,
             refresh_chroot,
             no_refresh_chroot,
@@ -394,6 +400,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 debusine,
                 debusine_project,
                 source,
+                remote,
                 chroot_refresh,
                 assume_yes: yes,
                 include_eol,

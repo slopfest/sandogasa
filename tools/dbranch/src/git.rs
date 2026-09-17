@@ -152,16 +152,51 @@ pub fn commit_time(repo: &Path, rev: &str) -> Option<u64> {
 /// `git@salsa.debian.org:…` → `salsa.debian.org`). `None` if the
 /// remote is unset or the URL can't be parsed.
 pub fn remote_host(repo: &Path, remote: &str) -> Option<String> {
+    crate::plan::host_from_remote_url(&remote_url(repo, remote)?)
+}
+
+/// A remote's URL (`git remote get-url <remote>`).
+pub fn remote_url(repo: &Path, remote: &str) -> Option<String> {
     let out = Command::new("git")
         .args(["remote", "get-url", remote])
         .current_dir(repo)
         .output()
         .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    crate::plan::host_from_remote_url(&url)
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// The configured remotes (`git remote`), in git's (sorted) order.
+pub fn remotes(repo: &Path) -> Vec<String> {
+    Command::new("git")
+        .arg("remote")
+        .current_dir(repo)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The remote a branch is configured to push to: `branch.<b>.pushRemote`
+/// if set, else `branch.<b>.remote` (its upstream). `None` when neither
+/// is set or the branch tracks a local one (`.`).
+pub fn branch_remote(repo: &Path, branch: &str) -> Option<String> {
+    ["pushRemote", "remote"].iter().find_map(|key| {
+        let out = Command::new("git")
+            .args(["config", "--get", &format!("branch.{branch}.{key}")])
+            .current_dir(repo)
+            .output()
+            .ok()?;
+        let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !v.is_empty() && v != ".").then_some(v)
+    })
 }
 
 /// Verify glab has a token for `host` (glab stores one per host), with
@@ -306,5 +341,19 @@ mod tests {
         git(&["config", "branch.main.remote", "origin"]);
         git(&["config", "branch.main.merge", "refs/heads/main"]);
         assert!(has_upstream(p, "main"));
+
+        // Remote helpers on the same fixture.
+        assert_eq!(
+            remote_url(p, "origin").as_deref(),
+            Some("/tmp/dbranch-test.git")
+        );
+        assert_eq!(remote_url(p, "nope"), None);
+        assert_eq!(branch_remote(p, "main").as_deref(), Some("origin"));
+        assert_eq!(branch_remote(p, "other"), None);
+        git(&["remote", "add", "fork", "/tmp/dbranch-fork.git"]);
+        assert_eq!(remotes(p), ["fork", "origin"]);
+        // pushRemote wins over the upstream's remote.
+        git(&["config", "branch.main.pushRemote", "fork"]);
+        assert_eq!(branch_remote(p, "main").as_deref(), Some("fork"));
     }
 }

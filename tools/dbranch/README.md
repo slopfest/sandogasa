@@ -135,8 +135,21 @@ without `--yes` is refused rather than run blind. (Bulk mode needs the
 
 Bulk considers only **local** branches — a local branch is the opt-in.
 To include a release in bulk runs, check it out once; to drop it,
-delete the local branch (it stays on `origin`). Name it explicitly to
+delete the local branch (it stays on its remote). Name it explicitly to
 rebuild it without checking it out.
+
+**Which remote.** Each target branch is pushed to, and has its CI
+configured on, its own remote — not necessarily `origin`, which in a
+team project the rebuilder may not control while the rebuild branch
+lives on a fork. dbranch resolves it per branch: `--remote <name>` if
+given; else the remote the branch pushes to or tracks; else the one
+remote already holding `<remote>/<branch>`; else the only configured
+remote. When several remotes could hold a new branch it asks which (a
+non-interactive run errors out and asks for `--remote`). A branch it
+creates records the choice as `branch.<name>.pushRemote`, so later
+stages and runs do not ask again. glab is pointed at that remote's
+project explicitly, so the CI watch and the CI settings follow the
+branch too.
 
 ```
 $ dbranch rebuild noble ubuntu/questing
@@ -169,7 +182,7 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   instead — gbp.conf with just those keys, salsa-ci.yml from the
   upstream template (an `include:` of `recipes/debian.yml`) plus the
   preset — so the Debian branch stays untouched. A
-  branch that already exists locally or only on `origin` is checked
+  branch that already exists locally or only on its remote is checked
   out and merged into instead (no recreation). The packaging tweaks are
   re-checked on **every** merge, not just at creation — they're
   idempotent, so an already-correct branch is left untouched, but an
@@ -251,27 +264,28 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   tag-count summary. It uses lintian's default exit convention
   (non-zero on error-level tags) and propagates that status.
 - **`push`** — when the branch carries a `debian/salsa-ci.yml`, first
-  check the project's CI config path (`glab api projects/:id`): Salsa
+  check the CI config path of the branch's remote project (`glab api
+  --hostname <host> projects/<group%2Frepo>`): Salsa
   only runs the file when that setting points at it, and a project
   that never had the file has it unset, so the push would start no
   pipeline and setting it afterwards needs a re-push. If unset, dbranch
-  offers to set it (`glab api -X PUT projects/:id -f
-  ci_config_path=debian/salsa-ci.yml`, needs Maintainer; `-y` sets it
+  offers to set it (`glab api --hostname <host> -X PUT projects/<id>
+  -f ci_config_path=debian/salsa-ci.yml`, needs Maintainer; `-y` sets it
   unasked, a non-interactive run only warns with the command). A path
   set to something else (the stock pipeline) is left alone, since the
   setting is project-wide, but reported: a note on a `debian/*` branch,
   where only the `RELEASE` pin goes unused, a warning on a PPA branch,
   whose relaxations the stock pipeline lacks. Then push the
-  branch (`git push -u origin <branch>` the
-  first time, to set the upstream tracking the new remote ref didn't
-  have yet; a plain `git push` once it tracks `origin/<branch>`), then
+  branch to its remote (`git push -u <remote> <branch>` the first
+  time, to set the upstream the new remote ref didn't have yet; a
+  plain `git push` once it is configured to push there), then
   (unless `--nowait`)
   watch the pushed commit's GitLab CI pipeline to completion. dbranch
-  polls `glab ci list --sha <commit> -F json`, targeting the **exact
-  commit** rather than the branch — so it can't accidentally report
-  the *previous* commit's pipeline in the window after `git push`
-  before GitLab has created the new one. `glab` reads the git remote
-  to find the host / project (e.g. `salsa.debian.org`) itself. It
+  polls `glab ci list -R <remote-url> --sha <commit> -F json`,
+  targeting the **exact commit** rather than the branch — so it can't
+  accidentally report the *previous* commit's pipeline in the window
+  after `git push` before GitLab has created the new one — and the
+  branch's remote explicitly, rather than letting glab pick one. It
   waits until the pipeline finishes: a `failed`/`canceled` result
   makes dbranch exit non-zero; `success`/`skipped`/`manual` pass; if
   no pipeline shows up within ~3 minutes it's treated as benign

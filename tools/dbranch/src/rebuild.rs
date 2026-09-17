@@ -18,7 +18,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::git;
-use crate::plan::{self, changelog_commit_message};
+use crate::plan::{self, GitLabProject, changelog_commit_message};
 use crate::ui::{StageFailure, Ui};
 use crate::{changelog, distroinfo, gbpconf, host, salsaci};
 
@@ -180,6 +180,9 @@ pub struct Options {
     /// branch. Lets dbranch run without first checking out the Debian
     /// branch.
     pub source: Option<String>,
+    /// Git remote to push to and configure CI on; `None` resolves it
+    /// per branch (see [`remote_candidates`]), asking when ambiguous.
+    pub remote: Option<String>,
     /// Build stage: whether to refresh the pbuilder base chroot first.
     pub chroot_refresh: ChrootRefresh,
     /// Bulk (no-argument) run: skip the confirmation prompt.
@@ -256,9 +259,9 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
         return Err(format!("source branch {s} not found").into());
     }
 
+    // glab is only needed when the push stage actually waits on CI.
+    let need_glab = opts.stages.push && !opts.nowait;
     if !ui.dry_run {
-        // glab is only needed when the push stage actually waits on CI.
-        let need_glab = opts.stages.push && !opts.nowait;
         // gbp is used by both the merge stage and `gbp tag`.
         git::ensure_tools(
             opts.stages.merge || opts.stages.tag,
@@ -271,13 +274,6 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
         )?;
         if opts.stages.upload && opts.debusine.is_some() {
             ensure_debusine_ready()?;
-        }
-        // glab keeps a token per host; check the one this repo lives on.
-        if let Some(host) = need_glab
-            .then(|| git::remote_host(repo, "origin"))
-            .flatten()
-        {
-            git::ensure_glab_auth(repo, &host)?;
         }
     }
 
@@ -375,12 +371,22 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
             )
             .into());
         }
-        let location = classify_target(repo, &all, target);
+        let remote = resolve_remote(ui, repo, target, opts.remote.as_deref())?;
+        // glab keeps a token per host; check the one this branch's
+        // remote lives on.
+        if need_glab
+            && !ui.dry_run
+            && let Some(host) = git::remote_host(repo, &remote)
+        {
+            git::ensure_glab_auth(repo, &host)?;
+        }
+        let location = classify_target(repo, &all, target, &remote);
         rebuild_one(
             ui,
             repo,
             &source,
             target,
+            &remote,
             location,
             opts.stages,
             opts.nowait,
@@ -400,7 +406,7 @@ pub fn run(ui: &Ui, repo: &Path, opts: &Options) -> Result<(), Box<dyn std::erro
 enum TargetLocation {
     /// A local branch — check it out directly.
     Local,
-    /// Only on the remote (`origin/<branch>`) — check out a tracking
+    /// Only on its remote (`<remote>/<branch>`) — check out a tracking
     /// branch from it; do NOT recreate it from the Debian branch.
     Remote,
     /// Doesn't exist anywhere — create it from the Debian branch.
@@ -408,17 +414,85 @@ enum TargetLocation {
 }
 
 /// Classify a target branch as local, remote-only, or new. A branch on
-/// `origin` that was never checked out locally is `Remote`, not `New`,
+/// `remote` that was never checked out locally is `Remote`, not `New`,
 /// so we track the existing PPA branch rather than clobbering it with a
 /// fresh branch off the Debian branch.
-fn classify_target(repo: &Path, local: &[String], target: &str) -> TargetLocation {
+fn classify_target(repo: &Path, local: &[String], target: &str, remote: &str) -> TargetLocation {
     if local.iter().any(|b| b == target) {
         TargetLocation::Local
-    } else if git::remote_branch_exists(repo, "origin", target) {
+    } else if git::remote_branch_exists(repo, remote, target) {
         TargetLocation::Remote
     } else {
         TargetLocation::New
     }
+}
+
+/// The remotes a target branch could belong to, most specific rule
+/// first: an explicit `--remote` (must exist); the remote the branch is
+/// configured to push to or track; the remote(s) already holding a
+/// `<remote>/<target>` ref; else every configured remote. One entry
+/// means the choice is settled; several need the user (a rebuild
+/// branch often lives on a fork while `origin` is the team project the
+/// user cannot configure, so `origin` is never assumed).
+fn remote_candidates(
+    repo: &Path,
+    target: &str,
+    explicit: Option<&str>,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let all = git::remotes(repo);
+    if let Some(r) = explicit {
+        if !all.iter().any(|a| a == r) {
+            return Err(format!("no git remote named {r} (remotes: {})", all.join(", ")).into());
+        }
+        return Ok(vec![r.to_string()]);
+    }
+    if let Some(r) = git::branch_remote(repo, target) {
+        return Ok(vec![r]);
+    }
+    let holding: Vec<String> = all
+        .iter()
+        .filter(|r| git::remote_branch_exists(repo, r, target))
+        .cloned()
+        .collect();
+    Ok(if holding.is_empty() { all } else { holding })
+}
+
+/// Settle which remote `target` is pushed to and has its CI configured:
+/// the single [`remote_candidates`] entry, or the user's pick among
+/// several (interactive only — otherwise ask for `--remote`).
+fn resolve_remote(
+    ui: &Ui,
+    repo: &Path,
+    target: &str,
+    explicit: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let candidates = remote_candidates(repo, target, explicit)?;
+    match candidates.as_slice() {
+        [] => Err(format!("no git remote configured in {}", repo.display()).into()),
+        [one] => Ok(one.clone()),
+        _ => {
+            let list = candidates.join(", ");
+            if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                return Err(format!(
+                    "{target} could live on several remotes ({list}); pass --remote <name>"
+                )
+                .into());
+            }
+            let pick = ui.choose(
+                &format!("Which remote should {target} be pushed to?"),
+                &candidates,
+            );
+            pick.map(|i| candidates[i].clone())
+                .ok_or_else(|| format!("no remote chosen for {target} (remotes: {list})").into())
+        }
+    }
+}
+
+/// The GitLab project behind `remote`, for pointing glab at it.
+fn gitlab_project(repo: &Path, remote: &str) -> Result<GitLabProject, Box<dyn std::error::Error>> {
+    let url = git::remote_url(repo, remote).ok_or_else(|| format!("remote {remote} has no URL"))?;
+    GitLabProject::from_remote_url(&url)
+        .ok_or_else(|| format!("cannot parse the URL of remote {remote}: {url}").into())
 }
 
 /// Attach to a branch's CI pipeline via `glab` and wait for it —
@@ -430,16 +504,18 @@ pub fn watch_ci(
     repo: &Path,
     branch: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if !ui.dry_run {
-        git::ensure_tools(false, false, false, true, false, false, false)?;
-        if let Some(host) = git::remote_host(repo, "origin") {
-            git::ensure_glab_auth(repo, &host)?;
-        }
-    }
     let branch = match branch {
         Some(b) => b,
         None => git::current_branch(repo)?,
     };
+    let remote = resolve_remote(ui, repo, &branch, None)?;
+    if !ui.dry_run {
+        git::ensure_tools(false, false, false, true, false, false, false)?;
+        if let Some(host) = git::remote_host(repo, &remote) {
+            git::ensure_glab_auth(repo, &host)?;
+        }
+    }
+    let project = gitlab_project(repo, &remote)?;
     // Watch the pipeline for the commit at the branch tip (what was
     // pushed), not just "the branch", to target the right pipeline.
     let sha = git::rev_parse(repo, &branch)
@@ -448,7 +524,7 @@ pub fn watch_ci(
         "Watch the CI pipeline for {branch} ({})",
         sha.get(..8).unwrap_or(&sha)
     ));
-    watch_pipeline(ui, repo, &sha)
+    watch_pipeline(ui, repo, &project, &sha)
 }
 
 /// Apply the PPA-branch packaging adjustments (gbp.conf `debian-branch`
@@ -477,13 +553,14 @@ pub fn fixup(
     };
     let all = git::local_branches(repo)?;
     for target in &targets {
-        match classify_target(repo, &all, target) {
+        let remote = resolve_remote(ui, repo, target, None)?;
+        match classify_target(repo, &all, target, &remote) {
             TargetLocation::New => {
                 return Err(format!("branch {target} does not exist").into());
             }
             location => {
                 ui.step(&format!("Fix up {target}"));
-                checkout_existing(ui, repo, target, location)?;
+                checkout_existing(ui, repo, target, &remote, location)?;
                 let target_type = classify_target_type(target, &target_codename(target))?;
                 adjust_branch_packaging(ui, repo, target, target_type)?;
             }
@@ -530,10 +607,11 @@ pub fn update(
         .into());
     }
 
+    // glab is only needed when the push stage actually waits on CI.
+    let need_glab = opts.stages.push && !opts.nowait;
     if !ui.dry_run {
         // gbp drives import-orig, dch, and tag; uscan + pristine-tar are
         // the import-orig backends.
-        let need_glab = opts.stages.push && !opts.nowait;
         git::ensure_tools(
             opts.stages.import || opts.stages.tag,
             opts.stages.build,
@@ -546,18 +624,19 @@ pub fn update(
         if opts.stages.upload && opts.debusine.is_some() {
             ensure_debusine_ready()?;
         }
-        if let Some(host) = need_glab
-            .then(|| git::remote_host(repo, "origin"))
-            .flatten()
-        {
-            git::ensure_glab_auth(repo, &host)?;
-        }
     }
 
     let branch = match &opts.branch {
         Some(b) => b.clone(),
         None => git::current_branch(repo)?,
     };
+    let remote = resolve_remote(ui, repo, &branch, None)?;
+    if need_glab
+        && !ui.dry_run
+        && let Some(host) = git::remote_host(repo, &remote)
+    {
+        git::ensure_glab_auth(repo, &host)?;
+    }
 
     if opts.stages.import {
         import_stage(ui, repo, &branch, &opts.urgency)?;
@@ -579,6 +658,7 @@ pub fn update(
         ui,
         repo,
         &branch,
+        &remote,
         None,
         &opts.build_suite,
         None,
@@ -791,6 +871,7 @@ fn rebuild_one(
     repo: &Path,
     source: &str,
     target: &str,
+    remote: &str,
     location: TargetLocation,
     stages: Stages,
     nowait: bool,
@@ -819,6 +900,7 @@ fn rebuild_one(
             repo,
             source,
             target,
+            remote,
             location,
             &codename,
             target_type,
@@ -833,7 +915,7 @@ fn rebuild_one(
             )
             .into());
         }
-        checkout_existing(ui, repo, target, location)?;
+        checkout_existing(ui, repo, target, remote, location)?;
     }
 
     // Ubuntu PPA and proposed-update builds run in the codename's own
@@ -852,6 +934,7 @@ fn rebuild_one(
         ui,
         repo,
         target,
+        remote,
         Some(target_type),
         &build_suite,
         rebuilt_version,
@@ -974,6 +1057,7 @@ fn build_pipeline(
     ui: &Ui,
     repo: &Path,
     target: &str,
+    remote: &str,
     target_type: Option<TargetType>,
     build_suite: &str,
     rebuilt_version: Option<String>,
@@ -1013,7 +1097,7 @@ fn build_pipeline(
         lint_stage(ui, repo, build_suite, version)?;
     }
     if stages.push {
-        push_stage(ui, repo, target, target_type, nowait, assume_yes)?;
+        push_stage(ui, repo, target, remote, target_type, nowait, assume_yes)?;
     }
     if stages.upload {
         let (package, version) = pkg_ver.as_ref().unwrap();
@@ -1264,11 +1348,20 @@ fn ppa_preflight(
 /// backports-style relaxations the stock pipeline lacks. Best-effort: a
 /// failed query or update warns and lets the push go ahead; the CI
 /// watch then ends with its benign "no pipeline".
-fn ensure_ci_config_path(ui: &Ui, repo: &Path, target_type: Option<TargetType>, assume_yes: bool) {
+fn ensure_ci_config_path(
+    ui: &Ui,
+    repo: &Path,
+    project: &GitLabProject,
+    target_type: Option<TargetType>,
+    assume_yes: bool,
+) {
     let want = plan::SALSA_CI_PATH;
-    ui.step(&format!("Check the project's CI config path is {want}"));
-    let query = plan::glab_project_argv();
-    let set = plan::glab_set_ci_config_path_argv(want);
+    ui.step(&format!(
+        "Check {}'s CI config path is {want}",
+        project.path
+    ));
+    let query = plan::glab_project_argv(project);
+    let set = plan::glab_set_ci_config_path_argv(project, want);
     ui.show_command(&query);
     if ui.dry_run {
         eprintln!("    (if unset, offers to set it)");
@@ -1279,7 +1372,7 @@ fn ensure_ci_config_path(ui: &Ui, repo: &Path, target_type: Option<TargetType>, 
         Ok((0, out, _)) => plan::ci_config_path(&out),
         Ok((_, out, err)) => {
             eprintln!(
-                "warning: `glab api projects/:id` failed: {}; skipping the CI config path check",
+                "warning: `glab api` failed: {}; skipping the CI config path check",
                 first_nonempty(&err, &out)
             );
             return;
@@ -1329,26 +1422,31 @@ fn ensure_ci_config_path(ui: &Ui, repo: &Path, target_type: Option<TargetType>, 
 }
 
 /// The push stage: check the project's CI config path when the branch
-/// carries a salsa-ci.yml, publish the branch, then (unless `nowait`)
-/// attach to its CI pipeline via `glab` and wait for the result.
+/// carries a salsa-ci.yml, publish the branch to `remote`, then (unless
+/// `nowait`) attach to its CI pipeline via `glab` and wait for the
+/// result.
+#[allow(clippy::too_many_arguments)]
 fn push_stage(
     ui: &Ui,
     repo: &Path,
     branch: &str,
+    remote: &str,
     target_type: Option<TargetType>,
     nowait: bool,
     assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let project = gitlab_project(repo, remote)?;
     if repo.join(plan::SALSA_CI_PATH).exists() {
-        ensure_ci_config_path(ui, repo, target_type, assume_yes);
+        ensure_ci_config_path(ui, repo, &project, target_type, assume_yes);
     }
-    ui.step(&format!("Push {branch} to origin"));
-    // Once the branch tracks origin/<branch> a plain `git push` (of the
-    // checked-out branch) suffices; the first push sets the upstream.
-    let push = if git::has_upstream(repo, branch) {
+    ui.step(&format!("Push {branch} to {remote}"));
+    // Once the branch is configured to push to `remote` a plain
+    // `git push` (of the checked-out branch) suffices; the first push
+    // sets that up (`-u`), as does a push to a different remote.
+    let push = if git::branch_remote(repo, branch).as_deref() == Some(remote) {
         plan::push_argv()
     } else {
-        plan::push_set_upstream_argv("origin", branch)
+        plan::push_set_upstream_argv(remote, branch)
     };
     ui.run_required(&push, repo)?;
 
@@ -1358,7 +1456,7 @@ fn push_stage(
     }
     ui.step("Watch the CI pipeline");
     match git::rev_parse(repo, branch) {
-        Some(sha) => watch_pipeline(ui, repo, &sha),
+        Some(sha) => watch_pipeline(ui, repo, &project, &sha),
         None => {
             eprintln!("could not resolve {branch} to a commit; skipping CI watch");
             Ok(())
@@ -1374,8 +1472,13 @@ fn push_stage(
 /// [`StageFailure`] so the run exits non-zero; `success`/`skipped`/
 /// `manual` pass; if no pipeline appears within [`CREATE_TIMEOUT`] it
 /// is reported as benign (nothing to watch).
-fn watch_pipeline(ui: &Ui, repo: &Path, sha: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let argv = plan::glab_ci_list_sha_argv(sha);
+fn watch_pipeline(
+    ui: &Ui,
+    repo: &Path,
+    project: &GitLabProject,
+    sha: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let argv = plan::glab_ci_list_sha_argv(project, sha);
     ui.show_command(&argv);
     if ui.dry_run {
         return Ok(());
@@ -1415,7 +1518,7 @@ fn watch_pipeline(ui: &Ui, repo: &Path, sha: &str) -> Result<(), Box<dyn std::er
         }
         // Report each job as it finishes (best-effort; the pipeline
         // poll above is the source of truth for pass/fail).
-        report_finished_jobs(ui, repo, p.id, &mut reported_jobs);
+        report_finished_jobs(ui, repo, project, p.id, &mut reported_jobs);
         if plan::is_terminal_status(&p.status) {
             return match p.status.as_str() {
                 "failed" | "canceled" => Err(Box::new(crate::ui::StageFailure {
@@ -1446,9 +1549,15 @@ fn first_nonempty<'a>(a: &'a str, b: &'a str) -> &'a str {
 /// terminal state, tracking which have already been reported.
 /// Best-effort: a failed jobs query is ignored (the pipeline-level
 /// poll drives pass/fail), so transient hiccups don't abort the watch.
-fn report_finished_jobs(ui: &Ui, repo: &Path, pipeline_id: i64, reported: &mut HashSet<String>) {
-    let Ok((code, out, _err)) = ui.run_query(&plan::glab_pipeline_jobs_argv(pipeline_id), repo)
-    else {
+fn report_finished_jobs(
+    ui: &Ui,
+    repo: &Path,
+    project: &GitLabProject,
+    pipeline_id: i64,
+    reported: &mut HashSet<String>,
+) {
+    let jobs = plan::glab_pipeline_jobs_argv(project, pipeline_id);
+    let Ok((code, out, _err)) = ui.run_query(&jobs, repo) else {
         return;
     };
     if code != 0 {
@@ -1472,20 +1581,21 @@ fn format_job_line(job: &plan::JobInfo) -> String {
 }
 
 /// Check out an existing target branch: a local one directly, or a
-/// fresh tracking branch from `origin/<branch>` when it only exists on
-/// the remote (so we build on the real PPA branch, not a new one).
+/// fresh tracking branch from `<remote>/<branch>` when it only exists
+/// on the remote (so we build on the real PPA branch, not a new one).
 fn checkout_existing(
     ui: &Ui,
     repo: &Path,
     target: &str,
+    remote: &str,
     location: TargetLocation,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match location {
         TargetLocation::Local => ensure_on_branch(ui, repo, target),
         TargetLocation::Remote => {
-            ui.step(&format!("Check out {target} tracking origin/{target}"));
+            ui.step(&format!("Check out {target} tracking {remote}/{target}"));
             ui.run_required(
-                &plan::checkout_new_argv(target, &format!("origin/{target}")),
+                &plan::checkout_new_argv(target, &format!("{remote}/{target}")),
                 repo,
             )
         }
@@ -1504,6 +1614,7 @@ fn merge_stage(
     repo: &Path,
     source: &str,
     target: &str,
+    remote: &str,
     location: TargetLocation,
     codename: &str,
     target_type: TargetType,
@@ -1515,8 +1626,14 @@ fn merge_stage(
         // the new packaging) — no merge needed.
         ui.step(&format!("Create {target} from {source}"));
         ui.run_required(&plan::checkout_new_argv(target, source), repo)?;
+        // Remember which remote it is for, so the push stage (and a
+        // later run) need not ask again; `git push -u` fills in the rest.
+        ui.run_required(
+            &plan::git_config_argv(&format!("branch.{target}.pushRemote"), remote),
+            repo,
+        )?;
     } else {
-        checkout_existing(ui, repo, target, location)?;
+        checkout_existing(ui, repo, target, remote, location)?;
         // The changelog conflict is expected and resolved
         // deterministically; in dry-run we always narrate it.
         let merged_ok = ui.run(&plan::merge_argv(source), repo)?;
@@ -2063,6 +2180,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         git(p, &["init", "-q", "-b", "debian/unstable"]);
+        git(
+            p,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://salsa.debian.org/x/damo.git",
+            ],
+        );
         std::fs::create_dir_all(p.join("debian")).unwrap();
         std::fs::write(
             p.join("debian/changelog"),
@@ -2216,6 +2342,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2235,6 +2362,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2255,6 +2383,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: Some("noble".to_string()),
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2274,6 +2403,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: Some("does-not-exist".to_string()),
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2292,15 +2422,61 @@ mod tests {
             &["update-ref", "refs/remotes/origin/ubuntu/questing", "HEAD"],
         );
         let local = crate::git::local_branches(p).unwrap();
-        assert_eq!(classify_target(p, &local, "noble"), TargetLocation::Local);
         assert_eq!(
-            classify_target(p, &local, "ubuntu/questing"),
+            classify_target(p, &local, "noble", "origin"),
+            TargetLocation::Local
+        );
+        assert_eq!(
+            classify_target(p, &local, "ubuntu/questing", "origin"),
             TargetLocation::Remote
         );
         assert_eq!(
-            classify_target(p, &local, "ubuntu/plucky"),
+            classify_target(p, &local, "ubuntu/plucky", "origin"),
             TargetLocation::New
         );
+        // The same ref on a different remote is not this remote's.
+        assert_eq!(
+            classify_target(p, &local, "ubuntu/questing", "fork"),
+            TargetLocation::New
+        );
+    }
+
+    #[test]
+    fn remote_candidates_by_rule() {
+        let dir = setup();
+        let p = dir.path();
+        // One remote: settled without asking.
+        assert_eq!(remote_candidates(p, "ubuntu/x", None).unwrap(), ["origin"]);
+        git(
+            p,
+            &["remote", "add", "fork", "git@salsa.debian.org:me/damo.git"],
+        );
+        // A new branch with two remotes is ambiguous (both listed).
+        assert_eq!(
+            remote_candidates(p, "ubuntu/x", None).unwrap(),
+            ["fork", "origin"]
+        );
+        // --remote settles it; an unknown name is an error.
+        assert_eq!(
+            remote_candidates(p, "ubuntu/x", Some("fork")).unwrap(),
+            ["fork"]
+        );
+        assert!(remote_candidates(p, "ubuntu/x", Some("nope")).is_err());
+        // A ref on exactly one remote picks that remote.
+        git(p, &["update-ref", "refs/remotes/fork/ubuntu/x", "HEAD"]);
+        assert_eq!(remote_candidates(p, "ubuntu/x", None).unwrap(), ["fork"]);
+        // A configured push/tracking remote wins over everything.
+        git(p, &["config", "branch.ubuntu/x.remote", "origin"]);
+        assert_eq!(remote_candidates(p, "ubuntu/x", None).unwrap(), ["origin"]);
+        git(p, &["config", "branch.ubuntu/x.pushRemote", "fork"]);
+        assert_eq!(remote_candidates(p, "ubuntu/x", None).unwrap(), ["fork"]);
+        // And the project glab is pointed at follows the remote.
+        let project = gitlab_project(p, "fork").unwrap();
+        assert_eq!(
+            (project.host.as_str(), project.path.as_str()),
+            ("salsa.debian.org", "me/damo")
+        );
+        assert!(gitlab_project(p, "nope").is_err());
     }
 
     #[test]
@@ -2321,6 +2497,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2354,6 +2531,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2577,6 +2755,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2596,6 +2775,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2619,6 +2799,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2644,6 +2825,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2666,6 +2848,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2756,6 +2939,7 @@ mod tests {
             debusine: Some("michelin".to_string()),
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2781,6 +2965,7 @@ mod tests {
             debusine: Some("michelin".to_string()),
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -2807,6 +2992,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -3004,6 +3190,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -3026,6 +3213,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -3048,6 +3236,7 @@ mod tests {
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -3127,6 +3316,7 @@ E: damo: an-error\n";
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: true,
@@ -3188,6 +3378,7 @@ E: damo: an-error\n";
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,
@@ -3209,6 +3400,7 @@ E: damo: an-error\n";
             debusine: None,
             debusine_project: None,
             source: None,
+            remote: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
             assume_yes: false,

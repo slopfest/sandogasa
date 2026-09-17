@@ -306,6 +306,12 @@ pub fn push_set_upstream_argv(remote: &str, branch: &str) -> Vec<String> {
     argv(&["git", "push", "-u", remote, branch])
 }
 
+/// `git config <key> <value>` — e.g. record a new branch's chosen
+/// remote as `branch.<b>.pushRemote` so later stages need not ask.
+pub fn git_config_argv(key: &str, value: &str) -> Vec<String> {
+    argv(&["git", "config", key, value])
+}
+
 /// `dput [<target>] <changes>` — upload a `.changes` to its archive.
 /// `Some(target)` is a dput host (e.g. `mentors`, `ftp-master`) or a
 /// PPA (`ppa:<user>/<name>`, see [`ppa_target`]); `None` omits the
@@ -395,8 +401,71 @@ pub fn published_source_count(json: &str) -> Option<u64> {
 /// unattended. glab finds the GitLab host/project from the git remote
 /// itself (e.g. salsa.debian.org). Run with stdin on `/dev/null` (see
 /// [`crate::ui::Ui::run_query`]).
-pub fn glab_ci_list_sha_argv(sha: &str) -> Vec<String> {
-    argv(&["glab", "ci", "list", "--sha", sha, "-F", "json"])
+pub fn glab_ci_list_sha_argv(project: &GitLabProject, sha: &str) -> Vec<String> {
+    argv(&[
+        "glab",
+        "ci",
+        "list",
+        "-R",
+        &project.url,
+        "--sha",
+        sha,
+        "-F",
+        "json",
+    ])
+}
+
+/// The GitLab project behind a git remote, for pointing glab at it
+/// explicitly (`-R <url>` for `glab ci`, `--hostname` + the encoded
+/// project path for `glab api`). Left to guess among several remotes
+/// glab prefers `origin`, which is wrong when the branch lives on a
+/// fork.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitLabProject {
+    /// The remote URL as configured.
+    pub url: String,
+    /// The GitLab host (`salsa.debian.org`).
+    pub host: String,
+    /// The project path (`group/sub/repo`, no `.git`).
+    pub path: String,
+}
+
+impl GitLabProject {
+    /// Parse a remote URL — scp-like (`git@host:group/repo.git`),
+    /// `ssh://[user@]host[:port]/group/repo.git` or
+    /// `https://[user@]host/group/repo.git`. `None` without a host or
+    /// a path.
+    pub fn from_remote_url(url: &str) -> Option<Self> {
+        let (scheme, rest) = match url.split_once("://") {
+            Some((s, r)) => (Some(s), r),
+            None => (None, url),
+        };
+        let rest = rest.rsplit_once('@').map(|(_, r)| r).unwrap_or(rest);
+        let host_end = rest.find(['/', ':'])?;
+        let host = &rest[..host_end];
+        let mut path = &rest[host_end + 1..];
+        // With a scheme, a `:` after the host starts a port, not the path.
+        if scheme.is_some() && rest.as_bytes()[host_end] == b':' {
+            path = path.split_once('/').map(|(_, p)| p)?;
+        }
+        let path = path.trim_matches('/');
+        let path = path.strip_suffix(".git").unwrap_or(path);
+        (!host.is_empty() && !path.is_empty()).then(|| Self {
+            url: url.to_string(),
+            host: host.to_string(),
+            path: path.to_string(),
+        })
+    }
+
+    /// The project's REST id: its path with `/` percent-encoded.
+    fn api_id(&self) -> String {
+        self.path.replace('/', "%2F")
+    }
+}
+
+/// `glab api --hostname <host> <endpoint>` against `project`'s host.
+fn glab_api_argv(project: &GitLabProject, endpoint: &str) -> Vec<String> {
+    argv(&["glab", "api", "--hostname", &project.host, endpoint])
 }
 
 /// One CI pipeline's identity and state, parsed from glab's JSON.
@@ -424,17 +493,16 @@ pub fn latest_pipeline(json: &str) -> Option<PipelineInfo> {
     })
 }
 
-/// `glab api projects/:id/pipelines/<id>/jobs?per_page=100` — list a
-/// pipeline's jobs as JSON. `glab` substitutes `:id` with the current
-/// repo and emits the raw API response; `per_page=100` avoids needing
-/// pagination for any realistic pipeline. Used to report per-job
-/// progress while watching (see [`crate::rebuild`]).
-pub fn glab_pipeline_jobs_argv(pipeline_id: i64) -> Vec<String> {
-    vec![
-        "glab".to_string(),
-        "api".to_string(),
-        format!("projects/:id/pipelines/{pipeline_id}/jobs?per_page=100"),
-    ]
+/// `glab api projects/<project>/pipelines/<id>/jobs?per_page=100` —
+/// list a pipeline's jobs as raw API JSON; `per_page=100` avoids
+/// needing pagination for any realistic pipeline. Used to report
+/// per-job progress while watching (see [`crate::rebuild`]).
+pub fn glab_pipeline_jobs_argv(project: &GitLabProject, pipeline_id: i64) -> Vec<String> {
+    let endpoint = format!(
+        "projects/{}/pipelines/{pipeline_id}/jobs?per_page=100",
+        project.api_id()
+    );
+    glab_api_argv(project, &endpoint)
 }
 
 /// One CI job's identity and state, parsed from glab's jobs JSON.
@@ -479,17 +547,28 @@ pub fn parse_jobs(json: &str) -> Vec<JobInfo> {
 /// and the file dbranch creates / adjusts on a rebuild branch.
 pub const SALSA_CI_PATH: &str = "debian/salsa-ci.yml";
 
-/// `glab api projects/:id` — the current project's settings as JSON,
+/// `glab api projects/<project>` — the project's settings as JSON,
 /// read for its `ci_config_path`.
-pub fn glab_project_argv() -> Vec<String> {
-    argv(&["glab", "api", "projects/:id"])
+pub fn glab_project_argv(project: &GitLabProject) -> Vec<String> {
+    glab_api_argv(project, &format!("projects/{}", project.api_id()))
 }
 
-/// `glab api -X PUT projects/:id -f ci_config_path=<path>` — point the
-/// project's CI config path at `path`. Needs Maintainer on the project.
-pub fn glab_set_ci_config_path_argv(path: &str) -> Vec<String> {
+/// `glab api -X PUT projects/<project> -f ci_config_path=<path>` — point
+/// the project's CI config path at `path`. Needs Maintainer there.
+pub fn glab_set_ci_config_path_argv(project: &GitLabProject, path: &str) -> Vec<String> {
+    let endpoint = format!("projects/{}", project.api_id());
     let field = format!("ci_config_path={path}");
-    argv(&["glab", "api", "-X", "PUT", "projects/:id", "-f", &field])
+    argv(&[
+        "glab",
+        "api",
+        "--hostname",
+        &project.host,
+        "-X",
+        "PUT",
+        &endpoint,
+        "-f",
+        &field,
+    ])
 }
 
 /// The project's `ci_config_path` from `glab api projects/:id` JSON;
@@ -831,8 +910,8 @@ mod tests {
             ["git", "push", "-u", "origin", "noble"]
         );
         assert_eq!(
-            glab_ci_list_sha_argv("ea4102c"),
-            ["glab", "ci", "list", "--sha", "ea4102c", "-F", "json"]
+            git_config_argv("branch.noble.pushRemote", "fork"),
+            ["git", "config", "branch.noble.pushRemote", "fork"]
         );
     }
 
@@ -873,19 +952,69 @@ mod tests {
         assert!(parse_jobs("{}").is_empty());
     }
 
+    fn fork() -> GitLabProject {
+        GitLabProject::from_remote_url("git@salsa.debian.org:michel/paperwm.git").unwrap()
+    }
+
+    #[test]
+    fn gitlab_project_parses_remote_url_forms() {
+        let p = fork();
+        assert_eq!(p.host, "salsa.debian.org");
+        assert_eq!(p.path, "michel/paperwm");
+        assert_eq!(p.api_id(), "michel%2Fpaperwm");
+        let nested = GitLabProject::from_remote_url(
+            "https://salsa.debian.org/gnome-team/shell-extensions/paperwm.git",
+        )
+        .unwrap();
+        assert_eq!(nested.path, "gnome-team/shell-extensions/paperwm");
+        // ssh with a user and a port: the port is not part of the path.
+        let port = GitLabProject::from_remote_url("ssh://git@host.example:2222/g/r/").unwrap();
+        assert_eq!(
+            (port.host.as_str(), port.path.as_str()),
+            ("host.example", "g/r")
+        );
+        assert_eq!(GitLabProject::from_remote_url("https://host.example"), None);
+        assert_eq!(GitLabProject::from_remote_url("nonsense"), None);
+    }
+
     #[test]
     fn glab_ci_config_path_argvs() {
-        assert_eq!(glab_project_argv(), ["glab", "api", "projects/:id"]);
         assert_eq!(
-            glab_set_ci_config_path_argv(SALSA_CI_PATH),
+            glab_project_argv(&fork()),
             [
                 "glab",
                 "api",
+                "--hostname",
+                "salsa.debian.org",
+                "projects/michel%2Fpaperwm"
+            ]
+        );
+        assert_eq!(
+            glab_set_ci_config_path_argv(&fork(), SALSA_CI_PATH),
+            [
+                "glab",
+                "api",
+                "--hostname",
+                "salsa.debian.org",
                 "-X",
                 "PUT",
-                "projects/:id",
+                "projects/michel%2Fpaperwm",
                 "-f",
                 "ci_config_path=debian/salsa-ci.yml"
+            ]
+        );
+        assert_eq!(
+            glab_ci_list_sha_argv(&fork(), "abc"),
+            [
+                "glab",
+                "ci",
+                "list",
+                "-R",
+                "git@salsa.debian.org:michel/paperwm.git",
+                "--sha",
+                "abc",
+                "-F",
+                "json"
             ]
         );
     }
@@ -910,13 +1039,15 @@ mod tests {
     }
 
     #[test]
-    fn glab_pipeline_jobs_argv_targets_current_repo() {
+    fn glab_pipeline_jobs_argv_targets_the_project() {
         assert_eq!(
-            glab_pipeline_jobs_argv(1111431),
+            glab_pipeline_jobs_argv(&fork(), 1111431),
             [
                 "glab",
                 "api",
-                "projects/:id/pipelines/1111431/jobs?per_page=100"
+                "--hostname",
+                "salsa.debian.org",
+                "projects/michel%2Fpaperwm/pipelines/1111431/jobs?per_page=100"
             ]
         );
     }

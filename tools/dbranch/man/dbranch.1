@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH dbranch 1 2026-09-10 "sandogasa 0.24.0" "Sandogasa Manual"
+.TH dbranch 1 2026-09-17 "sandogasa 0.24.0" "Sandogasa Manual"
 .SH NAME
 dbranch \- Propagate a Debian package across its Ubuntu PPA and Debian branches
 .SH SYNOPSIS
@@ -38,7 +38,7 @@ Print help
 [\fIBRANCH\fR]
 Branch(es) to fix up (default: the current branch)
 .SS dbranch rebuild
-\fBdbranch rebuild\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-source\fR] [\fB\-\-nowait\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-include\-eol\fR] [\fB\-\-ppa\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
+\fBdbranch rebuild\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-source\fR] [\fB\-\-remote\fR] [\fB\-\-nowait\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-include\-eol\fR] [\fB\-\-ppa\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
 .PP
 Rebuild a Debian package across its Ubuntu/PPA branches
 .TP
@@ -77,6 +77,9 @@ Defaults to `merge` (the others are opt\-in for now).
 .TP
 \fB\-\-source\fR \fI<BRANCH>\fR
 Merge source branch (default: the checked\-out branch)
+.TP
+\fB\-\-remote\fR \fI<NAME>\fR
+Git remote to push to and configure CI on (default: the branch\*(Aqs own, else the only one; asks when several could)
 .TP
 \fB\-\-nowait\fR
 In the push stage, push but don\*(Aqt wait for / watch CI
