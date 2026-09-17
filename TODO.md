@@ -463,8 +463,17 @@ one-shot view. Follow-ups:
 
 - (2026-07-07, nice-to-have) readability polish deferred from the H1
   report review: consider an executive-summary block at the top
-  (cross-domain totals). The other half of this entry — suppressing
-  all-zero stat lines — has landed.
+  (cross-domain totals).
+
+- (2026-07-02) Extend the commit detail-level policy to the other
+  sections. Commits now render as: summary = total + repo count;
+  `--detailed` = per-repo counts; `--detailed --detailed` = individual
+  commits with subject (see `DEVELOPMENT.md` "Commit detail levels"). The
+  PR / issue / patch / ticket sections (github/gitlab/forgejo/sourcehut)
+  still list every item at `--detailed` with no level-1-vs-2 distinction.
+  Decide whether they want the same three-tier treatment (e.g. `--detailed`
+  = counts or a compact list, `--detailed --detailed` = full per-item
+  detail) and apply it uniformly. Likely presentation-only.
 
 ## dbranch
 
@@ -591,18 +600,6 @@ one-shot view. Follow-ups:
   just need the Python branch.
 - (2026-06-23, later) Run `fedora-review -b <id>` ourselves instead of
   only pointing at an existing result dir.
-
-## sandogasa-report
-
-- (2026-07-02) Extend the commit detail-level policy to the other
-  sections. Commits now render as: summary = total + repo count;
-  `--detailed` = per-repo counts; `--detailed --detailed` = individual
-  commits with subject (see `DEVELOPMENT.md` "Commit detail levels"). The
-  PR / issue / patch / ticket sections (github/gitlab/forgejo/sourcehut)
-  still list every item at `--detailed` with no level-1-vs-2 distinction.
-  Decide whether they want the same three-tier treatment (e.g. `--detailed`
-  = counts or a compact list, `--detailed --detailed` = full per-item
-  detail) and apply it uniformly. Likely presentation-only.
 
 ## ebranch check-update (2026-08-07)
 
