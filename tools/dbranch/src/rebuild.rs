@@ -1913,7 +1913,7 @@ pub(crate) fn create_packaging_file(
 /// returns `true`, so the follow-up commit is still narrated. A
 /// transform returning `None` (unexpected format) is left unchanged
 /// with a warning.
-fn edit_file(
+pub(crate) fn edit_file(
     ui: &Ui,
     repo: &Path,
     rel: &str,

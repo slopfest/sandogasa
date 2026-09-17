@@ -31,7 +31,10 @@ Clone upstream's git to package it straight from its tags (gbp's
 \"upstream uses git, no tarballs\" flow): clone with upstream as
 remote `upstream`, start the Debian branch at the newest release tag,
 and commit a debian/gbp.conf naming the tag style (upstream-tag) with
-pristine-tar enabled. Later releases are then merged in by `update`,
+pristine-tar enabled. When upstream itself carries a debian/* branch,
+offers to start from it instead (its packaging commits stay in the
+history, so diverging is ordinary commits), merging the tag in.
+Later releases are then merged in by `update`,
 which detects this layout, and the source stage generates the orig
 tarball from the tag with `gbp export-orig`. Writing the rest of
 debian/ is left to you.")]
@@ -55,6 +58,14 @@ debian/ is left to you.")]
         /// Name for the remote holding upstream's git.
         #[arg(long, value_name = "NAME", default_value = "upstream")]
         upstream_remote: String,
+
+        /// Start from upstream's own debian/* branch without asking.
+        #[arg(long, conflicts_with = "fresh")]
+        from_upstream_packaging: bool,
+
+        /// Ignore any debian/* branch upstream carries; start at the tag.
+        #[arg(long)]
+        fresh: bool,
 
         /// Print the commands without running anything (a tutorial).
         #[arg(long)]
@@ -470,6 +481,8 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             upstream_version,
             debian_branch,
             upstream_remote,
+            from_upstream_packaging,
+            fresh,
             dry_run,
             explain,
             quiet,
@@ -479,6 +492,11 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 dry_run,
                 quiet,
             };
+            let packaging = match (from_upstream_packaging, fresh) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            };
             upstream::clone(
                 &ui,
                 &CloneOptions {
@@ -487,6 +505,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                     upstream_version,
                     debian_branch,
                     upstream_remote,
+                    packaging,
                 },
             )
         }

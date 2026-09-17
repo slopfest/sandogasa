@@ -26,6 +26,21 @@ noted and skipped on a re-run. The upstream remote is never offered as
 a push destination, and a repository with only that remote is told to
 add its packaging remote.
 
+When upstream itself already carries a `debian/*` branch — antifennel's
+author keeps a complete `debian/latest` — `clone` says who wrote it and
+which version its changelog is at, and offers to start from it instead
+(default yes; `--from-upstream-packaging` and `--fresh` decide unasked,
+a non-interactive run starts fresh with a warning): the Debian branch
+starts at upstream's packaging branch without tracking it, the release
+tag is merged in, and their gbp.conf is completed rather than replaced
+(`debian-branch` set to yours, `upstream-tag` and the pristine-tar keys
+added when absent). Their packaging commits stay in the history, so
+diverging is ordinary commits and their later changes can still be
+merged. A tag whose tree carries a `debian/` directory is warned about.
+With no packaging anywhere, the next-step message prints the
+`dh_make -p <name>_<version> --createorig` command to run, whose
+provisional orig the first `gbp export-orig` replaces.
+
 ### dbranch: push to, and configure CI on, the branch's own remote
 
 dbranch assumed every branch belonged to `origin`: it pushed there,

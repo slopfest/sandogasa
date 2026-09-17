@@ -335,6 +335,23 @@ pub fn git_clone_argv(url: &str, remote: &str, dir: &str) -> Vec<String> {
     argv(&["git", "clone", "--no-checkout", "-o", remote, url, dir])
 }
 
+/// `git checkout --no-track -b <branch> <start>` — start a branch from
+/// a remote-tracking ref *without* tracking it: upstream's packaging
+/// branch is a starting point, not where ours is pushed.
+pub fn checkout_new_no_track_argv(branch: &str, start_point: &str) -> Vec<String> {
+    argv(&["git", "checkout", "--no-track", "-b", branch, start_point])
+}
+
+/// `dh_make -p <name>_<version> --createorig` — the skeleton step for a
+/// package with no packaging anywhere, printed rather than run (its
+/// class, license and copyright answers are the packager's).
+/// `--createorig` makes the provisional orig tarball dh_make wants;
+/// the first `gbp export-orig` replaces it with the tag-derived one.
+pub fn dh_make_argv(name: &str, version: &str) -> Vec<String> {
+    let pkg = format!("{name}_{version}");
+    argv(&["dh_make", "-p", &pkg, "--createorig"])
+}
+
 /// `git fetch --tags <remote>` — bring in upstream's release tags.
 pub fn git_fetch_tags_argv(remote: &str) -> Vec<String> {
     argv(&["git", "fetch", "--tags", remote])
@@ -978,6 +995,21 @@ mod tests {
         assert_eq!(
             git_fetch_tags_argv("upstream"),
             ["git", "fetch", "--tags", "upstream"]
+        );
+        assert_eq!(
+            checkout_new_no_track_argv("debian/latest", "upstream/debian/latest"),
+            [
+                "git",
+                "checkout",
+                "--no-track",
+                "-b",
+                "debian/latest",
+                "upstream/debian/latest"
+            ]
+        );
+        assert_eq!(
+            dh_make_argv("antifennel", "0.3.1"),
+            ["dh_make", "-p", "antifennel_0.3.1", "--createorig"]
         );
         assert_eq!(repo_name_from_url("https://h/g/thing.git"), "thing");
         assert_eq!(repo_name_from_url("git@h:g/thing"), "thing");

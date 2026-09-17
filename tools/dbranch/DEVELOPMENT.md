@@ -413,10 +413,36 @@ recommended.
   what makes `debuild -S` find `../<pkg>_<v>.orig.tar.*`, and a source
   stage re-run should regenerate it. gbp is therefore required for the
   source stage in this mode (`ensure_tools`).
-- `clone` commits only `debian/gbp.conf`; the rest of `debian/` is the
-  packager's (dh_make or by hand) and dbranch says so. A `debian/watch`
-  with `mode=git` is worth adding so the tracker sees new tags, but
-  nothing in dbranch reads it.
+- **Upstream's own packaging branch is a starting point, not a
+  remote.** antifennel's author keeps a `debian/latest` in the upstream
+  repo (a complete, competent `debian/`, changelog 0.3.1-1, based one
+  commit before the 0.3.1 tag). `clone` offers to start from it —
+  `git checkout --no-track -b <ours> upstream/debian/latest`, then merge
+  the tag — because starting *from* the branch keeps their commits in
+  the history, so diverging is ordinary commits and their later changes
+  merge or cherry-pick; copying files out of it would lose that. The
+  `--no-track` matters: a tracking branch would make `branch_remote`
+  answer `upstream` and turn it into the push target. Their gbp.conf is
+  completed, not replaced: `debian-branch` set to ours, `upstream-tag`
+  and the pristine-tar keys added only when absent (an existing
+  `upstream-tag` is theirs to keep, even if it differs from the detected
+  style — it is what their flow uses). Non-interactive runs start fresh
+  with a warning; `--from-upstream-packaging` / `--fresh` decide unasked.
+- **Packaging inside the tag's tree is warned about, not handled.**
+  dpkg-source (3.0 quilt) drops the orig tarball's `debian/` at unpack,
+  so a build works, but the tree being edited and the tarball shipped
+  disagree and the tag's packaging can never be diverged from cleanly.
+  The advice to such an upstream is a branch; dbranch says so and
+  carries on.
+- `clone` commits only `debian/gbp.conf` when starting fresh; the rest
+  of `debian/` is the packager's and dbranch prints the
+  `dh_make -p <name>_<version> --createorig` to run rather than running
+  it — its class, license and copyright answers are theirs, and dh_make
+  is interactive. `--createorig` breaks the chicken-and-egg between
+  dh_make (wants an orig) and `gbp export-orig` (wants a changelog): the
+  provisional orig it makes is replaced by the first tag-derived one. A
+  `debian/watch` with `mode=git` is worth adding so the tracker sees new
+  tags, but nothing in dbranch reads it.
 
 ### Which remote a branch belongs to (`resolve_remote`)
 

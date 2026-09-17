@@ -93,8 +93,21 @@ the Debian branch (`debian/latest`; `--debian-branch` to change) at the
 newest release tag (`--upstream-version` to pick another), and commits a
 `debian/gbp.conf` naming the tag style — `upstream-tag = v%(version)s`
 or `%(version)s`, detected from the tags — with pristine-tar and
-`pristine-tar-commit` on. Writing the rest of `debian/` is up to you;
-from then on `update` merges new releases in (below). `fixup [<branch>...]` applies
+`pristine-tar-commit` on. When upstream itself carries a `debian/*`
+branch, `clone` says who wrote it and which version its changelog is
+at, and offers to start from it instead (default yes;
+`--from-upstream-packaging` says yes unasked, `--fresh` ignores it, a
+non-interactive run starts fresh with a warning): the branch begins at
+upstream's packaging branch without tracking it, the release tag is
+merged in, and their gbp.conf is completed — `debian-branch` set to
+yours, `upstream-tag` and the pristine-tar keys added when absent.
+Their packaging commits stay in the history, so diverging from them is
+ordinary commits and their later changes can still be merged. A tag
+whose tree carries a `debian/` directory gets a warning (dpkg-source
+drops the orig's copy, so the two disagree). Writing the rest of
+`debian/` is up to you; with no packaging anywhere the next-step
+message prints the `dh_make -p <name>_<version> --createorig` to run.
+From then on `update` merges new releases in (below). `fixup [<branch>...]` applies
 the PPA-branch packaging adjustments — gbp.conf's `debian-branch` /
 `debian-tag` and the salsa-ci.yml preset, the same ones the `merge`
 stage makes for a new branch — to **existing** branches, to repair

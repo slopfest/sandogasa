@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::ui::Ui;
-use crate::{gbpconf, git, plan};
+use crate::{changelog, gbpconf, git, plan};
 
 /// A repository packaged from upstream's git: the remote holding
 /// upstream and the gbp `upstream-tag` format naming its release tags.
@@ -34,6 +34,10 @@ pub struct CloneOptions {
     pub debian_branch: String,
     /// Name for the remote holding upstream's git (`upstream`).
     pub upstream_remote: String,
+    /// When upstream itself carries a `debian/*` branch: `Some(true)`
+    /// starts from it, `Some(false)` ignores it, `None` asks (a
+    /// non-interactive run starts fresh with a warning).
+    pub packaging: Option<bool>,
 }
 
 /// gbp's `upstream-tag` format for a tag's style: `v1.2` →
@@ -146,8 +150,14 @@ pub fn release_tag(
 /// `clone`: clone upstream with itself as remote `upstream_remote`,
 /// start the Debian branch at the chosen release tag, and commit a
 /// gbp.conf naming the tag style (`upstream-tag`) with pristine-tar
-/// enabled — the layout `update` detects. Writing the rest of
-/// `debian/` is the packager's job and is printed as the next step.
+/// enabled — the layout `update` detects. When upstream itself carries
+/// a `debian/*` branch (antifennel's author keeps one), offer to start
+/// from it instead — their packaging commits stay in the history, so
+/// diverging is ordinary commits and their later changes can still be
+/// merged — with the release tag merged in and gbp.conf's keys filled
+/// in where missing. Writing (or reviewing) `debian/` is the packager's
+/// job and is printed as the next step, with the `dh_make` command for
+/// a package that has none anywhere.
 pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Error>> {
     let dir = opts
         .dir
@@ -173,26 +183,175 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
     } else {
         release_tag(&dir, None, opts.upstream_version.as_deref())?
     };
-    ui.step(&format!(
-        "Start {} at upstream {version} (tag {tag})",
-        opts.debian_branch
-    ));
-    ui.run_required(&plan::checkout_new_argv(&opts.debian_branch, &tag), &dir)?;
-    ui.step("Create gbp.conf: package from upstream's git tags");
-    let text = gbpconf::upstream_git_config(&opts.debian_branch, &format);
-    crate::rebuild::create_packaging_file(
-        ui,
-        &dir,
-        "gbp.conf",
-        "packaging from upstream's git tags",
-        &text,
-    )?;
-    eprintln!(
-        "Next: write the rest of debian/ in {} (dh_make or by hand), add the \
-         packaging remote (git remote add origin <url>), and for later releases \
-         run `dbranch update` there.",
-        dir.display()
-    );
+    if !ui.dry_run && git::tree_has_path(&dir, &tag, "debian") {
+        eprintln!(
+            "warning: the tree at {tag} carries a debian/ directory. dpkg-source drops \
+             the orig tarball's copy when unpacking, so the branch's debian/ wins, but \
+             the two will disagree; ask upstream to keep packaging on a branch instead"
+        );
+    }
+    let theirs = if ui.dry_run {
+        eprintln!("    (if upstream carries a debian/* branch, offers to start from it)");
+        None
+    } else {
+        upstream_packaging(
+            ui,
+            &dir,
+            &opts.upstream_remote,
+            &opts.debian_branch,
+            opts.packaging,
+        )
+    };
+    match theirs {
+        Some(branch) => {
+            let start = format!("{}/{branch}", opts.upstream_remote);
+            ui.step(&format!(
+                "Start {} from upstream's {start} (not tracking it)",
+                opts.debian_branch
+            ));
+            ui.run_required(
+                &plan::checkout_new_no_track_argv(&opts.debian_branch, &start),
+                &dir,
+            )?;
+            if git::is_ancestor(&dir, &tag, "HEAD") {
+                eprintln!("note: {tag} is already part of that branch");
+            } else {
+                ui.step(&format!("Merge upstream {version} (tag {tag}) into it"));
+                ui.run_required(&plan::merge_argv(&tag), &dir)?;
+            }
+            complete_gbp_conf(ui, &dir, &opts.debian_branch, &format)?;
+            eprintln!(
+                "Next: review debian/ in {} — it is upstream's packaging (Maintainer, \
+                 changelog), and any change is an ordinary commit here — add the \
+                 packaging remote (git remote add origin <url>), and for later \
+                 releases run `dbranch update` there.",
+                dir.display()
+            );
+        }
+        None => {
+            ui.step(&format!(
+                "Start {} at upstream {version} (tag {tag})",
+                opts.debian_branch
+            ));
+            ui.run_required(&plan::checkout_new_argv(&opts.debian_branch, &tag), &dir)?;
+            ui.step("Create gbp.conf: package from upstream's git tags");
+            let text = gbpconf::upstream_git_config(&opts.debian_branch, &format);
+            crate::rebuild::create_packaging_file(
+                ui,
+                &dir,
+                "gbp.conf",
+                "packaging from upstream's git tags",
+                &text,
+            )?;
+            let name = plan::repo_name_from_url(&opts.url).to_lowercase();
+            eprintln!(
+                "Next: write the rest of debian/ in {} — with no packaging anywhere, \
+                 `{}` makes the skeleton (its class, license and copyright answers are \
+                 yours; the provisional orig it creates is replaced by the first \
+                 `gbp export-orig`) — add the packaging remote (git remote add origin \
+                 <url>), and for later releases run `dbranch update` there.",
+                dir.display(),
+                plan::dh_make_argv(&name, &version).join(" ")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Upstream's own packaging branch to start from, if any: a `debian/*`
+/// branch on `remote` (the one named like ours first), described by its
+/// last author and changelog version, and accepted per `choice` —
+/// `Some(true)` takes it, `Some(false)` ignores it, `None` asks
+/// (default yes) when interactive and otherwise warns and starts fresh.
+fn upstream_packaging(
+    ui: &Ui,
+    repo: &Path,
+    remote: &str,
+    debian_branch: &str,
+    choice: Option<bool>,
+) -> Option<String> {
+    let branches: Vec<String> = git::remote_branches(repo, remote)
+        .into_iter()
+        .filter(|b| b.starts_with("debian/"))
+        .collect();
+    let branch = branches
+        .iter()
+        .find(|b| *b == debian_branch)
+        .or(branches.first())?
+        .clone();
+    if choice == Some(false) {
+        eprintln!("note: upstream carries a {branch} branch; --fresh ignores it");
+        return None;
+    }
+    let rev = format!("{remote}/{branch}");
+    let by = git::commit_author_date(repo, &rev).unwrap_or_default();
+    let version = git::show_file(repo, &rev, "debian/changelog")
+        .and_then(|t| changelog::stanza_headers(&t).into_iter().next())
+        .map(|h| h.version)
+        .unwrap_or_else(|| "no changelog".to_string());
+    let what =
+        format!("upstream carries a {branch} branch — packaging by {by}, changelog {version}");
+    if choice == Some(true) {
+        eprintln!("{what}; starting from it");
+        return Some(branch);
+    }
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!(
+            "warning: {what}; starting fresh (pass --from-upstream-packaging to start from it)"
+        );
+        return None;
+    }
+    ui.confirm(&format!("{what} — start from it?"))
+        .then_some(branch)
+}
+
+/// Make upstream's gbp.conf serve this branch: `debian-branch` set to
+/// ours, and `upstream-tag`, `pristine-tar` and `pristine-tar-commit`
+/// added when absent (an existing `upstream-tag` is theirs to keep).
+/// Created outright when their branch has none. Committed if changed.
+fn complete_gbp_conf(
+    ui: &Ui,
+    repo: &Path,
+    debian_branch: &str,
+    tag_format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rel = "debian/gbp.conf";
+    if !repo.join(rel).exists() {
+        ui.step("Create gbp.conf: package from upstream's git tags");
+        let text = gbpconf::upstream_git_config(debian_branch, tag_format);
+        return crate::rebuild::create_packaging_file(
+            ui,
+            repo,
+            "gbp.conf",
+            "packaging from upstream's git tags",
+            &text,
+        );
+    }
+    ui.step(&format!("Adjust gbp.conf for {debian_branch}"));
+    let changed = crate::rebuild::edit_file(ui, repo, rel, |text| {
+        let cfg = gbpconf::parse(text);
+        let mut t = gbpconf::set_key(text, "debian-branch", debian_branch, None);
+        if cfg.upstream_tag.is_none() {
+            t = gbpconf::set_key(&t, "upstream-tag", tag_format, Some("debian-branch"));
+        }
+        if cfg.pristine_tar.is_none() {
+            t = gbpconf::set_key(&t, "pristine-tar", "True", None);
+        }
+        if !t
+            .lines()
+            .any(|l| l.trim_start().starts_with("pristine-tar-commit"))
+        {
+            t = gbpconf::set_key(&t, "pristine-tar-commit", "True", Some("pristine-tar"));
+        }
+        Some(t)
+    })?;
+    if changed {
+        ui.explain_diff(repo, &[rel]);
+        ui.run_required(
+            &plan::commit_file_argv(&format!("Adjust gbp.conf for {debian_branch}"), rel),
+            repo,
+        )?;
+    }
     Ok(())
 }
 
@@ -351,6 +510,7 @@ mod tests {
             upstream_version: None,
             debian_branch: "debian/latest".to_string(),
             upstream_remote: "upstream".to_string(),
+            packaging: Some(false),
         };
         // Real commits need an identity the fixture cannot pre-set in a
         // clone; git picks it up from the environment.
@@ -413,6 +573,87 @@ mod tests {
         fetch_and_merge(&ui, &dir, &up_git, None).unwrap();
     }
 
+    /// Give the upstream fixture a `debian/latest` packaging branch of
+    /// its own, based on the v0.2.0 commit (before the newest tag), with
+    /// a gbp.conf missing the pristine-tar keys and a changelog.
+    fn add_upstream_packaging(up: &Path) {
+        git(up, &["checkout", "-q", "-b", "debian/latest", "v0.2.0"]);
+        std::fs::create_dir_all(up.join("debian")).unwrap();
+        std::fs::write(
+            up.join("debian/gbp.conf"),
+            "[DEFAULT]\ndebian-branch = debian/latest\nupstream-tag = v%(version)s\n",
+        )
+        .unwrap();
+        std::fs::write(
+            up.join("debian/changelog"),
+            "thing (0.2.0-1) unstable; urgency=medium\n\n  * Initial release.\n\n \
+             -- P <p@x>  Thu, 19 Sep 2024 19:34:54 -0700\n",
+        )
+        .unwrap();
+        git(up, &["add", "-A"]);
+        git(
+            up,
+            &[
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "Initial packaging.",
+            ],
+        );
+        git(up, &["checkout", "-q", "main"]);
+    }
+
+    #[test]
+    fn clone_can_start_from_upstreams_packaging_branch() {
+        let up = upstream();
+        add_upstream_packaging(up.path());
+        let theirs = git::rev_parse(up.path(), "debian/latest").unwrap();
+        let work = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("GIT_CONFIG_COUNT", "3");
+            std::env::set_var("GIT_CONFIG_KEY_0", "user.name");
+            std::env::set_var("GIT_CONFIG_VALUE_0", "T");
+            std::env::set_var("GIT_CONFIG_KEY_1", "user.email");
+            std::env::set_var("GIT_CONFIG_VALUE_1", "t@x");
+            std::env::set_var("GIT_CONFIG_KEY_2", "commit.gpgsign");
+            std::env::set_var("GIT_CONFIG_VALUE_2", "false");
+        }
+        let opts = |dir: &str, packaging: Option<bool>| CloneOptions {
+            url: up.path().to_string_lossy().into_owned(),
+            dir: Some(work.path().join(dir)),
+            upstream_version: None,
+            debian_branch: "debian/latest".to_string(),
+            upstream_remote: "upstream".to_string(),
+            packaging,
+        };
+        // From upstream's packaging: their commit and the newest tag are
+        // both in our history, the branch tracks nothing (upstream must
+        // not become the push remote), and gbp.conf gained the missing
+        // pristine-tar keys while keeping their upstream-tag.
+        let dir = work.path().join("from");
+        clone(&ui(), &opts("from", Some(true))).unwrap();
+        assert!(git::is_ancestor(&dir, &theirs, "HEAD"));
+        assert!(git::is_ancestor(&dir, "v0.10.0", "HEAD"));
+        assert_eq!(git::branch_remote(&dir, "debian/latest"), None);
+        let conf = std::fs::read_to_string(dir.join("debian/gbp.conf")).unwrap();
+        assert!(conf.contains("upstream-tag = v%(version)s"), "{conf}");
+        assert!(conf.contains("pristine-tar-commit = True"), "{conf}");
+        let changelog = std::fs::read_to_string(dir.join("debian/changelog")).unwrap();
+        assert!(changelog.contains("0.2.0-1"));
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(status.stdout.is_empty());
+        // --fresh ignores it: a plain start at the tag.
+        let dir = work.path().join("fresh");
+        clone(&ui(), &opts("fresh", Some(false))).unwrap();
+        assert!(!git::is_ancestor(&dir, &theirs, "HEAD"));
+        assert!(!dir.join("debian/changelog").exists());
+    }
+
     #[test]
     fn detect_needs_remote_and_tag_format() {
         let up = upstream();
@@ -469,6 +710,7 @@ mod tests {
             upstream_version: None,
             debian_branch: "debian/latest".to_string(),
             upstream_remote: "upstream".to_string(),
+            packaging: None,
         };
         clone(&ui, &opts).unwrap();
         assert!(!work.path().join("thing").exists());

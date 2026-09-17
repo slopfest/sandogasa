@@ -200,6 +200,50 @@ pub fn is_ancestor(repo: &Path, rev: &str, of: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// A remote's branches, as plain names (`debian/latest`), sorted.
+pub fn remote_branches(repo: &Path, remote: &str) -> Vec<String> {
+    Command::new("git")
+        .args([
+            "for-each-ref",
+            "--format=%(refname:strip=3)",
+            &format!("refs/remotes/{remote}/"),
+        ])
+        .current_dir(repo)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| *l != "HEAD")
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether `rev`'s tree has `path` (`git ls-tree <rev> -- <path>`).
+pub fn tree_has_path(repo: &Path, rev: &str, path: &str) -> bool {
+    Command::new("git")
+        .args(["ls-tree", rev, "--", path])
+        .current_dir(repo)
+        .output()
+        .map(|o| o.status.success() && !o.stdout.is_empty())
+        .unwrap_or(false)
+}
+
+/// `<author> (<date>)` of a revision's commit, for describing it.
+pub fn commit_author_date(repo: &Path, rev: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args(["log", "-1", "--format=%an (%as)", rev])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 /// The configured remotes (`git remote`), in git's (sorted) order.
 pub fn remotes(repo: &Path) -> Vec<String> {
     Command::new("git")

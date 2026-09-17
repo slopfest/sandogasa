@@ -477,6 +477,18 @@ one-shot view. Follow-ups:
 
 ## dbranch
 
+- (2026-09-17) Exercise the upstream-git flow end to end on a real
+  package: a `dbranch update` that merges a newly tagged release, then
+  `gbp export-orig --pristine-tar-commit` feeding `debuild -S` and a
+  chroot build. antifennel is the first candidate once its packaging is
+  settled (it started from upstream's own `debian/latest`), but it needs
+  a new upstream tag first — a throwaway tag on a local mirror would do.
+  Separately, the from-scratch path — `clone` into a repo with no
+  packaging anywhere, then the printed `dh_make -p <name>_<version>
+  --createorig`, then the first export-orig replacing dh_make's
+  provisional orig — is reasoned only; a package that fits is expected
+  later.
+
 - (2026-07-03, nice-to-have) the merge phase of proposed-updates and
   backports could run on non-Debian hosts (only build/upload truly need
   Debian); kept simple and symmetric for now with a full up-front host

@@ -16,13 +16,16 @@ Print help
 Print version
 .SH COMMANDS
 .SS dbranch clone
-\fBdbranch clone\fR [\fB\-\-upstream\-version\fR] [\fB\-\-debian\-branch\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR] 
+\fBdbranch clone\fR [\fB\-\-upstream\-version\fR] [\fB\-\-debian\-branch\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-from\-upstream\-packaging\fR] [\fB\-\-fresh\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR] 
 .PP
 Clone upstream\*(Aqs git to package it straight from its tags (gbp\*(Aqs
 "upstream uses git, no tarballs" flow): clone with upstream as
 remote `upstream`, start the Debian branch at the newest release tag,
 and commit a debian/gbp.conf naming the tag style (upstream\-tag) with
-pristine\-tar enabled. Later releases are then merged in by `update`,
+pristine\-tar enabled. When upstream itself carries a debian/* branch,
+offers to start from it instead (its packaging commits stay in the
+history, so diverging is ordinary commits), merging the tag in.
+Later releases are then merged in by `update`,
 which detects this layout, and the source stage generates the orig
 tarball from the tag with `gbp export\-orig`. Writing the rest of
 debian/ is left to you.
@@ -35,6 +38,12 @@ Debian packaging branch to create
 .TP
 \fB\-\-upstream\-remote\fR \fI<NAME>\fR [default: upstream]
 Name for the remote holding upstream\*(Aqs git
+.TP
+\fB\-\-from\-upstream\-packaging\fR
+Start from upstream\*(Aqs own debian/* branch without asking
+.TP
+\fB\-\-fresh\fR
+Ignore any debian/* branch upstream carries; start at the tag
 .TP
 \fB\-\-dry\-run\fR
 Print the commands without running anything (a tutorial)
