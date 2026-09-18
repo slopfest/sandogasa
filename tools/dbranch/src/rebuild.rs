@@ -13,7 +13,7 @@
 //! `master`, `debian/unstable`, …); that branch is the merge source.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -1990,10 +1990,17 @@ fn source_stage(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Packaged from upstream's git: there is no downloaded tarball, so
     // generate the orig from the upstream tag first (and record it on
-    // the pristine-tar branch) for debuild to pick up from `..`.
+    // the pristine-tar branch) for debuild to pick up from `..`. One
+    // already there (a -2 of the same upstream) is left alone with a
+    // note and no command: gbp would only rediscover it, and a green
+    // command line is what the user would type by hand.
     if upstream_git.is_some() {
+        let (package, version) = top_package_version(repo)?;
         ui.step("Generate the orig tarball from the upstream tag");
-        ui.run_required(&plan::gbp_export_orig_argv(), repo)?;
+        match orig_tarball(repo, &package, plan::upstream_version(&version)) {
+            Some(orig) => eprintln!("note: {} is already there; skipped", orig.display()),
+            None => ui.run_required(&plan::gbp_export_orig_argv(), repo)?,
+        }
     }
     ui.step(if include_orig {
         "Build the source package, orig tarball included (-sa)"
@@ -2259,6 +2266,27 @@ fn resolve_changelog(repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("debian/changelog is unmerged but has no conflict markers")?;
     std::fs::write(&path, resolved)?;
     Ok(())
+}
+
+/// The existing orig tarball for `package` at `upstream_version`, if
+/// any: `../<package>_<version>.orig.tar.<gz|xz|bz2|lzma|zst>` next to
+/// the repo — the compressions dpkg-source accepts, so a stray
+/// `.orig.tar.gz.aside` does not count. The repo path is canonicalized
+/// first: dbranch runs with `-C .` by default, and the parent of a
+/// bare `.` is nothing.
+fn orig_tarball(repo: &Path, package: &str, upstream_version: &str) -> Option<PathBuf> {
+    let prefix = format!("{package}_{upstream_version}.orig.tar.");
+    let repo = repo.canonicalize().ok()?;
+    std::fs::read_dir(repo.parent()?)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_prefix(&prefix))
+                .is_some_and(|ext| ["gz", "xz", "bz2", "lzma", "zst"].contains(&ext))
+        })
 }
 
 /// The source package name and version from the top changelog stanza.
@@ -3583,6 +3611,38 @@ E: damo: an-error\n";
             include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn orig_tarball_is_found_next_to_the_repo_by_upstream_version() {
+        // A private parent directory: the check lists the repo's parent,
+        // and a shared one (/tmp) would leak fixtures between runs.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("damo");
+        std::fs::create_dir(&p).unwrap();
+        assert_eq!(orig_tarball(&p, "damo", "3.2.8"), None);
+        let orig = dir.path().join("damo_3.2.8.orig.tar.xz");
+        std::fs::write(&orig, b"x").unwrap();
+        assert_eq!(orig_tarball(&p, "damo", "3.2.8"), Some(orig.clone()));
+        // Another upstream version's tarball does not count, nor does a
+        // file that merely starts like one.
+        assert_eq!(orig_tarball(&p, "damo", "3.2.9"), None);
+        std::fs::write(dir.path().join("damo_3.2.9.orig.tar.gz.aside"), b"x").unwrap();
+        assert_eq!(orig_tarball(&p, "damo", "3.2.9"), None);
+        // A relative repo path (dbranch's default `-C .`) must resolve
+        // to the same parent directory, not to the empty path.
+        assert_eq!(orig_tarball(&pathdiff(&p), "damo", "3.2.8"), Some(orig));
+    }
+
+    /// `p` relative to the current directory, for testing relative
+    /// repo paths without changing the process's cwd.
+    fn pathdiff(p: &Path) -> PathBuf {
+        let cwd = std::env::current_dir().unwrap();
+        let mut up = PathBuf::new();
+        for _ in cwd.components().skip(1) {
+            up.push("..");
+        }
+        up.join(p.strip_prefix("/").unwrap())
     }
 
     #[test]

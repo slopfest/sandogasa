@@ -440,8 +440,14 @@ recommended.
   the tarball flow's `import_already_done`.
 - **export-orig runs in the source stage**, not the import stage: it is
   what makes `debuild -S` find `../<pkg>_<v>.orig.tar.*`, and a source
-  stage re-run should regenerate it. gbp is therefore required for the
-  source stage in this mode (`ensure_tools`).
+  stage re-run on a fresh clone should regenerate it. gbp is therefore
+  required for the source stage in this mode (`ensure_tools`). When the
+  orig for that upstream version is already there (a `-2`), the step
+  prints a plain "already there; skipped" note and **no command**: gbp
+  would only rediscover the file, and a green `$ …` line is dbranch's
+  promise that this is what the user would type by hand — a no-op must
+  not wear one (`orig_tarball` does the presence check by name, so a
+  different upstream version's tarball does not count).
 - **Upstream's own packaging branch is a starting point, not a
   remote.** antifennel's author keeps a `debian/latest` in the upstream
   repo (a complete, competent `debian/`, changelog 0.3.1-1, based one

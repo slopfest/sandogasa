@@ -139,7 +139,9 @@ merges the newest release tag (`--upstream-version` for another) into
 the Debian branch and writes the entry with `gbp dch -N <version>-1`,
 and the source stage first runs `gbp export-orig --pristine-tar
 --pristine-tar-commit` to generate the orig tarball from that tag, so
-the tarball is reproducible from git and never downloaded. The
+the tarball is reproducible from git and never downloaded (an orig for
+that upstream version already next to the repo — a `-2` — is noted and
+the step skipped, with no command). The
 upstream remote is never a push candidate. Unlike a rebuild the changelog is left as gbp writes it (a
 real new-upstream entry — your other commits since the last release
 show up as bullets, nothing is normalized away); the distribution is

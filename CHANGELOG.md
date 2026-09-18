@@ -21,7 +21,10 @@ newest release tag (or `--upstream-version`) into the Debian branch and
 writes the changelog entry with `gbp dch -N <version>-1`, and the
 source stage first generates the orig tarball from the tag with
 `gbp export-orig --pristine-tar --pristine-tar-commit`, so it is
-reproducible from git and never downloaded. A tag already merged is
+reproducible from git and never downloaded; when that upstream
+version's orig is already next to the repo (a `-2`), the step says so
+and prints no command, since a narrated command is what the user would
+run by hand and gbp would only have rediscovered the file. A tag already merged is
 noted and skipped on a re-run. The upstream remote is never offered as
 a push destination, and a repository with only that remote is told to
 add its packaging remote.
