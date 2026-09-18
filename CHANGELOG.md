@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Versioning: a tool crate's library target is not semver surface
+
+The tools that carry a `src/lib.rs` (dbranch, hs-relmon, koji-lag and
+others) do so for their own binary and tests; the library is internal
+and carries no stability promise. Changes to it — this release rewrites
+several of dbranch's `pub fn` signatures — are implementation details:
+they do not drive the version bump and are not listed as breaking. Only
+the standalone library crates under `crates/` are semver surface, which
+is what `make semver-checks` has always covered.
+
 ### dbranch: package from upstream's git tags — `clone`, and `update` merges releases
 
 Some upstreams publish no tarballs and ask to be packaged from their

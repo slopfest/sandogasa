@@ -123,6 +123,28 @@ gate over and over, because then those trees are live caches and each
 iteration becomes a full instrumented rebuild. `cargo clean` is for
 stepping away from the repo, or for running out of space for real.
 
+## A tool crate's library target is internal, not semver surface
+
+Several tools carry a `src/lib.rs` (dbranch, hs-relmon, koji-lag, …)
+because a clap binary's `main.rs` cannot be unit-tested from the outside
+and the man-page test needs to construct the `Cli` type. The library
+exists to serve that binary and its tests; nothing else links to it,
+and it is published to crates.io only because the tool is. So it is not
+part of the workspace's public API: `make semver-checks` covers
+`crates/*` alone (the Makefile has always said "semver-checks has
+nothing to say about binaries"), and a changed signature in a tool's
+`plan.rs` or a new field in its options struct is an implementation
+detail, not a breaking change — it neither drives the version bump nor
+gets a `(breaking)` heading in the CHANGELOG. The distinction that
+matters is standalone library crate versus tool: v0.24.0 went minor for
+field additions in `sandogasa-forgejo` and `sandogasa-gitlab`, which
+other crates and other people build against; the same kind of change
+inside dbranch's library at 0.24.1 is a patch. Decided 2026-09-18, when
+the dbranch upstream-git work rewrote a dozen of its `pub fn`
+signatures and the only alternative to this rule was a minor bump that
+would have told consumers something had broken for them when nothing
+had.
+
 ## Only dbranch ships binaries, and `precise-builds` is why it can
 
 Each release attaches statically linked musl builds of `dbranch` for
