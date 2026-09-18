@@ -70,15 +70,21 @@ stages you run need:
 ## Usage
 
 ```
+dbranch clone <url> [<dir>] [--upstream-version <v>]
+    [--debian-branch <branch>] [--upstream-remote <name>]
+    [--from-upstream-packaging | --fresh]
+    [--salsa <namespace>] [--mr] [--mrconfig <path>]
+    [--dry-run] [--explain] [--quiet]
 dbranch fixup [<branch>...] [-C <dir>] [--dry-run] [--explain] [--quiet]
 dbranch rebuild [<branch>...] [--stage <list>] [-C <dir>]
-    [--source <branch>] [--nowait]
+    [--source <branch>] [--remote <name>] [--nowait]
     [--refresh-chroot | --no-refresh-chroot] [--urgency <level>]
     [--ppa <name> | --upload-target <host> | --debusine <name>]
     [--debusine-project <project>] [--yes] [--include-eol]
     [--dry-run] [--explain] [--quiet]
 dbranch update [<branch>] [--stage <list>] [-C <dir>]
-    [--build-suite <suite>] [--nowait]
+    [--build-suite <suite>] [--upstream-remote <name>]
+    [--upstream-version <v>] [--nowait] [--yes]
     [--upload-target <host> | --debusine <name>]
     [--debusine-project <project>]
     [--refresh-chroot | --no-refresh-chroot] [--urgency <level>]

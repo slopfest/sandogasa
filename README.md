@@ -24,7 +24,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 ## Tools
 
 - **[cpu-sig-tracker](tools/cpu-sig-tracker/)** — CentOS Proposed Updates SIG package-state tracker across Koji, GitLab, and JIRA
-- **[dbranch](tools/dbranch/)** — propagate a Debian package across its downstream branches in `rpmbuild`-style stages: rebuild Ubuntu PPA and Debian stable proposed-update (`debian/<codename>`) branches, and update the Debian branch to a new upstream (merge/import + changelog entry; optional pbuilder build, lintian, push + GitLab CI watch via `glab`, dput upload, and tag); doubles as a learning tool via `--explain`
+- **[dbranch](tools/dbranch/)** — propagate a Debian package across its downstream branches in `rpmbuild`-style stages: rebuild Ubuntu PPA and Debian stable proposed-update (`debian/<codename>`) branches, and update the Debian branch to a new upstream (merge/import + changelog entry; optional pbuilder build, lintian, push + GitLab CI watch via `glab`, dput or Debusine upload, and tag); starts a package straight from upstream's git tags (`clone`, with the salsa project and a myrepos entry set up on request); doubles as a learning tool via `--explain`
 - **[ebranch](tools/ebranch/)** — cross-branch porting helper: build-order resolution, branch requests, update checking with Bodhi karma, and tracking a multi-package effort on its way into the distro
 - **[fedora-cve-triage](tools/fedora-cve-triage/)** — triage CVEs reported against Fedora components in Red Hat Bugzilla
 - **[fedora-review-digest](tools/fedora-review-digest/)** — condense a `fedora-review` run of an auto-generated spec (rust2rpm) into a short rust-sig-style review comment

@@ -235,11 +235,15 @@ that what dbranch sends is accepted — not that `-si` would be refused
 by a PPA, which is the claim the `-sa` arm rests on and which nothing
 here tests.
 
-**Not documented, reasoned:** mentors and Debusine. Neither's docs
-mention `-sa` or the orig tarball — the `-sa` there follows from the
-repository having no Debian pool to resolve against, so a sponsor
-`dget`ing the `.dsc` would find a file that isn't there. Confirm
-against a real upload before treating either as settled.
+**Debusine confirmed on 2026-09-18:** opentmux 0.1-3 built `-sa` was
+accepted by debusine.debian.net (artifact 4770413), its
+`debian_pipeline` workflow built, tested and signed it, and the package
+was published to the `sid-opentmux` suite — so the `-sa` arm holds
+there too. **Mentors is still reasoned only:** its docs do not mention
+`-sa` or the orig tarball — the `-sa` follows from the repository having
+no Debian pool to resolve against, so a sponsor `dget`ing the `.dsc`
+would find a file that isn't there. Confirm against a real upload
+before treating it as settled.
 
 Both flags are passed explicitly rather than letting `-si` be implicit,
 so the narrated command records what the run decided — the tool teaches

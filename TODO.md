@@ -477,17 +477,19 @@ one-shot view. Follow-ups:
 
 ## dbranch
 
-- (2026-09-17) Exercise the upstream-git flow end to end on a real
-  package: a `dbranch update` that merges a newly tagged release, then
-  `gbp export-orig --pristine-tar-commit` feeding `debuild -S` and a
-  chroot build. antifennel is the first candidate once its packaging is
-  settled (it started from upstream's own `debian/latest`), but it needs
-  a new upstream tag first — a throwaway tag on a local mirror would do.
-  Separately, the from-scratch path — `clone` into a repo with no
-  packaging anywhere, then the printed `dh_make -p <name>_<version>
-  --createorig`, then the first export-orig replacing dh_make's
-  provisional orig — is reasoned only; a package that fits is expected
-  later.
+- (2026-09-17) Exercise the one step of the upstream-git flow no
+  package has taken yet: a `dbranch update` that merges a *newly
+  tagged* upstream release into an existing Debian branch, then
+  `gbp export-orig --pristine-tar-commit` for the new version feeding
+  `debuild -S` and a chroot build. Everything around it ran for real on
+  2026-09-18 — `clone` (from upstream's packaging branch on antifennel,
+  from scratch on opentmux), the source stage's first export-orig,
+  build, lint, the push with tag + pristine-tar and salsa CI, and a
+  Debusine upload — but both packages sit at their newest tag, so the
+  merge path has only its unit and dry-run tests. antifennel or
+  opentmux will do when upstream tags again; a throwaway tag on a local
+  mirror would do sooner. The printed `dh_make --createorig` step is
+  likewise untried: opentmux's packaging was copied from tmux instead.
 
 - (2026-07-03, nice-to-have) the merge phase of proposed-updates and
   backports could run on non-Debian hosts (only build/upload truly need
