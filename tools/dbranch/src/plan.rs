@@ -431,6 +431,19 @@ pub fn mr_config_argv(mrconfig: &str, section: &str, checkout: &str, update: &st
     ])
 }
 
+/// `git push <remote> tag <tag>` — push one tag by name (the explicit
+/// form, so a branch of the same name is never meant).
+pub fn push_tag_argv(remote: &str, tag: &str) -> Vec<String> {
+    argv(&["git", "push", remote, "tag", tag])
+}
+
+/// The upstream part of a Debian version: no epoch, no revision
+/// (`1:0.3.1-1` → `0.3.1`; a native `0.3.1` stays).
+pub fn upstream_version(version: &str) -> &str {
+    let v = version.split_once(':').map(|(_, v)| v).unwrap_or(version);
+    v.rsplit_once('-').map(|(u, _)| u).unwrap_or(v)
+}
+
 /// `git fetch --tags <remote>` — bring in upstream's release tags.
 pub fn git_fetch_tags_argv(remote: &str) -> Vec<String> {
     argv(&["git", "fetch", "--tags", remote])
@@ -1090,6 +1103,14 @@ mod tests {
             dh_make_argv("antifennel", "0.3.1"),
             ["dh_make", "-p", "antifennel_0.3.1", "--createorig"]
         );
+        assert_eq!(
+            push_tag_argv("origin", "0.3.1"),
+            ["git", "push", "origin", "tag", "0.3.1"]
+        );
+        assert_eq!(upstream_version("0.3.1-1"), "0.3.1");
+        assert_eq!(upstream_version("1:0.3.1-2~bpo13+1"), "0.3.1");
+        assert_eq!(upstream_version("0.3.1"), "0.3.1");
+        assert_eq!(upstream_version("2026.09-1-1"), "2026.09-1");
         assert_eq!(
             git_remote_add_argv("origin", "git@h:ns/thing.git"),
             ["git", "remote", "add", "origin", "git@h:ns/thing.git"]

@@ -12,8 +12,10 @@
 //! the upstream template plus the same preset.
 
 /// The upstream template's minimal `debian/salsa-ci.yml`: a single
-/// `include:` of `recipes/debian.yml`.
-const TEMPLATE: &str = "\
+/// `include:` of `recipes/debian.yml`. As is, it is the right file for
+/// a Debian branch (it builds against unstable); rebuild branches get
+/// it plus their preset via [`new_config`].
+pub const TEMPLATE: &str = "\
 ---
 include:
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/recipes/debian.yml

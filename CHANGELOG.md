@@ -56,6 +56,19 @@ update — or, without a salsa project, the `dbranch clone` invocation
 that reproduces the setup (`--mrconfig` picks a file other than
 `~/.mrconfig`).
 
+The first push of such a Debian branch then runs CI: `update`'s push
+stage creates `debian/salsa-ci.yml` from the upstream template when the
+branch has none (as is it builds against unstable, which is what the
+Debian branch wants) and commits it before pushing. Until now only
+rebuild branches got the file, in the merge stage, so a Debian branch
+pushed by `update` started no pipeline however the project was
+configured. In a repository packaged from upstream's git the push stage
+also pushes the release tag the changelog version names, and the
+`pristine-tar` branch once it exists, ahead of the branch: salsa's CI
+builds the orig tarball from one of them, and antifennel's first
+pipeline failed with "0.3.1 is not a valid treeish" because the branch
+had gone up without its tag.
+
 ### dbranch: push to, and configure CI on, the branch's own remote
 
 dbranch assumed every branch belonged to `origin`: it pushed there,

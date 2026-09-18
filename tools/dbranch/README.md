@@ -305,7 +305,17 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   lintian is quiet when clean, so its output is echoed with a
   tag-count summary. It uses lintian's default exit convention
   (non-zero on error-level tags) and propagates that status.
-- **`push`** — when the branch carries a `debian/salsa-ci.yml`, first
+- **`push`** — for the Debian branch (`update`), first create
+  `debian/salsa-ci.yml` from the upstream template when the branch has
+  none (as is it builds against unstable, which is what that branch
+  wants) and commit it, so the first push already runs a pipeline; a
+  rebuild branch got its file, with the preset, in the merge stage.
+  In a repository packaged from upstream's git, the release tag named by
+  the changelog version (`0.3.1-1` → tag `0.3.1`) and the `pristine-tar`
+  branch, once it exists, are pushed ahead of the branch, because salsa's
+  CI builds the orig tarball from one of them (`gbp export-orig`) — a
+  branch pushed alone fails there with "not a valid treeish".
+  Then, when the branch carries a `debian/salsa-ci.yml`,
   check the CI config path of the branch's remote project (`glab api
   --hostname <host> projects/<group%2Frepo>`): Salsa
   only runs the file when that setting points at it, and a project

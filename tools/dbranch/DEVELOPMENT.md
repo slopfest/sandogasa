@@ -347,6 +347,35 @@ suite for an old Ubuntu LTS (better signal), and that is left untouched.
   rebuilder often isn't the maintainer and must not touch the Debian
   branch, and without the file the push stage sits out `CREATE_TIMEOUT`
   waiting for a pipeline that never appears.
+- **A Debian branch gets the plain template in the push stage.** The
+  rebuild flow creates salsa-ci.yml (with its preset) in the merge
+  stage, but `update` has no such stage, so its first push ran no CI —
+  the `clone --salsa` project has the CI config path preset, which is
+  only half of it. The push stage now creates the bare upstream template
+  (an `include:` of `recipes/debian.yml`, no `variables:` — a Debian
+  branch wants the default unstable) when the file is missing and
+  `target_type` is `None`, then the CI config path check confirms the
+  setting. Kept in the push stage, not `clone`: an adopted upstream
+  packaging or a freshly written `debian/` is the packager's to review
+  first, and the file only matters once something is pushed. The
+  alternative of pointing the project at
+  `recipes/debian.yml@salsa-ci-team/pipeline` with no file at all was
+  considered and dropped: the Salsa CI team recommends against it (CI
+  would run on every branch — `upstream`, `pristine-tar` — and nobody
+  can see from the repo why), and dbranch's PPA branches need their own
+  file anyway.
+- **CI needs the tag (or pristine-tar) on the packaging remote.**
+  antifennel's first pipeline failed in `build source`: salsa-ci runs
+  `gbp export-orig`, which found no `pristine-tar` branch and then
+  "0.3.1 is not a valid treeish" — the branch had been pushed, upstream's
+  tag had not (`git push -u origin <branch>` pushes no tags, and gbp's
+  own manual warns against `--tags`, which would push every upstream tag).
+  So for an upstream-git layout the push stage pushes the one tag the
+  changelog version names (`plan::upstream_version` → `tag_of_version`,
+  explicit `git push <remote> tag <tag>`) and the `pristine-tar` branch
+  when it exists, *before* the branch, so the pipeline the branch push
+  starts can build the orig. Idempotent: git answers "Everything
+  up-to-date" on a re-run.
 - **The file alone runs nothing: the project's CI config path must point
   at it.** Salsa has no instance default; a project that never had a
   salsa-ci.yml has `ci_config_path` unset (GitLab then looks for a root

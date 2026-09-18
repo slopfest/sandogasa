@@ -1157,7 +1157,16 @@ fn build_pipeline(
         lint_stage(ui, repo, build_suite, version)?;
     }
     if stages.push {
-        push_stage(ui, repo, target, remote, target_type, nowait, assume_yes)?;
+        push_stage(
+            ui,
+            repo,
+            target,
+            remote,
+            target_type,
+            upstream_git,
+            nowait,
+            assume_yes,
+        )?;
     }
     if stages.upload {
         let (package, version) = pkg_ver.as_ref().unwrap();
@@ -1501,12 +1510,44 @@ fn push_stage(
     branch: &str,
     remote: &str,
     target_type: Option<TargetType>,
+    upstream_git: Option<&UpstreamGit>,
     nowait: bool,
     assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project = gitlab_project(repo, remote)?;
-    if repo.join(plan::SALSA_CI_PATH).exists() {
+    // A Debian branch (`update`) with no salsa-ci.yml gets the plain
+    // upstream template — it builds against unstable, which is what the
+    // Debian branch wants — so this push already runs a pipeline. A
+    // rebuild branch got its file, with the preset, in the merge stage.
+    let mut has_ci = repo.join(plan::SALSA_CI_PATH).exists();
+    if target_type.is_none() && !has_ci {
+        ui.step(&format!("Create salsa-ci.yml for {branch}"));
+        create_packaging_file(ui, repo, "salsa-ci.yml", branch, salsaci::TEMPLATE)?;
+        has_ci = true;
+    }
+    if has_ci {
         ensure_ci_config_path(ui, repo, &project, target_type, assume_yes);
+    }
+    // Packaged from upstream's git: CI builds the orig tarball from the
+    // release tag (`gbp export-orig`), or from the pristine-tar branch
+    // once one exists, so both go to the packaging remote *before* the
+    // branch — the pipeline the branch push starts must find them.
+    if let Some(up) = upstream_git {
+        let (_, version) = top_package_version(repo)?;
+        let tag = upstream::tag_of_version(&up.tag_format, plan::upstream_version(&version));
+        if git::rev_parse(repo, &tag).is_some() {
+            ui.step(&format!(
+                "Push upstream tag {tag} to {remote} (CI builds the orig from it)"
+            ));
+            ui.run_required(&plan::push_tag_argv(remote, &tag), repo)?;
+        }
+        if git::local_branches(repo)?
+            .iter()
+            .any(|b| b == "pristine-tar")
+        {
+            ui.step(&format!("Push pristine-tar to {remote}"));
+            ui.run_required(&plan::push_set_upstream_argv(remote, "pristine-tar"), repo)?;
+        }
     }
     ui.step(&format!("Push {branch} to {remote}"));
     // Once the branch is configured to push to `remote` a plain
@@ -3542,6 +3583,61 @@ E: damo: an-error\n";
             include_eol: false,
         };
         run(&ui_dry(), dir.path(), &opts).unwrap();
+    }
+
+    #[test]
+    fn update_push_creates_salsa_ci_for_the_debian_branch() {
+        // setup() has an origin but no salsa-ci.yml: the push stage of
+        // `update` creates the plain template before pushing (narrated
+        // under dry-run), so the first push of a Debian branch runs CI.
+        let dir = setup();
+        let p = dir.path();
+        let opts = UpdateOptions {
+            branch: None,
+            stages: Stages {
+                push: true,
+                ..Stages::default()
+            },
+            build_suite: "testing".to_string(),
+            upstream_remote: None,
+            upstream_version: None,
+            nowait: true,
+            upload_target: None,
+            debusine: None,
+            debusine_project: None,
+            chroot_refresh: ChrootRefresh::Auto,
+            urgency: "medium".to_string(),
+        };
+        update(&ui_dry(), p, &opts).unwrap();
+        // Packaged from upstream's git: the release tag (from the
+        // changelog version, 3.2.8-1 → tag v3.2.8) and the pristine-tar
+        // branch are pushed ahead of the branch — narrated here.
+        git(
+            p,
+            &["remote", "add", "upstream", "https://git.example/damo.git"],
+        );
+        std::fs::write(
+            p.join("debian/gbp.conf"),
+            "[DEFAULT]\nupstream-tag = v%(version)s\n",
+        )
+        .unwrap();
+        git(p, &["tag", "v3.2.8"]);
+        git(p, &["branch", "pristine-tar"]);
+        update(&ui_dry(), p, &opts).unwrap();
+        // For real, the file is created and committed on the branch.
+        git(p, &["config", "user.email", "t@x"]);
+        git(p, &["config", "user.name", "T"]);
+        git(p, &["config", "commit.gpgsign", "false"]);
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: true,
+        };
+        create_packaging_file(&ui, p, "salsa-ci.yml", "debian/unstable", salsaci::TEMPLATE)
+            .unwrap();
+        let text = std::fs::read_to_string(p.join("debian/salsa-ci.yml")).unwrap();
+        assert_eq!(text, salsaci::TEMPLATE);
+        assert!(!text.contains("variables"));
     }
 
     #[test]
