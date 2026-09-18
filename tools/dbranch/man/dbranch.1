@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH dbranch 1 2026-09-17 "sandogasa 0.24.0" "Sandogasa Manual"
+.TH dbranch 1 2026-09-18 "sandogasa 0.24.0" "Sandogasa Manual"
 .SH NAME
 dbranch \- Propagate a Debian package across its Ubuntu PPA and Debian branches
 .SH SYNOPSIS
@@ -195,12 +195,15 @@ Run, but narrate each step + command first (follow along)
 \fB\-q\fR, \fB\-\-quiet\fR
 Suppress tool output, showing it only when a step fails
 .SS dbranch update
-\fBdbranch update\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-build\-suite\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-upstream\-version\fR] [\fB\-\-nowait\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
+\fBdbranch update\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-build\-suite\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-upstream\-version\fR] [\fB\-\-nowait\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
 .PP
 Update the Debian branch to a new upstream release
 .TP
 \fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
 Run in this package working directory
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Answer yes to prompts (e.g. create a missing Debusine workspace) instead of asking
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

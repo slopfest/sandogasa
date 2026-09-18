@@ -499,6 +499,99 @@ pub fn debusine_workflow(suite: &str, project: &str) -> String {
     format!("publish-to-{suite}-{project}")
 }
 
+/// The scope debusine.debian.net keeps Debian work in; personal
+/// repositories are child workspaces of its `developers` workspace.
+pub const DEBUSINE_SCOPE: &str = "debian";
+
+/// The wiki page describing personal repositories: naming, the
+/// `create-repository` workflow and `archive suite create`.
+pub const DEBUSINE_WIKI: &str = "https://wiki.debian.org/DebusineDebianNet#Repositories";
+
+/// A workspace's page on the instance (`https://debusine.debian.net/
+/// debian/r-<name>-<project>/`), whose HTTP status says whether the
+/// workspace exists — dput cannot create one.
+pub fn debusine_workspace_url(workspace: &str) -> String {
+    format!("https://{DEBUSINE_HOST}/{DEBUSINE_SCOPE}/{workspace}/")
+}
+
+/// A workflow template's page in a workspace
+/// (`…/<workspace>/workflow-template/<name>/`): 200 means the
+/// `publish-to-` workflow dput will name exists, which is the whole of
+/// what an upload needs.
+pub fn debusine_workflow_template_url(workspace: &str, workflow: &str) -> String {
+    format!("https://{DEBUSINE_HOST}/{DEBUSINE_SCOPE}/{workspace}/workflow-template/{workflow}/")
+}
+
+/// `curl -s -o /dev/null -w %{http_code} <url>` — just the HTTP status
+/// of a URL, for an existence check.
+pub fn http_status_argv(url: &str) -> Vec<String> {
+    argv(&["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url])
+}
+
+/// The `create-repository` workflow's input: the suffix of the
+/// workspace it creates (`r-<suffix>`), as the YAML the client reads
+/// from stdin.
+pub fn debusine_create_repository_data(workspace: &str) -> String {
+    let suffix = workspace.strip_prefix("r-").unwrap_or(workspace);
+    format!("suffix: \"{suffix}\"\n")
+}
+
+/// `debusine workflow start --workspace developers --data -
+/// create-repository` — create the personal repository workspace
+/// (its suffix arrives on stdin, see
+/// [`debusine_create_repository_data`]). From the wiki's recipe.
+pub fn debusine_create_repository_argv() -> Vec<String> {
+    argv(&[
+        "debusine",
+        "workflow",
+        "start",
+        "--workspace",
+        "developers",
+        "--data",
+        "-",
+        "create-repository",
+    ])
+}
+
+/// A personal repository's suite name, `<suite>-<project>` (the wiki
+/// recommends the base Debian suite plus an own suffix), whose publish
+/// workflow is then [`debusine_workflow`].
+pub fn debusine_suite(suite: &str, project: &str) -> String {
+    format!("{suite}-{project}")
+}
+
+/// `debusine archive suite create --workspace <ws> --architecture all
+/// --architecture amd64 --architecture arm64 --base-workflow-template
+/// upload-to-<dist> <suite>` — create the suite in a personal
+/// repository, which also creates its `publish-to-<suite>` workflow
+/// template from the shared `upload-to-*` one (`unstable` for `sid`,
+/// else the suite's own name).
+pub fn debusine_create_suite_argv(workspace: &str, base_suite: &str, suite: &str) -> Vec<String> {
+    let dist = if base_suite == "sid" {
+        "unstable"
+    } else {
+        base_suite
+    };
+    let template = format!("upload-to-{dist}");
+    argv(&[
+        "debusine",
+        "archive",
+        "suite",
+        "create",
+        "--workspace",
+        workspace,
+        "--architecture",
+        "all",
+        "--architecture",
+        "amd64",
+        "--architecture",
+        "arm64",
+        "--base-workflow-template",
+        &template,
+        suite,
+    ])
+}
+
 /// `dput -O debusine_workspace=<ws> -O debusine_workflow=<wf>
 /// debusine.debian.net <changes>` — upload to a Debusine personal
 /// repository. The `-O` overrides replace the profile's defaults (the
@@ -873,6 +966,64 @@ mod tests {
             dput_argv(None, "../damo_1_source.changes"),
             ["dput", "../damo_1_source.changes"]
         );
+    }
+
+    #[test]
+    fn debusine_workspace_setup_commands() {
+        assert_eq!(
+            debusine_workspace_url("r-michelin-opentmux"),
+            "https://debusine.debian.net/debian/r-michelin-opentmux/"
+        );
+        assert_eq!(
+            debusine_workflow_template_url("r-m-p", "publish-to-sid-p"),
+            "https://debusine.debian.net/debian/r-m-p/workflow-template/publish-to-sid-p/"
+        );
+        assert_eq!(
+            http_status_argv("https://x/y/"),
+            [
+                "curl",
+                "-s",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "https://x/y/"
+            ]
+        );
+        assert_eq!(
+            debusine_create_repository_data("r-michelin-opentmux"),
+            "suffix: \"michelin-opentmux\"\n"
+        );
+        assert_eq!(
+            debusine_create_repository_argv(),
+            [
+                "debusine",
+                "workflow",
+                "start",
+                "--workspace",
+                "developers",
+                "--data",
+                "-",
+                "create-repository"
+            ]
+        );
+        assert_eq!(debusine_suite("sid", "opentmux"), "sid-opentmux");
+        let sid = debusine_create_suite_argv("r-michelin-opentmux", "sid", "sid-opentmux");
+        assert_eq!(
+            &sid[..6],
+            [
+                "debusine",
+                "archive",
+                "suite",
+                "create",
+                "--workspace",
+                "r-michelin-opentmux"
+            ]
+        );
+        assert!(sid.contains(&"upload-to-unstable".to_string()));
+        assert_eq!(sid.last().map(String::as_str), Some("sid-opentmux"));
+        let trixie = debusine_create_suite_argv("r-m-p", "trixie", "trixie-p");
+        assert!(trixie.contains(&"upload-to-trixie".to_string()));
     }
 
     #[test]

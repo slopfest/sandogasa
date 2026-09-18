@@ -301,6 +301,37 @@ Landmines and decisions:
   setup` writes to `~/.config/debusine/client/config.ini`.
   `ensure_debusine_ready` pre-flights both files before any expensive
   work.
+- **The workspace and its publish workflow have to exist before dput
+  names them.** dput's debusine method only triggers a workflow in a
+  workspace; it cannot create either, so a first upload to a new
+  personal repository failed at the very end of the run, after the
+  build. `ensure_debusine_workspace` asks the instance first with
+  `curl -w %{http_code}`: the workflow template's page
+  (`…/<workspace>/workflow-template/publish-to-<suite>-<project>/`,
+  200 = everything dput needs is there), then the workspace's page
+  (`https://debusine.debian.net/debian/<workspace>/`); 404 means
+  missing, anything else is noted and the upload attempted anyway. The
+  two-level check exists because the first live run left a
+  half-created repository: **`create-repository` is a workflow, so it
+  is asynchronous** — the workspace appears when the work request has
+  run — and `archive suite create` issued right after it failed with
+  "Workspace not found". dbranch now polls the workspace page (5 s, up
+  to 3 min) after starting the workflow and before creating the suite,
+  and a workspace that exists without its suite gets just the suite
+  step. Creation follows the [wiki's
+  recipe](https://wiki.debian.org/DebusineDebianNet#Repositories):
+  `debusine workflow start --workspace developers --data -
+  create-repository` with `suffix: "<name>-<project>"` on stdin (the
+  client reads its data from a file or stdin, hence
+  `Ui::run_required_with_input`, narrated as `echo '…' | debusine …`),
+  then `debusine archive suite create --workspace <ws> --architecture
+  all/amd64/arm64 --base-workflow-template upload-to-<dist>
+  <suite>-<project>`, which also creates the `publish-to-<suite>-
+  <project>` template dput names. `upload-to-unstable` for `sid`, else
+  `upload-to-<suite>`. Default yes / `-y` unasked / non-interactive
+  fails with the commands as remedy, per the fix-it prompt rules. The
+  scope `debian` and the host are the instance's; both are constants
+  next to `DEBUSINE_HOST`.
 - **The workflow suite is the *base* release**, not the changelog
   distribution: a trixie backport (`~bpo13+1`, distribution
   `trixie-backports`) publishes via `publish-to-trixie-<srcpkg>` — the

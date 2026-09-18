@@ -229,6 +229,9 @@ pub struct UpdateOptions {
     /// Changelog urgency for the new-upstream entry (default `medium`,
     /// e.g. `high` for a security upload).
     pub urgency: String,
+    /// Answer yes to the fix-it prompts (a missing Debusine workspace,
+    /// a source package to rebuild) instead of asking.
+    pub assume_yes: bool,
 }
 
 /// Run the rebuild workflow over the selected branches.
@@ -713,10 +716,10 @@ pub fn update(
         // else (mentors, Debusine).
         orig_required(None, &upload),
         opts.chroot_refresh,
-        // `update` has no `--yes`: the PPA pre-check can't fire (it
-        // never uploads to a PPA) and its source-package prompts are
-        // interactive, warning or failing on a non-tty as usual.
-        false,
+        // The PPA pre-check can't fire here (update never uploads to a
+        // PPA); `-y` answers the source-package and Debusine-workspace
+        // prompts, which otherwise warn or fail on a non-tty as usual.
+        opts.assume_yes,
     )
 }
 
@@ -1202,6 +1205,131 @@ fn tag_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
     ui.run_required(&plan::gbp_tag_argv(), repo)
 }
 
+/// Make sure the Debusine personal repository, and the `publish-to-`
+/// workflow dput will name, exist before the upload: dput cannot
+/// create either, so a first upload to a new repository failed after
+/// the expensive stages. Two HTTP checks (`curl`, skipped with a note
+/// when curl is absent or an answer is neither 200 nor 404): the
+/// workflow template's page — 200 means all is there — then the
+/// workspace's. What is missing is offered for creation, default yes
+/// and unasked under `-y`, by the wiki's recipe: the `create-repository`
+/// workflow in the shared `developers` workspace when the workspace is
+/// missing — a workflow, so asynchronous: dbranch then polls the
+/// workspace page until it answers — and `archive suite create` for
+/// `<suite>-<project>`, which also creates the workflow template. A
+/// non-interactive run fails with the commands and the wiki link as
+/// the remedy.
+fn ensure_debusine_workspace(
+    ui: &Ui,
+    repo: &Path,
+    workspace: &str,
+    base_suite: &str,
+    project: &str,
+    assume_yes: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !ui.dry_run && !sandogasa_cli::tool_exists("curl") {
+        eprintln!("note: curl not found; skipping the {workspace} existence check");
+        return Ok(());
+    }
+    let workflow = plan::debusine_workflow(base_suite, project);
+    let suite = plan::debusine_suite(base_suite, project);
+    let ws_url = plan::debusine_workspace_url(workspace);
+    let wf_url = plan::debusine_workflow_template_url(workspace, &workflow);
+    let create_repo = plan::debusine_create_repository_argv();
+    let repo_data = plan::debusine_create_repository_data(workspace);
+    let create_suite = plan::debusine_create_suite_argv(workspace, base_suite, &suite);
+    ui.step(&format!(
+        "Check the Debusine repository {workspace} and its {workflow} workflow exist"
+    ));
+    let (code, wf_status) = ui.run_capture(&plan::http_status_argv(&wf_url), repo)?;
+    if ui.dry_run {
+        eprintln!("    (if missing, offers to create them)");
+        ui.run_required_with_input(&repo_data, &create_repo, repo)?;
+        ui.run_required(&create_suite, repo)?;
+        return Ok(());
+    }
+    let unsure = |what: &str, status: &str| {
+        eprintln!(
+            "note: could not tell whether {what} exists (HTTP {status}); trying the upload anyway"
+        );
+    };
+    match (code, wf_status.trim()) {
+        (0, "200") => return Ok(()),
+        (0, "404") => {}
+        (_, other) => {
+            unsure(&format!("the {workflow} workflow"), other);
+            return Ok(());
+        }
+    }
+    let (code, ws_status) = ui.run_capture(&plan::http_status_argv(&ws_url), repo)?;
+    let need_workspace = match (code, ws_status.trim()) {
+        (0, "200") => false,
+        (0, "404") => true,
+        (_, other) => {
+            unsure(&format!("the workspace {workspace}"), other);
+            return Ok(());
+        }
+    };
+    let (reason, remedy) = if need_workspace {
+        (
+            format!("the Debusine workspace {workspace} does not exist (dput cannot create it)"),
+            format!(
+                "create it as {} describes:\n  echo '{}' | {}\n  {}",
+                plan::DEBUSINE_WIKI,
+                repo_data.trim_end(),
+                create_repo.join(" "),
+                create_suite.join(" ")
+            ),
+        )
+    } else {
+        (
+            format!("{workspace} exists but has no {suite} suite / {workflow} workflow"),
+            format!(
+                "create them as {} describes:\n  {}",
+                plan::DEBUSINE_WIKI,
+                create_suite.join(" ")
+            ),
+        )
+    };
+    if !assume_yes {
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            return Err(format!("{reason}; {remedy}").into());
+        }
+        if !ui.confirm(&format!("{reason} — create now?")) {
+            return Err(format!("aborted; {remedy}").into());
+        }
+    }
+    if need_workspace {
+        ui.step(&format!("Create the Debusine repository {workspace}"));
+        ui.run_required_with_input(&repo_data, &create_repo, repo)?;
+        // create-repository is a workflow: the workspace appears when it
+        // has run. Poll its page rather than parse the work request.
+        ui.step(&format!("Wait for {workspace} to appear"));
+        let probe = plan::http_status_argv(&ws_url);
+        ui.show_command(&probe);
+        let start = Instant::now();
+        loop {
+            let (code, out, _) = ui.run_query(&probe, repo)?;
+            if code == 0 && out.trim() == "200" {
+                break;
+            }
+            if start.elapsed() > Duration::from_secs(180) {
+                return Err(format!(
+                    "{workspace} has not appeared after 3 minutes; check the \
+                     create-repository work request on {}, then re-run",
+                    plan::DEBUSINE_HOST
+                )
+                .into());
+            }
+            sleep(Duration::from_secs(5));
+        }
+    }
+    ui.step(&format!(
+        "Create the suite {suite} and its {workflow} workflow"
+    ));
+    ui.run_required(&create_suite, repo)
+}
+
 /// The upload stage: `dput` the source `.changes` to its destination —
 /// a PPA / dput host, dput's configured default (the Debian archive —
 /// used by `update`), or a Debusine personal repository.
@@ -1240,6 +1368,7 @@ fn upload_stage(
             let project = project.as_deref().unwrap_or(package);
             let workspace = plan::debusine_workspace(name, project);
             let workflow = plan::debusine_workflow(suite, project);
+            ensure_debusine_workspace(ui, repo, &workspace, suite, project, assume_yes)?;
             ui.step(&format!(
                 "Upload {package} {version} to Debusine ({workspace}, {workflow})"
             ));
@@ -2476,6 +2605,7 @@ mod tests {
             debusine_project: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
+            assume_yes: false,
         };
         update(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -3219,6 +3349,7 @@ mod tests {
             debusine_project: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
+            assume_yes: false,
         };
         update(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -3244,6 +3375,7 @@ mod tests {
             debusine_project: Some("mypkgs".to_string()),
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
+            assume_yes: false,
         };
         update(&ui_dry(), dir.path(), &opts).unwrap();
     }
@@ -3667,6 +3799,7 @@ E: damo: an-error\n";
             debusine_project: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
+            assume_yes: false,
         };
         update(&ui_dry(), p, &opts).unwrap();
         // Packaged from upstream's git: the release tag (from the
@@ -3733,6 +3866,7 @@ E: damo: an-error\n";
             debusine_project: None,
             chroot_refresh: ChrootRefresh::Auto,
             urgency: "medium".to_string(),
+            assume_yes: false,
         };
         update(&ui_dry(), p, &opts).unwrap();
         // Naming a remote that does not exist is an error, not a fallback.

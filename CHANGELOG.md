@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### dbranch: a Debusine upload offers to create the repository first
+
+`--debusine <name>` uploaded with `dput` into workspace
+`r-<name>-<project>`, but dput cannot create a workspace, so the first
+upload to a new personal repository failed at the end of the run, after
+the source build. The upload stage now checks that the workspace exists
+on debusine.debian.net and, when it does not, offers to create it by the
+[Debusine wiki's](https://wiki.debian.org/DebusineDebianNet#Repositories)
+recipe — the `create-repository` workflow, then `archive suite create`
+for `<suite>-<project>`, which also creates the `publish-to-` workflow
+the upload names — before running dput. The check looks for the
+workflow itself, so a repository created without its suite gets just
+that step, and since `create-repository` is a workflow and therefore
+asynchronous, dbranch waits for the workspace to appear before creating
+the suite. `update` gains `-y`/`--yes`,
+which creates it unasked and also answers its source-package prompts; a
+non-interactive run without it stops and prints the two commands and
+the wiki link.
+
 ### Versioning: a tool crate's library target is not semver surface
 
 The tools that carry a `src/lib.rs` (dbranch, hs-relmon, koji-lag and

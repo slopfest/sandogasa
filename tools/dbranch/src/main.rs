@@ -319,6 +319,11 @@ Defaults to `import`."
         #[arg(long, help_heading = "Stages")]
         nowait: bool,
 
+        /// Answer yes to prompts (e.g. create a missing Debusine
+        /// workspace) instead of asking.
+        #[arg(short = 'y', long)]
+        yes: bool,
+
         /// Build stage: force-refresh the pbuilder chroot first.
         #[arg(long, help_heading = "Stages", conflicts_with = "no_refresh_chroot")]
         refresh_chroot: bool,
@@ -539,6 +544,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             upstream_remote,
             upstream_version,
             nowait,
+            yes,
             refresh_chroot,
             no_refresh_chroot,
             urgency,
@@ -574,6 +580,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 debusine_project,
                 chroot_refresh,
                 urgency,
+                assume_yes: yes,
             };
             rebuild::update(&ui, &repo, &opts)
         }

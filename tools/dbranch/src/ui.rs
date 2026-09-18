@@ -246,6 +246,78 @@ impl Ui {
         ))
     }
 
+    /// Like [`Ui::run_required`], but feeding `input` to the command's
+    /// stdin. Narrated as `echo '<input>' | <command>` so the printed
+    /// line still reproduces the step by hand (for a tool that reads
+    /// its data from stdin, like `debusine workflow start --data -`).
+    pub fn run_required_with_input(
+        &self,
+        input: &str,
+        argv: &[String],
+        cwd: &Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut shown = vec![
+            "echo".to_string(),
+            input.trim_end().to_string(),
+            "|".to_string(),
+        ];
+        shown.extend(argv.iter().cloned());
+        self.show_command_raw(&shown, 2);
+        if self.dry_run {
+            return Ok(());
+        }
+        if self.explain {
+            self.pause();
+        }
+        use std::io::Write;
+        let mut child = Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(cwd)
+            .stdin(Stdio::piped())
+            .spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(input.as_bytes())?;
+        }
+        let code = child.wait()?.code().unwrap_or(1);
+        if code == 0 {
+            Ok(())
+        } else {
+            Err(Box::new(StageFailure {
+                command: shown.join(" "),
+                code,
+            }))
+        }
+    }
+
+    /// [`Ui::show_command`] with the argument at `raw_at` printed as
+    /// is (a shell operator such as `|`, which must not be quoted).
+    fn show_command_raw(&self, argv: &[String], raw_at: usize) {
+        if !self.narrating() {
+            return;
+        }
+        let prompt = Style::new().fg_color(Some(AnsiColor::BrightBlack.into()));
+        let cmd = Style::new().fg_color(Some(AnsiColor::Green.into())).bold();
+        let line = argv
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                if i == raw_at {
+                    a.clone()
+                } else {
+                    shell_quote(a)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        anstream::println!(
+            "    {}${} {}{line}{}",
+            prompt.render(),
+            prompt.render_reset(),
+            cmd.render(),
+            cmd.render_reset()
+        );
+    }
+
     /// Run a command that must succeed; otherwise return a
     /// [`StageFailure`] carrying its exit code so the process can exit
     /// with the same status.

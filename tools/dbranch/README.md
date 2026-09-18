@@ -246,7 +246,15 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   consulted only for `debian/`-namespaced branches. The `upload` stage
   goes to `dput`'s default target (the Debian archive) — no
   `--ppa`/`--upload-target` needed (only PPA branches require one) —
-  or to a Debusine personal repository with `--debusine <name>`. A
+  or to a Debusine personal repository with `--debusine <name>`. Before
+  a Debusine upload dbranch checks that the workspace
+  `r-<name>-<project>` exists (dput cannot create one) and, if not,
+  offers to create it the way the [Debusine
+  wiki](https://wiki.debian.org/DebusineDebianNet#Repositories)
+  describes: the `create-repository` workflow, then `archive suite
+  create` for `<suite>-<project>` with its `publish-to-` workflow;
+  `-y`/`--yes` creates it unasked, and a non-interactive run without
+  it stops and prints those commands instead. A
   proposed-update must be run on a **Debian host** (`gbp dch --stable`
   needs a newer gbp, and the stable chroot / archive upload are
   Debian-only); dbranch hard-fails early otherwise, except under
