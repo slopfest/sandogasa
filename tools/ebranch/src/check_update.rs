@@ -7,6 +7,8 @@
 //! then finds reverse dependencies in the stable repo that would break.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use rayon::prelude::*;
@@ -345,6 +347,12 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
     // Phase 0: Determine the update source (side tag / COPR spec),
     // NVRs, branch, Bodhi release branch, and Bodhi update status
     // (None for side-tag and COPR input).
+    // A Bodhi update's alias, kept for the local-repo fallback below:
+    // it names both the `bodhi updates download` and the cache dir.
+    let bodhi_alias = match detect_input_type(input) {
+        InputKind::BodhiAlias(alias) => Some(alias),
+        _ => None,
+    };
     let (side_tag, copr_spec, nvrs, branch, bodhi_branch, bodhi_status) =
         match detect_input_type(input) {
             InputKind::SideTag(tag) => {
@@ -749,6 +757,66 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             side_fq,
             opts,
         );
+    }
+
+    // A Bodhi update fedrq cannot see yet — pending, or pushed to
+    // testing but not on the mirrors — still has its builds in koji.
+    // Download them and index a local repository: as the "new" side it
+    // stands alone like a side-tag repo (`-r @baseurl:` replaces the
+    // branch's repos), so the side-tag arm's comparison applies as is,
+    // minus the staleness check a repo built from koji's own RPMs
+    // cannot fail.
+    if let Some(alias) = bodhi_alias.as_deref()
+        && !nvrs.is_empty()
+    {
+        match local_update_repo(alias, &nvrs, opts.verbose) {
+            Ok(dir) => {
+                let local_fq = sandogasa_fedrq::Fedrq {
+                    branch: None,
+                    repo: Some(local_repo_class(&dir)),
+                };
+                if opts.verbose {
+                    eprintln!(
+                        "[check-update] comparing provides via a local repo of the update's \
+                         builds ({})",
+                        dir.display()
+                    );
+                }
+                let koji_bins: Vec<String> = nvrs
+                    .iter()
+                    .flat_map(|nvr| {
+                        sandogasa_koji::build_rpms(nvr, opts.koji_profile.as_deref())
+                            .unwrap_or_default()
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                let changed = compute_changed_provides_via_koji(
+                    &nvrs,
+                    &updated_packages,
+                    &stable_fedrq,
+                    &local_fq,
+                    opts.koji_profile.as_deref(),
+                    opts.verbose,
+                );
+                return run_provides_analysis(
+                    input,
+                    &branch,
+                    &updated_packages,
+                    &changes,
+                    &koji_bins,
+                    changed,
+                    vec![],
+                    &stable_fedrq,
+                    &local_fq,
+                    opts,
+                );
+            }
+            Err(e) => eprintln!(
+                "warning: could not build a local repo of the update's builds ({e}); \
+                 listing reverse dependencies only"
+            ),
+        }
     }
 
     // No side tag and not usable via @testing: just list reverse deps.
@@ -1741,6 +1809,132 @@ fn fetch_bodhi_update(alias: &str) -> Result<BodhiUpdateInfo, String> {
     })
 }
 
+/// Beside the repodata: the sorted NVR list the local repo was built
+/// from, so a re-run with the same builds reuses the download and a
+/// changed list rebuilds from scratch.
+const LOCAL_REPO_NVRS: &str = ".ebranch-nvrs";
+
+/// Where a Bodhi update's downloaded builds are indexed:
+/// `$XDG_CACHE_HOME/ebranch/update-repos/<alias>/`.
+fn local_update_repo_dir(alias: &str) -> Result<PathBuf, String> {
+    if alias.is_empty() || !alias.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(format!("unexpected Bodhi alias {alias:?}"));
+    }
+    let base = dirs::cache_dir()
+        .ok_or("cannot locate the cache directory: neither $XDG_CACHE_HOME nor $HOME is set")?;
+    Ok(base.join("ebranch").join("update-repos").join(alias))
+}
+
+/// fedrq's repo class for a local repository, `@baseurl:file://<dir>`.
+/// Given with `-r` it *replaces* the branch's repositories (verified
+/// against a live update), so a query sees the update's builds alone.
+fn local_repo_class(dir: &Path) -> String {
+    format!("@baseurl:file://{}", dir.display())
+}
+
+/// `bodhi updates download --updateid <alias>` — run in the target
+/// directory (bodhi writes to the cwd). No `--arch`: bodhi then asks
+/// koji for `noarch` plus the host's architecture, which is what a
+/// local resolution needs; an explicit arch would drop noarch.
+fn bodhi_download_argv(alias: &str) -> Vec<String> {
+    ["bodhi", "updates", "download", "--updateid", alias]
+        .into_iter()
+        .map(String::from)
+        .collect()
+}
+
+/// `createrepo_c --update .` — index the directory in place.
+fn createrepo_argv() -> Vec<String> {
+    ["createrepo_c", "--update", "."]
+        .into_iter()
+        .map(String::from)
+        .collect()
+}
+
+fn local_repo_nvrs_text(nvrs: &[String]) -> String {
+    let mut sorted: Vec<&str> = nvrs.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    let mut text = sorted.join("\n");
+    text.push('\n');
+    text
+}
+
+/// Whether `dir` already holds a repository built from exactly `nvrs`.
+fn local_repo_is_current(dir: &Path, nvrs: &[String]) -> bool {
+    dir.join("repodata").join("repomd.xml").exists()
+        && std::fs::read_to_string(dir.join(LOCAL_REPO_NVRS))
+            .is_ok_and(|text| text == local_repo_nvrs_text(nvrs))
+}
+
+/// Run a command in `dir`, stdin closed, and report its failure with
+/// the command line and what it said.
+fn run_in(dir: &Path, argv: &[String]) -> Result<(), String> {
+    let out = Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("could not run {}: {e}", argv[0]))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let said = if stderr.trim().is_empty() {
+        stdout
+    } else {
+        stderr
+    };
+    Err(format!(
+        "`{}` failed ({}): {}",
+        argv.join(" "),
+        out.status,
+        said.trim().lines().last().unwrap_or("")
+    ))
+}
+
+/// Build — or reuse — the local repository of a Bodhi update's builds
+/// (see [`bodhi_download_argv`], [`createrepo_argv`]). Both tools are
+/// checked first; a directory built from a different NVR list is
+/// removed and rebuilt so no stale RPM lingers.
+fn local_update_repo(alias: &str, nvrs: &[String], verbose: bool) -> Result<PathBuf, String> {
+    sandogasa_cli::require_tools(&[
+        ("bodhi", "sudo dnf install bodhi-client", Some("--version")),
+        (
+            "createrepo_c",
+            "sudo dnf install createrepo_c",
+            Some("--version"),
+        ),
+    ])?;
+    let dir = local_update_repo_dir(alias)?;
+    if local_repo_is_current(&dir, nvrs) {
+        if verbose {
+            eprintln!(
+                "[check-update] reusing the local repo of {alias}'s builds in {}",
+                dir.display()
+            );
+        }
+        return Ok(dir);
+    }
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)
+            .map_err(|e| format!("cannot clear {}: {e}", dir.display()))?;
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    if verbose {
+        eprintln!(
+            "[check-update] downloading {alias}'s {} build(s) into {} and indexing them",
+            nvrs.len(),
+            dir.display()
+        );
+    }
+    run_in(&dir, &bodhi_download_argv(alias))?;
+    run_in(&dir, &createrepo_argv())?;
+    std::fs::write(dir.join(LOCAL_REPO_NVRS), local_repo_nvrs_text(nvrs))
+        .map_err(|e| format!("cannot write {}: {e}", dir.join(LOCAL_REPO_NVRS).display()))?;
+    Ok(dir)
+}
+
 /// Compute changed provides using `subpkgs_provides` on both repos.
 ///
 /// Works for @testing and any repo where source RPM queries work.
@@ -2292,6 +2486,53 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_repo_commands_and_class() {
+        assert_eq!(
+            bodhi_download_argv("FEDORA-2026-a67d0ddb5f"),
+            [
+                "bodhi",
+                "updates",
+                "download",
+                "--updateid",
+                "FEDORA-2026-a67d0ddb5f"
+            ]
+        );
+        assert_eq!(createrepo_argv(), ["createrepo_c", "--update", "."]);
+        assert_eq!(
+            local_repo_class(Path::new("/home/u/.cache/ebranch/update-repos/X")),
+            "@baseurl:file:///home/u/.cache/ebranch/update-repos/X"
+        );
+        // The alias names a directory: only what a Bodhi alias contains.
+        assert!(local_update_repo_dir("../etc").is_err());
+        assert!(local_update_repo_dir("").is_err());
+        let dir = local_update_repo_dir("FEDORA-2026-a67d0ddb5f").unwrap();
+        assert!(
+            dir.ends_with("ebranch/update-repos/FEDORA-2026-a67d0ddb5f"),
+            "{}",
+            dir.display()
+        );
+    }
+
+    #[test]
+    fn local_repo_is_current_only_with_repodata_and_the_same_nvrs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let nvrs = vec!["b-1-1.fc45".to_string(), "a-2-1.fc45".to_string()];
+        assert!(!local_repo_is_current(dir, &nvrs));
+        std::fs::create_dir_all(dir.join("repodata")).unwrap();
+        std::fs::write(dir.join("repodata/repomd.xml"), "<repomd/>").unwrap();
+        // Repodata alone is not enough: the build list must match.
+        assert!(!local_repo_is_current(dir, &nvrs));
+        std::fs::write(dir.join(LOCAL_REPO_NVRS), local_repo_nvrs_text(&nvrs)).unwrap();
+        assert!(local_repo_is_current(dir, &nvrs));
+        // Order does not matter; a different list does.
+        let reordered = vec!["a-2-1.fc45".to_string(), "b-1-1.fc45".to_string()];
+        assert!(local_repo_is_current(dir, &reordered));
+        let changed = vec!["a-2-2.fc45".to_string(), "b-1-1.fc45".to_string()];
+        assert!(!local_repo_is_current(dir, &changed));
+    }
 
     // --- skip_note / render_report skipped-analysis cases ---
 

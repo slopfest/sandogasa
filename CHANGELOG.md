@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### ebranch: `check-update` compares Provides for a pending Bodhi update too
+
+`check-update FEDORA-…` on an update that had not reached
+`updates-testing` — status `pending`, or pushed but not yet on the
+mirrors — could only list reverse dependencies for manual review,
+because its builds were in koji but in no repository fedrq could query.
+It now downloads the update's builds with `bodhi updates download
+--updateid <alias>` (no `--arch`, so noarch and the host's architecture
+both come) into `$XDG_CACHE_HOME/ebranch/update-repos/<alias>/`, indexes
+them with `createrepo_c`, and queries that directory through fedrq's
+`@baseurl:file://` class, which stands alone from the branch's
+repositories the way a side-tag repo does; the comparison is then the
+side-tag one, binary names from `koji buildinfo` included, and the full
+report follows. The directory is reused while the update's build list
+is unchanged. `bodhi-client` and `createrepo_c` are needed for this
+mode; without them, or if the download fails, ebranch says why and
+lists reverse dependencies as before.
+
 ### dbranch: a Debusine upload offers to create the repository first
 
 `--debusine <name>` uploaded with `dput` into workspace

@@ -27,7 +27,10 @@ repository queries.
 cargo install ebranch
 ```
 
-Requires `fedrq` to be installed and available in `$PATH`.
+Requires `fedrq` to be installed and available in `$PATH`. `koji` is
+needed for side-tag inputs, and `bodhi-client` plus `createrepo_c` for
+`check-update` on a Bodhi update that has not reached `updates-testing`
+(it downloads the update's builds into a local repository).
 
 ## Usage
 
@@ -555,7 +558,20 @@ For new provides, ebranch checks these sources in order:
    banner listing the stale sources instead, and the remedy is
    a manual `koji regen-repo <side-tag>` followed by a rerun
    with `--refresh` (which clears both caches).
-3. **Reverse deps only** — lists affected packages for manual review
+3. **A local repository of the update's builds** — for a Bodhi
+   update fedrq cannot see yet: `pending`, or pushed to testing but
+   not on the mirrors. ebranch runs `bodhi updates download
+   --updateid <alias>` (no `--arch`, so bodhi fetches `noarch` plus
+   the host's architecture) into
+   `$XDG_CACHE_HOME/ebranch/update-repos/<alias>/`, indexes it with
+   `createrepo_c`, and queries it through fedrq's `@baseurl:file://`
+   class, which stands alone from the branch's repositories the way a
+   side-tag repo does; the comparison is then the side-tag one, with
+   binary names from `koji buildinfo`. The directory is reused while
+   the update's build list is unchanged and rebuilt when it changes.
+   Needs `bodhi-client` and `createrepo_c`; without them, or if the
+   download fails, ebranch says so and falls through to the next mode.
+4. **Reverse deps only** — lists affected packages for manual review
 
 `-b`/`--branch` and `-r`/`--repo` are override-only. The branch is
 inferred from the input: the Bodhi release for an update alias, or the

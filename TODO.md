@@ -542,48 +542,6 @@ one-shot view. Follow-ups:
   (none → needinfo'd → releng-filed) so `escalate` knows which step
   each request is on, and the releng-filing branch in `escalate`.
 
-- (2026-06-25, EXPLORATORY — may not be worth it) check-update: source
-  a Bodhi update's Provides from koji instead of fedrq `@testing`, to
-  dodge mirror-propagation flakiness. NOT decided — the current
-  `@testing` approach may be good enough if we just accept up to ~1 day
-  of mirror lag (the note already explains the transient case). Capture
-  before deciding:
-  - Decided NOT to switch the presence check to `fedrq pkgs --src`:
-    `subpkgs` reads the *binary* repo and `pkgs --src` the *source* repo
-    (separate repos that sync independently), so mixing them could have
-    the presence gate pass off the source repo while the binary side
-    still lags — more inconsistency, not less. Stay on `subpkgs`
-    throughout (one repo); the only switch worth making is the wholesale
-    move to koji below, which is consistent AND mirror-immune.
-  - The obvious "reuse the side-tag path" does NOT work: `@koji:<tag>`
-    404s for `updates-testing` (koji serves on-demand repos for side
-    tags, not for updates-testing — it's composed into the public mirror
-    repo instead). Verified.
-  - What DOES work, fully mirror-immune: `koji call getRPMDeps <rpmID>
-    1` returns a binary RPM's Provides straight from koji's DB (proven
-    on build 3022363). Path: `getBuild <nvr>` → `listRPMs <buildID>` →
-    `getRPMDeps` per binary RPM. The koji side exists now:
-    `sandogasa_koji::rpm_provides` (used by fedora-cve-triage); ebranch
-    does not call it yet.
-  - If we do it, use getRPMDeps on BOTH sides — ask koji for the stable
-    (old) build's Provides too, not just the new one — so old vs new are
-    apples-to-apples from the same source (don't mix koji-new with
-    fedrq-stable; formats/arch handling would differ).
-  - Real risk to validate first: `compare_provides` is old-driven and
-    string-exact (an old provide is "unchanged" only if its exact string
-    is in the new set). koji returns `{name, version, flags}`, so the
-    strings must be formatted byte-identically (sense-flag operators,
-    epochs, bare file/soname provides) and arch-selected consistently,
-    or every provide shows as "updated". Validate the diff is clean on a
-    real package before trusting it.
-  - Evidence from the debugging session (f43 iptstate, 2.3.0-1 in
-    testing): `subpkgs -S` returned EMPTY against `@testing` while
-    `pkgs --src`/`pkgs` returned 2.3.0; `subpkgs` works on stable and
-    for bash/python-setuptools — and the author believes the disagreement
-    was transient mirror-propagation skew (different queries hitting
-    differently-synced mirrors; he, on better US mirrors, saw them
-    agree). So this is propagation, not a deterministic `subpkgs` bug.
-
 ## sandogasa-review adoption
 
 - (2026-06-29) Surveyed the workspace for other tools that could adopt the
