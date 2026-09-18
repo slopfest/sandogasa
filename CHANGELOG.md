@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.24.1
 
 ### ebranch: `check-update` compares Provides for a pending Bodhi update too
 
