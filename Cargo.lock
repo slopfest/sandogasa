@@ -360,6 +360,7 @@ dependencies = [
  "anstream",
  "anstyle",
  "clap",
+ "dirs",
  "sandogasa-build",
  "sandogasa-cli",
  "serde_json",

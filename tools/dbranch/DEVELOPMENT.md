@@ -434,6 +434,35 @@ recommended.
   disagree and the tag's packaging can never be diverged from cleanly.
   The advice to such an upstream is a branch; dbranch says so and
   carries on.
+- **`--salsa` creates the project through the API, not `glab repo
+  create`.** Run inside the clone, `glab repo create` would resolve the
+  host from the remotes (git.sr.ht is not GitLab) or fall back to the
+  default host, and it adds the remote with glab's own protocol choice.
+  Two explicit calls instead: `glab api --hostname salsa.debian.org
+  namespaces?search=<ns>` (a substring search — match `full_path`
+  exactly) for the id, then `POST projects` with `namespace_id`,
+  `visibility=public` and `ci_config_path=debian/salsa-ci.yml` preset,
+  so the first push carrying that file already runs a pipeline. dbranch
+  adds `origin` itself from the reply's `ssh_url_to_repo` (the user's
+  other salsa remotes are ssh). It does **not** push: a fresh branch is
+  a lone gbp.conf, an adopted upstream packaging deserves a review
+  (Maintainer, changelog) before it appears under the user's namespace,
+  and neither carries a salsa-ci.yml, so the push would run no CI. The
+  first push is `update --stage push`, one path that always adds the CI
+  file first. An empty project cannot be given a default branch; GitLab
+  makes the first pushed one the default.
+- **`--mr` writes what the user's `.mrconfig` already looks like.**
+  Sections are relative to the mrconfig's directory (`~/.mrconfig` →
+  `src/debian/pkgs/<name>`), so dbranch passes `-c` explicitly and
+  computes the relative path itself (`mr_section`; absolute when the
+  clone is outside that tree). The commands follow the existing
+  packaging entries: `gbp clone --all <salsa ssh url> <name> && cd
+  <name> && git remote add upstream <url> && git fetch --tags upstream`
+  with `update = gbp pull && git fetch --tags upstream`; without a salsa
+  project the checkout is the `dbranch clone` invocation, flags
+  included, that reproduces the setup. myrepos parses commands like
+  these only from trusted files; `~/.mrconfig` is trusted by default, a
+  `--mrconfig` elsewhere must be listed in `~/.mrtrust`.
 - `clone` commits only `debian/gbp.conf` when starting fresh; the rest
   of `debian/` is the packager's and dbranch prints the
   `dh_make -p <name>_<version> --createorig` to run rather than running

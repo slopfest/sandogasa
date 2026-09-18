@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS dbranch clone
-\fBdbranch clone\fR [\fB\-\-upstream\-version\fR] [\fB\-\-debian\-branch\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-from\-upstream\-packaging\fR] [\fB\-\-fresh\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR] 
+\fBdbranch clone\fR [\fB\-\-upstream\-version\fR] [\fB\-\-debian\-branch\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-from\-upstream\-packaging\fR] [\fB\-\-fresh\fR] [\fB\-\-salsa\fR] [\fB\-\-mr\fR] [\fB\-\-mrconfig\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR] 
 .PP
 Clone upstream\*(Aqs git to package it straight from its tags (gbp\*(Aqs
 "upstream uses git, no tarballs" flow): clone with upstream as
@@ -25,6 +25,9 @@ and commit a debian/gbp.conf naming the tag style (upstream\-tag) with
 pristine\-tar enabled. When upstream itself carries a debian/* branch,
 offers to start from it instead (its packaging commits stay in the
 history, so diverging is ordinary commits), merging the tag in.
+\-\-salsa NAMESPACE also creates the packaging project on salsa and adds
+it as origin (the first push is `update \-\-stage push`, which adds the
+CI file); \-\-mr registers the clone with myrepos.
 Later releases are then merged in by `update`,
 which detects this layout, and the source stage generates the orig
 tarball from the tag with `gbp export\-orig`. Writing the rest of
@@ -44,6 +47,15 @@ Start from upstream\*(Aqs own debian/* branch without asking
 .TP
 \fB\-\-fresh\fR
 Ignore any debian/* branch upstream carries; start at the tag
+.TP
+\fB\-\-salsa\fR \fI<NAMESPACE>\fR
+Create the packaging project on salsa.debian.org in this namespace and add it as origin (pushing is `update`\*(Aqs job)
+.TP
+\fB\-\-mr\fR
+Register the clone with myrepos (mr config)
+.TP
+\fB\-\-mrconfig\fR \fI<PATH>\fR
+mrconfig to register in (default: ~/.mrconfig)
 .TP
 \fB\-\-dry\-run\fR
 Print the commands without running anything (a tutorial)

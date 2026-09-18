@@ -38,7 +38,18 @@ pub struct CloneOptions {
     /// starts from it, `Some(false)` ignores it, `None` asks (a
     /// non-interactive run starts fresh with a warning).
     pub packaging: Option<bool>,
+    /// Create the packaging project on salsa under this namespace and
+    /// add it as `origin` (nothing is pushed: the first push is
+    /// `update --stage push`, which also adds the CI file).
+    pub salsa: Option<String>,
+    /// Register the clone with myrepos (`mr config`).
+    pub mr: bool,
+    /// The mrconfig to register in; `None` is `~/.mrconfig`.
+    pub mrconfig: Option<PathBuf>,
 }
+
+/// The GitLab instance `--salsa` creates projects on.
+const SALSA: &str = "salsa.debian.org";
 
 /// gbp's `upstream-tag` format for a tag's style: `v1.2` →
 /// `v%(version)s`, `1.2` → `%(version)s`; `None` for a tag that does
@@ -166,6 +177,30 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
     if dir.exists() {
         return Err(format!("{} already exists", dir.display()).into());
     }
+    // Cheap preconditions before the clone: the tools the optional
+    // steps need, and glab's token for salsa.
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or("the clone directory has no name")?;
+    let mrconfig = match (&opts.mr, &opts.mrconfig) {
+        (false, _) => None,
+        (true, Some(p)) => Some(p.clone()),
+        (true, None) => Some(
+            dirs::home_dir()
+                .ok_or("cannot locate ~/.mrconfig: $HOME is unset; pass --mrconfig <path>")?
+                .join(".mrconfig"),
+        ),
+    };
+    if !ui.dry_run {
+        if opts.mr && !sandogasa_cli::tool_exists("mr") {
+            return Err("mr not found; install myrepos (or drop --mr)".into());
+        }
+        if opts.salsa.is_some() {
+            git::ensure_tools(false, false, false, true, false, false, false)?;
+            git::ensure_glab_auth(Path::new("."), SALSA)?;
+        }
+    }
     ui.step(&format!(
         "Clone {} with upstream as remote {}",
         opts.url, opts.upstream_remote
@@ -202,7 +237,8 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
             opts.packaging,
         )
     };
-    match theirs {
+    let from_upstream = theirs.is_some();
+    let review = match theirs {
         Some(branch) => {
             let start = format!("{}/{branch}", opts.upstream_remote);
             ui.step(&format!(
@@ -220,13 +256,9 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
                 ui.run_required(&plan::merge_argv(&tag), &dir)?;
             }
             complete_gbp_conf(ui, &dir, &opts.debian_branch, &format)?;
-            eprintln!(
-                "Next: review debian/ in {} — it is upstream's packaging (Maintainer, \
-                 changelog), and any change is an ordinary commit here — add the \
-                 packaging remote (git remote add origin <url>), and for later \
-                 releases run `dbranch update` there.",
-                dir.display()
-            );
+            "review debian/ — it is upstream's packaging (Maintainer, changelog), and \
+             any change is an ordinary commit here"
+                .to_string()
         }
         None => {
             ui.step(&format!(
@@ -243,19 +275,177 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
                 "packaging from upstream's git tags",
                 &text,
             )?;
-            let name = plan::repo_name_from_url(&opts.url).to_lowercase();
-            eprintln!(
-                "Next: write the rest of debian/ in {} — with no packaging anywhere, \
-                 `{}` makes the skeleton (its class, license and copyright answers are \
-                 yours; the provisional orig it creates is replaced by the first \
-                 `gbp export-orig`) — add the packaging remote (git remote add origin \
-                 <url>), and for later releases run `dbranch update` there.",
-                dir.display(),
-                plan::dh_make_argv(&name, &version).join(" ")
-            );
+            format!(
+                "write the rest of debian/ — with no packaging anywhere, `{}` makes the \
+                 skeleton (its class, license and copyright answers are yours; the \
+                 provisional orig it creates is replaced by the first `gbp export-orig`)",
+                plan::dh_make_argv(&name.to_lowercase(), &version).join(" ")
+            )
+        }
+    };
+    let origin = match &opts.salsa {
+        Some(namespace) => Some(publish_to_salsa(ui, &dir, namespace, &name)?),
+        None => None,
+    };
+    if let Some(mrconfig) = &mrconfig {
+        register_mr(
+            ui,
+            &dir,
+            &name,
+            mrconfig,
+            opts,
+            origin.as_deref(),
+            from_upstream,
+        )?;
+    }
+    let remote = match origin {
+        Some(_) => String::new(),
+        None => ", add the packaging remote (git remote add origin <url>)".to_string(),
+    };
+    eprintln!(
+        "Next, in {}: {review}{remote}, then `dbranch update --stage push` for the first \
+         push (it adds debian/salsa-ci.yml so CI runs); later releases: `dbranch update`.",
+        dir.display()
+    );
+    Ok(())
+}
+
+/// Create `<namespace>/<name>` on salsa — public, with the CI config
+/// path preset to `debian/salsa-ci.yml` so the first push carrying that
+/// file runs a pipeline — and add it as `origin`. Nothing is pushed: a
+/// fresh branch holds only a gbp.conf, an adopted upstream packaging
+/// wants a look first, and neither carries a salsa-ci.yml yet. The
+/// first push is `update --stage push`, which adds that file, so it
+/// runs CI (GitLab makes the first pushed branch the default). Returns
+/// the project's ssh URL.
+fn publish_to_salsa(
+    ui: &Ui,
+    dir: &Path,
+    namespace: &str,
+    name: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    ui.step(&format!(
+        "Create {SALSA}/{namespace}/{name} and make it origin"
+    ));
+    let lookup = plan::glab_namespace_argv(SALSA, namespace);
+    ui.show_command(&lookup);
+    let ssh_url = if ui.dry_run {
+        ui.show_command(&plan::glab_create_project_argv(
+            SALSA,
+            name,
+            "<namespace-id>",
+            plan::SALSA_CI_PATH,
+        ));
+        format!("git@{SALSA}:{namespace}/{name}.git")
+    } else {
+        let (code, out, err) = ui.run_query(&lookup, dir)?;
+        if code != 0 {
+            let msg = if err.trim().is_empty() { out } else { err };
+            return Err(format!("`glab api namespaces` failed: {}", msg.trim()).into());
+        }
+        let id = plan::namespace_id(&out, namespace)
+            .ok_or_else(|| format!("no namespace {namespace} on {SALSA} (or no access to it)"))?;
+        let create =
+            plan::glab_create_project_argv(SALSA, name, &id.to_string(), plan::SALSA_CI_PATH);
+        let (code, out) = ui.run_capture(&create, dir)?;
+        if code != 0 {
+            return Err(format!("creating the project failed: {}", out.trim()).into());
+        }
+        plan::project_ssh_url(&out)
+            .ok_or_else(|| format!("unexpected reply creating the project: {}", out.trim()))?
+    };
+    ui.run_required(&plan::git_remote_add_argv("origin", &ssh_url), dir)?;
+    Ok(ssh_url)
+}
+
+/// Register the clone with myrepos: `mr -c <mrconfig> config <section>
+/// checkout=… update=…`, the section being the directory relative to
+/// the mrconfig's own directory (myrepos' convention), with the
+/// commands from [`mr_commands`]. Runs in the clone's parent directory.
+fn register_mr(
+    ui: &Ui,
+    dir: &Path,
+    name: &str,
+    mrconfig: &Path,
+    opts: &CloneOptions,
+    origin: Option<&str>,
+    from_upstream: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let abs = std::path::absolute(dir)?;
+    let section = mr_section(mrconfig, &abs);
+    let (checkout, update) = mr_commands(opts, name, origin, from_upstream);
+    ui.step(&format!(
+        "Register {section} with myrepos in {}",
+        mrconfig.display()
+    ));
+    let parent = abs.parent().unwrap_or(Path::new("."));
+    let cwd = if parent.is_dir() {
+        parent
+    } else {
+        Path::new(".")
+    };
+    ui.run_required(
+        &plan::mr_config_argv(&mrconfig.to_string_lossy(), &section, &checkout, &update),
+        cwd,
+    )
+}
+
+/// The mrconfig section for `dir`: its path relative to the mrconfig's
+/// directory when under it (`src/debian/pkgs/thing` for `~/.mrconfig`),
+/// else the absolute path, which myrepos also accepts.
+fn mr_section(mrconfig: &Path, dir: &Path) -> String {
+    let base = mrconfig.parent().unwrap_or(Path::new("/"));
+    let base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    let dir_c = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    dir_c
+        .strip_prefix(&base)
+        .map(|rel| rel.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| dir_c.to_string_lossy().into_owned())
+}
+
+/// The myrepos checkout and update commands for a clone. With a salsa
+/// `origin`: `gbp clone --all` of it, then upstream added and its tags
+/// fetched (the style of the user's other packaging entries), and
+/// `gbp pull` plus a tag fetch to update. Without one, only upstream
+/// exists, so the checkout is the `dbranch clone` invocation that
+/// reproduces this setup and the update a tag fetch.
+fn mr_commands(
+    opts: &CloneOptions,
+    name: &str,
+    origin: Option<&str>,
+    from_upstream: bool,
+) -> (String, String) {
+    let up = &opts.upstream_remote;
+    let fetch = format!("git fetch --tags {up}");
+    match origin {
+        Some(url) => (
+            format!(
+                "gbp clone --all {url} {name} && cd {name} && git remote add {up} {} && {fetch}",
+                opts.url
+            ),
+            format!("gbp pull && {fetch}"),
+        ),
+        None => {
+            let mut flags = vec![if from_upstream {
+                "--from-upstream-packaging".to_string()
+            } else {
+                "--fresh".to_string()
+            }];
+            if opts.debian_branch != "debian/latest" {
+                flags.push(format!("--debian-branch {}", opts.debian_branch));
+            }
+            if *up != "upstream" {
+                flags.push(format!("--upstream-remote {up}"));
+            }
+            if let Some(v) = &opts.upstream_version {
+                flags.push(format!("--upstream-version {v}"));
+            }
+            (
+                format!("dbranch clone {} {} {name}", flags.join(" "), opts.url),
+                fetch,
+            )
         }
     }
-    Ok(())
 }
 
 /// Upstream's own packaging branch to start from, if any: a `debian/*`
@@ -511,6 +701,9 @@ mod tests {
             debian_branch: "debian/latest".to_string(),
             upstream_remote: "upstream".to_string(),
             packaging: Some(false),
+            salsa: None,
+            mr: false,
+            mrconfig: None,
         };
         // Real commits need an identity the fixture cannot pre-set in a
         // clone; git picks it up from the environment.
@@ -626,6 +819,9 @@ mod tests {
             debian_branch: "debian/latest".to_string(),
             upstream_remote: "upstream".to_string(),
             packaging,
+            salsa: None,
+            mr: false,
+            mrconfig: None,
         };
         // From upstream's packaging: their commit and the newest tag are
         // both in our history, the branch tracks nothing (upstream must
@@ -652,6 +848,68 @@ mod tests {
         clone(&ui(), &opts("fresh", Some(false))).unwrap();
         assert!(!git::is_ancestor(&dir, &theirs, "HEAD"));
         assert!(!dir.join("debian/changelog").exists());
+    }
+
+    #[test]
+    fn mr_section_is_relative_to_the_mrconfig_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let mrconfig = home.path().join(".mrconfig");
+        let dir = home.path().join("src/debian/pkgs/thing");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(mr_section(&mrconfig, &dir), "src/debian/pkgs/thing");
+        // Outside the mrconfig's tree: absolute.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let section = mr_section(&mrconfig, elsewhere.path());
+        assert!(Path::new(&section).is_absolute(), "{section}");
+    }
+
+    #[test]
+    fn mr_commands_follow_the_two_layouts() {
+        let opts = CloneOptions {
+            url: "https://git.sr.ht/~technomancy/antifennel".to_string(),
+            dir: None,
+            upstream_version: None,
+            debian_branch: "debian/latest".to_string(),
+            upstream_remote: "upstream".to_string(),
+            packaging: None,
+            salsa: None,
+            mr: true,
+            mrconfig: None,
+        };
+        let (co, up) = mr_commands(
+            &opts,
+            "antifennel",
+            Some("git@salsa.debian.org:michel/antifennel.git"),
+            true,
+        );
+        assert_eq!(
+            co,
+            "gbp clone --all git@salsa.debian.org:michel/antifennel.git antifennel && \
+             cd antifennel && git remote add upstream \
+             https://git.sr.ht/~technomancy/antifennel && git fetch --tags upstream"
+        );
+        assert_eq!(up, "gbp pull && git fetch --tags upstream");
+        // No salsa project yet: the dbranch invocation that reproduces it.
+        let (co, up) = mr_commands(&opts, "antifennel", None, true);
+        assert_eq!(
+            co,
+            "dbranch clone --from-upstream-packaging \
+             https://git.sr.ht/~technomancy/antifennel antifennel"
+        );
+        assert_eq!(up, "git fetch --tags upstream");
+        let custom = CloneOptions {
+            debian_branch: "debian/sid".to_string(),
+            upstream_remote: "src".to_string(),
+            upstream_version: Some("0.3.0".to_string()),
+            ..opts
+        };
+        let (co, up) = mr_commands(&custom, "antifennel", None, false);
+        assert_eq!(
+            co,
+            "dbranch clone --fresh --debian-branch debian/sid --upstream-remote src \
+             --upstream-version 0.3.0 https://git.sr.ht/~technomancy/antifennel antifennel"
+        );
+        assert_eq!(up, "git fetch --tags src");
     }
 
     #[test]
@@ -711,9 +969,14 @@ mod tests {
             debian_branch: "debian/latest".to_string(),
             upstream_remote: "upstream".to_string(),
             packaging: None,
+            // Both optional steps narrate under --dry-run without glab or mr.
+            salsa: Some("michel".to_string()),
+            mr: true,
+            mrconfig: Some(work.path().join(".mrconfig")),
         };
         clone(&ui, &opts).unwrap();
         assert!(!work.path().join("thing").exists());
+        assert!(!work.path().join(".mrconfig").exists());
         let up = UpstreamGit {
             remote: "upstream".to_string(),
             tag_format: "v%(version)s".to_string(),

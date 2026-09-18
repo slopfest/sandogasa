@@ -352,6 +352,85 @@ pub fn dh_make_argv(name: &str, version: &str) -> Vec<String> {
     argv(&["dh_make", "-p", &pkg, "--createorig"])
 }
 
+/// `git remote add <name> <url>`.
+pub fn git_remote_add_argv(name: &str, url: &str) -> Vec<String> {
+    argv(&["git", "remote", "add", name, url])
+}
+
+/// `glab api --hostname <host> namespaces?search=<ns>` — look a
+/// namespace (user or group) up by path, for its id.
+pub fn glab_namespace_argv(host: &str, namespace: &str) -> Vec<String> {
+    argv(&[
+        "glab",
+        "api",
+        "--hostname",
+        host,
+        &format!("namespaces?search={namespace}"),
+    ])
+}
+
+/// The id of the namespace whose `full_path` is exactly `namespace` in
+/// a `namespaces?search=` listing (the search is a substring match).
+pub fn namespace_id(json: &str, namespace: &str) -> Option<i64> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    v.as_array()?
+        .iter()
+        .find(|n| n.get("full_path").and_then(|p| p.as_str()) == Some(namespace))
+        .and_then(|n| n.get("id")?.as_i64())
+}
+
+/// `glab api --hostname <host> -X POST projects -f name=… -f path=…
+/// -f namespace_id=… -f visibility=public -f ci_config_path=…` —
+/// create a public project with its CI config path preset, so the
+/// first push of a branch carrying that file already runs a pipeline.
+pub fn glab_create_project_argv(
+    host: &str,
+    name: &str,
+    namespace_id: &str,
+    ci_config_path: &str,
+) -> Vec<String> {
+    argv(&[
+        "glab",
+        "api",
+        "--hostname",
+        host,
+        "-X",
+        "POST",
+        "projects",
+        "-f",
+        &format!("name={name}"),
+        "-f",
+        &format!("path={name}"),
+        "-f",
+        &format!("namespace_id={namespace_id}"),
+        "-f",
+        "visibility=public",
+        "-f",
+        &format!("ci_config_path={ci_config_path}"),
+    ])
+}
+
+/// A created project's `ssh_url_to_repo` from the API's JSON.
+pub fn project_ssh_url(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    Some(v.get("ssh_url_to_repo")?.as_str()?.to_string())
+}
+
+/// `mr -c <mrconfig> config <section> checkout=<cmd> update=<cmd>` —
+/// register a repository with myrepos. `section` is the directory
+/// relative to the mrconfig's own directory.
+pub fn mr_config_argv(mrconfig: &str, section: &str, checkout: &str, update: &str) -> Vec<String> {
+    argv(&[
+        "mr",
+        "-c",
+        mrconfig,
+        "config",
+        section,
+        &format!("checkout={checkout}"),
+        &format!("update={update}"),
+    ])
+}
+
 /// `git fetch --tags <remote>` — bring in upstream's release tags.
 pub fn git_fetch_tags_argv(remote: &str) -> Vec<String> {
     argv(&["git", "fetch", "--tags", remote])
@@ -1011,6 +1090,72 @@ mod tests {
             dh_make_argv("antifennel", "0.3.1"),
             ["dh_make", "-p", "antifennel_0.3.1", "--createorig"]
         );
+        assert_eq!(
+            git_remote_add_argv("origin", "git@h:ns/thing.git"),
+            ["git", "remote", "add", "origin", "git@h:ns/thing.git"]
+        );
+        assert_eq!(
+            glab_namespace_argv("salsa.debian.org", "michel"),
+            [
+                "glab",
+                "api",
+                "--hostname",
+                "salsa.debian.org",
+                "namespaces?search=michel"
+            ]
+        );
+        let create = glab_create_project_argv("salsa.debian.org", "thing", "12468", SALSA_CI_PATH);
+        assert_eq!(
+            &create[..7],
+            [
+                "glab",
+                "api",
+                "--hostname",
+                "salsa.debian.org",
+                "-X",
+                "POST",
+                "projects"
+            ]
+        );
+        assert!(create.contains(&"namespace_id=12468".to_string()));
+        assert!(create.contains(&"path=thing".to_string()));
+        assert!(create.contains(&"visibility=public".to_string()));
+        assert!(create.contains(&"ci_config_path=debian/salsa-ci.yml".to_string()));
+        assert_eq!(
+            mr_config_argv(
+                "/h/.mrconfig",
+                "src/x/thing",
+                "git clone u thing",
+                "git pull"
+            ),
+            [
+                "mr",
+                "-c",
+                "/h/.mrconfig",
+                "config",
+                "src/x/thing",
+                "checkout=git clone u thing",
+                "update=git pull"
+            ]
+        );
+    }
+
+    #[test]
+    fn salsa_json_helpers() {
+        // The search is a substring match: pick the exact full_path.
+        let ns = r#"[{"id": 1, "kind": "group", "full_path": "michel-team"},
+                     {"id": 12468, "kind": "user", "full_path": "michel"}]"#;
+        assert_eq!(namespace_id(ns, "michel"), Some(12468));
+        assert_eq!(namespace_id(ns, "nobody"), None);
+        assert_eq!(namespace_id("[]", "michel"), None);
+        assert_eq!(
+            project_ssh_url(
+                r#"{"id": 7, "ssh_url_to_repo": "git@salsa.debian.org:michel/thing.git"}"#
+            )
+            .as_deref(),
+            Some("git@salsa.debian.org:michel/thing.git")
+        );
+        assert_eq!(project_ssh_url(r#"{"message": "403 Forbidden"}"#), None);
         assert_eq!(repo_name_from_url("https://h/g/thing.git"), "thing");
         assert_eq!(repo_name_from_url("git@h:g/thing"), "thing");
         assert_eq!(repo_name_from_url("/tmp/thing.git/"), "thing");

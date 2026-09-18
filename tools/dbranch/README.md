@@ -107,6 +107,18 @@ whose tree carries a `debian/` directory gets a warning (dpkg-source
 drops the orig's copy, so the two disagree). Writing the rest of
 `debian/` is up to you; with no packaging anywhere the next-step
 message prints the `dh_make -p <name>_<version> --createorig` to run.
+Two optional steps finish the setup: `--salsa <namespace>` creates the
+packaging project `<namespace>/<name>` on salsa.debian.org (public, CI
+config path preset to `debian/salsa-ci.yml`) and adds it as `origin` —
+nothing is pushed yet: a fresh branch holds only a gbp.conf and an
+adopted upstream packaging wants a look first, so the first push is
+`dbranch update --stage push` (below), which also adds the CI file;
+`--mr` registers the clone with myrepos
+(`mr -c ~/.mrconfig config <dir> checkout=… update=…`; `--mrconfig` for
+another file) — with a salsa project as `gbp clone --all <url> && …
+git remote add upstream … && git fetch --tags upstream` updated by
+`gbp pull && git fetch --tags upstream`, without one as the `dbranch
+clone` invocation that reproduces the setup, updated by the tag fetch.
 From then on `update` merges new releases in (below). `fixup [<branch>...]` applies
 the PPA-branch packaging adjustments — gbp.conf's `debian-branch` /
 `debian-tag` and the salsa-ci.yml preset, the same ones the `merge`

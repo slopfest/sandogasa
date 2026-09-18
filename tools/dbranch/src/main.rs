@@ -34,6 +34,9 @@ and commit a debian/gbp.conf naming the tag style (upstream-tag) with
 pristine-tar enabled. When upstream itself carries a debian/* branch,
 offers to start from it instead (its packaging commits stay in the
 history, so diverging is ordinary commits), merging the tag in.
+--salsa NAMESPACE also creates the packaging project on salsa and adds
+it as origin (the first push is `update --stage push`, which adds the
+CI file); --mr registers the clone with myrepos.
 Later releases are then merged in by `update`,
 which detects this layout, and the source stage generates the orig
 tarball from the tag with `gbp export-orig`. Writing the rest of
@@ -66,6 +69,19 @@ debian/ is left to you.")]
         /// Ignore any debian/* branch upstream carries; start at the tag.
         #[arg(long)]
         fresh: bool,
+
+        /// Create the packaging project on salsa.debian.org in this
+        /// namespace and add it as origin (pushing is `update`'s job).
+        #[arg(long, value_name = "NAMESPACE")]
+        salsa: Option<String>,
+
+        /// Register the clone with myrepos (mr config).
+        #[arg(long)]
+        mr: bool,
+
+        /// mrconfig to register in (default: ~/.mrconfig).
+        #[arg(long, value_name = "PATH", requires = "mr")]
+        mrconfig: Option<PathBuf>,
 
         /// Print the commands without running anything (a tutorial).
         #[arg(long)]
@@ -483,6 +499,9 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             upstream_remote,
             from_upstream_packaging,
             fresh,
+            salsa,
+            mr,
+            mrconfig,
             dry_run,
             explain,
             quiet,
@@ -506,6 +525,9 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                     debian_branch,
                     upstream_remote,
                     packaging,
+                    salsa,
+                    mr,
+                    mrconfig,
                 },
             )
         }

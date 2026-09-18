@@ -41,6 +41,21 @@ With no packaging anywhere, the next-step message prints the
 `dh_make -p <name>_<version> --createorig` command to run, whose
 provisional orig the first `gbp export-orig` replaces.
 
+Two optional steps finish the setup, since a clone with only upstream's
+remote has nowhere to push and nothing durable to re-clone from.
+`--salsa <namespace>` creates `<namespace>/<name>` on salsa.debian.org
+through the API (public, CI config path preset to `debian/salsa-ci.yml`)
+and adds it as `origin`, without pushing — a fresh branch holds only a
+gbp.conf, an adopted upstream packaging wants a look first, and neither
+carries a salsa-ci.yml yet; the first push is `update --stage push`
+(below), which adds that file so it runs CI. `--mr` registers the
+clone with myrepos in the style of the user's existing packaging
+entries — `gbp clone --all` of the salsa project with upstream added as
+a second remote and its tags fetched, `gbp pull` plus the tag fetch to
+update — or, without a salsa project, the `dbranch clone` invocation
+that reproduces the setup (`--mrconfig` picks a file other than
+`~/.mrconfig`).
+
 ### dbranch: push to, and configure CI on, the branch's own remote
 
 dbranch assumed every branch belonged to `origin`: it pushed there,
