@@ -3,5 +3,6 @@ name = "sandogasa-build"
 description = "Build-script helper: the git describe of the checkout a sandogasa tool is built from, for its --version"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

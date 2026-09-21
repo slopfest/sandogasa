@@ -3,6 +3,7 @@ name = "sandogasa-inventory"
 description = "Package-of-interest inventory data model and I/O"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

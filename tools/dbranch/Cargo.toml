@@ -3,6 +3,7 @@ name = "dbranch"
 version.workspace = true
 description = "Propagate a Debian package across its Ubuntu PPA and Debian branches"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

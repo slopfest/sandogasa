@@ -3,6 +3,7 @@ name = "koji-lag"
 description = "Quantify Koji build queue lag and per-arch build-time drag"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

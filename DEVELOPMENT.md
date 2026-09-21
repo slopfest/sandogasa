@@ -145,6 +145,55 @@ signatures and the only alternative to this rule was a minor bump that
 would have told consumers something had broken for them when nothing
 had.
 
+## The MSRV is 1.95, and EPEL waits for RHEL's rust to catch up
+
+`sandogasa-0.24.1` failed to build for EPEL 9 with `` `if let` guards
+are experimental``: fedora-cve-triage's bundled-library matching has a
+match arm guarded by `if let Some(snapshot) = snapshot_date(&version)`,
+which Rust 1.95 stabilized, and RHEL 9.8 ships rust 1.92. The
+workspace had declared no `rust-version` at all, so cargo could not
+refuse up front and the failure surfaced as a syntax error late in a
+mock build. The same source built fine for epel9-next, whose CentOS
+Stream 9 buildroot had 1.97.
+
+Decisions, 2026-09-21:
+
+- **Declare the real minimum, 1.95**, rather than rewrite the guard to
+  fit 1.92. `[workspace.package] rust-version = "1.95"`, inherited by
+  every member, makes an old cargo fail in seconds with the version it
+  needs, and gives clippy's `incompatible_msrv` lint its baseline for
+  std APIs. The figure was established two ways: the 1.95.0 release
+  notes ("Stabilize `if let` guards on match arms", rust-lang/rust
+  #141295) and a probe compiled under 1.92 through 1.95.
+- **`make msrv-check`** (`cargo +<msrv> check --workspace --all-targets`,
+  now in `release-checks`) is the gate, because syntax is invisible to
+  every lint: only the old compiler itself objects.
+- **Where the code has to build sets the bar**: Fedora plus the
+  released RHEL 9 and RHEL 10 minors, since EPEL builds against those
+  and a hotfix may need to land there quickly. At the time of writing
+  Fedora has 1.98 and the released RHEL 9.8 and 10.2 both 1.92, so 1.95
+  knowingly exceeds the released RHEL side; EPEL 9 and EPEL 10.2 builds
+  of 0.24.1 and later wait for a RHEL rust rebase (RHEL rebases rust at
+  minor releases). The pre-release minor is already there: the
+  `epel10.3-build` tag inherits Fedora infra's `c10-snapshot-*` external
+  repos, whose AppStream carries rust 1.97.1 (`koji list-external-repos
+  --tag epel10.3-build --inherit`, then `--name c10-snapshot-appstream`
+  for the URL, then `fedrq pkgs -r @baseurl:<url> -F nev rust`; the
+  root.log of a recent epel10.3 Rust build agrees), so EPEL 10.3 builds
+  as soon as its target opens. The snapshot is the authoritative read
+  for a minor in freeze: RHEL 10.3 is frozen and about to ship, so its
+  EPEL builds pin a CentOS Stream 10 snapshot from its branch point,
+  while `c10s` itself (what `epel10` targets) has moved on to what
+  becomes 10.4. `fedrq pkgs -b c10s -F nev rust` also said 1.97.1 that
+  day, but that is a coincidence of timing, not a way to read 10.3.
+  fedrq's `epel10.N` branches themselves hold EPEL content only; RHEL's
+  packages are read from `ubi10` (released), the snapshot (in freeze)
+  or `c10s` (the minor after). If a hotfix must
+  reach EPEL before then, the one guard in
+  `tools/fedora-cve-triage/src/bundled_library.rs` is the only thing to
+  rewrite — a nested `match` does the same job — and the MSRV drops
+  back to what the rest of the tree needs (TODO.md tracks this).
+
 ## Only dbranch ships binaries, and `precise-builds` is why it can
 
 Each release attaches statically linked musl builds of `dbranch` for

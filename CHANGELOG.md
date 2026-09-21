@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Minimum supported Rust declared: 1.95
+
+`sandogasa-0.24.1` failed to build for EPEL 9 with `` `if let` guards
+are experimental``: the workspace uses an `if let` guard on a match arm,
+which Rust 1.95 stabilized, while RHEL 9 and RHEL 10 ship rust 1.92 —
+and it declared no `rust-version`, so cargo could not say so up front.
+The workspace now declares `rust-version = "1.95"`, inherited by every
+crate, so an older toolchain is refused in seconds with the version it
+needs, and `make msrv-check` builds the whole workspace with that exact
+toolchain as part of the release gates. EPEL 9 and 10 builds resume
+once RHEL's rust reaches 1.95.
+
 ## v0.24.1
 
 ### ebranch: `check-update` compares Provides for a pending Bodhi update too

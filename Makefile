@@ -9,6 +9,9 @@
 CARGO ?= cargo
 # Library crates only: semver-checks has nothing to say about binaries.
 LIB_CRATES := $(notdir $(wildcard crates/*))
+# The workspace's declared MSRV, read from Cargo.toml so the two never
+# drift; msrv-check builds with exactly that toolchain.
+MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
 
 .DEFAULT_GOAL := help
 
@@ -56,6 +59,10 @@ semver-checks: ## Check the library crates for semver breakage
 packaging-test: ## Run the tests as a distro build does (offline, no distro tools)
 	./scripts/packaging-test.sh
 
+.PHONY: msrv-check
+msrv-check: ## Build with the declared MSRV toolchain (rustup toolchain install $(MSRV))
+	$(CARGO) +$(MSRV) check --workspace --all-targets
+
 .PHONY: check-published
 check-published: ## Verify every crate reached crates.io (run after publishing)
 	./scripts/check-published.sh
@@ -88,9 +95,10 @@ check: ## Everything a pull request should pass
 	$(MAKE) packaging-test
 
 .PHONY: release-checks
-release-checks: check ## The pre-tagging gates: check, plus audit, semver, coverage
+release-checks: check ## The pre-tagging gates: check, plus audit, semver, MSRV, coverage
 	$(MAKE) audit
 	$(MAKE) semver-checks
+	$(MAKE) msrv-check
 	$(MAKE) cov
 
 .PHONY: clean

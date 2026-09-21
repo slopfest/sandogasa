@@ -3,6 +3,7 @@ name = "sandogasa-jira"
 description = "Minimal JIRA REST API client (public issue status lookup)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

@@ -3,6 +3,7 @@ name = "sandogasa-report"
 description = "Activity reporting for Fedora, EPEL, and CentOS SIG packaging work"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

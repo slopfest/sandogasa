@@ -3,6 +3,7 @@ name = "sandogasa-bugclass"
 description = "Bug classification (CVE, FTBFS, update request, etc.) across issue trackers"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

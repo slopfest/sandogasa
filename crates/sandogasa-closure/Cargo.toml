@@ -3,6 +3,7 @@ name = "sandogasa-closure"
 description = "Dependency-closure walking over fedrq, with a persisted graph and an offline oracle"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

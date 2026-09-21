@@ -3,5 +3,6 @@ name = "sandogasa-depfilter"
 description = "RPM dependency filtering for cross-branch analysis"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

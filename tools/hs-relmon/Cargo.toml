@@ -5,6 +5,7 @@ name = "hs-relmon"
 version.workspace = true
 description = "Release monitoring tool for CentOS Hyperscale SIG packages"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

@@ -3,6 +3,7 @@ name = "koji-diff"
 version.workspace = true
 description = "Koji build log differ — compare buildroot and build logs between two Koji builds"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

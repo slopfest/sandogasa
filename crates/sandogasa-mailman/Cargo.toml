@@ -3,6 +3,7 @@ name = "sandogasa-mailman"
 description = "HyperKitty (Mailman 3) archive API client"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

@@ -52,6 +52,11 @@ members = [
 [workspace.package]
 version = "0.24.1"
 edition = "2024"
+# The oldest rustc that builds the workspace; `make msrv-check` proves
+# it. 1.95 stabilized `if let` guards on match arms (fedora-cve-triage
+# uses one). RHEL 9 and 10 ship 1.92 at the time of writing, so EPEL
+# builds wait for their rust rebase — see DEVELOPMENT.md.
+rust-version = "1.95"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/slopfest/sandogasa"
 

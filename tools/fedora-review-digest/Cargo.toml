@@ -3,6 +3,7 @@ name = "fedora-review-digest"
 description = "Condense a fedora-review run of an auto-generated spec into a review comment"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

@@ -3,6 +3,7 @@ name = "poi-tracker"
 description = "Package-of-interest tracker for Fedora, EPEL, and CentOS SIGs"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

@@ -3,6 +3,7 @@ name = "sandogasa-fedrq"
 description = "Rust wrapper for the fedrq RPM repository query tool"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

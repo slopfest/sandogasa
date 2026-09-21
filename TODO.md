@@ -475,6 +475,24 @@ one-shot view. Follow-ups:
   = counts or a compact list, `--detailed --detailed` = full per-item
   detail) and apply it uniformly. Likely presentation-only.
 
+## EPEL builds wait for RHEL rust ≥ 1.95 (2026-09-21)
+
+The workspace's MSRV is 1.95 (an `if let` guard on a match arm in
+`tools/fedora-cve-triage/src/bundled_library.rs`), and the released RHEL
+9.8 and RHEL 10.2 ship rust 1.92, so EPEL 9 and EPEL 10.2 cannot build
+0.24.1 or later until RHEL rebases rust. EPEL 10.3 already can: its
+build tag inherits the CentOS 10 snapshot repos with rust 1.97.1
+(2026-09-21), so build for `epel10.3` when that target opens and for
+`epel10` (c10s) meanwhile. Check the released minors with
+`fedrq pkgs -b ubi9 -F nev rust` and `-b ubi10`; a minor in freeze
+reads from the snapshot repos its `epelN.M-build` tag inherits (see
+DEVELOPMENT.md), and `-b c9s` / `-b c10s` only speak for the minor
+after that. When both released minors reach 1.95, resume the EPEL 9 /
+10.2 builds and drop this entry. If a security or bug hotfix
+has to reach EPEL before then, rewrite that one guard as a nested
+`match` (it is the only construct above 1.92 — `make msrv-check` with a
+1.92 toolchain confirms) and lower `rust-version` accordingly.
+
 ## dbranch
 
 - (2026-09-17) Exercise the one step of the upstream-git flow no

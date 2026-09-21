@@ -3,6 +3,7 @@ name = "sandogasa-meetbot"
 description = "HTTP client for meetbot.fedoraproject.org's meeting search endpoint"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

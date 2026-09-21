@@ -3,6 +3,7 @@ name = "sandogasa-pkg-acl"
 description = "View and manage Fedora package ACLs via the Pagure dist-git API"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

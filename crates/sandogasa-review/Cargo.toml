@@ -3,5 +3,6 @@ name = "sandogasa-review"
 description = "Interactive keep/explain/remove resolution for reviewer-curated findings"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

@@ -3,6 +3,7 @@ name = "fesco-chair"
 description = "FESCo meeting chair helper — agenda email, day-of script, summary email"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
