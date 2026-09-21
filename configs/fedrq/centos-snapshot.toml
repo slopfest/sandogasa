@@ -1,0 +1,26 @@
+# The CentOS Stream snapshot Fedora's Koji pins an EPEL minor release's
+# buildroot to while that RHEL minor is in freeze. `epel10.3-build`
+# inherits the external repos c10-snapshot-{baseos,appstream,crb}
+# (`koji list-external-repos --tag epel10.3-build --inherit`); this
+# release definition queries the same URLs.
+#
+#   fedrq pkgs -b c10-snapshot -F nev rust    # what an epel10.3 build sees
+#
+# Three branches say three different things about a RHEL 10 minor:
+# ubi10 is the released one, c10-snapshot the one in freeze, c10s the
+# moving stream already at the minor after. The capture group becomes
+# $releasever in repos/centos-snapshot.repo. Binaries only: the
+# snapshot publishes no source trees, so source-side queries return
+# nothing here. Koji has c10-snapshot repos only today; the matcher is
+# generic so a future c11-snapshot works unchanged, and an unpublished
+# one fails on metadata rather than silently.
+#
+# Install beside the other files where fedrq looks: /etc/fedrq/ or
+# ~/.config/fedrq/, with the repos/ directory alongside.
+
+[releases.centos-snapshot]
+matcher = '^c(\d+)-snapshot$'
+defpaths = ["centos-snapshot.repo"]
+system_repos = false
+
+defs.base = ["centos-snapshot-baseos", "centos-snapshot-appstream", "centos-snapshot-crb"]

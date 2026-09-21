@@ -176,11 +176,11 @@ Decisions, 2026-09-21:
   of 0.24.1 and later wait for a RHEL rust rebase (RHEL rebases rust at
   minor releases). The pre-release minor is already there: the
   `epel10.3-build` tag inherits Fedora infra's `c10-snapshot-*` external
-  repos, whose AppStream carries rust 1.97.1 (`koji list-external-repos
-  --tag epel10.3-build --inherit`, then `--name c10-snapshot-appstream`
-  for the URL, then `fedrq pkgs -r @baseurl:<url> -F nev rust`; the
-  root.log of a recent epel10.3 Rust build agrees), so EPEL 10.3 builds
-  as soon as its target opens. The snapshot is the authoritative read
+  repos, whose AppStream carries rust 1.97.1 (`fedrq pkgs -b
+  c10-snapshot -F nev rust`, via `configs/fedrq/centos-snapshot.toml`,
+  which queries the URLs `koji list-external-repos --tag epel10.3-build
+  --inherit` names; the root.log of a recent epel10.3 Rust build
+  agrees), so EPEL 10.3 builds as soon as its target opens. The snapshot is the authoritative read
   for a minor in freeze: RHEL 10.3 is frozen and about to ship, so its
   EPEL builds pin a CentOS Stream 10 snapshot from its branch point,
   while `c10s` itself (what `epel10` targets) has moved on to what

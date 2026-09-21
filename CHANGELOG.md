@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### fedrq config: the CentOS Stream snapshot behind EPEL minor-release builds
+
+Finding out which rustc (or anything else) an EPEL build for a RHEL
+minor in freeze would see — `epel10.3` while 10.3 is frozen — meant a
+Koji build or a hand-assembled `@baseurl:` query, because Fedora's Koji
+pins those buildroots to a CentOS Stream *snapshot* rather than to the
+released minor (`ubi10`) or to the moving stream (`c10s`, already at the
+minor after). `configs/fedrq/centos-snapshot.toml` defines that snapshot
+as a fedrq release: `fedrq pkgs -b c10-snapshot -F nev rust` queries the
+same `c10-snapshot-{baseos,appstream,crb}` URLs the `epel10.3-build` tag
+inherits. Binaries only, as the snapshot publishes no source trees; a
+stream with no published snapshot fails on metadata rather than
+silently. The Fedora package ships it as its own subpackage from the
+next build, alongside `fedrq-config-hyperscale`.
+
 ### Minimum supported Rust declared: 1.95
 
 `sandogasa-0.24.1` failed to build for EPEL 9 with `` `if let` guards
