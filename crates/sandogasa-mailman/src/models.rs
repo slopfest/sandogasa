@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 /// Paginated response from HyperKitty.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct PaginatedResponse<T> {
     pub count: u64,
     #[serde(default)]
@@ -15,6 +16,7 @@ pub struct PaginatedResponse<T> {
 
 /// An email in the HyperKitty archive.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Email {
     #[serde(default)]
     pub message_id_hash: String,
@@ -32,6 +34,7 @@ pub struct Email {
 
 /// A sender reference embedded in an email.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Sender {
     /// Obfuscated email address, e.g. "user (a) domain.com".
     pub address: String,

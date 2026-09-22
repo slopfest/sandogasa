@@ -127,6 +127,7 @@ workspace's own tests now do, and read fields by name. Affected:
 - sandogasa-gitlab: `Assignee`, `Issue`, `ProjectStatus`, `Branch`, `MergeRequest`, `MrAuthor`, `RepoCommit`, `CurrentUser`, `GroupProject`, `User`, `Event`, `EventNote`, `EventPushData`, `ProjectSummary`, `Tag`, `Release`, `ReleaseAuthor`, `ReleaseLinks`
 - sandogasa-sourcehut: `Patchset`, `NamedRef`, `Event`, `TicketRef`, `EventDetail`, `Actor`, `Repo`, `Commit`, `Signature`
 - sandogasa-jira: `Issue`, `IssueFields`, `NamedField`
+- sandogasa-mailman: `PaginatedResponse`, `Email`, `Sender`
 ### sandogasa-forgejo: `issue_timeline`, and the models are `#[non_exhaustive]` (breaking)
 
 `Client::issue_timeline` fetches an issue's timeline — comments
