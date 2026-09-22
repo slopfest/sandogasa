@@ -145,6 +145,33 @@ signatures and the only alternative to this rule was a minor bump that
 would have told consumers something had broken for them when nothing
 had.
 
+## A response model is `#[non_exhaustive]`; a format we own is not
+
+The client crates under `crates/` are mostly structs that `serde`
+fills from what a remote API returns — a Forgejo issue, a Bodhi update,
+a Repology package. Those APIs grow fields, and sooner or later a tool
+wants one, so the field is added to the model. While the model can be
+built with a struct literal, that addition is a breaking change:
+downstream literals stop compiling, and cargo-semver-checks calls it
+major. On 2026-09-22 a single `updated_at` on sandogasa-forgejo's
+`Issue` turned a patch release into a minor one, and the survey that
+followed found twelve crates in the same state — v0.18.0 had marked
+bodhi, bugzilla and distgit and stopped there.
+
+So every public struct that derives `Deserialize` in a library crate
+is `#[non_exhaustive]`, and `scripts/check-non-exhaustive.sh` (part of
+`make check`) fails the build when one is not. What the attribute
+costs: outside the crate the struct cannot be built with a literal or
+destructured exhaustively. What it buys: fields arrive as patch
+releases. The one place the attribute is wrong is a format the
+workspace itself defines and the tools build and write —
+sandogasa-closure's graph, sandogasa-inventory's documents — where a
+caller constructing the struct is the point; those crates are exempt
+in the script, and a new exemption needs that same reason. Test
+fixtures for a model deserialize the JSON the API would return
+(`serde_json::from_value(json!({ … }))`), which is also the path the
+real data takes; the workspace's own tests all do this now.
+
 ## The MSRV is 1.95, and EPEL waits for RHEL's rust to catch up
 
 `sandogasa-0.24.1` failed to build for EPEL 9 with `` `if let` guards

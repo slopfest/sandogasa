@@ -110,6 +110,17 @@ link, since the visible `#NNNN` is typed by hand and has been wrong.
 A `needinfo?` flag now carries when it was set, so a caller can say how
 long a question has gone unanswered.
 
+### `make check` fails on a response model that is not `#[non_exhaustive]`
+
+The twelve-crate cleanup below happened because nothing caught a
+deserialized model that callers could build with a struct literal
+until a new field turned a patch release into a minor one.
+`scripts/check-non-exhaustive.sh`, now part of `make check`, lists
+every public `Deserialize` struct in `crates/` that lacks the
+attribute and fails; sandogasa-closure and sandogasa-inventory are
+exempt because their structs are file formats the tools build
+themselves. DEVELOPMENT.md explains the rule.
+
 ### API response models are `#[non_exhaustive]` in every client crate (breaking)
 
 Adding a field the API returns to a response model was a breaking

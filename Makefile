@@ -63,6 +63,10 @@ packaging-test: ## Run the tests as a distro build does (offline, no distro tool
 msrv-check: ## Build with the declared MSRV toolchain (rustup toolchain install $(MSRV))
 	$(CARGO) +$(MSRV) check --workspace --all-targets
 
+.PHONY: check-non-exhaustive
+check-non-exhaustive: ## Fail on a library response model that is not #[non_exhaustive]
+	./scripts/check-non-exhaustive.sh
+
 .PHONY: check-published
 check-published: ## Verify every crate reached crates.io (run after publishing)
 	./scripts/check-published.sh
@@ -92,6 +96,7 @@ check: ## Everything a pull request should pass
 	$(CARGO) fmt --all --check
 	$(MAKE) clippy
 	$(MAKE) test
+	$(MAKE) check-non-exhaustive
 	$(MAKE) packaging-test
 
 .PHONY: release-checks
