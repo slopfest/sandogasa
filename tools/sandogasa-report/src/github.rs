@@ -1035,20 +1035,17 @@ mod tests {
     }
 
     fn make_tagger(name: &str, email: &str, date: &str) -> sandogasa_github::Tagger {
-        sandogasa_github::Tagger {
-            name: name.into(),
-            email: email.into(),
-            date: date.into(),
-        }
+        serde_json::from_value(serde_json::json!({
+            "name": name, "email": email, "date": date
+        }))
+        .unwrap()
     }
 
     fn make_user(login: &str, name: Option<&str>, email: Option<&str>) -> User {
-        User {
-            id: 1,
-            login: login.into(),
-            name: name.map(String::from),
-            email: email.map(String::from),
-        }
+        serde_json::from_value(serde_json::json!({
+            "id": 1, "login": login, "name": name, "email": email
+        }))
+        .unwrap()
     }
 
     #[test]

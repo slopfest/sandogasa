@@ -110,6 +110,20 @@ link, since the visible `#NNNN` is typed by hand and has been wrong.
 A `needinfo?` flag now carries when it was set, so a caller can say how
 long a question has gone unanswered.
 
+### API response models are `#[non_exhaustive]` in every client crate (breaking)
+
+Adding a field the API returns to a response model was a breaking
+release whenever the model could be built with a struct literal, which
+is what `Issue.updated_at` in sandogasa-forgejo did to this one.
+sandogasa-bodhi, sandogasa-bugzilla and sandogasa-distgit have carried
+`#[non_exhaustive]` on their models since 0.18.0; the remaining client
+crates now do too. **What breaks:** literal construction (`Struct {
+.. }`) and exhaustive destructuring of these types outside their
+defining crate no longer compile. **Migration:** build a test fixture
+with `serde_json::from_value` on the JSON the API would return, as the
+workspace's own tests now do, and read fields by name. Affected:
+
+- sandogasa-github: `User`, `Repository`, `PullRequest`, `PullRequestRef`, `PullRequestDetail`, `Login`, `RepoCommit`, `CommitBody`, `CommitAuthor`, `GitRef`, `Event`, `GitTagRef`, `GitObject`, `AnnotatedTag`, `Tagger`
 ### sandogasa-forgejo: `issue_timeline`, and the models are `#[non_exhaustive]` (breaking)
 
 `Client::issue_timeline` fetches an issue's timeline — comments

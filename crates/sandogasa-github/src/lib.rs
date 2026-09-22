@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 /// A GitHub user as returned by `/users/{username}`. Only the
 /// fields downstream tools currently consume.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct User {
     pub id: u64,
     pub login: String,
@@ -48,6 +49,7 @@ pub struct User {
 
 /// A repository as returned by event payloads and PR responses.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct Repository {
     pub id: u64,
     /// `owner/name`, e.g. `slopfest/sandogasa`.
@@ -73,6 +75,7 @@ impl Repository {
 /// shape this around the union of useful fields rather than the
 /// fuller `/repos/{owner}/{repo}/pulls/{number}` model.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct PullRequest {
     pub number: u64,
     pub title: String,
@@ -128,6 +131,7 @@ impl PullRequest {
 /// a pull request. The Search Issues endpoint signals "is PR"
 /// by populating this; merged state lives here too.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct PullRequestRef {
     #[serde(default)]
     pub merged_at: Option<String>,
@@ -136,6 +140,7 @@ pub struct PullRequestRef {
 /// The fuller pull-request object from `/repos/{owner}/{repo}/pulls/{n}`:
 /// the head and base refs the search result omits, and whether it merged.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct PullRequestDetail {
     pub number: u64,
     pub state: String,
@@ -153,6 +158,7 @@ pub struct PullRequestDetail {
 
 /// An account named only by its login.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Login {
     pub login: String,
 }
@@ -160,6 +166,7 @@ pub struct Login {
 /// A commit from `/pulls/{n}/commits` or `/commits`: the sha, the
 /// message and the author of the commit itself (not the GitHub account).
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct RepoCommit {
     pub sha: String,
     pub commit: CommitBody,
@@ -167,6 +174,7 @@ pub struct RepoCommit {
 
 /// The git-level part of a commit.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct CommitBody {
     #[serde(default)]
     pub message: String,
@@ -176,6 +184,7 @@ pub struct CommitBody {
 
 /// A commit's author as git recorded it.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct CommitAuthor {
     #[serde(default)]
     pub name: String,
@@ -192,6 +201,7 @@ impl RepoCommit {
 
 /// One side of a pull request: the branch name and the commit it points at.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct GitRef {
     #[serde(rename = "ref")]
     pub ref_name: String,
@@ -217,6 +227,7 @@ struct SearchIssuesResponse {
 /// sparse; we keep just enough to identify the event type,
 /// associated repo, and the actor.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct Event {
     pub id: String,
     /// `"PushEvent"`, `"PullRequestEvent"`,
@@ -235,6 +246,7 @@ pub struct Event {
 /// directly to a commit) from annotated tags (point to a Tag
 /// object that carries tagger info).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct GitTagRef {
     /// The fully-qualified ref, e.g. `refs/tags/v0.11.0`.
     #[serde(rename = "ref")]
@@ -254,6 +266,7 @@ impl GitTagRef {
 /// The thing a Git ref points at. `object_type` is `"commit"`
 /// for lightweight tags and `"tag"` for annotated ones.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct GitObject {
     #[serde(rename = "type")]
     pub object_type: String,
@@ -265,6 +278,7 @@ pub struct GitObject {
 /// carry tagger metadata; lightweight tags don't have an
 /// addressable tag object.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct AnnotatedTag {
     pub tag: String,
     pub tagger: Tagger,
@@ -273,6 +287,7 @@ pub struct AnnotatedTag {
 /// `name` + `email` + `date` triple stamped on annotated-tag
 /// creation. `date` is ISO 8601 (e.g. `2026-05-15T17:03:15Z`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct Tagger {
     pub name: String,
     pub email: String,
