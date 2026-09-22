@@ -1,6 +1,6 @@
 [package]
 name = "fesco-chair"
-description = "FESCo meeting chair helper — agenda email, day-of script, summary email"
+description = "FESCo meeting chair helper — agenda, day-of script, summary email, ticket votes"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,6 +16,7 @@ reqwest = { workspace = true }
 # here because this crate does not use the `http` module.
 sandogasa-cli = { workspace = true, features = ["tls"] }
 sandogasa-config = { workspace = true }
+sandogasa-fasjson = { workspace = true }
 sandogasa-forgejo = { workspace = true }
 sandogasa-meetbot = { workspace = true }
 serde = { workspace = true }

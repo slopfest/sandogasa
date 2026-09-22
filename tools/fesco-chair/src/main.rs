@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! fesco-chair — helper for FESCo meeting chair duties: the agenda
-//! announcement, the day-of meetbot script, and the post-meeting
-//! summary email. See
+//! announcement, the day-of meetbot script, the post-meeting
+//! summary email, and the state of open in-ticket votes. See
 //! <https://fedoraproject.org/wiki/FESCo_meeting_process>.
 
 use std::process::ExitCode;
@@ -15,6 +15,7 @@ mod script;
 mod sources;
 mod state;
 mod summary;
+mod votes;
 
 #[derive(Parser)]
 #[command(
@@ -39,6 +40,8 @@ enum Command {
     Script(script::ScriptArgs),
     /// Compose the post-meeting summary email from the minutes.
     Summary(summary::SummaryArgs),
+    /// Where each open in-ticket vote stands under the policy.
+    Votes(votes::VotesArgs),
 }
 
 fn main() -> ExitCode {
@@ -54,6 +57,7 @@ fn main() -> ExitCode {
         },
         Command::Script(args) => script::run(&args),
         Command::Summary(args) => summary::run(&args),
+        Command::Votes(args) => votes::run(&args),
     }
 }
 

@@ -576,6 +576,7 @@ dependencies = [
  "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
+ "sandogasa-fasjson",
  "sandogasa-forgejo",
  "sandogasa-meetbot",
  "serde",

@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### fesco-chair: `votes` reports where each open in-ticket vote stands
+
+Deciding before a meeting whether a ticket vote would conclude on its
+own, or whether to bring the ticket to the meeting, meant opening each
+`vote-in-progress` and `fast track` ticket, counting the `+1`/`0`/`-1`
+comments by hand against the current FESCo roster, and working out
+from the label date when the policy's week would be up. On 2026-09-22
+a Fast Track ticket sat at +5 for six days with nobody noticing that
+the 48-hour reminder the policy asks for had never been sent.
+
+`fesco-chair votes` scans those tickets and applies the ticket-vote
+policy to each: the eligible voters come from the `fesco` FAS group
+(via FASJSON, so a Kerberos ticket is needed, or `--member` lists them
+by hand), each member's latest vote comment counts, and the clock runs
+from the label that opened the vote. The report gives the tally in the
+`(+X, Y, -Z)` form the decision comments use, the names behind it, the verdict (approved, rejected, meeting on a standing `-1`, or
+waiting with the date the next rule fires), and, when that date falls
+after the meeting, says so — the chair's choice is then to let the
+vote run or cast a procedural `-1`. A ticket short of the `+1` its
+next rule needs is flagged with the members yet to vote. Fast Track
+tickets still waiting report whether the 48-hour reminder is due,
+overdue or sent. Votes are read at face value ("I'll go -1 if we hear
+nothing" is a `-1`), so `--ignore N:FAS` and `--vote N:FAS=V` correct
+a misread comment on one ticket, and `--non-voting FAS` — pinned in
+`[defaults.votes]` — drops a group member who holds no vote, such as
+the Fedora Project Leader, from the roster altogether. A system config
+doing exactly that ships as `configs/fesco-chair/config.toml`, for the
+Fedora package to install as `/etc/fesco-chair/config.toml`.
+
 ### sandogasa-config: `SANDOGASA_ETC` relocates the system layer
 
 A system config a repository ships under `configs/<tool>/` could not
@@ -9,6 +38,14 @@ be tried before installation without copying it to `/etc` or into the
 user file, where it would sit beside the token. `SANDOGASA_ETC` names
 another root for the system layer (`SANDOGASA_ETC=$PWD/configs`), read
 beneath the real user file as `/etc` would be.
+
+### sandogasa-forgejo: `issue_timeline`
+
+`Client::issue_timeline` fetches an issue's timeline — comments
+interleaved with events such as label changes, as `TimelineEvent` —
+which is where the date a label was applied lives; the comments
+endpoint carries no such history. `TimelineEvent::label_added` names
+the label an event added.
 
 ### fedrq config: the CentOS Stream snapshot behind EPEL minor-release builds
 

@@ -1,0 +1,13 @@
+# fesco-chair system-wide configuration, read from
+# /etc/fesco-chair/config.toml beneath the per-user
+# ~/.config/fesco-chair/config.toml (the user file wins per key,
+# command-line flags win over both).
+#
+# The Forgejo token is per person and belongs in the user file:
+# `fesco-chair config` stores it there with 600 permissions.
+
+[defaults.votes]
+# Members of the `fesco` FAS group who hold no vote. The Fedora
+# Project Leader sits in the group ex officio; `votes` never lists
+# them as not having voted and never counts a stray vote from them.
+non-voting = ["jspaleta"]

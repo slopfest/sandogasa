@@ -32,8 +32,8 @@ Forgejo tokens are scoped by category (read/write). Per operation:
 - `validate_token` — `read:user` (it calls `/api/v1/user`).
 - `create_issue` / `search_issues` — `write:issue` (create) /
   `read:issue` (search), plus `read:repository`.
-- `repo_issues` / `issue` / `issue_comments` — `read:issue` +
-  `read:repository`.
+- `repo_issues` / `issue` / `issue_comments` / `issue_timeline` —
+  `read:issue` + `read:repository`.
 
 ## Usage
 

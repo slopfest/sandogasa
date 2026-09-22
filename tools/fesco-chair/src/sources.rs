@@ -31,6 +31,11 @@ pub const MEETING_LABEL: &str = "meeting";
 /// Label on tickets approved/rejected by an in-ticket vote, announced
 /// alongside the agenda ("Discussed and Voted in the Ticket").
 pub const PENDING_LABEL: &str = "pending announcement";
+/// Label on tickets with an in-ticket vote running.
+pub const VOTE_LABEL: &str = "vote-in-progress";
+/// Label on tickets under the policy's Fast Track (`+7` approves at
+/// once, a reminder is due after 48 hours).
+pub const FAST_TRACK_LABEL: &str = "fast track";
 /// The meetbot topic FESCo meetings are recorded under
 /// (`!meetingname fesco`).
 pub const MEETBOT_TOPIC: &str = "fesco";

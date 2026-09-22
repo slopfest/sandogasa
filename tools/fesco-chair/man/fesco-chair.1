@@ -1,12 +1,12 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH fesco-chair 1 2026-09-18 "sandogasa 0.24.1" "Sandogasa Manual"
+.TH fesco-chair 1 2026-09-22 "sandogasa 0.24.1" "Sandogasa Manual"
 .SH NAME
-fesco\-chair \- FESCo meeting chair helper — agenda email, day\-of script, summary email
+fesco\-chair \- FESCo meeting chair helper — agenda, day\-of script, summary email, ticket votes
 .SH SYNOPSIS
 \fBfesco\-chair\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
 .SH DESCRIPTION
-FESCo meeting chair helper — agenda email, day\-of script, summary email
+FESCo meeting chair helper — agenda, day\-of script, summary email, ticket votes
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
@@ -91,6 +91,34 @@ Compose the post\-meeting summary email from the minutes
 .TP
 \fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
 Meeting date (default: today)
+.TP
+\fB\-\-json\fR
+Machine\-readable JSON output
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS fesco-chair votes
+\fBfesco\-chair votes\fR [\fB\-\-date\fR] [\fB\-\-member\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Where each open in\-ticket vote stands under the policy
+.TP
+\fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
+Meeting date the hints refer to (default: the coming Tuesday)
+.TP
+\fB\-\-member\fR \fI<FAS>\fR
+Count these FAS users as voters instead of the fesco group (repeat/CSV)
+.TP
+\fB\-\-non\-voting\fR \fI<FAS>\fR
+Group members who do not vote, e.g. the FPL (repeat/CSV)
+.TP
+\fB\-\-vote\fR \fI<N:FAS=V>\fR
+Count a member\*(Aqs vote on one ticket as given, e.g. 3685:salimma=0, when a comment was misread (repeat/CSV)
+.TP
+\fB\-\-ignore\fR \fI<N:FAS>\fR
+Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
 .TP
 \fB\-\-json\fR
 Machine\-readable JSON output

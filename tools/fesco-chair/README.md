@@ -3,9 +3,10 @@
 Helper for [FESCo meeting chair
 duties](https://fedoraproject.org/wiki/FESCo_meeting_process):
 compose the agenda announcement email, generate the day-of meetbot
-script (with the pre/during-meeting checklist), and compose the
-post-meeting summary email. It prepares text for you to paste — it
-does not send email or post to Matrix.
+script (with the pre/during-meeting checklist), compose the
+post-meeting summary email, and report where every open in-ticket
+vote stands. It prepares text for you to paste — it does not send
+email or post to Matrix.
 
 Agenda tickets come from the [FESCo
 tracker](https://forge.fedoraproject.org/fesco/tickets) (Forgejo):
@@ -32,7 +33,8 @@ Applications on
 then store it with `fesco-chair config`. Token scopes (Forgejo scopes
 tokens by category, each read-only or read-and-write):
 
-- **issue: read** — the agenda queries list tracker issues by label
+- **issue: read** — the agenda queries list tracker issues by label,
+  and `votes` reads each ticket's timeline
 - **repository: read** — the issue endpoints live under the `/repos`
   API group, so they need repository read access too
 - **user: read** — only for `fesco-chair config`'s validation step
@@ -45,6 +47,11 @@ The `FORGEJO_TOKEN_FORGE_FEDORAPROJECT_ORG` and `FORGEJO_TOKEN`
 environment variables override the stored token (matching
 sandogasa-report's convention, so one env setup can serve both
 tools).
+
+`votes` also needs a Kerberos ticket for `FEDORAPROJECT.ORG` (`kinit`),
+because it reads the eligible voters — the members of the `fesco` FAS
+group — from [FASJSON](https://fasjson.fedoraproject.org/); `--member`
+supplies the list by hand instead.
 
 ## Subcommands
 
@@ -165,6 +172,72 @@ was decided in-ticket after the schedule was sent. Remember to comment
 The lookup needs a token and is best-effort: without one, or with the
 tracker unreachable, the summary still prints the minutes.
 
+### `votes`
+
+```sh
+fesco-chair votes                      # every open in-ticket vote
+fesco-chair votes --date 2026-09-29    # hints relative to that meeting
+fesco-chair votes --member a,b,c       # voters by hand (no Kerberos)
+fesco-chair votes --ignore 3685:salimma   # a misread comment is not a vote
+fesco-chair votes --vote 3685:salimma=0   # ... or count it as this vote
+fesco-chair votes --non-voting jspaleta   # in the group, but no vote
+fesco-chair votes --json               # machine-readable
+```
+
+Scans the open tickets labeled `vote-in-progress` or `fast track` and
+applies the [ticket-vote
+policy](https://docs.fedoraproject.org/en-US/fesco/#ticket-votes) to
+each. The eligible voters are the members of the `fesco` FAS group; a
+member's latest comment carrying `+1`, `0` (also `±0`, `+0`) or `-1`
+is their vote, so a changed vote supersedes the earlier one. Quoted
+lines and tally lines such as `APPROVED (+3, 0, 0)` are skipped. Each
+ticket shows its tally in that same `(+X, Y, -Z)` form, ready for the
+decision comment, followed by the names behind it.
+Tokens are taken at face value — "I'll go -1 if we hear nothing"
+counts as a `-1` — so check a decisive vote against the ticket; the
+report names every voter, and a misread one is corrected for that
+ticket with `--ignore N:FAS` (not a vote) or `--vote N:FAS=+1|0|-1`
+(count this instead), both repeatable or CSV.
+
+The per-member lists are for the chair, not for publication: a quiet
+nudge to those who have not voted yet, and a running tally when votes
+change during the meeting. The announcement carries the totals only.
+
+A group member who holds no vote — the Fedora Project Leader sits in
+the group ex officio — is dropped from the roster with `--non-voting`:
+never listed as not having voted, and a stray `+1` or `-1` from them
+never counted. That is a standing fact rather than a per-run one, so
+pin it in the config file's `[defaults]` table:
+
+```toml
+[defaults.votes]
+non-voting = ["jspaleta"]
+```
+
+The clock starts when the `vote-in-progress` label was added, else the
+`fast track` label, else at the ticket's creation (a Change ticket is a
+proposal on creation). Each ticket then reports one of:
+
+- **approved** — `+7` with no `-1` on a Fast Track ticket, at least
+  three `+1` and no `-1` after a week, or at least one `+1` and no
+  `-1` after two weeks
+- **rejected** — seven `-1` and no `+1`, or no votes at all after two
+  weeks
+- **meeting** — a `-1` stands, which puts the ticket on the agenda
+  (and takes it off Fast Track)
+- **waiting** — with what is still needed and the date the next rule
+  fires; when that date is after the meeting (`--date`, default the
+  coming Tuesday) the report says so, since the chair then chooses
+  between letting the vote run and a procedural `-1` that brings it
+  to the meeting. A ticket that cannot conclude as it stands — too few
+  `+1` for the rule that fires next — is flagged `NEEDS VOTES` with the
+  members who have not voted, and listed again on stderr at the end
+
+A Fast Track ticket (label or `[FastTrack]` in the title) that is still
+waiting also reports the policy's 48-hour reminder: due, overdue, or
+sent — a FESCo member's comment mentioning "reminder" after the vote
+opened counts as sent.
+
 ## System-wide configuration
 
 Settings are read from `/etc/fesco-chair/config.toml` first, then
@@ -172,6 +245,12 @@ overridden per key by `~/.config/fesco-chair/config.toml`, with
 command-line flags overriding both. A system file alone is enough — no
 per-user file is required — and either may also carry a `[defaults]`
 table pinning flag defaults (see the root `DEVELOPMENT.md`).
+
+The repository ships a system file at `configs/fesco-chair/config.toml`
+(the Fedora package installs it) that marks the Fedora Project Leader
+non-voting for `votes`; try it before installing with
+`SANDOGASA_ETC=$PWD/configs fesco-chair votes`, which reads it beneath
+your own config, token included.
 
 `fesco-chair config` writes the user file only, with 700 on the
 directory and 600 on the file. Nothing writes under `/etc`: a system

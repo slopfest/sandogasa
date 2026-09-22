@@ -28,7 +28,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 - **[ebranch](tools/ebranch/)** — cross-branch porting helper: build-order resolution, branch requests, update checking with Bodhi karma, and tracking a multi-package effort on its way into the distro
 - **[fedora-cve-triage](tools/fedora-cve-triage/)** — triage CVEs reported against Fedora components in Red Hat Bugzilla
 - **[fedora-review-digest](tools/fedora-review-digest/)** — condense a `fedora-review` run of an auto-generated spec (rust2rpm) into a short rust-sig-style review comment
-- **[fesco-chair](tools/fesco-chair/)** — FESCo meeting chair helper: agenda announcement email, day-of meetbot script, and post-meeting summary email
+- **[fesco-chair](tools/fesco-chair/)** — FESCo meeting chair helper: agenda announcement email, day-of meetbot script, post-meeting summary email, and the state of open in-ticket votes
 - **[hs-intake](tools/hs-intake/)** — Hyperscale package intake analysis
 - **[hs-meetings](tools/hs-meetings/)** — chair CentOS Hyperscale SIG meetings: day-of zodbot script, meetbot archive list and sync
 - **[hs-relmon](tools/hs-relmon/)** — Hyperscale release monitoring via Repology

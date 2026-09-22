@@ -245,6 +245,40 @@ pub struct IssueComment {
     pub created_at: Option<String>,
 }
 
+/// A label as embedded in a timeline event.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LabelRef {
+    pub name: String,
+}
+
+/// One entry of an issue's timeline: a comment (`type` `comment`,
+/// `body` the text) or an event such as a label change (`type`
+/// `label`, `label` the label, `body` `"1"` when added and empty when
+/// removed).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TimelineEvent {
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub user: Option<UserRef>,
+    /// RFC 3339 timestamp of the event.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub label: Option<LabelRef>,
+}
+
+impl TimelineEvent {
+    /// The label this event added, if it is a label-added event.
+    pub fn label_added(&self) -> Option<&str> {
+        (self.kind == "label" && self.body == "1")
+            .then(|| self.label.as_ref().map(|l| l.name.as_str()))
+            .flatten()
+    }
+}
+
 /// A git ref (branch or commit) as embedded in a pull request's
 /// `head` / `base`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -698,6 +732,25 @@ impl Client {
         )
     }
 
+    /// Fetch an issue's timeline — comments interleaved with events
+    /// such as label changes — oldest first, paginated.
+    pub fn issue_timeline(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<TimelineEvent>, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/v1/repos/{owner}/{repo}/issues/{number}/timeline",
+            self.base_url
+        );
+        self.get_paged(
+            &url,
+            &[],
+            &format!("Forgejo timeline for {owner}/{repo}#{number}"),
+        )
+    }
+
     /// Search issues (not pulls) on `owner/repo` matching `query`, across
     /// any state — used to spot an already-filed ticket before creating a
     /// duplicate.
@@ -996,6 +1049,34 @@ mod tests {
         mock.assert();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].number, 7);
+    }
+
+    #[test]
+    fn issue_timeline_reads_comments_and_label_events() {
+        let mut server = mockito::Server::new();
+        let body = r#"[
+            {"type": "label", "body": "1", "user": {"login": "zbyszek"},
+             "created_at": "2026-09-16T13:07:00Z", "label": {"name": "fast track"}},
+            {"type": "label", "body": "", "user": {"login": "zbyszek"},
+             "created_at": "2026-09-16T13:07:01Z", "label": {"name": "meeting"}},
+            {"type": "comment", "body": "+1", "user": {"login": "kevin"},
+             "created_at": "2026-09-16T14:00:00Z"}
+        ]"#;
+        let mock = server
+            .mock("GET", "/api/v1/repos/fesco/tickets/issues/3685/timeline")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(body)
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let events = client.issue_timeline("fesco", "tickets", 3685).unwrap();
+        mock.assert();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].label_added(), Some("fast track"));
+        assert_eq!(events[1].label_added(), None);
+        assert_eq!(events[2].label_added(), None);
+        assert_eq!(events[2].kind, "comment");
+        assert_eq!(events[2].user.as_ref().unwrap().login, "kevin");
     }
 
     #[test]
