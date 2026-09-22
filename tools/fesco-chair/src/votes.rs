@@ -7,7 +7,8 @@
 //! Tickets labeled `vote-in-progress` or `fast track` are scanned;
 //! the latest `+1` / `0` / `-1` from each currently serving FESCo
 //! member (the `fesco` FAS group) is tallied, the clock starts at the
-//! label that opened the vote, and the policy's rules give a verdict:
+//! `vote-in-progress` label or, without one, at the ticket's creation,
+//! and the policy's rules give a verdict:
 //! approved, rejected, needs a meeting (any `-1`), or waiting — with
 //! the date the ticket becomes decidable, so the chair can see before
 //! composing the agenda whether to let a vote run or bring it to the
@@ -279,19 +280,17 @@ pub fn label_added_at(events: &[TimelineEvent], label: &str) -> Option<DateTime<
 }
 
 /// When the vote's clock started: the `vote-in-progress` label, else
-/// the `fast track` label, else the ticket's creation (a Change
-/// ticket is a proposal on creation), with the basis named for the
-/// report.
+/// the ticket's creation (a proposal is voted on from the moment it is
+/// made; a Change ticket is one on creation), with the basis named
+/// for the report. A Fast Track request only adds the early exit and
+/// the reminder — it does not restart the week.
 pub fn vote_start(
     events: &[TimelineEvent],
     created: DateTime<Utc>,
 ) -> (DateTime<Utc>, &'static str) {
-    if let Some(t) = label_added_at(events, VOTE_LABEL) {
-        (t, "vote-in-progress label")
-    } else if let Some(t) = label_added_at(events, FAST_TRACK_LABEL) {
-        (t, "fast track label")
-    } else {
-        (created, "ticket creation")
+    match label_added_at(events, VOTE_LABEL) {
+        Some(t) => (t, "vote-in-progress label"),
+        None => (created, "ticket creation"),
     }
 }
 
@@ -857,16 +856,15 @@ mod tests {
     }
 
     #[test]
-    fn vote_start_prefers_the_vote_label_then_fast_track_then_creation() {
+    fn vote_start_is_the_vote_label_else_creation_never_fast_track() {
         let created = at("2026-09-15T14:39:04Z");
         let ft = vec![
             label("meeting", true, "2026-09-15T14:39:10Z"),
             label("fast track", true, "2026-09-16T13:07:00Z"),
         ];
-        assert_eq!(
-            vote_start(&ft, created),
-            (at("2026-09-16T13:07:00Z"), "fast track label")
-        );
+        // #3685: proposed on filing, Fast Track requested a day later —
+        // the week still ends 2026-09-22.
+        assert_eq!(vote_start(&ft, created), (created, "ticket creation"));
         let mut both = ft.clone();
         both.push(label("vote-in-progress", true, "2026-09-17T00:00:00Z"));
         assert_eq!(vote_start(&both, created).1, "vote-in-progress label");

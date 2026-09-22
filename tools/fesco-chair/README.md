@@ -244,9 +244,10 @@ the same three flags — `--non-voting`, `--ignore` and `--vote` — so a
 correction made for `votes` carries over, and the top-level table
 covers all of them.
 
-The clock starts when the `vote-in-progress` label was added, else the
-`fast track` label, else at the ticket's creation (a Change ticket is a
-proposal on creation). Each ticket then reports one of:
+The clock starts when the `vote-in-progress` label was added, else at
+the ticket's creation: a proposal is voted on from the moment it is
+made (a Change ticket is one on creation), and a Fast Track request
+does not restart the week. Each ticket then reports one of:
 
 - **approved** — `+7` with no `-1` on a Fast Track ticket, at least
   three `+1` and no `-1` after a week, or at least one `+1` and no

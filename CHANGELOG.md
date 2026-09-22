@@ -16,7 +16,8 @@ the 48-hour reminder the policy asks for had never been sent.
 policy to each: the eligible voters come from the `fesco` FAS group
 (via FASJSON, so a Kerberos ticket is needed, or `--member` lists them
 by hand), each member's latest vote comment counts, and the clock runs
-from the label that opened the vote. The report gives the tally in the
+from the `vote-in-progress` label or, without one, from the ticket's
+creation — a Fast Track request does not restart it. The report gives the tally in the
 `(+X, Y, -Z)` form the decision comments use, the names behind it, the verdict (approved, rejected, meeting on a standing `-1`, or
 waiting with the date the next rule fires), and, when that date falls
 after the meeting, says so — the chair's choice is then to let the
