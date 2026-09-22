@@ -326,6 +326,26 @@ pub fn list_tagged(
     Ok(parse_list_tagged(&stdout))
 }
 
+/// The external repos a tag inherits, by name and in the order the hub
+/// lists them (`koji list-external-repos --tag <tag> --inherit`) —
+/// what a buildroot for that tag actually installs from. Empty when
+/// the tag has none.
+pub fn list_external_repos(tag: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
+    let stdout = run_koji(profile, &["list-external-repos", "--tag", tag, "--inherit"])?;
+    Ok(parse_list_external_repos(&stdout))
+}
+
+/// The repo names in a `list-external-repos --tag` listing: the last
+/// column of each row after the header and its dashed rule.
+pub fn parse_list_external_repos(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .skip_while(|l| !l.starts_with("---"))
+        .skip(1)
+        .filter_map(|l| l.split_whitespace().last().map(str::to_string))
+        .collect()
+}
+
 /// Every completed build of `package`, as NVRs, in the order the hub
 /// lists them (`koji list-builds --package`).
 pub fn list_builds(package: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
@@ -717,6 +737,28 @@ pub fn parse_rpm_deps(json: &str, dep_type: u64) -> Result<Vec<(String, Option<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_list_external_repos_reads_the_last_column() {
+        let out = "Tag                  Pri Mode       External repo name\n\
+                   -------------------- --- ---------- -------------------------\n\
+                   epel10.3-base        10  bare       c10-snapshot-baseos\n\
+                   epel10.3-base        20  bare       c10-snapshot-appstream\n\
+                   epel10.3-base        30  bare       c10-snapshot-crb\n";
+        assert_eq!(
+            parse_list_external_repos(out),
+            [
+                "c10-snapshot-baseos",
+                "c10-snapshot-appstream",
+                "c10-snapshot-crb"
+            ]
+        );
+        assert!(parse_list_external_repos("").is_empty());
+        assert!(
+            parse_list_external_repos("Tag Pri Mode External repo name\n---- --- ---- ----\n")
+                .is_empty()
+        );
+    }
 
     #[test]
     fn parse_buildinfo_rpms_lists_binary_nvras() {

@@ -588,9 +588,16 @@ CentOS Stream `@epel` group carries epel-next too), epel10 →
 `-b c10s -r @epel`, with the EPEL name kept as the `@testing`/chroot
 branch. The substitution is printed
 on stderr on every run. Passing `-r` yourself turns it off, so
-`-b c9s -r @epel` compares against CentOS Stream instead. The
-minor-release branches (`epel10.1`) have no assumed base — c10s runs
-ahead of a RHEL minor — and still require `-b` and `-r`.
+`-b c9s -r @epel` compares against CentOS Stream instead. A
+minor-release branch (`epel10.3`) has no fixed base: the newest minor
+builds against the moving stream, one in freeze against a pinned
+CentOS Stream snapshot, a released one against RHEL itself. So its
+base is read from Koji — the external repos `epel10.N-build` inherits
+name it: `c10-*` → `c10s`, `c10-snapshot-*` → `c10-snapshot` (defined
+by sandogasa's fedrq config), `rhel10.N-*` → `ubi10` (fedrq's
+currently released minor) — and the note says which repos decided it.
+Without koji, or for a minor Koji does not know, it is the guard
+error, and `-b` plus `-r` still work.
 
 For EPEL side tags, the testing branch is auto-detected from the
 side tag name (e.g. `epel9-build-side-*` uses `epel9`). Use

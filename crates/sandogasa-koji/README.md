@@ -21,6 +21,9 @@ CentOS Build System).
 - `is_available()` — whether the `koji` CLI is on PATH, for callers
   that degrade gracefully
 - `list_tagged_nvrs(tag, profile)` — list NVRs only (quiet mode)
+- `list_external_repos(tag, profile)` — the external repos a tag
+  inherits, by name (`list-external-repos --tag … --inherit`): what
+  its buildroot installs from
 - `build_rpms(nvr, profile)` — list binary RPM names from buildinfo
 - `parse_nvr(nvr)` — split NVR into (name, version, release)
 - `parse_nvr_name(nvr)` — extract just the package name from an NVR

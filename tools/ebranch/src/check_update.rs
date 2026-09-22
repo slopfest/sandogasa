@@ -469,7 +469,12 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
 
     // EPEL on its own can't resolve base-OS dependencies: a plain
     // epelN branch is checked against its base distro plus @epel.
-    let mapped = apply_epel_defaults(branch, opts.repo.clone(), opts.testing_branch.clone())?;
+    let mapped = apply_epel_defaults(
+        branch,
+        opts.repo.clone(),
+        opts.testing_branch.clone(),
+        |tag| sandogasa_koji::list_external_repos(tag, opts.koji_profile.as_deref()).ok(),
+    )?;
     if let Some(note) = &mapped.note {
         eprintln!("[check-update] {note}");
     }
@@ -1655,16 +1660,16 @@ fn epel_guard_error(branch: &str) -> String {
     format!(
         "{branch} can't resolve base-OS dependencies on its own and has no \
          assumed base (epel8, epel9, epel9-next and epel10 map to al8, al9, c9s \
-         and c10s); \
-         pass a base branch plus the EPEL repo, e.g. -b c10s -r @epel"
+         and c10s; a minor-release branch such as epel10.3 is read from what \
+         its Koji build tag inherits — c10s, c10-snapshot or ubi10 — which \
+         needs koji); pass a base branch plus the EPEL repo, e.g. -b c10s -r @epel"
     )
 }
 
 /// The base distro a plain EPEL branch is checked against — exact
 /// matches only. EPEL Next builds against CentOS Stream, whose fedrq
-/// `@epel` group carries epel-next too. `epel10.Y` targets a RHEL
-/// minor release that c10s runs ahead of, so the minor-release
-/// branches are not assumed.
+/// `@epel` group carries epel-next too. A minor-release branch
+/// (`epel10.3`) has no fixed answer; see [`minor_base_from_repos`].
 fn epel_base(branch: &str) -> Option<&'static str> {
     match branch {
         "epel8" => Some("al8"),
@@ -1673,6 +1678,44 @@ fn epel_base(branch: &str) -> Option<&'static str> {
         "epel10" => Some("c10s"),
         _ => None,
     }
+}
+
+/// The fedrq base for an EPEL minor-release branch, from the external
+/// repos its Koji build tag inherits — the buildroot's own answer to
+/// "which RHEL is this". The newest minor builds against the moving
+/// stream (`c10-baseos` → `c10s`), a minor in freeze against a pinned
+/// snapshot (`c10-snapshot-baseos` → `c10-snapshot`, defined by
+/// sandogasa's fedrq config), and a released minor against RHEL
+/// itself (`rhel10.2-baseos` → `ubi10`, fedrq's currently released
+/// minor). `None` when no repo name has one of those shapes.
+fn minor_base_from_repos<'a>(repos: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    repos.into_iter().find_map(|r| {
+        let digits = |s: &str| {
+            s.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+        };
+        if let Some(rest) = r.strip_prefix('c') {
+            let n = digits(rest);
+            let tail = &rest[n.len()..];
+            if n.is_empty() {
+                return None;
+            }
+            if tail.starts_with("-snapshot-") {
+                return Some(format!("c{n}-snapshot"));
+            }
+            if tail.starts_with('-') {
+                return Some(format!("c{n}s"));
+            }
+        }
+        if let Some(rest) = r.strip_prefix("rhel") {
+            let n = digits(rest);
+            if !n.is_empty() {
+                return Some(format!("ubi{n}"));
+            }
+        }
+        None
+    })
 }
 
 /// The branch, repo and @testing/chroot branch a check runs with, and
@@ -1686,13 +1729,17 @@ struct EpelDefaults {
 }
 
 /// A plain `epelN` branch with no `-r` becomes its base distro plus
-/// `@epel`, keeping the EPEL name as the @testing/chroot branch. An
-/// explicit `-r` is an override and leaves everything alone; an EPEL
-/// branch with no mapping (a minor release, epel7) is the guard error.
+/// `@epel`, keeping the EPEL name as the @testing/chroot branch; a
+/// minor-release branch asks `external_repos` (Koji, for
+/// `<branch>-build`) which base its buildroot inherits. An explicit
+/// `-r` is an override and leaves everything alone; an EPEL branch
+/// with no mapping (epel7, or a minor Koji cannot answer for) is the
+/// guard error.
 fn apply_epel_defaults(
     branch: String,
     repo: Option<String>,
     testing_branch: Option<String>,
+    external_repos: impl Fn(&str) -> Option<Vec<String>>,
 ) -> Result<EpelDefaults, String> {
     if repo.is_some() || !branch.starts_with("epel") {
         return Ok(EpelDefaults {
@@ -1702,14 +1749,25 @@ fn apply_epel_defaults(
             note: None,
         });
     }
-    let base = epel_base(&branch).ok_or_else(|| epel_guard_error(&branch))?;
+    let (base, why) = match epel_base(&branch) {
+        Some(b) => (b.to_string(), String::new()),
+        None => {
+            let repos = external_repos(&format!("{branch}-build")).unwrap_or_default();
+            let base = minor_base_from_repos(repos.iter().map(String::as_str))
+                .ok_or_else(|| epel_guard_error(&branch))?;
+            (
+                base,
+                format!(", as {branch}-build inherits {}", repos.join(", ")),
+            )
+        }
+    };
     let testing = testing_branch.unwrap_or_else(|| branch.clone());
     Ok(EpelDefaults {
         note: Some(format!(
             "{branch}: checking against {base} with -r @epel (testing/chroot \
-             {testing}); pass -b and -r to override"
+             {testing}){why}; pass -b and -r to override"
         )),
-        branch: base.to_string(),
+        branch: base,
         repo: Some("@epel".to_string()),
         testing_branch: Some(testing),
     })
@@ -3373,7 +3431,7 @@ mod tests {
             ("epel9-next", "c9s"),
             ("epel10", "c10s"),
         ] {
-            let d = apply_epel_defaults(epel.to_string(), None, None).unwrap();
+            let d = apply_epel_defaults(epel.to_string(), None, None, no_koji).unwrap();
             assert_eq!(d.branch, base);
             assert_eq!(d.repo.as_deref(), Some("@epel"));
             assert_eq!(d.testing_branch.as_deref(), Some(epel));
@@ -3381,9 +3439,19 @@ mod tests {
             assert!(note.contains(base) && note.contains("override"), "{note}");
         }
         // An explicit testing branch survives the substitution.
-        let d =
-            apply_epel_defaults("epel9".to_string(), None, Some("epel9-next".to_string())).unwrap();
+        let d = apply_epel_defaults(
+            "epel9".to_string(),
+            None,
+            Some("epel9-next".to_string()),
+            no_koji,
+        )
+        .unwrap();
         assert_eq!(d.testing_branch.as_deref(), Some("epel9-next"));
+    }
+
+    /// Koji unreachable: the fixture for a run without it.
+    fn no_koji(_tag: &str) -> Option<Vec<String>> {
+        None
     }
 
     #[test]
@@ -3391,7 +3459,7 @@ mod tests {
         // An explicit -r is the override: -b c9s -r @epel stays as given,
         // and so does -b epel9 -r @epel (the reviewer's call).
         for (b, r) in [("c9s", "@epel"), ("epel9", "@epel"), ("al9", "@epel")] {
-            let d = apply_epel_defaults(b.to_string(), Some(r.to_string()), None).unwrap();
+            let d = apply_epel_defaults(b.to_string(), Some(r.to_string()), None, no_koji).unwrap();
             assert_eq!(
                 d,
                 EpelDefaults {
@@ -3402,20 +3470,49 @@ mod tests {
                 }
             );
         }
-        let d = apply_epel_defaults("f44".to_string(), None, None).unwrap();
+        let d = apply_epel_defaults("f44".to_string(), None, None, no_koji).unwrap();
         assert_eq!(d.branch, "f44");
         assert!(d.repo.is_none() && d.note.is_none());
     }
 
     #[test]
-    fn epel_defaults_do_not_assume_a_base_for_minor_releases() {
-        // c10s runs ahead of a RHEL minor: epel10.1 needs -b and -r.
-        let err = apply_epel_defaults("epel10.1".to_string(), None, None).unwrap_err();
+    fn epel_defaults_read_a_minor_releases_base_from_its_koji_build_tag() {
+        // What Koji answered on 2026-09-23: the newest minor builds
+        // against the moving stream, the one in freeze against a
+        // snapshot, a released one against RHEL itself.
+        let koji = |tag: &str| -> Option<Vec<String>> {
+            let repos: &[&str] = match tag {
+                "epel10.4-build" => &["c10-baseos", "c10-appstream", "c10-crb"],
+                "epel10.3-build" => &["c10-snapshot-baseos", "c10-snapshot-appstream"],
+                "epel10.2-build" => &["rhel10.2-baseos", "rhel10.2-appstream", "rhel10.2-crb"],
+                _ => return None,
+            };
+            Some(repos.iter().map(|s| s.to_string()).collect())
+        };
+        for (minor, base) in [
+            ("epel10.4", "c10s"),
+            ("epel10.3", "c10-snapshot"),
+            ("epel10.2", "ubi10"),
+        ] {
+            let d = apply_epel_defaults(minor.to_string(), None, None, koji).unwrap();
+            assert_eq!(d.branch, base, "{minor}");
+            assert_eq!(d.repo.as_deref(), Some("@epel"));
+            assert_eq!(d.testing_branch.as_deref(), Some(minor));
+            let note = d.note.unwrap();
+            assert!(note.contains(&format!("{minor}-build inherits")), "{note}");
+        }
+        // Koji unreachable, or a tag it does not know: the guard error,
+        // naming the three possible bases.
+        let err = apply_epel_defaults("epel10.1".to_string(), None, None, koji).unwrap_err();
         assert!(
-            err.contains("epel10.1") && err.contains("-b c10s -r @epel"),
+            err.contains("epel10.1")
+                && err.contains("c10-snapshot or ubi10")
+                && err.contains("-b c10s -r @epel"),
             "{err}"
         );
-        assert!(apply_epel_defaults("epel7".to_string(), None, None).is_err());
+        assert!(apply_epel_defaults("epel7".to_string(), None, None, no_koji).is_err());
+        assert_eq!(minor_base_from_repos(["epel10.4-something"]), None);
+        assert_eq!(minor_base_from_repos(["c9-baseos"]).as_deref(), Some("c9s"));
     }
 
     #[test]

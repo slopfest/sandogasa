@@ -221,6 +221,24 @@ first as `Note` (author, timestamp, `system` flag), and
 `add_merge_request_note` posts one on a merge request. `MergeRequest` gains `updated_at`,
 `user_notes_count`, `has_conflicts` and `detailed_merge_status`.
 
+### ebranch: `check-update` knows which base an EPEL minor-release branch builds against
+
+`check-update --submit epel10.4-build-side-152618` refused with "epel10.4
+can't resolve base-OS dependencies on its own and has no assumed base",
+as every `epel10.N` branch did: the mapping knew epel8, epel9,
+epel9-next and epel10, and a minor release deliberately had no fixed
+answer, since the newest minor builds against the moving stream, one
+in freeze against a pinned CentOS Stream snapshot and a released one
+against RHEL itself. The answer exists, though — in Koji, as the
+external repos the `epel10.N-build` tag inherits. `check-update` now
+reads them: `c10-*` means `c10s`, `c10-snapshot-*` means
+`c10-snapshot` (sandogasa's own fedrq config), `rhel10.N-*` means
+`ubi10`; the substitution note names the repos that decided it, and
+the guard error remains for a run without koji or a minor it cannot
+answer for. On 2026-09-23 that gave c10s for epel10.4, c10-snapshot
+for epel10.3 and ubi10 for epel10.2. sandogasa-koji gains
+`list_external_repos`.
+
 ### fedrq config: the CentOS Proposed Updates SIG
 
 Asking what the Proposed Updates SIG ships for a package — the version
