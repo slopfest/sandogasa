@@ -346,25 +346,18 @@ fn delete_package(copr: &str, name: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sandogasa_copr::ChrootState;
 
     fn package(name: &str, chroots: &[(&str, &str, &str)]) -> PackageStatus {
-        PackageStatus {
-            name: name.to_string(),
-            chroots: chroots
-                .iter()
-                .map(|(c, state, vr)| {
-                    (
-                        c.to_string(),
-                        ChrootState {
-                            state: state.to_string(),
-                            build_id: Some(1),
-                            pkg_version: Some(vr.to_string()),
-                        },
-                    )
-                })
-                .collect(),
-        }
+        let chroots: serde_json::Map<String, serde_json::Value> = chroots
+            .iter()
+            .map(|(c, state, vr)| {
+                (
+                    c.to_string(),
+                    serde_json::json!({"state": state, "build_id": 1, "pkg_version": vr}),
+                )
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({"name": name, "chroots": chroots})).unwrap()
     }
 
     #[test]

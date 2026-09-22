@@ -32,6 +32,7 @@ pub const DEFAULT_BASE_URL: &str = "https://copr.fedorainfracloud.org";
 /// A package's latest-build state in one chroot, from
 /// `/api_3/monitor`.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct ChrootState {
     /// Build state, e.g. `succeeded`, `failed`, `running`.
     #[serde(default)]
@@ -48,6 +49,7 @@ pub struct ChrootState {
 /// One package row from `/api_3/monitor`: the package name and its
 /// latest build per chroot.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct PackageStatus {
     pub name: String,
     #[serde(default)]
