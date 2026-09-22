@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 /// A JIRA issue. Holds just the fields we care about.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Issue {
     /// Issue key, e.g. "RHEL-12345".
     pub key: String,
@@ -52,6 +53,7 @@ impl Issue {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct IssueFields {
     pub summary: String,
     pub status: NamedField,
@@ -67,6 +69,7 @@ pub struct IssueFields {
 /// JIRA exposes many fields as `{name: ..., ...}`; we only need
 /// the name.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct NamedField {
     pub name: String,
 }
