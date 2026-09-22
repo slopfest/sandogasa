@@ -310,10 +310,20 @@ their own keys from it, and the rest reach it through
 Four consequences worth knowing, for packaging in particular:
 
 - **Nothing ever creates the system file.** No tool writes under
-  `/etc`; `save` writes the user file only. A system config is
-  always authored by an admin (or shipped by a package), so an RPM
-  wants to own the directory and mark the file `%ghost
+  `/etc`; `save` writes the user file only, laying the struct over
+  what is there so a hand-written `[defaults]` survives. A system
+  config is always authored by an admin (or shipped by a package), so
+  an RPM wants to own the directory and mark the file `%ghost
   %config(noreplace)` rather than expect it to appear.
+- **A `config` command loads the user file alone.** It prompts, then
+  saves what it loaded, so loading the merged view would copy every
+  shipped value the struct models into the user file, where it would
+  shadow the next package update. `load_user` reads the user layer
+  only; the runtime keeps using `load`. Found on 2026-09-22, when
+  `fesco-chair config` was seen erasing a `[defaults]` table — the
+  erasure is what `save`'s overlay fixed, and `load_user` closes the
+  copying that a shipped `[forgejo]` or `[run]` table would have hit
+  next.
 - **A system file alone is enough.** `read_merged` returns the
   system table when no user file exists, so `load` succeeds from
   `/etc` with no per-user setup. (The not-found error names the

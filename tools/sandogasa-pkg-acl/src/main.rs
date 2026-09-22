@@ -216,7 +216,7 @@ fn resolve_target(
 async fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
     let cf = ConfigFile::for_tool(TOOL_NAME);
 
-    match cf.load::<AppConfig>() {
+    match cf.load_user::<AppConfig>() {
         Ok(config) => {
             println!("Found config at {}", cf.path().display());
             print!("Verifying API token... ");

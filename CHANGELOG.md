@@ -67,6 +67,23 @@ and `--vote` corrections as `votes`, so a misread comment is fixed once
 for all of them; the shipped config sets `non-voting` in the top-level
 `[defaults]` table so one line covers every subcommand.
 
+### sandogasa-config: `save` no longer erases what the struct does not model
+
+Every tool's `config` command loads the user file into a struct that
+knows its credentials and writes the struct back, so a `[defaults]`
+table the user had added by hand — pinning `--non-voting` for
+fesco-chair, say — vanished the next time they ran `fesco-chair
+config`; eight tools shared the flaw. `save` now lays the struct over
+the existing file key by key, recursively for tables, so unmodelled
+tables and keys stay, comments on untouched keys stay, and only the
+keys the struct carries are rewritten. `save` never removes a key;
+`edit` remains the tool for that. The same commands also loaded the
+merged `/etc` + user view before saving, which would have copied any
+shipped value the struct models into the user file; they now load with
+the new `load_user`, the user file alone, so the runtime keeps its
+layered `load` and a `config` run writes back only what the person
+wrote.
+
 ### sandogasa-config: `SANDOGASA_ETC` relocates the system layer
 
 A system config a repository ships under `configs/<tool>/` could not

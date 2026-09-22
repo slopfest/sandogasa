@@ -35,7 +35,7 @@ pub fn stored_token() -> Option<String> {
 /// it against the instance, and save.
 pub fn cmd_config() -> Result<(), String> {
     let cf = sandogasa_config::ConfigFile::for_tool("fesco-chair");
-    let mut config: Config = cf.load().unwrap_or_default();
+    let mut config: Config = cf.load_user().unwrap_or_default();
 
     println!("fesco-chair configuration\n");
     println!("Config file: {}\n", cf.path().display());

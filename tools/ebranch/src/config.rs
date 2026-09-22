@@ -167,7 +167,7 @@ pub fn resolve_api_key(cli_key: Option<&str>) -> Result<String, String> {
 /// Interactive config setup.
 pub async fn cmd_config() -> Result<(), String> {
     let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
-    let mut config: EbranchConfig = cf.load().unwrap_or_default();
+    let mut config: EbranchConfig = cf.load_user().unwrap_or_default();
 
     println!("ebranch configuration\n");
     println!("Config file: {}\n", cf.path().display());

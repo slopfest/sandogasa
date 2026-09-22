@@ -132,7 +132,7 @@ pub fn resolve_email() -> Option<String> {
 /// validates it with a minimal search, and writes the result.
 pub async fn cmd_config() -> Result<(), String> {
     let cf = sandogasa_config::ConfigFile::for_tool("poi-tracker");
-    let mut config: PoiTrackerConfig = cf.load().unwrap_or_default();
+    let mut config: PoiTrackerConfig = cf.load_user().unwrap_or_default();
 
     println!("poi-tracker configuration\n");
     println!("Config file: {}\n", cf.path().display());

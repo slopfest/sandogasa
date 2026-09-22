@@ -11,7 +11,12 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
   user file wins per key, recursively for tables; command-line
   flags override both). `save` only ever writes the user file.
   `read_merged` exposes the raw merged TOML for generic
-  inspection (the flag-defaults lookup uses it). Either layer may
+  inspection (the flag-defaults lookup uses it). `save` lays the
+  struct over what the user file already holds, so a table it does
+  not model — a hand-written `[defaults]` — and comments on untouched
+  keys survive a `config` command. A `config` command loads with
+  `load_user`, the user file alone, so a value shipped in `/etc` is not
+  copied into the user file when it saves. Either layer may
   be absent, and the system layer alone is enough — `load`
   succeeds from `/etc` with no user file present. `SANDOGASA_ETC`
   points the system layer at another root, so a config a repository

@@ -125,6 +125,24 @@ impl ConfigFile {
         }
     }
 
+    /// Load the **user** file alone, ignoring the system layer — for a
+    /// `config` command that will [`Self::save`] what it loads. Loading
+    /// the merged view there would copy every value shipped in `/etc`
+    /// that the struct models into the user file, where it would shadow
+    /// later package updates; loading the user file alone keeps the
+    /// round trip to what the person actually wrote. Errors when the
+    /// user file does not exist, like `load`.
+    pub fn load_user<T: DeserializeOwned>(&self) -> Result<T, Box<dyn std::error::Error>> {
+        match read_optional_table(&self.path)? {
+            Some(table) => Ok(toml::Value::Table(table).try_into()?),
+            None => Err(format!(
+                "Could not read {}: file not found. Run 'config' to set up.",
+                self.path.display()
+            )
+            .into()),
+        }
+    }
+
     /// Read the raw merged TOML of the layers. `Ok(None)` when no
     /// layer exists. For callers that inspect config generically
     /// (e.g. the `[defaults]` flag-defaults lookup).
@@ -147,28 +165,25 @@ impl ConfigFile {
         })
     }
 
-    /// Serialize and save the **user** config file, creating parent
-    /// directories as needed — the system layer is never written.
-    /// For user config files (`for_tool`), sets directory
+    /// Serialize `config` into the **user** config file, creating
+    /// parent directories as needed — the system layer is never
+    /// written. For user config files (`for_tool`), sets directory
     /// permissions to 700 and file permissions to 600.
     ///
-    /// Note: `save(load()?)` would bake system-layer values into
-    /// the user file; interactive `config` flows that rewrite the
-    /// file should keep that in mind (acceptable today — the
-    /// prompted fields are per-user anyway).
+    /// The struct is laid over what the file already holds, key by
+    /// key and recursively for tables, so a table the struct does not
+    /// model — `[defaults]`, written by hand — survives a `config`
+    /// command that only knows about credentials, as do comments on
+    /// untouched keys. A key the struct carries is replaced; one it
+    /// lacks is left alone, so `save` never removes anything (use
+    /// [`Self::edit`] for that).
+    ///
+    /// Note: `save(load()?)` still bakes system-layer values the
+    /// struct *does* model into the user file; `config` flows that
+    /// prompt only for per-user fields are unaffected.
     pub fn save<T: Serialize>(&self, config: &T) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-            if self.secure {
-                set_dir_permissions(parent)?;
-            }
-        }
-        let contents = toml::to_string_pretty(config)?;
-        std::fs::write(&self.path, &contents)?;
-        if self.secure {
-            set_file_permissions(&self.path)?;
-        }
-        Ok(())
+        let new: toml_edit::DocumentMut = toml::to_string_pretty(config)?.parse()?;
+        self.edit(|doc| overlay_items(doc.as_table_mut(), new.as_table()))
     }
 
     /// Change part of the **user** config file in place, keeping its
@@ -343,6 +358,22 @@ fn set_file_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
+}
+
+/// Lay `new` over `existing`: every key in `new` replaces the same key
+/// in `existing`, except that two tables merge recursively so keys
+/// only `existing` has are kept.
+fn overlay_items(existing: &mut toml_edit::Table, new: &toml_edit::Table) {
+    for (key, value) in new {
+        match (existing.get_mut(key), value.as_table()) {
+            (Some(old), Some(table)) if old.is_table() => {
+                overlay_items(old.as_table_mut().expect("is_table"), table)
+            }
+            _ => {
+                existing.insert(key, value.clone());
+            }
+        }
+    }
 }
 
 /// The system layer's root: `/etc`, or `$SANDOGASA_ETC` when set —
@@ -534,6 +565,76 @@ mod tests {
 
         let loaded: TestConfig = cf.load().unwrap();
         assert_eq!(loaded, config);
+    }
+
+    #[test]
+    fn load_user_ignores_the_system_layer_so_save_does_not_bake_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let system = dir.path().join("etc.toml");
+        let user = dir.path().join("config.toml");
+        std::fs::write(&system, "[forge]\nurl = \"https://shipped.example\"\n").unwrap();
+        std::fs::write(&user, "[forge]\ntoken = \"t\"\n").unwrap();
+        #[derive(Serialize, Deserialize, Default)]
+        struct Forge {
+            #[serde(default)]
+            url: String,
+            #[serde(default)]
+            token: String,
+        }
+        #[derive(Serialize, Deserialize, Default)]
+        struct Config {
+            forge: Forge,
+        }
+        let cf = ConfigFile::from_path(user.clone()).with_system_path(system);
+        let merged: Config = cf.load().unwrap();
+        assert_eq!(merged.forge.url, "https://shipped.example");
+        let mine: Config = cf.load_user().unwrap();
+        assert_eq!(mine.forge.url, "", "the shipped value is not the user's");
+        cf.save(&mine).unwrap();
+        let text = std::fs::read_to_string(&user).unwrap();
+        assert!(!text.contains("shipped.example"), "{text}");
+        assert!(text.contains("token = \"t\""), "{text}");
+        assert!(
+            cf.load_user::<Config>().is_ok()
+                && ConfigFile::from_path(dir.path().join("missing.toml"))
+                    .load_user::<Config>()
+                    .is_err()
+        );
+    }
+
+    #[test]
+    fn save_keeps_tables_and_comments_the_struct_does_not_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "# hand-written\n[forgejo]\ntoken = \"old\"\nextra = 1\n\n[defaults]\nnon-voting = [\"jspaleta\"]\n\n[defaults.agenda]\nhistory = 20\n",
+        )
+        .unwrap();
+        #[derive(Serialize)]
+        struct Forgejo {
+            token: String,
+        }
+        #[derive(Serialize)]
+        struct Config {
+            forgejo: Forgejo,
+        }
+        let cf = ConfigFile::from_path(path.clone());
+        cf.save(&Config {
+            forgejo: Forgejo {
+                token: "new".into(),
+            },
+        })
+        .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("token = \"new\""), "{text}");
+        assert!(
+            text.contains("extra = 1"),
+            "unmodelled key inside a modelled table kept: {text}"
+        );
+        assert!(text.contains("non-voting = [\"jspaleta\"]"), "{text}");
+        assert!(text.contains("[defaults.agenda]\nhistory = 20"), "{text}");
+        assert!(text.starts_with("# hand-written"), "{text}");
     }
 
     #[test]

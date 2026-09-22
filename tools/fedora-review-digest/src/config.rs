@@ -37,7 +37,7 @@ pub struct Credentials {
 /// config file once for both.
 pub fn credentials() -> Result<Credentials, Box<dyn std::error::Error>> {
     let file = ConfigFile::for_tool("fedora-review-digest");
-    let mut cfg: Config = file.load().unwrap_or_default();
+    let mut cfg: Config = file.load_user().unwrap_or_default();
     let mut dirty = false;
 
     let api_key = match env_nonempty("BUGZILLA_API_KEY") {
