@@ -25,6 +25,7 @@ pub enum Status {
 ///
 /// Only `repo` and `version` are guaranteed to be present.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Package {
     pub repo: String,
     pub version: String,
