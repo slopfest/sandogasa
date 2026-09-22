@@ -78,8 +78,9 @@ trackers, and groups the Changes into those still needing a decision
 and those retargeted — each with its wiki page, owners, the bug's
 status and last change, any unanswered `needinfo?` and how long it has
 waited, and the ticket's latest line, marked when its stated status is
-no longer Bugzilla's — and listed at the end for the Change Wrangler,
-whose list it is to edit. The bug number is taken from the `show_bug.cgi`
+no longer Bugzilla's — and listed in a closing section for the Change
+Wrangler, whose list it is to edit. The output is Markdown, ready to
+paste into the ticket. The bug number is taken from the `show_bug.cgi`
 link, since the visible `#NNNN` is typed by hand and has been wrong.
 
 ### sandogasa-bugzilla: `Flag::creation_date`

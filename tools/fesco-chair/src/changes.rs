@@ -359,7 +359,10 @@ fn assemble(
     Ok((issue, release, reports))
 }
 
-/// The text report: three groups, one block per Change.
+/// The report as Markdown, ready to paste into the ticket: a heading
+/// per group with a list item per Change, and a closing section
+/// listing the blocks whose stated status Bugzilla has moved on from,
+/// for the Change Wrangler.
 pub fn render(reports: &[Report], release: u32, today: NaiveDate) -> String {
     let mut out = Vec::new();
     for (state, heading) in [
@@ -378,13 +381,31 @@ pub fn render(reports: &[Report], release: u32, today: NaiveDate) -> String {
         if group.is_empty() {
             continue;
         }
-        out.push(format!("= {heading} ({}) =", group.len()));
-        for r in group {
-            out.push(render_one(r, today));
-        }
+        out.push(format!("## {heading} ({})\n", group.len()));
+        out.extend(group.iter().map(|r| render_one(r, today)));
         out.push(String::new());
     }
+    let stale: Vec<&Report> = reports.iter().filter(|r| r.stale).collect();
+    if !stale.is_empty() {
+        out.push(format!(
+            "## Ticket list behind Bugzilla ({}) — for the Change Wrangler\n",
+            stale.len()
+        ));
+        out.extend(stale.iter().map(|r| {
+            format!(
+                "- {}: ticket says {}, bz {} is {}",
+                r.entry.name,
+                r.entry.status,
+                bug_link(r.entry.bug),
+                r.bz_status
+            )
+        }));
+    }
     out.join("\n").trim_end().to_string()
+}
+
+fn bug_link(bug: u64) -> String {
+    format!("[#{bug}]({BUGZILLA_URL}/show_bug.cgi?id={bug})")
 }
 
 fn render_one(r: &Report, today: NaiveDate) -> String {
@@ -398,13 +419,13 @@ fn render_one(r: &Report, today: NaiveDate) -> String {
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let mut lines = vec![format!("{} — {owners}", e.name)];
-    if let Some(w) = &e.wiki {
-        lines.push(format!("  {w}"));
-    }
+    let name = match &e.wiki {
+        Some(w) => format!("[{}]({w})", e.name),
+        None => e.name.clone(),
+    };
     let mut bz = format!(
-        "  bz #{} {}{}, last changed {}",
-        e.bug,
+        "  - bz {} {}{}, last changed {}",
+        bug_link(e.bug),
         r.bz_status,
         if r.resolution.is_empty() {
             String::new()
@@ -425,7 +446,6 @@ fn render_one(r: &Report, today: NaiveDate) -> String {
             .unwrap_or_default();
         bz.push_str(&format!("; NEEDINFO {who} unanswered{age}"));
     }
-    lines.push(bz);
     let section = e
         .section
         .as_deref()
@@ -436,13 +456,12 @@ fn render_one(r: &Report, today: NaiveDate) -> String {
     } else {
         String::new()
     };
-    lines.push(format!(
-        "  ticket ({} {}{section}){stale}: {}",
+    format!(
+        "- **{name}** — {owners}\n{bz}\n  - ticket ({} {}{section}){stale}: {}",
         e.noted,
         e.noted_by,
         if e.info.is_empty() { "-" } else { &e.info }
-    ));
-    lines.join("\n")
+    )
 }
 
 pub fn run(args: &ChangesArgs) -> ExitCode {
@@ -464,29 +483,17 @@ pub fn run(args: &ChangesArgs) -> ExitCode {
         println!("{}", serde_json::to_string_pretty(&out).expect("serialize"));
     } else {
         println!(
-            "#{} {}\n{}\n\n{}",
+            "Incomplete Changes as of {} — Bugzilla against #{} {}\n{}\n\n{}",
+            Utc::now().date_naive(),
             issue.number,
             issue.title,
             issue.html_url,
             render(&reports, release, Utc::now().date_naive())
         );
-        let stale: Vec<String> = reports
-            .iter()
-            .filter(|r| r.stale)
-            .map(|r| {
-                format!(
-                    "{} (ticket says {}, bz #{} is {})",
-                    r.entry.name, r.entry.status, r.entry.bug, r.bz_status
-                )
-            })
-            .collect();
-        if !stale.is_empty() {
+        if reports.iter().any(|r| r.stale) {
             eprintln!(
-                "\nnote: the ticket's list is behind Bugzilla on {} Change(s) — the groups \
-                 above follow Bugzilla; the list is the Change Wrangler's to edit, so point \
-                 them at these rather than editing the ticket:\n  {}",
-                stale.len(),
-                stale.join("\n  ")
+                "\nnote: the last section is for the Change Wrangler, whose list the \
+                 ticket is — point them at it rather than editing the ticket"
             );
         }
     }
@@ -640,23 +647,41 @@ Latest Info: **Deferred to F46**\n";
         let text = render(&reports, 45, NaiveDate::from_ymd_opt(2026, 9, 22).unwrap());
         assert!(
             text.starts_with(
-                "= Needs a decision — still open against F45 (1) =\nRelocate — @ngompa\n"
+                "## Needs a decision — still open against F45 (1)\n\n\
+                 - **[Relocate](https://fedoraproject.org/wiki/Changes/Relocate)** — @ngompa\n"
             ),
             "{text}"
         );
         assert!(
-            text.contains("  bz #2481848 ASSIGNED, last changed 2026-09-09; NEEDINFO ngompa13 unanswered since 2026-08-31 (22 days)"),
+            text.contains(
+                "  - bz [#2481848](https://bugzilla.redhat.com/show_bug.cgi?id=2481848) ASSIGNED, \
+                 last changed 2026-09-09; NEEDINFO ngompa13 unanswered since 2026-08-31 (22 days)"
+            ),
             "{text}"
         );
         assert!(
-            text.contains("  ticket (2026-09-09 gotmax23, \"Needs review\"): Owner NEEDINFO'd"),
+            text.contains("  - ticket (2026-09-09 gotmax23, \"Needs review\"): Owner NEEDINFO'd"),
             "{text}"
         );
         assert!(
-            text.contains("= Code complete or done — nothing to decide (1) =\nToolchain — @ngompa"),
+            text.contains("## Code complete or done — nothing to decide (1)\n\n- **[Toolchain]"),
             "{text}"
         );
-        assert!(text.contains("  bz #2503684 ON_QA, last changed 2026-09-10\n  ticket (2026-09-09 gotmax23) [ticket says ASSIGNED]: Owner NEEDINFO'd"), "{text}");
+        assert!(
+            text.contains(
+                "ON_QA, last changed 2026-09-10\n  - ticket (2026-09-09 gotmax23) \
+                 [ticket says ASSIGNED]: Owner NEEDINFO'd"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.ends_with(
+                "## Ticket list behind Bugzilla (1) — for the Change Wrangler\n\n\
+                 - Toolchain: ticket says ASSIGNED, bz \
+                 [#2503684](https://bugzilla.redhat.com/show_bug.cgi?id=2503684) is ON_QA"
+            ),
+            "{text}"
+        );
         assert!(!text.contains("Retargeted"), "empty groups are left out");
     }
 }

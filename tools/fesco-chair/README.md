@@ -142,12 +142,13 @@ the Changes:
 - **Retargeted** — blocking the next release's tracker instead
 - **On neither tracker** — worth a look
 
-Each Change shows its wiki page, owners, the bug's status, resolution
-and last change, an unanswered `needinfo?` with whom it asks and for
-how long, and the ticket's latest line on it; a block whose stated
-status Bugzilla no longer has is marked `[ticket says …]`, and those
-are listed again at the end for the Change Wrangler, whose list it is
-— the tool never edits the ticket. The report ticket is the open
+The output is Markdown, ready to paste into the ticket: a heading per
+group and a list item per Change with its wiki page, owners, the bug's
+status, resolution and last change, an unanswered `needinfo?` with
+whom it asks and for how long, and the ticket's latest line on it. A
+block whose stated status Bugzilla no longer has is marked `[ticket
+says …]`, and a closing section lists those for the Change Wrangler,
+whose list it is — the tool never edits the ticket. The report ticket is the open
 `meeting` ticket titled "Incomplete Changes Report" unless `--ticket`
 names one. Bugzilla is read anonymously.
 
