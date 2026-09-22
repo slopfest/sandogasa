@@ -1782,26 +1782,12 @@ mod tests {
 
     #[test]
     fn test_issue_ref_from_gitlab_issue_with_status() {
-        use crate::gitlab;
-        let issue = gitlab::Issue {
-            labels: vec![],
-            iid: 7,
-            title: "t".into(),
-            description: None,
-            state: "opened".into(),
-            web_url: "https://example.com/issues/7".into(),
-            assignees: vec![
-                gitlab::Assignee {
-                    username: "alice".into(),
-                },
-                gitlab::Assignee {
-                    username: "bob".into(),
-                },
-            ],
-            start_date: None,
-            due_date: None,
-            created_at: None,
-        };
+        let issue = serde_json::from_value(serde_json::json!({
+            "iid": 7, "title": "t", "state": "opened",
+            "web_url": "https://example.com/issues/7",
+            "assignees": [{"username": "alice"}, {"username": "bob"}]
+        }))
+        .unwrap();
         let r = IssueRef::from_gitlab_issue(&issue, Some("To do".into()));
         assert_eq!(r.iid, 7);
         assert_eq!(r.url, "https://example.com/issues/7");
@@ -1812,19 +1798,10 @@ mod tests {
 
     #[test]
     fn test_issue_ref_from_gitlab_issue_no_status() {
-        use crate::gitlab;
-        let issue = gitlab::Issue {
-            labels: vec![],
-            iid: 1,
-            title: "t".into(),
-            description: None,
-            state: "closed".into(),
-            web_url: "u".into(),
-            assignees: vec![],
-            start_date: None,
-            due_date: None,
-            created_at: None,
-        };
+        let issue = serde_json::from_value(serde_json::json!({
+            "iid": 1, "title": "t", "state": "closed", "web_url": "u"
+        }))
+        .unwrap();
         let r = IssueRef::from_gitlab_issue(&issue, None);
         assert_eq!(r.status, "closed");
         assert_eq!(r.state, "closed");

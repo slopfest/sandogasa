@@ -286,18 +286,12 @@ mod tests {
     use super::*;
 
     fn issue(project: &str, iid: u64, title: &str, labels: &[&str], created: &str) -> Issue {
-        Issue {
-            iid,
-            title: title.into(),
-            description: None,
-            state: "opened".into(),
-            web_url: format!("{GITLAB_URL}/{GROUP}/{project}/-/work_items/{iid}"),
-            labels: labels.iter().map(|l| l.to_string()).collect(),
-            assignees: vec![],
-            start_date: None,
-            due_date: None,
-            created_at: Some(format!("{created}T10:00:00.000Z")),
-        }
+        serde_json::from_value(serde_json::json!({
+            "iid": iid, "title": title, "state": "opened",
+            "web_url": format!("{GITLAB_URL}/{GROUP}/{project}/-/work_items/{iid}"),
+            "labels": labels, "created_at": format!("{created}T10:00:00.000Z")
+        }))
+        .unwrap()
     }
 
     fn date(s: &str) -> NaiveDate {

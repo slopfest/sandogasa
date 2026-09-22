@@ -336,24 +336,14 @@ mod tests {
         state: &str,
         assignees: Vec<&str>,
     ) -> gitlab::Issue {
-        gitlab::Issue {
-            labels: vec![],
-            iid,
-            title: format!("{package}-1.0 is available"),
-            description: None,
-            state: state.into(),
-            web_url: format!(
-                "https://gitlab.com/CentOS/Hyperscale/\
-                rpms/{package}/-/issues/{iid}"
-            ),
-            assignees: assignees
-                .into_iter()
-                .map(|u| gitlab::Assignee { username: u.into() })
-                .collect(),
-            start_date: None,
-            due_date: None,
-            created_at: None,
-        }
+        serde_json::from_value(serde_json::json!({
+            "iid": iid,
+            "title": format!("{package}-1.0 is available"),
+            "state": state,
+            "web_url": format!("https://gitlab.com/CentOS/Hyperscale/rpms/{package}/-/issues/{iid}"),
+            "assignees": assignees.iter().map(|u| serde_json::json!({"username": u})).collect::<Vec<_>>(),
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -389,18 +379,10 @@ mod tests {
 
     #[test]
     fn test_entry_from_issue_bad_url() {
-        let issue = gitlab::Issue {
-            labels: vec![],
-            iid: 1,
-            title: "t".into(),
-            description: None,
-            state: "opened".into(),
-            web_url: "".into(),
-            assignees: vec![],
-            start_date: None,
-            due_date: None,
-            created_at: None,
-        };
+        let issue = serde_json::from_value(serde_json::json!({
+            "iid": 1, "title": "t", "state": "opened", "web_url": ""
+        }))
+        .unwrap();
         assert!(entry_from_issue(&issue, None, None).is_none());
     }
 

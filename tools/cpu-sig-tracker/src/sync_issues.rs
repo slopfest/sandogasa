@@ -250,18 +250,11 @@ mod tests {
     use super::*;
 
     fn issue(url: &str, title: &str) -> gitlab::Issue {
-        gitlab::Issue {
-            labels: vec![],
-            iid: 1,
-            title: title.to_string(),
-            description: None,
-            state: "opened".to_string(),
-            web_url: url.to_string(),
-            assignees: vec![],
-            start_date: None,
-            due_date: None,
-            created_at: None,
-        }
+        serde_json::from_value(serde_json::json!({
+            "labels": [], "iid": 1, "title": title, "state": "opened",
+            "web_url": url, "assignees": []
+        }))
+        .unwrap()
     }
 
     #[test]

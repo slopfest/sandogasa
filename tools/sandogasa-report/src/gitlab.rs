@@ -755,17 +755,12 @@ mod tests {
         iid: Option<u64>,
         title: Option<&str>,
     ) -> Event {
-        Event {
-            id: 1,
-            project_id,
-            action_name: action.to_string(),
-            target_type: target_type.map(|s| s.to_string()),
-            target_iid: iid,
-            target_title: title.map(|s| s.to_string()),
-            created_at: "2026-02-15T10:00:00Z".to_string(),
-            note: None,
-            push_data: None,
-        }
+        serde_json::from_value(serde_json::json!({
+            "id": 1, "project_id": project_id, "action_name": action,
+            "target_type": target_type, "target_iid": iid, "target_title": title,
+            "created_at": "2026-02-15T10:00:00Z"
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -825,11 +820,10 @@ mod tests {
 
     #[test]
     fn dispatch_commented_dedups_per_mr() {
-        let note = sandogasa_gitlab::EventNote {
-            noteable_type: Some("MergeRequest".to_string()),
-            noteable_iid: Some(7),
-            body: Some("LGTM".to_string()),
-        };
+        let note: sandogasa_gitlab::EventNote = serde_json::from_value(serde_json::json!({
+            "noteable_type": "MergeRequest", "noteable_iid": 7, "body": "LGTM"
+        }))
+        .unwrap();
         let mut ev = sample_event("commented on", None, 10, None, Some("Fix X"));
         ev.note = Some(note);
         let mut report = GitlabReport::default();
@@ -854,13 +848,12 @@ mod tests {
     #[test]
     fn dispatch_push_accumulates_commits() {
         let mut ev = sample_event("pushed to", None, 10, None, None);
-        ev.push_data = Some(sandogasa_gitlab::EventPushData {
-            commit_count: 3,
-            action: None,
-            ref_type: None,
-            ref_name: Some("main".to_string()),
-            commit_title: None,
-        });
+        ev.push_data = Some(
+            serde_json::from_value(serde_json::json!({
+                "commit_count": 3, "ref_name": "main"
+            }))
+            .unwrap(),
+        );
         let mut report = GitlabReport::default();
         let mut seen = BTreeSet::new();
         dispatch_event(

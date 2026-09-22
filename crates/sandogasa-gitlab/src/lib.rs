@@ -12,12 +12,14 @@ const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VE
 
 /// A GitLab user (assignee).
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Assignee {
     pub username: String,
 }
 
 /// A GitLab issue.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Issue {
     pub iid: u64,
     pub title: String,
@@ -46,6 +48,7 @@ pub struct Issue {
 /// from the project endpoint; the issue-feature flags only appear
 /// for authenticated requests.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct ProjectStatus {
     /// Archived projects are read-only — issue writes return 403.
     #[serde(default)]
@@ -79,6 +82,7 @@ pub struct ProjectUpdate {
 
 /// A branch as the repository branches endpoint lists it.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Branch {
     pub name: String,
     #[serde(default)]
@@ -117,6 +121,7 @@ impl ProjectStatus {
 
 /// A GitLab merge request (minimal fields).
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct MergeRequest {
     pub iid: u64,
     pub title: String,
@@ -139,6 +144,7 @@ pub struct MergeRequest {
 
 /// A merge request's author: account login and display name.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct MrAuthor {
     pub username: String,
     #[serde(default)]
@@ -147,6 +153,7 @@ pub struct MrAuthor {
 
 /// A commit from the repository or merge-request commit listings.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct RepoCommit {
     pub id: String,
     #[serde(default)]
@@ -809,6 +816,7 @@ pub struct IssueUpdate {
 
 /// Whoever a token belongs to, from `GET /api/v4/user`.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct CurrentUser {
     pub id: u64,
     pub username: String,
@@ -841,6 +849,7 @@ pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::
 
 /// A project name returned by the GitLab group projects API.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct GroupProject {
     pub name: String,
     pub path: String,
@@ -1040,6 +1049,7 @@ pub fn parse_issue_url(url: &str) -> Result<(String, String, u64), String> {
 
 /// A GitLab user as returned by `/users?username=<name>`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct User {
     pub id: u64,
     pub username: String,
@@ -1097,6 +1107,7 @@ fn get_all_pages<T: DeserializeOwned>(
 /// sparse — GitLab only populates the ones relevant to each
 /// `action_name`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct Event {
     pub id: u64,
     pub project_id: u64,
@@ -1116,6 +1127,7 @@ pub struct Event {
 
 /// Note payload attached to `commented on` events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct EventNote {
     #[serde(default)]
     pub noteable_type: Option<String>,
@@ -1127,6 +1139,7 @@ pub struct EventNote {
 
 /// Push payload attached to `pushed to` / `pushed new` events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct EventPushData {
     #[serde(default)]
     pub commit_count: u64,
@@ -1177,6 +1190,7 @@ pub fn user_events(
 /// Minimal project identity: what you need to filter events by
 /// `path_with_namespace` prefix and render a human-readable link.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct ProjectSummary {
     pub id: u64,
     pub path_with_namespace: String,
@@ -1248,6 +1262,7 @@ pub fn count_authored_commits(
 /// match: the tag's `created_at` (when the ref was pushed,
 /// distinct from the commit date) and the tag name.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct Tag {
     pub name: String,
     /// Tag-ref creation timestamp on GitLab (ISO 8601). This is
@@ -1287,6 +1302,7 @@ pub fn list_tags(
 /// A GitLab Release as returned by `/projects/:id/releases`.
 /// Field selection follows the API's snake_case names.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct Release {
     pub tag_name: String,
     #[serde(default)]
@@ -1304,6 +1320,7 @@ pub struct Release {
 /// Author block on a Release. Username is the field most useful
 /// for cross-referencing with the calling user's profile.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct ReleaseAuthor {
     pub id: u64,
     pub username: String,
@@ -1314,6 +1331,7 @@ pub struct ReleaseAuthor {
 /// `_links` block. The `self` link is the canonical web URL of
 /// the release page.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct ReleaseLinks {
     #[serde(default, rename = "self")]
     pub self_url: Option<String>,
