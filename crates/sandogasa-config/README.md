@@ -13,7 +13,10 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
   `read_merged` exposes the raw merged TOML for generic
   inspection (the flag-defaults lookup uses it). Either layer may
   be absent, and the system layer alone is enough — `load`
-  succeeds from `/etc` with no user file present.
+  succeeds from `/etc` with no user file present. `SANDOGASA_ETC`
+  points the system layer at another root, so a config a repository
+  ships under `configs/<tool>/` can be tried beneath the real user
+  file before it is installed (`SANDOGASA_ETC=$PWD/configs`).
 - **try_for_tool_file** — the same layered pair for a file other than
   `config.toml`, e.g. a run profile a package ships under
   `/etc/{tool}/` while users override it per key in `~/.config/{tool}/`.

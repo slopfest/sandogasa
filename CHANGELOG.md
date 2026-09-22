@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### sandogasa-config: `SANDOGASA_ETC` relocates the system layer
+
+A system config a repository ships under `configs/<tool>/` could not
+be tried before installation without copying it to `/etc` or into the
+user file, where it would sit beside the token. `SANDOGASA_ETC` names
+another root for the system layer (`SANDOGASA_ETC=$PWD/configs`), read
+beneath the real user file as `/etc` would be.
+
 ### fedrq config: the CentOS Stream snapshot behind EPEL minor-release builds
 
 Finding out which rustc (or anything else) an EPEL build for a RHEL

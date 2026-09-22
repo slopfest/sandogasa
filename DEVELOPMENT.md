@@ -302,6 +302,11 @@ Four consequences worth knowing, for packaging in particular:
   token maps to one person.
 - **A missing system file is not an error**, so shipping the
   directory empty is fine.
+- **`SANDOGASA_ETC` relocates the system layer** for one run —
+  `SANDOGASA_ETC=$PWD/configs fesco-chair votes` reads the
+  repository's `configs/fesco-chair/config.toml` beneath the real
+  user file, tokens included, which is how a shipped system config
+  is tried before the package installs it under `/etc`.
 
 Keeping credentials out of the system layer is a design choice, not
 just caution, because the alternatives are all worse. Restricting by

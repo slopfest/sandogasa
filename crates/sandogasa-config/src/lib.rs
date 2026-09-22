@@ -60,7 +60,7 @@ impl ConfigFile {
         Some(Self {
             path: dirs::config_dir()?.join(tool_name).join(file_name),
             secure: file_name == "config.toml",
-            system_path: Some(Path::new("/etc").join(tool_name).join(file_name)),
+            system_path: Some(system_root().join(tool_name).join(file_name)),
         })
     }
 
@@ -345,6 +345,21 @@ fn set_file_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// The system layer's root: `/etc`, or `$SANDOGASA_ETC` when set —
+/// so a config a repository ships under `configs/<tool>/` can be
+/// tried beneath the real user file before it is installed
+/// (`SANDOGASA_ETC=$PWD/configs`).
+fn system_root() -> PathBuf {
+    system_root_from(std::env::var_os("SANDOGASA_ETC"))
+}
+
+fn system_root_from(override_dir: Option<std::ffi::OsString>) -> PathBuf {
+    match override_dir {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => PathBuf::from("/etc"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,6 +376,16 @@ mod tests {
         key: String,
         #[serde(default)]
         optional: String,
+    }
+
+    #[test]
+    fn system_root_is_etc_unless_overridden() {
+        assert_eq!(system_root_from(None), PathBuf::from("/etc"));
+        assert_eq!(system_root_from(Some("".into())), PathBuf::from("/etc"));
+        assert_eq!(
+            system_root_from(Some("/srv/cfg".into())),
+            PathBuf::from("/srv/cfg")
+        );
     }
 
     #[test]
