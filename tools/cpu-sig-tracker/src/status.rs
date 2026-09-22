@@ -506,7 +506,7 @@ fn resolve_body_references(body: &str, verbose: bool, force_mr_fetch: bool) -> B
 /// Parse the structured `- **MR**: [title](url)[ — state]`
 /// line. Returns (url, state) where state is the trimmed text
 /// after ` — ` / ` -- ` following the URL's closing paren.
-fn parse_mr_line(body: &str) -> Option<(String, Option<String>)> {
+pub(crate) fn parse_mr_line(body: &str) -> Option<(String, Option<String>)> {
     for line in body.lines() {
         if let Some(rest) = line.strip_prefix("- **MR**: [")
             && let Some(idx) = rest.find("](")
@@ -595,7 +595,7 @@ fn is_legacy_line(line: &str) -> bool {
 /// return it trimmed at a whitespace or closing-paren boundary.
 /// Case where the body has `* Stream MR: https://.../-/merge_requests/10`
 /// or similar ad-hoc forms.
-fn scan_mr_url_in_body(body: &str) -> Option<String> {
+pub(crate) fn scan_mr_url_in_body(body: &str) -> Option<String> {
     const SEP: &str = "/-/merge_requests/";
     let idx = body.find(SEP)?;
     // Walk left to find the start of the URL (https:// or http://).
@@ -646,7 +646,7 @@ fn fetch_mr(url: &str, verbose: bool) -> Option<gitlab::MergeRequest> {
 /// `https://gitlab.com/CentOS/proposed_updates/rpms/<pkg>/-/work_items/<n>`,
 /// return the project path `CentOS/proposed_updates/rpms/<pkg>`
 /// so callers can construct a project-scoped client.
-fn tracking_project_of(web_url: &str) -> Option<String> {
+pub(crate) fn tracking_project_of(web_url: &str) -> Option<String> {
     sandogasa_gitlab::project_path_from_issue_url(web_url)
 }
 
@@ -958,7 +958,7 @@ fn fetch_jira(key: &str, verbose: bool) -> Option<JiraInfo> {
     })
 }
 
-fn fetch_proposed_updates_nvrs(release: &str, verbose: bool) -> HashMap<String, String> {
+pub(crate) fn fetch_proposed_updates_nvrs(release: &str, verbose: bool) -> HashMap<String, String> {
     match proposed_updates_tag(release) {
         Ok(tag) => fetch_koji_nvrs(&tag, verbose),
         Err(e) => {
@@ -968,7 +968,10 @@ fn fetch_proposed_updates_nvrs(release: &str, verbose: bool) -> HashMap<String, 
     }
 }
 
-fn fetch_proposed_updates_testing_nvrs(release: &str, verbose: bool) -> HashMap<String, String> {
+pub(crate) fn fetch_proposed_updates_testing_nvrs(
+    release: &str,
+    verbose: bool,
+) -> HashMap<String, String> {
     match crate::dump_inventory::proposed_updates_testing_tag(release) {
         Ok(tag) => fetch_koji_nvrs(&tag, verbose),
         Err(e) => {
@@ -1002,7 +1005,11 @@ fn nvr_map_by_name(builds: &[TaggedBuild]) -> HashMap<String, String> {
     map
 }
 
-fn fetch_stream_nvrs(release: &str, packages: &[String], verbose: bool) -> HashMap<String, String> {
+pub(crate) fn fetch_stream_nvrs(
+    release: &str,
+    packages: &[String],
+    verbose: bool,
+) -> HashMap<String, String> {
     if packages.is_empty() {
         return HashMap::new();
     }
@@ -1056,7 +1063,7 @@ fn suggest_next_action(
 /// greater than the proposed_updates V-R (RPM ordering). If
 /// either side is missing we play it safe and return false —
 /// suggestion falls through to `in-progress`.
-fn stream_newer_than_proposed(pu_nvr: Option<&str>, stream_nvr: Option<&str>) -> bool {
+pub(crate) fn stream_newer_than_proposed(pu_nvr: Option<&str>, stream_nvr: Option<&str>) -> bool {
     use std::cmp::Ordering;
     let Some(pu) = pu_nvr else {
         return false;

@@ -137,13 +137,45 @@ pub struct MergeRequest {
     /// When the MR was opened (RFC 3339).
     #[serde(default)]
     pub created_at: Option<String>,
+    /// When anything about the MR last changed (RFC 3339) — a
+    /// comment, a push, a label, an approval.
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    /// How many non-system notes it carries.
+    #[serde(default)]
+    pub user_notes_count: Option<u64>,
+    /// Whether it no longer merges cleanly into its target.
+    #[serde(default)]
+    pub has_conflicts: Option<bool>,
+    /// GitLab's mergeability verdict, e.g. `mergeable`,
+    /// `not_approved`, `conflict`, `draft_status`.
+    #[serde(default)]
+    pub detailed_merge_status: Option<String>,
     /// Who opened it.
     #[serde(default)]
     pub author: Option<MrAuthor>,
 }
 
+/// A note (comment) on a merge request or issue. `system` notes are
+/// GitLab's own — "added 1 commit", "changed the description" — as
+/// opposed to something a person wrote.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct Note {
+    pub id: u64,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub author: Option<MrAuthor>,
+    /// RFC 3339.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub system: bool,
+}
+
 /// A merge request's author: account login and display name.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct MrAuthor {
     pub username: String,
@@ -229,6 +261,53 @@ impl Client {
 
     /// The commits a merge request carries (one page of up to a
     /// hundred).
+    /// Every note on a merge request, oldest first, system notes
+    /// included (filter on [`Note::system`]).
+    pub fn merge_request_notes(&self, iid: u64) -> Result<Vec<Note>, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/merge_requests/{}/notes",
+            self.base_url, encoded, iid
+        );
+        get_all_pages(
+            &self.http,
+            &url,
+            &[("sort", "asc"), ("order_by", "created_at")],
+            &[],
+        )
+    }
+
+    /// Every note on an issue, oldest first, system notes included.
+    pub fn issue_notes(&self, iid: u64) -> Result<Vec<Note>, Box<dyn std::error::Error>> {
+        let url = format!("{}/{iid}/notes", self.issues_url());
+        get_all_pages(
+            &self.http,
+            &url,
+            &[("sort", "asc"), ("order_by", "created_at")],
+            &[],
+        )
+    }
+
+    /// Post a note (comment) on a merge request.
+    pub fn add_merge_request_note(
+        &self,
+        iid: u64,
+        body: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/merge_requests/{}/notes",
+            self.base_url, encoded, iid
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .json(&serde_json::json!({ "body": body }))
+            .send()?;
+        blocking_ok(resp, &format!("GitLab POST {url}"))?;
+        Ok(())
+    }
+
     pub fn merge_request_commits(
         &self,
         iid: u64,
@@ -1490,6 +1569,50 @@ mod tests {
         let client = Client::new(&server.url(), "g/p", "tok").unwrap();
         client.archive_project().unwrap();
         mock.assert();
+    }
+
+    #[test]
+    fn merge_request_notes_are_paged_oldest_first_and_posted_back() {
+        let mut server = mockito::Server::new();
+        let list = server
+            .mock("GET", "/api/v4/projects/g%2Fp/merge_requests/9/notes")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
+                mockito::Matcher::UrlEncoded("order_by".into(), "created_at".into()),
+                mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"[{"id": 1, "body": "added 1 commit", "system": true,
+                     "author": {"username": "alice"}, "created_at": "2026-01-01T00:00:00Z"},
+                    {"id": 2, "body": "Looks fine", "system": false,
+                     "author": {"username": "bob"}, "created_at": "2026-01-02T00:00:00Z"}]"#,
+            )
+            .create();
+        let post = server
+            .mock("POST", "/api/v4/projects/g%2Fp/merge_requests/9/notes")
+            .match_body(mockito::Matcher::JsonString(
+                r#"{"body": "ping"}"#.to_string(),
+            ))
+            .with_status(201)
+            .with_body("{}")
+            .create();
+        let issue_list = server
+            .mock("GET", "/api/v4/projects/g%2Fp/issues/3/notes")
+            .match_query(mockito::Matcher::UrlEncoded("sort".into(), "asc".into()))
+            .with_status(200)
+            .with_body(r#"[{"id": 7, "body": "tracked", "author": {"username": "me"}}]"#)
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        let notes = client.merge_request_notes(9).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert!(notes[0].system);
+        assert_eq!(notes[1].author.as_ref().unwrap().username, "bob");
+        client.add_merge_request_note(9, "ping").unwrap();
+        assert_eq!(client.issue_notes(3).unwrap()[0].body, "tracked");
+        list.assert();
+        post.assert();
+        issue_list.assert();
     }
 
     #[test]

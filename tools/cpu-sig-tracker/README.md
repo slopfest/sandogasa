@@ -88,6 +88,54 @@ stamps `start_date` from the Koji build's creation time.
 The issue body follows a canonical format that `status` parses back
 (MR, JIRA, Release, Affected build, Expected fix).
 
+### `ping`
+
+```sh
+cpu-sig-tracker ping -i inventory.toml [--release cNs] [--package PKG,...] \
+    [--days N] [--reping-days N] [--apply] [--json]
+```
+
+The SIG's counterpart to Fedora's `needinfo?`, for a change that three
+people own: the SIG member who builds the Proposed Update, the author
+of the upstream merge request, and the CentOS Stream maintainer who
+reviews it. For every open tracking issue the command reads the
+upstream MR, the SIG's `-testing` and `-release` builds and stock
+Stream, and works out what the change needs from whom — each message
+where its reader looks, in the order that makes each step actionable
+for the next person:
+
+- **rebase-build** — stock Stream has moved past the SIG's build. The
+  SIG rebuilds first; a note on the *tracking issue* says so, once per
+  stock build, and nothing goes upstream until the rebuild.
+- **rebase-mr** — the MR no longer merges cleanly. A note on the *MR*,
+  addressed to its author, says it is behind its target branch, once
+  per head revision.
+- **announce** — a SIG build has reached `-testing` or `-release` and
+  no note has named it at that stage. A "for those watching" note
+  gives the NVR and how to get it — the SIG repo for a release, the
+  buildlogs testing repo for a testing build — on the MR and on the
+  tracking issue, once per build and stage; the same NVR in both tags
+  is announced as released only. Independent of the action.
+- **ping** — the MR merges cleanly, the SIG build is current, and the
+  MR has been quiet for `--days` (default 14). A note on the MR asks
+  the maintainer what blocks review and names the tracking issue.
+  While it stands unanswered the change is **waiting**; after
+  `--reping-days` (default 30) it is asked again.
+- **respond** — someone upstream spoke last, so the SIG owes the
+  reply; the last response (date, author, first line) is shown.
+  **active** — touched within the window; **merged / closed** —
+  nothing to nudge.
+
+Nothing is posted without `--apply`; without it the run reports what
+it would post and where. Activity is the later of the MR's own
+`updated_at` (pushes, labels, approvals) and its last human note;
+GitLab's system notes do not count. Every note carries a hidden
+`<!-- cpu-sig-tracker: … -->` marker naming the build, stage or
+revision it is about, which is how later runs recognise it. "Us" is
+the token's login, from `GET /api/v4/user`. A comment on the RHEL Jira
+issue, for its watchers, is the announcement's third channel once the
+Jira crate can write.
+
 ### `retire`
 
 ```sh
@@ -167,6 +215,10 @@ cpu-sig-tracker file-issue https://gitlab.com/redhat/centos-stream/rpms/xz/-/mer
 
 # See what needs attention.
 cpu-sig-tracker status -i cpu-sig.toml
+
+# Nudge upstream MRs that have gone quiet; read the answers.
+cpu-sig-tracker ping -i cpu-sig.toml            # report
+cpu-sig-tracker ping -i cpu-sig.toml --apply    # post the pings
 
 # Sync GitLab metadata (status, dates, body format).
 cpu-sig-tracker status -i cpu-sig.toml --refresh

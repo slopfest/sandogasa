@@ -10,6 +10,7 @@ mod dump_inventory;
 mod file_issue;
 mod gitlab;
 mod jira;
+mod ping;
 mod retire;
 mod status;
 mod sync_issues;
@@ -20,6 +21,7 @@ mod utils;
 
 use dump_inventory::DumpInventoryArgs;
 use file_issue::FileIssueArgs;
+use ping::PingArgs;
 use retire::RetireArgs;
 use status::StatusArgs;
 use sync_issues::SyncIssuesArgs;
@@ -51,6 +53,10 @@ enum Command {
     /// group for a given Merge Request URL.
     FileIssue(FileIssueArgs),
 
+    /// Nudge upstream merge requests that have gone quiet, and
+    /// show the last response on those that have not.
+    Ping(PingArgs),
+
     /// Close a tracking issue (retire-issue suggestion) after
     /// verifying JIRA is resolved and the build is untagged.
     Retire(RetireArgs),
@@ -75,6 +81,7 @@ fn main() -> ExitCode {
         Command::Config => configure::run(),
         Command::DumpInventory(args) => dump_inventory::run(&args),
         Command::FileIssue(args) => file_issue::run(&args),
+        Command::Ping(args) => ping::run(&args),
         Command::Retire(args) => retire::run(&args),
         Command::Status(args) => status::run(&args),
         Command::SyncIssues(args) => sync_issues::run(&args),

@@ -4,8 +4,8 @@
 //! from the local config file and constructs project clients.
 
 pub use sandogasa_gitlab::{
-    Client, GroupClient, Issue, IssueUpdate, MergeRequest, package_from_issue_url, parse_issue_url,
-    parse_mr_url,
+    Client, GroupClient, Issue, IssueUpdate, MergeRequest, Note, package_from_issue_url,
+    parse_issue_url, parse_mr_url,
 };
 
 /// Load the GitLab token from `GITLAB_TOKEN` env or config.

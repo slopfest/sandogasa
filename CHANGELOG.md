@@ -184,6 +184,43 @@ future fields arrive without a bump. Migration: build a fixture with
 `serde_json::from_value` on the JSON the API would return, and read
 fields by name.
 
+### cpu-sig-tracker: `ping` tells each of three owners what a change needs
+
+A Proposed Update exists because a change has not landed in CentOS
+Stream yet, and three different people own getting it there: the SIG
+member who built the update, the author of the merge request carrying
+it upstream, and the Stream maintainer who has to review that MR.
+PackageKit's MR had sat with no activity since 2025-12-14 and
+conflicts against its target, while stock c10s moved past the SIG's
+build — and nobody had a prompt to act. Fedora has `needinfo?` for
+this; the SIG had memory.
+
+`cpu-sig-tracker ping` reads the upstream MR, the SIG's `-testing` and
+`-release` builds and stock Stream for every open tracking issue and
+names what the change needs from whom, each message where its reader
+looks, in the order that makes each step actionable: **rebase-build**
+(stock is past the SIG's build; a note on the tracking issue, once per
+stock build, and nothing upstream until the rebuild), **rebase-mr**
+(the MR has conflicts; a note on the MR to its author, once per head
+revision), **announce** (a build reached testing or release and no
+note named it at that stage; a "for those watching" note with the NVR
+and how to get it, on the MR and the tracking issue, once per build
+and stage), and **ping** (the MR merges cleanly, the build is current,
+quiet for `--days`, default 14; a note asks the maintainer what blocks
+review, repeated after `--reping-days`, default 30, while unanswered).
+"Waiting" between pings, "respond" with the last response's date,
+author and first line when someone upstream spoke last. `--apply`
+posts; every note carries a marker naming what it is about, so later
+runs recognise it. A Jira comment for the RHEL issue's watchers is the
+announcement's third channel once sandogasa-jira can write.
+
+### sandogasa-gitlab: merge request and issue notes
+
+`Client::merge_request_notes` and `issue_notes` list notes oldest
+first as `Note` (author, timestamp, `system` flag), and
+`add_merge_request_note` posts one on a merge request. `MergeRequest` gains `updated_at`,
+`user_notes_count`, `has_conflicts` and `detailed_merge_status`.
+
 ### fedrq config: the CentOS Proposed Updates SIG
 
 Asking what the Proposed Updates SIG ships for a package — the version

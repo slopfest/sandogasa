@@ -20,6 +20,10 @@ let client = Client::new("https://gitlab.com", "group/project", "glpat-token")?;
 let issues = client.list_issues("bug", Some("opened"))?;
 ```
 
+Notes: `merge_request_notes` and `issue_notes` (oldest first, system
+notes flagged), `add_merge_request_note` and `add_note` (issues).
+Merge requests: `merge_request`, `merge_request_commits`.
+
 ## License
 
 Licensed under either of
