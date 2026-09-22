@@ -1,28 +1,29 @@
 # The CentOS Stream snapshot behind Fedora Koji's EPEL minor-release
 # buildroots (`-b c10-snapshot`; see ../centos-snapshot.toml). The URLs
 # are the ones Koji's c10-snapshot-* external repos use, with
-# $releasever (the stream) and $basearch filled in by fedrq. Binaries
+# $releasever_major (the stream; $releasever may carry an EPEL minor,
+# `10.3`) and $basearch filled in by fedrq. Binaries
 # only — the snapshot publishes no source trees. gpgcheck is off because
 # fedrq never installs anything from here and the mirror carries no
 # key file of its own.
 
 [centos-snapshot-baseos]
 name=CentOS Stream $releasever snapshot - BaseOS (Fedora Koji EPEL buildroot)
-baseurl=https://infrastructure.fedoraproject.org/repo/centos/centos-$releasever-snapshot/BaseOS/$basearch/os/
+baseurl=https://infrastructure.fedoraproject.org/repo/centos/centos-$releasever_major-snapshot/BaseOS/$basearch/os/
 gpgcheck=0
 repo_gpgcheck=0
 enabled=0
 
 [centos-snapshot-appstream]
 name=CentOS Stream $releasever snapshot - AppStream (Fedora Koji EPEL buildroot)
-baseurl=https://infrastructure.fedoraproject.org/repo/centos/centos-$releasever-snapshot/AppStream/$basearch/os/
+baseurl=https://infrastructure.fedoraproject.org/repo/centos/centos-$releasever_major-snapshot/AppStream/$basearch/os/
 gpgcheck=0
 repo_gpgcheck=0
 enabled=0
 
 [centos-snapshot-crb]
 name=CentOS Stream $releasever snapshot - CRB (Fedora Koji EPEL buildroot)
-baseurl=https://infrastructure.fedoraproject.org/repo/centos/centos-$releasever-snapshot/CRB/$basearch/os/
+baseurl=https://infrastructure.fedoraproject.org/repo/centos/centos-$releasever_major-snapshot/CRB/$basearch/os/
 gpgcheck=0
 repo_gpgcheck=0
 enabled=0

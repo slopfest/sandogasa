@@ -536,11 +536,23 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         });
     }
 
-    // Set up fedrq for the stable repo.
+    // Set up fedrq for the stable repo, and make sure fedrq accepts
+    // the branch/repo pair before anything is queried: the queries
+    // below fold an error into "no packages", and a refused pair
+    // would read as every dependency unsatisfied.
     let stable_fedrq = sandogasa_fedrq::Fedrq {
         branch: Some(branch.clone()),
         repo: opts.repo.clone(),
     };
+    stable_fedrq.repolist().map_err(|e| {
+        format!(
+            "fedrq cannot query {branch}{}: {e}",
+            opts.repo
+                .as_deref()
+                .map(|r| format!(" with -r {r}"))
+                .unwrap_or_default()
+        )
+    })?;
 
     // Per-package version changes for the summary: one fedrq source
     // query gives each package's stable V-R (absent ⇒ newly introduced),
@@ -1661,7 +1673,7 @@ fn epel_guard_error(branch: &str) -> String {
         "{branch} can't resolve base-OS dependencies on its own and has no \
          assumed base (epel8, epel9, epel9-next and epel10 map to al8, al9, c9s \
          and c10s; a minor-release branch such as epel10.3 is read from what \
-         its Koji build tag inherits — c10s, c10-snapshot or ubi10 — which \
+         its Koji build tag inherits — c10s, c10.3-snapshot or ubi10 — which \
          needs koji); pass a base branch plus the EPEL repo, e.g. -b c10s -r @epel"
     )
 }
@@ -1684,11 +1696,16 @@ fn epel_base(branch: &str) -> Option<&'static str> {
 /// repos its Koji build tag inherits — the buildroot's own answer to
 /// "which RHEL is this". The newest minor builds against the moving
 /// stream (`c10-baseos` → `c10s`), a minor in freeze against a pinned
-/// snapshot (`c10-snapshot-baseos` → `c10-snapshot`, defined by
-/// sandogasa's fedrq config), and a released minor against RHEL
-/// itself (`rhel10.2-baseos` → `ubi10`, fedrq's currently released
-/// minor). `None` when no repo name has one of those shapes.
-fn minor_base_from_repos<'a>(repos: impl IntoIterator<Item = &'a str>) -> Option<String> {
+/// snapshot (`c10-snapshot-baseos` → `c10.3-snapshot` for epel10.3:
+/// sandogasa's fedrq config, which pairs the snapshot with that
+/// minor's own EPEL repos), and a released minor against RHEL itself
+/// (`rhel10.2-baseos` → `ubi10`, fedrq's currently released minor).
+/// `None` when no repo name has one of those shapes.
+fn minor_base_from_repos<'a>(
+    branch: &str,
+    repos: impl IntoIterator<Item = &'a str>,
+) -> Option<String> {
+    let minor = branch.trim_start_matches(|c: char| c.is_ascii_alphabetic());
     repos.into_iter().find_map(|r| {
         let digits = |s: &str| {
             s.chars()
@@ -1702,7 +1719,7 @@ fn minor_base_from_repos<'a>(repos: impl IntoIterator<Item = &'a str>) -> Option
                 return None;
             }
             if tail.starts_with("-snapshot-") {
-                return Some(format!("c{n}-snapshot"));
+                return Some(format!("c{minor}-snapshot"));
             }
             if tail.starts_with('-') {
                 return Some(format!("c{n}s"));
@@ -1753,7 +1770,7 @@ fn apply_epel_defaults(
         Some(b) => (b.to_string(), String::new()),
         None => {
             let repos = external_repos(&format!("{branch}-build")).unwrap_or_default();
-            let base = minor_base_from_repos(repos.iter().map(String::as_str))
+            let base = minor_base_from_repos(&branch, repos.iter().map(String::as_str))
                 .ok_or_else(|| epel_guard_error(&branch))?;
             (
                 base,
@@ -3491,7 +3508,7 @@ mod tests {
         };
         for (minor, base) in [
             ("epel10.4", "c10s"),
-            ("epel10.3", "c10-snapshot"),
+            ("epel10.3", "c10.3-snapshot"),
             ("epel10.2", "ubi10"),
         ] {
             let d = apply_epel_defaults(minor.to_string(), None, None, koji).unwrap();
@@ -3506,13 +3523,23 @@ mod tests {
         let err = apply_epel_defaults("epel10.1".to_string(), None, None, koji).unwrap_err();
         assert!(
             err.contains("epel10.1")
-                && err.contains("c10-snapshot or ubi10")
+                && err.contains("c10.3-snapshot or ubi10")
                 && err.contains("-b c10s -r @epel"),
             "{err}"
         );
         assert!(apply_epel_defaults("epel7".to_string(), None, None, no_koji).is_err());
-        assert_eq!(minor_base_from_repos(["epel10.4-something"]), None);
-        assert_eq!(minor_base_from_repos(["c9-baseos"]).as_deref(), Some("c9s"));
+        assert_eq!(
+            minor_base_from_repos("epel10.4", ["epel10.4-something"]),
+            None
+        );
+        assert_eq!(
+            minor_base_from_repos("epel9.7", ["c9-baseos"]).as_deref(),
+            Some("c9s")
+        );
+        assert_eq!(
+            minor_base_from_repos("epel10.3", ["c10-snapshot-crb"]).as_deref(),
+            Some("c10.3-snapshot")
+        );
     }
 
     #[test]

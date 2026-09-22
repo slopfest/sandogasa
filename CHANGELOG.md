@@ -235,9 +235,23 @@ reads them: `c10-*` means `c10s`, `c10-snapshot-*` means
 `c10-snapshot` (sandogasa's own fedrq config), `rhel10.N-*` means
 `ubi10`; the substitution note names the repos that decided it, and
 the guard error remains for a run without koji or a minor it cannot
-answer for. On 2026-09-23 that gave c10s for epel10.4, c10-snapshot
+answer for. On 2026-09-23 that gave c10s for epel10.4, c10.3-snapshot
 for epel10.3 and ubi10 for epel10.2. sandogasa-koji gains
 `list_external_repos`.
+
+The first epel10.3 run then reported 134 installability issues on two
+packages — every glibc symbol unsatisfied — and both packages as new.
+The snapshot release defined no `@epel` group, so fedrq refused
+`-b c10-snapshot -r @epel` outright, and `check-update` folded that
+refusal into "no packages" everywhere. Two fixes: the snapshot release
+now accepts a minor in its branch (`c10.3-snapshot` gives `$releasever`
+`10.3`, which fedrq's own epel.repo turns into the EPEL 10.3 repos,
+while the snapshot URLs use `$releasever_major`) and carries an
+`@epel` group spelled as fedrq's centos-stream release spells it; and
+`check-update` asks fedrq to list the repos for its branch/repo pair
+before any query, so a pair fedrq refuses is an error up front, with
+fedrq's own message, instead of a run in which everything looks
+broken. sandogasa-fedrq gains `Fedrq::repolist`.
 
 ### fedrq config: the CentOS Proposed Updates SIG
 

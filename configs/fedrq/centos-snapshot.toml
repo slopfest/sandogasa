@@ -4,23 +4,31 @@
 # (`koji list-external-repos --tag epel10.3-build --inherit`); this
 # release definition queries the same URLs.
 #
-#   fedrq pkgs -b c10-snapshot -F nev rust    # what an epel10.3 build sees
+#   fedrq pkgs -b c10-snapshot -F nev rust            # what an epel10.3 build sees
+#   fedrq pkgs -b c10.3-snapshot -r @epel libheif     # plus EPEL 10.3 itself
 #
 # Three branches say three different things about a RHEL 10 minor:
 # ubi10 is the released one, c10-snapshot the one in freeze, c10s the
 # moving stream already at the minor after. The capture group becomes
-# $releasever in repos/centos-snapshot.repo. Binaries only: the
-# snapshot publishes no source trees, so source-side queries return
-# nothing here. Koji has c10-snapshot repos only today; the matcher is
-# generic so a future c11-snapshot works unchanged, and an unpublished
-# one fails on metadata rather than silently.
+# $releasever: with a minor (`c10.3-snapshot`) it is `10.3`, which is
+# what fedrq's epel.repo needs to pick the EPEL 10.3 repos
+# (`epel-z-10.3`), while the snapshot URLs use $releasever_major, since
+# the snapshot is published per stream. Binaries only: the snapshot
+# publishes no source trees, so source-side queries return nothing
+# here. Koji has c10-snapshot repos only today; the matcher is generic
+# so a future c11-snapshot works unchanged, and an unpublished one
+# fails on metadata rather than silently.
 #
 # Install beside the other files where fedrq looks: /etc/fedrq/ or
 # ~/.config/fedrq/, with the repos/ directory alongside.
 
 [releases.centos-snapshot]
-matcher = '^c(\d+)-snapshot$'
-defpaths = ["centos-snapshot.repo"]
+matcher = '^c(\d+(?:\.\d+)?)-snapshot$'
+defpaths = ["centos-snapshot.repo", "epel.repo"]
 system_repos = false
 
 defs.base = ["centos-snapshot-baseos", "centos-snapshot-appstream", "centos-snapshot-crb"]
+# The base plus EPEL for the same releasever, as fedrq's own
+# centos-stream release spells it: `-b c10.3-snapshot -r @epel` is an
+# epel10.3 buildroot's view.
+defs.epel = ["@base", "@repo:epel", "epel-source"]

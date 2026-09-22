@@ -593,9 +593,13 @@ minor-release branch (`epel10.3`) has no fixed base: the newest minor
 builds against the moving stream, one in freeze against a pinned
 CentOS Stream snapshot, a released one against RHEL itself. So its
 base is read from Koji — the external repos `epel10.N-build` inherits
-name it: `c10-*` → `c10s`, `c10-snapshot-*` → `c10-snapshot` (defined
-by sandogasa's fedrq config), `rhel10.N-*` → `ubi10` (fedrq's
-currently released minor) — and the note says which repos decided it.
+name it: `c10-*` → `c10s`, `c10-snapshot-*` → `c10.3-snapshot` (for
+epel10.3: sandogasa's fedrq config, which pairs the snapshot with that
+minor's own EPEL repos), `rhel10.N-*` → `ubi10` (fedrq's currently
+released minor) — and the note says which repos decided it. Before any
+query, fedrq is asked to list the repos for the pair, so a branch or
+group it refuses is an error up front rather than a run in which every
+dependency looks unsatisfied.
 Without koji, or for a minor Koji does not know, it is the guard
 error, and `-b` plus `-r` still work.
 

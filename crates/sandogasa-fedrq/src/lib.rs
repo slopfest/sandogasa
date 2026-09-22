@@ -266,6 +266,19 @@ impl Fedrq {
         Ok(lines)
     }
 
+    /// The repos this branch/repo combination enables (`fedrq
+    /// repolist`), one id per line — and, before any query, the cheap
+    /// way to learn that fedrq refuses the combination at all: a
+    /// release with no such group, an unknown branch. Every query
+    /// helper reports such a failure too, but callers that fold an
+    /// error into "no packages" would read it as an empty repo.
+    pub fn repolist(&self) -> Result<Vec<String>, Error> {
+        let mut cmd = Command::new("fedrq");
+        cmd.arg("repolist");
+        self.apply_opts(&mut cmd);
+        Self::run(&mut cmd)
+    }
+
     /// Run `fedrq <args>... [opts] -- <operands>...` and return the
     /// trimmed, non-empty output lines. All queries funnel through
     /// here so the branch/repo options and the `--` separator (which
