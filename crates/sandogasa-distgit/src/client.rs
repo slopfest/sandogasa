@@ -21,6 +21,7 @@ pub struct PullRequestsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Pagination {
     #[serde(default)]
     pub pages: u64,
