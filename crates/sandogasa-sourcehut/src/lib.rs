@@ -32,6 +32,7 @@ use serde_json::{Value, json};
 
 /// A patchset submitted to a mailing list (lists.sr.ht).
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Patchset {
     /// RFC3339 UTC submission time.
     pub created: String,
@@ -44,6 +45,7 @@ pub struct Patchset {
 
 /// A `{ name }` reference (mailing list, repository, …).
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct NamedRef {
     pub name: String,
 }
@@ -51,6 +53,7 @@ pub struct NamedRef {
 /// One ticket-activity event from the authenticated user's todo.sr.ht
 /// feed. An event bundles one or more [`EventDetail`] changes to a ticket.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Event {
     /// RFC3339 UTC event time.
     pub created: String,
@@ -60,6 +63,7 @@ pub struct Event {
 
 /// The ticket an [`Event`] concerns.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct TicketRef {
     /// Canonical cross-tracker reference, e.g. `~user/tracker#3`.
     #[serde(rename = "ref")]
@@ -72,6 +76,7 @@ pub struct TicketRef {
 /// only for the matching kind (via GraphQL inline fragments).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EventDetail {
     pub event_type: String,
     /// The author of a `CREATED` change.
@@ -88,18 +93,21 @@ pub struct EventDetail {
 /// (`~username` for a registered sr.ht user).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Actor {
     pub canonical_name: String,
 }
 
 /// A git.sr.ht repository (only the name is needed to drive the log).
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Repo {
     pub name: String,
 }
 
 /// A git commit from a repository log.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Commit {
     pub id: String,
     /// Full commit message (the caller takes the first line as a subject).
@@ -111,6 +119,7 @@ pub struct Commit {
 
 /// A git author/committer signature.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Signature {
     pub name: String,
     pub email: String,
