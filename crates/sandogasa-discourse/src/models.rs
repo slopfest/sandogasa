@@ -5,12 +5,14 @@ use serde::Deserialize;
 
 /// Top-level response from `GET /u/{username}.json`.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct UserResponse {
     pub user: User,
 }
 
 /// A Discourse user profile.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct User {
     pub id: u64,
     pub username: String,
@@ -32,6 +34,7 @@ pub struct User {
 
 /// Custom status set by the user (emoji + description, with optional expiry).
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct UserStatus {
     #[serde(default)]
     pub emoji: Option<String>,
