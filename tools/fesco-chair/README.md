@@ -92,7 +92,9 @@ The body is wrapped to 71 columns, like the summary.
 Open [fesco/docs](https://forge.fedoraproject.org/fesco/docs) issues
 and pull requests (the wiki's pre-meeting step 3) are offered onto
 the agenda: on a terminal each one is prompted for individually
-(default no), `--docs <N,...>` adds them unprompted (issues and PRs
+(default no) with its link and the dates it was opened and last
+updated, so a long-stalled item is easy to skip; `--docs <N,...>` adds
+them unprompted (issues and PRs
 share one number space), and selected items land under New business
 as `fesco/docs#NN` entries. In `--json` mode nothing is prompted —
 unselected items are reported in a `docs_open` field instead. A

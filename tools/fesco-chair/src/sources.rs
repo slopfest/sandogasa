@@ -78,6 +78,12 @@ pub struct Ticket {
     /// `!forge issue` lookup in the meeting script).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pull: bool,
+    /// Dates (`YYYY-MM-DD`) the item was opened and last changed —
+    /// shown when offering docs items, so a stale one is easy to skip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<String>,
 }
 
 impl Ticket {
@@ -110,8 +116,15 @@ impl From<sandogasa_forgejo::Issue> for Ticket {
             decision: None,
             repo: None,
             pull: false,
+            created: issue.created_at.as_deref().map(date_of),
+            updated: issue.updated_at.as_deref().map(date_of),
         }
     }
+}
+
+/// The `YYYY-MM-DD` part of an RFC 3339 timestamp.
+fn date_of(timestamp: &str) -> String {
+    timestamp.chars().take(10).collect()
 }
 
 /// The announcement's ticket sections.
@@ -488,6 +501,8 @@ mod tests {
             decision: None,
             repo: None,
             pull: false,
+            created: None,
+            updated: None,
         }
     }
 
@@ -621,6 +636,8 @@ Meeting summary
             decision: None,
             repo: Some("fesco/docs".to_string()),
             pull: true,
+            created: None,
+            updated: None,
         }
     }
 

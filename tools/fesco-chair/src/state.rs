@@ -88,6 +88,8 @@ mod tests {
                     decision: None,
                     repo: None,
                     pull: false,
+                    created: None,
+                    updated: None,
                 }],
                 new_business: vec![],
             },
@@ -98,6 +100,8 @@ mod tests {
                 decision: None,
                 repo: Some("fesco/docs".to_string()),
                 pull: true,
+                created: None,
+                updated: None,
             }],
         }
     }

@@ -209,6 +209,9 @@ pub struct Issue {
     /// RFC 3339 timestamp the issue was opened at.
     #[serde(default)]
     pub created_at: Option<String>,
+    /// RFC 3339 timestamp of the last change to the issue.
+    #[serde(default)]
+    pub updated_at: Option<String>,
     /// RFC 3339 timestamp the issue was closed at, if closed.
     #[serde(default)]
     pub closed_at: Option<String>,

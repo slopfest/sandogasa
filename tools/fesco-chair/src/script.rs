@@ -168,6 +168,8 @@ mod tests {
             decision: None,
             repo: None,
             pull: false,
+            created: None,
+            updated: None,
         };
         let script = render_script(date, &[&followup]);
         let expected = "\
@@ -197,6 +199,8 @@ mod tests {
             decision: None,
             repo: Some("fesco/docs".to_string()),
             pull: true,
+            created: None,
+            updated: None,
         };
         let script = render_script(date, &[&docs]);
         // A docs PR uses the pr subcommand against its own repo.

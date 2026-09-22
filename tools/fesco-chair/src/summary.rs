@@ -230,6 +230,8 @@ Meeting summary
                 decision: Some("APPROVED (+8, 0, -0)".to_string()),
                 repo: None,
                 pull: false,
+                created: None,
+                updated: None,
             },
             // No tally parsed → the chair fills the line in.
             sources::Ticket {
@@ -239,6 +241,8 @@ Meeting summary
                 decision: None,
                 repo: None,
                 pull: false,
+                created: None,
+                updated: None,
             },
         ];
         let body = render_body(

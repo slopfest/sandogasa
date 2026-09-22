@@ -229,6 +229,14 @@ pub fn assemble(
             let mut selected = selected;
             let interactive = !args.json && std::io::IsTerminal::is_terminal(&std::io::stdin());
             for item in rest {
+                if interactive {
+                    eprintln!(
+                        "\n{}\n  opened {}, last updated {}",
+                        item.url,
+                        item.created.as_deref().unwrap_or("?"),
+                        item.updated.as_deref().unwrap_or("?")
+                    );
+                }
                 let take = interactive
                     && sources::confirm_default_no(&format!(
                         "add {} \u{201c}{}\u{201d} to the agenda?",
@@ -342,6 +350,8 @@ mod tests {
             decision: None,
             repo: None,
             pull: false,
+            created: None,
+            updated: None,
         }
     }
 

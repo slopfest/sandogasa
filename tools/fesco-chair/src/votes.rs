@@ -897,6 +897,8 @@ mod tests {
                 decision: None,
                 repo: None,
                 pull: false,
+                created: None,
+                updated: None,
             },
             fast_track: true,
             start: at("2026-09-16T13:07:00Z"),

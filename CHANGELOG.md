@@ -39,6 +39,14 @@ user file, where it would sit beside the token. `SANDOGASA_ETC` names
 another root for the system layer (`SANDOGASA_ETC=$PWD/configs`), read
 beneath the real user file as `/etc` would be.
 
+### fesco-chair: the docs-item prompt shows the link and dates
+
+`agenda` offered each open fesco/docs issue and pull request by number
+and title alone, so telling a fresh item from one that has sat
+untouched for months meant opening it. The prompt now prints the link
+and the dates the item was opened and last updated first, and the
+`docs_open` JSON carries them as `created` and `updated`.
+
 ### sandogasa-forgejo: `issue_timeline`
 
 `Client::issue_timeline` fetches an issue's timeline — comments
