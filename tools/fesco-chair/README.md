@@ -97,7 +97,22 @@ updated, so a long-stalled item is easy to skip; `--docs <N,...>` adds
 them unprompted (issues and PRs
 share one number space), and selected items land under New business
 as `fesco/docs#NN` entries. In `--json` mode nothing is prompted —
-unselected items are reported in a `docs_open` field instead. A
+unselected items are reported in a `docs_open` field instead.
+
+Tickets under an in-ticket vote (`vote-in-progress` or `fast track`,
+see `votes`) sit between the two pools, so each one not already on the
+agenda is offered too, with its tally, verdict and whether it concludes
+before the meeting: one with a standing `-1` belongs on the agenda
+(default yes), one that will not conclude before the meeting is the
+chair's call between letting it run and a procedural `-1` (default
+no). Accepted tickets are placed like any meeting ticket — Followups
+if discussed before, else New business, and the reminders at the end
+list them for the `meeting` label, since nothing here writes to the
+tracker. Off a terminal they are reported in a `votes_open` field and
+left for `--followup` / `--new`.
+The scan needs the voter roster (a Kerberos ticket, or `--non-voting`
+alone does not suffice — see `votes`); without it the offer is skipped
+with a warning. A
 reminder to comment on each ticket ("This issue will be discussed at
 the next meeting on …") is printed to stderr.
 
@@ -174,6 +189,14 @@ was decided in-ticket after the schedule was sent. Remember to comment
 The lookup needs a token and is best-effort: without one, or with the
 tracker unreachable, the summary still prints the minutes.
 
+A vote that reached its week between the agenda and the summary —
+approved or rejected by the tally under the policy, but not yet tagged
+— is offered for the same section (default yes) with the decision the
+tally gives, e.g. `APPROVED (+5, 1, -0)`. Comment that decision on the
+ticket and tag it `pending announcement` before sending; the reminder
+after the body lists which ones. Off a terminal such votes are
+reported in a `votes_concluded` field instead.
+
 ### `votes`
 
 ```sh
@@ -212,9 +235,14 @@ never counted. That is a standing fact rather than a per-run one, so
 pin it in the config file's `[defaults]` table:
 
 ```toml
-[defaults.votes]
+[defaults]
 non-voting = ["jspaleta"]
 ```
+
+`agenda`, `script` and `summary` scan the votes too (below) and take
+the same three flags — `--non-voting`, `--ignore` and `--vote` — so a
+correction made for `votes` carries over, and the top-level table
+covers all of them.
 
 The clock starts when the `vote-in-progress` label was added, else the
 `fast track` label, else at the ticket's creation (a Change ticket is a

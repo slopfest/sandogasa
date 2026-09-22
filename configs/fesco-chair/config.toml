@@ -6,8 +6,9 @@
 # The Forgejo token is per person and belongs in the user file:
 # `fesco-chair config` stores it there with 600 permissions.
 
-[defaults.votes]
+[defaults]
 # Members of the `fesco` FAS group who hold no vote. The Fedora
-# Project Leader sits in the group ex officio; `votes` never lists
-# them as not having voted and never counts a stray vote from them.
+# Project Leader sits in the group ex officio; `votes`, `agenda`,
+# `script` and `summary` never list them as not having voted and
+# never count a stray vote from them.
 non-voting = ["jspaleta"]

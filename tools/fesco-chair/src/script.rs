@@ -47,12 +47,7 @@ pub fn run(args: &ScriptArgs) -> ExitCode {
             state.sections
         }
         _ => match crate::agenda::assemble(&args.agenda) {
-            Ok((date, sections, docs_open)) => {
-                let state = crate::state::AgendaState {
-                    date,
-                    sections,
-                    docs_open,
-                };
+            Ok((state, _, _)) => {
                 crate::state::save(&state);
                 state.sections
             }

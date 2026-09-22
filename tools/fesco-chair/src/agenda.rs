@@ -12,7 +12,7 @@
 
 use std::process::ExitCode;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 
 use crate::sources::{self, Sections};
 
@@ -37,6 +37,9 @@ pub struct AgendaArgs {
     /// Add fesco/docs issue/PR(s) to the agenda (repeat/CSV).
     #[arg(long, value_name = "N", value_delimiter = ',')]
     pub docs: Vec<u64>,
+
+    #[command(flatten)]
+    pub voters: crate::votes::VoterArgs,
 
     /// Past meetings scanned for followups (default 12).
     #[arg(
@@ -65,11 +68,14 @@ struct AgendaJson<'a> {
     /// Open fesco/docs items not selected for the agenda (candidates
     /// for `--docs`).
     docs_open: &'a [sources::Ticket],
+    /// Tickets under an in-ticket vote left off the agenda (candidates
+    /// for `--followup` / `--new`).
+    votes_open: &'a [sources::Ticket],
     body: String,
 }
 
 pub fn run(args: &AgendaArgs) -> ExitCode {
-    let (date, sections, docs_open) = match assemble(args) {
+    let (state, votes_open, votes_taken) = match assemble(args) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
@@ -78,11 +84,6 @@ pub fn run(args: &AgendaArgs) -> ExitCode {
     };
     // Persist the assembled agenda so `script` can replay these
     // decisions on meeting day without re-asking; `summary` clears it.
-    let state = crate::state::AgendaState {
-        date,
-        sections,
-        docs_open,
-    };
     crate::state::save(&state);
     let crate::state::AgendaState {
         date,
@@ -97,6 +98,7 @@ pub fn run(args: &AgendaArgs) -> ExitCode {
             subject: subject(date),
             sections: &sections,
             docs_open: &docs_open,
+            votes_open: &votes_open,
             body,
         };
         println!("{}", serde_json::to_string_pretty(&out).expect("serialize"));
@@ -114,6 +116,14 @@ pub fn run(args: &AgendaArgs) -> ExitCode {
              \"Announced: <archive link>\", untag `pending announcement`, \
              and close it with the matching status"
         );
+        if !votes_taken.is_empty() {
+            let list: Vec<String> = votes_taken.iter().map(|n| format!("#{n}")).collect();
+            eprintln!(
+                "tag `meeting` on {}: taken onto the agenda from an in-ticket \
+                 vote, so the tracker still shows only the vote label",
+                list.join(", ")
+            );
+        }
     }
     ExitCode::SUCCESS
 }
@@ -140,14 +150,20 @@ pub fn has_overrides(args: &AgendaArgs) -> bool {
         && args.docs.is_empty())
 }
 
-/// Fetch the ticket pools and split them into sections; also returns
-/// the open fesco/docs items *not* put on the agenda (surfaced so the
-/// chair can reconsider). Shared with the `script` subcommand, which
-/// runs the same classification.
+/// Fetch the ticket pools and split them into sections. Also returns
+/// the tickets under an in-ticket vote left off the agenda, and the
+/// numbers of those taken onto it (which still need the `meeting`
+/// label on the tracker — nothing here writes to it); the open
+/// fesco/docs items not put on the agenda travel in the state.
+/// Shared with the `script` subcommand, which runs the same
+/// classification.
+#[allow(clippy::type_complexity)]
 pub fn assemble(
     args: &AgendaArgs,
-) -> Result<(NaiveDate, Sections, Vec<sources::Ticket>), Box<dyn std::error::Error>> {
+) -> Result<(crate::state::AgendaState, Vec<sources::Ticket>, Vec<u64>), Box<dyn std::error::Error>>
+{
     let date = target_date(args);
+    let interactive = !args.json && std::io::IsTerminal::is_terminal(&std::io::stdin());
 
     let client = sources::forge_client()?;
     if args.verbose {
@@ -185,6 +201,48 @@ pub fn assemble(
                     .into(),
             );
         }
+    }
+
+    // Tickets under an in-ticket vote sit between the two pools: one
+    // with a standing -1 belongs on the agenda (default yes), one that
+    // will not conclude before the meeting is the chair's call
+    // (default no). Accepted tickets join the meeting pool, so the
+    // followup inference below places them.
+    let mut votes_open = Vec::new();
+    let mut votes_taken = Vec::new();
+    for report in crate::votes::open_votes(&client, &args.voters, args.verbose, Utc::now()) {
+        let number = report.ticket.number;
+        if voted.iter().chain(&meeting).any(|t| t.number == number) {
+            continue;
+        }
+        let take = interactive && {
+            eprintln!(
+                "\n{}\n  {}",
+                report.ticket.url,
+                crate::votes::brief(&report, date)
+            );
+            sandogasa_cli::confirm(
+                &format!(
+                    "add {} \u{201c}{}\u{201d} to the agenda?",
+                    report.ticket.label(),
+                    report.ticket.title
+                ),
+                report.verdict.outcome == crate::votes::Outcome::Meeting,
+            )?
+        };
+        if take {
+            votes_taken.push(number);
+            meeting.push(report.ticket);
+        } else {
+            votes_open.push(report.ticket);
+        }
+    }
+    if !votes_open.is_empty() && !interactive {
+        eprintln!(
+            "note: {} ticket(s) under an in-ticket vote not on the agenda; \
+             add with --followup / --new <N,...>, see `fesco-chair votes`",
+            votes_open.len()
+        );
     }
 
     // Followup inference is best-effort: without meetbot everything
@@ -227,7 +285,6 @@ pub fn assemble(
         Ok(items) => {
             let (selected, rest) = sources::partition_forced(items, &args.docs);
             let mut selected = selected;
-            let interactive = !args.json && std::io::IsTerminal::is_terminal(&std::io::stdin());
             for item in rest {
                 if interactive {
                     eprintln!(
@@ -263,7 +320,12 @@ pub fn assemble(
 
     sources::fill_decisions(&client, &mut sections.voted, args.verbose);
 
-    Ok((date, sections, docs_open))
+    let state = crate::state::AgendaState {
+        date,
+        sections,
+        docs_open,
+    };
+    Ok((state, votes_open, votes_taken))
 }
 
 /// Render the announcement body (everything below the Subject line),

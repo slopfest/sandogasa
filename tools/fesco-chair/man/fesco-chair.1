@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS fesco-chair agenda
-\fBfesco\-chair agenda\fR [\fB\-\-date\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBfesco\-chair agenda\fR [\fB\-\-date\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Compose the meeting announcement email from the tracker
 .TP
@@ -34,6 +34,15 @@ Force ticket(s) into New business (repeat/CSV)
 .TP
 \fB\-\-docs\fR \fI<N>\fR
 Add fesco/docs issue/PR(s) to the agenda (repeat/CSV)
+.TP
+\fB\-\-non\-voting\fR \fI<FAS>\fR
+Group members who do not vote, e.g. the FPL (repeat/CSV)
+.TP
+\fB\-\-vote\fR \fI<N:FAS=V>\fR
+Count a member\*(Aqs vote on one ticket as given, e.g. 3685:salimma=0, when a comment was misread (repeat/CSV)
+.TP
+\fB\-\-ignore\fR \fI<N:FAS>\fR
+Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
 .TP
 \fB\-\-history\fR \fI<N>\fR
 Past meetings scanned for followups (default 12)
@@ -54,7 +63,7 @@ Store the Forgejo API token (interactive)
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS fesco-chair script
-\fBfesco\-chair script\fR [\fB\-\-date\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBfesco\-chair script\fR [\fB\-\-date\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Day\-of checklist plus the meetbot command script
 .TP
@@ -73,6 +82,15 @@ Force ticket(s) into New business (repeat/CSV)
 \fB\-\-docs\fR \fI<N>\fR
 Add fesco/docs issue/PR(s) to the agenda (repeat/CSV)
 .TP
+\fB\-\-non\-voting\fR \fI<FAS>\fR
+Group members who do not vote, e.g. the FPL (repeat/CSV)
+.TP
+\fB\-\-vote\fR \fI<N:FAS=V>\fR
+Count a member\*(Aqs vote on one ticket as given, e.g. 3685:salimma=0, when a comment was misread (repeat/CSV)
+.TP
+\fB\-\-ignore\fR \fI<N:FAS>\fR
+Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
+.TP
 \fB\-\-history\fR \fI<N>\fR
 Past meetings scanned for followups (default 12)
 .TP
@@ -85,12 +103,21 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS fesco-chair summary
-\fBfesco\-chair summary\fR [\fB\-\-date\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBfesco\-chair summary\fR [\fB\-\-date\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Compose the post\-meeting summary email from the minutes
 .TP
 \fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
 Meeting date (default: today)
+.TP
+\fB\-\-non\-voting\fR \fI<FAS>\fR
+Group members who do not vote, e.g. the FPL (repeat/CSV)
+.TP
+\fB\-\-vote\fR \fI<N:FAS=V>\fR
+Count a member\*(Aqs vote on one ticket as given, e.g. 3685:salimma=0, when a comment was misread (repeat/CSV)
+.TP
+\fB\-\-ignore\fR \fI<N:FAS>\fR
+Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
 .TP
 \fB\-\-json\fR
 Machine\-readable JSON output

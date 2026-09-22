@@ -31,17 +31,10 @@ pub const FESCO_GROUP: &str = "fesco";
 /// The title marker the policy requires on Fast Track tickets.
 pub const FAST_TRACK_TITLE: &str = "[FastTrack]";
 
-#[derive(clap::Args)]
-pub struct VotesArgs {
-    /// Meeting date the hints refer to (default: the coming Tuesday).
-    #[arg(long, value_name = "YYYY-MM-DD")]
-    pub date: Option<NaiveDate>,
-
-    /// Count these FAS users as voters instead of the fesco group
-    /// (repeat/CSV).
-    #[arg(long = "member", value_name = "FAS", value_delimiter = ',')]
-    pub members: Vec<String>,
-
+/// The roster corrections, shared by every subcommand that reads
+/// votes (`votes`, `agenda`, `script`, `summary`).
+#[derive(clap::Args, Default)]
+pub struct VoterArgs {
     /// Group members who do not vote, e.g. the FPL (repeat/CSV).
     #[arg(long = "non-voting", value_name = "FAS", value_delimiter = ',')]
     pub non_voting: Vec<String>,
@@ -55,6 +48,21 @@ pub struct VotesArgs {
     /// 3685:salimma (repeat/CSV).
     #[arg(long = "ignore", value_name = "N:FAS", value_delimiter = ',', value_parser = parse_scoped)]
     pub ignore: Vec<(u64, String)>,
+}
+
+#[derive(clap::Args)]
+pub struct VotesArgs {
+    /// Meeting date the hints refer to (default: the coming Tuesday).
+    #[arg(long, value_name = "YYYY-MM-DD")]
+    pub date: Option<NaiveDate>,
+
+    /// Count these FAS users as voters instead of the fesco group
+    /// (repeat/CSV).
+    #[arg(long = "member", value_name = "FAS", value_delimiter = ',')]
+    pub members: Vec<String>,
+
+    #[command(flatten)]
+    pub voters: VoterArgs,
 
     /// Machine-readable JSON output.
     #[arg(long)]
@@ -428,8 +436,11 @@ pub fn reminder(
 /// group via FASJSON, which needs a Kerberos ticket (offered when
 /// missing), less `--non-voting`. Sorted so every list in the report
 /// is stable.
-fn members(args: &VotesArgs) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let mut members = if args.members.is_empty() {
+pub fn roster(
+    members: &[String],
+    non_voting: &[String],
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut members = if members.is_empty() {
         ensure_kerberos_ticket()?;
         sandogasa_fasjson::FasjsonClient::new()
             .group_members(FESCO_GROUP, None)?
@@ -437,12 +448,46 @@ fn members(args: &VotesArgs) -> Result<Vec<String>, Box<dyn std::error::Error>> 
             .map(|u| u.username)
             .collect()
     } else {
-        args.members.clone()
+        members.to_vec()
     };
-    members.retain(|m| !args.non_voting.contains(m));
+    members.retain(|m| !non_voting.contains(m));
     members.sort();
     members.dedup();
     Ok(members)
+}
+
+/// The `--ignore` / `--vote` corrections, keyed by ticket.
+fn overrides(args: &VoterArgs) -> BTreeMap<u64, BTreeMap<String, Option<Vote>>> {
+    let mut overrides: BTreeMap<u64, BTreeMap<String, Option<Vote>>> = BTreeMap::new();
+    for (n, who) in &args.ignore {
+        overrides.entry(*n).or_default().insert(who.clone(), None);
+    }
+    for (n, who, v) in &args.votes {
+        overrides
+            .entry(*n)
+            .or_default()
+            .insert(who.clone(), Some(*v));
+    }
+    overrides
+}
+
+/// The open vote tickets with their reports, for `agenda` and
+/// `summary` to offer. Those commands stand without this, so a roster
+/// or tracker failure warns and yields nothing.
+pub fn open_votes(
+    client: &sandogasa_forgejo::Client,
+    args: &VoterArgs,
+    verbose: bool,
+    now: DateTime<Utc>,
+) -> Vec<VoteReport> {
+    let scanned = roster(&[], &args.non_voting)
+        .and_then(|members| scan(client, &members, &overrides(args), verbose, now));
+    scanned.unwrap_or_else(|e| {
+        eprintln!(
+            "warning: not checking tickets under an in-ticket vote ({e}); see `fesco-chair votes`"
+        );
+        Vec::new()
+    })
 }
 
 fn ensure_kerberos_ticket() -> Result<(), Box<dyn std::error::Error>> {
@@ -465,26 +510,17 @@ fn ensure_kerberos_ticket() -> Result<(), Box<dyn std::error::Error>> {
     kerberos::acquire_ticket(&principal).map_err(|e| format!("{e}; {remedy}").into())
 }
 
-/// Scan the tracker and assemble the report.
-fn assemble(
-    args: &VotesArgs,
+/// Scan the tracker's open vote tickets and report on each.
+pub fn scan(
+    client: &sandogasa_forgejo::Client,
     members: &[String],
+    overrides: &BTreeMap<u64, BTreeMap<String, Option<Vote>>>,
+    verbose: bool,
     now: DateTime<Utc>,
 ) -> Result<Vec<VoteReport>, Box<dyn std::error::Error>> {
-    let client = sources::forge_client()?;
-    let mut overrides: BTreeMap<u64, BTreeMap<String, Option<Vote>>> = BTreeMap::new();
-    for (n, who) in &args.ignore {
-        overrides.entry(*n).or_default().insert(who.clone(), None);
-    }
-    for (n, who, v) in &args.votes {
-        overrides
-            .entry(*n)
-            .or_default()
-            .insert(who.clone(), Some(*v));
-    }
     let mut issues = Vec::new();
     for label in [FAST_TRACK_LABEL, VOTE_LABEL] {
-        if args.verbose {
+        if verbose {
             eprintln!("[votes] fetching open `{label}` tickets");
         }
         issues.extend(client.repo_issues(TRACKER_OWNER, TRACKER_REPO, "open", &[label])?);
@@ -493,7 +529,7 @@ fn assemble(
     issues.dedup_by_key(|i| i.number);
     let mut out = Vec::new();
     for issue in issues {
-        if args.verbose {
+        if verbose {
             eprintln!("[votes] reading #{}", issue.number);
         }
         let events = client.issue_timeline(TRACKER_OWNER, TRACKER_REPO, issue.number)?;
@@ -534,6 +570,55 @@ fn assemble(
     Ok(out)
 }
 
+/// The chair's hint while a vote is still running: whether it
+/// concludes before `meeting`.
+fn hint(report: &VoteReport, meeting: NaiveDate) -> Option<String> {
+    let at = report.verdict.decidable_at?;
+    Some(if at.date_naive() > meeting {
+        format!(
+            "not decidable in ticket before the {meeting} meeting: let it run, or a procedural -1 puts it on the agenda"
+        )
+    } else {
+        format!(
+            "decidable in ticket on {}, before the {meeting} meeting",
+            at.format("%Y-%m-%d")
+        )
+    })
+}
+
+/// The one-paragraph state of a vote, for the `agenda` and `summary`
+/// prompts: kind and start, tally, verdict, and the hint.
+pub fn brief(report: &VoteReport, meeting: NaiveDate) -> String {
+    let kind = if report.fast_track {
+        "Fast Track"
+    } else {
+        "ticket vote"
+    };
+    let mut text = format!(
+        "{kind} since {}, tally {}\n  {}: {}",
+        report.start.format("%Y-%m-%d"),
+        report.tally,
+        format!("{:?}", report.verdict.outcome).to_lowercase(),
+        report.verdict.detail
+    );
+    if let Some(h) = hint(report, meeting) {
+        text.push_str("\n  ");
+        text.push_str(&h);
+    }
+    text
+}
+
+/// The decision line for a concluded vote, in the form the
+/// announcement uses: `APPROVED (+5, 1, -0)`. `None` while it runs.
+pub fn decision(report: &VoteReport) -> Option<String> {
+    let verdict = match report.verdict.outcome {
+        Outcome::Approved => "APPROVED",
+        Outcome::Rejected => "REJECTED",
+        Outcome::Meeting | Outcome::Waiting => return None,
+    };
+    Some(format!("{verdict} {}", report.tally))
+}
+
 /// The human-readable report for one ticket, with the chair's hint
 /// when the vote cannot conclude before `meeting`.
 pub fn render(report: &VoteReport, meeting: NaiveDate) -> String {
@@ -567,14 +652,8 @@ pub fn render(report: &VoteReport, meeting: NaiveDate) -> String {
             report.verdict.detail
         ),
     ];
-    if let Some(at) = report.verdict.decidable_at {
-        lines.push(if at.date_naive() > meeting {
-            format!(
-                "  not decidable in ticket before the {meeting} meeting: let it run, or a procedural -1 puts it on the agenda"
-            )
-        } else {
-            format!("  decidable in ticket on {}, before the {meeting} meeting", at.format("%Y-%m-%d"))
-        });
+    if let Some(h) = hint(report, meeting) {
+        lines.push(format!("  {h}"));
     }
     if report.verdict.votes_needed > 0 {
         lines.push(format!(
@@ -606,11 +685,19 @@ pub fn run(args: &VotesArgs) -> ExitCode {
     let meeting = args
         .date
         .unwrap_or_else(|| sources::next_tuesday(now.date_naive()));
-    let result = members(args).and_then(|members| {
+    let result = roster(&args.members, &args.voters.non_voting).and_then(|members| {
         if args.verbose {
             eprintln!("[votes] voters: {}", members.join(", "));
         }
-        assemble(args, &members, now).map(|reports| (members, reports))
+        let client = sources::forge_client()?;
+        scan(
+            &client,
+            &members,
+            &overrides(&args.voters),
+            args.verbose,
+            now,
+        )
+        .map(|reports| (members, reports))
     });
     let (members, reports) = match result {
         Ok(v) => v,
@@ -884,6 +971,47 @@ mod tests {
                 at: at("2026-09-22T10:37:00Z"),
                 by: "salimma".into()
             }
+        );
+    }
+
+    #[test]
+    fn brief_and_decision_summarize_a_report() {
+        let mut report = VoteReport {
+            ticket: Ticket {
+                number: 3685,
+                title: "t".into(),
+                url: "u".into(),
+                decision: None,
+                repo: None,
+                pull: false,
+                created: None,
+                updated: None,
+            },
+            fast_track: true,
+            start: at("2026-09-16T13:07:00Z"),
+            start_basis: "fast track label",
+            votes: Tally::default(),
+            tally: "(+5, 1, -0)".into(),
+            verdict: Verdict {
+                outcome: Outcome::Waiting,
+                detail: "d".into(),
+                votes_needed: 0,
+                decidable_at: Some(at("2026-09-23T13:07:00Z")),
+            },
+            reminder: None,
+        };
+        let meeting = NaiveDate::from_ymd_opt(2026, 9, 22).unwrap();
+        assert_eq!(
+            brief(&report, meeting),
+            "Fast Track since 2026-09-16, tally (+5, 1, -0)\n  waiting: d\n  not decidable in ticket before the 2026-09-22 meeting: let it run, or a procedural -1 puts it on the agenda"
+        );
+        assert_eq!(decision(&report), None);
+        report.verdict.outcome = Outcome::Approved;
+        report.verdict.decidable_at = None;
+        assert_eq!(decision(&report).as_deref(), Some("APPROVED (+5, 1, -0)"));
+        assert_eq!(
+            brief(&report, meeting),
+            "Fast Track since 2026-09-16, tally (+5, 1, -0)\n  approved: d"
         );
     }
 

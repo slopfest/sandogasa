@@ -10,7 +10,7 @@
 
 use std::process::ExitCode;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 
 use crate::sources;
 
@@ -19,6 +19,9 @@ pub struct SummaryArgs {
     /// Meeting date (default: today).
     #[arg(long, value_name = "YYYY-MM-DD")]
     pub date: Option<NaiveDate>,
+
+    #[command(flatten)]
+    pub voters: crate::votes::VoterArgs,
 
     /// Machine-readable JSON output.
     #[arg(long)]
@@ -40,6 +43,10 @@ struct SummaryJson {
     /// Tickets announced alongside the minutes (still tagged
     /// `pending announcement` when this ran).
     voted: Vec<sources::Ticket>,
+    /// Votes that concluded in ticket but were not yet tagged
+    /// `pending announcement`, with the decision the tally gives —
+    /// whether or not they were taken into `voted`.
+    votes_concluded: Vec<sources::Ticket>,
     body: String,
 }
 
@@ -67,7 +74,7 @@ pub fn run(args: &SummaryArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let voted = pending_announcements(args.verbose);
+    let (voted, votes_concluded) = pending_announcements(args, date);
     let body = render_body(
         &meeting.summary_url,
         &minutes_txt_url,
@@ -85,6 +92,7 @@ pub fn run(args: &SummaryArgs) -> ExitCode {
             log_url: meeting.logs_url,
             log_txt_url,
             voted,
+            votes_concluded,
             body,
         };
         println!("{}", serde_json::to_string_pretty(&out).expect("serialize"));
@@ -100,6 +108,17 @@ pub fn run(args: &SummaryArgs) -> ExitCode {
                  comment \"Announced: <archive link>\", untag `pending \
                  announcement`, and close it with the matching status",
                 voted.len()
+            );
+        }
+        for t in votes_concluded
+            .iter()
+            .filter(|c| voted.iter().any(|t| t.number == c.number))
+        {
+            eprintln!(
+                "before sending: comment \"After a week: {}\" on {} and tag it \
+                 `pending announcement` — it concluded in ticket but was not tagged",
+                t.decision.as_deref().unwrap_or("DECISION"),
+                t.label()
             );
         }
     }
@@ -119,26 +138,73 @@ pub fn subject(date: NaiveDate) -> String {
 /// Best-effort: without a token or a reachable tracker the summary
 /// still stands on the minutes alone, so any failure warns rather
 /// than aborting a run whose expensive part already succeeded.
-fn pending_announcements(verbose: bool) -> Vec<sources::Ticket> {
+///
+/// A vote that reached its week between the agenda and now — approved
+/// or rejected by the tally, but not yet tagged — is offered for the
+/// section too (default yes) with the decision the tally gives; the
+/// chair then comments and tags it before sending. The second list
+/// holds every such ticket, taken or not; off a terminal none is
+/// taken.
+fn pending_announcements(
+    args: &SummaryArgs,
+    date: NaiveDate,
+) -> (Vec<sources::Ticket>, Vec<sources::Ticket>) {
     let client = match sources::forge_client() {
         Ok(client) => client,
         Err(e) => {
             eprintln!("warning: not checking for pending announcements ({e})");
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
     };
-    if verbose {
+    if args.verbose {
         eprintln!("[summary] fetching '{}' tickets", sources::PENDING_LABEL);
     }
     let mut voted = match sources::pending_tickets(&client) {
         Ok(voted) => voted,
         Err(e) => {
             eprintln!("warning: could not fetch pending announcements ({e})");
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
     };
-    sources::fill_decisions(&client, &mut voted, verbose);
-    voted
+    sources::fill_decisions(&client, &mut voted, args.verbose);
+    let interactive = !args.json && std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let mut concluded = Vec::new();
+    for report in crate::votes::open_votes(&client, &args.voters, args.verbose, Utc::now()) {
+        let Some(decision) = crate::votes::decision(&report) else {
+            continue;
+        };
+        if voted.iter().any(|t| t.number == report.ticket.number) {
+            continue;
+        }
+        let mut ticket = report.ticket.clone();
+        ticket.decision = Some(decision.clone());
+        let take = interactive && {
+            eprintln!("\n{}\n  {}", ticket.url, crate::votes::brief(&report, date));
+            sandogasa_cli::confirm(
+                &format!(
+                    "announce {} \u{201c}{}\u{201d} as {decision}? (comment the \
+                     decision on the ticket and tag it `pending announcement` first)",
+                    ticket.label(),
+                    ticket.title
+                ),
+                true,
+            )
+            .unwrap_or(false)
+        };
+        if take {
+            voted.push(ticket.clone());
+        }
+        concluded.push(ticket);
+    }
+    if !concluded.is_empty() && !interactive {
+        eprintln!(
+            "note: {} vote(s) concluded in ticket but not tagged `pending \
+             announcement`; comment the decision, tag, and re-run to announce",
+            concluded.len()
+        );
+    }
+    voted.sort_by_key(|t| t.number);
+    (voted, concluded)
 }
 
 /// The email body: the artefact links, any tickets decided in-ticket

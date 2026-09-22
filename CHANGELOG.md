@@ -31,6 +31,19 @@ the Fedora Project Leader, from the roster altogether. A system config
 doing exactly that ships as `configs/fesco-chair/config.toml`, for the
 Fedora package to install as `/etc/fesco-chair/config.toml`.
 
+`agenda` and `summary` run the same scan. A ticket under vote is
+neither a meeting ticket nor an announced one, so `agenda` offers each
+onto the agenda with its state — default yes when a `-1` stands, since
+that ticket must be discussed, default no when the vote merely outlives
+the meeting, with a reminder at the end to tag them `meeting` — and
+`summary` offers a vote that reached its week since
+the agenda went out for the "Discussed and Voted in the Ticket" section
+with the decision the tally gives, reminding the chair to comment and
+tag it before sending. Both take the same `--non-voting`, `--ignore`
+and `--vote` corrections as `votes`, so a misread comment is fixed once
+for all of them; the shipped config sets `non-voting` in the top-level
+`[defaults]` table so one line covers every subcommand.
+
 ### sandogasa-config: `SANDOGASA_ETC` relocates the system layer
 
 A system config a repository ships under `configs/<tool>/` could not
