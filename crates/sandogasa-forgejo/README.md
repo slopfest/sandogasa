@@ -8,7 +8,12 @@ issue listing by state and label names plus single-issue fetch (for
 `fesco-chair`'s agenda queries), and token validation.
 
 Works against any instance — codeberg.org, a Fedora Forgejo, or a
-self-hosted Gitea — by taking the instance root URL in full. Designed
+self-hosted Gitea — by taking the instance root URL in full. The
+response models (`Issue`, `PullRequest`, `TimelineEvent`, …) are
+`#[non_exhaustive]`: read their fields by name, and build a test
+fixture with `serde_json::from_value` on the JSON the API would return,
+since a struct literal will not compile outside this crate. Fields the
+API grows are then added without a breaking release. Designed
 to mirror `sandogasa-github` and `sandogasa-gitlab` in shape so a
 Forgejo domain in `sandogasa-report` looks structurally identical to a
 GitHub or GitLab one (per-instance tokens and identities, an optional

@@ -745,26 +745,21 @@ mod tests {
         parse_time(s).unwrap()
     }
 
+    fn event(v: serde_json::Value) -> TimelineEvent {
+        serde_json::from_value(v).unwrap()
+    }
+
     fn comment(login: &str, body: &str, when: &str) -> TimelineEvent {
-        TimelineEvent {
-            kind: "comment".into(),
-            body: body.into(),
-            user: Some(sandogasa_forgejo::UserRef {
-                login: login.into(),
-            }),
-            created_at: Some(when.into()),
-            label: None,
-        }
+        event(serde_json::json!({
+            "type": "comment", "body": body, "user": {"login": login}, "created_at": when
+        }))
     }
 
     fn label(name: &str, added: bool, when: &str) -> TimelineEvent {
-        TimelineEvent {
-            kind: "label".into(),
-            body: if added { "1" } else { "" }.into(),
-            user: None,
-            created_at: Some(when.into()),
-            label: Some(sandogasa_forgejo::LabelRef { name: name.into() }),
-        }
+        event(serde_json::json!({
+            "type": "label", "body": if added { "1" } else { "" },
+            "created_at": when, "label": {"name": name}
+        }))
     }
 
     fn members(names: &[&str]) -> Vec<String> {

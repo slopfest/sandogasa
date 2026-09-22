@@ -53,6 +53,7 @@ pub const FEED_PAGE_CAP: u32 = 50;
 /// A Forgejo user as returned by `/api/v1/user`. Only the fields
 /// downstream tools currently consume.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct User {
     pub id: u64,
     pub login: String,
@@ -60,6 +61,7 @@ pub struct User {
 
 /// One event of a user's activity feed.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct Activity {
     /// `create_issue`, `comment_issue`, `close_issue`, `reopen_issue`,
     /// `create_pull_request`, `merge_pull_request`, `commit_repo`, …
@@ -77,6 +79,7 @@ pub struct Activity {
 
 /// The repository an activity happened in.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct ActivityRepo {
     pub full_name: String,
     #[serde(default)]
@@ -85,6 +88,7 @@ pub struct ActivityRepo {
 
 /// The comment an activity posted, when it did.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct ActivityComment {
     #[serde(default)]
     pub html_url: Option<String>,
@@ -114,6 +118,7 @@ impl Activity {
 
 /// The user reference embedded in a pull-request search result.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct UserRef {
     pub login: String,
 }
@@ -122,6 +127,7 @@ pub struct UserRef {
 /// In this compact form `owner` is a bare login string (not a full
 /// user object).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct RepositoryRef {
     #[serde(default)]
     pub full_name: String,
@@ -134,6 +140,7 @@ pub struct RepositoryRef {
 /// The `pull_request` sub-object on a search result — the bits that
 /// distinguish a merged PR from a merely-closed one.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct PullInfo {
     #[serde(default)]
     pub merged: bool,
@@ -147,6 +154,7 @@ pub struct PullInfo {
 /// A pull request as returned by the issue/pull search endpoint (an
 /// issue object whose `pull_request` field is populated).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct PullRequest {
     pub number: u64,
     pub title: String,
@@ -197,6 +205,7 @@ impl PullRequest {
 /// `closed_at`, `repository`) are populated by the search; the per-repo
 /// endpoints leave them at their defaults.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct Issue {
     pub number: u64,
     pub title: String,
@@ -237,6 +246,7 @@ impl Issue {
 /// An issue comment (`/repos/{owner}/{repo}/issues/{n}/comments`) —
 /// only the fields downstream tools consume.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct IssueComment {
     #[serde(default)]
     pub body: String,
@@ -250,6 +260,7 @@ pub struct IssueComment {
 
 /// A label as embedded in a timeline event.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct LabelRef {
     pub name: String,
 }
@@ -259,6 +270,7 @@ pub struct LabelRef {
 /// `label`, `label` the label, `body` `"1"` when added and empty when
 /// removed).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct TimelineEvent {
     #[serde(rename = "type", default)]
     pub kind: String,
@@ -285,6 +297,7 @@ impl TimelineEvent {
 /// A git ref (branch or commit) as embedded in a pull request's
 /// `head` / `base`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct GitRef {
     pub sha: String,
     #[serde(rename = "ref")]
@@ -296,6 +309,7 @@ pub struct GitRef {
 /// closed-but-unmerged PR's commit nonetheless landed on the target
 /// branch (applied out-of-band).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct PullDetail {
     pub number: u64,
     #[serde(default)]
@@ -310,6 +324,7 @@ pub struct PullDetail {
 /// A commit from `/pulls/{n}/commits` or `/commits`: the sha and the
 /// git-level message and author.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct RepoCommit {
     pub sha: String,
     pub commit: CommitBody,
@@ -317,6 +332,7 @@ pub struct RepoCommit {
 
 /// The git-level part of a commit.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct CommitBody {
     #[serde(default)]
     pub message: String,
@@ -326,6 +342,7 @@ pub struct CommitBody {
 
 /// A commit's author as git recorded it.
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct CommitAuthor {
     #[serde(default)]
     pub name: String,

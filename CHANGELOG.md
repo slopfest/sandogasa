@@ -110,13 +110,26 @@ link, since the visible `#NNNN` is typed by hand and has been wrong.
 A `needinfo?` flag now carries when it was set, so a caller can say how
 long a question has gone unanswered.
 
-### sandogasa-forgejo: `issue_timeline`
+### sandogasa-forgejo: `issue_timeline`, and the models are `#[non_exhaustive]` (breaking)
 
 `Client::issue_timeline` fetches an issue's timeline — comments
 interleaved with events such as label changes, as `TimelineEvent` —
 which is where the date a label was applied lives; the comments
 endpoint carries no such history. `TimelineEvent::label_added` names
-the label an event added.
+the label an event added, and `Issue` gains `updated_at`.
+
+That new field is what makes this breaking: `Issue` was constructible
+with a struct literal, so any such literal downstream stops compiling.
+Rather than pay that price on every field the API grows, all the
+response models (`User`, `Activity`, `ActivityRepo`, `ActivityComment`,
+`UserRef`, `RepositoryRef`, `PullInfo`, `PullRequest`, `Issue`,
+`IssueComment`, `LabelRef`, `TimelineEvent`, `GitRef`, `PullDetail`,
+`RepoCommit`, `CommitBody`, `CommitAuthor`) are now `#[non_exhaustive]`,
+as sandogasa-bugzilla's already were: they can no longer be built with
+a struct literal or destructured exhaustively outside the crate, and
+future fields arrive without a bump. Migration: build a fixture with
+`serde_json::from_value` on the JSON the API would return, and read
+fields by name.
 
 ### fedrq config: the CentOS Stream snapshot behind EPEL minor-release builds
 
