@@ -130,6 +130,7 @@ workspace's own tests now do, and read fields by name. Affected:
 - sandogasa-mailman: `PaginatedResponse`, `Email`, `Sender`
 - sandogasa-nvd: `CveResponse`, `Vulnerability`, `CveItem`, `CveReference`, `CveDescription`, `Configuration`, `Node`, `CpeMatch`
 - sandogasa-repology: `Package`
+- sandogasa-fasjson: `FasjsonResponse`, `FasjsonPage`, `PageInfo`, `FasUser`
 ### sandogasa-forgejo: `issue_timeline`, and the models are `#[non_exhaustive]` (breaking)
 
 `Client::issue_timeline` fetches an issue's timeline — comments

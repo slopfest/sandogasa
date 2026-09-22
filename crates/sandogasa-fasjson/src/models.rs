@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 /// FASJSON API response wrapper.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct FasjsonResponse<T> {
     pub result: T,
 }
@@ -11,6 +12,7 @@ pub struct FasjsonResponse<T> {
 /// One page of a FASJSON list (`/v1/groups/<name>/members/`, …):
 /// the items, and where the page sits in the whole.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct FasjsonPage<T> {
     pub result: Vec<T>,
     #[serde(default)]
@@ -19,6 +21,7 @@ pub struct FasjsonPage<T> {
 
 /// FASJSON's paging block.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct PageInfo {
     pub total_results: u32,
     pub page_size: u32,
@@ -28,6 +31,7 @@ pub struct PageInfo {
 
 /// A Fedora Account System user profile.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct FasUser {
     pub username: String,
     #[serde(default)]
