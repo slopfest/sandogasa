@@ -134,6 +134,7 @@ workspace's own tests now do, and read fields by name. Affected:
 - sandogasa-discourse: `UserResponse`, `User`, `UserStatus`
 - sandogasa-copr: `ChrootState`, `PackageStatus`
 - sandogasa-distgit: `Pagination` (its other response models have been since 0.18.0)
+- sandogasa-bodhi: `OidcTokens` (its other response models have been since 0.18.0)
 ### sandogasa-forgejo: `issue_timeline`, and the models are `#[non_exhaustive]` (breaking)
 
 `Client::issue_timeline` fetches an issue's timeline — comments

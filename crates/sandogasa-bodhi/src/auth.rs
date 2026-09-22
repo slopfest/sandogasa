@@ -40,6 +40,7 @@ const EXPIRY_SLACK_SECS: i64 = 60;
 /// Unknown fields are preserved via `extra` so saving a refreshed
 /// token back doesn't drop anything the Python client relies on.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct OidcTokens {
     pub access_token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
