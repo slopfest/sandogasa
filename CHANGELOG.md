@@ -128,6 +128,7 @@ workspace's own tests now do, and read fields by name. Affected:
 - sandogasa-sourcehut: `Patchset`, `NamedRef`, `Event`, `TicketRef`, `EventDetail`, `Actor`, `Repo`, `Commit`, `Signature`
 - sandogasa-jira: `Issue`, `IssueFields`, `NamedField`
 - sandogasa-mailman: `PaginatedResponse`, `Email`, `Sender`
+- sandogasa-nvd: `CveResponse`, `Vulnerability`, `CveItem`, `CveReference`, `CveDescription`, `Configuration`, `Node`, `CpeMatch`
 ### sandogasa-forgejo: `issue_timeline`, and the models are `#[non_exhaustive]` (breaking)
 
 `Client::issue_timeline` fetches an issue's timeline — comments

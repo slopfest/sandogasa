@@ -3,16 +3,19 @@
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct CveResponse {
     pub vulnerabilities: Vec<Vulnerability>,
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Vulnerability {
     pub cve: CveItem,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[non_exhaustive]
 pub struct CveItem {
     pub id: String,
     #[serde(default, rename = "sourceIdentifier")]
@@ -32,29 +35,34 @@ pub struct CveItem {
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct CveReference {
     pub url: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct CveDescription {
     pub lang: String,
     pub value: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Configuration {
     #[serde(default)]
     pub nodes: Vec<Node>,
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Node {
     #[serde(default, rename = "cpeMatch")]
     pub cpe_match: Vec<CpeMatch>,
 }
 
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct CpeMatch {
     pub criteria: String,
     #[serde(default)]
