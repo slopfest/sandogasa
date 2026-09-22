@@ -61,6 +61,32 @@ untouched for months meant opening it. The prompt now prints the link
 and the dates the item was opened and last updated first, and the
 `docs_open` JSON carries them as `created` and `updated`.
 
+### fesco-chair: `changes` checks the Incomplete Changes Report against Bugzilla
+
+Working through the F45 Incomplete Changes Report at the meeting meant
+reading twenty hand-written blocks — in the ticket body, restated in
+two long comments with edits — and opening each tracker bug to learn
+what had happened since: five blocks still said ASSIGNED for bugs that
+were ON_QA or MODIFIED, and eight Changes had been retargeted to F46
+through the bugs alone.
+
+`fesco-chair changes` reads every block from the report ticket and its
+comments, keeps the latest word on each tracker bug with its author,
+date and `## heading`, asks Bugzilla for the bugs and the two release
+trackers, and groups the Changes into those still needing a decision
+(NEW or ASSIGNED against this release), those code complete or done,
+and those retargeted — each with its wiki page, owners, the bug's
+status and last change, any unanswered `needinfo?` and how long it has
+waited, and the ticket's latest line, marked when its stated status is
+no longer Bugzilla's — and listed at the end for the Change Wrangler,
+whose list it is to edit. The bug number is taken from the `show_bug.cgi`
+link, since the visible `#NNNN` is typed by hand and has been wrong.
+
+### sandogasa-bugzilla: `Flag::creation_date`
+
+A `needinfo?` flag now carries when it was set, so a caller can say how
+long a question has gone unanswered.
+
 ### sandogasa-forgejo: `issue_timeline`
 
 `Client::issue_timeline` fetches an issue's timeline — comments

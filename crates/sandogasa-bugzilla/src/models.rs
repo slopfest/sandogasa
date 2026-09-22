@@ -76,6 +76,9 @@ pub struct Flag {
     pub setter: String,
     #[serde(default)]
     pub requestee: Option<String>,
+    /// When the flag was set — how long a `needinfo?` has waited.
+    #[serde(default)]
+    pub creation_date: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]

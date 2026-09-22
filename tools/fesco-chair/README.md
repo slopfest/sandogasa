@@ -4,8 +4,8 @@ Helper for [FESCo meeting chair
 duties](https://fedoraproject.org/wiki/FESCo_meeting_process):
 compose the agenda announcement email, generate the day-of meetbot
 script (with the pre/during-meeting checklist), compose the
-post-meeting summary email, and report where every open in-ticket
-vote stands. It prepares text for you to paste — it does not send
+post-meeting summary email, report where every open in-ticket vote
+stands, and check the Incomplete Changes Report against Bugzilla. It prepares text for you to paste — it does not send
 email or post to Matrix.
 
 Agenda tickets come from the [FESCo
@@ -115,6 +115,41 @@ alone does not suffice — see `votes`); without it the offer is skipped
 with a warning. A
 reminder to comment on each ticket ("This issue will be discussed at
 the next meeting on …") is printed to stderr.
+
+### `changes`
+
+```sh
+fesco-chair changes                    # the open "Incomplete Changes Report"
+fesco-chair changes --ticket 3682      # a specific report ticket
+fesco-chair changes --json             # machine-readable
+```
+
+One week before the beta freeze the Change Wrangler files an
+Incomplete Changes Report on the tracker — one block per Change with
+its name, owners, tracker bug, status and latest info — and FESCo
+works through it at the meeting. The blocks are hand-maintained, and
+by meeting day the report and the comments restating it have drifted
+from the tracker bugs. This reads every block from the ticket body
+and its comments (quoted lines excluded), keeps the latest word on
+each tracker bug together with who wrote it, when, and under which
+`## heading`, then asks Bugzilla where each bug actually is and groups
+the Changes:
+
+- **Needs a decision** — NEW or ASSIGNED and still blocking this
+  release's `FNNChanges` tracker
+- **Code complete or done** — MODIFIED, ON_QA, VERIFIED or CLOSED on
+  this release's tracker (ON_QA is the policy's code-complete state)
+- **Retargeted** — blocking the next release's tracker instead
+- **On neither tracker** — worth a look
+
+Each Change shows its wiki page, owners, the bug's status, resolution
+and last change, an unanswered `needinfo?` with whom it asks and for
+how long, and the ticket's latest line on it; a block whose stated
+status Bugzilla no longer has is marked `[ticket says …]`, and those
+are listed again at the end for the Change Wrangler, whose list it is
+— the tool never edits the ticket. The report ticket is the open
+`meeting` ticket titled "Incomplete Changes Report" unless `--ticket`
+names one. Bugzilla is read anonymously.
 
 ### `config`
 

@@ -573,6 +573,7 @@ dependencies = [
  "clap",
  "dirs",
  "reqwest",
+ "sandogasa-bugzilla",
  "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
@@ -582,6 +583,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

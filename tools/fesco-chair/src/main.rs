@@ -10,6 +10,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 mod agenda;
+mod changes;
 mod config;
 mod script;
 mod sources;
@@ -34,6 +35,8 @@ struct Cli {
 enum Command {
     /// Compose the meeting announcement email from the tracker.
     Agenda(agenda::AgendaArgs),
+    /// Where each Change on the Incomplete Changes Report stands.
+    Changes(changes::ChangesArgs),
     /// Store the Forgejo API token (interactive).
     Config,
     /// Day-of checklist plus the meetbot command script.
@@ -48,6 +51,7 @@ fn main() -> ExitCode {
     sandogasa_cli::init();
     match sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME")).command {
         Command::Agenda(args) => agenda::run(&args),
+        Command::Changes(args) => changes::run(&args),
         Command::Config => match config::cmd_config() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
