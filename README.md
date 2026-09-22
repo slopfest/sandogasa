@@ -27,7 +27,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 - **[dbranch](tools/dbranch/)** — propagate a Debian package across its downstream branches in `rpmbuild`-style stages: rebuild Ubuntu PPA and Debian stable proposed-update (`debian/<codename>`) branches, and update the Debian branch to a new upstream (merge/import + changelog entry; optional pbuilder build, lintian, push + GitLab CI watch via `glab`, dput or Debusine upload, and tag); starts a package straight from upstream's git tags (`clone`, with the salsa project and a myrepos entry set up on request); doubles as a learning tool via `--explain`
 - **[ebranch](tools/ebranch/)** — cross-branch porting helper: build-order resolution, branch requests, update checking with Bodhi karma, and tracking a multi-package effort on its way into the distro
 - **[fedora-cve-triage](tools/fedora-cve-triage/)** — triage CVEs reported against Fedora components in Red Hat Bugzilla
-- **[fedora-review-digest](tools/fedora-review-digest/)** — condense a `fedora-review` run of an auto-generated spec (rust2rpm) into a short rust-sig-style review comment
+- **[fedora-review-digest](tools/fedora-review-digest/)** — condense a `fedora-review` run of an auto-generated spec (rust2rpm, cabal-rpm) into a short SIG-style review comment
 - **[fesco-chair](tools/fesco-chair/)** — FESCo meeting chair helper: agenda announcement email, day-of meetbot script, post-meeting summary email, the state of open in-ticket votes, and the Incomplete Changes Report checked against Bugzilla
 - **[hs-intake](tools/hs-intake/)** — Hyperscale package intake analysis
 - **[hs-meetings](tools/hs-meetings/)** — chair CentOS Hyperscale SIG meetings: day-of zodbot script, meetbot archive list and sync

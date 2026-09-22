@@ -70,17 +70,46 @@ impl Item {
 pub fn generator_name(g: Generator) -> &'static str {
     match g {
         Generator::Rust2Rpm => "rust2rpm",
+        Generator::CabalRpm => "cabal-rpm",
         Generator::Pyp2Spec => "pyp2spec",
         Generator::Unknown => "an automated tool",
     }
 }
 
-/// The inferred checklist for a review. `crate_latest` is the latest
-/// stable version crates.io reports (evidence for the version item;
-/// `None` if not checked / unreachable). Only the Rust (rust2rpm)
-/// checklist exists today; pyp2spec gets its own list later.
-pub fn infer(review: &Review, crate_latest: Option<&str>) -> Vec<Item> {
-    rust_checklist(review, crate_latest)
+/// The inferred checklist for a review. `latest` is the latest version
+/// the registry reports — crates.io for rust2rpm, Hackage for
+/// cabal-rpm — as evidence for the version item (`None` if not checked
+/// / unreachable). pyp2spec gets its own list later.
+pub fn infer(review: &Review, latest: Option<&str>) -> Vec<Item> {
+    match review.spec.generator {
+        Generator::CabalRpm => haskell_checklist(review, latest),
+        _ => rust_checklist(review, latest),
+    }
+}
+
+/// The Haskell review criteria — the Rust list with Hackage and the
+/// `.cabal` file as the evidence, no static-deps item (Haskell
+/// libraries link statically by design and the guidelines do not fold
+/// their licenses), and a test suite upstream never wrote noted as
+/// such rather than as a caveat.
+fn haskell_checklist(r: &Review, latest: Option<&str>) -> Vec<Item> {
+    vec![
+        Item::new(
+            "package contains only permissible content",
+            Mark::Pass,
+            None,
+        ),
+        builds_item(r),
+        tests_item(r),
+        version_item(r, latest, "package", "Hackage"),
+        license_item(r, ".cabal"),
+        license_file_item(r),
+        Item::new(
+            "package complies with Haskell Packaging Guidelines",
+            Mark::Pass,
+            None,
+        ),
+    ]
 }
 
 /// The Rust-SIG review criteria, with marks inferred from the review
@@ -94,8 +123,8 @@ fn rust_checklist(r: &Review, crate_latest: Option<&str>) -> Vec<Item> {
         ),
         builds_item(r),
         tests_item(r),
-        version_item(r, crate_latest),
-        license_item(r),
+        version_item(r, crate_latest, "crate", "crates.io"),
+        license_item(r, "Cargo.toml"),
     ];
     // A shipped binary statically links its dependencies, so its
     // License: must fold in all of their licenses — an extra check.
@@ -141,10 +170,15 @@ fn install_failed(r: &Review) -> bool {
 }
 
 /// Tests fully run (`%cargo_test`, no `--skip`) → pass; some skipped or
-/// the suite disabled → caveat with an editable justification.
+/// the suite disabled → caveat with an editable justification. When
+/// upstream's manifest shows there is no test suite to run, the caveat
+/// comes with that as its note: nothing to run is still not a pass.
 fn tests_item(r: &Review) -> Item {
     let label = "test suite is run and all unit tests pass";
     if !r.spec.tests_enabled {
+        if r.upstream_has_tests == Some(false) {
+            return Item::new(label, Mark::Caveat, Some("upstream ships no test suite"));
+        }
         Item::new(label, Mark::Caveat, Some("disabled — justify"))
     } else if r.spec.tests_skipped {
         Item::new(label, Mark::Caveat, Some("not all tests run — justify"))
@@ -153,70 +187,81 @@ fn tests_item(r: &Review) -> Item {
     }
 }
 
-/// The version item, with crates.io evidence: ✅ + `crates.io: <v>` when
-/// the packaged version is the latest stable; 🫤 noting the newer
-/// version otherwise; ✅ + "not checked" when crates.io wasn't queried.
-fn version_item(r: &Review, latest: Option<&str>) -> Item {
-    let label = "latest version of the crate is packaged";
+/// The version item, with the registry's evidence: ✅ + `<registry>:
+/// <v>` when the packaged version is the latest; 🫤 noting the newer
+/// version otherwise; ✅ + "not checked" when the registry wasn't
+/// queried.
+fn version_item(r: &Review, latest: Option<&str>, noun: &str, registry: &str) -> Item {
+    let label = format!("latest version of the {noun} is packaged");
     let packaged = &r.spec.version;
     match latest {
         Some(v) if v == packaged => Item {
-            label: label.into(),
+            label,
             mark: Mark::Pass,
-            note: Some(format!("spec & crates.io: {v}")),
+            note: Some(format!("spec & {registry}: {v}")),
         },
         Some(v) => Item {
-            label: label.into(),
+            label,
             mark: Mark::Caveat,
-            note: Some(format!("spec: {packaged}; crates.io: {v} — update")),
+            note: Some(format!("spec: {packaged}; {registry}: {v} — update")),
         },
         None => Item {
-            label: label.into(),
+            label,
             mark: Mark::Pass,
-            note: Some(format!("spec: {packaged}; crates.io: not checked")),
+            note: Some(format!("spec: {packaged}; {registry}: not checked")),
         },
     }
 }
 
-/// The license item, reporting both the spec `License:` and the crate's
-/// `Cargo.toml` `license` as evidence; a mismatch is flagged for the
-/// reviewer to reconcile.
-fn license_item(r: &Review) -> Item {
+/// The license item, reporting both the spec `License:` and the
+/// license upstream's `manifest` states as evidence; a mismatch is
+/// flagged for the reviewer to reconcile.
+fn license_item(r: &Review, manifest: &str) -> Item {
     let label = "license matches upstream specification and is acceptable for Fedora";
     let spec = &r.spec.license;
-    match &r.cargo_license {
+    match &r.upstream_license {
         Some(c) if c == spec => Item {
             label: label.into(),
             mark: Mark::Pass,
-            note: Some(format!("spec & Cargo.toml: {spec}")),
+            note: Some(format!("spec & {manifest}: {spec}")),
         },
         // Cargo's deprecated `/` separator means OR, which rust2rpm
-        // rewrites to SPDX — so `MIT/Apache-2.0` and `MIT OR Apache-2.0`
-        // are the same license, not a mismatch.
+        // rewrites to SPDX, and a legacy Cabal identifier such as `BSD3`
+        // is what cabal-rpm turned into `BSD-3-Clause` — the same
+        // license spelled differently, not a mismatch.
         Some(c) if normalize_license(c) == normalize_license(spec) => Item {
             label: label.into(),
             mark: Mark::Pass,
-            note: Some(format!("spec: {spec}; Cargo.toml: {c} (equivalent)")),
+            note: Some(format!("spec: {spec}; {manifest}: {c} (equivalent)")),
         },
         Some(c) => Item {
             label: label.into(),
             mark: Mark::Caveat,
-            note: Some(format!("spec: {spec}; Cargo.toml: {c} — reconcile")),
+            note: Some(format!("spec: {spec}; {manifest}: {c} — reconcile")),
         },
         None => Item {
             label: label.into(),
             mark: Mark::Pass,
-            note: Some(format!("spec: {spec}; Cargo.toml: not found")),
+            note: Some(format!("spec: {spec}; {manifest}: not found")),
         },
     }
 }
 
 /// Normalize a license expression for comparison: Cargo's deprecated `/`
-/// (meaning OR) becomes ` OR `, and whitespace is collapsed — so a
-/// Cargo `MIT/Apache-2.0` compares equal to a spec `MIT OR Apache-2.0`.
+/// (meaning OR) becomes ` OR `, a legacy Cabal identifier becomes its
+/// SPDX family, the `-only` / `-or-later` suffix the legacy identifier
+/// cannot express is dropped, and whitespace is collapsed — so a Cargo
+/// `MIT/Apache-2.0` compares equal to a spec `MIT OR Apache-2.0`, and a
+/// `.cabal` `GPL-3` to the `GPL-3.0-or-later` cabal-rpm writes for it.
 fn normalize_license(s: &str) -> String {
+    let s = crate::review::cabal_license_spdx(s).unwrap_or(s);
     s.replace('/', " OR ")
         .split_whitespace()
+        .map(|w| {
+            w.strip_suffix("-only")
+                .or_else(|| w.strip_suffix("-or-later"))
+                .unwrap_or(w)
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -373,12 +418,34 @@ pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIss
 }
 
 /// Render the post-import boilerplate (the part below the second `===`).
-/// Rust-SIG tasks today; Python gets its own when added.
-pub fn render_post_import(generator: Generator, upstream_name: &str) -> String {
+/// Rust-SIG and Haskell-SIG tasks; Python gets its own when added.
+/// `package` is the spec `Name:` (the Haskell one is `ghc-<name>` for
+/// a library but the bare name for a binary).
+pub fn render_post_import(generator: Generator, upstream_name: &str, package: &str) -> String {
     match generator {
         Generator::Pyp2Spec => String::new(), // TODO: python post-import tasks
+        Generator::CabalRpm => haskell_post_import(upstream_name, package),
         _ => rust_post_import(upstream_name),
     }
+}
+
+fn haskell_post_import(name: &str, package: &str) -> String {
+    format!(
+        "Recommended post-import haskell-sig tasks:
+
+- set up package on release-monitoring.org:
+  project: {name}
+  homepage: https://hackage.haskell.org/package/{name}
+  backend: Hackage
+  version scheme: semantic
+  distro: Fedora
+  Package: {package}
+
+- add @haskell-lang-sig with \"commit\" access as package co-maintainer
+
+- track package in koschei for all built branches
+"
+    )
 }
 
 fn rust_post_import(crate_name: &str) -> String {
@@ -449,12 +516,57 @@ mod tests {
                 ships_binary: false,
             },
             upstream_name: "foo".to_string(),
-            cargo_license: Some("MIT".to_string()),
+            upstream_license: Some("MIT".to_string()),
+            upstream_has_tests: None,
             build_ok,
             rpmlint_clean: true,
             issues,
             static_deps: None,
         }
+    }
+
+    #[test]
+    fn haskell_review_uses_hackage_and_the_cabal_file_as_evidence() {
+        let mut r = review(false, true, true, vec![]);
+        r.spec.generator = Generator::CabalRpm;
+        r.spec.name = "ghc-shell-monad".into();
+        r.spec.version = "0.6.10".into();
+        r.spec.license = "BSD-3-Clause".into();
+        r.upstream_name = "shell-monad".into();
+        r.upstream_license = Some("BSD3".into());
+        r.upstream_has_tests = Some(false);
+        let items = infer(&r, Some("0.6.10"));
+        assert_eq!(items.len(), 7);
+        let block = render_review(r.spec.generator, &items, &[]);
+        assert!(block.contains("generated with cabal-rpm"));
+        // No suite to run is a caveat with the reason filled in, not a pass.
+        assert!(block.contains(
+            "🫤 test suite is run and all unit tests pass (upstream ships no test suite)"
+        ));
+        assert!(approved(&items, &[]), "a caveat does not block approval");
+        assert!(
+            block.contains("✅ latest version of the package is packaged (spec & Hackage: 0.6.10)")
+        );
+        assert!(
+            block.contains("(spec: BSD-3-Clause; .cabal: BSD3 (equivalent))"),
+            "{block}"
+        );
+        assert!(block.contains("✅ package complies with Haskell Packaging Guidelines"));
+        // A legacy GPL-3 cannot say -only or -or-later, so cabal-rpm's
+        // GPL-3.0-or-later is equivalent, not a mismatch.
+        r.spec.license = "GPL-3.0-or-later".into();
+        r.upstream_license = Some("GPL-3".into());
+        assert!(infer(&r, None)[4].mark == Mark::Pass);
+        // Tests disabled with a suite upstream asks for a justification.
+        r.upstream_has_tests = Some(true);
+        assert_eq!(
+            infer(&r, None)[2].note.as_deref(),
+            Some("disabled — justify")
+        );
+        let post = render_post_import(Generator::CabalRpm, "shell-monad", "ghc-shell-monad");
+        assert!(post.contains("backend: Hackage"));
+        assert!(post.contains("Package: ghc-shell-monad"));
+        assert!(post.contains("@haskell-lang-sig"));
     }
 
     #[test]
@@ -544,7 +656,7 @@ mod tests {
     #[test]
     fn license_mismatch_between_spec_and_cargo_is_a_caveat() {
         let mut r = review(true, true, true, vec![]);
-        r.cargo_license = Some("MIT OR Apache-2.0".to_string());
+        r.upstream_license = Some("MIT OR Apache-2.0".to_string());
         let items = infer(&r, Some("1.0"));
         let lic = &items[4];
         assert_eq!(lic.mark, Mark::Caveat);
@@ -558,7 +670,7 @@ mod tests {
     fn cargo_slash_license_matches_spdx_or() {
         let mut r = review(true, true, true, vec![]);
         r.spec.license = "MIT OR Apache-2.0".to_string();
-        r.cargo_license = Some("MIT/Apache-2.0".to_string()); // deprecated Cargo form
+        r.upstream_license = Some("MIT/Apache-2.0".to_string()); // deprecated Cargo form
         let items = infer(&r, Some("1.0"));
         let lic = &items[4];
         assert_eq!(lic.mark, Mark::Pass);
@@ -695,7 +807,7 @@ mod tests {
 
     #[test]
     fn post_import_substitutes_the_crate_name() {
-        let p = render_post_import(Generator::Rust2Rpm, "trustfall_core");
+        let p = render_post_import(Generator::Rust2Rpm, "trustfall_core", "rust-trustfall_core");
         assert!(p.contains("project: trustfall_core"));
         assert!(p.contains("Package: rust-trustfall_core"));
         assert!(p.contains("homepage: https://crates.io/crates/trustfall_core"));
