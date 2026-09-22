@@ -184,6 +184,23 @@ future fields arrive without a bump. Migration: build a fixture with
 `serde_json::from_value` on the JSON the API would return, and read
 fields by name.
 
+### fedrq config: the CentOS Proposed Updates SIG
+
+Asking what the Proposed Updates SIG ships for a package — the version
+under test on buildlogs, what a machine with the SIG enabled would
+resolve, or whether stock CentOS Stream has caught up — meant reading
+the mirror by hand, since fedrq knew the Hyperscale SIG but not this
+one. `configs/fedrq/centos-proposed-updates.toml` adds `cpu.el9` and
+`cpu.el10` on the Hyperscale pattern, with `@base` (the SIG repo and
+its source), `@testing`, `@testing-only` (buildlogs, binaries only),
+`@debuginfo`, and `@stack` / `@stack-testing` (CentOS Stream base plus
+EPEL plus the SIG). Repo ids, names and metalinks match the
+`centos-release-proposed_updates` package's own repo file. First
+answer it gave: PackageKit 1.2.8-9~proposed.el10 is in the SIG repo
+and stock c10s now carries 1.2.8-9.el10. The Fedora package ships it
+as its own subpackage from the next build, beside the Hyperscale and
+snapshot configs.
+
 ### fedrq config: the CentOS Stream snapshot behind EPEL minor-release builds
 
 Finding out which rustc (or anything else) an EPEL build for a RHEL

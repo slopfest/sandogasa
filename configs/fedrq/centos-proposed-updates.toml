@@ -1,0 +1,44 @@
+# CentOS Proposed Updates SIG releases for fedrq.
+#
+#   fedrq pkgs -b cpu.el10 PackageKit           # SIG repo only
+#   fedrq pkgs -b cpu.el10 -r stack PackageKit  # base + EPEL + SIG,
+#                                               # i.e. what a machine with
+#                                               # the SIG enabled resolves
+#   fedrq pkgs -b cpu.el10 -r testing PackageKit      # plus the testing repo
+#                                                     # (builds tagged -testing,
+#                                                     # on buildlogs.centos.org)
+#   fedrq pkgs -b cpu.el10 -r testing-only PackageKit # testing repo alone
+#
+# The branch spelling follows centos-hyperscale.toml's hs.el9 / hs.el10.
+# The capture group becomes $releasever in repos/centos-proposed-updates.repo,
+# whose repo ids match the centos-release-proposed_updates package.
+#
+# Install this file where fedrq looks: /etc/fedrq/ (system-wide, what a
+# package would do) or ~/.config/fedrq/ (per-user), with the repos/
+# directory beside it either way. On a CentOS Stream machine these
+# branches count as fedrq's *native* release and use the system dnf
+# cache; see centos-hyperscale.toml for the smartcache note.
+
+[releases.centos-proposed-updates]
+matcher = '^cpu\.el(\d+)$'
+defpaths = ["centos-proposed-updates.repo", "centos-stream.repo", "epel.repo"]
+system_repos = false
+
+defs.base = ["centos-proposed_updates", "centos-proposed_updates-source"]
+# @testing is base plus the testing repo, @testing-only the testing
+# repo alone (binaries only — buildlogs publishes no source).
+defs.testing = ["@base", "centos-proposed_updates-testing"]
+defs.testing-only = ["centos-proposed_updates-testing"]
+defs.debuginfo = ["@base", "centos-proposed_updates-debuginfo"]
+
+# The full stack a machine with the SIG enabled resolves against:
+# CentOS Stream base (from fedrq's own centos-stream.repo), EPEL, and
+# the SIG repo layered on top.
+defs.stack = [
+    "fedrq-centos-stream-baseos", "fedrq-centos-stream-baseos-source",
+    "fedrq-centos-stream-appstream", "fedrq-centos-stream-appstream-source",
+    "fedrq-centos-stream-crb", "fedrq-centos-stream-crb-source",
+    "epel", "epel-source",
+    "centos-proposed_updates", "centos-proposed_updates-source",
+]
+defs.stack-testing = ["@stack", "centos-proposed_updates-testing"]

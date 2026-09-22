@@ -1,0 +1,54 @@
+# CentOS Proposed Updates SIG repos, for fedrq queries
+# (`-b cpu.el9` / `-b cpu.el10`; see ../centos-proposed-updates.toml).
+# Installed to /etc/fedrq/repos/ or ~/.config/fedrq/repos/.
+#
+# Repo ids, names and metalinks match what centos-release-proposed_updates
+# installs in /etc/yum.repos.d/CentOS-Stream-Proposed-Updates.repo, so on
+# a machine with the SIG enabled these definitions coincide with the
+# system's. Two deliberate differences, as in centos-hyperscale.repo:
+# `$stream` is a CentOS-only dnf variable, so the metalinks spell it
+# `$releasever-stream` (fedrq sets $releasever from the branch); and
+# gpgkey points at distribution-gpg-keys, which exists on machines that
+# never installed the release package.
+#
+# The SIG has one flavor, packages-main, on both streams. The testing
+# repo (the CBS -testing destination tag) is published to
+# buildlogs.centos.org, binaries only; the release package ships no
+# definition for it, so the id below follows the Hyperscale pattern.
+
+[centos-proposed_updates]
+name=CentOS Stream $releasever - Proposed Updates
+metalink=https://mirrors.centos.org/metalink?repo=centos-proposed_updates-sig-packages-main-$releasever-stream&arch=$basearch&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/proposed_updates/$basearch/packages-main/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-Proposed-Updates
+gpgcheck=1
+repo_gpgcheck=0
+enabled=0
+
+[centos-proposed_updates-debuginfo]
+name=CentOS Stream $releasever - Proposed Updates - Debug
+metalink=https://mirrors.centos.org/metalink?repo=centos-proposed_updates-sig-packages-main-debug-$releasever-stream&arch=$basearch&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/proposed_updates/$basearch/packages-main/debug/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-Proposed-Updates
+gpgcheck=1
+repo_gpgcheck=0
+enabled=0
+
+[centos-proposed_updates-source]
+name=CentOS Stream $releasever - Proposed Updates - Source
+metalink=https://mirrors.centos.org/metalink?repo=centos-proposed_updates-sig-packages-main-source-$releasever-stream&arch=source&protocol=https,http
+#baseurl=https://mirror.stream.centos.org/SIGs/$releasever-stream/proposed_updates/source/packages-main/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-Proposed-Updates
+gpgcheck=1
+repo_gpgcheck=0
+enabled=0
+
+## Testing repo, from buildlogs.centos.org (no source repo there)
+
+[centos-proposed_updates-testing]
+name=CentOS Stream $releasever - Proposed Updates - Testing
+baseurl=https://buildlogs.centos.org/centos/$releasever-stream/proposed_updates/$basearch/packages-main/
+gpgkey=file:///usr/share/distribution-gpg-keys/centos/RPM-GPG-KEY-CentOS-SIG-Proposed-Updates
+gpgcheck=1
+repo_gpgcheck=0
+enabled=0
