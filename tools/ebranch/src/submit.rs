@@ -164,11 +164,12 @@ async fn propose_bugs(
         })
         .collect();
 
-    let trackers = sandogasa_bugclass::bugzilla::lookup_branch_trackers(bz, &report.branch).await;
+    let trackers =
+        sandogasa_bugclass::bugzilla::lookup_branch_trackers(bz, report.dist_branch()).await;
     let facts = crate::karma::UpdateFacts {
         builds: &builds,
         trackers: &trackers,
-        branch: &report.branch,
+        branch: report.dist_branch(),
         unsatisfied: &report.installability_issues,
         full_analysis: report.full_analysis,
     };

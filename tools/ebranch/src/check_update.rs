@@ -151,7 +151,14 @@ pub struct RevDepResult {
 #[derive(Debug, Serialize)]
 pub struct CheckUpdateReport {
     pub input: String,
+    /// The fedrq branch the check ran against (`al9` for an EPEL 9
+    /// update).
     pub branch: String,
+    /// The dist-git branch the update is for, when it differs from
+    /// `branch` (`epel9` checked against `al9`). Bugzilla's release
+    /// vocabulary follows this one, not the base.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dist_branch: Option<String>,
     /// Repository class (e.g. "@epel"), if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
@@ -179,6 +186,14 @@ pub struct CheckUpdateReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_reason: Option<SkipReason>,
     pub reverse_deps: BTreeMap<String, RevDepResult>,
+}
+
+impl CheckUpdateReport {
+    /// The branch Bugzilla knows the update by: the dist-git branch
+    /// when the check ran against a base distro, else the branch.
+    pub fn dist_branch(&self) -> &str {
+        self.dist_branch.as_deref().unwrap_or(&self.branch)
+    }
 }
 
 /// Why a full Provides comparison couldn't be run, so the report can
@@ -524,6 +539,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         return Ok(CheckUpdateReport {
             input: input.to_string(),
             branch: branch.clone(),
+            dist_branch: opts.testing_branch.clone(),
             repo: opts.repo.clone(),
             updated_packages: vec![],
             changes: vec![],
@@ -886,6 +902,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
     Ok(CheckUpdateReport {
         input: input.to_string(),
         branch,
+        dist_branch: opts.testing_branch.clone(),
         repo: opts.repo.clone(),
         updated_packages,
         changes,
@@ -2265,6 +2282,7 @@ fn run_provides_analysis(
             input: input.to_string(),
             branch: branch.to_string(),
             repo: opts.repo.clone(),
+            dist_branch: opts.testing_branch.clone(),
             updated_packages: updated_packages.to_vec(),
             changes: changes.to_vec(),
             full_analysis: true,
@@ -2373,6 +2391,7 @@ fn run_provides_analysis(
         input: input.to_string(),
         branch: branch.to_string(),
         repo: opts.repo.clone(),
+        dist_branch: opts.testing_branch.clone(),
         updated_packages: updated_packages.to_vec(),
         changes: changes.to_vec(),
         full_analysis: true,
@@ -2616,6 +2635,7 @@ mod tests {
             input: "FEDORA-2026-test".to_string(),
             branch: branch.to_string(),
             repo: None,
+            dist_branch: None,
             updated_packages: vec!["iptstate".to_string()],
             changes: vec![],
             full_analysis: false,
@@ -2702,6 +2722,7 @@ mod tests {
             input: "FEDORA-2026-test".to_string(),
             branch: "f44".to_string(),
             repo: None,
+            dist_branch: None,
             updated_packages: vec![],
             changes: vec![],
             full_analysis: true,
@@ -2846,6 +2867,7 @@ mod tests {
             input: "FEDORA-2026-x".to_string(),
             branch: "f43".to_string(),
             repo: None,
+            dist_branch: None,
             updated_packages: vec![
                 "a".into(),
                 "b".into(),
@@ -2884,6 +2906,7 @@ mod tests {
             input: "x".to_string(),
             branch: "f43".to_string(),
             repo: None,
+            dist_branch: None,
             updated_packages: vec!["foo".into(), "bar".into()],
             changes: vec![
                 change("foo", Some("1.0-1.fc43"), "1.1-1.fc43"),
@@ -3467,6 +3490,19 @@ mod tests {
     }
 
     /// Koji unreachable: the fixture for a run without it.
+    #[test]
+    fn dist_branch_is_the_epel_branch_not_the_base() {
+        // Bugzilla files an epel9 update's bugs against epel9; the
+        // al9 the check ran against means nothing to it.
+        let mut report = skip_report("al9", SkipReason::NoSource { bodhi_status: None });
+        report.dist_branch = Some("epel9".to_string());
+        assert_eq!(report.dist_branch(), "epel9");
+        assert_eq!(
+            skip_report("f44", SkipReason::NoSource { bodhi_status: None }).dist_branch(),
+            "f44"
+        );
+    }
+
     fn no_koji(_tag: &str) -> Option<Vec<String>> {
         None
     }

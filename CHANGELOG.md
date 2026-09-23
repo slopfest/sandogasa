@@ -328,6 +328,20 @@ before any query, so a pair fedrq refuses is an error up front, with
 fedrq's own message, instead of a run in which everything looks
 broken. sandogasa-fedrq gains `Fedrq::repolist`.
 
+### ebranch: an EPEL update's bugs are judged against the EPEL release again
+
+The epel9 libheif security update submitted on 2026-09-23 proposed one
+release-monitoring bug and none of the three open CVE trackers filed
+against epel9, though fedora-cve-triage matched all three. The check
+had run against `al9` — the base the EPEL mapping substitutes — and
+recorded that as the branch, so the bug verdict asked Bugzilla's
+vocabulary about `al9`: no product and version for a CVE tracker, and
+no `EPEL9FTBFS` / `EPEL9FailsToInstall` wording either, which means
+the bot-worded FTBFS and FailsToInstall verdicts had been silently
+inert for every EPEL update since the mapping was introduced. The
+report now keeps the dist-git branch alongside the fedrq base, and
+the karma vote and `--submit` read the release from it.
+
 ### fedrq config: the CentOS Proposed Updates SIG
 
 Asking what the Proposed Updates SIG ships for a package — the version
