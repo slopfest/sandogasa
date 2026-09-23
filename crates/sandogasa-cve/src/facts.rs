@@ -183,9 +183,18 @@ pub fn resolved_from_ghsa(
                 })
             })
             .collect();
+        // A range open at the top (`>= 1.19.0`) beside a patched
+        // version means "from 1.19.0 until the fix": close it there,
+        // or every build past the fix would still read as vulnerable.
         let ranges: Vec<sandogasa_nvd::VulnerableRange> = vulns
             .iter()
-            .filter_map(|v| crate::advisory::ghsa_range(&v.package, v.range.as_deref()?))
+            .filter_map(|v| {
+                let mut r = crate::advisory::ghsa_range(&v.package, v.range.as_deref()?)?;
+                if r.end_excluding.is_none() && r.end_including.is_none() {
+                    r.end_excluding = v.patched.clone();
+                }
+                Some(r)
+            })
             .collect();
         // No patched version, but a range closed at the top says what
         // is not affected: everything above it.
@@ -354,6 +363,24 @@ mod tests {
         // A recorded fix or an open top infers nothing.
         assert!(inferred_from_ranges(&[r(Some("0.9.0"), Some("0.8.0"))]).is_empty());
         assert!(inferred_from_ranges(&[r(None, None)]).is_empty());
+    }
+
+    #[test]
+    fn a_range_open_at_the_top_is_closed_by_the_patched_version() {
+        // GHSA-73p7-m7gg-w2jv as strukturag/libheif publishes it:
+        // affected `>= 1.19.0`, patched 1.23.3.
+        let (found, _) = resolved_from_ghsa(&[ghsa(
+            "GHSA-73p7-m7gg-w2jv",
+            &[("", "libheif", Some(">= 1.19.0"), Some("1.23.3"))],
+        )]);
+        let found = found.unwrap();
+        assert_eq!(found.ranges[0].end_excluding.as_deref(), Some("1.23.3"));
+        assert!(is_fix("1.23.5", &found.fixed, &found.ranges));
+        assert!(!is_fix("1.22.0", &found.fixed, &found.ranges));
+        assert!(
+            !is_fix("1.18.0", &found.fixed, &found.ranges),
+            "below the range: not affected, but not a fix either"
+        );
     }
 
     #[test]

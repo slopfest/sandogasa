@@ -221,6 +221,36 @@ first as `Note` (author, timestamp, `system` flag), and
 `add_merge_request_note` posts one on a merge request. `MergeRequest` gains `updated_at`,
 `user_notes_count`, `has_conflicts` and `detailed_merge_status`.
 
+### fedora-cve-triage: bodhi-check sees pending updates and a project's own advisories
+
+A run over libheif's twenty-one CVE bugs on 2026-09-23 found no fix for
+fifteen and no fixed version for five, hours after security updates for
+EPEL 10.3 and 10.4 had been submitted. Both answers were honest and
+both were gaps. bodhi-check scanned stable and testing updates only,
+so an update still pending was invisible; it now scans pending ones
+too, reports them as "in testing or pending" with the status named,
+and `--edit-bodhi` attaches the bugs to every such update across the
+releases a bug covers (an `epel10` bug to both the EPEL-10.3 and the
+EPEL-10.4 update, where it used to pick one), so an update submitted
+minutes ago carries its CVE bugs. And NVD had the five CVEs as
+Deferred while GitHub's global advisory database had no record of
+them: the fix was in the project's own advisories
+(`github.com/strukturag/libheif/security/advisories/GHSA-…`, which
+reach the global database only after GitHub's review) and in the
+release-tag URLs the references carried. The repository advisories
+are now read from the project's own endpoint when the global lookup
+returns nothing, with the same patched versions and ranges, and a
+`…/releases/tag/vX.Y.Z` reference becomes a candidate version to
+confirm, like one read from prose. Two spellings those advisories use
+had to be learned on the way: `patched_versions` may carry an operator
+and a `v` (`>= v1.23.0`), and an affected range open at the top
+(`>= 1.19.0`) beside a patched version means "until the fix", so the
+range is closed there — otherwise every build past the fix still read
+as vulnerable. With all of it, the same libheif run matches fifteen of
+the twenty bugs to the pending EPEL 10.3 update; the three left are
+EPEL 9 bugs with no update yet, and one CVE has no fix version in any
+source.
+
 ### sandogasa-cve: new library crate, lifted out of fedora-cve-triage
 
 Whether a build fixes a CVE — NVD's fixed versions and vulnerable

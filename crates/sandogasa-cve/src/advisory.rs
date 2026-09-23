@@ -89,6 +89,114 @@ pub fn ghsa_records(json: &str) -> Vec<(String, Vec<GhsaVuln>)> {
         .collect()
 }
 
+/// The version a GitHub release-tag URL names — `…/releases/tag/v1.23.1`
+/// gives `1.23.1` — when a CVE's references point at the release that
+/// carried the fix. A candidate like any read from prose: the caller
+/// confirms it. `None` for any other URL, or a tag that is not a
+/// dotted version.
+pub fn release_tag_version(url: &str) -> Option<String> {
+    let (_, tag) = url.split_once("/releases/tag/")?;
+    let tag = tag.split(['?', '#', '/']).next()?.trim_start_matches('v');
+    (tag.contains('.')
+        && tag.starts_with(|c: char| c.is_ascii_digit())
+        && tag.ends_with(|c: char| c.is_ascii_digit()))
+    .then(|| tag.to_string())
+}
+
+/// The repository advisories a CVE's references name —
+/// `github.com/<owner>/<repo>/security/advisories/GHSA-…` — as
+/// `(owner, repo, ghsa_id)`, each once. Those are the advisories a
+/// project publishes itself; the global database only carries them
+/// once GitHub has reviewed them, so a fresh CVE is often findable
+/// here and nowhere else.
+pub fn repo_advisory_refs(urls: &[String]) -> Vec<(String, String, String)> {
+    let mut out: Vec<(String, String, String)> = Vec::new();
+    for url in urls {
+        let Some(rest) = url
+            .strip_prefix("https://github.com/")
+            .or_else(|| url.strip_prefix("http://github.com/"))
+        else {
+            continue;
+        };
+        let parts: Vec<&str> = rest.split('/').collect();
+        if let [owner, repo, "security", "advisories", ghsa, ..] = parts.as_slice()
+            && ghsa.starts_with("GHSA-")
+        {
+            let key = (owner.to_string(), repo.to_string(), ghsa.to_string());
+            if !out.contains(&key) {
+                out.push(key);
+            }
+        }
+    }
+    out
+}
+
+/// GitHub's API endpoint for one repository advisory.
+pub fn repo_advisory_url(owner: &str, repo: &str, ghsa_id: &str) -> String {
+    format!("https://api.github.com/repos/{owner}/{repo}/security-advisories/{ghsa_id}")
+}
+
+/// A repository advisory's affected packages, in the shape
+/// [`ghsa_records`] gives for the global database. The repository
+/// form spells the fix as `patched_versions`, a string that may list
+/// several (`1.23.3, 1.24.0`) and may carry a `v`; each becomes one
+/// record with the same range, and an advisory that names no patched
+/// version yields one record with none.
+pub fn repo_advisory_records(json: &str) -> Vec<(String, Vec<GhsaVuln>)> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(id) = v.get("ghsa_id").and_then(|i| i.as_str()) else {
+        return Vec::new();
+    };
+    let vulns: Vec<GhsaVuln> = v
+        .get("vulnerabilities")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .flat_map(|entry| {
+            let text = |key: &str| entry.get(key).and_then(|v| v.as_str()).map(str::to_string);
+            let package = entry
+                .pointer("/package/name")
+                .and_then(|p| p.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let ecosystem = entry
+                .pointer("/package/ecosystem")
+                .and_then(|p| p.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let range = text("vulnerable_version_range");
+            // Projects write the field by hand: `v1.23.3`, `>= v1.23.0`,
+            // `1.23.3, 1.24.0`. Keep the version alone.
+            let patched: Vec<Option<String>> = match text("patched_versions") {
+                Some(p) if !p.trim().is_empty() => p
+                    .split(',')
+                    .map(|s| {
+                        Some(
+                            s.trim()
+                                .trim_start_matches(['>', '=', ' '])
+                                .trim_start_matches('v')
+                                .to_string(),
+                        )
+                    })
+                    .collect(),
+                _ => vec![None],
+            };
+            patched
+                .into_iter()
+                .map(move |patched| GhsaVuln {
+                    ecosystem: ecosystem.clone(),
+                    package: package.clone(),
+                    range: range.clone(),
+                    patched,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    vec![(id.to_string(), vulns)]
+}
+
 /// A GHSA vulnerable range as NVD would state it: `>= 6.30.0rc1, <= 6.33.4`
 /// bounds both ends, `< 5.29.6` names the fix, `<= 0.8.0` an unfixed
 /// series, `= 1.2.3` a single version. `None` for a range that names
@@ -281,5 +389,84 @@ mod tests {
             fixed_version_candidates("fixed in 7-Zip 26.02."),
             vec!["26.02"]
         );
+    }
+
+    #[test]
+    fn release_tag_urls_name_a_candidate_version() {
+        assert_eq!(
+            release_tag_version("https://github.com/strukturag/libheif/releases/tag/v1.23.1")
+                .as_deref(),
+            Some("1.23.1")
+        );
+        assert_eq!(
+            release_tag_version("https://github.com/x/y/releases/tag/2.0#notes").as_deref(),
+            Some("2.0")
+        );
+        assert_eq!(
+            release_tag_version("https://github.com/x/y/releases/tag/nightly"),
+            None
+        );
+        assert_eq!(
+            release_tag_version("https://github.com/x/y/commit/abc"),
+            None
+        );
+    }
+
+    #[test]
+    fn repository_advisories_are_read_from_references_and_their_api_shape() {
+        let refs = vec![
+            "https://github.com/strukturag/libheif/commit/089a809".to_string(),
+            "https://github.com/strukturag/libheif/security/advisories/GHSA-73p7-m7gg-w2jv"
+                .to_string(),
+            "https://github.com/strukturag/libheif/security/advisories/GHSA-73p7-m7gg-w2jv"
+                .to_string(),
+        ];
+        assert_eq!(
+            repo_advisory_refs(&refs),
+            vec![(
+                "strukturag".to_string(),
+                "libheif".to_string(),
+                "GHSA-73p7-m7gg-w2jv".to_string()
+            )]
+        );
+        assert_eq!(
+            repo_advisory_url("strukturag", "libheif", "GHSA-73p7-m7gg-w2jv"),
+            "https://api.github.com/repos/strukturag/libheif/security-advisories/GHSA-73p7-m7gg-w2jv"
+        );
+        // What GitHub answered for that advisory on 2026-09-23.
+        let json = r#"{"ghsa_id": "GHSA-73p7-m7gg-w2jv", "cve_id": "CVE-2026-62292",
+            "vulnerabilities": [{"package": {"ecosystem": "", "name": "libheif"},
+            "vulnerable_version_range": ">= 1.19.0", "patched_versions": "v1.23.3"}]}"#;
+        let records = repo_advisory_records(json);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].0, "GHSA-73p7-m7gg-w2jv");
+        assert_eq!(
+            records[0].1,
+            vec![GhsaVuln {
+                ecosystem: String::new(),
+                package: "libheif".into(),
+                range: Some(">= 1.19.0".into()),
+                patched: Some("1.23.3".into()),
+            }]
+        );
+        // An operator in the field is the project's phrasing, not a range.
+        let op = r#"{"ghsa_id": "GHSA-op", "vulnerabilities": [{"package": {"name": "libheif"},
+            "vulnerable_version_range": ">= 1.19.0, <= 1.22.2", "patched_versions": ">= v1.23.0"}]}"#;
+        assert_eq!(
+            repo_advisory_records(op)[0].1[0].patched.as_deref(),
+            Some("1.23.0")
+        );
+        // Several patched versions become one record each; none becomes one without.
+        let two = r#"{"ghsa_id": "GHSA-x", "vulnerabilities": [{"package": {"name": "p"},
+            "vulnerable_version_range": "< 2", "patched_versions": "1.9.1, 2.0.1"}]}"#;
+        let p: Vec<Option<String>> = repo_advisory_records(two)[0]
+            .1
+            .iter()
+            .map(|v| v.patched.clone())
+            .collect();
+        assert_eq!(p, vec![Some("1.9.1".into()), Some("2.0.1".into())]);
+        let none = r#"{"ghsa_id": "GHSA-y", "vulnerabilities": [{"package": {"name": "p"},
+            "vulnerable_version_range": ">= 1.0", "patched_versions": ""}]}"#;
+        assert_eq!(repo_advisory_records(none)[0].1[0].patched, None);
     }
 }
