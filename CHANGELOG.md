@@ -308,10 +308,10 @@ against RHEL itself. The answer exists, though — in Koji, as the
 external repos the `epel10.N-build` tag inherits. `check-update` now
 reads them: `c10-*` means `c10s`, `c10-snapshot-*` means
 `c10-snapshot` (sandogasa's own fedrq config), `rhel10.N-*` means
-`ubi10`; the substitution note names the repos that decided it, and
+`al10.N`; the substitution note names the repos that decided it, and
 the guard error remains for a run without koji or a minor it cannot
 answer for. On 2026-09-23 that gave c10s for epel10.4, c10.3-snapshot
-for epel10.3 and ubi10 for epel10.2. sandogasa-koji gains
+for epel10.3 and al10.2 for epel10.2. sandogasa-koji gains
 `list_external_repos`.
 
 The first epel10.3 run then reported 134 installability issues on two
@@ -327,6 +327,16 @@ while the snapshot URLs use `$releasever_major`) and carries an
 before any query, so a pair fedrq refuses is an error up front, with
 fedrq's own message, instead of a run in which everything looks
 broken. sandogasa-fedrq gains `Fedrq::repolist`.
+
+The epel10.2 run first used `ubi10` for the released minor and
+reported libheif's `libSDL2-2.0.so.0()(64bit)` unsatisfied. It is not:
+SDL2 is in RHEL 10 AppStream, but UBI is a public subset of RHEL, and
+the `rhel10.2-*` repos Koji builds against are not public. The released
+minor now maps to AlmaLinux's rebuild of it, `al10.N`: fedrq resolves
+that branch (its almalinux release takes a minor), the rebuild carries
+the whole of RHEL 10.2, and the minor in the branch pairs it with EPEL
+10.2's own repos rather than the newest minor's. fedrq has no RHEL
+release and its `ubi10` takes no minor.
 
 ### ebranch: an EPEL update's bugs are judged against the EPEL release again
 

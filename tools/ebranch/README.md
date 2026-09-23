@@ -595,11 +595,12 @@ CentOS Stream snapshot, a released one against RHEL itself. So its
 base is read from Koji — the external repos `epel10.N-build` inherits
 name it: `c10-*` → `c10s`, `c10-snapshot-*` → `c10.3-snapshot` (for
 epel10.3: sandogasa's fedrq config, which pairs the snapshot with that
-minor's own EPEL repos), `rhel10.N-*` → `ubi10` (fedrq's currently
-released minor) — and the note says which repos decided it. Before any
-query, fedrq is asked to list the repos for the pair, so a branch or
-group it refuses is an error up front rather than a run in which every
-dependency looks unsatisfied.
+minor's own EPEL repos), `rhel10.N-*` → `al10.N` (AlmaLinux's rebuild
+of that RHEL minor, paired with the minor's own EPEL repos; Koji's RHEL
+repos are not public) — and the note says which repos decided it.
+Before any query, fedrq is asked to list the repos for the pair, so a
+branch or group it refuses is an error up front rather than a run in
+which every dependency looks unsatisfied.
 Without koji, or for a minor Koji does not know, it is the guard
 error, and `-b` plus `-r` still work.
 

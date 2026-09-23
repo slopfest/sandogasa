@@ -1690,7 +1690,7 @@ fn epel_guard_error(branch: &str) -> String {
         "{branch} can't resolve base-OS dependencies on its own and has no \
          assumed base (epel8, epel9, epel9-next and epel10 map to al8, al9, c9s \
          and c10s; a minor-release branch such as epel10.3 is read from what \
-         its Koji build tag inherits — c10s, c10.3-snapshot or ubi10 — which \
+         its Koji build tag inherits — c10s, c10.3-snapshot or al10.2 — which \
          needs koji); pass a base branch plus the EPEL repo, e.g. -b c10s -r @epel"
     )
 }
@@ -1716,7 +1716,9 @@ fn epel_base(branch: &str) -> Option<&'static str> {
 /// snapshot (`c10-snapshot-baseos` → `c10.3-snapshot` for epel10.3:
 /// sandogasa's fedrq config, which pairs the snapshot with that
 /// minor's own EPEL repos), and a released minor against RHEL itself
-/// (`rhel10.2-baseos` → `ubi10`, fedrq's currently released minor).
+/// (`rhel10.2-baseos` → `al10.2`: AlmaLinux's rebuild of that minor,
+/// which fedrq pairs with the minor's own EPEL repos — the RHEL repos
+/// Koji uses are not public, and UBI is only a subset of them).
 /// `None` when no repo name has one of those shapes.
 fn minor_base_from_repos<'a>(
     branch: &str,
@@ -1742,11 +1744,10 @@ fn minor_base_from_repos<'a>(
                 return Some(format!("c{n}s"));
             }
         }
-        if let Some(rest) = r.strip_prefix("rhel") {
-            let n = digits(rest);
-            if !n.is_empty() {
-                return Some(format!("ubi{n}"));
-            }
+        if r.strip_prefix("rhel")
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        {
+            return Some(format!("al{minor}"));
         }
         None
     })
@@ -2281,8 +2282,8 @@ fn run_provides_analysis(
         return Ok(CheckUpdateReport {
             input: input.to_string(),
             branch: branch.to_string(),
-            repo: opts.repo.clone(),
             dist_branch: opts.testing_branch.clone(),
+            repo: opts.repo.clone(),
             updated_packages: updated_packages.to_vec(),
             changes: changes.to_vec(),
             full_analysis: true,
@@ -2390,8 +2391,8 @@ fn run_provides_analysis(
     Ok(CheckUpdateReport {
         input: input.to_string(),
         branch: branch.to_string(),
-        repo: opts.repo.clone(),
         dist_branch: opts.testing_branch.clone(),
+        repo: opts.repo.clone(),
         updated_packages: updated_packages.to_vec(),
         changes: changes.to_vec(),
         full_analysis: true,
@@ -2634,8 +2635,8 @@ mod tests {
         CheckUpdateReport {
             input: "FEDORA-2026-test".to_string(),
             branch: branch.to_string(),
-            repo: None,
             dist_branch: None,
+            repo: None,
             updated_packages: vec!["iptstate".to_string()],
             changes: vec![],
             full_analysis: false,
@@ -2721,8 +2722,8 @@ mod tests {
         CheckUpdateReport {
             input: "FEDORA-2026-test".to_string(),
             branch: "f44".to_string(),
-            repo: None,
             dist_branch: None,
+            repo: None,
             updated_packages: vec![],
             changes: vec![],
             full_analysis: true,
@@ -2866,8 +2867,8 @@ mod tests {
         let report = CheckUpdateReport {
             input: "FEDORA-2026-x".to_string(),
             branch: "f43".to_string(),
-            repo: None,
             dist_branch: None,
+            repo: None,
             updated_packages: vec![
                 "a".into(),
                 "b".into(),
@@ -2905,8 +2906,8 @@ mod tests {
         let report = CheckUpdateReport {
             input: "x".to_string(),
             branch: "f43".to_string(),
-            repo: None,
             dist_branch: None,
+            repo: None,
             updated_packages: vec!["foo".into(), "bar".into()],
             changes: vec![
                 change("foo", Some("1.0-1.fc43"), "1.1-1.fc43"),
@@ -3489,7 +3490,6 @@ mod tests {
         assert_eq!(d.testing_branch.as_deref(), Some("epel9-next"));
     }
 
-    /// Koji unreachable: the fixture for a run without it.
     #[test]
     fn dist_branch_is_the_epel_branch_not_the_base() {
         // Bugzilla files an epel9 update's bugs against epel9; the
@@ -3503,6 +3503,7 @@ mod tests {
         );
     }
 
+    /// Koji unreachable: the fixture for a run without it.
     fn no_koji(_tag: &str) -> Option<Vec<String>> {
         None
     }
@@ -3545,7 +3546,7 @@ mod tests {
         for (minor, base) in [
             ("epel10.4", "c10s"),
             ("epel10.3", "c10.3-snapshot"),
-            ("epel10.2", "ubi10"),
+            ("epel10.2", "al10.2"),
         ] {
             let d = apply_epel_defaults(minor.to_string(), None, None, koji).unwrap();
             assert_eq!(d.branch, base, "{minor}");
@@ -3559,7 +3560,7 @@ mod tests {
         let err = apply_epel_defaults("epel10.1".to_string(), None, None, koji).unwrap_err();
         assert!(
             err.contains("epel10.1")
-                && err.contains("c10.3-snapshot or ubi10")
+                && err.contains("c10.3-snapshot or al10.2")
                 && err.contains("-b c10s -r @epel"),
             "{err}"
         );
