@@ -9,6 +9,7 @@ members = [
     "crates/sandogasa-closure",
     "crates/sandogasa-config",
     "crates/sandogasa-copr",
+    "crates/sandogasa-cve",
     "crates/sandogasa-depfilter",
     "crates/sandogasa-discourse",
     "crates/sandogasa-distgit",
@@ -138,6 +139,7 @@ sandogasa-closure = { version = "0.24", path = "crates/sandogasa-closure" }
 sandogasa-config = { version = "0.24", path = "crates/sandogasa-config" }
 sandogasa-copr = { version = "0.24", path = "crates/sandogasa-copr" }
 sandogasa-depfilter = { version = "0.24", path = "crates/sandogasa-depfilter" }
+sandogasa-cve = { version = "0.24", path = "crates/sandogasa-cve" }
 sandogasa-discourse = { version = "0.24", path = "crates/sandogasa-discourse" }
 sandogasa-distgit = { version = "0.24", path = "crates/sandogasa-distgit" }
 sandogasa-fasjson = { version = "0.24", path = "crates/sandogasa-fasjson" }

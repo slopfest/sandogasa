@@ -536,6 +536,7 @@ dependencies = [
  "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
+ "sandogasa-cve",
  "sandogasa-distgit",
  "sandogasa-koji",
  "sandogasa-nvd",
@@ -546,7 +547,6 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
- "version-compare",
  "wiremock",
 ]
 
@@ -2010,6 +2010,19 @@ dependencies = [
  "sandogasa-cli",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "sandogasa-cve"
+version = "0.24.1"
+dependencies = [
+ "reqwest",
+ "sandogasa-cli",
+ "sandogasa-nvd",
+ "serde_json",
+ "tokio",
+ "version-compare",
+ "wiremock",
 ]
 
 [[package]]

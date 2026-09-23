@@ -221,6 +221,27 @@ first as `Note` (author, timestamp, `system` flag), and
 `add_merge_request_note` posts one on a merge request. `MergeRequest` gains `updated_at`,
 `user_notes_count`, `has_conflicts` and `detailed_merge_status`.
 
+### sandogasa-cve: new library crate, lifted out of fedora-cve-triage
+
+Whether a build fixes a CVE — NVD's fixed versions and vulnerable
+ranges, GitHub's advisory database when NVD has not analyzed the CVE,
+a range closed at the top standing in for a fix, NVD's product names
+matched against a component's provides, and the rate-paced NVD cache
+behind it all — lived inside fedora-cve-triage's binary, where nothing
+else could ask the question. ebranch needed to: a security update's
+CVE trackers carry no version, so it could never say which of them
+the update closes.
+
+`sandogasa-cve` now holds that logic (`facts`, `cache`, `advisory`,
+`version`), with one shared judgment, `is_fix(version, fixed,
+ranges)`: at or past a fixed version *and* outside every range still
+marked vulnerable, so one series' fix does not vouch for another
+series' build. fedora-cve-triage imports it and behaves as before,
+same cache directory included; the advisory-page scrape and its
+confirmation prompt stay in the tool, since they need a terminal and a
+config file to record into. `NvdCache::new` takes the tool's name and
+API key, so each tool keeps its own cache.
+
 ### ebranch: `check-update` knows which base an EPEL minor-release branch builds against
 
 `check-update --submit epel10.4-build-side-152618` refused with "epel10.4

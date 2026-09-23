@@ -70,6 +70,7 @@ library crates:
 - **sandogasa-kojihub** — Koji hub XML-RPC client
 - **sandogasa-mailman** — HyperKitty (Mailman 3) archive API client
 - **sandogasa-meetbot** — meetbot.fedoraproject.org meeting search client
+- **sandogasa-cve** — where a CVE is fixed: NVD and GitHub advisory data, an NVD cache paced to its rate limit, and the judgment of a build against a CVE's fixed versions and vulnerable ranges
 - **sandogasa-nvd** — NVD (National Vulnerability Database) API client
 - **sandogasa-repology** — Repology package version tracking API client
 - **sandogasa-review** — shared keep/explain/remove resolution for
