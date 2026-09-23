@@ -459,6 +459,7 @@ dependencies = [
  "sandogasa-closure",
  "sandogasa-config",
  "sandogasa-copr",
+ "sandogasa-cve",
  "sandogasa-depfilter",
  "sandogasa-distgit",
  "sandogasa-fedrq",

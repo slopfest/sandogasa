@@ -32,6 +32,34 @@ pub(crate) struct BugFacts {
     /// Bugs this one blocks — how an FTBFS or FailsToInstall bug is
     /// recognized, by the release tracker it blocks.
     pub blocks: Vec<u64>,
+    /// The product and version the bug is filed against — how a CVE
+    /// tracker says which release it is about (`Fedora EPEL`,
+    /// `epel10`), since its title names none.
+    pub product: Option<String>,
+    pub version: Vec<String>,
+    pub keywords: Vec<String>,
+    /// For a security tracker on a package the update builds, filed
+    /// against the update's release: where the CVE is fixed, from NVD
+    /// or GitHub's advisories. Filled by [`attach_cve_facts`]; `None`
+    /// when no source has a fixed version.
+    pub cve_fix: Option<sandogasa_cve::CveFix>,
+}
+
+impl BugFacts {
+    /// Whether the bug is a CVE tracker filed against the release the
+    /// update targets — a tracker for another release is not this
+    /// update's to answer.
+    fn is_tracker_for(&self, branch: &str) -> bool {
+        if !sandogasa_cve::facts::is_security_tracker(&self.summary, &self.keywords) {
+            return false;
+        }
+        match sandogasa_bugclass::bugzilla::product_version_for_branch(branch) {
+            Some((product, version)) => {
+                self.product.as_deref() == Some(product) && self.version.contains(&version)
+            }
+            None => false,
+        }
+    }
 }
 
 /// Bug ID to what Bugzilla says about it.
@@ -174,6 +202,41 @@ pub(crate) fn bug_verdict(bug: &BugFacts, update: &UpdateFacts<'_>) -> Verdict {
             },
             None => Verdict::Missing {
                 reason: format!("update builds no {pkg}, the package under review"),
+            },
+        };
+    }
+
+    // A CVE tracker for this release, on a package the update builds:
+    // the build either reaches the fix every source agrees on or it
+    // does not. A tracker for another release, or one no source has a
+    // fixed version for, is left to the user.
+    if bug.is_tracker_for(update.branch) {
+        let Some(pkg) = bug.component.as_deref() else {
+            return Verdict::Unknown;
+        };
+        let Some((_, build_version)) = builds.iter().find(|(p, _)| p == pkg) else {
+            return Verdict::Unknown;
+        };
+        let Some(fix) = &bug.cve_fix else {
+            return Verdict::Unknown;
+        };
+        let addressed = sandogasa_cve::is_fix(build_version, &fix.fixed, &fix.ranges);
+        return Verdict::Decided {
+            karma: if addressed { 1 } else { -1 },
+            reason: if addressed {
+                format!(
+                    "update delivers {pkg}-{build_version}, at or past the {} fix {} ({})",
+                    fix.cve_id,
+                    fix.fixed_versions(),
+                    fix.source
+                )
+            } else {
+                format!(
+                    "update only delivers {pkg}-{build_version}, below the {} fix {} ({})",
+                    fix.cve_id,
+                    fix.fixed_versions(),
+                    fix.source
+                )
             },
         };
     }
@@ -575,6 +638,10 @@ pub(crate) async fn fetch_bugs(bz: &sandogasa_bugzilla::BzClient, ids: &[u64]) -
                         summary: bug.summary,
                         component: bug.component.first().cloned(),
                         blocks: bug.blocks,
+                        product: Some(bug.product),
+                        version: bug.version,
+                        keywords: bug.keywords,
+                        cve_fix: None,
                     },
                 )
             })
@@ -587,6 +654,64 @@ pub(crate) async fn fetch_bugs(bz: &sandogasa_bugzilla::BzClient, ids: &[u64]) -
             );
             BugMap::new()
         }
+    }
+}
+
+/// Look up where each CVE is fixed, for the bugs that are security
+/// trackers on a package the update builds and filed against its
+/// release — the ones [`bug_verdict`] can then decide. One NVD answer
+/// per CVE, paced to NVD's limit (an API key in `[nvd]` lifts it) and
+/// cached a day under ebranch's cache directory; GitHub's advisories
+/// fill in when NVD has no fixed version.
+pub(crate) async fn attach_cve_facts(bugs: &mut BugMap, update: &UpdateFacts<'_>, verbose: bool) {
+    let wanted: Vec<(u64, String, String)> = bugs
+        .iter()
+        .filter(|(_, b)| b.is_tracker_for(update.branch))
+        .filter_map(|(id, b)| {
+            let component = b.component.as_deref()?;
+            update.builds.iter().find(|(p, _)| p == component)?;
+            let cve = sandogasa_cve::facts::cve_id_in(&b.summary)?;
+            Some((*id, cve.to_string(), component.to_string()))
+        })
+        .collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let mut nvd =
+        sandogasa_cve::NvdCache::new("ebranch", crate::config::nvd_api_key(), verbose, false);
+    let advisories = sandogasa_cli::cache::DiskCache::new(
+        "ebranch",
+        "advisories",
+        Some(sandogasa_cve::cache::NVD_TTL),
+        false,
+    );
+    let http = http_client();
+    let token = std::env::var("GITHUB_TOKEN").ok();
+    if verbose {
+        eprintln!(
+            "[bugs] looking up the fix for {} CVE tracker(s) on NVD",
+            wanted.len()
+        );
+    }
+    for (id, cve, component) in wanted {
+        let fix = sandogasa_cve::fix_facts(
+            &cve,
+            &component,
+            &mut nvd,
+            &http,
+            &advisories,
+            token.as_deref(),
+        )
+        .await;
+        if let Some(b) = bugs.get_mut(&id) {
+            b.cve_fix = fix;
+        }
+    }
+    if !nvd.refused.is_empty() {
+        eprintln!(
+            "warning: NVD refused {} CVE(s) (rate limited); their bugs are left to you",
+            nvd.refused.len()
+        );
     }
 }
 
@@ -623,7 +748,7 @@ async fn run_async(
     // Bodhi's bug tracker is Red Hat Bugzilla (the same instance
     // the manual prompt links to); public summaries need no auth.
     let bz = sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com");
-    let bugzilla = backfill_bug_titles(&bz, &mut update.bugs).await;
+    let mut bugzilla = backfill_bug_titles(&bz, &mut update.bugs).await;
     // Which release's FTBFS / FailsToInstall trackers to recognize.
     // A bug blocking another release's tracker is not this update's
     // business, and EPEL has no such trackers at all, so those bugs
@@ -672,6 +797,7 @@ async fn run_async(
         unsatisfied: &report.installability_issues,
         full_analysis: report.full_analysis,
     };
+    attach_cve_facts(&mut bugzilla, &facts, false).await;
 
     let mut decisions = Vec::new();
     // Bugs to put to the user, each with the answer Enter will take
@@ -934,8 +1060,98 @@ mod tests {
         BugFacts {
             summary: summary.to_string(),
             component: component.map(str::to_string),
-            blocks: Vec::new(),
+            ..BugFacts::default()
         }
+    }
+
+    /// A CVE tracker filed against `product`/`version`, with the fix
+    /// a source states — or none, when no source has one.
+    fn cve_bug(component: &str, version: &str, fixed: Option<&str>) -> BugFacts {
+        BugFacts {
+            summary: format!("CVE-2026-62292 {component}: denial of service [epel-all]"),
+            component: Some(component.to_string()),
+            product: Some(if version.starts_with("epel") {
+                "Fedora EPEL".to_string()
+            } else {
+                "Fedora".to_string()
+            }),
+            version: vec![version.to_string()],
+            keywords: vec!["Security".to_string(), "SecurityTracking".to_string()],
+            cve_fix: fixed.map(|v| sandogasa_cve::CveFix {
+                cve_id: "CVE-2026-62292".to_string(),
+                fixed: vec![sandogasa_nvd_fixed(component, v)],
+                ranges: vec![],
+                source: "GHSA-73p7-m7gg-w2jv".to_string(),
+            }),
+            ..BugFacts::default()
+        }
+    }
+
+    fn sandogasa_nvd_fixed(product: &str, version: &str) -> sandogasa_cve::FixedVersion {
+        sandogasa_cve::FixedVersion {
+            product: product.to_string(),
+            version: version.to_string(),
+        }
+    }
+
+    #[test]
+    fn bug_verdict_judges_a_cve_tracker_by_the_fix_a_source_states() {
+        let builds = vec![("libheif".to_string(), "1.23.5".to_string())];
+        let trackers = trackers();
+        let update = UpdateFacts {
+            builds: &builds,
+            trackers: &trackers,
+            branch: "epel10.2",
+            unsatisfied: &[],
+            full_analysis: true,
+        };
+        // At or past the fix: +1, naming the CVE, the fix and its source.
+        let (karma, note) = decided(bug_verdict(
+            &cve_bug("libheif", "epel10", Some("1.23.3")),
+            &update,
+        ))
+        .unwrap();
+        assert_eq!(karma, 1);
+        assert!(
+            note.contains("CVE-2026-62292")
+                && note.contains("1.23.3")
+                && note.contains("GHSA-73p7"),
+            "{note}"
+        );
+        // Below the fix: -1.
+        let (karma, note) = decided(bug_verdict(
+            &cve_bug("libheif", "epel10", Some("1.24.0")),
+            &update,
+        ))
+        .unwrap();
+        assert_eq!(karma, -1);
+        assert!(note.contains("below"), "{note}");
+        // No source has a fixed version: the user decides.
+        assert!(is_unknown(bug_verdict(
+            &cve_bug("libheif", "epel10", None),
+            &update
+        )));
+        // Another release's tracker is not this update's to answer.
+        assert!(is_unknown(bug_verdict(
+            &cve_bug("libheif", "epel9", Some("1.23.3")),
+            &update
+        )));
+        // A package the update does not build: nothing to conclude.
+        assert!(is_unknown(bug_verdict(
+            &cve_bug("aom", "epel10", Some("3.0")),
+            &update
+        )));
+        // Fedora spells the version bare: an f46 update answers a "46" tracker.
+        let f46 = UpdateFacts {
+            branch: "f46",
+            ..update
+        };
+        assert_eq!(
+            decided(bug_verdict(&cve_bug("libheif", "46", Some("1.23.3")), &f46))
+                .unwrap()
+                .0,
+            1
+        );
     }
 
     /// A bug that blocks the target release's FTBFS or

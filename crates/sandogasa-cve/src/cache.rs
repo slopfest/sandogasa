@@ -180,6 +180,39 @@ impl<T> NvdCache<T> {
     }
 }
 
+/// What trying an API key on NVD said.
+#[derive(Debug, PartialEq, Eq)]
+pub enum KeyCheck {
+    /// NVD served the request: the faster pace applies.
+    Accepted,
+    /// NVD does not know the key — mistyped, or not yet activated
+    /// (the activation link arrives by mail after the request).
+    Refused,
+    /// NVD refused the request itself, with this status: rate
+    /// limited, not the key's fault.
+    Throttled(u16),
+    /// The request did not complete.
+    Unreachable(String),
+}
+
+/// Try `key` on a CVE every NVD has. NVD answers 404 to a key it does
+/// not know — the CVE asked for exists, so the key is what it did not
+/// find — and 403 or 429 when the window is spent.
+pub async fn check_api_key(key: &str) -> KeyCheck {
+    match NvdClient::new()
+        .with_api_key(key)
+        .cve_json("CVE-2021-44228")
+        .await
+    {
+        Ok(_) => KeyCheck::Accepted,
+        Err(e) if nvd_refused_key(&e) => KeyCheck::Refused,
+        Err(e) if nvd_throttled(&e) => {
+            KeyCheck::Throttled(e.status().map(|s| s.as_u16()).unwrap_or_default())
+        }
+        Err(e) => KeyCheck::Unreachable(e.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

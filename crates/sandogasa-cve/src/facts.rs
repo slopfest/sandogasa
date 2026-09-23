@@ -11,6 +11,10 @@
 //! fix only when it is at or past a fixed version *and* outside every
 //! range still marked vulnerable.
 
+use sandogasa_cli::cache::DiskCache;
+
+use crate::cache::NvdCache;
+
 /// A distribution name as [PEP 503](https://peps.python.org/pep-0503/)
 /// normalises it and as Fedora's `python3dist()` provides carry it:
 /// lowercase, with any run of `-`, `_` and `.` as a single `-`
@@ -27,6 +31,148 @@ pub fn pep503(name: &str) -> String {
         }
     }
     out
+}
+
+/// The CVE a bug summary names, e.g. `CVE-2026-62292` from
+/// "CVE-2026-62292 libheif: …" — the first token of that shape.
+pub fn cve_id_in(summary: &str) -> Option<&str> {
+    summary.split_whitespace().find(|w| {
+        w.strip_prefix("CVE-").is_some_and(|rest| {
+            let (year, num) = rest.split_once('-').unwrap_or(("", ""));
+            year.len() == 4
+                && year.bytes().all(|b| b.is_ascii_digit())
+                && num.len() >= 4
+                && num.bytes().all(|b| b.is_ascii_digit())
+        })
+    })
+}
+
+/// Whether a bug is a security tracker: keyworded `Security` or
+/// `SecurityTracking`, or a summary that opens with a CVE id.
+pub fn is_security_tracker(summary: &str, keywords: &[String]) -> bool {
+    keywords
+        .iter()
+        .any(|k| k == "SecurityTracking" || k == "Security")
+        || summary.starts_with("CVE-")
+}
+
+/// A CVE's fix as one source states it, ready for [`is_fix`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct CveFix {
+    pub cve_id: String,
+    pub fixed: Vec<sandogasa_nvd::FixedVersion>,
+    pub ranges: Vec<sandogasa_nvd::VulnerableRange>,
+    /// Where it came from, for a reason a person reads: `NVD`, a
+    /// GHSA id, or `NVD's affected range`.
+    pub source: String,
+}
+
+impl CveFix {
+    /// `1.23.3` — or `1.23.3, 6.0.8` for a fix per series.
+    pub fn fixed_versions(&self) -> String {
+        self.fixed
+            .iter()
+            .map(|f| f.version.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// The fix for `cve_id` as it applies to `component`, from the
+/// sources that need no one's confirmation, in order of authority:
+/// NVD's CPE data; GitHub's advisory database by CVE; the repository
+/// advisories NVD's references name; a range NVD closes at the top
+/// with no fix recorded. `None` when none of them has a fixed
+/// version whose product matches the component (so a CVE in a
+/// library the package bundles is not judged by the package's own
+/// version). NVD answers come through `nvd`; advisory pages are kept
+/// in `advisories` a day like NVD's.
+pub async fn fix_facts(
+    cve_id: &str,
+    component: &str,
+    nvd: &mut NvdCache<sandogasa_nvd::models::CveResponse>,
+    http: &reqwest::Client,
+    advisories: &DiskCache,
+    github_token: Option<&str>,
+) -> Option<CveFix> {
+    let facts = CveFacts::from_response(nvd.get(cve_id, |r| r).await?);
+    let matching = |fixed: &[sandogasa_nvd::FixedVersion],
+                    ranges: &[sandogasa_nvd::VulnerableRange]|
+     -> Option<(
+        Vec<sandogasa_nvd::FixedVersion>,
+        Vec<sandogasa_nvd::VulnerableRange>,
+    )> {
+        let fixed: Vec<_> = fixed
+            .iter()
+            .filter(|f| product_matches_component(&f.product, component, None))
+            .cloned()
+            .collect();
+        (!fixed.is_empty()).then(|| {
+            (
+                fixed,
+                ranges
+                    .iter()
+                    .filter(|r| product_matches_component(&r.product, component, None))
+                    .cloned()
+                    .collect(),
+            )
+        })
+    };
+    let done = |fixed, ranges, source: String| CveFix {
+        cve_id: cve_id.to_string(),
+        fixed,
+        ranges,
+        source,
+    };
+    if let Some((fixed, ranges)) = matching(&facts.fixed, &facts.ranges) {
+        return Some(done(fixed, ranges, "NVD".to_string()));
+    }
+    // GitHub's database by CVE, then the project's own advisories.
+    let mut records = ghsa_json(
+        http,
+        advisories,
+        &crate::advisory::ghsa_search_url(cve_id),
+        github_token,
+    )
+    .await
+    .map(|j| crate::advisory::ghsa_records(&j))
+    .unwrap_or_default();
+    if records.is_empty() {
+        for (owner, repo, ghsa) in crate::advisory::repo_advisory_refs(&facts.references) {
+            let url = crate::advisory::repo_advisory_url(&owner, &repo, &ghsa);
+            if let Some(json) = ghsa_json(http, advisories, &url, github_token).await {
+                records.extend(crate::advisory::repo_advisory_records(&json));
+            }
+        }
+    }
+    if let (Some(found), _) = resolved_from_ghsa(&records)
+        && let Some((fixed, ranges)) = matching(&found.fixed, &found.ranges)
+    {
+        let source = match &found.source {
+            VersionSource::Advisory { id, .. } => id.clone(),
+            _ => "GitHub's advisory database".to_string(),
+        };
+        return Some(done(fixed, ranges, source));
+    }
+    let inferred = inferred_from_ranges(&facts.ranges);
+    matching(&inferred, &facts.ranges)
+        .map(|(fixed, ranges)| done(fixed, ranges, "NVD's affected range".to_string()))
+}
+
+/// A GitHub advisory answer, from the day cache or the API.
+async fn ghsa_json(
+    http: &reqwest::Client,
+    advisories: &DiskCache,
+    url: &str,
+    token: Option<&str>,
+) -> Option<String> {
+    let key = sandogasa_cli::cache::url_key(url);
+    if let Some(json) = advisories.load(&key) {
+        return Some(json);
+    }
+    let json = crate::advisory::fetch_github(http, url, token).await?;
+    advisories.store(&key, &json);
+    Some(json)
 }
 
 /// Whether a build at `version` fixes the CVE: at or past one of the
@@ -363,6 +509,45 @@ mod tests {
         // A recorded fix or an open top infers nothing.
         assert!(inferred_from_ranges(&[r(Some("0.9.0"), Some("0.8.0"))]).is_empty());
         assert!(inferred_from_ranges(&[r(None, None)]).is_empty());
+    }
+
+    #[test]
+    fn cve_ids_and_security_trackers_are_recognised() {
+        assert_eq!(
+            cve_id_in("CVE-2026-62292 libheif: libheif: Denial of service [epel-all]"),
+            Some("CVE-2026-62292")
+        );
+        assert_eq!(
+            cve_id_in("Tracker for CVE-2025-1 (typo)"),
+            None,
+            "too short"
+        );
+        assert_eq!(cve_id_in("libheif-1.23.5 is available"), None);
+        assert!(is_security_tracker("CVE-2026-1234 foo: bar", &[]));
+        assert!(is_security_tracker(
+            "foo: bar",
+            &["SecurityTracking".to_string()]
+        ));
+        assert!(!is_security_tracker(
+            "foo-1.0 is available",
+            &["FutureFeature".to_string()]
+        ));
+        let fix = CveFix {
+            cve_id: "CVE-1".into(),
+            fixed: vec![
+                sandogasa_nvd::FixedVersion {
+                    product: "p".into(),
+                    version: "1.2".into(),
+                },
+                sandogasa_nvd::FixedVersion {
+                    product: "p".into(),
+                    version: "2.1".into(),
+                },
+            ],
+            ranges: vec![],
+            source: "NVD".into(),
+        };
+        assert_eq!(fix.fixed_versions(), "1.2, 2.1");
     }
 
     #[test]

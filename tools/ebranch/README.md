@@ -651,8 +651,23 @@ requirements all resolve, `-1` naming the requirement that does not.
 Both are recognized either by the release tracker the bug blocks or by
 the fixed wording Fedora's bots use, which names the release itself —
 so a bug filed against a different release is left alone. The bot
-wording is what covers EPEL, which has no such trackers. A CVE or a
-plain bug report gets no suggestion either way.
+wording is what covers EPEL, which has no such trackers.
+
+CVE trackers are judged by where the CVE is fixed, since their titles
+carry no version. A security tracker on a package the update builds,
+filed against the update's release (`Fedora EPEL`/`epel10` for an
+epel10.2 update, `Fedora`/`46` for f46), has its fix looked up — NVD's
+CPE data first, then GitHub's advisory database by CVE, then the
+repository advisories NVD's references name, then a range NVD closes
+at the top — and is auto-voted `+1` when the build is at or past the
+fix and outside every range still marked vulnerable, `-1` when it is
+below the fix, with the CVE, the version and the source in the reason.
+A tracker for another release, or a CVE no source has a fixed version
+for, is left to you. NVD answers are paced to its limit — one request
+per 6 s without a key — and cached a day under `~/.cache/ebranch`; an
+API key in the config's `[nvd]` table (`ebranch config` asks for one,
+optional) lifts the pace tenfold. A plain bug report gets no
+suggestion either way.
 
 Review requests (`Review Request: <pkg> - ...`) are auto-voted `+1`
 when the update builds the package under review — the usual case for
@@ -703,7 +718,10 @@ carrying the same fix would otherwise have nothing to attach. Only
 bugs that would be voted `+1` are proposed, and each is shown with how
 it was found. The open-bug search is not scoped to the update's
 release: update requests are filed against Rawhide and package reviews
-under Fedora, so an EPEL update's bugs are mostly not EPEL bugs.
+under Fedora, so an EPEL update's bugs are mostly not EPEL bugs. CVE
+trackers among them are judged as described above, so a security
+update is offered the trackers filed against its release whose fix its
+build reaches, each with the CVE, the fixed version and the source:
 
 ```console
 This update looks like it closes:

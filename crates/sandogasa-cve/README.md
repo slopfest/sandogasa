@@ -10,10 +10,16 @@ Where a CVE is fixed, and whether a build has that fix.
   or past a fixed version *and* outside every range still marked
   vulnerable, so one series' fix does not vouch for another series'
   build; `product_matches_component` for NVD's product names against a
-  Fedora component and its provides.
+  Fedora component and its provides; `fix_facts`, the sources that
+  need no one's confirmation asked in order of authority — NVD, GitHub's
+  database by CVE, the repository advisories NVD's references name, a
+  range closed at the top — for one `CveFix` a tool can judge a build
+  against; `cve_id_in` and `is_security_tracker` for reading a Bugzilla
+  summary.
 - **`cache`** — `NvdCache`, NVD answers paced to its rate limit (5 per
   30 s bare, 50 with an API key), retried once after a refusal, kept
-  on disk for a day under the calling tool's cache directory.
+  on disk for a day under the calling tool's cache directory;
+  `check_api_key`, what NVD says to a configured key.
 - **`advisory`** — GitHub Security Advisories by CVE (`ghsa_records`,
   `ghsa_range`) and a fixed-version candidate read out of advisory
   prose (`fixed_version_candidates`) — a candidate a caller confirms,

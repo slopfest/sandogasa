@@ -221,6 +221,30 @@ first as `Note` (author, timestamp, `system` flag), and
 `add_merge_request_note` posts one on a merge request. `MergeRequest` gains `updated_at`,
 `user_notes_count`, `has_conflicts` and `detailed_merge_status`.
 
+### ebranch: `check-update` proposes and votes on CVE trackers
+
+libheif's EPEL 10.4 security update went out on 2026-09-23 with three
+release-monitoring bugs attached and none of the seventeen open CVE
+trackers filed against epel10: a CVE tracker's title carries no
+version, so the verdict every proposed bug has to pass could only say
+"unknown" about them, and `--give-karma` on a security update asked
+about each one by hand.
+
+A security tracker on a package the update builds, filed against the
+update's release, now has its fix looked up through sandogasa-cve — NVD
+first, then GitHub's advisory database by CVE, then the repository
+advisories NVD's references name, then a range NVD closes at the top —
+and the verdict decides it: `+1` when the build is at or past the fix
+and outside every range still marked vulnerable, `-1` when below, with
+the CVE, the fixed version and the source in the reason a person reads.
+`--submit` therefore proposes those trackers ("CVE-2026-62292 tracker,
+fixed in 1.23.3 per GHSA-73p7-m7gg-w2jv"), and the karma vote judges
+them the same way. A tracker for another release, or a CVE no source
+has a fixed version for, is left to the user as before. NVD answers
+are paced to its limit and cached a day under ebranch's own cache
+directory; `ebranch config` now asks for an optional NVD API key, kept
+in the config's `[nvd]` table, which lifts the pace tenfold.
+
 ### fedora-cve-triage: bodhi-check sees pending updates and a project's own advisories
 
 A run over libheif's twenty-one CVE bugs on 2026-09-23 found no fix for

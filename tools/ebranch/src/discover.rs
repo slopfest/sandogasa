@@ -13,6 +13,10 @@
 //!   the update's release: the-new-hotness files update requests
 //!   against Rawhide and package reviews live under Fedora, so an
 //!   EPEL update's bugs are mostly not EPEL bugs.
+//! - **CVE trackers** among those open bugs, filed against the update's
+//!   release, are judged by where the CVE is fixed — NVD, or GitHub's
+//!   advisories when NVD has nothing — since their titles carry no
+//!   version; a build at or past the fix closes the tracker.
 //! - **`rhbz#` references in the new changelog entries.** A bug fixed
 //!   in Rawhide is closed when that build lands, so it is no longer
 //!   open and the first source misses it — but a branch update
@@ -161,8 +165,11 @@ pub async fn candidates(
     wanted.dedup();
 
     // Everything reaches the same verdict logic the vote uses, so a
-    // proposed bug is one the update would vote +1 on.
-    let facts = crate::karma::fetch_bugs(bz, &wanted).await;
+    // proposed bug is one the update would vote +1 on. CVE trackers
+    // need the fix looked up first; the verdict cannot read it off
+    // the title.
+    let mut facts = crate::karma::fetch_bugs(bz, &wanted).await;
+    crate::karma::attach_cve_facts(&mut facts, update, false).await;
     let mut out = Vec::new();
     for id in wanted {
         let Some(bug) = facts.get(&id) else { continue };
@@ -173,9 +180,16 @@ pub async fn candidates(
             continue;
         }
         let source = from_changelog.get(&id).cloned().unwrap_or_else(|| {
-            open.get(&id)
-                .map(|c| format!("open against {c}"))
-                .unwrap_or_else(|| "open".to_string())
+            match (&bug.cve_fix, open.get(&id)) {
+                (Some(fix), _) => format!(
+                    "{} tracker, fixed in {} per {}",
+                    fix.cve_id,
+                    fix.fixed_versions(),
+                    fix.source
+                ),
+                (None, Some(c)) => format!("open against {c}"),
+                (None, None) => "open".to_string(),
+            }
         });
         out.push(Candidate {
             bug_id: id,

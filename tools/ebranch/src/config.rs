@@ -13,9 +13,29 @@ use serde::{Deserialize, Serialize};
 pub struct EbranchConfig {
     #[serde(default)]
     pub bugzilla: BugzillaConfig,
+    /// `[nvd]` table: an API key lifts NVD's pace from one request
+    /// per 6 s to one per 0.6 s when CVE trackers are judged.
+    #[serde(default)]
+    pub nvd: NvdConfig,
     /// `[check-crate]` table.
     #[serde(default, rename = "check-crate")]
     pub check_crate: CheckCrateConfig,
+}
+
+/// NVD configuration.
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct NvdConfig {
+    #[serde(default)]
+    pub api_key: String,
+}
+
+/// The configured NVD API key, empty when there is none — the layered
+/// config, so a key shipped system-wide counts.
+pub fn nvd_api_key() -> String {
+    sandogasa_config::ConfigFile::for_tool("ebranch")
+        .load::<EbranchConfig>()
+        .map(|c| c.nvd.api_key)
+        .unwrap_or_default()
 }
 
 /// Standing `check-crate` preferences.
@@ -203,6 +223,44 @@ pub async fn cmd_config() -> Result<(), String> {
             println!("failed.");
             eprintln!("warning: {e}");
             eprintln!("The key was saved but may not work.");
+        }
+    }
+
+    // NVD API key: optional, for judging CVE trackers against the
+    // fix NVD records.
+    if config.nvd.api_key.is_empty() {
+        println!(
+            "\nAn NVD API key raises the rate limit from 5 to 50 requests per 30 s when \
+             check-update judges CVE bugs. Request one free at \
+             https://nvd.nist.gov/developers/request-an-api-key, or leave empty to skip."
+        );
+        if let Some(key) = sandogasa_config::prompt_optional_field(
+            "NVD",
+            "API key (optional, empty to skip)",
+            true,
+        )
+        .map_err(|e| format!("failed to read NVD API key: {e}"))?
+        {
+            config.nvd.api_key = key;
+        }
+    } else {
+        println!("NVD API key: (set)");
+    }
+    if !config.nvd.api_key.is_empty() {
+        print!("Validating NVD API key... ");
+        match sandogasa_cve::cache::check_api_key(&config.nvd.api_key).await {
+            sandogasa_cve::cache::KeyCheck::Accepted => {
+                println!("valid; NVD lookups pace at 0.6 s instead of 6 s.")
+            }
+            sandogasa_cve::cache::KeyCheck::Refused => println!(
+                "not accepted (404): NVD does not know this key — it is mistyped, or not yet \
+                 activated; the activation link arrives by mail after the request. Runs fall \
+                 back to the keyless pace until it works."
+            ),
+            sandogasa_cve::cache::KeyCheck::Throttled(status) => {
+                println!("NVD refused the request ({status}) — rate limited; try again in a minute")
+            }
+            sandogasa_cve::cache::KeyCheck::Unreachable(e) => println!("could not check: {e}"),
         }
     }
 
