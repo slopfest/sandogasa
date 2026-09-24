@@ -16,6 +16,7 @@ mod retire;
 mod status;
 #[cfg(test)]
 mod test_support;
+mod timeline;
 mod untag;
 mod utils;
 
@@ -25,6 +26,7 @@ use list_issues::ListIssuesArgs;
 use ping::PingArgs;
 use retire::RetireArgs;
 use status::StatusArgs;
+use timeline::TimelineArgs;
 use untag::UntagArgs;
 
 #[derive(Parser)]
@@ -70,6 +72,10 @@ enum Command {
     /// active tracking issue.
     Status(StatusArgs),
 
+    /// How long each Proposed Update took and where the time went:
+    /// filed, covered, fixed in stock, RHEL's advisory, shadowed.
+    Timeline(TimelineArgs),
+
     /// Untag a proposed_updates build from its CBS -release tag
     /// after verifying the JIRA is resolved.
     Untag(UntagArgs),
@@ -86,6 +92,7 @@ fn main() -> ExitCode {
         Command::Ping(args) => ping::run(&args),
         Command::Retire(args) => retire::run(&args),
         Command::Status(args) => status::run(&args),
+        Command::Timeline(args) => timeline::run(&args),
         Command::Untag(args) => untag::run(&args),
     }
 }

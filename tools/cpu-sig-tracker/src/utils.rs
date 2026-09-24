@@ -100,6 +100,43 @@ pub fn canonical_jira_suffix(status: Option<&str>, resolution: Option<&str>) -> 
 /// Pull the calendar-date portion out of an ISO-8601 timestamp
 /// like `"2025-04-04T22:17:50.677Z"`. Returns `None` when the
 /// input doesn't begin with a `YYYY-MM-DD` chunk.
+/// The line recording which stock build carried the fix when a person,
+/// not a commit, established it: `- **Stock fix**: <nvr> — verified by
+/// <who> on <date>`. `timeline` reads it ahead of any inference.
+pub fn format_stock_fix_line(nvr: &str, by: &str, on: chrono::NaiveDate) -> String {
+    format!("- **Stock fix**: {nvr} — verified by {by} on {on}")
+}
+
+/// The `(nvr, note)` of a body's `- **Stock fix**:` line, the note
+/// being whatever follows the dash.
+pub fn parse_stock_fix_line(body: &str) -> Option<(String, String)> {
+    body.lines().find_map(|line| {
+        let rest = line.trim_start().strip_prefix("- **Stock fix**:")?.trim();
+        let (nvr, note) = rest.split_once(" — ").unwrap_or((rest, ""));
+        (!nvr.is_empty()).then(|| (nvr.trim().to_string(), note.trim().to_string()))
+    })
+}
+
+/// `body` with its `- **Stock fix**:` line replaced by `line`, or
+/// `line` appended after the metadata when there is none.
+pub fn with_stock_fix_line(body: &str, line: &str) -> String {
+    if parse_stock_fix_line(body).is_some() {
+        return body
+            .lines()
+            .map(|l| {
+                if l.trim_start().starts_with("- **Stock fix**:") {
+                    line.to_string()
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+    }
+    format!("{}\n{line}\n", body.trim_end())
+}
+
 pub fn parse_iso_date(ts: &str) -> Option<chrono::NaiveDate> {
     let date_part = ts.split(['T', ' ']).next()?;
     chrono::NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
@@ -136,5 +173,28 @@ mod tests {
     #[test]
     fn parse_jira_key_returns_none_when_missing() {
         assert_eq!(parse_jira_key_from_body("no jira"), None);
+    }
+
+    #[test]
+    fn stock_fix_line_round_trips_and_replaces_in_place() {
+        let on = chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap();
+        let line = format_stock_fix_line("mutter-47.5-10.el10", "salimma", on);
+        assert_eq!(
+            parse_stock_fix_line(&line),
+            Some((
+                "mutter-47.5-10.el10".to_string(),
+                "verified by salimma on 2026-09-24".to_string()
+            ))
+        );
+        let body = "- **MR**: [t](https://x) — opened\n- **Release**: c10s\n";
+        let once = with_stock_fix_line(body, &line);
+        assert!(once.ends_with("- **Release**: c10s\n- **Stock fix**: mutter-47.5-10.el10 — verified by salimma on 2026-09-24\n"));
+        let again = with_stock_fix_line(
+            &once,
+            &format_stock_fix_line("mutter-47.5-11.el10", "salimma", on),
+        );
+        assert_eq!(again.matches("- **Stock fix**:").count(), 1);
+        assert!(again.contains("mutter-47.5-11.el10") && !again.contains("47.5-10"));
+        assert_eq!(parse_stock_fix_line(body), None);
     }
 }

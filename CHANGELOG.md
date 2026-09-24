@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: `timeline` says how long each Proposed Update took
+
+How long the SIG carries a change until stock catches up, and how far
+Stream lags RHEL, was a spreadsheet kept by hand — eighteen columns per
+change, from the RHEL issue's filing date to the RHSA's — and it did
+not keep up. The worse case was invisible altogether: a stock build
+moving past the SIG's without the fix, so the SIG's `~proposed` build
+stopped installing, and nobody noticing for months.
+
+`timeline` builds those rows from the systems that keep history for
+good, off the metadata a tracking issue already carries: GitLab for
+the MR's and the issue's dates, Jira for the RHEL issue's, CBS Koji for
+when the SIG's build entered `-release` (covered from), CentOS
+Stream's Koji — centpkg's `stream` profile, readable without an
+account — for when the stock fix was built and became compose-bound
+(`<release>-pending-signed`), and Red Hat's security data for the
+advisory on the CVE. Three spans follow: coverage, Stream against RHEL
+(negative when Stream was first: PackageKit's fix was compose-bound
+twelve days before RHSA-2026:19141), and the shadow — a stock build
+past the SIG's, compose-bound, not the fix — with how long until the
+SIG rebuilt or retired, or "still" when it has not. The "expected fix"
+on the issue is a guess and is never used: the stock fix is the build a
+person recorded on the issue, else the build made from the stock
+commit that names the change (`ping`'s evidence), else the first
+compose-bound build after it, and each row says which. When nothing
+settles it — blktrace, mutter — the row says so and how to record what
+you establish. `--csv` reproduces the spreadsheet's columns plus the
+spans; `--json` everything.
+
+The record is written where the determination is made: `retire
+--reason landed` with nothing on record asks which stock build carries
+the fix (`--stock-fix <nvr>` unattended) and puts it on the issue as a
+`- **Stock fix**:` line in your name, which `status --refresh` now
+preserves — along with the `Affected build` and `Expected fix` lines
+it used to drop.
+
+sandogasa-koji gains `package_history` (`koji list-history --package`,
+tag and untag events with their tag) and `build_source_commit`;
+sandogasa-jira `IssueFields::created`; sandogasa-gitlab
+`RepoCommit::committed_date` and `Issue::closed_at`.
+
 ### cpu-sig-tracker: `retire` closes a tracking issue for a reason
 
 A closed tracking issue said nothing about why. PackageKit's is

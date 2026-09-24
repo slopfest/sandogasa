@@ -152,7 +152,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker retire
-\fBcpu\-sig\-tracker retire\fR [\fB\-\-release\fR] [\fB\-\-reason\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-\-claim\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE\fR> 
+\fBcpu\-sig\-tracker retire\fR [\fB\-\-release\fR] [\fB\-\-reason\fR] [\fB\-\-stock\-fix\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-\-claim\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE\fR> 
 .PP
 Close a tracking issue for a reason — landed, superseded or abandoned — labelling it, telling the MR, closing the MR of an abandoned change
 .TP
@@ -171,6 +171,9 @@ landed: The problem is fixed in stock — by the SIG\*(Aqs MR merging, or anothe
 .IP \(bu 2
 abandoned: The SIG gives up on the change (Bugzilla\*(Aqs CANTFIX)
 .RE
+.TP
+\fB\-\-stock\-fix\fR \fI<NVR>\fR
+With `\-\-reason landed` and nothing on record: the stock build that carries the fix, as you verified it. Recorded on the issue for `timeline`; asked for at a terminal otherwise
 .TP
 \fB\-y\fR, \fB\-\-yes\fR
 Skip the interactive confirmation prompt
@@ -213,6 +216,31 @@ Rewrite tracking issue bodies to the standardized format, refreshing the MR stat
 .TP
 \fB\-\-include\-closed\fR
 With \-\-refresh, also process closed tracking issues — backfill their start_date / due_date and reconcile their work\-item status against the current JIRA resolution (e.g. Done → Won\*(Aqt do when JIRA was retroactively flipped). Body content is left alone. No\-op without \-\-refresh
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS cpu-sig-tracker timeline
+\fBcpu\-sig\-tracker timeline\fR [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-open\-only\fR] [\fB\-\-json\fR] [\fB\-\-csv\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+How long each Proposed Update took and where the time went: filed, covered, fixed in stock, RHEL\*(Aqs advisory, shadowed
+.TP
+\fB\-\-release\fR \fI<RELEASE>\fR
+Restrict to a single release (e.g. `c10s`)
+.TP
+\fB\-\-package\fR \fI<PACKAGE>\fR
+Restrict to these package(s) (repeat/CSV)
+.TP
+\fB\-\-open\-only\fR
+Open tracking issues only (closed ones are the history and are included by default)
+.TP
+\fB\-\-json\fR
+Emit a machine\-readable JSON array instead of a table
+.TP
+\fB\-\-csv\fR
+Emit CSV with the spreadsheet\*(Aqs columns instead of a table
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr

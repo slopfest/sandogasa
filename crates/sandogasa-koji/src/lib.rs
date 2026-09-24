@@ -517,6 +517,82 @@ pub fn parse_tag_history(stdout: &str) -> Vec<TagAddEvent> {
     out
 }
 
+/// One tag event in a package's history: `nvr` tagged into (or
+/// untagged from) `tag` at `when` (UTC, `koji list-history --utc`
+/// spelling: `Thu Apr 30 23:19:02 2026`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TagEvent {
+    pub when: String,
+    pub nvr: String,
+    pub tag: String,
+    pub owner: String,
+    /// `true` for "tagged into", `false` for "untagged from".
+    pub added: bool,
+}
+
+impl TagEvent {
+    /// `when` as a UTC timestamp.
+    pub fn at(&self) -> Option<chrono::NaiveDateTime> {
+        chrono::NaiveDateTime::parse_from_str(&self.when, "%a %b %e %H:%M:%S %Y").ok()
+    }
+}
+
+/// Every tag event of `package` on the hub, oldest first
+/// (`koji list-history --package <pkg> --utc`): where each of its
+/// builds went and when, which is a package's life in dates.
+pub fn package_history(package: &str, profile: Option<&str>) -> Result<Vec<TagEvent>, String> {
+    let stdout = run_koji(profile, &["list-history", "--package", package, "--utc"])?;
+    Ok(parse_package_history(&stdout))
+}
+
+/// Parse `koji list-history` output into tag events, keeping "tagged
+/// into" and "untagged from" lines with their tag name.
+pub fn parse_package_history(stdout: &str) -> Vec<TagEvent> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 11 {
+                return None;
+            }
+            let added = match (parts[6], parts[7]) {
+                ("tagged", "into") => true,
+                ("untagged", "from") => false,
+                _ => return None,
+            };
+            if parts[9] != "by" {
+                return None;
+            }
+            Some(TagEvent {
+                when: parts[0..5].join(" "),
+                nvr: parts[5].to_string(),
+                tag: parts[8].to_string(),
+                owner: parts[10].to_string(),
+                added,
+            })
+        })
+        .collect()
+}
+
+/// The dist-git commit a build was made from: the sha after `#` in
+/// buildinfo's `Source:` line (`git+https://…/rpms/PackageKit#99e0f170…`),
+/// `None` when the build records no source.
+pub fn build_source_commit(nvr: &str, profile: Option<&str>) -> Result<Option<String>, String> {
+    let stdout = run_koji(profile, &["buildinfo", "--", nvr])?;
+    Ok(parse_build_source_commit(&stdout))
+}
+
+/// The commit sha out of a buildinfo `Source:` line.
+pub fn parse_build_source_commit(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("Source:"))
+        .and_then(|src| src.trim().rsplit_once('#'))
+        .map(|(_, sha)| sha.trim().to_string())
+        .filter(|sha| !sha.is_empty())
+}
+
 /// Verify an authenticated Koji session is available for `profile`
 /// by running `koji moshimoshi` (the authenticated hello).
 ///
@@ -1009,5 +1085,32 @@ Mon May 18 15:35:11 2026 ethtool-6.14-1.hs.el10 untagged from hyperscale10s-pack
         // Both are bounded; what differs is by how much, and that a
         // regen taking minutes is expected rather than a failure.
         assert!(DEFAULT_WAIT_TIMEOUT > DEFAULT_TIMEOUT * 10);
+    }
+
+    #[test]
+    fn package_history_keeps_tag_and_untag_events_with_their_tag() {
+        let out = "\
+Mon Apr 27 15:20:04 2026 PackageKit-1.2.8-9.el10 tagged into c10s-draft by osci-distrobuildsync
+Thu May  7 11:31:09 2026 PackageKit-1.2.8-9.el10 untagged from c10s-draft by ckelley
+Thu May  7 11:33:13 2026 PackageKit-1.2.8-9.el10 tagged into c10s-pending-signed by autorpmsign/signer01 [still active]
+Thu May  7 11:33:13 2026 PackageKit-1.2.8-9.el10 owner changed to ckelley
+";
+        let events = parse_package_history(out);
+        assert_eq!(events.len(), 3);
+        assert!(events[0].added && events[0].tag == "c10s-draft");
+        assert!(!events[1].added && events[1].tag == "c10s-draft");
+        assert_eq!(events[2].tag, "c10s-pending-signed");
+        assert_eq!(events[2].at().unwrap().to_string(), "2026-05-07 11:33:13");
+    }
+
+    #[test]
+    fn build_source_commit_is_the_sha_after_the_hash() {
+        let out = "BUILD: PackageKit-1.2.8-9.el10 [12345]\nState: COMPLETE\n\
+                   Source: git+https://gitlab.com/redhat/centos-stream/rpms/PackageKit#99e0f170abcd\n";
+        assert_eq!(
+            parse_build_source_commit(out).as_deref(),
+            Some("99e0f170abcd")
+        );
+        assert_eq!(parse_build_source_commit("State: COMPLETE\n"), None);
     }
 }

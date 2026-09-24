@@ -202,7 +202,7 @@ announcement's third channel once the Jira crate can write.
 
 ```sh
 cpu-sig-tracker retire <issue-url | package> [--release cNs] \
-    [--reason landed|abandoned] [--yes] [--force] [--claim]
+    [--reason landed|abandoned] [--stock-fix NVR] [--yes] [--force] [--claim]
 ```
 
 Takes the tracking issue's URL, or the package name: a name is
@@ -220,8 +220,11 @@ giving up?
   the change (the tracking issue's RHEL key, the RHEL key in the MR's
   branch name, a CVE id from either title, the MR's title); the RHEL
   issue was resolved as Done; or, when none of those is on record, you
-  confirm at the prompt that you verified it, which the audit note
-  then says in your name. Stock merely being past the SIG's build is
+  confirm at the prompt that you verified it and name the stock build
+  that carries the fix (`--stock-fix <nvr>` unattended). That build
+  is recorded on the issue as a `- **Stock fix**:` line in your name,
+  which `timeline` reads ahead of any inference, and the audit note
+  says so too. Stock merely being past the SIG's build is
   not a reason — that is the rebase case `ping` reports — and the tool
   says so instead of suggesting anything.
 - **abandoned** — the SIG gives up on the change, Bugzilla's CANTFIX.
@@ -274,6 +277,46 @@ JIRA + Koji (Done / Won't do / In progress / To do), and sets
 missing `start_date` / `due_date` via the GraphQL work-item API.
 `--include-closed` extends the refresh scan to historical tracking
 issues so their dates can be backfilled after the fact.
+
+### `timeline`
+
+```sh
+cpu-sig-tracker timeline [--release cNs] [--package PKG,...] [--open-only] \
+    [--json | --csv]
+```
+
+How long each Proposed Update took, and where the time went — the
+dates that used to live in a spreadsheet, one row per tracking issue,
+closed ones included (they are the history): when the RHEL issue, the
+MR and the tracking issue were filed; the SIG's first `-release` build,
+when it was built and when it entered `-release` (covered from); the
+stock build carrying the fix, when it was built and when it became
+compose-bound (`<release>-pending-signed`); Red Hat's advisory and its
+date. Then three spans:
+
+- **coverage** — from the SIG build entering `-release` until the
+  stock fix is compose-bound: how long the SIG carried the change.
+- **Stream against RHEL** — the stock fix's compose-bound date against
+  the RHEL advisory's; negative when Stream was first.
+- **shadow** — a stock build past the SIG's went compose-bound while
+  the SIG build was still tagged and was not the fix, so the SIG's
+  `~proposed` build stopped installing; how long until the SIG's next
+  `-release` build or the issue closing, or "still" when neither has
+  happened.
+
+Everything is read from systems that keep history for good — GitLab,
+Jira, CBS Koji, CentOS Stream's Koji (the `stream` profile centpkg
+ships) and Red Hat's security data (by the CVE in the title) — off the
+metadata the issue carries. The tracking issue's "expected fix" is a
+guess and is not used: the stock fix is, first, the build a person
+recorded on the issue (`retire --reason landed --stock-fix`, or a
+`- **Stock fix**: <nvr>` line written by hand on an older issue); else
+the build made from the stock commit that names the change, the way
+`ping` and `retire` read evidence; else the first compose-bound build
+after that commit (or after the MR merged). Each row says which. A
+change none of that settles says so, and how to record what you
+establish. `--csv` has the spreadsheet's columns plus the spans;
+`--json` everything.
 
 ### `untag`
 

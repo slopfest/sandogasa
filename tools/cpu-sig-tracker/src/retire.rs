@@ -86,6 +86,9 @@ pub struct RetireFacts {
     pub landed_by: Option<String>,
     /// The RHEL issue's resolution, when it is resolved.
     pub jira_resolution: Option<String>,
+    /// The stock build a person named as carrying the fix, to record
+    /// on the issue.
+    pub recorded_fix: Option<String>,
 }
 
 impl RetireFacts {
@@ -171,6 +174,12 @@ pub struct RetireArgs {
     /// when omitted, and asked at a terminal.
     #[arg(long, value_enum)]
     pub reason: Option<Reason>,
+
+    /// With `--reason landed` and nothing on record: the stock build
+    /// that carries the fix, as you verified it. Recorded on the issue
+    /// for `timeline`; asked for at a terminal otherwise.
+    #[arg(long, value_name = "NVR", requires = "reason")]
+    pub stock_fix: Option<String>,
 
     /// Skip the interactive confirmation prompt.
     #[arg(short, long)]
@@ -259,19 +268,30 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     }
     let reason = resolve_reason(args, &facts)?;
     // The fix in stock with nothing on record saying so: the operator
-    // can say so, and the audit note then says who did.
-    if reason == Reason::Landed && facts.landed_by.is_none() && !args.yes {
+    // can say so — naming the stock build that carries it, which goes
+    // on the issue for `timeline` — and the audit note says who did.
+    if reason == Reason::Landed && facts.landed_by.is_none() {
         use std::io::IsTerminal;
-        if std::io::stdin().is_terminal()
-            && sandogasa_cli::confirm(
-                &format!(
-                    "Nothing on record says the fix is in stock ({}). Have you verified it is?",
-                    facts.stream_nvr.as_deref().unwrap_or("stock build unknown")
-                ),
-                false,
-            )?
-        {
-            facts.landed_by = Some(verified_by_operator());
+        let named = match &args.stock_fix {
+            Some(nvr) => Some(nvr.clone()),
+            None if !args.yes && std::io::stdin().is_terminal() => {
+                if sandogasa_cli::confirm(
+                    &format!(
+                        "Nothing on record says the fix is in stock ({}). Have you verified it is?",
+                        facts.stream_nvr.as_deref().unwrap_or("stock build unknown")
+                    ),
+                    false,
+                )? {
+                    ask_stock_fix(facts.stream_nvr.as_deref())
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+        if let Some(nvr) = named {
+            facts.landed_by = Some(verified_by_operator(&nvr));
+            facts.recorded_fix = Some(nvr);
         }
     }
     let label = reason.label(facts.mr_merged());
@@ -335,6 +355,22 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
         eprintln!("[cpu-sig-tracker] posting audit note");
     }
     client.add_note(iid, &note)?;
+
+    // What a person established goes on the issue, where timeline
+    // reads it ahead of any inference.
+    if let Some(nvr) = &facts.recorded_fix {
+        let who = whoami().unwrap_or_else(|| "the operator".to_string());
+        let line = crate::utils::format_stock_fix_line(nvr, &who, chrono::Utc::now().date_naive());
+        if let Err(e) = client.edit_issue(
+            iid,
+            &gitlab::IssueUpdate {
+                description: Some(crate::utils::with_stock_fix_line(body, &line)),
+                ..Default::default()
+            },
+        ) {
+            eprintln!("warning: could not record the stock fix on the issue: {e}");
+        }
+    }
 
     // Flip the work-item status so browsers of the GitLab UI see a
     // terminal state, not just a closed issue: "Done" for a change
@@ -515,13 +551,38 @@ fn ask_reason(
 
 /// What the audit note says when the operator, not the record,
 /// vouches for the fix being in stock.
-fn verified_by_operator() -> String {
-    let who = gitlab::load_token()
+fn verified_by_operator(nvr: &str) -> String {
+    format!(
+        "verified by {}: stock {nvr} carries the fix (no commit on record names it)",
+        whoami().unwrap_or_else(|| "the operator".to_string())
+    )
+}
+
+/// The token's GitLab username, when it can be learnt.
+fn whoami() -> Option<String> {
+    let token = gitlab::load_token().ok()?;
+    sandogasa_gitlab::current_user(&crate::utils::gitlab_base(), &token)
         .ok()
-        .and_then(|t| sandogasa_gitlab::current_user(&crate::utils::gitlab_base(), &t).ok())
         .map(|u| u.username)
-        .unwrap_or_else(|| "the operator".to_string());
-    format!("verified by {who}: the fix is in stock (no commit on record names it)")
+}
+
+/// Ask which stock build carries the fix, `default` (stock's current
+/// build) on Enter; `None` when nothing is given.
+fn ask_stock_fix(default: Option<&str>) -> Option<String> {
+    use std::io::{BufRead, Write};
+    eprint!(
+        "Which stock build carries the fix?{}: ",
+        default.map(|d| format!(" [{d}]")).unwrap_or_default()
+    );
+    std::io::stderr().flush().ok()?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line).ok()?;
+    let line = line.trim();
+    if line.is_empty() {
+        default.map(str::to_string)
+    } else {
+        Some(line.to_string())
+    }
 }
 
 /// Leave the reason's note on the open MR and, for an abandoned
@@ -826,6 +887,7 @@ mod tests {
             stream_nvr: stream.map(str::to_string),
             landed_by: None,
             jira_resolution: None,
+            recorded_fix: None,
         }
     }
 
@@ -920,6 +982,7 @@ mod tests {
             issue: "https://gitlab.example/g/p/-/issues/1".to_string(),
             release: None,
             reason: None,
+            stock_fix: None,
             yes,
             force: false,
             claim,
@@ -1130,6 +1193,7 @@ mod tests {
             issue: "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1".to_string(),
             release: None,
             reason: None,
+            stock_fix: None,
             yes: true,
             force: false,
             claim: false,
@@ -1244,6 +1308,7 @@ mod tests {
             issue: "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1".to_string(),
             release: None,
             reason: None,
+            stock_fix: None,
             yes: true,
             force: false,
             claim: true,

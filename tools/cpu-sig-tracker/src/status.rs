@@ -893,10 +893,24 @@ fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
     let lead = extract_lead_paragraph(a.original_body);
     let mr_line = format_mr_line(a.mr_url, a.mr_title, a.mr_state);
     let jira_line = format_jira_line(a.jira_key, a.jira_status, a.jira_resolution);
+    // Lines that record something the live systems do not say — the
+    // affected and expected builds the SIG named, the stock fix a
+    // person established — survive the rewrite unchanged.
+    let kept: String = a
+        .original_body
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("- **Affected build**:")
+                || t.starts_with("- **Expected fix**:")
+                || t.starts_with("- **Stock fix**:")
+        })
+        .map(|l| format!("{}\n", l.trim_end()))
+        .collect();
     let metadata = format!(
         "{mr_line}\n\
          {jira_line}\n\
-         - **Release**: {}\n",
+         - **Release**: {}\n{kept}",
         a.release,
     );
     match lead {
@@ -932,6 +946,7 @@ fn is_metadata_line(line: &str) -> bool {
         "- **Release**:",
         "- **Affected build**:",
         "- **Expected fix**:",
+        "- **Stock fix**:",
         "- **Status**:",
         "* Stream MR:",
         "* Affected",

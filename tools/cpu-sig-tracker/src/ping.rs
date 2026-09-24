@@ -517,24 +517,32 @@ pub fn evidence_tokens(
     out
 }
 
-/// The first stock commit whose message names one of `tokens`,
-/// described for a reason line.
-pub fn find_evidence(
-    commits: &[sandogasa_gitlab::RepoCommit],
-    tokens: &[String],
-) -> Option<String> {
+/// The first stock commit whose message names one of `tokens`, and
+/// the token it names.
+pub fn find_evidence_commit<'a>(
+    commits: &'a [sandogasa_gitlab::RepoCommit],
+    tokens: &'a [String],
+) -> Option<(&'a sandogasa_gitlab::RepoCommit, &'a str)> {
     commits.iter().find_map(|c| {
         let hay = c.message.to_lowercase();
         tokens
             .iter()
             .find(|t| t.len() > 3 && hay.contains(&t.to_lowercase()))
-            .map(|t| {
-                format!(
-                    "stock commit {} ({}) names {t}",
-                    &c.id[..c.id.len().min(8)],
-                    c.title.trim()
-                )
-            })
+            .map(|t| (c, t.as_str()))
+    })
+}
+
+/// [`find_evidence_commit`], described for a reason line.
+pub fn find_evidence(
+    commits: &[sandogasa_gitlab::RepoCommit],
+    tokens: &[String],
+) -> Option<String> {
+    find_evidence_commit(commits, tokens).map(|(c, t)| {
+        format!(
+            "stock commit {} ({}) names {t}",
+            &c.id[..c.id.len().min(8)],
+            c.title.trim()
+        )
     })
 }
 

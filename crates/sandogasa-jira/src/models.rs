@@ -61,8 +61,16 @@ impl Issue {
     /// `2026-04-22`). `None` when the issue isn't resolved or
     /// the timestamp is missing / malformed.
     pub fn resolution_date(&self) -> Option<chrono::NaiveDate> {
-        let ts = self.fields.resolutiondate.as_deref()?;
-        let date_part = ts.split(['T', ' ']).next()?;
+        Self::date_of(self.fields.resolutiondate.as_deref())
+    }
+
+    /// The day the issue was filed.
+    pub fn created_date(&self) -> Option<chrono::NaiveDate> {
+        Self::date_of(self.fields.created.as_deref())
+    }
+
+    fn date_of(ts: Option<&str>) -> Option<chrono::NaiveDate> {
+        let date_part = ts?.split(['T', ' ']).next()?;
         chrono::NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
     }
 }
@@ -79,6 +87,9 @@ pub struct IssueFields {
     /// they need.
     #[serde(default)]
     pub resolutiondate: Option<String>,
+    /// When the issue was filed, same spelling.
+    #[serde(default)]
+    pub created: Option<String>,
 }
 
 /// JIRA exposes many fields as `{name: ..., ...}`; we only need

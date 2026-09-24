@@ -42,6 +42,9 @@ pub struct Issue {
     /// recover its creation time.
     #[serde(default)]
     pub created_at: Option<String>,
+    /// When the issue was closed (RFC 3339), for a closed one.
+    #[serde(default)]
+    pub closed_at: Option<String>,
 }
 
 /// A project's status flags relevant to filing issues. Fetched
@@ -205,6 +208,9 @@ pub struct RepoCommit {
     /// The full message, `Resolves: RHEL-…` trailers included.
     #[serde(default)]
     pub message: String,
+    /// When it was committed (RFC 3339).
+    #[serde(default)]
+    pub committed_date: Option<String>,
     #[serde(default)]
     pub author_name: String,
     #[serde(default)]
