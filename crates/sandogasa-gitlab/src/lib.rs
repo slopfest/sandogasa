@@ -154,6 +154,18 @@ pub struct MergeRequest {
     /// Who opened it.
     #[serde(default)]
     pub author: Option<MrAuthor>,
+    /// When it was merged (RFC 3339), for a merged MR.
+    #[serde(default)]
+    pub merged_at: Option<String>,
+    /// When it was closed without merging (RFC 3339).
+    #[serde(default)]
+    pub closed_at: Option<String>,
+    /// Who merged it.
+    #[serde(default)]
+    pub merged_by: Option<MrAuthor>,
+    /// Who closed it without merging.
+    #[serde(default)]
+    pub closed_by: Option<MrAuthor>,
 }
 
 /// A note (comment) on a merge request or issue. `system` notes are

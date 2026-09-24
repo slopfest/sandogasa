@@ -133,8 +133,10 @@ for the next person:
   `--reping-days` (default 30) it is asked again.
 - **respond** — someone upstream spoke last, so the SIG owes the
   reply; the last response (date, author, first line) is shown.
-  **active** — touched within the window; **merged / closed** —
-  nothing to nudge.
+  **active** — touched within the window. **merged / closed** —
+  upstream has taken the change or dropped it, so nothing is nudged;
+  the line says who closed the MR and when, and whether stock is past
+  the SIG's build: verify the change is in, then `retire`.
 
 Nothing is posted without `--apply`; without it the run reports what
 it would post and where. Activity is the later of the MR's own

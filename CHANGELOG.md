@@ -26,6 +26,17 @@ stored JIRA credentials sent them looking for a tenant id on the mock
 server; they now run with `XDG_CONFIG_HOME` pointed at their own
 temporary directory.
 
+### cpu-sig-tracker: `ping` says what a closed merge request means
+
+For PackageKit the same run said "closed; quiet 149 days" about MRs the
+maintainer had closed himself, saying he would redo the change with
+`target:none` since 9.8.z already had it — not a change gone quiet, but
+one upstream had taken over. A merged or closed MR now reads as who
+closed it and when, and whether stock Stream is past the SIG's build:
+if it is, "verify the change is in, then `retire`"; if not, check how
+the change landed before retiring; no quiet-days count. The JSON rows
+gain `mr_closed_by` and `mr_closed_at`.
+
 ### cpu-sig-tracker: `config` takes Atlassian Cloud credentials for JIRA
 
 `cpu-sig-tracker config` asked for "a JIRA personal access token" for
@@ -326,7 +337,8 @@ announcement's third channel once sandogasa-jira can write.
 `Client::merge_request_notes` and `issue_notes` list notes oldest
 first as `Note` (author, timestamp, `system` flag), and
 `add_merge_request_note` posts one on a merge request. `MergeRequest` gains `updated_at`,
-`user_notes_count`, `has_conflicts` and `detailed_merge_status`.
+`user_notes_count`, `has_conflicts`, `detailed_merge_status`, `merged_at`,
+`closed_at`, `merged_by` and `closed_by`.
 
 ### ebranch: `check-update` proposes and votes on CVE trackers
 

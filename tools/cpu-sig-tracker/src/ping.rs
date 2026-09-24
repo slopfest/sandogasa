@@ -187,6 +187,12 @@ pub struct Row {
     pub mr_url: String,
     pub mr_state: String,
     pub mr_author: String,
+    /// Who merged or closed the MR, when it is not open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mr_closed_by: Option<String>,
+    /// When the MR was merged or closed (RFC 3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mr_closed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release_nvr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -505,6 +511,12 @@ fn scan(args: &PingArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
                 mr_url,
                 mr_state: mr.state.clone(),
                 mr_author: mr_author.clone(),
+                mr_closed_by: mr
+                    .merged_by
+                    .as_ref()
+                    .or(mr.closed_by.as_ref())
+                    .map(|u| u.username.clone()),
+                mr_closed_at: mr.merged_at.clone().or(mr.closed_at.clone()),
                 release_nvr: facts.release_nvr.map(str::to_string),
                 testing_nvr: facts.testing_nvr.map(str::to_string),
                 stream_nvr: facts.stream_nvr.map(str::to_string),
@@ -515,6 +527,45 @@ fn scan(args: &PingArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
     }
     rows.sort_by(|a, b| (&a.release, &a.package).cmp(&(&b.release, &b.package)));
     Ok(rows)
+}
+
+/// What a merged or closed MR means for the SIG: upstream has taken
+/// the change, or dropped it, and nothing is left to nudge. What is
+/// left is to verify the change is in stock — the build comparison
+/// says so when stock is past the SIG's build; otherwise a person
+/// checks — and then to `retire` the update.
+fn closed_line(r: &Row) -> String {
+    let who = r
+        .mr_closed_by
+        .as_deref()
+        .map(|u| format!(" by @{u}"))
+        .unwrap_or_default();
+    let when = r
+        .mr_closed_at
+        .as_deref()
+        .and_then(|t| parse_time(Some(t)))
+        .map(|t| format!(" on {}", t.format("%Y-%m-%d")))
+        .unwrap_or_default();
+    let sig = r.release_nvr.as_deref().unwrap_or("no release build");
+    let verdict = match r.stream_nvr.as_deref() {
+        Some(stock) if stream_newer_than_proposed(r.release_nvr.as_deref(), Some(stock)) => {
+            format!(
+                "stock {} has {stock}, past the SIG's {sig} — verify the change is in, then `retire`",
+                r.release
+            )
+        }
+        Some(stock) => format!(
+            "stock {} has {stock}, not past the SIG's {sig} — check whether the change landed \
+             another way (a maintainer's own build, say) before `retire`",
+            r.release
+        ),
+        None => format!(
+            "stock {} has no build to compare with the SIG's {sig} — verify the change landed, \
+             then `retire`",
+            r.release
+        ),
+    };
+    format!("{}{who}{when} — {verdict}", r.mr_state)
 }
 
 /// One block per change: the action and whose it is, the builds, and
@@ -567,15 +618,25 @@ pub fn render(rows: &[Row], apply: bool) -> String {
                     .unwrap_or_default()
             ),
             Action::Active => "active".to_string(),
-            Action::Closed => r.mr_state.clone(),
+            Action::Closed => closed_line(r),
         };
+        let quiet = if a.action == Action::Closed {
+            String::new()
+        } else {
+            format!(
+                "; quiet {} days (since {})",
+                a.quiet_days,
+                a.last_activity.format("%Y-%m-%d")
+            )
+        };
+        // A blank line between changes: two releases of one package
+        // read as one block otherwise.
+        if !out.is_empty() {
+            out.push(String::new());
+        }
         out.push(format!(
-            "{} {}: {}\n    {what}; quiet {} days (since {})",
-            r.package,
-            r.release,
-            r.mr_url,
-            a.quiet_days,
-            a.last_activity.format("%Y-%m-%d")
+            "{} {}: {}\n    {what}{quiet}",
+            r.package, r.release, r.mr_url
         ));
         for an in &a.announce {
             let mut where_ = Vec::new();
@@ -873,6 +934,8 @@ mod tests {
                 .into(),
             mr_state: "opened".into(),
             mr_author: "ngompa".into(),
+            mr_closed_by: None,
+            mr_closed_at: None,
             release_nvr: Some(PU.into()),
             testing_nvr: Some(PU.into()),
             stream_nvr: Some("PackageKit-1.2.8-9.el10".into()),
@@ -906,5 +969,51 @@ mod tests {
             ),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_closed_mr_says_who_closed_it_and_points_at_retire() {
+        let sys = [note("bot", "closed", "2026-04-27T00:00:00Z", true)];
+        let row = |stream_nvr: Option<&str>| {
+            let mut f = facts(&sys, "2026-04-27T00:00:00Z");
+            f.mr_state = "closed";
+            f.release_nvr = Some("PackageKit-1.2.8-9~proposed.el10");
+            f.stream_nvr = stream_nvr;
+            Row {
+                release: "c10s".into(),
+                package: "PackageKit".into(),
+                issue_url: String::new(),
+                mr_url: "https://gitlab.example/mr/13".into(),
+                mr_state: "closed".into(),
+                mr_author: "ngompa".into(),
+                mr_closed_by: Some("hughsie".into()),
+                mr_closed_at: Some("2026-04-27T10:00:00Z".into()),
+                release_nvr: f.release_nvr.map(str::to_string),
+                testing_nvr: None,
+                stream_nvr: stream_nvr.map(str::to_string),
+                assessment: assess(&f, ME, at(NOW), W),
+                posted: vec![],
+            }
+        };
+        // Stock past the SIG's build: verify, then retire.
+        let out = render(&[row(Some("PackageKit-1.2.8-9.el10"))], false);
+        assert!(out.contains("closed by @hughsie on 2026-04-27"), "{out}");
+        assert!(
+            out.contains("past the SIG's PackageKit-1.2.8-9~proposed.el10"),
+            "{out}"
+        );
+        assert!(out.contains("then `retire`"), "{out}");
+        assert!(
+            !out.contains("quiet"),
+            "a closed MR has nothing to be quiet about: {out}"
+        );
+        // Stock not there: a person checks how the change landed.
+        let out = render(&[row(Some("PackageKit-1.2.8-8.el10"))], false);
+        assert!(
+            out.contains("not past the SIG's") && out.contains("another way"),
+            "{out}"
+        );
+        let out = render(&[row(None)], false);
+        assert!(out.contains("no build to compare"), "{out}");
     }
 }
