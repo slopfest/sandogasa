@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### sandogasa-bugzilla: a batch of bugs is fetched past Bugzilla's page
+
+`ebranch check-update --submit` on libheif's EPEL 10.2 security update
+proposed one of the seven open CVE trackers filed against epel10, the
+oldest, and never looked the other six up; the same update's Fedora
+run through fedora-cve-triage had matched them. The update's packages
+had 45 open bugs, and `BzClient::bugs` asked for all 45 in one request.
+Red Hat Bugzilla answers a bug list with at most 20 rows whatever
+`limit` says — the 20 lowest IDs, and `total_matches: 45` — and the
+batch fetch, unlike `search`, read one page and stopped, so every
+caller that fetched more than 20 bugs at once (ebranch's bug verdicts
+and review linking, fesco-chair's `changes`, the read-back after a
+failed write) silently worked on a prefix of what it asked for.
+
+`bugs` now pages like `search`, following `total_matches` by offset;
+`search` also stops on an empty page rather than trusting a count.
+
 ### ebranch: `file-requests` and `escalate` take a `check-crate --toml` report
 
 `ebranch file-requests tiny-dfr.toml epel10` on a report that

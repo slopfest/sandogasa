@@ -148,21 +148,18 @@ impl BzClient {
         Ok(resp.bugs.into_iter().next().unwrap())
     }
 
-    /// Fetch multiple bugs by ID in a single request.
+    /// Fetch multiple bugs by ID.
+    ///
+    /// Paged like [`search`](Self::search): a bug list is a search to
+    /// Bugzilla, and Red Hat's serves at most 20 rows per request
+    /// whatever `limit` asks for, so one request for 45 IDs answers
+    /// with the 20 lowest and `total_matches: 45`.
     pub async fn bugs(&self, ids: &[u64]) -> Result<Vec<Bug>, reqwest::Error> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
         let id_params: Vec<String> = ids.iter().map(|id| format!("id={id}")).collect();
-        let query = id_params.join("&");
-        let resp: BugSearchResponse = self
-            .request(&format!("bug?{query}&include_fields={}", Self::FIELDS))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-        Ok(resp.bugs)
+        self.search(&id_params.join("&"), 0).await
     }
 
     /// Search bugs with a query string (e.g. "product=Fedora&component=kernel&status=NEW").
@@ -191,10 +188,11 @@ impl BzClient {
                 .await?;
 
             let total = resp.total_matches.unwrap_or(resp.bugs.len() as u64);
+            let page = resp.bugs.len() as u64;
             all_bugs.extend(resp.bugs);
 
             offset = all_bugs.len() as u64;
-            if offset >= total || (max_results > 0 && offset >= max_results) {
+            if page == 0 || offset >= total || (max_results > 0 && offset >= max_results) {
                 break;
             }
         }
@@ -484,6 +482,43 @@ mod tests {
             .await;
         let client = BzClient::new(&server.uri());
         client.bugs(&[12345]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bugs_pages_past_the_servers_row_cap() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Red Hat Bugzilla answers a request for 3 bugs with 2 rows and
+        // total_matches 3 (its cap is 20; the shape is the same), so
+        // the rest has to be asked for by offset.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("id", "1"))
+            .and(query_param("offset", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(1, "NEW", "2025-01-15T10:00:00Z"),
+                         bug_json(2, "NEW", "2025-01-15T10:00:00Z")],
+                "total_matches": 3
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("id", "1"))
+            .and(query_param("offset", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(3, "NEW", "2025-01-15T10:00:00Z")],
+                "total_matches": 3
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = BzClient::new(&server.uri());
+        let bugs = client.bugs(&[1, 2, 3]).await.unwrap();
+        assert_eq!(bugs.iter().map(|b| b.id).collect::<Vec<_>>(), vec![1, 2, 3]);
     }
 
     #[test]

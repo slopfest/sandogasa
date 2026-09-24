@@ -8,7 +8,8 @@ either way, though a stock instance serves one string).
 ## Features
 
 - Search bugs with arbitrary query parameters, with automatic pagination
-- Fetch individual bugs by numeric ID or alias
+- Fetch individual bugs by numeric ID or alias, or a batch by ID (paged
+  like a search)
 - Fetch comments on a bug
 - Update single or multiple bugs in one request (requires API key)
 - Bearer token authentication
