@@ -492,6 +492,8 @@ mod tests {
         let new_path = format!("{}:{existing_path}", dir.path().display());
         let _guard = EnvGuard::new(&[
             ("GITLAB_TOKEN", "test-token"),
+            // The developer's own config must not leak into a test.
+            ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
             ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
             ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
             ("PATH", &new_path),
@@ -601,6 +603,8 @@ mod tests {
         let new_path = format!("{}:{existing_path}", dir.path().display());
         let _guard = EnvGuard::new(&[
             ("GITLAB_TOKEN", "test-token"),
+            // The developer's own config must not leak into a test.
+            ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
             ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
             ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
             ("PATH", &new_path),

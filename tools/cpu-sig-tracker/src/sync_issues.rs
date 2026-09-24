@@ -41,6 +41,11 @@ pub struct SyncIssuesArgs {
     #[arg(long)]
     pub release: Option<String>,
 
+    /// Label hand-filed tracking issues `cpu-sig-tracker` without
+    /// asking, so every command tracks them
+    #[arg(long)]
+    pub adopt: bool,
+
     /// Emit a machine-readable JSON array instead of grouped text.
     #[arg(long)]
     pub json: bool,
@@ -64,6 +69,10 @@ pub fn run(args: &SyncIssuesArgs) -> ExitCode {
             } else {
                 print_human(&rows);
             }
+            if let Err(e) = adopt(&rows, args) {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -73,12 +82,74 @@ pub fn run(args: &SyncIssuesArgs) -> ExitCode {
     }
 }
 
+/// Label the hand-filed tracking issues `cpu-sig-tracker`: with
+/// `--adopt` outright, otherwise after asking — and only at a
+/// terminal, since an unattended run must not relabel unasked. An
+/// issue filed by a person drifts from the tool's conventions by
+/// nature; the label is what brings it back into every command's
+/// view.
+fn adopt(rows: &[Row], args: &SyncIssuesArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::IsTerminal;
+    let hand_filed: Vec<&Row> = rows
+        .iter()
+        .filter(|r| r.status == TrackingStatus::HandFiled)
+        .collect();
+    if hand_filed.is_empty() {
+        return Ok(());
+    }
+    let go = if args.adopt {
+        true
+    } else if args.json || !std::io::stdin().is_terminal() {
+        eprintln!(
+            "{} hand-filed tracking issue(s) lack the `{TRACKING_LABEL}` label; pass --adopt \
+             to label them",
+            hand_filed.len()
+        );
+        false
+    } else {
+        sandogasa_cli::confirm(
+            &format!(
+                "Label {} hand-filed tracking issue(s) `{TRACKING_LABEL}` so every command \
+                 tracks them?",
+                hand_filed.len()
+            ),
+            true,
+        )?
+    };
+    if !go {
+        return Ok(());
+    }
+    for r in hand_filed {
+        let (Some(url), Some(iid)) = (&r.issue_url, r.issue_iid) else {
+            continue;
+        };
+        let Some(project) = crate::status::tracking_project_of(url) else {
+            eprintln!("warning: {url}: unrecognised issue URL; not labelled");
+            continue;
+        };
+        gitlab::client(&gitlab_base(), &project)?.edit_issue(
+            iid,
+            &sandogasa_gitlab::IssueUpdate {
+                add_labels: Some(TRACKING_LABEL.to_string()),
+                ..Default::default()
+            },
+        )?;
+        println!("labelled {url} `{TRACKING_LABEL}`");
+    }
+    Ok(())
+}
+
 /// Per-(release, package) classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TrackingStatus {
-    /// Open issue in `rpms/<pkg>` with the release label.
+    /// Open issue in `rpms/<pkg>` with the release label and the
+    /// tool's own, so every command sees it.
     Active,
+    /// Open issue in `rpms/<pkg>` with the release label but not
+    /// the tool's: filed by a person, invisible to the other
+    /// commands until `--adopt` labels it.
+    HandFiled,
     /// Open issue in `package_tracker` whose title starts with
     /// the package name. No per-package MR-backed issue yet.
     Proposed,
@@ -90,6 +161,7 @@ impl TrackingStatus {
     fn as_str(self) -> &'static str {
         match self {
             TrackingStatus::Active => "active",
+            TrackingStatus::HandFiled => "hand-filed",
             TrackingStatus::Proposed => "proposed",
             TrackingStatus::Missing => "missing",
         }
@@ -103,6 +175,9 @@ pub struct Row {
     pub status: TrackingStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_url: Option<String>,
+    /// The issue's iid in its project, for `--adopt`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_iid: Option<u64>,
 }
 
 pub(crate) fn build_rows(args: &SyncIssuesArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
@@ -128,10 +203,12 @@ pub(crate) fn build_rows(args: &SyncIssuesArgs) -> Result<Vec<Row>, Box<dyn std:
     let mut rows: Vec<Row> = Vec::new();
     for release in &releases {
         if args.verbose {
-            eprintln!("[cpu-sig-tracker] fetching active issues for {release}");
+            eprintln!("[cpu-sig-tracker] fetching {release} issues");
         }
-        let active_label = format!("{TRACKING_LABEL},{release}");
-        let active = group_client.list_issues(&active_label, Some("opened"))?;
+        // By the release label alone: the tool's own issues and the
+        // hand-filed ones both carry it, and the tool's label tells
+        // them apart in `classify`.
+        let active = group_client.list_issues(release, Some("opened"))?;
 
         if args.verbose {
             eprintln!("[cpu-sig-tracker] fetching proposed issues for {release}");
@@ -153,41 +230,42 @@ pub(crate) fn build_rows(args: &SyncIssuesArgs) -> Result<Vec<Row>, Box<dyn std:
 }
 
 /// Decide which bucket a (release, package) falls into given
-/// pre-fetched issue lists.
+/// pre-fetched issue lists: `active` is every open issue in the
+/// per-package projects with the release label, the tool's own
+/// (labelled) first.
 fn classify(
     release: &str,
     package: &str,
     active: &[gitlab::Issue],
     proposed: &[gitlab::Issue],
 ) -> Row {
-    if let Some(issue) = active
+    let row = |status, issue: Option<&gitlab::Issue>| Row {
+        release: release.to_string(),
+        package: package.to_string(),
+        status,
+        issue_url: issue.map(|i| i.web_url.clone()),
+        issue_iid: issue.map(|i| i.iid),
+    };
+    let ours: Vec<&gitlab::Issue> = active
         .iter()
-        .find(|i| gitlab::package_from_issue_url(&i.web_url) == Some(package))
+        .filter(|i| gitlab::package_from_issue_url(&i.web_url) == Some(package))
+        .collect();
+    if let Some(issue) = ours
+        .iter()
+        .find(|i| i.labels.iter().any(|l| l == TRACKING_LABEL))
     {
-        return Row {
-            release: release.to_string(),
-            package: package.to_string(),
-            status: TrackingStatus::Active,
-            issue_url: Some(issue.web_url.clone()),
-        };
+        return row(TrackingStatus::Active, Some(issue));
+    }
+    if let Some(issue) = ours.first() {
+        return row(TrackingStatus::HandFiled, Some(issue));
     }
     if let Some(issue) = proposed
         .iter()
         .find(|i| title_matches_package(&i.title, package))
     {
-        return Row {
-            release: release.to_string(),
-            package: package.to_string(),
-            status: TrackingStatus::Proposed,
-            issue_url: Some(issue.web_url.clone()),
-        };
+        return row(TrackingStatus::Proposed, Some(issue));
     }
-    Row {
-        release: release.to_string(),
-        package: package.to_string(),
-        status: TrackingStatus::Missing,
-        issue_url: None,
-    }
+    row(TrackingStatus::Missing, None)
 }
 
 /// Does a package_tracker issue title reference the given
@@ -224,23 +302,24 @@ fn print_human(rows: &[Row]) {
         }
         first = false;
         println!("release {release}:");
-        let mut counts = [0usize; 3];
+        let mut counts = [0usize; 4];
         for r in rs {
             let idx = match r.status {
                 TrackingStatus::Active => 0,
-                TrackingStatus::Proposed => 1,
-                TrackingStatus::Missing => 2,
+                TrackingStatus::HandFiled => 1,
+                TrackingStatus::Proposed => 2,
+                TrackingStatus::Missing => 3,
             };
             counts[idx] += 1;
             let status = r.status.as_str();
             match &r.issue_url {
-                Some(url) => println!("  {:<pkg_width$}  {:<9}  {url}", r.package, status),
-                None => println!("  {:<pkg_width$}  {:<9}", r.package, status),
+                Some(url) => println!("  {:<pkg_width$}  {:<10}  {url}", r.package, status),
+                None => println!("  {:<pkg_width$}  {:<10}", r.package, status),
             }
         }
         println!(
-            "  → {} active, {} proposed, {} missing",
-            counts[0], counts[1], counts[2]
+            "  → {} active, {} hand-filed, {} proposed, {} missing",
+            counts[0], counts[1], counts[2], counts[3]
         );
     }
 }
@@ -250,11 +329,49 @@ mod tests {
     use super::*;
 
     fn issue(url: &str, title: &str) -> gitlab::Issue {
+        labelled_issue(url, title, &["c10s", TRACKING_LABEL])
+    }
+
+    fn labelled_issue(url: &str, title: &str, labels: &[&str]) -> gitlab::Issue {
         serde_json::from_value(serde_json::json!({
-            "labels": [], "iid": 1, "title": title, "state": "opened",
+            "labels": labels, "iid": 7, "title": title, "state": "opened",
             "web_url": url, "assignees": []
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn classify_calls_an_unlabelled_per_package_issue_hand_filed() {
+        // blktrace#2 as a person filed it: the release label, not the
+        // tool's. It is the tracking issue all the same, and wins over
+        // a package_tracker entry — but is told apart from active.
+        let active = vec![labelled_issue(
+            "https://gitlab.com/CentOS/proposed_updates/rpms/blktrace/-/issues/2",
+            "blktrace: Move librsvg2-tools runtime requirement",
+            &["bugfix", "c10s"],
+        )];
+        let proposed = vec![issue(
+            "https://gitlab.com/CentOS/proposed_updates/package_tracker/-/issues/4",
+            "blktrace: proposed",
+        )];
+        let row = classify("c10s", "blktrace", &active, &proposed);
+        assert_eq!(row.status, TrackingStatus::HandFiled);
+        assert_eq!(row.issue_iid, Some(7));
+        assert!(
+            row.issue_url
+                .unwrap()
+                .ends_with("/rpms/blktrace/-/issues/2")
+        );
+        // With both kinds present, the labelled one is the active issue.
+        let mut both = active;
+        both.push(issue(
+            "https://gitlab.com/CentOS/proposed_updates/rpms/blktrace/-/issues/3",
+            "blktrace: 1.3.0-12 → 1.3.0-13",
+        ));
+        assert_eq!(
+            classify("c10s", "blktrace", &both, &[]).status,
+            TrackingStatus::Active
+        );
     }
 
     #[test]
@@ -383,6 +500,7 @@ name = "missingpkg"
             "description": "",
             "state": "opened",
             "web_url": web_url,
+            "labels": ["c10s", TRACKING_LABEL],
             "assignees": [],
         })
     }
@@ -397,7 +515,7 @@ name = "missingpkg"
         runtime.block_on(async {
             Mock::given(method("GET"))
                 .and(path(rpms_path))
-                .and(query_param("labels", "cpu-sig-tracker,c10s"))
+                .and(query_param("labels", "c10s"))
                 .and(query_param("state", "opened"))
                 .respond_with(
                     ResponseTemplate::new(200).set_body_json(json!([gitlab_issue_json(
@@ -429,9 +547,11 @@ name = "missingpkg"
         unsafe {
             std::env::set_var("GITLAB_TOKEN", "test-token");
             std::env::set_var("CPU_SIG_TRACKER_GITLAB_BASE", server.uri());
+            std::env::set_var("XDG_CONFIG_HOME", dir.path());
         }
 
         let args = SyncIssuesArgs {
+            adopt: false,
             inventory: inv_path.to_string_lossy().into_owned(),
             release: Some("c10s".to_string()),
             json: false,
@@ -442,6 +562,7 @@ name = "missingpkg"
         unsafe {
             std::env::remove_var("GITLAB_TOKEN");
             std::env::remove_var("CPU_SIG_TRACKER_GITLAB_BASE");
+            std::env::remove_var("XDG_CONFIG_HOME");
         }
 
         assert_eq!(rows.len(), 2);

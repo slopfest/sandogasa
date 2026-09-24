@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: `sync-issues` adopts tracking issues filed by hand
+
+The first live `ping` run on 2026-09-24 reported two changes where the
+SIG has ten open tracking issues. Every command finds tracking issues
+by the `cpu-sig-tracker` label the tool puts on the ones it files, and
+eight of the ten had been filed by a person with a release label
+alone — blktrace, liburing, mesa, tpm2-tools and two in the older
+`package_tracker` project — so `status`, `sync-issues` and `ping` were
+blind to them, and `sync-issues` listed their packages as `missing`.
+
+`sync-issues` now lists an open issue in a package's own project that
+carries the release label but not the tool's as `hand-filed`, and
+offers to add the label: at the prompt (default yes), or without
+asking with `--adopt`; an unattended or `--json` run only reports
+them. Once labelled they are `active` like the tool's own, and every
+command sees them. Issues in `package_tracker` stay `proposed`, as
+before. The JSON rows gain `issue_iid`.
+
+The end-to-end tests had been reading the developer's own
+`~/.config/cpu-sig-tracker/config.toml`, which came to light when
+stored JIRA credentials sent them looking for a tenant id on the mock
+server; they now run with `XDG_CONFIG_HOME` pointed at their own
+temporary directory.
+
 ### cpu-sig-tracker: `config` takes Atlassian Cloud credentials for JIRA
 
 `cpu-sig-tracker config` asked for "a JIRA personal access token" for

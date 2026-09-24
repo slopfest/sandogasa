@@ -192,14 +192,19 @@ issues so their dates can be backfilled after the fact.
 ### `sync-issues`
 
 ```sh
-cpu-sig-tracker sync-issues -i inventory.toml [--release cNs] [--json]
+cpu-sig-tracker sync-issues -i inventory.toml [--release cNs] [--adopt] [--json]
 ```
 
 Gap analysis: for every inventory package, checks whether a tracking
-issue exists. Classifies each as `active` (open per-package issue),
-`proposed` (only in the central `proposed_updates/package_tracker`),
-or `missing`. Read-only; file new tracking issues explicitly via
-`file-issue`.
+issue exists. Classifies each as `active` (open per-package issue
+carrying the tool's `cpu-sig-tracker` label), `hand-filed` (open
+per-package issue with the release label only — filed by a person, so
+the other commands do not see it), `proposed` (only in the central
+`proposed_updates/package_tracker`), or `missing`. Hand-filed issues
+are offered the label at the prompt, or labelled outright with
+`--adopt`, after which every command tracks them; an unattended run
+only reports them. Otherwise read-only; file new tracking issues
+explicitly via `file-issue`.
 
 ### `untag`
 
