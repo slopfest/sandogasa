@@ -7,6 +7,21 @@
 
 use serde::Deserialize;
 
+/// The account behind the credentials, from `GET myself`.
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub struct Myself {
+    pub display_name: String,
+    /// Absent when the account hides it.
+    #[serde(default)]
+    pub email_address: Option<String>,
+    /// An Atlassian Cloud account id; a self-hosted Jira has `name`
+    /// instead.
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
 /// A JIRA issue. Holds just the fields we care about.
 #[derive(Debug, Clone, Deserialize)]
 #[non_exhaustive]

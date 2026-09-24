@@ -1,30 +1,83 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Thin wrapper around [`sandogasa_jira`] for the Red Hat JIRA
-//! (`https://issues.redhat.com`). Loads the API token from config
-//! if present; otherwise falls back to anonymous access (which
-//! works for public issues).
+//! (`https://redhat.atlassian.net`).
+//! Loads the credentials from config if present; otherwise falls
+//! back to anonymous access (which works for public issues).
 //!
 //! Also owns the blocking wrappers every subcommand uses to look
 //! up an issue from synchronous code.
 
 use crate::utils::Check;
 
-/// Build a JIRA client, loading an optional token from the
-/// environment (`JIRA_TOKEN`) or the local config. Base URL
-/// comes from [`crate::utils::jira_base`] so tests can point
-/// it at a mock server.
-pub fn client() -> sandogasa_jira::JiraClient {
-    let token = std::env::var("JIRA_TOKEN").ok().or_else(|| {
-        crate::config::load()
-            .ok()
-            .and_then(|c| c.jira.map(|j| j.access_token))
-    });
-    let c = sandogasa_jira::JiraClient::new(&crate::utils::jira_base());
-    match token {
-        Some(t) => c.with_api_key(t),
-        None => c,
-    }
+/// Build a JIRA client, loading optional credentials from the
+/// environment (`JIRA_EMAIL` and `JIRA_TOKEN`) or the local config.
+/// Base URL comes from [`crate::utils::jira_base`] so tests can
+/// point it at a mock server.
+pub async fn client() -> Result<sandogasa_jira::JiraClient, String> {
+    let (email, token) = match std::env::var("JIRA_TOKEN") {
+        Ok(t) => (std::env::var("JIRA_EMAIL").ok(), Some(t)),
+        Err(_) => match crate::config::load().ok().and_then(|c| c.jira) {
+            Some(j) => (j.email, Some(j.access_token)),
+            None => (None, None),
+        },
+    };
+    with_credentials(email, token).await
+}
+
+/// A token with the account's email is an Atlassian Cloud API token:
+/// basic auth, through Atlassian's gateway for the site (the only
+/// place a scoped token works), whose tenant id is looked up once per
+/// run. A token alone is a self-hosted personal access token, a
+/// bearer against the site; none is anonymous, against the site.
+pub async fn with_credentials(
+    email: Option<String>,
+    token: Option<String>,
+) -> Result<sandogasa_jira::JiraClient, String> {
+    let site = crate::utils::jira_base();
+    Ok(match (email, token) {
+        (Some(e), Some(t)) => {
+            sandogasa_jira::JiraClient::new(&gateway_for(&site).await?).with_api_token(e, t)
+        }
+        (None, Some(t)) => sandogasa_jira::JiraClient::new(&site).with_api_key(t),
+        (_, None) => sandogasa_jira::JiraClient::new(&site),
+    })
+}
+
+/// The gateway base URL for `site`, from its tenant id, remembered
+/// for the run so a `status` over many issues asks once.
+async fn gateway_for(site: &str) -> Result<String, String> {
+    static GATEWAY: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+    GATEWAY
+        .get_or_try_init(|| async {
+            sandogasa_jira::cloud_id(site)
+                .await
+                .map(|id| sandogasa_jira::gateway_url(&id))
+                .map_err(|e| format!("cannot read {site}'s tenant id: {e}"))
+        })
+        .await
+        .cloned()
+}
+
+/// Who the credentials belong to, blocking on the shared runtime;
+/// `Err` carries the failure rendered for a message, with a 401
+/// named as a rejected token.
+pub fn whoami(email: Option<String>, token: String) -> Result<sandogasa_jira::Myself, String> {
+    let runtime = runtime()?;
+    runtime.block_on(async {
+        with_credentials(email, Some(token))
+            .await?
+            .myself()
+            .await
+            .map_err(|e| {
+                if e.status().is_some_and(|s| s.as_u16() == 401) {
+                    "JIRA rejected the credentials (401; a scoped token needs read:jira-user)"
+                        .to_string()
+                } else {
+                    e.to_string()
+                }
+            })
+    })
 }
 
 /// Why a [`fetch`] failed, with the underlying error rendered to
@@ -56,9 +109,14 @@ pub fn fetch(key: &str, verbose: bool) -> Result<Option<sandogasa_jira::Issue>, 
         eprintln!("[cpu-sig-tracker] fetching JIRA {key}");
     }
     let runtime = runtime().map_err(FetchError::Runtime)?;
-    runtime
-        .block_on(client().issue(key))
-        .map_err(|e| FetchError::Lookup(e.to_string()))
+    runtime.block_on(async {
+        client()
+            .await
+            .map_err(FetchError::Lookup)?
+            .issue(key)
+            .await
+            .map_err(|e| FetchError::Lookup(e.to_string()))
+    })
 }
 
 /// Warn-and-continue variant of [`fetch`]: prints a warning on

@@ -42,10 +42,20 @@ cpu-sig-tracker config
 ```
 
 Prompts for a GitLab personal access token (validated against
-gitlab.com) and an optional Red Hat JIRA token. Tokens are written to
-`~/.config/cpu-sig-tracker/config.toml` with 0600 permissions. Both
-can also be supplied via `GITLAB_TOKEN` / `JIRA_TOKEN` env vars.
-Anonymous JIRA access works for public issues.
+gitlab.com) and, optionally, Red Hat JIRA credentials. Red Hat's
+tracker is an Atlassian Cloud site (`issues.redhat.com` redirects to
+`redhat.atlassian.net`), so those are an API token created at
+<https://id.atlassian.com/manage-profile/security/api-tokens> — for a
+scoped token, `read:jira-user` and `read:jira-work`, plus
+`write:jira-work` to comment — together with the email of the Atlassian
+account it belongs to; both are checked against the site before being
+kept. Authenticated calls go through Atlassian's API gateway, the only
+place a scoped token is honoured; anonymous reads go to the site. Credentials are
+written to `~/.config/cpu-sig-tracker/config.toml` with 0600
+permissions, and can also be supplied via the `GITLAB_TOKEN`, and
+`JIRA_EMAIL` with `JIRA_TOKEN`, environment variables. Anonymous JIRA
+access works for public issues. Links to issues use the
+`redhat.atlassian.net` host throughout.
 
 ## Subcommands
 

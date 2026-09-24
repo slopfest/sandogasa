@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! `config` subcommand — interactively set up GitLab and JIRA
-//! authentication tokens in `~/.config/cpu-sig-tracker/config.toml`.
+//! credentials in `~/.config/cpu-sig-tracker/config.toml`.
 
 use std::process::ExitCode;
 
@@ -22,13 +22,13 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
     let existing = config::load().ok().unwrap_or_default();
 
     let gitlab_token = prompt_gitlab_token(existing.gitlab.as_ref())?;
-    let jira_token = prompt_jira_token(existing.jira.as_ref())?;
+    let jira = prompt_jira(existing.jira.as_ref())?;
 
     let cfg = Config {
         gitlab: Some(GitlabConfig {
             access_token: gitlab_token,
         }),
-        jira: jira_token.map(|t| JiraConfig { access_token: t }),
+        jira,
     };
 
     config::save(&cfg)?;
@@ -66,31 +66,55 @@ fn prompt_gitlab_token(
     Ok(token)
 }
 
-fn prompt_jira_token(
+/// Red Hat's tracker is an Atlassian Cloud site, so the credentials
+/// are an API token from id.atlassian.com beside the account's
+/// email; both are checked against `myself` before being kept.
+fn prompt_jira(
     existing: Option<&JiraConfig>,
-) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    if existing.is_some() {
-        eprintln!("JIRA token already configured at {}.", jira_base(),);
-        eprint!("Replace it? [y/N]: ");
-        use std::io::{BufRead, Write};
-        std::io::stderr().flush()?;
-        let mut line = String::new();
-        std::io::stdin().lock().read_line(&mut line)?;
-        if !line.trim().eq_ignore_ascii_case("y") {
-            return Ok(existing.map(|c| c.access_token.clone()));
+) -> Result<Option<JiraConfig>, Box<dyn std::error::Error>> {
+    if let Some(cfg) = existing {
+        eprint!("Validating existing JIRA credentials... ");
+        match crate::jira::whoami(cfg.email.clone(), cfg.access_token.clone()) {
+            Ok(me) => {
+                eprintln!("valid ({}).", me.display_name);
+                return Ok(Some(JiraConfig {
+                    email: cfg.email.clone(),
+                    access_token: cfg.access_token.clone(),
+                }));
+            }
+            Err(e) => eprintln!("{e}; re-prompting."),
         }
     }
 
     eprintln!(
-        "Paste a JIRA personal access token for {} (empty to skip; \
-        anonymous access works for public issues).",
+        "JIRA at {} is an Atlassian Cloud site. Create an API token at\n  \
+         https://id.atlassian.com/manage-profile/security/api-tokens\n\
+         (a scoped token needs read:jira-user and read:jira-work, and\n  \
+         write:jira-work to comment)\n\
+         and enter it with the email of the Atlassian account it belongs to.\n\
+         Empty to skip; anonymous access works for public issues.",
         jira_base(),
     );
-    let token = rpassword::prompt_password("JIRA token: ")?;
+    use std::io::{BufRead, Write};
+    eprint!("Atlassian account email: ");
+    std::io::stderr().flush()?;
+    let mut email = String::new();
+    std::io::stdin().lock().read_line(&mut email)?;
+    let email = email.trim().to_string();
+    if email.is_empty() {
+        return Ok(None);
+    }
+    let token = rpassword::prompt_password("API token: ")?;
     let token = token.trim().to_string();
     if token.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(token))
+        return Err("no JIRA token provided".into());
     }
+
+    eprint!("Validating JIRA credentials... ");
+    let me = crate::jira::whoami(Some(email.clone()), token.clone())?;
+    eprintln!("valid ({}).", me.display_name);
+    Ok(Some(JiraConfig {
+        email: Some(email),
+        access_token: token,
+    }))
 }

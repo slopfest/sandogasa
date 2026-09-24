@@ -38,12 +38,14 @@ pub fn gitlab_base() -> String {
         .unwrap_or_else(|_| "https://gitlab.com".to_string())
 }
 
-/// Red Hat JIRA base URL, overridable via
-/// `CPU_SIG_TRACKER_JIRA_BASE` for tests pointing at mock
-/// servers. Defaults to the real `https://issues.redhat.com`.
+/// Red Hat JIRA base URL — the Atlassian Cloud site
+/// `https://redhat.atlassian.net` (`issues.redhat.com` redirects to
+/// it) — overridable via `CPU_SIG_TRACKER_JIRA_BASE` for tests
+/// pointing at mock servers. API calls and the links written into
+/// tracking issues both use it.
 pub fn jira_base() -> String {
     std::env::var("CPU_SIG_TRACKER_JIRA_BASE")
-        .unwrap_or_else(|_| "https://issues.redhat.com".to_string())
+        .unwrap_or_else(|_| "https://redhat.atlassian.net".to_string())
 }
 
 /// Find the `RHEL-\d+` key in `- **JIRA**: [KEY](...)`.

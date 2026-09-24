@@ -111,7 +111,7 @@ We don't have a JIRA client yet. For this tool we only need:
 - `issue(key) -> Issue` — status, resolution, summary.
 - Optionally: `search(jql)` for bulk lookups later.
 
-Red Hat JIRA is at `https://issues.redhat.com`. Anonymous access
+Red Hat JIRA is at `https://redhat.atlassian.net` (Atlassian Cloud; `issues.redhat.com` redirects there). Anonymous access
 works for public issues; config-stored API token for private ones.
 
 Scope: add a minimal `sandogasa-jira` library crate alongside the

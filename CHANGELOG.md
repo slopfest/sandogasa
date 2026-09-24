@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: `config` takes Atlassian Cloud credentials for JIRA
+
+`cpu-sig-tracker config` asked for "a JIRA personal access token" for
+issues.redhat.com and named no scope, because it was written for the
+self-hosted Jira that used to answer there. Red Hat's tracker has since
+moved to Atlassian Cloud: `issues.redhat.com` is a redirect to
+`redhat.atlassian.net`, whose API tokens come from id.atlassian.com and
+are sent as basic auth with the account's email. A token stored by
+the old prompt was sent as a bearer, which the Cloud site ignores, and
+sent to the old host, whose redirect strips the `Authorization` header
+anyway — so it could never have authenticated a request.
+
+The prompt now says where the token comes from (with the scopes a
+scoped token needs: `read:jira-user` and `read:jira-work`, and
+`write:jira-work` to comment), asks for the account's email beside it,
+checks both against the `myself` endpoint before keeping them, and
+stores the email as `[jira] email`. Authenticated calls go through
+Atlassian's API gateway (`api.atlassian.com/ex/jira/<cloud id>`, the
+id read once per run from the site's tenant endpoint), the only place
+a scoped token is honoured — the first try against the site itself
+answered a plain 401, and the gateway then said "scope does not
+match" for a token without `read:jira-user`. `redhat.atlassian.net` is the tracker's address
+throughout — API calls and the links written into tracking issues,
+which `status --refresh` brings up to date. `JIRA_EMAIL` joins
+`JIRA_TOKEN` as the
+environment override, and a config with a bare token still loads, sent
+as a bearer for a self-hosted Jira. Anonymous reads of public issues,
+which every subcommand relied on so far, still work either way.
+
+### sandogasa-jira: Atlassian Cloud credentials and `myself`
+
+`JiraClient::with_api_token(email, token)` sends an Atlassian Cloud
+API token as basic auth, beside the bearer `with_api_key` a self-hosted
+Jira takes; `cloud_id(site)` and `gateway_url(&id)` give the gateway
+base URL such a client is built on; `myself()` returns the account behind the credentials
+(`Myself`: display name, email, account id), whose 401 tells a
+rejected token from an unreachable server. The README now names the
+Cloud host and warns that an `Authorization` header does not survive a
+redirect to another host.
+
 ### sandogasa-bugzilla: a batch of bugs is fetched past Bugzilla's page
 
 `ebranch check-update --submit` on libheif's EPEL 10.2 security update
