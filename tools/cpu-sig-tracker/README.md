@@ -154,8 +154,10 @@ never posts, and neither does a run with `--json` or without a
 terminal. An open MR's line ends with GitLab's own merge status after
 a recheck (`mergeable`, `not_approved`, `discussions_not_resolved`,
 …). With more than one change the report ends with what the SIG has
-to do next — retire, rebuild, reply, pings held — and how many notes
-wait, and how many of those wait behind a reply. Activity is the later of the MR's own `updated_at`
+to do next — retire, rebuild, reply, pings held — one change per line
+with the link the next command takes (the tracking issue for `retire`,
+the MR for a reply), and how many notes wait, and how many of those
+wait behind a reply. Activity is the later of the MR's own `updated_at`
 (pushes, labels, approvals) and its last human note; GitLab's system
 notes do not count. The last response is shown flattened onto one
 line, so a greeting on its first line does not stand for it. Every

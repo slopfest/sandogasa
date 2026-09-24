@@ -876,24 +876,41 @@ pub fn render(rows: &[Row]) -> String {
     out.join("\n")
 }
 
-/// What the SIG has to do next, by kind, one line each: the changes
-/// to retire, to rebuild, to answer, and how many notes wait.
+/// What the SIG has to do next, by kind, one change per line with
+/// the link the next command takes: the tracking issue for a retire
+/// or a rebuild, the MR for a reply or a held ping; then how many
+/// notes wait.
 fn summary(rows: &[Row]) -> String {
-    let names = |f: &dyn Fn(&Row) -> bool| {
+    enum Link {
+        Issue,
+        Mr,
+    }
+    let list = |f: &dyn Fn(&Row) -> bool, link: Link| {
         rows.iter()
             .filter(|r| f(r))
-            .map(|r| format!("{} {}", r.package, r.release))
+            .map(|r| {
+                let url = match link {
+                    Link::Issue => &r.issue_url,
+                    Link::Mr => &r.mr_url,
+                };
+                format!("    {} {}  {url}", r.package, r.release)
+            })
             .collect::<Vec<_>>()
-            .join(", ")
     };
-    let retire = names(&|r| {
-        r.assessment.action == Action::Landed
-            || (r.assessment.action == Action::Closed
-                && stream_newer_than_proposed(r.release_nvr.as_deref(), r.stream_nvr.as_deref()))
-    });
-    let rebuild = names(&|r| r.assessment.action == Action::RebaseBuild);
-    let reply = names(&|r| r.assessment.action == Action::Respond);
-    let held = names(&|r| r.assessment.action == Action::MergeUnknown);
+    let retire = list(
+        &|r| {
+            r.assessment.action == Action::Landed
+                || (r.assessment.action == Action::Closed
+                    && stream_newer_than_proposed(
+                        r.release_nvr.as_deref(),
+                        r.stream_nvr.as_deref(),
+                    ))
+        },
+        Link::Issue,
+    );
+    let rebuild = list(&|r| r.assessment.action == Action::RebaseBuild, Link::Issue);
+    let reply = list(&|r| r.assessment.action == Action::Respond, Link::Mr);
+    let held = list(&|r| r.assessment.action == Action::MergeUnknown, Link::Mr);
     let notes = rows
         .iter()
         .map(|r| r.pending.len() + r.posted.len())
@@ -904,14 +921,15 @@ fn summary(rows: &[Row]) -> String {
         .map(|r| r.pending.len())
         .sum::<usize>();
     let mut out = vec!["Next for the SIG:".to_string()];
-    for (label, list) in [
+    for (label, lines) in [
         ("retire (landed, or upstream took over)", retire),
         ("rebuild", rebuild),
         ("reply owed", reply),
         ("ping held until GitLab rechecks", held),
     ] {
-        if !list.is_empty() {
-            out.push(format!("  {label}: {list}"));
+        if !lines.is_empty() {
+            out.push(format!("  {label}:"));
+            out.extend(lines);
         }
     }
     out.push(match behind_reply {
@@ -1092,6 +1110,50 @@ mod tests {
         assert_eq!(assess(&f, ME, at(NOW), W).action, Action::RebaseMr);
         f.merge_status = "mergeable";
         assert_eq!(assess(&f, ME, at(NOW), W).action, Action::Ping);
+    }
+
+    #[test]
+    fn the_summary_names_each_change_with_the_link_the_next_command_takes() {
+        let row = |action_state: &str, stream: &str, mr_url: &str, issue_url: &str| {
+            let mut f = facts(&[], "2025-11-13T00:00:00Z");
+            f.mr_state = action_state;
+            f.stream_nvr = Some(stream);
+            Row {
+                release: "c9s".into(),
+                package: "blktrace".into(),
+                issue_url: issue_url.into(),
+                mr_url: mr_url.into(),
+                mr_state: action_state.into(),
+                mr_author: "michel-slm".into(),
+                mr_merge_status: None,
+                mr_closed_by: None,
+                mr_closed_at: None,
+                release_nvr: Some(PU.into()),
+                testing_nvr: None,
+                stream_nvr: Some(stream.into()),
+                assessment: assess(&f, ME, at(NOW), W),
+                posted: vec![],
+                pending: vec![],
+            }
+        };
+        // Landed: the tracking issue, which `retire` takes.
+        let landed = row(
+            "closed",
+            "PackageKit-1.2.8-9.el10",
+            "https://gitlab.example/mr/5",
+            "https://gitlab.example/issue/2",
+        );
+        assert_eq!(landed.assessment.action, Action::Landed);
+        // Quiet and pingable: no line in the summary's lists.
+        let quiet = row(
+            "opened",
+            "PackageKit-1.2.8-8.el10",
+            "https://gitlab.example/mr/6",
+            "https://gitlab.example/issue/1",
+        );
+        let text = render(&[landed, quiet]);
+        assert!(text.contains("  retire (landed, or upstream took over):\n    blktrace c9s  https://gitlab.example/issue/2"), "{text}");
+        assert!(!text.contains("reply owed"), "{text}");
     }
 
     #[test]

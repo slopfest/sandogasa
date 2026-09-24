@@ -36,8 +36,10 @@ does next:
   characters.
 - Two releases of one package ran into each other; a blank line now
   separates changes, and with more than one the report ends with what
-  the SIG has to do next — retire, rebuild, reply, pings held — and the
-  number of notes waiting.
+  the SIG has to do next — retire, rebuild, reply, pings held — one
+  change per line with the link the next command takes (the tracking
+  issue `retire` wants, the MR a reply goes on), and the number of
+  notes waiting.
 - A ping went out on the strength of `has_conflicts`, which is only as
   fresh as GitLab's last mergeability check — and on an MR nobody has
   opened in months that check may never have run. GitLab is now asked
