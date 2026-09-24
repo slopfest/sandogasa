@@ -98,6 +98,29 @@ stamps `start_date` from the Koji build's creation time.
 The issue body follows a canonical format that `status` parses back
 (MR, JIRA, Release, Affected build, Expected fix).
 
+### `list-issues`
+
+```sh
+cpu-sig-tracker list-issues [-i inventory.toml] [--release cNs] \
+    [--package PKG,...] [--adopt] [--json]
+```
+
+The SIG's tracking issues, one row per release and package, with the
+issue's URL and the upstream MR it names — the arguments the other
+commands take. A row is `active` (open per-package issue carrying the
+tool's `cpu-sig-tracker` label) or `hand-filed` (open per-package
+issue with the release label only — filed by a person, so the other
+commands do not see it). Without an inventory the releases come from
+the issues' own labels. With `-i`, every inventory package is
+classified as well, adding `proposed` (only in the central
+`proposed_updates/package_tracker`) and `missing`; issues for packages
+outside the inventory are still listed.
+
+Hand-filed issues are offered the label at the prompt, or labelled
+outright with `--adopt`, after which every command tracks them; an
+unattended run only reports them. Otherwise read-only; file new
+tracking issues explicitly via `file-issue`.
+
 ### `ping`
 
 ```sh
@@ -209,23 +232,6 @@ JIRA + Koji (Done / Won't do / In progress / To do), and sets
 missing `start_date` / `due_date` via the GraphQL work-item API.
 `--include-closed` extends the refresh scan to historical tracking
 issues so their dates can be backfilled after the fact.
-
-### `sync-issues`
-
-```sh
-cpu-sig-tracker sync-issues -i inventory.toml [--release cNs] [--adopt] [--json]
-```
-
-Gap analysis: for every inventory package, checks whether a tracking
-issue exists. Classifies each as `active` (open per-package issue
-carrying the tool's `cpu-sig-tracker` label), `hand-filed` (open
-per-package issue with the release label only — filed by a person, so
-the other commands do not see it), `proposed` (only in the central
-`proposed_updates/package_tracker`), or `missing`. Hand-filed issues
-are offered the label at the prompt, or labelled outright with
-`--adopt`, after which every command tracks them; an unattended run
-only reports them. Otherwise read-only; file new tracking issues
-explicitly via `file-issue`.
 
 ### `untag`
 

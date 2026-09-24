@@ -48,7 +48,7 @@ Koji tag:
 cpu-sig-tracker dump-inventory --release c10s -o inventory.toml
 cpu-sig-tracker file-issue <mr-url> [--affected VER] [--expected-fix VER]
 cpu-sig-tracker status -i inventory.toml [--release c10s]
-cpu-sig-tracker sync-issues -i inventory.toml [--file-missing]
+cpu-sig-tracker list-issues -i inventory.toml [--file-missing]
 cpu-sig-tracker untag <nvr> [--release c10s]
 ```
 
@@ -66,7 +66,7 @@ cpu-sig-tracker untag <nvr> [--release c10s]
 - **`status`**: scan the inventory, for each package fetch the
   tracking issue → MR → JIRA, compare to current Stream build,
   report per-package next action. Human-readable + `--json`.
-- **`sync-issues`**: for each inventory package, verify a tracking
+- **`list-issues`** (was `sync-issues`): for each inventory package, verify a tracking
   issue exists. With `--file-missing`, create one for any that
   don't. Useful after `dump-inventory` to close gaps.
 - **`untag <nvr>`**: run the "JIRA closed → untag" path for a
@@ -125,7 +125,7 @@ other API clients, following the same pattern as
 3. Add MR-detail fetching to `sandogasa-gitlab` (get description,
    linked issues, source/target branches) if not already there.
 4. `cpu-sig-tracker` crate with `dump-inventory`, `file-issue`,
-   `status`, `sync-issues`, and `untag` subcommands.
+   `status`, `list-issues`, and `untag` subcommands.
 5. Human-readable status output + `--json`.
 6. Interactive prompts for untag/rebase actions, `--yes` to skip.
 

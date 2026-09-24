@@ -10,10 +10,10 @@ mod dump_inventory;
 mod file_issue;
 mod gitlab;
 mod jira;
+mod list_issues;
 mod ping;
 mod retire;
 mod status;
-mod sync_issues;
 #[cfg(test)]
 mod test_support;
 mod untag;
@@ -21,10 +21,10 @@ mod utils;
 
 use dump_inventory::DumpInventoryArgs;
 use file_issue::FileIssueArgs;
+use list_issues::ListIssuesArgs;
 use ping::PingArgs;
 use retire::RetireArgs;
 use status::StatusArgs;
-use sync_issues::SyncIssuesArgs;
 use untag::UntagArgs;
 
 #[derive(Parser)]
@@ -53,6 +53,10 @@ enum Command {
     /// group for a given Merge Request URL.
     FileIssue(FileIssueArgs),
 
+    /// List the SIG's tracking issues per release and package, with
+    /// the MR each names; with an inventory, the packages missing one
+    ListIssues(ListIssuesArgs),
+
     /// Nudge upstream merge requests that have gone quiet, and
     /// show the last response on those that have not.
     Ping(PingArgs),
@@ -64,10 +68,6 @@ enum Command {
     /// Report JIRA status and suggested next action for each
     /// active tracking issue.
     Status(StatusArgs),
-
-    /// Report which inventory packages have active, proposed,
-    /// or missing tracking issues per release.
-    SyncIssues(SyncIssuesArgs),
 
     /// Untag a proposed_updates build from its CBS -release tag
     /// after verifying the JIRA is resolved.
@@ -81,10 +81,10 @@ fn main() -> ExitCode {
         Command::Config => configure::run(),
         Command::DumpInventory(args) => dump_inventory::run(&args),
         Command::FileIssue(args) => file_issue::run(&args),
+        Command::ListIssues(args) => list_issues::run(&args),
         Command::Ping(args) => ping::run(&args),
         Command::Retire(args) => retire::run(&args),
         Command::Status(args) => status::run(&args),
-        Command::SyncIssues(args) => sync_issues::run(&args),
         Command::Untag(args) => untag::run(&args),
     }
 }

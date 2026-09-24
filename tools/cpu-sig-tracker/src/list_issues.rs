@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! `sync-issues` subcommand.
+//! `list-issues` subcommand.
 //!
-//! For each (release, package) pair in the inventory, check
-//! whether a tracking issue exists in either the per-package
-//! project (`CentOS/proposed_updates/rpms/<pkg>`, the active
-//! state once an MR is filed) or the central tracker
-//! (`CentOS/proposed_updates/package_tracker`, for proposed-only
-//! items without an MR yet). Classifies each pair as
-//! `active`, `proposed`, or `missing` and reports a per-release
-//! summary. Read-only — filing missing issues will come in a
-//! later iteration.
+//! The SIG's tracking issues, one row per (release, package): the
+//! tool's own (`active`), the ones a person filed with the release
+//! label alone (`hand-filed`, offered the tool's label with
+//! `--adopt`) and, given an inventory, the packages with only a
+//! `package_tracker` entry (`proposed`) or nothing at all
+//! (`missing`). Each row carries the issue's URL and the MR it
+//! names, so the next command has its argument.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::process::ExitCode;
 
 use crate::gitlab;
+use crate::status::{parse_mr_line, scan_mr_url_in_body};
+use crate::utils::gitlab_base;
 
 /// GitLab group containing the per-package tracking projects.
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
@@ -27,35 +27,36 @@ const PACKAGE_TRACKER_PROJECT: &str = "CentOS/proposed_updates/package_tracker";
 /// Label applied to all tool-filed tracking issues.
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
 
-/// Hardcoded since all cpu-sig-tracker flows go through gitlab.com.
-use crate::utils::gitlab_base;
-
 #[derive(clap::Args)]
-pub struct SyncIssuesArgs {
-    /// Path to the sandogasa-inventory TOML file.
-    #[arg(short, long, default_value = "inventory.toml")]
-    pub inventory: String,
+pub struct ListIssuesArgs {
+    /// sandogasa-inventory TOML; with it every inventory package is
+    /// classified, `proposed` and `missing` included
+    #[arg(short, long)]
+    pub inventory: Option<String>,
 
-    /// Restrict the check to a single release (e.g. `c10s`). If
-    /// omitted, every workload in the inventory is checked.
+    /// Restrict to a single release (e.g. `c10s`)
     #[arg(long)]
     pub release: Option<String>,
+
+    /// Restrict to these package(s) (repeat/CSV)
+    #[arg(long, value_delimiter = ',')]
+    pub package: Vec<String>,
 
     /// Label hand-filed tracking issues `cpu-sig-tracker` without
     /// asking, so every command tracks them
     #[arg(long)]
     pub adopt: bool,
 
-    /// Emit a machine-readable JSON array instead of grouped text.
+    /// Emit a machine-readable JSON array instead of grouped text
     #[arg(long)]
     pub json: bool,
 
-    /// Print progress to stderr.
+    /// Print progress to stderr
     #[arg(short, long)]
     pub verbose: bool,
 }
 
-pub fn run(args: &SyncIssuesArgs) -> ExitCode {
+pub fn run(args: &ListIssuesArgs) -> ExitCode {
     match build_rows(args) {
         Ok(rows) => {
             if args.json {
@@ -67,7 +68,7 @@ pub fn run(args: &SyncIssuesArgs) -> ExitCode {
                     }
                 }
             } else {
-                print_human(&rows);
+                print_human(&rows, args.inventory.is_some());
             }
             if let Err(e) = adopt(&rows, args) {
                 eprintln!("error: {e}");
@@ -88,7 +89,7 @@ pub fn run(args: &SyncIssuesArgs) -> ExitCode {
 /// issue filed by a person drifts from the tool's conventions by
 /// nature; the label is what brings it back into every command's
 /// view.
-fn adopt(rows: &[Row], args: &SyncIssuesArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn adopt(rows: &[Row], args: &ListIssuesArgs) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::IsTerminal;
     let hand_filed: Vec<&Row> = rows
         .iter()
@@ -178,27 +179,37 @@ pub struct Row {
     /// The issue's iid in its project, for `--adopt`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_iid: Option<u64>,
+    /// The upstream merge request the issue names, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mr_url: Option<String>,
 }
 
-pub(crate) fn build_rows(args: &SyncIssuesArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
-    let inventory = sandogasa_inventory::load(&args.inventory)?;
-
-    let releases: Vec<String> = match &args.release {
-        Some(r) => {
-            if !inventory.inventory.workloads.contains_key(r) {
-                return Err(format!(
-                    "release '{r}' not found in inventory; available: {:?}",
-                    inventory.workload_names()
-                )
-                .into());
-            }
-            vec![r.clone()]
-        }
-        None => inventory.inventory.workloads.keys().cloned().collect(),
-    };
-
+pub(crate) fn build_rows(args: &ListIssuesArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
+    let inventory = args
+        .inventory
+        .as_deref()
+        .map(sandogasa_inventory::load)
+        .transpose()?;
     let group_client = gitlab::group_client(&gitlab_base(), PROPOSED_UPDATES_GROUP)?;
-    let tracker_client = gitlab::client(&gitlab_base(), PACKAGE_TRACKER_PROJECT)?;
+    let releases: Vec<String> = match (&args.release, &inventory) {
+        (Some(r), Some(inv)) if !inv.inventory.workloads.contains_key(r) => {
+            return Err(format!(
+                "release '{r}' not found in inventory; available: {:?}",
+                inv.workload_names()
+            )
+            .into());
+        }
+        (Some(r), _) => vec![r.clone()],
+        (None, Some(inv)) => inv.inventory.workloads.keys().cloned().collect(),
+        // No inventory to name the releases: the open issues' own
+        // release labels do.
+        (None, None) => {
+            if args.verbose {
+                eprintln!("[cpu-sig-tracker] fetching open issues to find the releases");
+            }
+            releases_from_labels(&group_client.list_issues_where(&[("state", "opened")])?)
+        }
+    };
 
     let mut rows: Vec<Row> = Vec::new();
     for release in &releases {
@@ -209,24 +220,63 @@ pub(crate) fn build_rows(args: &SyncIssuesArgs) -> Result<Vec<Row>, Box<dyn std:
         // hand-filed ones both carry it, and the tool's label tells
         // them apart in `classify`.
         let active = group_client.list_issues(release, Some("opened"))?;
-
-        if args.verbose {
-            eprintln!("[cpu-sig-tracker] fetching proposed issues for {release}");
-        }
-        let proposed = tracker_client.list_issues(release, Some("opened"))?;
-
-        let packages = inventory
-            .inventory
-            .workloads
-            .get(release)
-            .map(|w| w.packages.clone())
+        let proposed = match &inventory {
+            Some(_) => {
+                if args.verbose {
+                    eprintln!("[cpu-sig-tracker] fetching proposed issues for {release}");
+                }
+                gitlab::client(&gitlab_base(), PACKAGE_TRACKER_PROJECT)?
+                    .list_issues(release, Some("opened"))?
+            }
+            None => Vec::new(),
+        };
+        // Every package the inventory lists for the release, and every
+        // package an issue is filed for — an issue outside the
+        // inventory is still the SIG's.
+        let mut packages: BTreeSet<String> = inventory
+            .as_ref()
+            .and_then(|inv| inv.inventory.workloads.get(release))
+            .map(|w| w.packages.iter().cloned().collect())
             .unwrap_or_default();
-
+        packages.extend(
+            active
+                .iter()
+                .filter_map(|i| gitlab::package_from_issue_url(&i.web_url))
+                .map(str::to_string),
+        );
+        if !args.package.is_empty() {
+            packages.retain(|p| args.package.contains(p));
+        }
         for pkg in packages {
             rows.push(classify(release, &pkg, &active, &proposed));
         }
     }
     Ok(rows)
+}
+
+/// The releases the open issues are labelled with: `c9s`, `c10s`.
+fn releases_from_labels(issues: &[gitlab::Issue]) -> Vec<String> {
+    issues
+        .iter()
+        .flat_map(|i| i.labels.iter())
+        .filter(|l| {
+            l.strip_prefix('c')
+                .and_then(|r| r.strip_suffix('s'))
+                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// The upstream MR a tracking issue names, from its standard `- **MR**:`
+/// line or anywhere in its body.
+fn mr_of(issue: &gitlab::Issue) -> Option<String> {
+    let body = issue.description.as_deref()?;
+    parse_mr_line(body)
+        .map(|(u, _)| u)
+        .or_else(|| scan_mr_url_in_body(body))
 }
 
 /// Decide which bucket a (release, package) falls into given
@@ -245,6 +295,7 @@ fn classify(
         status,
         issue_url: issue.map(|i| i.web_url.clone()),
         issue_iid: issue.map(|i| i.iid),
+        mr_url: issue.and_then(mr_of),
     };
     let ours: Vec<&gitlab::Issue> = active
         .iter()
@@ -283,17 +334,32 @@ fn title_matches_package(title: &str, package: &str) -> bool {
     }
 }
 
-fn print_human(rows: &[Row]) {
+/// `rpms/PackageKit!13` for an MR URL, the project relative to the
+/// CentOS Stream namespace people know.
+fn mr_short(url: &str) -> String {
+    match gitlab::parse_mr_url(url) {
+        Ok((_, project, iid)) => format!(
+            "{}!{iid}",
+            project
+                .strip_prefix("redhat/centos-stream/")
+                .unwrap_or(&project)
+        ),
+        Err(_) => url.to_string(),
+    }
+}
+
+fn print_human(rows: &[Row], with_inventory: bool) {
     let mut by_release: BTreeMap<&str, Vec<&Row>> = BTreeMap::new();
     for r in rows {
         by_release.entry(&r.release).or_default().push(r);
     }
-
-    let pkg_width = rows
-        .iter()
-        .map(|r| r.package.chars().count())
-        .max()
-        .unwrap_or(0);
+    let width = |f: &dyn Fn(&Row) -> usize| rows.iter().map(f).max().unwrap_or(0);
+    let pkg_width = width(&|r| r.package.chars().count());
+    let mr_width = width(&|r| {
+        r.mr_url
+            .as_deref()
+            .map_or(1, |u| mr_short(u).chars().count())
+    });
 
     let mut first = true;
     for (release, rs) in by_release {
@@ -312,15 +378,23 @@ fn print_human(rows: &[Row]) {
             };
             counts[idx] += 1;
             let status = r.status.as_str();
+            let mr = r.mr_url.as_deref().map_or("-".to_string(), mr_short);
             match &r.issue_url {
-                Some(url) => println!("  {:<pkg_width$}  {:<10}  {url}", r.package, status),
+                Some(url) => println!(
+                    "  {:<pkg_width$}  {:<10}  {mr:<mr_width$}  {url}",
+                    r.package, status
+                ),
                 None => println!("  {:<pkg_width$}  {:<10}", r.package, status),
             }
         }
-        println!(
-            "  → {} active, {} hand-filed, {} proposed, {} missing",
-            counts[0], counts[1], counts[2], counts[3]
-        );
+        if with_inventory {
+            println!(
+                "  → {} active, {} hand-filed, {} proposed, {} missing",
+                counts[0], counts[1], counts[2], counts[3]
+            );
+        } else {
+            println!("  → {} active, {} hand-filed", counts[0], counts[1]);
+        }
     }
 }
 
@@ -550,10 +624,11 @@ name = "missingpkg"
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
         }
 
-        let args = SyncIssuesArgs {
+        let args = ListIssuesArgs {
             adopt: false,
-            inventory: inv_path.to_string_lossy().into_owned(),
+            inventory: Some(inv_path.to_string_lossy().into_owned()),
             release: Some("c10s".to_string()),
+            package: vec![],
             json: false,
             verbose: false,
         };
@@ -578,5 +653,91 @@ name = "missingpkg"
         let missing = rows.iter().find(|r| r.package == "missingpkg").unwrap();
         assert_eq!(missing.status, TrackingStatus::Missing);
         assert_eq!(missing.issue_url, None);
+    }
+
+    #[test]
+    fn a_row_names_the_mr_its_issue_names_and_releases_come_from_labels() {
+        let mut issue = labelled_issue(
+            "https://gitlab.com/CentOS/proposed_updates/rpms/PackageKit/-/issues/3",
+            "PackageKit: 1.2.8-8.el10 → 1.2.8-9.el10",
+            &["c10s", TRACKING_LABEL, "security"],
+        );
+        issue.description = Some(
+            "- **MR**: [!13](https://gitlab.com/redhat/centos-stream/rpms/PackageKit/-/merge_requests/13)\n"
+                .to_string(),
+        );
+        let other = labelled_issue(
+            "https://gitlab.com/CentOS/proposed_updates/rpms/blktrace/-/issues/1",
+            "blktrace",
+            &["bugfix", "c9s"],
+        );
+        let issues = [issue, other];
+        let row = classify("c10s", "PackageKit", &issues, &[]);
+        assert_eq!(
+            row.mr_url.as_deref(),
+            Some("https://gitlab.com/redhat/centos-stream/rpms/PackageKit/-/merge_requests/13")
+        );
+        assert_eq!(
+            mr_short(row.mr_url.as_deref().unwrap()),
+            "rpms/PackageKit!13"
+        );
+        assert_eq!(releases_from_labels(&issues), vec!["c10s", "c9s"]);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn build_rows_without_an_inventory_lists_what_the_issues_say() {
+        use wiremock::matchers::query_param_is_missing;
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let rpms_path = "/api/v4/groups/CentOS%2Fproposed_updates%2Frpms/issues";
+        let hand_filed = json!({
+            "iid": 2, "title": "blktrace: Move librsvg2-tools runtime requirement",
+            "description": "see https://gitlab.com/redhat/centos-stream/rpms/blktrace/-/merge_requests/5 ",
+            "state": "opened",
+            "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/blktrace/-/issues/2",
+            "labels": ["bugfix", "c10s"], "assignees": []
+        });
+        runtime.block_on(async {
+            // Release discovery: every open issue, no label filter.
+            Mock::given(method("GET"))
+                .and(path(rpms_path))
+                .and(query_param("state", "opened"))
+                .and(query_param_is_missing("labels"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([hand_filed])))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(rpms_path))
+                .and(query_param("labels", "c10s"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([hand_filed])))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+        let dir = tempdir().unwrap();
+        let _guard = crate::test_support::EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
+        ]);
+        let args = ListIssuesArgs {
+            inventory: None,
+            release: None,
+            package: vec!["blktrace".to_string()],
+            adopt: false,
+            json: false,
+            verbose: false,
+        };
+        let rows = build_rows(&args).expect("build_rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].release, "c10s");
+        assert_eq!(rows[0].status, TrackingStatus::HandFiled);
+        assert_eq!(rows[0].issue_iid, Some(2));
+        assert_eq!(
+            rows[0].mr_url.as_deref(),
+            Some("https://gitlab.com/redhat/centos-stream/rpms/blktrace/-/merge_requests/5")
+        );
     }
 }

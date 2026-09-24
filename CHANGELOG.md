@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: `list-issues` replaces `sync-issues` (breaking CLI)
+
+Two tools work the same GitLab group and had drifted apart:
+hs-relmon's `list-issues` lists the SIG's issues and, given a
+manifest, the packages without one; cpu-sig-tracker's `sync-issues`
+did only the second half, and nothing listed the tracking issues at
+all — the report `ping` ends with named changes, and `retire` wanted
+an issue URL that had to be found by hand.
+
+`list-issues` lists the tracking issues, one row per release and
+package, with the issue's URL and the upstream MR it names
+(`rpms/PackageKit!13`): `active` for the tool's own, `hand-filed` for a
+person's, offered the label as `sync-issues --adopt` did. The inventory
+is optional now; without it the releases come from the issues' own
+labels. With `-i` the gap analysis is as before, `proposed` and
+`missing` included, and issues for packages outside the inventory are
+listed too. `--package` narrows either way.
+
+Removed: the `sync-issues` subcommand. Migration: `sync-issues -i X`
+is `list-issues -i X`, same flags; the JSON rows gain `mr_url`.
+
 ### hs-relmon: `check-stock` and `review` have their descriptions back
 
 `hs-relmon --help` listed `check-stock` and `review` with no description

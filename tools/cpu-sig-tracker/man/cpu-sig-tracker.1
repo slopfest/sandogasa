@@ -92,6 +92,31 @@ Print help
 .TP
 <\fIMR_URL\fR>
 Full Merge Request URL to track, e.g. `gitlab.com/redhat/centos\-stream/rpms/xz/\-/merge_requests/42` (with the https:// scheme)
+.SS cpu-sig-tracker list-issues
+\fBcpu\-sig\-tracker list\-issues\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-adopt\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+List the SIG\*(Aqs tracking issues per release and package, with the MR each names; with an inventory, the packages missing one
+.TP
+\fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
+sandogasa\-inventory TOML; with it every inventory package is classified, `proposed` and `missing` included
+.TP
+\fB\-\-release\fR \fI<RELEASE>\fR
+Restrict to a single release (e.g. `c10s`)
+.TP
+\fB\-\-package\fR \fI<PACKAGE>\fR
+Restrict to these package(s) (repeat/CSV)
+.TP
+\fB\-\-adopt\fR
+Label hand\-filed tracking issues `cpu\-sig\-tracker` without asking, so every command tracks them
+.TP
+\fB\-\-json\fR
+Emit a machine\-readable JSON array instead of grouped text
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS cpu-sig-tracker ping
 \fBcpu\-sig\-tracker ping\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-days\fR] [\fB\-\-reping\-days\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
@@ -172,28 +197,6 @@ Rewrite tracking issue bodies to the standardized format, refreshing the MR stat
 .TP
 \fB\-\-include\-closed\fR
 With \-\-refresh, also process closed tracking issues — backfill their start_date / due_date and reconcile their work\-item status against the current JIRA resolution (e.g. Done → Won\*(Aqt do when JIRA was retroactively flipped). Body content is left alone. No\-op without \-\-refresh
-.TP
-\fB\-v\fR, \fB\-\-verbose\fR
-Print progress to stderr
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help
-.SS cpu-sig-tracker sync-issues
-\fBcpu\-sig\-tracker sync\-issues\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-\-adopt\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
-.PP
-Report which inventory packages have active, proposed, or missing tracking issues per release
-.TP
-\fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR [default: inventory.toml]
-Path to the sandogasa\-inventory TOML file
-.TP
-\fB\-\-release\fR \fI<RELEASE>\fR
-Restrict the check to a single release (e.g. `c10s`). If omitted, every workload in the inventory is checked
-.TP
-\fB\-\-adopt\fR
-Label hand\-filed tracking issues `cpu\-sig\-tracker` without asking, so every command tracks them
-.TP
-\fB\-\-json\fR
-Emit a machine\-readable JSON array instead of grouped text
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
