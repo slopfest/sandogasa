@@ -1157,4 +1157,64 @@ Latest Info: **Deferred to F46**\n";
         };
         assert!(!already_decided(&open));
     }
+
+    #[test]
+    fn testable_and_decided_changes_have_their_own_groups() {
+        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
+        let report = |name: &str, state: State, info: &str, section: Option<&str>| Report {
+            entry: Entry {
+                name: name.into(),
+                wiki: Some(format!("https://fedoraproject.org/wiki/Changes/{name}")),
+                bug: 7,
+                status: "ASSIGNED".into(),
+                info: info.into(),
+                section: section.map(str::to_string),
+                noted: "2026-09-15".into(),
+                noted_by: "gotmax23".into(),
+                ..Entry::default()
+            },
+            state,
+            bz_status: "MODIFIED".into(),
+            resolution: String::new(),
+            last_change: at("2026-09-22T00:00:00Z"),
+            needinfo: None,
+            stale: false,
+            ticket: Some(3606),
+            ticket_url: Some("https://forge.fedoraproject.org/fesco/tickets/issues/3606".into()),
+            wiki_broken: None,
+        };
+        let reports = [
+            report("Relocate", State::Testable, "INFO: all implemented", None),
+            report(
+                "Flatpaks",
+                State::Decided,
+                "AGREED: This Change is completed. (+5, 0, -0); bug needs to be updated",
+                Some("Needs processing (NOT on agenda for next week)"),
+            ),
+            report("Elsewhere", State::Elsewhere, "-", None),
+        ];
+        let text = render(&reports, 45, NaiveDate::from_ymd_opt(2026, 9, 24).unwrap());
+        assert!(text.contains("## Testable but not code complete (MODIFIED) — still reviewed (1, in the ticket's order)"), "{text}");
+        assert!(text.contains("## Decided in the ticket, Bugzilla not yet updated — for the Change Wrangler (1, in the ticket's order)"), "{text}");
+        assert!(
+            text.contains("## On neither release tracker (1, in the ticket's order)"),
+            "{text}"
+        );
+        assert!(text.contains("- Flatpaks: decided in the ticket (AGREED: This Change is completed. (+5, 0, -0); bug needs to be updated), bz [#7]"), "{text}");
+        assert!(text.contains("  - FESCo ticket [#3606](https://forge.fedoraproject.org/fesco/tickets/issues/3606)"), "{text}");
+        let script = render_script(&reports, 45);
+        assert!(
+            script.starts_with("!topic F45 Change: Relocate\n!fesco 3606\n"),
+            "{script}"
+        );
+        assert!(
+            script
+                .contains("# Flatpaks — decided in the ticket; bz for the wrangler (!fesco 3606)"),
+            "{script}"
+        );
+        assert!(
+            script.contains("# Elsewhere — on neither tracker (!fesco 3606)"),
+            "{script}"
+        );
+    }
 }

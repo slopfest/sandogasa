@@ -1316,4 +1316,21 @@ mod tests {
         };
         run_inner(&args).expect("retire succeeds");
     }
+
+    #[test]
+    fn a_reason_is_parsed_from_a_word_or_its_initial() {
+        for (word, want) in [
+            ("landed", Some(Reason::Landed)),
+            (" Fixed ", Some(Reason::Landed)),
+            ("f", Some(Reason::Landed)),
+            ("abandoned", Some(Reason::Abandoned)),
+            ("A", Some(Reason::Abandoned)),
+            ("superseded", None),
+            ("", None),
+        ] {
+            assert_eq!(Reason::parse(word), want, "{word:?}");
+        }
+        assert_eq!(Reason::Abandoned.label(true), "abandoned");
+        assert_eq!(Reason::Landed.label(true), "landed");
+    }
 }

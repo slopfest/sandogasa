@@ -411,6 +411,9 @@ Re-check at the next breaking release:
 - rusqlite 0.38.0 → 0.40.2 (Fedora: 0.38.0 everywhere)
 - serial_test 3.4.0 → 4.0.1 (Fedora: 3.4.0 everywhere; dev-dependency)
 
+  Re-checked 2026-09-24 for 0.25.0: the same four, none packaged in
+  rawhide, f45 or epel10 at the new major, so all deferred again.
+
 ## pkg-health after kondo: reuse the graph, score dependencies too (2026-09-06)
 
 Kondo left behind observations pkg-health should report over time, not

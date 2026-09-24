@@ -763,4 +763,45 @@ name = "missingpkg"
             Some("https://gitlab.com/redhat/centos-stream/rpms/blktrace/-/merge_requests/5")
         );
     }
+
+    #[test]
+    fn the_table_prints_every_status_with_and_without_an_inventory() {
+        let row = |package: &str, status, url: Option<&str>, mr: Option<&str>| Row {
+            release: "c10s".into(),
+            package: package.into(),
+            status,
+            issue_url: url.map(str::to_string),
+            issue_iid: url.map(|_| 1),
+            mr_url: mr.map(str::to_string),
+        };
+        let rows = [
+            row(
+                "PackageKit",
+                TrackingStatus::Active,
+                Some("https://gitlab.example/rpms/PackageKit/-/issues/3"),
+                Some("https://gitlab.com/redhat/centos-stream/rpms/PackageKit/-/merge_requests/13"),
+            ),
+            row(
+                "blktrace",
+                TrackingStatus::HandFiled,
+                Some("https://gitlab.example/rpms/blktrace/-/issues/2"),
+                None,
+            ),
+            row(
+                "cmake",
+                TrackingStatus::Proposed,
+                Some("https://gitlab.example/package_tracker/-/issues/4"),
+                None,
+            ),
+            row("openssl", TrackingStatus::Missing, None, None),
+        ];
+        // Printing is the whole point; the counts line differs by mode.
+        print_human(&rows, true);
+        print_human(&rows, false);
+        assert_eq!(TrackingStatus::HandFiled.as_str(), "hand-filed");
+        assert_eq!(
+            mr_short("https://example/not-an-mr"),
+            "https://example/not-an-mr"
+        );
+    }
 }

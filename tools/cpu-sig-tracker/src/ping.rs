@@ -1660,4 +1660,89 @@ mod tests {
         let out = render(&[row(None)]);
         assert!(out.contains("no build to compare"), "{out}");
     }
+
+    #[test]
+    fn the_report_has_a_line_for_every_action_and_the_summary_gathers_them() {
+        let mk = |package: &str, f: Facts<'_>, posted: Vec<&str>, pending: usize| Row {
+            release: "c10s".into(),
+            package: package.into(),
+            issue_url: format!("https://gitlab.example/issue/{package}"),
+            mr_url: if f.mr_state == "none" {
+                String::new()
+            } else {
+                format!("https://gitlab.example/mr/{package}")
+            },
+            mr_state: f.mr_state.into(),
+            mr_author: "ngompa".into(),
+            mr_merge_status: Some(f.merge_status.to_string()),
+            mr_closed_by: None,
+            mr_closed_at: None,
+            release_nvr: f.release_nvr.map(str::to_string),
+            testing_nvr: f.testing_nvr.map(str::to_string),
+            stream_nvr: f.stream_nvr.map(str::to_string),
+            assessment: assess(&f, ME, at(NOW), W),
+            posted: posted.into_iter().map(str::to_string).collect(),
+            pending: (0..pending)
+                .map(|i| Pending {
+                    tag: format!("t{i}"),
+                    describe: format!("note {i}"),
+                    target: Target::Issue {
+                        project: "p".into(),
+                        iid: 1,
+                    },
+                    body: String::new(),
+                })
+                .collect(),
+        };
+        // ping, posted; rebase-mr, posted; rebase-build with a pending
+        // note; no MR; a held ping; waiting; respond with pending notes.
+        let ping = mk("a", facts(&[], "2025-12-14T20:38:23Z"), vec!["ping@mr"], 0);
+        let mut f = facts(&[], "2025-12-14T20:38:23Z");
+        f.has_conflicts = true;
+        let rebase_mr = mk("b", f, vec!["rebase@mr"], 0);
+        let mut f = facts(&[], "2025-12-14T20:38:23Z");
+        f.stream_nvr = Some("PackageKit-1.2.8-10.el10");
+        let rebase_build = mk("c", f, vec![], 1);
+        let mut f = facts(&[], "2025-12-14T20:38:23Z");
+        f.mr_state = "none";
+        let no_mr = mk("d", f, vec![], 1);
+        let mut f = facts(&[], "2025-12-14T20:38:23Z");
+        f.merge_status = "unchecked";
+        let held = mk("e", f, vec![], 0);
+        // Pinged 21 days ago: past the quiet window, inside the re-ping one.
+        let pinged = [note(ME, PING_MARKER, "2026-09-01T00:00:00Z", false)];
+        let waiting = mk("f", facts(&pinged, "2026-09-01T00:00:00Z"), vec![], 0);
+        let asked = [note(
+            "maintainer",
+            "Could you rebase?",
+            "2026-09-10T00:00:00Z",
+            false,
+        )];
+        let respond = mk("g", facts(&asked, "2026-09-10T00:00:00Z"), vec![], 2);
+        let rows = [ping, rebase_mr, rebase_build, no_mr, held, waiting, respond];
+        let text = render(&rows);
+        for needle in [
+            "ping — maintainer: posted ping",
+            "rebase-mr — @ngompa: conflicts; posted rebase note",
+            "rebase-build — SIG: stock PackageKit-1.2.8-10.el10 is past",
+            "to post note on the tracking issue",
+            "no MR yet — nothing upstream to nudge",
+            "ping held — GitLab has not checked whether this still merges",
+            "waiting — pinged 2026-09-01, no response",
+            "respond — SIG owes the reply; notes here default to no until it is given",
+            "last response 2026-09-10 by maintainer: Could you rebase?",
+            "GitLab: mergeable",
+            "  rebuild:\n    c c10s  https://gitlab.example/issue/c",
+            "  reply owed:\n    g c10s  https://gitlab.example/mr/g",
+            "  ping held until GitLab rechecks:\n    e c10s  https://gitlab.example/mr/e",
+            "notes: 6, 2 behind a reply the SIG owes",
+        ] {
+            assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+        }
+        // The no-MR row links its tracking issue in the header.
+        assert!(
+            text.contains("d c10s: https://gitlab.example/issue/d\n"),
+            "{text}"
+        );
+    }
 }

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.25.0
 
 ### fesco-chair: a MODIFIED Change is still reviewed
 

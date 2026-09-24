@@ -1014,4 +1014,91 @@ mod tests {
         assert!(row.contains(",RHSA-2026:19141,2026-05-19,-12,15,"));
         assert_eq!(csv_cell("a, b"), "\"a, b\"");
     }
+
+    #[test]
+    fn the_report_reads_the_dates_and_spans_back() {
+        assert_eq!(render(&[]), "no tracking issues\n");
+        let (issue, s) = packagekit();
+        let covered = assemble(&issue, "PackageKit", "c10s", &s);
+        // A still-shadowed change with a reply owed nowhere: no fix, no
+        // RHEL advisory, a note.
+        let (issue2, mut s2) = packagekit();
+        s2.evidence = None;
+        s2.stock_sources.clear();
+        s2.rhel = None;
+        s2.cve = None;
+        s2.stream = vec![ev(
+            "Fri Apr 24 10:00:00 2026",
+            "PackageKit-1.2.8-9.el10",
+            "c10s-pending-signed",
+        )];
+        let shadowed = assemble(&issue2, "PackageKit", "c10s", &s2);
+        assert!(shadowed.still_shadowed);
+        // And one that never reached -release.
+        let (issue3, mut s3) = packagekit();
+        s3.cbs.clear();
+        let unreleased = assemble(&issue3, "PackageKit", "c10s", &s3);
+        let text = render(&[covered, shadowed, unreleased]);
+        assert!(
+            text.contains("PackageKit c10s [security] CVE-2026-41651: https://gitlab.com/"),
+            "{text}"
+        );
+        assert!(text.contains("filed: RHEL RHEL-170526 (2026-04-22), MR 2026-04-22 (merged -), tracking 2026-04-22"), "{text}");
+        assert!(
+            text.contains(
+                "SIG: PackageKit-1.2.8-9~proposed.el10 built 2026-04-22, in -release 2026-04-22"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("stock fix: PackageKit-1.2.8-9.el10 built 2026-04-27, compose-bound 2026-05-07 (built from stock commit 99e0f170"), "{text}");
+        assert!(text.contains("RHEL: RHSA-2026:19141 2026-05-19"), "{text}");
+        assert!(
+            text.contains("→ covered 15 days; Stream ahead of RHEL by 12 days"),
+            "{text}"
+        );
+        assert!(
+            text.contains("SHADOWED") && text.contains("and counting (since 2026-04-24)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("note: shadowed by stock PackageKit-1.2.8-9.el10"),
+            "{text}"
+        );
+        assert!(
+            text.contains("note: no SIG build ever tagged into -release"),
+            "{text}"
+        );
+        // CSV of the same rows: one line per row plus the header.
+        let csv = render_csv(&[
+            assemble(&issue, "PackageKit", "c10s", &s),
+            assemble(&issue2, "PackageKit", "c10s", &s2),
+        ]);
+        assert_eq!(csv.lines().count(), 3);
+        assert!(csv.lines().nth(2).unwrap().contains(",still,"), "{csv}");
+    }
+
+    #[test]
+    fn timestamps_of_either_spelling_become_days() {
+        assert_eq!(
+            rfc3339_day("2026-04-22T19:16:15.021+0000").as_deref(),
+            Some("2026-04-22")
+        );
+        assert_eq!(rfc3339_day("short"), None);
+        assert_eq!(
+            rfc3339_to_naive("2026-04-22T19:16:15Z").map(day).as_deref(),
+            Some("2026-04-22")
+        );
+        assert_eq!(
+            rfc3339_to_naive("2026-04-22T19:16:15.021+0000")
+                .map(day)
+                .as_deref(),
+            Some("2026-04-22")
+        );
+        assert_eq!(rfc3339_to_naive("not a time"), None);
+        assert_eq!(stream_major("c10s"), "10");
+        assert_eq!(
+            vr("PackageKit-1.2.8-9.el10").as_deref(),
+            Some("1.2.8-9.el10")
+        );
+    }
 }
