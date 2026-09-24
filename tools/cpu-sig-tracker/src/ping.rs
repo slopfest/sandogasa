@@ -23,10 +23,21 @@
 //!   maintainer what blocks review, and again after `--reping-days`
 //!   if it stays unanswered.
 //!
+//! Before any of that, stock Stream carrying the SIG's build as-is
+//! means the change **landed**: nothing to nudge, `retire`. A merged
+//! or closed MR means upstream took the change or dropped it: the
+//! report says who and when, and whether stock is past the SIG's
+//! build. A tracking issue with **no MR** yet still gets its builds
+//! announced. A ping is held while GitLab has not checked the MR's
+//! mergeability (its `detailed_merge_status`), so an old MR is not
+//! nudged before it is known to merge; GitLab is asked to recheck on
+//! every read.
+//!
 //! When someone upstream spoke last the SIG owes the reply, so the
-//! last response is shown instead. Read-only by default; `--apply`
-//! posts. Every note carries a hidden marker so later runs recognise
-//! it.
+//! last response is shown instead. Nothing is posted unasked: at a
+//! terminal each note is offered one by one, `--apply` posts them all
+//! for an unattended run, and otherwise the run only reports. Every
+//! note carries a hidden marker so later runs recognise it.
 
 use std::process::ExitCode;
 
@@ -35,7 +46,8 @@ use chrono::{DateTime, Utc};
 use crate::gitlab::{self, Note};
 use crate::status::{
     fetch_proposed_updates_nvrs, fetch_proposed_updates_testing_nvrs, fetch_stream_nvrs,
-    parse_mr_line, scan_mr_url_in_body, stream_newer_than_proposed, tracking_project_of,
+    parse_mr_line, scan_mr_url_in_body, stream_carries_proposed, stream_newer_than_proposed,
+    tracking_project_of,
 };
 use crate::utils::gitlab_base;
 
@@ -82,9 +94,15 @@ pub struct PingArgs {
     )]
     pub reping_days: i64,
 
-    /// Post the notes; without it, report what would be posted.
+    /// Take the default answer at every prompt without asking, for
+    /// an unattended run: post each note unless the SIG owes a reply
+    /// on that change
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+
+    /// Report only: never prompt, never post
     #[arg(long)]
-    pub apply: bool,
+    pub dry_run: bool,
 
     /// Emit a machine-readable JSON array instead of a table.
     #[arg(long)]
@@ -99,8 +117,14 @@ pub struct PingArgs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Action {
+    /// Stock Stream carries the SIG's build as-is: the change landed,
+    /// and the Proposed Update is done.
+    Landed,
     /// Stock Stream is past the SIG's build: the SIG rebuilds first.
     RebaseBuild,
+    /// The tracking issue names no merge request yet: nothing
+    /// upstream to nudge, builds still announced on the issue.
+    NoMr,
     /// The MR has conflicts: its author rebases.
     RebaseMr,
     /// Someone upstream spoke last: the SIG owes the reply.
@@ -112,6 +136,9 @@ pub enum Action {
     Waiting,
     /// Touched recently; nothing to do yet.
     Active,
+    /// A ping is due but GitLab has not checked whether the MR still
+    /// merges (`unchecked`/`checking`): held until it has.
+    MergeUnknown,
     /// Merged or closed upstream.
     Closed,
 }
@@ -121,7 +148,8 @@ pub enum Action {
 pub struct Response {
     pub by: String,
     pub at: DateTime<Utc>,
-    /// The note's first line.
+    /// The note's text flattened onto one line, cut at about 120
+    /// characters — a greeting on the first line is not the message.
     pub excerpt: String,
 }
 
@@ -138,8 +166,13 @@ pub struct Announce {
 /// What we know about one tracked change.
 #[derive(Debug, Clone, Default)]
 pub struct Facts<'a> {
+    /// `opened`, `merged`, `closed`; `none` when the tracking issue
+    /// names no MR.
     pub mr_state: &'a str,
     pub has_conflicts: bool,
+    /// GitLab's `detailed_merge_status`: `mergeable`, `conflict`,
+    /// `need_rebase`, `unchecked`, `checking`, …
+    pub merge_status: &'a str,
     /// Head sha of the MR, for the once-per-revision rebase note.
     pub sha: &'a str,
     pub updated_at: Option<DateTime<Utc>>,
@@ -184,9 +217,14 @@ pub struct Row {
     pub release: String,
     pub package: String,
     pub issue_url: String,
+    /// Empty when the tracking issue names no MR.
     pub mr_url: String,
     pub mr_state: String,
     pub mr_author: String,
+    /// GitLab's `detailed_merge_status` for an open MR, after a
+    /// recheck: `mergeable`, `not_approved`, `conflict`, …
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mr_merge_status: Option<String>,
     /// Who merged or closed the MR, when it is not open.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mr_closed_by: Option<String>,
@@ -201,8 +239,30 @@ pub struct Row {
     pub stream_nvr: Option<String>,
     #[serde(flatten)]
     pub assessment: Assessment,
-    /// Notes `--apply` posted on this run, as `what@where`.
+    /// Notes posted on this run, as `what@where`.
     pub posted: Vec<String>,
+    /// Notes this run would post, until [`post`] decides.
+    #[serde(skip)]
+    pub pending: Vec<Pending>,
+}
+
+/// A note to post, where, and the `what@where` tag it is reported as.
+#[derive(Debug, Clone)]
+pub struct Pending {
+    /// `what@where`, as the JSON `posted` list reports it.
+    pub tag: String,
+    /// The same for a person: "the release announcement of
+    /// blktrace-1.2.0-21~proposed.el9 on the MR".
+    pub describe: String,
+    pub target: Target,
+    pub body: String,
+}
+
+/// Where a note goes.
+#[derive(Debug, Clone)]
+pub enum Target {
+    Mr { project: String, iid: u64 },
+    Issue { project: String, iid: u64 },
 }
 
 fn author(n: &Note) -> &str {
@@ -213,6 +273,21 @@ fn parse_time(s: Option<&str>) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s?)
         .ok()
         .map(|t| t.with_timezone(&Utc))
+}
+
+/// A note's text on one line, markers and blank lines dropped, cut at
+/// about 120 characters.
+fn excerpt(body: &str) -> String {
+    let flat = body
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("<!--"))
+        .flat_map(str::split_whitespace)
+        .collect::<Vec<_>>()
+        .join(" ");
+    match flat.char_indices().nth(120) {
+        Some((cut, _)) => format!("{}…", flat[..cut].trim_end()),
+        None => flat,
+    }
 }
 
 /// When we last left a note carrying `marker`, if ever.
@@ -249,29 +324,43 @@ pub fn assess(f: &Facts<'_>, me: &str, now: DateTime<Utc>, w: Windows) -> Assess
     let last_response = last_other.map(|n| Response {
         by: author(n).to_string(),
         at: parse_time(n.created_at.as_deref()).unwrap_or(now),
-        excerpt: n.body.lines().next().unwrap_or("").trim().to_string(),
+        excerpt: excerpt(&n.body),
     });
     let ours_last = human.last().is_some_and(|n| author(n) == me);
-    let build_behind = stream_newer_than_proposed(f.release_nvr, f.stream_nvr);
+    let landed = stream_carries_proposed(f.release_nvr, f.stream_nvr);
+    let build_behind = !landed && stream_newer_than_proposed(f.release_nvr, f.stream_nvr);
     let rebase_said = ours(f.mr_notes, me, &format!("{REBASE_MARKER}{} -->", f.sha)).is_some();
     let ping_due = match pinged_at {
         None => true,
         Some(t) => (now - t).num_days() >= w.reping,
     };
-    let action = if f.mr_state != "opened" {
+    // `has_conflicts` is only as fresh as GitLab's last check; the
+    // detailed status says when that check has not happened.
+    let unmergeable = f.has_conflicts || matches!(f.merge_status, "conflict" | "need_rebase");
+    let unchecked = matches!(f.merge_status, "unchecked" | "checking");
+    // Landed outranks everything; a merged or closed MR outranks the
+    // build comparison, since upstream took the change or dropped it
+    // and the SIG has nothing to rebuild for it.
+    let action = if landed {
+        Action::Landed
+    } else if !matches!(f.mr_state, "opened" | "none") {
         Action::Closed
     } else if build_behind {
         Action::RebaseBuild
-    } else if f.has_conflicts && !rebase_said {
+    } else if f.mr_state == "none" {
+        Action::NoMr
+    } else if unmergeable && !rebase_said {
         Action::RebaseMr
     } else if last_other.is_some() && !ours_last {
         Action::Respond
-    } else if quiet_days < w.quiet || f.has_conflicts {
+    } else if quiet_days < w.quiet || unmergeable {
         Action::Active
-    } else if ping_due {
-        Action::Ping
-    } else {
+    } else if !ping_due {
         Action::Waiting
+    } else if unchecked {
+        Action::MergeUnknown
+    } else {
+        Action::Ping
     };
     let tell_issue_behind = action == Action::RebaseBuild
         && ours(
@@ -283,7 +372,7 @@ pub fn assess(f: &Facts<'_>, me: &str, now: DateTime<Utc>, w: Windows) -> Assess
     // A build is announced at each stage it reaches, once; the same
     // NVR in both tags is announced as released only.
     let mut announce = Vec::new();
-    if f.mr_state == "opened" && !build_behind {
+    if matches!(f.mr_state, "opened" | "none") && !build_behind && !landed {
         let stages = [(f.release_nvr, "release"), (f.testing_nvr, "testing")];
         for (nvr, stage) in stages {
             let Some(nvr) = nvr else { continue };
@@ -291,7 +380,7 @@ pub fn assess(f: &Facts<'_>, me: &str, now: DateTime<Utc>, w: Windows) -> Assess
                 continue;
             }
             let marker = build_marker(nvr, stage);
-            let to_mr = ours(f.mr_notes, me, &marker).is_none();
+            let to_mr = f.mr_state == "opened" && ours(f.mr_notes, me, &marker).is_none();
             let to_issue = ours(f.issue_notes, me, &marker).is_none();
             if to_mr || to_issue {
                 announce.push(Announce {
@@ -421,112 +510,206 @@ fn scan(args: &PingArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
         let stream_nvrs = fetch_stream_nvrs(release, &packages, args.verbose);
         for (package, issue) in issues {
             let body = issue.description.clone().unwrap_or_default();
-            let Some(mr_url) = parse_mr_line(&body)
-                .map(|(u, _)| u)
-                .or_else(|| scan_mr_url_in_body(&body))
-            else {
-                eprintln!("warning: {package} {release}: tracking issue names no MR; skipped");
-                continue;
-            };
-            let (_, project, iid) = gitlab::parse_mr_url(&mr_url)?;
             let Some(tracking_project) = tracking_project_of(&issue.web_url) else {
                 eprintln!("warning: {package} {release}: unrecognised issue URL; skipped");
                 continue;
             };
-            if args.verbose {
-                eprintln!("[ping] {package} {release}: reading {project}!{iid}");
-            }
-            let mr_client = gitlab::client(&base, &project)?;
             let issue_client = gitlab::client(&base, &tracking_project)?;
-            let mr = mr_client.merge_request(iid)?;
-            let mr_notes = mr_client.merge_request_notes(iid)?;
             let issue_notes = issue_client.issue_notes(issue.iid)?;
+            // An issue without an MR is still a change in flight: its
+            // builds are announced on the issue, and stock is compared.
+            let upstream = match parse_mr_line(&body)
+                .map(|(u, _)| u)
+                .or_else(|| scan_mr_url_in_body(&body))
+            {
+                Some(mr_url) => {
+                    let (_, project, iid) = gitlab::parse_mr_url(&mr_url)?;
+                    if args.verbose {
+                        eprintln!("[ping] {package} {release}: reading {project}!{iid}");
+                    }
+                    let mr_client = gitlab::client(&base, &project)?;
+                    let mr = mr_client.merge_request_rechecked(iid)?;
+                    let notes = mr_client.merge_request_notes(iid)?;
+                    Some((mr_url, project, iid, mr, notes))
+                }
+                None => None,
+            };
+            let (mr_url, project, iid, mr, mr_notes) = match &upstream {
+                Some((u, p, i, m, n)) => (u.clone(), Some(p.clone()), *i, Some(m), n.as_slice()),
+                None => (String::new(), None, 0, None, &[][..]),
+            };
             let mr_author = mr
-                .author
-                .as_ref()
+                .and_then(|m| m.author.as_ref())
                 .map(|a| a.username.clone())
                 .unwrap_or_default();
             let facts = Facts {
-                mr_state: &mr.state,
-                has_conflicts: mr.has_conflicts.unwrap_or(false),
-                sha: mr.sha.as_deref().unwrap_or(""),
-                updated_at: parse_time(mr.updated_at.as_deref()),
-                mr_notes: &mr_notes,
+                mr_state: mr.map_or("none", |m| m.state.as_str()),
+                has_conflicts: mr.and_then(|m| m.has_conflicts).unwrap_or(false),
+                merge_status: mr
+                    .and_then(|m| m.detailed_merge_status.as_deref())
+                    .unwrap_or(""),
+                sha: mr.and_then(|m| m.sha.as_deref()).unwrap_or(""),
+                updated_at: mr.and_then(|m| parse_time(m.updated_at.as_deref())),
+                mr_notes,
                 issue_notes: &issue_notes,
                 release_nvr: release_nvrs.get(&package).map(String::as_str),
                 testing_nvr: testing_nvrs.get(&package).map(String::as_str),
                 stream_nvr: stream_nvrs.get(&package).map(String::as_str),
             };
             let assessment = assess(&facts, &me, now, windows);
-            let mut posted = Vec::new();
-            if args.apply {
-                for a in &assessment.announce {
-                    let text = announce_body(&a.nvr, a.stage, &package, release);
-                    if a.to_mr {
-                        mr_client.add_merge_request_note(iid, &text)?;
-                        posted.push(format!("announce {}@mr", a.stage));
-                    }
-                    if a.to_issue {
-                        issue_client.add_note(issue.iid, &text)?;
-                        posted.push(format!("announce {}@issue", a.stage));
-                    }
+            let on_mr = |tag: &str, what: &str, body: String| Pending {
+                tag: tag.to_string(),
+                describe: format!("{what} on the MR"),
+                target: Target::Mr {
+                    project: project.clone().unwrap_or_default(),
+                    iid,
+                },
+                body,
+            };
+            let on_issue = |tag: &str, what: &str, body: String| Pending {
+                tag: tag.to_string(),
+                describe: format!("{what} on the tracking issue"),
+                target: Target::Issue {
+                    project: tracking_project.clone(),
+                    iid: issue.iid,
+                },
+                body,
+            };
+            let mut pending = Vec::new();
+            for a in &assessment.announce {
+                let text = announce_body(&a.nvr, a.stage, &package, release);
+                let what = format!("the {} announcement of {}", a.stage, a.nvr);
+                if a.to_mr {
+                    pending.push(on_mr(
+                        &format!("announce {}@mr", a.stage),
+                        &what,
+                        text.clone(),
+                    ));
                 }
-                match assessment.action {
-                    Action::RebaseBuild if assessment.tell_issue_behind => {
-                        issue_client.add_note(
-                            issue.iid,
-                            &behind_body(
-                                facts.stream_nvr.unwrap_or(""),
-                                facts.release_nvr.unwrap_or(""),
-                                release,
-                            ),
-                        )?;
-                        posted.push("behind@issue".to_string());
-                    }
-                    Action::RebaseMr => {
-                        mr_client.add_merge_request_note(
-                            iid,
-                            &rebase_body(&mr_author, &mr.target_branch, facts.sha),
-                        )?;
-                        posted.push("rebase@mr".to_string());
-                    }
-                    Action::Ping => {
-                        mr_client.add_merge_request_note(
-                            iid,
-                            &ping_body(
-                                assessment.last_activity,
-                                assessment.quiet_days,
-                                &issue.web_url,
-                            ),
-                        )?;
-                        posted.push("ping@mr".to_string());
-                    }
-                    _ => {}
+                if a.to_issue {
+                    pending.push(on_issue(
+                        &format!("announce {}@issue", a.stage),
+                        &what,
+                        text,
+                    ));
                 }
+            }
+            match assessment.action {
+                Action::RebaseBuild if assessment.tell_issue_behind => pending.push(on_issue(
+                    "behind@issue",
+                    &format!(
+                        "the note that stock {} is past the SIG's build",
+                        facts.stream_nvr.unwrap_or("")
+                    ),
+                    behind_body(
+                        facts.stream_nvr.unwrap_or(""),
+                        facts.release_nvr.unwrap_or(""),
+                        release,
+                    ),
+                )),
+                Action::RebaseMr => pending.push(on_mr(
+                    "rebase@mr",
+                    &format!("the rebase request to @{mr_author}"),
+                    rebase_body(
+                        &mr_author,
+                        mr.map_or("", |m| m.target_branch.as_str()),
+                        facts.sha,
+                    ),
+                )),
+                Action::Ping => pending.push(on_mr(
+                    "ping@mr",
+                    "the ping to the maintainer",
+                    ping_body(
+                        assessment.last_activity,
+                        assessment.quiet_days,
+                        &issue.web_url,
+                    ),
+                )),
+                _ => {}
             }
             rows.push(Row {
                 release: release.clone(),
                 package: package.clone(),
                 issue_url: issue.web_url.clone(),
                 mr_url,
-                mr_state: mr.state.clone(),
-                mr_author: mr_author.clone(),
-                mr_closed_by: mr
-                    .merged_by
-                    .as_ref()
-                    .or(mr.closed_by.as_ref())
-                    .map(|u| u.username.clone()),
-                mr_closed_at: mr.merged_at.clone().or(mr.closed_at.clone()),
+                mr_state: facts.mr_state.to_string(),
+                mr_author,
+                mr_merge_status: mr
+                    .filter(|m| m.state == "opened")
+                    .and_then(|m| m.detailed_merge_status.clone()),
+                mr_closed_by: mr.and_then(|m| {
+                    m.merged_by
+                        .as_ref()
+                        .or(m.closed_by.as_ref())
+                        .map(|u| u.username.clone())
+                }),
+                mr_closed_at: mr.and_then(|m| m.merged_at.clone().or(m.closed_at.clone())),
                 release_nvr: facts.release_nvr.map(str::to_string),
                 testing_nvr: facts.testing_nvr.map(str::to_string),
                 stream_nvr: facts.stream_nvr.map(str::to_string),
                 assessment,
-                posted,
+                posted: Vec::new(),
+                pending,
             });
         }
     }
     rows.sort_by(|a, b| (&a.release, &a.package).cmp(&(&b.release, &b.package)));
     Ok(rows)
+}
+
+/// The default answer to "post this note?": yes, unless someone
+/// upstream is waiting on the SIG — a note landing on top of an
+/// unanswered question reads as ignoring it, so the reply comes first.
+fn default_answer(action: Action) -> bool {
+    action != Action::Respond
+}
+
+/// Post the pending notes: at a terminal each one after asking, with
+/// [`default_answer`] as the default; with `-y` the default answer
+/// unasked; none otherwise — an unattended run must not write
+/// unasked. Returns how many were left unposted.
+fn post(rows: &mut [Row], args: &PingArgs) -> Result<usize, Box<dyn std::error::Error>> {
+    use std::io::IsTerminal;
+    let base = gitlab_base();
+    let interactive = !args.json && std::io::stdin().is_terminal();
+    let mut skipped = 0;
+    for r in rows.iter_mut() {
+        let default = default_answer(r.assessment.action);
+        for p in std::mem::take(&mut r.pending) {
+            let go = if args.yes {
+                default
+            } else if interactive {
+                let owed = if default {
+                    ""
+                } else {
+                    " — the SIG owes a reply on this change first"
+                };
+                sandogasa_cli::confirm(
+                    &format!("{} {}: post {}?{owed}", r.package, r.release, p.describe),
+                    default,
+                )?
+            } else {
+                false
+            };
+            if !go {
+                skipped += 1;
+                continue;
+            }
+            match &p.target {
+                Target::Mr { project, iid } => {
+                    gitlab::client(&base, project)?.add_merge_request_note(*iid, &p.body)?
+                }
+                Target::Issue { project, iid } => {
+                    gitlab::client(&base, project)?.add_note(*iid, &p.body)?
+                }
+            }
+            if !args.json {
+                println!("{} {}: posted {}", r.package, r.release, p.describe);
+            }
+            r.posted.push(p.tag);
+        }
+    }
+    Ok(skipped)
 }
 
 /// What a merged or closed MR means for the SIG: upstream has taken
@@ -569,15 +752,14 @@ fn closed_line(r: &Row) -> String {
 }
 
 /// One block per change: the action and whose it is, the builds, and
-/// the last upstream word when there is one.
-pub fn render(rows: &[Row], apply: bool) -> String {
+/// the last upstream word when there is one; then, for more than one
+/// change, what the SIG has to do next, gathered.
+pub fn render(rows: &[Row]) -> String {
     let verb = |what: &str, done: bool| {
         if done {
             format!("posted {what}")
-        } else if apply {
-            format!("{what} not posted")
         } else {
-            format!("would post {what}")
+            format!("to post {what}")
         }
     };
     let mut out = Vec::new();
@@ -585,6 +767,11 @@ pub fn render(rows: &[Row], apply: bool) -> String {
         let a = &r.assessment;
         let has = |p: &str| r.posted.iter().any(|x| x == p);
         let what = match a.action {
+            Action::Landed => format!(
+                "landed — stock {} carries {}, the SIG's build as-is: `retire`",
+                r.release,
+                r.stream_nvr.as_deref().unwrap_or("?")
+            ),
             Action::RebaseBuild => format!(
                 "rebase-build — SIG: stock {} is past {}{}",
                 r.stream_nvr.as_deref().unwrap_or("?"),
@@ -598,12 +785,16 @@ pub fn render(rows: &[Row], apply: bool) -> String {
                     String::new()
                 }
             ),
+            Action::NoMr => "no MR yet — nothing upstream to nudge".to_string(),
             Action::RebaseMr => format!(
                 "rebase-mr — @{}: conflicts; {}",
                 r.mr_author,
                 verb("rebase note", has("rebase@mr"))
             ),
-            Action::Respond => "respond — SIG owes the reply".to_string(),
+            Action::Respond => {
+                "respond — SIG owes the reply; notes here default to no until it is given"
+                    .to_string()
+            }
             Action::Ping => format!(
                 "ping — maintainer: {}{}",
                 verb("ping", has("ping@mr")),
@@ -618,15 +809,23 @@ pub fn render(rows: &[Row], apply: bool) -> String {
                     .unwrap_or_default()
             ),
             Action::Active => "active".to_string(),
+            Action::MergeUnknown => {
+                "ping held — GitLab has not checked whether this still merges; re-run once it has"
+                    .to_string()
+            }
             Action::Closed => closed_line(r),
         };
-        let quiet = if a.action == Action::Closed {
+        let quiet = if matches!(a.action, Action::Closed | Action::Landed | Action::NoMr) {
             String::new()
         } else {
             format!(
-                "; quiet {} days (since {})",
+                "; quiet {} days (since {}){}",
                 a.quiet_days,
-                a.last_activity.format("%Y-%m-%d")
+                a.last_activity.format("%Y-%m-%d"),
+                r.mr_merge_status
+                    .as_deref()
+                    .map(|m| format!("; GitLab: {m}"))
+                    .unwrap_or_default()
             )
         };
         // A blank line between changes: two releases of one package
@@ -634,9 +833,14 @@ pub fn render(rows: &[Row], apply: bool) -> String {
         if !out.is_empty() {
             out.push(String::new());
         }
+        let link = if r.mr_url.is_empty() {
+            &r.issue_url
+        } else {
+            &r.mr_url
+        };
         out.push(format!(
-            "{} {}: {}\n    {what}{quiet}",
-            r.package, r.release, r.mr_url
+            "{} {}: {link}\n    {what}{quiet}",
+            r.package, r.release
         ));
         for an in &a.announce {
             let mut where_ = Vec::new();
@@ -665,11 +869,60 @@ pub fn render(rows: &[Row], apply: bool) -> String {
             ));
         }
     }
+    if rows.len() > 1 {
+        out.push(String::new());
+        out.push(summary(rows));
+    }
+    out.join("\n")
+}
+
+/// What the SIG has to do next, by kind, one line each: the changes
+/// to retire, to rebuild, to answer, and how many notes wait.
+fn summary(rows: &[Row]) -> String {
+    let names = |f: &dyn Fn(&Row) -> bool| {
+        rows.iter()
+            .filter(|r| f(r))
+            .map(|r| format!("{} {}", r.package, r.release))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let retire = names(&|r| {
+        r.assessment.action == Action::Landed
+            || (r.assessment.action == Action::Closed
+                && stream_newer_than_proposed(r.release_nvr.as_deref(), r.stream_nvr.as_deref()))
+    });
+    let rebuild = names(&|r| r.assessment.action == Action::RebaseBuild);
+    let reply = names(&|r| r.assessment.action == Action::Respond);
+    let held = names(&|r| r.assessment.action == Action::MergeUnknown);
+    let notes = rows
+        .iter()
+        .map(|r| r.pending.len() + r.posted.len())
+        .sum::<usize>();
+    let behind_reply = rows
+        .iter()
+        .filter(|r| !default_answer(r.assessment.action))
+        .map(|r| r.pending.len())
+        .sum::<usize>();
+    let mut out = vec!["Next for the SIG:".to_string()];
+    for (label, list) in [
+        ("retire (landed, or upstream took over)", retire),
+        ("rebuild", rebuild),
+        ("reply owed", reply),
+        ("ping held until GitLab rechecks", held),
+    ] {
+        if !list.is_empty() {
+            out.push(format!("  {label}: {list}"));
+        }
+    }
+    out.push(match behind_reply {
+        0 => format!("  notes: {notes}"),
+        n => format!("  notes: {notes}, {n} behind a reply the SIG owes"),
+    });
     out.join("\n")
 }
 
 pub fn run(args: &PingArgs) -> ExitCode {
-    let rows = match scan(args) {
+    let mut rows = match scan(args) {
         Ok(rows) => rows,
         Err(e) => {
             eprintln!("error: {e}");
@@ -677,24 +930,43 @@ pub fn run(args: &PingArgs) -> ExitCode {
         }
     };
     if args.json {
+        // Post first (the defaults, with -y only), so the rows say
+        // what went out.
+        if !args.dry_run
+            && let Err(e) = post(&mut rows, args)
+        {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(&rows).expect("serialize")
         );
-    } else if rows.is_empty() {
-        println!("no open tracking issues with a merge request");
-    } else {
-        println!("{}", render(&rows, args.apply));
-        let pending = rows
-            .iter()
-            .filter(|r| {
-                !r.assessment.announce.is_empty()
-                    || r.assessment.tell_issue_behind
-                    || matches!(r.assessment.action, Action::Ping | Action::RebaseMr)
-            })
-            .count();
-        if pending > 0 && !args.apply {
-            eprintln!("\n{pending} change(s) have notes to post; pass --apply to post them");
+        return ExitCode::SUCCESS;
+    }
+    if rows.is_empty() {
+        println!("no open tracking issues");
+        return ExitCode::SUCCESS;
+    }
+    println!("{}", render(&rows));
+    let pending: usize = rows.iter().map(|r| r.pending.len()).sum();
+    if pending == 0 {
+        return ExitCode::SUCCESS;
+    }
+    if args.dry_run {
+        eprintln!("\n{pending} note(s) would be offered; run without --dry-run to be asked");
+        return ExitCode::SUCCESS;
+    }
+    println!();
+    match post(&mut rows, args) {
+        Ok(0) => {}
+        Ok(skipped) if args.yes => eprintln!("{skipped} note(s) not posted (reply owed)"),
+        Ok(skipped) => eprintln!(
+            "{skipped} note(s) left unposted; at a terminal each is offered, -y takes the defaults"
+        ),
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
         }
     }
     ExitCode::SUCCESS
@@ -728,6 +1000,7 @@ mod tests {
         Facts {
             mr_state: "opened",
             has_conflicts: false,
+            merge_status: "mergeable",
             sha: "2b171ab4",
             updated_at: Some(at(updated)),
             mr_notes,
@@ -761,24 +1034,90 @@ mod tests {
     #[test]
     fn a_build_behind_stock_is_told_to_the_tracking_issue_once_and_never_announced() {
         let mut f = facts(&[], "2025-12-14T20:38:23Z");
-        f.stream_nvr = Some("PackageKit-1.2.8-9.el10");
+        f.stream_nvr = Some("PackageKit-1.2.8-10.el10");
         let a = assess(&f, ME, at(NOW), W);
         assert_eq!(a.action, Action::RebaseBuild);
         assert!(a.tell_issue_behind);
         assert!(a.announce.is_empty(), "no announcing a superseded build");
         let said = [note(
             ME,
-            &behind_body("PackageKit-1.2.8-9.el10", PU, "c10s"),
+            &behind_body("PackageKit-1.2.8-10.el10", PU, "c10s"),
             "2026-09-20T00:00:00Z",
             false,
         )];
         f.issue_notes = &said;
         assert!(!assess(&f, ME, at(NOW), W).tell_issue_behind);
-        f.stream_nvr = Some("PackageKit-1.2.8-10.el10");
+        f.stream_nvr = Some("PackageKit-1.2.8-11.el10");
         assert!(
             assess(&f, ME, at(NOW), W).tell_issue_behind,
             "stock moving again is news again"
         );
+    }
+
+    #[test]
+    fn the_sigs_build_in_stock_as_is_has_landed_whatever_the_mr_says() {
+        // Stock carries PU minus `~proposed`: the change is in, and
+        // that outranks a closed MR, a quiet one, and any announcing.
+        for state in ["opened", "closed", "none"] {
+            let mut f = facts(&[], "2025-12-14T20:38:23Z");
+            f.mr_state = state;
+            f.stream_nvr = Some("PackageKit-1.2.8-9.el10");
+            let a = assess(&f, ME, at(NOW), W);
+            assert_eq!(a.action, Action::Landed, "{state}");
+            assert!(a.announce.is_empty(), "{state}");
+            assert!(!a.tell_issue_behind, "{state}");
+        }
+    }
+
+    #[test]
+    fn an_issue_without_an_mr_announces_its_builds_on_the_issue_only() {
+        let mut f = facts(&[], "2025-12-14T20:38:23Z");
+        f.mr_state = "none";
+        let a = assess(&f, ME, at(NOW), W);
+        assert_eq!(a.action, Action::NoMr);
+        assert_eq!(a.announce.len(), 1);
+        assert!(!a.announce[0].to_mr && a.announce[0].to_issue);
+    }
+
+    #[test]
+    fn a_ping_waits_for_gitlab_to_check_mergeability_and_a_stale_conflict_is_a_rebase() {
+        let mut f = facts(&[], "2025-12-14T20:38:23Z");
+        f.merge_status = "unchecked";
+        assert_eq!(assess(&f, ME, at(NOW), W).action, Action::MergeUnknown);
+        f.merge_status = "checking";
+        assert_eq!(assess(&f, ME, at(NOW), W).action, Action::MergeUnknown);
+        // A conflict GitLab reports in the detailed status counts even
+        // when `has_conflicts` still says false.
+        f.merge_status = "need_rebase";
+        assert_eq!(assess(&f, ME, at(NOW), W).action, Action::RebaseMr);
+        f.merge_status = "mergeable";
+        assert_eq!(assess(&f, ME, at(NOW), W).action, Action::Ping);
+    }
+
+    #[test]
+    fn a_reply_owed_turns_the_default_answer_to_no() {
+        assert!(!default_answer(Action::Respond));
+        for a in [
+            Action::Ping,
+            Action::RebaseMr,
+            Action::RebaseBuild,
+            Action::NoMr,
+        ] {
+            assert!(default_answer(a), "{a:?}");
+        }
+    }
+
+    #[test]
+    fn an_excerpt_is_the_message_not_its_greeting() {
+        let body = "Hi @michel-slm ,\n\nCould you rebase this onto the current branch? \
+                    The spec moved.\n\n<!-- cpu-sig-tracker: ping -->\n";
+        assert_eq!(
+            excerpt(body),
+            "Hi @michel-slm , Could you rebase this onto the current branch? The spec moved."
+        );
+        let long = "word ".repeat(60);
+        let cut = excerpt(&long);
+        assert!(cut.ends_with('…') && cut.chars().count() <= 121, "{cut}");
     }
 
     #[test]
@@ -875,7 +1214,7 @@ mod tests {
             Some(Response {
                 by: "maintainer".into(),
                 at: at("2026-07-03T00:00:00Z"),
-                excerpt: "Sorry, rebasing this week.".into(),
+                excerpt: "Sorry, rebasing this week. More below.".into(),
             })
         );
     }
@@ -934,6 +1273,7 @@ mod tests {
                 .into(),
             mr_state: "opened".into(),
             mr_author: "ngompa".into(),
+            mr_merge_status: Some("mergeable".into()),
             mr_closed_by: None,
             mr_closed_at: None,
             release_nvr: Some(PU.into()),
@@ -953,13 +1293,14 @@ mod tests {
                 }),
             },
             posted: vec![],
+            pending: vec![],
         };
-        let text = render(&[row], false);
+        let text = render(&[row]);
         assert!(
             text.contains(
                 "rebase-build — SIG: stock PackageKit-1.2.8-9.el10 is past \
-                 PackageKit-1.2.8-9~proposed.el10; would post note on the tracking issue; \
-                 quiet 281 days (since 2025-12-14)"
+                 PackageKit-1.2.8-9~proposed.el10; to post note on the tracking issue; \
+                 quiet 281 days (since 2025-12-14); GitLab: mergeable"
             ),
             "{text}"
         );
@@ -986,6 +1327,7 @@ mod tests {
                 mr_url: "https://gitlab.example/mr/13".into(),
                 mr_state: "closed".into(),
                 mr_author: "ngompa".into(),
+                mr_merge_status: None,
                 mr_closed_by: Some("hughsie".into()),
                 mr_closed_at: Some("2026-04-27T10:00:00Z".into()),
                 release_nvr: f.release_nvr.map(str::to_string),
@@ -993,10 +1335,11 @@ mod tests {
                 stream_nvr: stream_nvr.map(str::to_string),
                 assessment: assess(&f, ME, at(NOW), W),
                 posted: vec![],
+                pending: vec![],
             }
         };
         // Stock past the SIG's build: verify, then retire.
-        let out = render(&[row(Some("PackageKit-1.2.8-9.el10"))], false);
+        let out = render(&[row(Some("PackageKit-1.2.8-10.el10"))]);
         assert!(out.contains("closed by @hughsie on 2026-04-27"), "{out}");
         assert!(
             out.contains("past the SIG's PackageKit-1.2.8-9~proposed.el10"),
@@ -1008,12 +1351,12 @@ mod tests {
             "a closed MR has nothing to be quiet about: {out}"
         );
         // Stock not there: a person checks how the change landed.
-        let out = render(&[row(Some("PackageKit-1.2.8-8.el10"))], false);
+        let out = render(&[row(Some("PackageKit-1.2.8-8.el10"))]);
         assert!(
             out.contains("not past the SIG's") && out.contains("another way"),
             "{out}"
         );
-        let out = render(&[row(None)], false);
+        let out = render(&[row(None)]);
         assert!(out.contains("no build to compare"), "{out}");
     }
 }

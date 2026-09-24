@@ -93,7 +93,7 @@ Print help
 <\fIMR_URL\fR>
 Full Merge Request URL to track, e.g. `gitlab.com/redhat/centos\-stream/rpms/xz/\-/merge_requests/42` (with the https:// scheme)
 .SS cpu-sig-tracker ping
-\fBcpu\-sig\-tracker ping\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-days\fR] [\fB\-\-reping\-days\fR] [\fB\-\-apply\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBcpu\-sig\-tracker ping\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-days\fR] [\fB\-\-reping\-days\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Nudge upstream merge requests that have gone quiet, and show the last response on those that have not
 .TP
@@ -112,8 +112,11 @@ Days without upstream activity before a merge request is pinged (default 14)
 \fB\-\-reping\-days\fR \fI<N>\fR
 Days after an unanswered ping before it is repeated (default 30)
 .TP
-\fB\-\-apply\fR
-Post the notes; without it, report what would be posted
+\fB\-y\fR, \fB\-\-yes\fR
+Take the default answer at every prompt without asking, for an unattended run: post each note unless the SIG owes a reply on that change
+.TP
+\fB\-\-dry\-run\fR
+Report only: never prompt, never post
 .TP
 \fB\-\-json\fR
 Emit a machine\-readable JSON array instead of a table

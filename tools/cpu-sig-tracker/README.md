@@ -102,7 +102,7 @@ The issue body follows a canonical format that `status` parses back
 
 ```sh
 cpu-sig-tracker ping -i inventory.toml [--release cNs] [--package PKG,...] \
-    [--days N] [--reping-days N] [--apply] [--json]
+    [--days N] [--reping-days N] [-y] [--dry-run] [--json]
 ```
 
 The SIG's counterpart to Fedora's `needinfo?`, for a change that three
@@ -114,9 +114,13 @@ Stream, and works out what the change needs from whom — each message
 where its reader looks, in the order that makes each step actionable
 for the next person:
 
+- **landed** — stock Stream carries the SIG's build as-is (the same
+  NVR without `~proposed`). The change is in; `retire` the update.
 - **rebase-build** — stock Stream has moved past the SIG's build. The
   SIG rebuilds first; a note on the *tracking issue* says so, once per
   stock build, and nothing goes upstream until the rebuild.
+- **no MR yet** — the tracking issue names no merge request: nothing
+  upstream to nudge, while builds are still announced on the issue.
 - **rebase-mr** — the MR no longer merges cleanly. A note on the *MR*,
   addressed to its author, says it is behind its target branch, once
   per head revision.
@@ -130,7 +134,10 @@ for the next person:
   MR has been quiet for `--days` (default 14). A note on the MR asks
   the maintainer what blocks review and names the tracking issue.
   While it stands unanswered the change is **waiting**; after
-  `--reping-days` (default 30) it is asked again.
+  `--reping-days` (default 30) it is asked again. GitLab is asked to
+  recheck the MR's mergeability on every read, and while it reports
+  the check as not done the ping is **held** rather than sent to an
+  MR that may no longer merge.
 - **respond** — someone upstream spoke last, so the SIG owes the
   reply; the last response (date, author, first line) is shown.
   **active** — touched within the window. **merged / closed** —
@@ -138,15 +145,25 @@ for the next person:
   the line says who closed the MR and when, and whether stock is past
   the SIG's build: verify the change is in, then `retire`.
 
-Nothing is posted without `--apply`; without it the run reports what
-it would post and where. Activity is the later of the MR's own
-`updated_at` (pushes, labels, approvals) and its last human note;
-GitLab's system notes do not count. Every note carries a hidden
-`<!-- cpu-sig-tracker: … -->` marker naming the build, stage or
-revision it is about, which is how later runs recognise it. "Us" is
-the token's login, from `GET /api/v4/user`. A comment on the RHEL Jira
-issue, for its watchers, is the announcement's third channel once the
-Jira crate can write.
+Nothing is posted unasked. After the report, each pending note is
+offered one by one at the prompt, default yes — except on a change
+where someone upstream is waiting on the SIG, where the default is no
+and the prompt says a reply comes first. `-y` takes every default
+without asking, for an unattended run; `--dry-run` never prompts and
+never posts, and neither does a run with `--json` or without a
+terminal. An open MR's line ends with GitLab's own merge status after
+a recheck (`mergeable`, `not_approved`, `discussions_not_resolved`,
+…). With more than one change the report ends with what the SIG has
+to do next — retire, rebuild, reply, pings held — and how many notes
+wait, and how many of those wait behind a reply. Activity is the later of the MR's own `updated_at`
+(pushes, labels, approvals) and its last human note; GitLab's system
+notes do not count. The last response is shown flattened onto one
+line, so a greeting on its first line does not stand for it. Every
+note carries a hidden `<!-- cpu-sig-tracker: … -->` marker naming the
+build, stage or revision it is about, which is how later runs
+recognise it. "Us" is the token's login, from `GET /api/v4/user`. A
+comment on the RHEL Jira issue, for its watchers, is the
+announcement's third channel once the Jira crate can write.
 
 ### `retire`
 
@@ -234,8 +251,9 @@ cpu-sig-tracker file-issue https://gitlab.com/redhat/centos-stream/rpms/xz/-/mer
 cpu-sig-tracker status -i cpu-sig.toml
 
 # Nudge upstream MRs that have gone quiet; read the answers.
-cpu-sig-tracker ping -i cpu-sig.toml            # report
-cpu-sig-tracker ping -i cpu-sig.toml --apply    # post the pings
+cpu-sig-tracker ping -i cpu-sig.toml --dry-run  # report only
+cpu-sig-tracker ping -i cpu-sig.toml            # report, then ask per note
+cpu-sig-tracker ping -i cpu-sig.toml -y         # unattended: the defaults
 
 # Sync GitLab metadata (status, dates, body format).
 cpu-sig-tracker status -i cpu-sig.toml --refresh

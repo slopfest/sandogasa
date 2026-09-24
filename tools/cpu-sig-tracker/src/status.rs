@@ -1059,6 +1059,19 @@ fn suggest_next_action(
     "in-progress"
 }
 
+/// True when stock Stream carries the SIG's build as-is: the same
+/// NVR without the `~proposed` release suffix (`blktrace-1.3.0-13.el10`
+/// for `blktrace-1.3.0-13~proposed.el10`). The change landed; the
+/// Proposed Update is done.
+pub(crate) fn stream_carries_proposed(pu_nvr: Option<&str>, stream_nvr: Option<&str>) -> bool {
+    match (pu_nvr, stream_nvr) {
+        (Some(pu), Some(stream)) => {
+            pu.contains("~proposed") && pu.replace("~proposed", "") == stream
+        }
+        _ => false,
+    }
+}
+
 /// True when both NVRs are known AND the Stream V-R is strictly
 /// greater than the proposed_updates V-R (RPM ordering). If
 /// either side is missing we play it safe and return false —
@@ -1479,6 +1492,24 @@ mod tests {
     #[test]
     fn vr_of_nvr_invalid() {
         assert_eq!(vr_of_nvr("nohyphens"), None);
+    }
+
+    #[test]
+    fn stream_carries_proposed_means_the_same_build_without_the_suffix() {
+        assert!(stream_carries_proposed(
+            Some("blktrace-1.3.0-13~proposed.el10"),
+            Some("blktrace-1.3.0-13.el10")
+        ));
+        // A newer stock build is past the SIG's, not the SIG's own.
+        assert!(!stream_carries_proposed(
+            Some("blktrace-1.3.0-13~proposed.el10"),
+            Some("blktrace-1.3.0-14.el10")
+        ));
+        assert!(!stream_carries_proposed(
+            Some("x-1-1.el10"),
+            Some("x-1-1.el10")
+        ));
+        assert!(!stream_carries_proposed(None, Some("x-1-1.el10")));
     }
 
     #[test]

@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: `ping` after its first live run
+
+The first run over the SIG's ten tracking issues on 2026-09-24 read
+right on the whole and wrong in the details that decide what a person
+does next:
+
+- blktrace c10s came out as rebase-build because stock had
+  `blktrace-1.3.0-13.el10` and the SIG `1.3.0-13~proposed.el10` — the
+  same build, landed as-is, which is the best outcome there is, not a
+  reason to rebuild. Stock carrying the SIG's NVR minus `~proposed` is
+  now **landed**: nothing to nudge, `retire`, whatever the MR's state.
+- liburing c9s vanished into a stderr warning because its tracking
+  issue names no merge request yet; it is now a row (**no MR yet**),
+  with its builds still announced on the tracking issue.
+- minlei's question on blktrace c9s, owed an answer for 315 days,
+  showed as "Hi @michel-slm ," — the note's first line. The last
+  response is now the note flattened onto one line, cut at about 120
+  characters.
+- Two releases of one package ran into each other; a blank line now
+  separates changes, and with more than one the report ends with what
+  the SIG has to do next — retire, rebuild, reply, pings held — and the
+  number of notes waiting.
+- A ping went out on the strength of `has_conflicts`, which is only as
+  fresh as GitLab's last mergeability check — and on an MR nobody has
+  opened in months that check may never have run. GitLab is now asked
+  to recheck on every read (`with_merge_status_recheck`), a
+  `conflict`/`need_rebase` status counts as conflicts, and a ping due
+  while the status is `unchecked`/`checking` is **held** for the next
+  run rather than sent to an MR that may not merge.
+- `--apply` posted every note at once, and was the one flag of its
+  kind in the workspace, where `-y` and `--dry-run` are the words.
+  Nothing is posted unasked now: after the report each note is offered
+  at the prompt, default yes — except on a change where someone
+  upstream is waiting on the SIG, where the default is no and the
+  prompt says the reply comes first, since a note landing on an
+  unanswered question reads as ignoring it. `-y` takes the defaults
+  without asking (an unattended run), `--dry-run` never prompts or
+  posts, and a `--json` or terminal-less run only reports. `--apply` is
+  gone; the rows' `posted` list says what went out.
+- GitLab's merge status was consulted and not shown. An open MR's line
+  now ends with it (`GitLab: discussions_not_resolved` on blktrace c9s,
+  blocked on the very thread the SIG owes an answer to).
+
+sandogasa-gitlab gains `Client::merge_request_rechecked`.
+
 ### cpu-sig-tracker: `sync-issues` adopts tracking issues filed by hand
 
 The first live `ping` run on 2026-09-24 reported two changes where the
@@ -327,7 +372,7 @@ and stage), and **ping** (the MR merges cleanly, the build is current,
 quiet for `--days`, default 14; a note asks the maintainer what blocks
 review, repeated after `--reping-days`, default 30, while unanswered).
 "Waiting" between pings, "respond" with the last response's date,
-author and first line when someone upstream spoke last. `--apply`
+author and first line when someone upstream spoke last. `-y`
 posts; every note carries a marker naming what it is about, so later
 runs recognise it. A Jira comment for the RHEL issue's watchers is the
 announcement's third channel once sandogasa-jira can write.

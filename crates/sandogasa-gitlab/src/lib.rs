@@ -262,10 +262,37 @@ impl Client {
 
     /// Fetch a merge request by its internal ID (iid).
     pub fn merge_request(&self, iid: u64) -> Result<MergeRequest, Box<dyn std::error::Error>> {
+        self.fetch_merge_request(iid, false)
+    }
+
+    /// A merge request, asking GitLab to recompute its mergeability
+    /// first (`with_merge_status_recheck`): on a merge request nobody
+    /// has opened in months `detailed_merge_status` can still say
+    /// `unchecked`, and `has_conflicts` is only as fresh as the last
+    /// check. GitLab answers at once, possibly still `checking`.
+    pub fn merge_request_rechecked(
+        &self,
+        iid: u64,
+    ) -> Result<MergeRequest, Box<dyn std::error::Error>> {
+        self.fetch_merge_request(iid, true)
+    }
+
+    fn fetch_merge_request(
+        &self,
+        iid: u64,
+        recheck: bool,
+    ) -> Result<MergeRequest, Box<dyn std::error::Error>> {
         let encoded = self.project_path.replace('/', "%2F");
         let url = format!(
-            "{}/api/v4/projects/{}/merge_requests/{}",
-            self.base_url, encoded, iid
+            "{}/api/v4/projects/{}/merge_requests/{}{}",
+            self.base_url,
+            encoded,
+            iid,
+            if recheck {
+                "?with_merge_status_recheck=true"
+            } else {
+                ""
+            }
         );
         let resp = self.http.get(&url).send()?;
         Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
