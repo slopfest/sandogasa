@@ -78,15 +78,33 @@ impl CveFix {
     }
 }
 
+/// The distinct versions the release-tag URLs among `references`
+/// name, in order — see [`crate::advisory::release_tag_version`].
+pub fn release_tag_candidates(references: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for v in references
+        .iter()
+        .filter_map(|u| crate::advisory::release_tag_version(u))
+    {
+        if !out.contains(&v) {
+            out.push(v);
+        }
+    }
+    out
+}
+
 /// The fix for `cve_id` as it applies to `component`, from the
 /// sources that need no one's confirmation, in order of authority:
 /// NVD's CPE data; GitHub's advisory database by CVE; the repository
 /// advisories NVD's references name; a range NVD closes at the top
-/// with no fix recorded. `None` when none of them has a fixed
-/// version whose product matches the component (so a CVE in a
-/// library the package bundles is not judged by the package's own
-/// version). NVD answers come through `nvd`; advisory pages are kept
-/// in `advisories` a day like NVD's.
+/// with no fix recorded; and, when every one of those is silent, the
+/// single release NVD's references point at (`…/releases/tag/v1.23.5`),
+/// which names the fixing version without a page to read — two
+/// releases disagree, and that is left for a person. `None` when none
+/// of them has a fixed version whose product matches the component
+/// (so a CVE in a library the package bundles is not judged by the
+/// package's own version). NVD answers come through `nvd`; advisory
+/// pages are kept in `advisories` a day like NVD's.
 pub async fn fix_facts(
     cve_id: &str,
     component: &str,
@@ -154,9 +172,21 @@ pub async fn fix_facts(
         };
         return Some(done(fixed, ranges, source));
     }
-    let inferred = inferred_from_ranges(&facts.ranges);
-    matching(&inferred, &facts.ranges)
-        .map(|(fixed, ranges)| done(fixed, ranges, "NVD's affected range".to_string()))
+    if let Some((fixed, ranges)) = matching(&inferred_from_ranges(&facts.ranges), &facts.ranges) {
+        return Some(done(fixed, ranges, "NVD's affected range".to_string()));
+    }
+    let mut releases = release_tag_candidates(&facts.references);
+    if releases.len() != 1 {
+        return None;
+    }
+    Some(done(
+        vec![sandogasa_nvd::FixedVersion {
+            product: component.to_string(),
+            version: releases.remove(0),
+        }],
+        Vec::new(),
+        "the release NVD's references name".to_string(),
+    ))
 }
 
 /// A GitHub advisory answer, from the day cache or the API.
@@ -488,6 +518,25 @@ mod tests {
             note.as_deref(),
             Some("GHSA-open records no patched version (affected: x >= 1.0)")
         );
+    }
+
+    #[test]
+    fn release_tag_candidates_are_the_distinct_versions_named() {
+        let refs: Vec<String> = [
+            "https://github.com/strukturag/libheif/commit/abc123",
+            "https://github.com/strukturag/libheif/releases/tag/v1.23.5",
+            "https://github.com/strukturag/libheif/security/advisories/GHSA-x",
+            "https://github.com/strukturag/libheif/releases/tag/v1.23.5",
+        ]
+        .map(str::to_string)
+        .into();
+        // The same release twice, with another reference between: one
+        // candidate, so a fix.
+        assert_eq!(release_tag_candidates(&refs), vec!["1.23.5".to_string()]);
+        let mut refs = refs;
+        refs.push("https://github.com/strukturag/libheif/releases/tag/v1.22.9".to_string());
+        assert_eq!(release_tag_candidates(&refs).len(), 2);
+        assert!(release_tag_candidates(&[]).is_empty());
     }
 
     #[test]

@@ -13,7 +13,8 @@ Where a CVE is fixed, and whether a build has that fix.
   Fedora component and its provides; `fix_facts`, the sources that
   need no one's confirmation asked in order of authority — NVD, GitHub's
   database by CVE, the repository advisories NVD's references name, a
-  range closed at the top — for one `CveFix` a tool can judge a build
+  range closed at the top, the single release the references point at
+  (`release_tag_candidates`) — for one `CveFix` a tool can judge a build
   against; `cve_id_in` and `is_security_tracker` for reading a Bugzilla
   summary.
 - **`cache`** — `NvdCache`, NVD answers paced to its rate limit (5 per

@@ -259,7 +259,9 @@ about each one by hand.
 A security tracker on a package the update builds, filed against the
 update's release, now has its fix looked up through sandogasa-cve — NVD
 first, then GitHub's advisory database by CVE, then the repository
-advisories NVD's references name, then a range NVD closes at the top —
+advisories NVD's references name, then a range NVD closes at the top,
+then the single release NVD's references point at (the tag names the
+version without a page to read; two releases are left to a person) —
 and the verdict decides it: `+1` when the build is at or past the fix
 and outside every range still marked vulnerable, `-1` when below, with
 the CVE, the fixed version and the source in the reason a person reads.
