@@ -1059,11 +1059,13 @@ fn suggest_next_action(
     "in-progress"
 }
 
-/// True when stock Stream carries the SIG's build as-is: the same
-/// NVR without the `~proposed` release suffix (`blktrace-1.3.0-13.el10`
-/// for `blktrace-1.3.0-13~proposed.el10`). The change landed; the
-/// Proposed Update is done.
-pub(crate) fn stream_carries_proposed(pu_nvr: Option<&str>, stream_nvr: Option<&str>) -> bool {
+/// True when stock Stream's NVR is the SIG's minus the `~proposed`
+/// release suffix (`blktrace-1.3.0-13.el10` for
+/// `blktrace-1.3.0-13~proposed.el10`). A hint, not proof that the
+/// change landed: blktrace's stock `-13` was a mass rebuild, and the
+/// SIG's `-13~proposed` had been numbered off the affected release.
+/// Whether the change is in stock is read from stock's history.
+pub(crate) fn stream_shares_release_number(pu_nvr: Option<&str>, stream_nvr: Option<&str>) -> bool {
     match (pu_nvr, stream_nvr) {
         (Some(pu), Some(stream)) => {
             pu.contains("~proposed") && pu.replace("~proposed", "") == stream
@@ -1495,21 +1497,21 @@ mod tests {
     }
 
     #[test]
-    fn stream_carries_proposed_means_the_same_build_without_the_suffix() {
-        assert!(stream_carries_proposed(
+    fn stream_shares_release_number_means_the_same_nvr_without_the_suffix() {
+        assert!(stream_shares_release_number(
             Some("blktrace-1.3.0-13~proposed.el10"),
             Some("blktrace-1.3.0-13.el10")
         ));
         // A newer stock build is past the SIG's, not the SIG's own.
-        assert!(!stream_carries_proposed(
+        assert!(!stream_shares_release_number(
             Some("blktrace-1.3.0-13~proposed.el10"),
             Some("blktrace-1.3.0-14.el10")
         ));
-        assert!(!stream_carries_proposed(
+        assert!(!stream_shares_release_number(
             Some("x-1-1.el10"),
             Some("x-1-1.el10")
         ));
-        assert!(!stream_carries_proposed(None, Some("x-1-1.el10")));
+        assert!(!stream_shares_release_number(None, Some("x-1-1.el10")));
     }
 
     #[test]

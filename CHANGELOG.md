@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: `ping` calls a change landed only on evidence
+
+A first cut of `ping` read stock carrying the SIG's NVR minus
+`~proposed` as the change having landed, and told the SIG to `retire`
+blktrace on c10s. Stock's `blktrace-1.3.0-13.el10` is Troy's October
+2024 mass rebuild (RHEL-64018) — the *affected* version, the one the
+tracking issue names as such — while the SIG's `1.3.0-13~proposed`
+had been numbered off it instead of off the fix, and MR !5, which bumps
+to `-14`, sits open and unreviewed. Nothing had landed; a release
+number had been reached twice.
+
+Landed now needs evidence: the MR is merged, or a commit on stock's
+release branch names the change — the tracking issue's RHEL key, the
+RHEL key in the MR's branch name (`c10s-RHEL-170492`), a CVE id from
+the MR's or the issue's title, or the MR's title, the changelog line
+the SIG wrote. Stock's history is read through the dist-git repo's
+commits, which for an rpmautospec package like PackageKit is also its
+changelog (`Fix CVE-2026-41651 … Resolves: RHEL-170492`, hughsie's
+own commit, is what proves PackageKit c10s landed; `Rebase to version
+2.12. Resolves: RHEL-114115` proves liburing c9s, whose hand-filed
+issue links that key in plain prose). The reason line says what the
+evidence was. A matching release number with no
+evidence is the opposite case, a **collision**: the SIG's `~proposed`
+build sorts below stock and installs nowhere, so it is rebase-build
+with a note on the tracking issue asking for a higher release.
+sandogasa-gitlab gains `Client::branch_commits` and
+`RepoCommit::message`.
+
 ### cpu-sig-tracker: `retire` takes a package name
 
 `retire` took only a tracking issue URL, which meant a trip to GitLab
@@ -55,11 +83,10 @@ The first run over the SIG's ten tracking issues on 2026-09-24 read
 right on the whole and wrong in the details that decide what a person
 does next:
 
-- blktrace c10s came out as rebase-build because stock had
-  `blktrace-1.3.0-13.el10` and the SIG `1.3.0-13~proposed.el10` — the
-  same build, landed as-is, which is the best outcome there is, not a
-  reason to rebuild. Stock carrying the SIG's NVR minus `~proposed` is
-  now **landed**: nothing to nudge, `retire`, whatever the MR's state.
+- A merged MR, or stock's history naming the change, means the change
+  **landed**: nothing to nudge, `retire`, whatever else the MR says
+  (see the next entry for how that is read, and for the wrong turn
+  taken first).
 - liburing c9s vanished into a stderr warning because its tracking
   issue names no merge request yet; it is now a row (**no MR yet**),
   with its builds still announced on the tracking issue.

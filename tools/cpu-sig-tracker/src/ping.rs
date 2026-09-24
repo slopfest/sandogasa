@@ -23,11 +23,17 @@
 //!   maintainer what blocks review, and again after `--reping-days`
 //!   if it stays unanswered.
 //!
-//! Before any of that, stock Stream carrying the SIG's build as-is
-//! means the change **landed**: nothing to nudge, `retire`. A merged
-//! or closed MR means upstream took the change or dropped it: the
-//! report says who and when, and whether stock is past the SIG's
-//! build. A tracking issue with **no MR** yet still gets its builds
+//! Before any of that, the change may have **landed**: the MR is
+//! merged, or stock's dist-git history names the change — the
+//! tracking issue's RHEL key, the MR's CVE or title — in which case
+//! nothing is nudged and the update is retired. A matching release
+//! number alone proves nothing (blktrace's stock `-13` was a mass
+//! rebuild, the SIG's `-13~proposed` numbered off the affected
+//! release); with no trace of the change it is a collision that
+//! shadows the SIG's build, and the SIG rebuilds with a higher
+//! release. A merged or closed MR without that evidence means
+//! upstream took the change or dropped it: the report says who and
+//! when, and whether stock is past the SIG's build. A tracking issue with **no MR** yet still gets its builds
 //! announced. A ping is held while GitLab has not checked the MR's
 //! mergeability (its `detailed_merge_status`), so an old MR is not
 //! nudged before it is known to merge; GitLab is asked to recheck on
@@ -46,7 +52,7 @@ use chrono::{DateTime, Utc};
 use crate::gitlab::{self, Note};
 use crate::status::{
     fetch_proposed_updates_nvrs, fetch_proposed_updates_testing_nvrs, fetch_stream_nvrs,
-    parse_mr_line, scan_mr_url_in_body, stream_carries_proposed, stream_newer_than_proposed,
+    parse_mr_line, scan_mr_url_in_body, stream_newer_than_proposed, stream_shares_release_number,
     tracking_project_of,
 };
 use crate::utils::gitlab_base;
@@ -117,8 +123,8 @@ pub struct PingArgs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Action {
-    /// Stock Stream carries the SIG's build as-is: the change landed,
-    /// and the Proposed Update is done.
+    /// The MR is merged, or stock's history names the change: it
+    /// landed, and the Proposed Update is done.
     Landed,
     /// Stock Stream is past the SIG's build: the SIG rebuilds first.
     RebaseBuild,
@@ -185,6 +191,9 @@ pub struct Facts<'a> {
     pub testing_nvr: Option<&'a str>,
     /// Stock Stream's build.
     pub stream_nvr: Option<&'a str>,
+    /// What in stock's dist-git history names this change, when
+    /// something does: `stock commit 99e0f170 (Fix CVE-2026-41651)`.
+    pub landed_evidence: Option<&'a str>,
 }
 
 /// The windows the decision uses, in days.
@@ -197,6 +206,14 @@ pub struct Windows {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Assessment {
     pub action: Action,
+    /// Why the change counts as landed: `MR merged`, or the stock
+    /// commit that names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub landed_by: Option<String>,
+    /// Stock reached the SIG's release number without the change:
+    /// the SIG's build sorts below it and needs a higher release.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub release_collision: bool,
     /// Whether the tracking issue still has to be told the build is
     /// behind stock (`rebase-build` only).
     pub tell_issue_behind: bool,
@@ -327,8 +344,15 @@ pub fn assess(f: &Facts<'_>, me: &str, now: DateTime<Utc>, w: Windows) -> Assess
         excerpt: excerpt(&n.body),
     });
     let ours_last = human.last().is_some_and(|n| author(n) == me);
-    let landed = stream_carries_proposed(f.release_nvr, f.stream_nvr);
+    let landed_by = if f.mr_state == "merged" {
+        Some("MR merged".to_string())
+    } else {
+        f.landed_evidence.map(str::to_string)
+    };
+    let landed = landed_by.is_some();
     let build_behind = !landed && stream_newer_than_proposed(f.release_nvr, f.stream_nvr);
+    let release_collision =
+        build_behind && stream_shares_release_number(f.release_nvr, f.stream_nvr);
     let rebase_said = ours(f.mr_notes, me, &format!("{REBASE_MARKER}{} -->", f.sha)).is_some();
     let ping_due = match pinged_at {
         None => true,
@@ -394,6 +418,8 @@ pub fn assess(f: &Facts<'_>, me: &str, now: DateTime<Utc>, w: Windows) -> Assess
     }
     Assessment {
         action,
+        landed_by,
+        release_collision,
         tell_issue_behind,
         announce,
         last_activity,
@@ -425,14 +451,91 @@ pub fn rebase_body(mr_author: &str, target: &str, sha: &str) -> String {
     )
 }
 
-/// The note on the tracking issue when stock has passed the SIG's build.
+/// The note on the tracking issue when stock has passed the SIG's
+/// build — or reached its release number by another route, in which
+/// case the SIG's `~proposed` build sorts below stock and installs
+/// nowhere until it is renumbered.
 pub fn behind_body(stream_nvr: &str, release_nvr: &str, release: &str) -> String {
-    format!(
-        "Stock CentOS Stream {} now carries `{stream_nvr}`, ahead of the SIG's \
-         `{release_nvr}`: this Proposed Update needs a rebase and rebuild before \
-         anything else moves.\n\n{BEHIND_MARKER}{stream_nvr} -->\n",
-        stream_of(release)
-    )
+    let what = if stream_shares_release_number(Some(release_nvr), Some(stream_nvr)) {
+        format!(
+            "Stock CentOS Stream {} now carries `{stream_nvr}` — the SIG's release number \
+             without the SIG's change (a mass rebuild, say), so the SIG's `{release_nvr}` \
+             sorts below stock and installs nowhere: this Proposed Update needs a rebuild \
+             with a higher release before anything else moves.",
+            stream_of(release)
+        )
+    } else {
+        format!(
+            "Stock CentOS Stream {} now carries `{stream_nvr}`, ahead of the SIG's \
+             `{release_nvr}`: this Proposed Update needs a rebase and rebuild before \
+             anything else moves.",
+            stream_of(release)
+        )
+    };
+    format!("{what}\n\n{BEHIND_MARKER}{stream_nvr} -->\n")
+}
+
+/// The words in stock's history that would mean this change landed:
+/// the tracking issue's RHEL key, any RHEL key in the MR's branch
+/// name, any CVE id in the MR's or issue's title, and the MR's title
+/// itself (the changelog line the SIG wrote).
+pub fn evidence_tokens(
+    issue_body: &str,
+    issue_title: &str,
+    mr_title: &str,
+    mr_branch: &str,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |t: String| {
+        if !t.is_empty() && !out.contains(&t) {
+            out.push(t);
+        }
+    };
+    // Every RHEL key the issue body carries — a hand-filed issue links
+    // its Jira anywhere, not on the tool's `- **JIRA**:` line — and any
+    // in the MR's branch name (`c10s-RHEL-170492`, where the scanner
+    // for prose would reject a key glued to a dash).
+    for text in [issue_body, mr_branch] {
+        for (i, _) in text.match_indices("RHEL-") {
+            let digits: String = text[i + 5..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if !digits.is_empty() {
+                push(format!("RHEL-{digits}"));
+            }
+        }
+    }
+    for text in [mr_title, issue_title] {
+        for w in text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-') {
+            if w.starts_with("CVE-") && w.len() > 8 {
+                push(w.to_string());
+            }
+        }
+    }
+    push(mr_title.trim().to_string());
+    out
+}
+
+/// The first stock commit whose message names one of `tokens`,
+/// described for a reason line.
+pub fn find_evidence(
+    commits: &[sandogasa_gitlab::RepoCommit],
+    tokens: &[String],
+) -> Option<String> {
+    commits.iter().find_map(|c| {
+        let hay = c.message.to_lowercase();
+        tokens
+            .iter()
+            .find(|t| t.len() > 3 && hay.contains(&t.to_lowercase()))
+            .map(|t| {
+                format!(
+                    "stock commit {} ({}) names {t}",
+                    &c.id[..c.id.len().min(8)],
+                    c.title.trim()
+                )
+            })
+    })
 }
 
 /// The note announcing a SIG build to whoever follows the change.
@@ -542,6 +645,27 @@ fn scan(args: &PingArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
                 .and_then(|m| m.author.as_ref())
                 .map(|a| a.username.clone())
                 .unwrap_or_default();
+            // Has the change landed in stock? Its dist-git history says:
+            // the tracking issue's RHEL key, the MR's CVE or title in a
+            // stock commit. A matching release number alone does not.
+            let tokens = evidence_tokens(
+                &body,
+                &issue.title,
+                mr.map_or("", |m| m.title.as_str()),
+                mr.map_or("", |m| m.source_branch.as_str()),
+            );
+            let landed_evidence =
+                match gitlab::client(&base, &format!("redhat/centos-stream/rpms/{package}"))
+                    .and_then(|c| c.branch_commits(release))
+                {
+                    Ok(commits) => find_evidence(&commits, &tokens),
+                    Err(e) => {
+                        if args.verbose {
+                            eprintln!("[ping] {package} {release}: cannot read stock history: {e}");
+                        }
+                        None
+                    }
+                };
             let facts = Facts {
                 mr_state: mr.map_or("none", |m| m.state.as_str()),
                 has_conflicts: mr.and_then(|m| m.has_conflicts).unwrap_or(false),
@@ -555,6 +679,7 @@ fn scan(args: &PingArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
                 release_nvr: release_nvrs.get(&package).map(String::as_str),
                 testing_nvr: testing_nvrs.get(&package).map(String::as_str),
                 stream_nvr: stream_nvrs.get(&package).map(String::as_str),
+                landed_evidence: landed_evidence.as_deref(),
             };
             let assessment = assess(&facts, &me, now, windows);
             let on_mr = |tag: &str, what: &str, body: String| Pending {
@@ -768,9 +893,23 @@ pub fn render(rows: &[Row]) -> String {
         let has = |p: &str| r.posted.iter().any(|x| x == p);
         let what = match a.action {
             Action::Landed => format!(
-                "landed — stock {} carries {}, the SIG's build as-is: `retire`",
-                r.release,
-                r.stream_nvr.as_deref().unwrap_or("?")
+                "landed — {}: `retire`",
+                a.landed_by.as_deref().unwrap_or("the change is in stock")
+            ),
+            Action::RebaseBuild if a.release_collision => format!(
+                "rebase-build — SIG: stock {} took the SIG's release number without the \
+                 change (no trace of it in stock's history), so {} sorts below it; rebuild \
+                 with a higher release{}",
+                r.stream_nvr.as_deref().unwrap_or("?"),
+                r.release_nvr.as_deref().unwrap_or("?"),
+                if a.tell_issue_behind {
+                    format!(
+                        "; {}",
+                        verb("note on the tracking issue", has("behind@issue"))
+                    )
+                } else {
+                    String::new()
+                }
             ),
             Action::RebaseBuild => format!(
                 "rebase-build — SIG: stock {} is past {}{}",
@@ -1026,6 +1165,7 @@ mod tests {
             release_nvr: Some(PU),
             testing_nvr: Some(PU),
             stream_nvr: Some("PackageKit-1.2.8-8.el10"),
+            landed_evidence: None,
         }
     }
 
@@ -1073,18 +1213,99 @@ mod tests {
     }
 
     #[test]
-    fn the_sigs_build_in_stock_as_is_has_landed_whatever_the_mr_says() {
-        // Stock carries PU minus `~proposed`: the change is in, and
-        // that outranks a closed MR, a quiet one, and any announcing.
+    fn landed_needs_evidence_and_a_shared_release_number_alone_is_a_collision() {
+        // Stock has the SIG's number minus `~proposed` and nothing else
+        // says the change is in: blktrace's mass rebuild. The SIG's
+        // build sorts below stock — rebuild with a higher release.
+        let mut f = facts(&[], "2025-12-14T20:38:23Z");
+        f.stream_nvr = Some("PackageKit-1.2.8-9.el10");
+        let a = assess(&f, ME, at(NOW), W);
+        assert_eq!(a.action, Action::RebaseBuild);
+        assert!(a.release_collision && a.tell_issue_behind);
+        assert!(a.announce.is_empty());
+        assert!(behind_body("PackageKit-1.2.8-9.el10", PU, "c10s").contains("higher release"));
+        // Evidence in stock's history: landed, whatever the MR says.
         for state in ["opened", "closed", "none"] {
             let mut f = facts(&[], "2025-12-14T20:38:23Z");
             f.mr_state = state;
             f.stream_nvr = Some("PackageKit-1.2.8-9.el10");
+            f.landed_evidence =
+                Some("stock commit 99e0f170 (Fix CVE-2026-41651) names CVE-2026-41651");
             let a = assess(&f, ME, at(NOW), W);
             assert_eq!(a.action, Action::Landed, "{state}");
-            assert!(a.announce.is_empty(), "{state}");
-            assert!(!a.tell_issue_behind, "{state}");
+            assert!(
+                a.landed_by.as_deref().unwrap().contains("99e0f170"),
+                "{state}"
+            );
+            assert!(a.announce.is_empty() && !a.tell_issue_behind, "{state}");
         }
+        // A merged MR is evidence in itself.
+        let mut f = facts(&[], "2025-12-14T20:38:23Z");
+        f.mr_state = "merged";
+        assert_eq!(
+            assess(&f, ME, at(NOW), W).landed_by.as_deref(),
+            Some("MR merged")
+        );
+    }
+
+    #[test]
+    fn evidence_is_a_rhel_key_a_cve_or_the_mrs_title_in_a_stock_commit() {
+        let tokens = evidence_tokens(
+            "- **JIRA**: [RHEL-170526](https://issues.redhat.com/browse/RHEL-170526)\n",
+            "PackageKit: 1.2.8-8.el10 → 1.2.8-9.el10",
+            "Fix CVE-2026-41651 local root exploit",
+            "c10s-RHEL-170492",
+        );
+        assert_eq!(
+            tokens,
+            vec![
+                "RHEL-170526",
+                "RHEL-170492",
+                "CVE-2026-41651",
+                "Fix CVE-2026-41651 local root exploit"
+            ]
+        );
+        let commit = |id: &str, title: &str, message: &str| -> sandogasa_gitlab::RepoCommit {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "title": title, "message": message
+            }))
+            .unwrap()
+        };
+        let stock = [
+            commit(
+                "acdd66c3aaaa",
+                "Bump release for October 2024 mass rebuild:",
+                "Bump release for October 2024 mass rebuild:\nResolves: RHEL-64018",
+            ),
+            commit(
+                "99e0f170bbbb",
+                "Fix CVE-2026-41651",
+                "Fix CVE-2026-41651\n\nResolves: RHEL-170492",
+            ),
+        ];
+        assert_eq!(
+            find_evidence(&stock, &tokens).as_deref(),
+            Some("stock commit 99e0f170 (Fix CVE-2026-41651) names RHEL-170492")
+        );
+        // A hand-filed issue links its Jira wherever it likes.
+        assert_eq!(
+            evidence_tokens(
+                "See https://issues.redhat.com/browse/RHEL-114115 for the RHEL side",
+                "",
+                "",
+                ""
+            ),
+            vec!["RHEL-114115"]
+        );
+        // blktrace: the key from the MR's branch, the MR's title — and
+        // stock's history has a mass rebuild only.
+        let tokens = evidence_tokens(
+            "* Stream MR: …",
+            "blktrace: Move librsvg2-tools runtime requirement",
+            "Move librsvg2-tools runtime requirement to the iowatcher subpackage",
+            "c10s-RHEL-123605",
+        );
+        assert_eq!(find_evidence(&stock[..1], &tokens), None);
     }
 
     #[test]
@@ -1136,9 +1357,9 @@ mod tests {
                 pending: vec![],
             }
         };
-        // Landed: the tracking issue, which `retire` takes.
+        // Landed (the MR merged): the tracking issue, which `retire` takes.
         let landed = row(
-            "closed",
+            "merged",
             "PackageKit-1.2.8-9.el10",
             "https://gitlab.example/mr/5",
             "https://gitlab.example/issue/2",
@@ -1294,6 +1515,14 @@ mod tests {
         let mut f = facts(&sys, "2025-12-14T00:00:00Z");
         f.mr_state = "merged";
         let a = assess(&f, ME, at(NOW), W);
+        assert_eq!(
+            a.action,
+            Action::Landed,
+            "a merged MR is the change landing"
+        );
+        assert!(a.announce.is_empty());
+        f.mr_state = "closed";
+        let a = assess(&f, ME, at(NOW), W);
         assert_eq!(a.action, Action::Closed);
         assert!(a.announce.is_empty());
     }
@@ -1343,6 +1572,8 @@ mod tests {
             stream_nvr: Some("PackageKit-1.2.8-9.el10".into()),
             assessment: Assessment {
                 action: Action::RebaseBuild,
+                landed_by: None,
+                release_collision: false,
                 tell_issue_behind: true,
                 announce: vec![],
                 last_activity: at("2025-12-14T20:38:23Z"),

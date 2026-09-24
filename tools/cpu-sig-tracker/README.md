@@ -137,11 +137,19 @@ Stream, and works out what the change needs from whom — each message
 where its reader looks, in the order that makes each step actionable
 for the next person:
 
-- **landed** — stock Stream carries the SIG's build as-is (the same
-  NVR without `~proposed`). The change is in; `retire` the update.
+- **landed** — the MR is merged, or stock's dist-git history names the
+  change: a commit on the release branch carrying the tracking issue's
+  RHEL key, the RHEL key in the MR's branch name, a CVE id from the
+  MR's or issue's title, or the MR's title itself. The change is in;
+  `retire` the update. A stock NVR that merely matches the SIG's
+  without `~proposed` is not evidence — a mass rebuild reaches the
+  same number.
 - **rebase-build** — stock Stream has moved past the SIG's build. The
   SIG rebuilds first; a note on the *tracking issue* says so, once per
-  stock build, and nothing goes upstream until the rebuild.
+  stock build, and nothing goes upstream until the rebuild. When stock
+  reached the SIG's release number without the change, the SIG's
+  `~proposed` build sorts below stock and installs nowhere, and the
+  note says to rebuild with a higher release.
 - **no MR yet** — the tracking issue names no merge request: nothing
   upstream to nudge, while builds are still announced on the issue.
 - **rebase-mr** — the MR no longer merges cleanly. A note on the *MR*,

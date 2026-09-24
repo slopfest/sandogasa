@@ -202,6 +202,9 @@ pub struct RepoCommit {
     pub id: String,
     #[serde(default)]
     pub title: String,
+    /// The full message, `Resolves: RHEL-…` trailers included.
+    #[serde(default)]
+    pub message: String,
     #[serde(default)]
     pub author_name: String,
     #[serde(default)]
@@ -357,6 +360,26 @@ impl Client {
             self.base_url, encoded, iid
         );
         let resp = self.http.get(&url).query(&[("per_page", "100")]).send()?;
+        Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
+    }
+
+    /// The newest commits on `branch`, one page of up to a hundred:
+    /// a dist-git branch's recent history, which for an rpmautospec
+    /// package is also its changelog.
+    pub fn branch_commits(
+        &self,
+        branch: &str,
+    ) -> Result<Vec<RepoCommit>, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/repository/commits",
+            self.base_url, encoded
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("ref_name", branch), ("per_page", "100")])
+            .send()?;
         Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
     }
 
