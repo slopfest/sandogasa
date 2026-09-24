@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### ebranch: an `[epel-all]` or `[fedora-all]` CVE tracker counts for every branch
+
+Voting on libheif's EPEL 9 update on 2026-09-24, `check-update` asked
+about four freshly filed CVE trackers with a default of 0, while the
+same four had been voted +1 on the EPEL 10 updates minutes earlier
+without a question. The security team files one EPEL tracker per CVE,
+on the newest EPEL version (`epel10`) and marked `[epel-all]`, to cover
+every EPEL branch — as `[fedora-all]` trackers sit on rawhide and cover
+every Fedora release. ebranch read the version field alone, so on epel9
+the trackers were another release's and left to the user.
+
+A tracker whose title carries the product's all-branches marker is now
+this release's tracker on any branch of that product, and is looked up
+and voted like the rest: for those four, NVD lists the CVEs as Deferred
+with no fixed version, but their references carry libheif's own
+advisories and the v1.23.2 release tag, so 1.23.5 answers them +1.
+
 ### cpu-sig-tracker: `timeline` says how long each Proposed Update took
 
 How long the SIG carries a change until stock catches up, and how far

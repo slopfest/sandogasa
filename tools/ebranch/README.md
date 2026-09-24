@@ -665,7 +665,9 @@ wording is what covers EPEL, which has no such trackers.
 CVE trackers are judged by where the CVE is fixed, since their titles
 carry no version. A security tracker on a package the update builds,
 filed against the update's release (`Fedora EPEL`/`epel10` for an
-epel10.2 update, `Fedora`/`46` for f46), has its fix looked up — NVD's
+epel10.2 update, `Fedora`/`46` for f46) — or against the whole product,
+the security team's `[epel-all]` and `[fedora-all]` trackers, which sit
+on one version and cover every branch — has its fix looked up — NVD's
 CPE data first, then GitHub's advisory database by CVE, then the
 repository advisories NVD's references name, then a range NVD closes
 at the top, then the single release NVD's references point at — and is

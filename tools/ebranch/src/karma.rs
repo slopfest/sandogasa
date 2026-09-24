@@ -49,16 +49,32 @@ impl BugFacts {
     /// Whether the bug is a CVE tracker filed against the release the
     /// update targets — a tracker for another release is not this
     /// update's to answer.
+    /// Whether this security tracker is for `branch`'s release: the
+    /// product and version match, or the tracker is one of the
+    /// security team's `[fedora-all]` / `[epel-all]` ones — filed on
+    /// one version (rawhide, the newest EPEL) and covering every
+    /// branch of the product, so the version field alone would say no.
     fn is_tracker_for(&self, branch: &str) -> bool {
         if !sandogasa_cve::facts::is_security_tracker(&self.summary, &self.keywords) {
             return false;
         }
         match sandogasa_bugclass::bugzilla::product_version_for_branch(branch) {
             Some((product, version)) => {
-                self.product.as_deref() == Some(product) && self.version.contains(&version)
+                self.product.as_deref() == Some(product)
+                    && (self.version.contains(&version) || self.covers_all_of(product))
             }
             None => false,
         }
+    }
+
+    /// `[fedora-all]` for Fedora, `[epel-all]` for Fedora EPEL.
+    fn covers_all_of(&self, product: &str) -> bool {
+        let marker = match product {
+            "Fedora" => "[fedora-all]",
+            "Fedora EPEL" => "[epel-all]",
+            _ => return false,
+        };
+        self.summary.to_ascii_lowercase().contains(marker)
     }
 }
 
@@ -1070,7 +1086,7 @@ mod tests {
     /// a source states — or none, when no source has one.
     fn cve_bug(component: &str, version: &str, fixed: Option<&str>) -> BugFacts {
         BugFacts {
-            summary: format!("CVE-2026-62292 {component}: denial of service [epel-all]"),
+            summary: format!("CVE-2026-62292 {component}: denial of service [{version}]"),
             component: Some(component.to_string()),
             product: Some(if version.starts_with("epel") {
                 "Fedora EPEL".to_string()
@@ -1211,6 +1227,29 @@ mod tests {
 
     fn is_unknown(verdict: Verdict) -> bool {
         matches!(verdict, Verdict::Unknown)
+    }
+
+    #[test]
+    fn an_epel_all_tracker_is_every_epel_branchs_tracker() {
+        // Filed on epel10 by the security team, marked [epel-all]: an
+        // epel9 update answers it too. Without the marker, epel10's
+        // tracker is not epel9's business.
+        let mut all = cve_bug("libheif", "epel10", Some("1.23.2"));
+        all.summary =
+            "CVE-2026-84444 libheif: libheif: Out-of-bounds write via crafted tile [epel-all]"
+                .to_string();
+        assert!(all.is_tracker_for("epel9"));
+        assert!(all.is_tracker_for("epel10.2"));
+        assert!(!all.is_tracker_for("f46"), "the marker is per product");
+        let one = cve_bug("libheif", "epel10", Some("1.23.2"));
+        assert!(one.is_tracker_for("epel10"));
+        assert!(!one.is_tracker_for("epel9"));
+        // Fedora's spelling.
+        let mut fedora = cve_bug("libheif", "rawhide", Some("1.23.2"));
+        fedora.product = Some("Fedora".to_string());
+        fedora.summary = "CVE-2026-84444 libheif: … [fedora-all]".to_string();
+        assert!(fedora.is_tracker_for("f46"));
+        assert!(!fedora.is_tracker_for("epel9"));
     }
 
     #[test]
