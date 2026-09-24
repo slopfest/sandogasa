@@ -193,10 +193,16 @@ announcement's third channel once the Jira crate can write.
 ### `retire`
 
 ```sh
-cpu-sig-tracker retire <issue-url> [--yes] [--force] [--claim]
+cpu-sig-tracker retire <issue-url | package> [--release cNs] [--yes] [--force] [--claim]
 ```
 
-Closes a tracking issue after verifying the linked JIRA is resolved
+Takes the tracking issue's URL, or the package name: a name is
+resolved through the SIG's open tracking issues (what `list-issues`
+shows), `--release` picking the release when the package is tracked in
+several; without it, several matches are listed and chosen by number
+at a terminal, and are an error in an unattended run.
+
+Closes the tracking issue after verifying the linked JIRA is resolved
 and the package is no longer tagged in `-release` Koji. Sets GitLab
 work-item status to `Done` / `Won't do` (mirroring the JIRA
 resolution), stamps `due_date` from JIRA's `resolutiondate`, leaves
@@ -268,7 +274,7 @@ cpu-sig-tracker status -i cpu-sig.toml --refresh
 
 # Once Stream catches up: untag, then retire.
 cpu-sig-tracker untag xz --release c10s --yes
-cpu-sig-tracker retire https://gitlab.com/CentOS/proposed_updates/rpms/xz/-/work_items/1 --yes
+cpu-sig-tracker retire xz --release c10s --yes
 ```
 
 ## System-wide configuration

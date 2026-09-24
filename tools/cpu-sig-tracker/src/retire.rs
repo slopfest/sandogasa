@@ -25,9 +25,15 @@ const KOJI_PROFILE: &str = "cbs";
 
 #[derive(clap::Args)]
 pub struct RetireArgs {
-    /// Full tracking issue URL (either `/-/issues/<n>` or
-    /// `/-/work_items/<n>` form).
-    pub issue_url: String,
+    /// Tracking issue URL (`/-/issues/<n>` or `/-/work_items/<n>`),
+    /// or a package name, resolved through the SIG's open tracking
+    /// issues (`list-issues`).
+    pub issue: String,
+
+    /// With a package name: the release to retire it in (e.g.
+    /// `c10s`), when it is tracked in several.
+    #[arg(long)]
+    pub release: Option<String>,
 
     /// Skip the interactive confirmation prompt.
     #[arg(short, long)]
@@ -63,7 +69,8 @@ pub fn run(args: &RetireArgs) -> ExitCode {
 }
 
 pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let (_parsed_base, project_path, iid) = gitlab::parse_issue_url(&args.issue_url)?;
+    let issue_url = resolve_issue(args)?;
+    let (_parsed_base, project_path, iid) = gitlab::parse_issue_url(&issue_url)?;
     // parse_issue_url extracts the host from the user-supplied
     // URL, but we route API calls through `gitlab_base()` so
     // tests can override via `CPU_SIG_TRACKER_GITLAB_BASE`.
@@ -198,6 +205,72 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
 /// The identity comes from the token rather than from configuration —
 /// GitLab assigns by numeric id, which nobody knows offhand, and the token
 /// already says who it belongs to.
+/// The tracking issue to retire: the URL given, or the one open
+/// tracking issue for the package named — in `--release`, or across
+/// releases when one match settles it. Several matches are put to
+/// the operator at a terminal; unattended, they are an error naming
+/// each, since a run nobody watches must not guess which change to
+/// close.
+fn resolve_issue(args: &RetireArgs) -> Result<String, Box<dyn std::error::Error>> {
+    use std::io::IsTerminal;
+    if args.issue.contains("://") {
+        return Ok(args.issue.clone());
+    }
+    let rows =
+        crate::list_issues::tracking_issues(args.release.as_deref(), &args.issue, args.verbose)?;
+    let interactive = !args.yes && std::io::stdin().is_terminal();
+    pick(&rows, &args.issue, interactive, |n| {
+        use std::io::{BufRead, Write};
+        eprint!("Which one? [1-{n}, empty to abort]: ");
+        std::io::stderr().flush().ok()?;
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line).ok()?;
+        line.trim().parse::<usize>().ok()
+    })
+}
+
+/// One row is the answer; none is an error; several are listed and,
+/// when `interactive`, chosen by number through `ask` (given the
+/// count, answering the 1-based pick or `None` to abort).
+fn pick(
+    rows: &[crate::list_issues::Row],
+    package: &str,
+    interactive: bool,
+    ask: impl FnOnce(usize) -> Option<usize>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let url = |r: &crate::list_issues::Row| r.issue_url.clone().unwrap_or_default();
+    match rows {
+        [] => Err(format!(
+            "no open tracking issue for {package}; `list-issues` shows what is tracked"
+        )
+        .into()),
+        [one] => Ok(url(one)),
+        many => {
+            let listed: Vec<String> = many
+                .iter()
+                .enumerate()
+                .map(|(i, r)| format!("  {}. {} {}  {}", i + 1, r.package, r.release, url(r)))
+                .collect();
+            if !interactive {
+                return Err(format!(
+                    "{package} is tracked in {} releases; pass --release, or the issue URL:\n{}",
+                    many.len(),
+                    listed.join("\n")
+                )
+                .into());
+            }
+            eprintln!("{package} is tracked in {} releases:", many.len());
+            for l in &listed {
+                eprintln!("{l}");
+            }
+            match ask(many.len()) {
+                Some(n) if (1..=many.len()).contains(&n) => Ok(url(&many[n - 1])),
+                _ => Err("no tracking issue chosen".into()),
+            }
+        }
+    }
+}
+
 fn resolve_issue_claim(
     args: &RetireArgs,
 ) -> Result<Option<(u64, String)>, Box<dyn std::error::Error>> {
@@ -301,9 +374,64 @@ fn parse_release_from_body(body: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn tracked(package: &str, release: &str, url: &str) -> crate::list_issues::Row {
+        crate::list_issues::Row {
+            release: release.into(),
+            package: package.into(),
+            status: crate::list_issues::TrackingStatus::Active,
+            issue_url: Some(url.into()),
+            issue_iid: Some(1),
+            mr_url: None,
+        }
+    }
+
+    #[test]
+    fn a_package_name_resolves_to_its_one_issue_or_asks_which() {
+        let c9 = tracked(
+            "blktrace",
+            "c9s",
+            "https://gitlab.example/rpms/blktrace/-/issues/1",
+        );
+        let c10 = tracked(
+            "blktrace",
+            "c10s",
+            "https://gitlab.example/rpms/blktrace/-/issues/2",
+        );
+        // One match: no question asked.
+        let url = pick(std::slice::from_ref(&c9), "blktrace", true, |_| {
+            panic!("not asked")
+        })
+        .unwrap();
+        assert_eq!(url, "https://gitlab.example/rpms/blktrace/-/issues/1");
+        // None: an error pointing at list-issues.
+        let err = pick(&[], "nothing", true, |_| None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no open tracking issue for nothing") && err.contains("list-issues"));
+        // Several, at a terminal: the pick by number.
+        let both = [c9, c10];
+        let url = pick(&both, "blktrace", true, |n| {
+            assert_eq!(n, 2);
+            Some(2)
+        })
+        .unwrap();
+        assert_eq!(url, "https://gitlab.example/rpms/blktrace/-/issues/2");
+        assert!(pick(&both, "blktrace", true, |_| None).is_err());
+        assert!(pick(&both, "blktrace", true, |_| Some(7)).is_err());
+        // Several, unattended: an error that lists them and names --release.
+        let err = pick(&both, "blktrace", false, |_| panic!("not asked"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("--release") && err.contains("issues/1") && err.contains("issues/2"),
+            "{err}"
+        );
+    }
+
     fn args(claim: bool, yes: bool) -> RetireArgs {
         RetireArgs {
-            issue_url: "https://gitlab.example/g/p/-/issues/1".to_string(),
+            issue: "https://gitlab.example/g/p/-/issues/1".to_string(),
+            release: None,
             yes,
             force: false,
             claim,
@@ -500,8 +628,8 @@ mod tests {
         ]);
 
         let args = RetireArgs {
-            issue_url: "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1"
-                .to_string(),
+            issue: "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1".to_string(),
+            release: None,
             yes: true,
             force: false,
             claim: false,
@@ -613,8 +741,8 @@ mod tests {
         // --claim with -y: the flag claims without prompting, which is
         // what makes this testable without a terminal.
         let args = RetireArgs {
-            issue_url: "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1"
-                .to_string(),
+            issue: "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1".to_string(),
+            release: None,
             yes: true,
             force: false,
             claim: true,

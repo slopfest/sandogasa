@@ -8,7 +8,8 @@
 //! `--adopt`) and, given an inventory, the packages with only a
 //! `package_tracker` entry (`proposed`) or nothing at all
 //! (`missing`). Each row carries the issue's URL and the MR it
-//! names, so the next command has its argument.
+//! names, so the next command has its argument; `retire` resolves a
+//! package name to its issue through [`tracking_issues`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::ExitCode;
@@ -182,6 +183,28 @@ pub struct Row {
     /// The upstream merge request the issue names, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mr_url: Option<String>,
+}
+
+/// The open tracking issues for `package` — active or hand-filed —
+/// in `release`, or in every release when none is given. What
+/// `retire <package>` resolves its argument through.
+pub(crate) fn tracking_issues(
+    release: Option<&str>,
+    package: &str,
+    verbose: bool,
+) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
+    let args = ListIssuesArgs {
+        inventory: None,
+        release: release.map(str::to_string),
+        package: vec![package.to_string()],
+        adopt: false,
+        json: false,
+        verbose,
+    };
+    Ok(build_rows(&args)?
+        .into_iter()
+        .filter(|r| matches!(r.status, TrackingStatus::Active | TrackingStatus::HandFiled))
+        .collect())
 }
 
 pub(crate) fn build_rows(args: &ListIssuesArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: `retire` takes a package name
+
+`retire` took only a tracking issue URL, which meant a trip to GitLab
+(or, since today, to `list-issues`) to copy it, while hs-relmon's
+`retire` has always taken package names. It now takes either: a
+package name is resolved through the SIG's open tracking issues, with
+`--release` choosing the release when the package is tracked in
+several (`retire blktrace --release c10s`). Without it, several
+matches are listed with their URLs and picked by number at a
+terminal; an unattended run refuses with the same list, since a run
+nobody watches must not guess which change to close.
+
 ### cpu-sig-tracker: `list-issues` replaces `sync-issues` (breaking CLI)
 
 Two tools work the same GitLab group and had drifted apart:

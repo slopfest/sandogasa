@@ -152,9 +152,12 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker retire
-\fBcpu\-sig\-tracker retire\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-\-claim\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE_URL\fR> 
+\fBcpu\-sig\-tracker retire\fR [\fB\-\-release\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-\-claim\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE\fR> 
 .PP
 Close a tracking issue (retire\-issue suggestion) after verifying JIRA is resolved and the build is untagged
+.TP
+\fB\-\-release\fR \fI<RELEASE>\fR
+With a package name: the release to retire it in (e.g. `c10s`), when it is tracked in several
 .TP
 \fB\-y\fR, \fB\-\-yes\fR
 Skip the interactive confirmation prompt
@@ -173,8 +176,8 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fIISSUE_URL\fR>
-Full tracking issue URL (either `/\-/issues/<n>` or `/\-/work_items/<n>` form)
+<\fIISSUE\fR>
+Tracking issue URL (`/\-/issues/<n>` or `/\-/work_items/<n>`), or a package name, resolved through the SIG\*(Aqs open tracking issues (`list\-issues`)
 .SS cpu-sig-tracker status
 \fBcpu\-sig\-tracker status\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-p\fR|\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-\-refresh\fR] [\fB\-\-include\-closed\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
