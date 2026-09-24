@@ -85,9 +85,18 @@ pub struct Entry {
 pub enum State {
     /// Still open against this release: NEW or ASSIGNED on its tracker.
     Decision,
-    /// MODIFIED, ON_QA, VERIFIED or CLOSED on this release's tracker —
-    /// code complete (ON_QA) or done.
+    /// MODIFIED on this release's tracker: testable, which is what the
+    /// policy asks of a Change by the testable deadline, but not 100%
+    /// code complete, which it asks by Beta Freeze (ON_QA) — so still
+    /// reviewed.
+    Testable,
+    /// ON_QA, VERIFIED or CLOSED on this release's tracker — 100% code
+    /// complete or done.
     Complete,
+    /// Still open on the tracker, but the ticket records the decision
+    /// already (`AGREED: …`, or a "needs processing" section): nothing
+    /// for the meeting, a bug for the Change Wrangler to update.
+    Decided,
     /// Blocks the next release's tracker instead.
     Retargeted,
     /// On neither tracker.
@@ -334,6 +343,7 @@ pub fn classify(status: &str, blocks: &[u64], this: u64, next: Option<u64>) -> S
     if blocks.contains(&this) {
         match status {
             "NEW" | "ASSIGNED" => State::Decision,
+            "MODIFIED" => State::Testable,
             _ => State::Complete,
         }
     } else if next.is_some_and(|n| blocks.contains(&n)) {
@@ -341,6 +351,19 @@ pub fn classify(status: &str, blocks: &[u64], this: u64, next: Option<u64>) -> S
     } else {
         State::Elsewhere
     }
+}
+
+/// Whether the ticket has already decided this Change, whatever the
+/// tracker bug says: its latest line is a meeting agreement
+/// (`AGREED: This Change is completed. (+5, 0, -0)`), or the block sits
+/// under a section for decided items ("Needs processing (NOT on
+/// agenda for next week)").
+pub fn already_decided(entry: &Entry) -> bool {
+    let info = entry.info.trim_start().to_ascii_lowercase();
+    let section = entry.section.as_deref().unwrap_or("").to_ascii_lowercase();
+    info.starts_with("agreed")
+        || section.contains("needs processing")
+        || section.contains("not on agenda")
 }
 
 /// The report ticket: `--ticket`, else the one open meeting ticket
@@ -459,8 +482,12 @@ fn assemble(
             .find(|f| f.name == "needinfo" && f.status == "?")
             .map(|f| (f.requestee.clone().unwrap_or_default(), f.creation_date));
         let stale = !entry.status.eq_ignore_ascii_case(&bug.status);
+        let mut state = classify(&bug.status, &bug.blocks, this, next);
+        if matches!(state, State::Decision | State::Testable) && already_decided(&entry) {
+            state = State::Decided;
+        }
         reports.push(Report {
-            state: classify(&bug.status, &bug.blocks, this, next),
+            state,
             bz_status: bug.status.clone(),
             resolution: bug.resolution.clone(),
             last_change: bug.last_change_time,
@@ -530,12 +557,15 @@ pub fn wiki_in(text: &str) -> Option<String> {
 }
 
 /// The chair's zodbot lines: one `!topic` / `!fesco` pair per Change
-/// that needs a decision, in the ticket's order, then the rest as
-/// comments so nothing is missed. Copied line by line as the meeting
-/// goes.
+/// still reviewed — needing a decision, or testable but not code
+/// complete — in the ticket's order, then the rest as comments so
+/// nothing is missed. Copied line by line as the meeting goes.
 pub fn render_script(reports: &[Report], release: u32) -> String {
     let mut out = Vec::new();
-    for r in reports.iter().filter(|r| r.state == State::Decision) {
+    for r in reports
+        .iter()
+        .filter(|r| matches!(r.state, State::Decision | State::Testable))
+    {
         out.push(format!("!topic F{release} Change: {}", r.entry.name));
         match r.ticket {
             Some(n) => out.push(format!("!fesco {n}")),
@@ -546,15 +576,19 @@ pub fn render_script(reports: &[Report], release: u32) -> String {
             )),
         }
     }
-    for r in reports.iter().filter(|r| r.state != State::Decision) {
+    for r in reports
+        .iter()
+        .filter(|r| !matches!(r.state, State::Decision | State::Testable))
+    {
         out.push(format!(
             "# {} — {}{}",
             r.entry.name,
             match r.state {
                 State::Complete => "code complete or done",
+                State::Decided => "decided in the ticket; bz for the wrangler",
                 State::Retargeted => "retargeted",
                 State::Elsewhere => "on neither tracker",
-                State::Decision => unreachable!(),
+                State::Decision | State::Testable => unreachable!(),
             },
             r.ticket
                 .map(|n| format!(" (!fesco {n})"))
@@ -576,8 +610,16 @@ pub fn render(reports: &[Report], release: u32, today: NaiveDate) -> String {
             format!("Needs a decision — still open against F{release}"),
         ),
         (
+            State::Testable,
+            "Testable but not code complete (MODIFIED) — still reviewed".to_string(),
+        ),
+        (
             State::Complete,
             "Code complete or done — nothing to decide".to_string(),
+        ),
+        (
+            State::Decided,
+            "Decided in the ticket, Bugzilla not yet updated — for the Change Wrangler".to_string(),
         ),
         (State::Retargeted, format!("Retargeted to F{}", release + 1)),
         (State::Elsewhere, "On neither release tracker".to_string()),
@@ -595,7 +637,7 @@ pub fn render(reports: &[Report], release: u32, today: NaiveDate) -> String {
     }
     let stale: Vec<&Report> = reports
         .iter()
-        .filter(|r| r.stale || r.wiki_broken.is_some())
+        .filter(|r| r.stale || r.wiki_broken.is_some() || r.state == State::Decided)
         .collect();
     if !stale.is_empty() {
         out.push(format!(
@@ -603,6 +645,19 @@ pub fn render(reports: &[Report], release: u32, today: NaiveDate) -> String {
             stale.len()
         ));
         for r in &stale {
+            if r.state == State::Decided {
+                out.push(format!(
+                    "- {}: decided in the ticket ({}), bz {} still {}",
+                    r.entry.name,
+                    if r.entry.info.is_empty() {
+                        "-"
+                    } else {
+                        &r.entry.info
+                    },
+                    bug_link(r.entry.bug),
+                    r.bz_status
+                ));
+            }
             if r.stale {
                 out.push(format!(
                     "- {}: ticket says {}, bz {} is {}",
@@ -831,6 +886,11 @@ Latest Info: **Deferred to F46**\n";
         assert_eq!(
             classify("ASSIGNED", &[2402320], 2402320, Some(2520385)),
             State::Decision
+        );
+        // Testable is not complete: the policy wants ON_QA by Beta Freeze.
+        assert_eq!(
+            classify("MODIFIED", &[2402320], 2402320, Some(2520385)),
+            State::Testable
         );
         assert_eq!(
             classify("ON_QA", &[2402320], 2402320, Some(2520385)),
@@ -1070,5 +1130,31 @@ Latest Info: **Deferred to F46**\n";
             ),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_decision_recorded_in_the_ticket_outranks_the_bugs_state() {
+        // The Flatpak filter on 2026-09-22: ASSIGNED on Bugzilla, but the
+        // ticket's list has it under "Needs processing (NOT on agenda for
+        // next week)" with an AGREED line.
+        let decided = Entry {
+            name: "Filter Fedora Flatpaks".into(),
+            info: "AGREED: This Change is completed. (+5, 0, -0); bug needs to be updated".into(),
+            section: Some("Needs processing (NOT on agenda for next week)".into()),
+            ..Entry::default()
+        };
+        assert!(already_decided(&decided));
+        let by_section = Entry {
+            info: "Owner NEEDINFO'd".into(),
+            section: Some("Needs processing".into()),
+            ..Entry::default()
+        };
+        assert!(already_decided(&by_section));
+        let open = Entry {
+            info: "INFO: This is only blocked by package review.".into(),
+            section: Some("Needs review (on agenda for next week)".into()),
+            ..Entry::default()
+        };
+        assert!(!already_decided(&open));
     }
 }

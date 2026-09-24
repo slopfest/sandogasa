@@ -138,10 +138,31 @@ the Changes:
 
 - **Needs a decision** — NEW or ASSIGNED and still blocking this
   release's `FNNChanges` tracker
-- **Code complete or done** — MODIFIED, ON_QA, VERIFIED or CLOSED on
-  this release's tracker (ON_QA is the policy's code-complete state)
+- **Testable but not code complete** — MODIFIED: testable, which the
+  policy asks by the testable deadline, but not 100% complete, which it
+  asks by Beta Freeze; still reviewed
+- **Code complete or done** — ON_QA, VERIFIED or CLOSED on this
+  release's tracker (ON_QA is the policy's 100% code-complete state)
+- **Decided in the ticket, Bugzilla not yet updated** — the tracker
+  still says NEW, ASSIGNED or MODIFIED, but the ticket's latest line
+  is an `AGREED:` or the block sits under a "needs processing" section:
+  nothing for the meeting, a bug for the Change Wrangler, and listed in
+  the closing section for them
 - **Retargeted** — blocking the next release's tracker instead
 - **On neither tracker** — worth a look
+
+The review itself is not written down anywhere but the [Changes
+policy](https://docs.fedoraproject.org/en-US/operations/changes_policy/)'s
+one line — FESCo re-reviews the Changes one week before Beta Freeze on
+the wrangler's report — and the meetings' own practice, which is what
+this encodes: go through the list in the ticket's order; skip what is
+ON_QA, CLOSED or retargeted; for each Change still NEW, ASSIGNED or
+MODIFIED, `!topic` it, `!fesco` its ticket, hear the owner or whoever
+knows, and `!info` the status agreed (or `!agreed` a decision, such as
+activating the contingency plan or retargeting); afterwards, post the
+updated list to the ticket, in the same order. Keep the report to
+yourself until then: the ticket's list is what the room reads during
+the meeting.
 
 Within a group the Changes come in the ticket's order — the newest
 list's order first, then whatever only older lists carry — which is

@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### fesco-chair: a MODIFIED Change is still reviewed
+
+The report filed "Relocate RPM repository configs to /usr" under "code
+complete or done" on 2026-09-22 because its tracker had moved to
+MODIFIED that day, and the meeting then had to discuss it anyway: as
+gotmax23 put it, anything not ON_QA or CLOSED still needs review. The
+Changes policy agrees — MODIFIED is "code complete enough to be
+testable", the state asked by the testable deadline; ON_QA is 100%
+complete, the state asked by Beta Freeze. MODIFIED Changes now form
+their own group, "Testable but not code complete — still reviewed",
+between the ones needing a decision and the complete ones, and
+`--script` gives them their `!topic` / `!fesco` pair like the rest.
+The README also writes down the review procedure the tool encodes,
+since the docs do not.
+
+The opposite case is handled too. The Flatpak filter for Atomic
+Desktops was on the agenda again although the ticket had settled it —
+"AGREED: This Change is completed. (+5, 0, -0); bug needs to be
+updated", under gotmax23's "Needs processing (NOT on agenda for next
+week)" — because its tracker still said ASSIGNED. A decision recorded
+in the ticket now outranks the bug's state: such a Change forms the
+group "Decided in the ticket, Bugzilla not yet updated", is left out of
+`--script`'s topics, and goes on the Change Wrangler's list with the
+decision and the bug's state.
+
 ### fesco-chair: `changes` keeps the ticket's order and hands the chair the meeting lines
 
 Working through the F45 Incomplete Changes Report at the 2026-09-22
