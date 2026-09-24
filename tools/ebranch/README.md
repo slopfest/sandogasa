@@ -985,19 +985,34 @@ ebranch file-requests django.toml epel9 --fas alice
 ebranch file-requests django.toml epel9 --blocked 2482250   # block a tracker
 ```
 
+A `check-crate --toml` report works the same way: every package a
+missing dependency is built as, direct or transitive, is a candidate,
+linked along the crate dependency graph. A dependency that is packaged
+but too old, or built only in the staging COPR, is not, and neither is
+the crate itself:
+
+```sh
+ebranch check-crate tiny-dfr -b epel10 -t --toml tiny-dfr.toml
+ebranch file-requests tiny-dfr.toml epel10 --fas alice --sig asahi-sig --dry-run
+```
+
 `--blocked` applies to every request the batch files.
 
 Bug IDs and a `pinged` flag are stored in the report under
-`[branch_requests]`, so re-runs skip already-filed packages.
+`[branch_requests]`, whichever kind it is, so re-runs skip
+already-filed packages.
 
-Before filing, both `file-request` and `file-requests` run a
-base-distro pre-flight: packages that exist as source packages in the
-base distro behind the branch (epel10 → c10s, epel9 → al9; override
-with `--base-branch`) are refused/skipped — a branch request for a
-base-distro package is always CANTFIX, and report packages marked as
-overrides are skipped too (an alternate package needs a **new package
-review**, not a branch request). The pre-flight re-checks the base
-itself, so stale or pre-guard reports can't slip one through.
+Before filing, both `file-request` and `file-requests` run two
+pre-flights. A source pre-flight skips packages that are not in the
+source branch (rawhide for a check-crate report): there is nothing to
+branch from, and a package new to Fedora needs a package review first
+(`check-pkg-reviews`). A base-distro pre-flight refuses/skips packages
+that exist as source packages in the base distro behind the branch
+(epel10 → c10s, epel9 → al9; override with `--base-branch`) — a branch
+request for a base-distro package is always CANTFIX — and report
+packages marked as overrides (an alternate package needs a **new
+package review**, not a branch request). The pre-flights re-check the
+repos themselves, so stale or pre-guard reports can't slip one through.
 
 Escalate requests that have sat in NEW for at least a week —
 adds a `needinfo?` ping and marks them so they're not pinged

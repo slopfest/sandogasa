@@ -495,6 +495,7 @@ mod tests {
                 ("dep-b".to_string(), BTreeSet::new()),
             ]),
             review_bugs: BTreeMap::new(),
+            branch_requests: BTreeMap::new(),
             copr: None,
         };
 

@@ -176,6 +176,10 @@ pub struct CheckCrateReport {
     /// Package name → Bugzilla review bug ID, populated by check-pkg-reviews.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub review_bugs: BTreeMap<String, u64>,
+    /// Filed EPEL branch requests, keyed by package. Populated by
+    /// `file-request`/`file-requests`, consumed by `escalate`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub branch_requests: BTreeMap<String, crate::resolve::BranchRequest>,
 }
 
 impl CheckCrateReport {
@@ -192,6 +196,49 @@ impl CheckCrateReport {
             self.package.clone()
         } else {
             format!("rust-{crate_name}")
+        }
+    }
+
+    /// The branch-request view of this report: every package a
+    /// missing dependency is built as, direct and transitive, with
+    /// the dependency edges by package name. A too-old or COPR-staged
+    /// dependency is packaged already and the crate itself is the
+    /// user's own, so neither is a request. Branches come from
+    /// rawhide.
+    pub fn branch_request_report(&self) -> crate::resolve::ResolveReport {
+        let mut packages: Vec<String> = self
+            .dependencies
+            .iter()
+            .filter(|d| matches!(d.status, DepStatus::Missing))
+            .map(|d| self.rpm_package(&d.dep.name))
+            .chain(
+                self.transitive_missing
+                    .iter()
+                    .filter(|d| d.status == TransitiveStatus::Missing)
+                    .map(|d| d.package.clone()),
+            )
+            .collect();
+        packages.sort();
+        packages.dedup();
+        let edges = self
+            .transitive_edges
+            .iter()
+            .filter(|(_, deps)| !deps.is_empty())
+            .map(|(c, deps)| {
+                (
+                    self.rpm_package(c),
+                    deps.iter().map(|d| self.rpm_package(d)).collect(),
+                )
+            })
+            .collect();
+        crate::resolve::ResolveReport {
+            source_branch: "rawhide".to_string(),
+            target_branch: self.branch.clone(),
+            packages,
+            edges,
+            branch_requests: self.branch_requests.clone(),
+            blocked_by_base: BTreeMap::new(),
+            overrides: BTreeSet::new(),
         }
     }
 
@@ -564,6 +611,7 @@ pub fn check_crate(
         transitive_build_order,
         transitive_edges,
         review_bugs: BTreeMap::new(),
+        branch_requests: BTreeMap::new(),
         in_tree,
         copr: opts.copr.clone(),
     })
@@ -2031,6 +2079,7 @@ mod tests {
             transitive_build_order: vec![],
             transitive_edges: Default::default(),
             review_bugs: Default::default(),
+            branch_requests: Default::default(),
             in_tree: vec![],
             copr: None,
         };
@@ -2625,6 +2674,7 @@ mod tests {
                 ("transitive-dep".to_string(), BTreeSet::new()),
             ]),
             review_bugs: BTreeMap::new(),
+            branch_requests: BTreeMap::new(),
             in_tree: vec![],
             copr: None,
         };
@@ -2645,6 +2695,61 @@ mod tests {
         assert_eq!(parsed.transitive_build_order.len(), 1);
         assert_eq!(parsed.transitive_edges.len(), 2);
         assert!(parsed.transitive_edges["missing-dep"].contains("transitive-dep"));
+    }
+
+    #[test]
+    fn branch_request_report_lists_missing_packages_only() {
+        let mut report = make_report();
+        report.branch = "epel10".to_string();
+        report.transitive_missing = vec![
+            TransitiveDep {
+                name: "dep-c".to_string(),
+                package: "rust-dep-c".to_string(),
+                status: TransitiveStatus::Missing,
+                version: "0.1.0".to_string(),
+                version_req: "^0.1".to_string(),
+                pulled_by: "dep-a".to_string(),
+            },
+            // Packaged but too old, and built in the staging COPR: no
+            // branch to request for either.
+            TransitiveDep {
+                name: "dep-d".to_string(),
+                package: "rust-dep-d".to_string(),
+                status: TransitiveStatus::Unmet,
+                version: "2.0.0".to_string(),
+                version_req: "^2".to_string(),
+                pulled_by: "dep-a".to_string(),
+            },
+            TransitiveDep {
+                name: "dep-e".to_string(),
+                package: "rust-dep-e".to_string(),
+                status: TransitiveStatus::Staged,
+                version: "1.0.0".to_string(),
+                version_req: "^1".to_string(),
+                pulled_by: "dep-c".to_string(),
+            },
+        ];
+        report.transitive_edges = BTreeMap::from([
+            (
+                "dep-a".to_string(),
+                BTreeSet::from(["dep-c".to_string(), "dep-d".to_string()]),
+            ),
+            ("dep-c".to_string(), BTreeSet::new()),
+        ]);
+        let view = report.branch_request_report();
+        assert_eq!(view.source_branch, "rawhide");
+        assert_eq!(view.target_branch, "epel10");
+        // The missing direct dep as its package, the missing transitive
+        // one; not the satisfied dep-b, not the crate itself.
+        assert_eq!(
+            view.packages,
+            vec!["rust-dep-a".to_string(), "rust-dep-c".to_string()]
+        );
+        assert_eq!(view.edges.len(), 1);
+        assert_eq!(
+            view.edges["rust-dep-a"],
+            BTreeSet::from(["rust-dep-c".to_string(), "rust-dep-d".to_string()])
+        );
     }
 
     fn make_report() -> CheckCrateReport {
@@ -2685,6 +2790,7 @@ mod tests {
             ],
             transitive_edges: BTreeMap::new(),
             review_bugs: BTreeMap::new(),
+            branch_requests: BTreeMap::new(),
             in_tree: vec![],
         }
     }

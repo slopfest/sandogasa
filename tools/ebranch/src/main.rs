@@ -701,14 +701,14 @@ struct FileRequestArgs {
     #[arg(long, value_delimiter = ',')]
     dependson: Vec<String>,
 
-    /// check-crate report TOML to record the new bug ID in.
+    /// check-crate or resolve report TOML to record the new bug ID in.
     #[arg(long)]
     toml: Option<String>,
 }
 
 #[derive(clap::Args, Clone)]
 struct FileRequestsArgs {
-    /// check-crate report TOML listing the missing packages.
+    /// check-crate or resolve report TOML listing the missing packages.
     toml: String,
 
     #[command(flatten)]
@@ -721,7 +721,7 @@ struct FileRequestsArgs {
 
 #[derive(clap::Args, Clone)]
 struct EscalateArgs {
-    /// check-crate report TOML with recorded branch requests.
+    /// check-crate or resolve report TOML with recorded branch requests.
     toml: String,
 
     #[command(flatten)]

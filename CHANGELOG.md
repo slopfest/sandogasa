@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### ebranch: `file-requests` and `escalate` take a `check-crate --toml` report
+
+`ebranch file-requests tiny-dfr.toml epel10` on a report that
+`check-crate --branch epel10 --toml` had just written failed with
+"missing field `source_branch`" (GitHub #14), though the help text,
+the README and the module's own doc all named a check-crate report as
+the input. Since the branch-request commands were ported they had only
+ever parsed a `resolve --report` file.
+
+`file-requests`, `escalate` and `file-request --toml` now read either
+kind. A check-crate report is read through a branch-request view:
+every package a missing dependency is built as, direct or transitive,
+is a candidate, linked along the crate graph by package name; a
+dependency that is packaged but too old or built only in the staging
+COPR is not one, and neither is the crate itself. The filed requests
+are written back into the check-crate file under `[branch_requests]`,
+as they are into a resolve report, so `escalate` and re-runs find them.
+
+A check-crate report also lists crates nobody has packaged yet beside
+ones that only want branching, so both filing commands gain a source
+pre-flight next to the base-distro one: a package the source branch
+(rawhide for a check-crate report) does not carry is skipped with a
+pointer to `check-pkg-reviews` — a package new to Fedora needs a
+package review first, and a branch request for a component Bugzilla
+does not know would have aborted the batch midway.
+
 ### fedora-review-digest: cabal-rpm packages are digested too
 
 A Haskell package review — a spec cabal-rpm generated from the `.cabal`

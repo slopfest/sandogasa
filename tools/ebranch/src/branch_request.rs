@@ -11,9 +11,9 @@
 //!
 //! - [`file_one`] — file a single request.
 //! - [`file_batch`] — file requests for every missing package in
-//!   a `check-crate --toml` report and link them together along
-//!   the dependency graph (a package's request depends on the
-//!   requests for the packages it needs).
+//!   a `resolve --report` or `check-crate --toml` report and link
+//!   them together along the dependency graph (a package's request
+//!   depends on the requests for the packages it needs).
 //! - [`escalate`] — ping requests that have been NEW for at least
 //!   a week.
 
@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use sandogasa_bugzilla::BzClient;
 
+use crate::check_crate::{self, CheckCrateReport};
 use crate::resolve::{self, BranchRequest, ResolveReport};
 
 /// Minimum age (days) before a NEW request is escalated.
@@ -222,7 +223,7 @@ pub async fn resolve_refs(bz: &BzClient, tokens: &[String]) -> Result<Vec<u64>, 
     Ok(ids)
 }
 
-// ---- base-distro pre-flight ----
+// ---- pre-flight probes ----
 
 /// Map batch `src_nvrs` output (`name-version-release` strings) back to
 /// the queried package names: package → `version-release`. Longest
@@ -248,34 +249,42 @@ fn match_nvrs_to_packages(nvrs: &[String], packages: &[String]) -> BTreeMap<Stri
 /// pre-flight: it re-checks the base itself rather than trusting the
 /// report, so stale or pre-guard reports can't slip a base-distro
 /// package through (the rhbz#2482250 failure mode).
-fn base_src_probe(
-    base_branch: &str,
-    packages: &[String],
-) -> Result<BTreeMap<String, String>, String> {
-    let base = sandogasa_fedrq::Fedrq {
-        branch: Some(base_branch.to_string()),
+/// Which of `packages` a branch carries as source packages, with
+/// their version-release.
+fn src_probe(branch: &str, packages: &[String]) -> Result<BTreeMap<String, String>, String> {
+    let fedrq = sandogasa_fedrq::Fedrq {
+        branch: Some(branch.to_string()),
         repo: None,
     };
-    let nvrs = base
+    let nvrs = fedrq
         .src_nvrs(packages)
-        .map_err(|e| format!("base-distro pre-flight ({base_branch}): {e}"))?;
+        .map_err(|e| format!("pre-flight ({branch}): {e}"))?;
     Ok(match_nvrs_to_packages(&nvrs, packages))
 }
 
 /// Split the not-yet-filed packages into ones to file and ones to skip
 /// (with the reason to print). Skips: overrides from the report (an
-/// alternate package needs a new package review, not a branch request)
-/// and anything the base-distro pre-flight found in the base.
+/// alternate package needs a new package review, not a branch request),
+/// anything the base-distro pre-flight found in the base, and anything
+/// the source pre-flight did not find in the source branch (nothing to
+/// branch from: a package new to Fedora needs a package review first).
 fn partition_filable(
     report: &ResolveReport,
     candidates: Vec<String>,
     base_present: &BTreeMap<String, String>,
     base_label: &str,
+    source_present: &BTreeMap<String, String>,
 ) -> (Vec<String>, Vec<String>) {
     let mut to_file = Vec::new();
     let mut skipped = Vec::new();
     for pkg in candidates {
-        if report.overrides.contains(&pkg) {
+        if !source_present.contains_key(&pkg) {
+            skipped.push(format!(
+                "skipping {pkg}: not in {} — nothing to branch from; a package \
+                 new to Fedora needs a package review first (see check-pkg-reviews)",
+                report.source_branch
+            ));
+        } else if report.overrides.contains(&pkg) {
             skipped.push(format!(
                 "skipping {pkg}: marked as a base-distro override — an \
                  alternate package needs a NEW package review (see \
@@ -324,9 +333,13 @@ pub async fn file_batch(
         .cloned()
         .collect();
 
+    // Source pre-flight: a check-crate report lists crates nobody has
+    // packaged yet beside ones that only want branching, and a resolve
+    // report may be stale.
+    let source_present = src_probe(&report.source_branch, &candidates)?;
     // Base-distro pre-flight (defense in depth against stale reports).
     let base_present = match &opts.base_branch {
-        Some(base) => base_src_probe(base, &candidates)?,
+        Some(base) => src_probe(base, &candidates)?,
         None => {
             eprintln!(
                 "warning: no base-distro mapping for {}; base-distro \
@@ -337,7 +350,13 @@ pub async fn file_batch(
         }
     };
     let base_label = opts.base_branch.as_deref().unwrap_or("base");
-    let (to_file, skipped) = partition_filable(report, candidates, &base_present, base_label);
+    let (to_file, skipped) = partition_filable(
+        report,
+        candidates,
+        &base_present,
+        base_label,
+        &source_present,
+    );
     for msg in &skipped {
         eprintln!("{msg}");
     }
@@ -546,7 +565,7 @@ pub fn run_file_request(
         // in the base distro is always CANTFIX (rhbz#2482250).
         match &opts.base_branch {
             Some(base) => {
-                if let Some(vr) = base_src_probe(base, &[pkg.to_string()])?.get(pkg) {
+                if let Some(vr) = src_probe(base, &[pkg.to_string()])?.get(pkg) {
                     return Err(format!(
                         "{pkg} is in the base distro {base} ({vr}); EPEL must \
                          not replace it — a branch request would be CANTFIX. \
@@ -588,7 +607,8 @@ pub fn run_file_request(
         println!("filed {pkg}: rhbz#{rhbz}");
 
         if let Some(path) = report_path {
-            let mut report = resolve::load_report(path)?;
+            let mut file = ReportFile::load(path)?;
+            let mut report = file.view();
             report.branch_requests.insert(
                 pkg.to_string(),
                 BranchRequest {
@@ -596,13 +616,13 @@ pub fn run_file_request(
                     pinged: false,
                 },
             );
-            resolve::write_report(&report, path)?;
+            file.save(&report, path)?;
         }
         Ok(())
     })
 }
 
-/// `file-requests` — batch over a resolve report file.
+/// `file-requests` — batch over a report file.
 pub fn run_file_requests(
     report_path: &str,
     blocked: &[String],
@@ -611,31 +631,73 @@ pub fn run_file_requests(
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| format!("failed to create async runtime: {e}"))?;
     rt.block_on(async {
-        let mut report = resolve::load_report(report_path)?;
+        let mut file = ReportFile::load(report_path)?;
+        let mut report = file.view();
         let changed = file_batch(&mut report, blocked, opts).await?;
         if changed && !opts.dry_run {
-            resolve::write_report(&report, report_path)?;
+            file.save(&report, report_path)?;
         }
         Ok(())
     })
 }
 
-/// `escalate` — ping stale requests in a resolve report file.
+/// `escalate` — ping stale requests in a report file.
 pub fn run_escalate(report_path: &str, opts: &Options) -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| format!("failed to create async runtime: {e}"))?;
     rt.block_on(async {
-        let mut report = resolve::load_report(report_path)?;
+        let mut file = ReportFile::load(report_path)?;
+        let mut report = file.view();
         if report.branch_requests.is_empty() {
             println!("No branch requests recorded in {report_path}.");
             return Ok(());
         }
         let changed = escalate(&mut report, opts).await?;
         if changed && !opts.dry_run {
-            resolve::write_report(&report, report_path)?;
+            file.save(&report, report_path)?;
         }
         Ok(())
     })
+}
+
+/// The file a branch-request command works on: a `resolve --report`
+/// file, or a `check-crate --toml` one, read through its
+/// branch-request view and given the filed requests back under
+/// `[branch_requests]`.
+enum ReportFile {
+    Resolve(ResolveReport),
+    CheckCrate(CheckCrateReport),
+}
+
+impl ReportFile {
+    /// A check-crate report names its crate; a resolve report does not.
+    fn load(path: &str) -> Result<Self, String> {
+        let s = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
+        let value: toml::Value = toml::from_str(&s).map_err(|e| format!("parse {path}: {e}"))?;
+        Ok(if value.get("crate_name").is_some() {
+            Self::CheckCrate(check_crate::load_report(path)?)
+        } else {
+            Self::Resolve(resolve::load_report(path)?)
+        })
+    }
+
+    fn view(&self) -> ResolveReport {
+        match self {
+            Self::Resolve(r) => r.clone(),
+            Self::CheckCrate(c) => c.branch_request_report(),
+        }
+    }
+
+    /// Write `view` back in the file's own format.
+    fn save(&mut self, view: &ResolveReport, path: &str) -> Result<(), String> {
+        match self {
+            Self::Resolve(_) => resolve::write_report(view, path),
+            Self::CheckCrate(c) => {
+                c.branch_requests = view.branch_requests.clone();
+                check_crate::write_toml(c, path)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -680,10 +742,23 @@ mod tests {
         let mut base_present = BTreeMap::new();
         base_present.insert("python-setuptools".to_string(), "69.0.3-9.el10".to_string());
 
-        let candidates = report.packages.clone();
-        let (to_file, skipped) = partition_filable(&report, candidates, &base_present, "c10s");
+        // The source has everything but rust-nowhere, which nobody has
+        // packaged yet: nothing to branch.
+        let source_present: BTreeMap<String, String> = report
+            .packages
+            .iter()
+            .map(|p| (p.clone(), "1-1.fc46".to_string()))
+            .collect();
+
+        let mut candidates = report.packages.clone();
+        candidates.push("rust-nowhere".to_string());
+        let (to_file, skipped) =
+            partition_filable(&report, candidates, &base_present, "c10s", &source_present);
         assert_eq!(to_file, vec!["rust-newthing".to_string()]);
-        assert_eq!(skipped.len(), 2);
+        assert_eq!(skipped.len(), 3);
+        assert!(skipped.iter().any(|m| m.contains("rust-nowhere")
+            && m.contains("not in rawhide")
+            && m.contains("check-pkg-reviews")));
         assert!(skipped.iter().any(|m| m.contains("python-setuptools")
             && m.contains("c10s")
             && m.contains("CANTFIX")));
@@ -748,6 +823,84 @@ mod tests {
         assert_eq!(
             ping_decision("NEW", PING_MIN_DAYS, false),
             PingDecision::Ping
+        );
+    }
+
+    #[test]
+    fn report_file_reads_either_kind_and_writes_requests_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolve_path = dir.path().join("resolve.toml");
+        let crate_path = dir.path().join("crate.toml");
+        let resolve_path = resolve_path.to_str().unwrap();
+        let crate_path = crate_path.to_str().unwrap();
+        resolve::write_report(
+            &ResolveReport {
+                source_branch: "rawhide".into(),
+                target_branch: "c10s".into(),
+                packages: vec!["python-foo".into()],
+                edges: BTreeMap::new(),
+                branch_requests: BTreeMap::new(),
+                blocked_by_base: BTreeMap::new(),
+                overrides: BTreeSet::new(),
+            },
+            resolve_path,
+        )
+        .unwrap();
+        // A check-crate report, as `check-crate -b epel10 --toml` writes
+        // it: one missing dependency, one satisfied.
+        check_crate::write_toml(
+            &serde_json::from_value(serde_json::json!({
+                "crate_name": "tiny-dfr", "crate_version": "0.3.7",
+                "package": "rust-tiny-dfr", "branch": "epel10",
+                "dependencies": [
+                    {"name": "glib", "version_req": "^0.20", "kind": "normal",
+                     "optional": false, "status": "missing"},
+                    {"name": "anyhow", "version_req": "^1", "kind": "normal",
+                     "optional": false, "status": "satisfied", "version": "1.0.104"}
+                ],
+                "transitive_missing": [
+                    {"name": "glib-sys", "package": "rust-glib-sys", "status": "missing",
+                     "version": "0.20.0", "version_req": "^0.20", "pulled_by": "glib"}
+                ],
+                "transitive_edges": {"glib": ["glib-sys"]}
+            }))
+            .unwrap(),
+            crate_path,
+        )
+        .unwrap();
+
+        let resolve_file = ReportFile::load(resolve_path).unwrap();
+        assert!(matches!(resolve_file, ReportFile::Resolve(_)));
+        assert_eq!(resolve_file.view().packages, vec!["python-foo".to_string()]);
+
+        let mut crate_file = ReportFile::load(crate_path).unwrap();
+        assert!(matches!(crate_file, ReportFile::CheckCrate(_)));
+        let mut view = crate_file.view();
+        assert_eq!(view.source_branch, "rawhide");
+        assert_eq!(
+            view.packages,
+            vec!["rust-glib".to_string(), "rust-glib-sys".to_string()]
+        );
+        assert_eq!(
+            view.edges["rust-glib"],
+            BTreeSet::from(["rust-glib-sys".to_string()])
+        );
+
+        // Filed requests land in the check-crate file and survive a reload.
+        view.branch_requests.insert(
+            "rust-glib-sys".into(),
+            BranchRequest {
+                rhbz: 42,
+                pinged: false,
+            },
+        );
+        crate_file.save(&view, crate_path).unwrap();
+        let again = ReportFile::load(crate_path).unwrap();
+        assert!(matches!(again, ReportFile::CheckCrate(_)));
+        assert_eq!(again.view().branch_requests["rust-glib-sys"].rhbz, 42);
+        assert_eq!(
+            check_crate::load_report(crate_path).unwrap().crate_name,
+            "tiny-dfr"
         );
     }
 }

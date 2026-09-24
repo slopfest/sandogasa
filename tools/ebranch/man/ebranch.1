@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-09-18 "sandogasa 0.24.1" "Sandogasa Manual"
+.TH ebranch 1 2026-09-24 "sandogasa 0.24.1" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -401,7 +401,7 @@ Print progress to stderr
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fITOML\fR>
-check\-crate report TOML with recorded branch requests
+check\-crate or resolve report TOML with recorded branch requests
 .TP
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
@@ -449,7 +449,7 @@ CSV of bugs/aliases this request blocks
 CSV of bugs/aliases this request depends on
 .TP
 \fB\-\-toml\fR \fI<TOML>\fR
-check\-crate report TOML to record the new bug ID in
+check\-crate or resolve report TOML to record the new bug ID in
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
@@ -503,7 +503,7 @@ CSV of bugs/aliases each filed request blocks
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fITOML\fR>
-check\-crate report TOML listing the missing packages
+check\-crate or resolve report TOML listing the missing packages
 .TP
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
