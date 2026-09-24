@@ -616,6 +616,14 @@ does not show it, that repo is refetched and probed once more before
 the reverse-dependency fallback. The
 branch's own metadata stays cached until `--refresh` clears everything.
 
+For an update built from a side tag, a fixed build re-tagged into the
+tag after submission reaches the update by itself: Bodhi adds it, and
+drops the build it replaces, once the new build is signed — minutes
+after the tag, with a "New build(s) / Removed build(s)" comment in your
+name. There is nothing to refresh by hand; re-run `check-update <alias>
+--give-karma` once that comment appears, and the check reads the new
+build. (Bodhi also resets the update's karma at that point.)
+
 After the check, `--give-karma` casts karma on the update.
 
 Interactively (a TTY, without `--yes`), you first **curate the blocking
