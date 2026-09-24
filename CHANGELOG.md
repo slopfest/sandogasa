@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### hs-relmon: `check-stock` and `review` have their descriptions back
+
+`hs-relmon --help` listed `check-stock` and `review` with no description
+at all, and gave `check-repos` three sentences, one each about
+reviewing testing builds, comparing against stock and checking repo
+settings: when `check-stock` and `retire` were added (e617d14) their
+variants went in under the doc comments that belonged to their
+neighbours. The command list was also out of order, `check-repos`,
+`check-stock`, `retire`, `review` and `config` trailing the `prune-*`
+commands. Each command now carries its own sentence, the list is
+alphabetical, and the README's sections follow the same order (the
+stock-and-retire section moves up next to `check-repos`, the
+archived-packages pruning ahead of the other two).
+
 ### cpu-sig-tracker: `ping` after its first live run
 
 The first run over the SIG's ten tracking issues on 2026-09-24 read

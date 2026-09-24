@@ -144,6 +144,85 @@ matching assignee are excluded."
         issue_assignee: Option<String>,
     },
 
+    /// Check every manifest package's GitLab repo against the SIG's
+    /// conventions — default branch the newest Hyperscale branch,
+    /// merge requests fast-forwarded — and set them with `--apply`.
+    CheckRepos {
+        /// Path to the TOML manifest file.
+        manifest: PathBuf,
+
+        /// Comma-separated packages to check (default: all).
+        #[arg(long, value_name = "LIST")]
+        package: Option<String>,
+
+        /// GitLab group the packages' repos live under.
+        #[arg(long, default_value = retire::DEFAULT_GITLAB_GROUP, value_name = "URL")]
+        gitlab_group: String,
+
+        /// Set what differs, asking per repo (`a` for the rest, `q`
+        /// to stop).
+        #[arg(long)]
+        apply: bool,
+
+        /// Apply to every repo without asking.
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Output as JSON instead of human-readable.
+        #[arg(long)]
+        json: bool,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Compare every manifest package's Hyperscale builds against
+    /// stock: still ahead, or caught up — and then whether to retire
+    /// it or rebase it, per the manifest's `divergent`.
+    CheckStock {
+        /// Path to the TOML manifest file.
+        manifest: PathBuf,
+
+        /// Comma-separated Hyperscale repositories to judge by.
+        #[arg(
+            long,
+            default_value = prune_tags::DEFAULT_REPOSITORY,
+            long_help = "\
+Comma-separated Hyperscale repositories whose
+`-release`/`-testing` tags are compared against
+stock. The repository is the segment between
+`-packages-` and the stage suffix, e.g. `main` in
+`hyperscale10s-packages-main-release`."
+        )]
+        repositories: String,
+
+        /// Comma-separated packages to skip.
+        #[arg(long, value_name = "LIST")]
+        skip: Option<String>,
+
+        /// Colorize the verdicts, as `ls --color`: `--color` alone
+        /// is `always`; `auto` (the default) colors a TTY unless
+        /// NO_COLOR is set; `never`.
+        #[arg(
+            long,
+            value_enum,
+            value_name = "WHEN",
+            default_value_t = sandogasa_cli::style::ColorChoice::Auto,
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "always"
+        )]
+        color: sandogasa_cli::style::ColorChoice,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Configure GitLab authentication.
+    Config,
+
     /// Find binary RPMs shipped by 2+ source packages in a tag.
     DupeSubpkgs {
         /// Comma-separated Hyperscale repositories to scan.
@@ -450,84 +529,6 @@ repository is not in this list are not touched."
         verbose: bool,
     },
 
-    /// Interactively review builds in hyperscale `-testing` tags
-    /// and promote (+1), reject (-1), or skip (0) each one.
-    /// Compare every manifest package's Hyperscale builds against
-    /// stock: still ahead, or caught up — and then whether to
-    /// retire it or rebase it, per the manifest's `divergent`.
-    /// Check every manifest package's GitLab repo against the SIG's
-    /// conventions — default branch the newest Hyperscale branch,
-    /// merge requests fast-forwarded — and set them with `--apply`.
-    CheckRepos {
-        /// Path to the TOML manifest file.
-        manifest: PathBuf,
-
-        /// Comma-separated packages to check (default: all).
-        #[arg(long, value_name = "LIST")]
-        package: Option<String>,
-
-        /// GitLab group the packages' repos live under.
-        #[arg(long, default_value = retire::DEFAULT_GITLAB_GROUP, value_name = "URL")]
-        gitlab_group: String,
-
-        /// Set what differs, asking per repo (`a` for the rest, `q`
-        /// to stop).
-        #[arg(long)]
-        apply: bool,
-
-        /// Apply to every repo without asking.
-        #[arg(short, long)]
-        yes: bool,
-
-        /// Output as JSON instead of human-readable.
-        #[arg(long)]
-        json: bool,
-
-        /// Print progress to stderr.
-        #[arg(short, long)]
-        verbose: bool,
-    },
-
-    CheckStock {
-        /// Path to the TOML manifest file.
-        manifest: PathBuf,
-
-        /// Comma-separated Hyperscale repositories to judge by.
-        #[arg(
-            long,
-            default_value = prune_tags::DEFAULT_REPOSITORY,
-            long_help = "\
-Comma-separated Hyperscale repositories whose
-`-release`/`-testing` tags are compared against
-stock. The repository is the segment between
-`-packages-` and the stage suffix, e.g. `main` in
-`hyperscale10s-packages-main-release`."
-        )]
-        repositories: String,
-
-        /// Comma-separated packages to skip.
-        #[arg(long, value_name = "LIST")]
-        skip: Option<String>,
-
-        /// Colorize the verdicts, as `ls --color`: `--color` alone
-        /// is `always`; `auto` (the default) colors a TTY unless
-        /// NO_COLOR is set; `never`.
-        #[arg(
-            long,
-            value_enum,
-            value_name = "WHEN",
-            default_value_t = sandogasa_cli::style::ColorChoice::Auto,
-            num_args = 0..=1,
-            require_equals = true,
-            default_missing_value = "always"
-        )]
-        color: sandogasa_cli::style::ColorChoice,
-
-        /// Print progress to stderr.
-        #[arg(short, long)]
-        verbose: bool,
-    },
-
     /// Retire package(s) stock now carries: untag their builds
     /// from every hyperscale tag, drop them from the manifest,
     /// archive their GitLab repos.
@@ -563,6 +564,8 @@ stock. The repository is the segment between
         verbose: bool,
     },
 
+    /// Interactively review builds in hyperscale `-testing` tags and
+    /// promote (+1), reject (-1), or skip (0) each one.
     Review {
         /// Optional package name or build NVR. With a package
         /// name, reviews its latest build in each testing tag;
@@ -615,9 +618,6 @@ newer than the released build."
         #[arg(short, long)]
         verbose: bool,
     },
-
-    /// Configure GitLab authentication.
-    Config,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

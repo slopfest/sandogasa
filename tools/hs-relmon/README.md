@@ -212,6 +212,119 @@ Archived repos are read-only and only reported. Needs a GitLab token
 with Maintainer access on the repos (`GITLAB_TOKEN` or `hs-relmon
 config`).
 
+### Checking stock, and retiring a package it has caught up with
+
+Some packages the SIG carries only until CentOS Stream catches up;
+once it has, the SIG copy is noise. Others carry packaging changes of
+the SIG's own — patches, configuration, subpackage layout — and when
+stock moves the action is a rebase, never a retirement. CBS and
+Repology cannot tell the two apart (a SIG build behind stock looks the
+same either way), so the manifest declares it:
+
+```toml
+[[package]]
+name = "pykickstart"
+divergent = true     # carries SIG changes: rebase when stock moves
+
+[[package]]
+name = "crun"
+divergent = false    # tracked until stock catches up: then retire
+```
+
+`check-stock <manifest>` compares every manifest package's builds in
+its `-release`/`-testing` tags against the stock version for each
+tag's channel (CentOS Stream N for a Stream tag, AlmaLinux N for a
+RHEL tag, either plus EPEL N, from Repology — the rule `prune-archived`
+applies) and says
+what follows, one verdict word per line: `ahead` (the SIG is newer
+than stock, its live work) first, then `release` (stock has the
+version but the SIG's release is newer — retiring would leave a system
+running the SIG build on it until stock's version moves, since dnf
+does not downgrade while a configuration manager told to upgrade
+would), then the caught-up packages —
+`retire` when declared `divergent = false`, `rebase` when `true`,
+`declare` when the field is unset — and last `none`, no build in the
+managed tags at all (gone from CBS, or carried in a repository other
+than `--repositories`). Stock means what ships the package by name, as
+for `prune-archived`: `autoconf-latest` in stock, with no binary called
+`autoconf`, does not catch up with the SIG's `autoconf`. Tags are shown without their boilerplate,
+`10s-main-release` for `hyperscale10s-packages-main-release`; the
+verdicts are colored on a terminal (`--color[=WHEN]` as in `ls`:
+`auto`, `always`, `never`), and a legend closes the listing:
+
+```
+$ hs-relmon check-stock packages.toml --repositories main,facebook,experimental,kernel
+ahead     dnsmasq                     2 build(s) newer than stock (10s-main-release 2.90; 9s-main-release 2.85)
+…
+retire    crun                        stock covers 2 build(s) (10s-main-testing 1.29.1; 9s-main-testing 1.29.1)
+rebase    pykickstart                 stock covers 2 build(s) (10s-main-release 3.52.13)
+declare   openssh                     stock covers 20 build(s) (10s-facebook-release 9.9p1; 10s-facebook-testing 9.9p1; 9s-facebook-release 9.9p1; 9s-facebook-testing 9.9p1)
+…
+none      sqlite                      no builds in the managed tags
+
+ahead: the SIG is newer than stock  retire: stock has caught up, the package is temporary  rebase: …  declare: stock has caught up — set `divergent = false` (retire) or `true` (rebase) on the manifest entry  none: no builds in the managed tags
+65 package(s): 40 ahead of stock, 1 to retire, 1 to rebase, 13 caught up but undeclared, 10 without builds
+openssh: stock has caught up — temporary (retire) or divergent (rebase)? (t)emporary / (d)ivergent / (s)kip [s]:
+```
+
+On a terminal, the `declare` packages are then asked about one by one
+— `t` writes `divergent = false` to the manifest entry, `d` writes
+`true`, Enter or `s` leaves it undeclared, `q` stops asking — so the
+declaration is made where the evidence is on screen. A piped run
+(stdin not a terminal) only lists.
+
+The managed tags are read once — the candidate names that exist on
+the hub, then each tag's contents — and Repology is asked once per
+package, a second apart as its terms require, so a manifest of
+sixty-odd takes about a minute. Equal versions count as caught up.
+`poi-tracker export hs-relmon` preserves per-package fields across
+re-exports, so a `divergent` set at the prompt or by hand stays.
+
+`retire <package>` then takes a package out, in one confirmation (none
+with `--yes`; `--dry-run` shows the plan): its builds are untagged from
+every hyperscale tag they are in — candidate tags included, which the
+`prune-*` commands leave alone — it is removed from the manifest, and
+its GitLab repo under `--gitlab-group` (the SIG's `rpms` group by
+default) is archived:
+
+```
+$ hs-relmon retire crun --manifest packages.toml --dry-run
+crun: hyperscale10s-packages-main-candidate [stock 1.29.1]
+    untag (<= stock): crun-1.28-1.1.hs.el10
+crun: hyperscale10s-packages-main-testing [stock 1.29.1]
+    untag (<= stock): crun-1.28-1.1.hs.el10
+crun: hyperscale9s-packages-main-candidate [stock 1.29.1]
+    untag (<= stock): crun-1.28-1.1.hs.el9
+crun: hyperscale9s-packages-main-testing [stock 1.29.1]
+    untag (<= stock): crun-1.28-1.1.hs.el9
+crun: retirable
+    manifest: remove entry
+    https://gitlab.com/CentOS/Hyperscale/rpms/crun: archive
+```
+
+Builds in the tags of a release the SIG no longer tracks —
+`hyperscale8s-*`, CentOS Stream 8 being EOL — stay tagged, and are
+listed as such: there is no stock to compare against and nothing to
+gain by rewriting history. The manifest entry is removed and the repo
+archived regardless. A package declared `divergent` is
+refused — rebase it instead — unless `--force`. A build newer than
+stock is never untagged under `--yes`,
+and is prompted for individually otherwise (default no); while any such
+build stays tagged the package is not retired — the untags already done
+stand, but the manifest entry and the repo remain, since the SIG is
+still that build's only source.
+
+That stopping-short is also how to retire a package **for one release
+only**. When stock has caught up on el10 but not on el9 — wprof once
+EPEL 10 shipped it while EPEL 9 had nothing — `retire wprof` untags
+every el10 build at or behind stock, candidate tag included, then asks
+about each el9 build; decline those and it leaves the manifest entry
+and the repo alone. The el9 side stays the SIG's, and `check-repos`
+then moves the default branch to the release that still has builds.
+
+`retire` requires `koji` with the `cbs` profile and a GitLab token
+(`GITLAB_TOKEN` or `hs-relmon config`); a dry run needs neither.
+
 ### Configuration
 
 Set up GitLab authentication (token stored in
@@ -361,6 +474,59 @@ Automatically add missing packages to the manifest (preserves comments):
 $ hs-relmon list-issues --manifest packages.toml --add-missing
 ```
 
+### Pruning builds for archived packages
+
+When a package's upstream repo is archived (recorded as
+`archived = true` in the manifest by
+`poi-tracker sync-gitlab --mark-unshipped`), its CBS builds
+should eventually be retired once stock catches up.
+`prune-archived <manifest>` walks the archived packages and, for
+each build in their `-release`/`-testing` tags, compares the
+build version against the **stock** distro version for that
+tag's channel:
+
+- Stream tags (`hyperscaleNs-…`) compare against CentOS Stream N
+  plus EPEL N.
+- RHEL tags (`hyperscaleN-…`) compare against AlmaLinux N plus EPEL N.
+
+EPEL counts because it sits on top of either base — a package the SIG
+carried until stock caught up is just as redundant once EPEL ships it
+— and whichever of the two carries the newer package is the stock
+version. Repology reports EPEL 10 at the minor release matching the
+released RHEL, not the leading one that tracks CentOS Stream, so its
+EPEL version can lag a point release; that understates stock, never
+overstates it, so a verdict is at worst conservative. fedrq against
+the live repo is the authority when a point release is what decides.
+
+```
+$ hs-relmon prune-archived packages.toml --dry-run
+nvme-cli: 2 build(s) at/behind stock to untag, 0 ahead of stock
+  hyperscale9s-packages-main-release [stock 2.16]
+    untag (<= stock): nvme-cli-2.8-1.hs.el9
+socat: 0 build(s) at/behind stock to untag, 1 ahead of stock
+  hyperscale9s-packages-main-release [stock 1.7.4.1]
+    ahead of stock:   socat-1.7.4.4-4.hs.el9
+```
+
+Builds at or behind stock are redundant and untagged (one batch
+confirmation per package). Builds **ahead** of stock — or for
+which stock has no entry at all — are never untagged
+automatically: the archived repo may be their only source, so
+each is prompted individually, and `--yes` warns about and skips
+them. A build of stock's version but a **newer release** is
+treated the same way, with its own prompt: a system running it
+keeps it until stock's version moves (dnf does not downgrade; a
+configuration manager told to upgrade would). Stock's release
+comes from Repology's full `version-release`, so the tie-break
+costs no extra request. Stock versions come from Repology, and only from what stands in
+for the SIG package: a stock source of the same name, or one shipping
+a binary of that name, since a consumer needs the binary whoever
+builds it. CentOS Stream 9 ships `autoconf` 2.69 and `autoconf-latest`
+2.71 (binaries `autoconf-latest` and `autoconf271`) and Repology files
+both under one project, but only stock's `autoconf` says whether the
+SIG's has been caught up with. `prune-archived`
+requires `koji` with the `cbs` profile.
+
 ### Pruning old tagged builds
 
 CBS Koji's hyperscale `-testing` and `-release` tags accumulate
@@ -424,172 +590,6 @@ $ hs-relmon prune-manifest packages.toml --skip systemd,kernel
 
 `-candidate` and tags whose repository isn't in `--repositories`
 are left alone.
-
-### Pruning builds for archived packages
-
-When a package's upstream repo is archived (recorded as
-`archived = true` in the manifest by
-`poi-tracker sync-gitlab --mark-unshipped`), its CBS builds
-should eventually be retired once stock catches up.
-`prune-archived <manifest>` walks the archived packages and, for
-each build in their `-release`/`-testing` tags, compares the
-build version against the **stock** distro version for that
-tag's channel:
-
-- Stream tags (`hyperscaleNs-…`) compare against CentOS Stream N
-  plus EPEL N.
-- RHEL tags (`hyperscaleN-…`) compare against AlmaLinux N plus EPEL N.
-
-EPEL counts because it sits on top of either base — a package the SIG
-carried until stock caught up is just as redundant once EPEL ships it
-— and whichever of the two carries the newer package is the stock
-version. Repology reports EPEL 10 at the minor release matching the
-released RHEL, not the leading one that tracks CentOS Stream, so its
-EPEL version can lag a point release; that understates stock, never
-overstates it, so a verdict is at worst conservative. fedrq against
-the live repo is the authority when a point release is what decides.
-
-```
-$ hs-relmon prune-archived packages.toml --dry-run
-nvme-cli: 2 build(s) at/behind stock to untag, 0 ahead of stock
-  hyperscale9s-packages-main-release [stock 2.16]
-    untag (<= stock): nvme-cli-2.8-1.hs.el9
-socat: 0 build(s) at/behind stock to untag, 1 ahead of stock
-  hyperscale9s-packages-main-release [stock 1.7.4.1]
-    ahead of stock:   socat-1.7.4.4-4.hs.el9
-```
-
-Builds at or behind stock are redundant and untagged (one batch
-confirmation per package). Builds **ahead** of stock — or for
-which stock has no entry at all — are never untagged
-automatically: the archived repo may be their only source, so
-each is prompted individually, and `--yes` warns about and skips
-them. A build of stock's version but a **newer release** is
-treated the same way, with its own prompt: a system running it
-keeps it until stock's version moves (dnf does not downgrade; a
-configuration manager told to upgrade would). Stock's release
-comes from Repology's full `version-release`, so the tie-break
-costs no extra request. Stock versions come from Repology, and only from what stands in
-for the SIG package: a stock source of the same name, or one shipping
-a binary of that name, since a consumer needs the binary whoever
-builds it. CentOS Stream 9 ships `autoconf` 2.69 and `autoconf-latest`
-2.71 (binaries `autoconf-latest` and `autoconf271`) and Repology files
-both under one project, but only stock's `autoconf` says whether the
-SIG's has been caught up with. `prune-archived`
-requires `koji` with the `cbs` profile.
-
-### Checking stock, and retiring a package it has caught up with
-
-Some packages the SIG carries only until CentOS Stream catches up;
-once it has, the SIG copy is noise. Others carry packaging changes of
-the SIG's own — patches, configuration, subpackage layout — and when
-stock moves the action is a rebase, never a retirement. CBS and
-Repology cannot tell the two apart (a SIG build behind stock looks the
-same either way), so the manifest declares it:
-
-```toml
-[[package]]
-name = "pykickstart"
-divergent = true     # carries SIG changes: rebase when stock moves
-
-[[package]]
-name = "crun"
-divergent = false    # tracked until stock catches up: then retire
-```
-
-`check-stock <manifest>` compares every manifest package's builds in
-its `-release`/`-testing` tags against the stock version for each
-tag's channel (CentOS Stream N for a Stream tag, AlmaLinux N for a
-RHEL tag, either plus EPEL N, from Repology — the rule `prune-archived`
-applies) and says
-what follows, one verdict word per line: `ahead` (the SIG is newer
-than stock, its live work) first, then `release` (stock has the
-version but the SIG's release is newer — retiring would leave a system
-running the SIG build on it until stock's version moves, since dnf
-does not downgrade while a configuration manager told to upgrade
-would), then the caught-up packages —
-`retire` when declared `divergent = false`, `rebase` when `true`,
-`declare` when the field is unset — and last `none`, no build in the
-managed tags at all (gone from CBS, or carried in a repository other
-than `--repositories`). Stock means what ships the package by name, as
-for `prune-archived`: `autoconf-latest` in stock, with no binary called
-`autoconf`, does not catch up with the SIG's `autoconf`. Tags are shown without their boilerplate,
-`10s-main-release` for `hyperscale10s-packages-main-release`; the
-verdicts are colored on a terminal (`--color[=WHEN]` as in `ls`:
-`auto`, `always`, `never`), and a legend closes the listing:
-
-```
-$ hs-relmon check-stock packages.toml --repositories main,facebook,experimental,kernel
-ahead     dnsmasq                     2 build(s) newer than stock (10s-main-release 2.90; 9s-main-release 2.85)
-…
-retire    crun                        stock covers 2 build(s) (10s-main-testing 1.29.1; 9s-main-testing 1.29.1)
-rebase    pykickstart                 stock covers 2 build(s) (10s-main-release 3.52.13)
-declare   openssh                     stock covers 20 build(s) (10s-facebook-release 9.9p1; 10s-facebook-testing 9.9p1; 9s-facebook-release 9.9p1; 9s-facebook-testing 9.9p1)
-…
-none      sqlite                      no builds in the managed tags
-
-ahead: the SIG is newer than stock  retire: stock has caught up, the package is temporary  rebase: …  declare: stock has caught up — set `divergent = false` (retire) or `true` (rebase) on the manifest entry  none: no builds in the managed tags
-65 package(s): 40 ahead of stock, 1 to retire, 1 to rebase, 13 caught up but undeclared, 10 without builds
-openssh: stock has caught up — temporary (retire) or divergent (rebase)? (t)emporary / (d)ivergent / (s)kip [s]:
-```
-
-On a terminal, the `declare` packages are then asked about one by one
-— `t` writes `divergent = false` to the manifest entry, `d` writes
-`true`, Enter or `s` leaves it undeclared, `q` stops asking — so the
-declaration is made where the evidence is on screen. A piped run
-(stdin not a terminal) only lists.
-
-The managed tags are read once — the candidate names that exist on
-the hub, then each tag's contents — and Repology is asked once per
-package, a second apart as its terms require, so a manifest of
-sixty-odd takes about a minute. Equal versions count as caught up.
-`poi-tracker export hs-relmon` preserves per-package fields across
-re-exports, so a `divergent` set at the prompt or by hand stays.
-
-`retire <package>` then takes a package out, in one confirmation (none
-with `--yes`; `--dry-run` shows the plan): its builds are untagged from
-every hyperscale tag they are in — candidate tags included, which the
-`prune-*` commands leave alone — it is removed from the manifest, and
-its GitLab repo under `--gitlab-group` (the SIG's `rpms` group by
-default) is archived:
-
-```
-$ hs-relmon retire crun --manifest packages.toml --dry-run
-crun: hyperscale10s-packages-main-candidate [stock 1.29.1]
-    untag (<= stock): crun-1.28-1.1.hs.el10
-crun: hyperscale10s-packages-main-testing [stock 1.29.1]
-    untag (<= stock): crun-1.28-1.1.hs.el10
-crun: hyperscale9s-packages-main-candidate [stock 1.29.1]
-    untag (<= stock): crun-1.28-1.1.hs.el9
-crun: hyperscale9s-packages-main-testing [stock 1.29.1]
-    untag (<= stock): crun-1.28-1.1.hs.el9
-crun: retirable
-    manifest: remove entry
-    https://gitlab.com/CentOS/Hyperscale/rpms/crun: archive
-```
-
-Builds in the tags of a release the SIG no longer tracks —
-`hyperscale8s-*`, CentOS Stream 8 being EOL — stay tagged, and are
-listed as such: there is no stock to compare against and nothing to
-gain by rewriting history. The manifest entry is removed and the repo
-archived regardless. A package declared `divergent` is
-refused — rebase it instead — unless `--force`. A build newer than
-stock is never untagged under `--yes`,
-and is prompted for individually otherwise (default no); while any such
-build stays tagged the package is not retired — the untags already done
-stand, but the manifest entry and the repo remain, since the SIG is
-still that build's only source.
-
-That stopping-short is also how to retire a package **for one release
-only**. When stock has caught up on el10 but not on el9 — wprof once
-EPEL 10 shipped it while EPEL 9 had nothing — `retire wprof` untags
-every el10 build at or behind stock, candidate tag included, then asks
-about each el9 build; decline those and it leaves the manifest entry
-and the repo alone. The el9 side stays the SIG's, and `check-repos`
-then moves the default branch to the release that still has builds.
-
-`retire` requires `koji` with the `cbs` profile and a GitLab token
-(`GITLAB_TOKEN` or `hs-relmon config`); a dry run needs neither.
 
 ### Reviewing testing builds
 
