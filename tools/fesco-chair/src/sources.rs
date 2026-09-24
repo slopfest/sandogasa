@@ -259,22 +259,22 @@ pub fn entry(ticket: &Ticket) -> String {
 /// the ticket is tagged; this returns the verdict-through-tally slice
 /// of that line, e.g. `APPROVED (+3, 0, 0)`. The verdict is matched
 /// case-insensitively ("… is approved (+6, 0, 0)" is just as common)
-/// and normalized to uppercase for the announcement.
+/// and normalized to uppercase for the announcement — the verdict
+/// word alone: whatever the chair wrote between it and the tally
+/// ("approved under normal ticket vote rule (+5, 1, 0)") keeps its
+/// casing, since the decision is the word, not the sentence.
 pub fn extract_decision<'a>(bodies_newest_first: impl Iterator<Item = &'a str>) -> Option<String> {
     for body in bodies_newest_first {
         for line in body.lines() {
-            // Uppercasing both matches the verdict case-insensitively
-            // and normalizes it; the tally is digits and punctuation,
-            // unaffected.
-            let line = line.to_ascii_uppercase();
+            let upper = line.to_ascii_uppercase();
             for verdict in ["APPROVED", "REJECTED"] {
-                let Some(start) = line.find(verdict) else {
+                let Some(start) = upper.find(verdict) else {
                     continue;
                 };
                 let rest = &line[start..];
                 let Some(end) = rest.find(')') else { continue };
                 if rest[..end].contains('(') {
-                    return Some(rest[..=end].to_string());
+                    return Some(format!("{verdict}{}", &rest[verdict.len()..=end]));
                 }
             }
         }
@@ -681,6 +681,22 @@ Meeting summary
         );
         // ...and no comments means no decision.
         assert_eq!(extract_decision(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn extract_decision_uppercases_the_verdict_and_nothing_else() {
+        // Ticket 3685, as the chair wrote it: the decision is one word;
+        // the qualification between it and the tally is a sentence.
+        assert_eq!(
+            extract_decision(
+                [
+                    "the policy exemption to upgrade libxml2 to 2.15.4 in F45 has been approved \
+                  under normal ticket vote rule (+5, 1, 0)"
+                ]
+                .into_iter()
+            ),
+            Some("APPROVED under normal ticket vote rule (+5, 1, 0)".to_string())
+        );
     }
 
     #[test]

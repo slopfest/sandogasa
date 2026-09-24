@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### fesco-chair: the announcement shouts the verdict, not the sentence
+
+The summary for the 2026-09-22 meeting announced ticket 3685 as
+"APPROVED UNDER NORMAL TICKET VOTE RULE (+5, 1, 0)": the decision is
+read off the chair's concluding comment, matched case-insensitively by
+uppercasing the whole line, and the slice from the verdict to the tally
+was returned in that uppercased form. The verdict word alone is now
+uppercased — "APPROVED under normal ticket vote rule (+5, 1, 0)" — and
+whatever the chair wrote between it and the tally keeps its casing.
+
 ### ebranch: an `[epel-all]` or `[fedora-all]` CVE tracker counts for every branch
 
 Voting on libheif's EPEL 9 update on 2026-09-24, `check-update` asked
