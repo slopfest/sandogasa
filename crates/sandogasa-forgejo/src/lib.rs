@@ -256,6 +256,10 @@ pub struct IssueComment {
     /// RFC 3339 timestamp the comment was posted at.
     #[serde(default)]
     pub created_at: Option<String>,
+    /// RFC 3339 timestamp the comment was last edited at (the same
+    /// as `created_at` when it never was).
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 /// A label as embedded in a timeline event.
@@ -682,6 +686,26 @@ impl Client {
         labels: &[&str],
     ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
         self.repo_items("issues", owner, repo, state, labels)
+    }
+
+    /// Search `owner/repo`'s issues by keyword (`q`, matched against
+    /// title and body), in any `state` (`open`, `closed`, `all`), one
+    /// page of up to the usual limit: enough to find the ticket a
+    /// Change was approved in by its name.
+    pub fn search_repo_issues(
+        &self,
+        owner: &str,
+        repo: &str,
+        q: &str,
+        state: &str,
+    ) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/v1/repos/{owner}/{repo}/issues", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("type", "issues"), ("state", state), ("q", q)])
+            .send()?;
+        Ok(http::blocking_json_ok(resp, "Forgejo issue search")?)
     }
 
     /// List pull requests on `owner/repo` by `state`, in the same
@@ -1254,5 +1278,26 @@ mod tests {
             .create();
         assert!(!validate_token(&server.url(), "bad").unwrap());
         bad.assert();
+    }
+
+    #[test]
+    fn search_repo_issues_passes_the_keyword_and_state() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v1/repos/fesco/tickets/issues")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("type".into(), "issues".into()),
+                mockito::Matcher::UrlEncoded("state".into(), "all".into()),
+                mockito::Matcher::UrlEncoded("q".into(), "llvm23".into()),
+            ]))
+            .with_status(200)
+            .with_body(r#"[{"number": 3629, "title": "Change: LLVM 23", "state": "closed"}]"#)
+            .create();
+        let client = Client::anonymous(&server.url()).unwrap();
+        let found = client
+            .search_repo_issues("fesco", "tickets", "llvm23", "all")
+            .unwrap();
+        assert_eq!(found[0].number, 3629);
+        mock.assert();
     }
 }

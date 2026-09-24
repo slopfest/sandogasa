@@ -38,8 +38,14 @@ pub struct ChangesArgs {
     pub ticket: Option<u64>,
 
     /// Machine-readable JSON output.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "script")]
     pub json: bool,
+
+    /// The chair's zodbot lines for the meeting instead of the
+    /// report: a `!topic FNN Change: <name>` and `!fesco <ticket>`
+    /// pair per Change that needs a decision, in the ticket's order.
+    #[arg(long)]
+    pub script: bool,
 
     /// Print progress to stderr.
     #[arg(short, long)]
@@ -66,6 +72,11 @@ pub struct Entry {
     /// Date (`YYYY-MM-DD`) and author of the block this came from.
     pub noted: String,
     pub noted_by: String,
+    /// Where the block stands in the ticket: the newest listing it
+    /// appears in (0 for the newest text of all) and its place there.
+    /// The order the room reads the ticket in.
+    #[serde(skip)]
+    pub order: (usize, usize),
 }
 
 /// Where Bugzilla puts the Change.
@@ -99,6 +110,16 @@ pub struct Report {
     /// Whether the status the ticket's list gives disagrees with
     /// Bugzilla's.
     pub stale: bool,
+    /// The FESCo ticket the Change was approved in, when the tracker
+    /// has one titled for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticket_url: Option<String>,
+    /// The wiki link the ticket gives when it does not resolve; the
+    /// entry's `wiki` is then the tracker bug's, or nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wiki_broken: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -160,6 +181,7 @@ pub fn parse_blocks(text: &str, noted: &str, noted_by: &str) -> Vec<Entry> {
                 section: section.clone(),
                 noted: noted.to_string(),
                 noted_by: noted_by.to_string(),
+                order: (0, out.len()),
                 ..Entry::default()
             }),
             _ if out.is_empty() => {}
@@ -183,11 +205,17 @@ pub fn parse_blocks(text: &str, noted: &str, noted_by: &str) -> Vec<Entry> {
 /// Fold the blocks from the body and then each comment, oldest first,
 /// into one entry per tracker bug: a later block replaces the earlier
 /// word on status, info and section, and fills in a name, wiki or
-/// owners the earlier one lacked.
+/// owners the earlier one lacked. The entries come back in the
+/// ticket's order — the newest listing's order first, then what only
+/// older texts list, in theirs — which is the order the room reads
+/// the ticket in.
 pub fn latest_entries<'a>(texts: impl Iterator<Item = (&'a str, &'a str, &'a str)>) -> Vec<Entry> {
+    let texts: Vec<_> = texts.collect();
+    let newest = texts.len().saturating_sub(1);
     let mut by_bug: BTreeMap<u64, Entry> = BTreeMap::new();
-    for (text, noted, noted_by) in texts {
-        for entry in parse_blocks(text, noted, noted_by) {
+    for (i, (text, noted, noted_by)) in texts.into_iter().enumerate() {
+        for mut entry in parse_blocks(text, noted, noted_by) {
+            entry.order.0 = newest - i;
             by_bug
                 .entry(entry.bug)
                 .and_modify(|e| {
@@ -205,11 +233,89 @@ pub fn latest_entries<'a>(texts: impl Iterator<Item = (&'a str, &'a str, &'a str
                     e.section = entry.section.clone();
                     e.noted = entry.noted.clone();
                     e.noted_by = entry.noted_by.clone();
+                    e.order = entry.order;
                 })
                 .or_insert(entry);
         }
     }
-    by_bug.into_values().collect()
+    let mut out: Vec<Entry> = by_bug.into_values().collect();
+    out.sort_by_key(|e| e.order);
+    out
+}
+
+/// Whether a FESCo ticket title names this Change: `Change: <name>`
+/// or `Change: <wiki slug>` in any casing and spacing ("Change:
+/// RelocateRpmRepoConfigsToUsr", "Change: Grub EFI For Confidential
+/// Computing"), title and Change compared with everything but letters
+/// and digits removed.
+pub fn ticket_matches(title: &str, name: &str, slug: Option<&str>) -> bool {
+    let squash = |s: &str| {
+        s.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect::<String>()
+    };
+    let t = squash(title);
+    let Some(rest) = t.strip_prefix("change") else {
+        return false;
+    };
+    let squashed_name = squash(name);
+    let slug = slug.map(squash).unwrap_or_default();
+    // Every word of the Change's name in the title ("Encapsule devel
+    // containers" against "Change: Encapsule isolated devel
+    // containers"), the short ones aside.
+    // Numbers count whatever their length: "LLVM 22" is not "LLVM 23".
+    let words: Vec<String> = name
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= 3 || w.chars().all(|c| c.is_ascii_digit()))
+        .filter(|w| !w.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let all_words = !words.is_empty() && words.iter().all(|w| rest.contains(w.as_str()));
+    !rest.is_empty() && (rest == squashed_name || (!slug.is_empty() && rest == slug) || all_words)
+}
+
+/// The FESCo ticket a Change was approved in, found by searching the
+/// tracker for its wiki slug and its name and keeping the title that
+/// names it ([`ticket_matches`]); the newest when several do.
+fn find_change_ticket(
+    client: &sandogasa_forgejo::Client,
+    entry: &Entry,
+    verbose: bool,
+) -> Option<sandogasa_forgejo::Issue> {
+    let slug = entry
+        .wiki
+        .as_deref()
+        .and_then(|w| w.trim_end_matches('/').rsplit('/').next())
+        .map(str::to_string);
+    let mut queries: Vec<String> = Vec::new();
+    if let Some(s) = &slug {
+        queries.push(s.clone());
+    }
+    queries.push(entry.name.clone());
+    let mut best: Option<sandogasa_forgejo::Issue> = None;
+    for q in queries {
+        let found = match client.search_repo_issues(TRACKER_OWNER, TRACKER_REPO, &q, "all") {
+            Ok(f) => f,
+            Err(e) => {
+                if verbose {
+                    eprintln!("[changes] ticket search for {q:?}: {e}");
+                }
+                continue;
+            }
+        };
+        for issue in found {
+            if ticket_matches(&issue.title, &entry.name, slug.as_deref())
+                && best.as_ref().is_none_or(|b| issue.number > b.number)
+            {
+                best = Some(issue);
+            }
+        }
+        if best.is_some() {
+            break;
+        }
+    }
+    best
 }
 
 /// The release number in a report title such as "F45 Incomplete
@@ -291,7 +397,11 @@ fn assemble(
         .chain(comments.iter().map(|c| {
             (
                 c.body.as_str(),
-                c.created_at.as_deref().unwrap_or("?"),
+                // A list edited in place is as new as its edit.
+                c.updated_at
+                    .as_deref()
+                    .or(c.created_at.as_deref())
+                    .unwrap_or("?"),
                 c.user.as_ref().map_or("?", |u| u.login.as_str()),
             )
         }))
@@ -332,6 +442,10 @@ fn assemble(
         bugs.into_iter().map(|b| (b.id, b)).collect();
     let mut reports = Vec::new();
     for entry in entries {
+        if args.verbose {
+            eprintln!("[changes] looking for {}'s FESCo ticket", entry.name);
+        }
+        let ticket = find_change_ticket(&client, &entry, args.verbose);
         let Some(bug) = bugs.get(&entry.bug) else {
             eprintln!(
                 "warning: bug #{} ({}) not returned by Bugzilla; skipped",
@@ -352,11 +466,102 @@ fn assemble(
             last_change: bug.last_change_time,
             needinfo,
             stale,
+            ticket: ticket.as_ref().map(|t| t.number),
+            ticket_url: ticket.map(|t| t.html_url),
+            wiki_broken: None,
             entry,
         });
     }
-    reports.sort_by(|a, b| a.state.cmp(&b.state).then(a.entry.name.cmp(&b.entry.name)));
+    // The ticket's wiki links are typed by hand and have been wrong
+    // ("llvm23" for LLVM-23); the tracker bug's description names the
+    // page the wrangler's tooling filed it for. A link that does not
+    // resolve is replaced from there and reported for the wrangler.
+    let http = sources::http_client();
+    for r in &mut reports {
+        let Some(link) = r.entry.wiki.clone() else {
+            continue;
+        };
+        if resolves(&http, &link) {
+            continue;
+        }
+        if args.verbose {
+            eprintln!(
+                "[changes] {} links {link}, which does not resolve",
+                r.entry.name
+            );
+        }
+        let from_bug = rt
+            .block_on(bz.comments(r.entry.bug))
+            .ok()
+            .and_then(|cs| cs.first().and_then(|c| wiki_in(&c.text)))
+            .filter(|u| resolves(&http, u));
+        r.wiki_broken = Some(link);
+        r.entry.wiki = from_bug;
+    }
+    // Grouped by where Bugzilla puts them, and within a group in the
+    // ticket's order: the room follows the list, not the alphabet.
+    reports.sort_by(|a, b| {
+        a.state
+            .cmp(&b.state)
+            .then(a.entry.order.cmp(&b.entry.order))
+    });
     Ok((issue, release, reports))
+}
+
+/// Whether `url` answers 2xx to a HEAD. A network failure counts as
+/// resolving: a flaky line must not report the wrangler's links wrong.
+fn resolves(http: &reqwest::blocking::Client, url: &str) -> bool {
+    match http.head(url).send() {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => true,
+    }
+}
+
+/// The Change page a text names — `https://fedoraproject.org/wiki/Changes/…`,
+/// as a tracker bug's description does ("For more details, see: …").
+pub fn wiki_in(text: &str) -> Option<String> {
+    const PREFIX: &str = "https://fedoraproject.org/wiki/Changes/";
+    let start = text.find(PREFIX)?;
+    let url: String = text[start..]
+        .chars()
+        .take_while(|c| !c.is_whitespace() && !matches!(c, ')' | ']' | '>' | '"'))
+        .collect();
+    (url.len() > PREFIX.len()).then_some(url)
+}
+
+/// The chair's zodbot lines: one `!topic` / `!fesco` pair per Change
+/// that needs a decision, in the ticket's order, then the rest as
+/// comments so nothing is missed. Copied line by line as the meeting
+/// goes.
+pub fn render_script(reports: &[Report], release: u32) -> String {
+    let mut out = Vec::new();
+    for r in reports.iter().filter(|r| r.state == State::Decision) {
+        out.push(format!("!topic F{release} Change: {}", r.entry.name));
+        match r.ticket {
+            Some(n) => out.push(format!("!fesco {n}")),
+            None => out.push(format!(
+                "# no FESCo ticket found for {}; !link {}",
+                r.entry.name,
+                r.entry.wiki.as_deref().unwrap_or("(no wiki page)")
+            )),
+        }
+    }
+    for r in reports.iter().filter(|r| r.state != State::Decision) {
+        out.push(format!(
+            "# {} — {}{}",
+            r.entry.name,
+            match r.state {
+                State::Complete => "code complete or done",
+                State::Retargeted => "retargeted",
+                State::Elsewhere => "on neither tracker",
+                State::Decision => unreachable!(),
+            },
+            r.ticket
+                .map(|n| format!(" (!fesco {n})"))
+                .unwrap_or_default()
+        ));
+    }
+    out.join("\n")
 }
 
 /// The report as Markdown, ready to paste into the ticket: a heading
@@ -381,25 +586,47 @@ pub fn render(reports: &[Report], release: u32, today: NaiveDate) -> String {
         if group.is_empty() {
             continue;
         }
-        out.push(format!("## {heading} ({})\n", group.len()));
+        out.push(format!(
+            "## {heading} ({}, in the ticket's order)\n",
+            group.len()
+        ));
         out.extend(group.iter().map(|r| render_one(r, today)));
         out.push(String::new());
     }
-    let stale: Vec<&Report> = reports.iter().filter(|r| r.stale).collect();
+    let stale: Vec<&Report> = reports
+        .iter()
+        .filter(|r| r.stale || r.wiki_broken.is_some())
+        .collect();
     if !stale.is_empty() {
         out.push(format!(
             "## Ticket list behind Bugzilla ({}) — for the Change Wrangler\n",
             stale.len()
         ));
-        out.extend(stale.iter().map(|r| {
-            format!(
-                "- {}: ticket says {}, bz {} is {}",
-                r.entry.name,
-                r.entry.status,
-                bug_link(r.entry.bug),
-                r.bz_status
-            )
-        }));
+        for r in &stale {
+            if r.stale {
+                out.push(format!(
+                    "- {}: ticket says {}, bz {} is {}",
+                    r.entry.name,
+                    r.entry.status,
+                    bug_link(r.entry.bug),
+                    r.bz_status
+                ));
+            }
+            if let Some(bad) = &r.wiki_broken {
+                out.push(match &r.entry.wiki {
+                    Some(good) => format!(
+                        "- {}: ticket links {bad}, which does not resolve; bz {} says {good}",
+                        r.entry.name,
+                        bug_link(r.entry.bug)
+                    ),
+                    None => format!(
+                        "- {}: ticket links {bad}, which does not resolve, and bz {} names no page",
+                        r.entry.name,
+                        bug_link(r.entry.bug)
+                    ),
+                });
+            }
+        }
     }
     out.join("\n").trim_end().to_string()
 }
@@ -456,8 +683,12 @@ fn render_one(r: &Report, today: NaiveDate) -> String {
     } else {
         String::new()
     };
+    let fesco = match (r.ticket, &r.ticket_url) {
+        (Some(n), Some(url)) => format!("\n  - FESCo ticket [#{n}]({url})"),
+        _ => String::new(),
+    };
     format!(
-        "- **{name}** — {owners}\n{bz}\n  - ticket ({} {}{section}){stale}: {}",
+        "- **{name}** — {owners}\n{bz}\n  - ticket ({} {}{section}){stale}: {}{fesco}",
         e.noted,
         e.noted_by,
         if e.info.is_empty() { "-" } else { &e.info }
@@ -472,6 +703,10 @@ pub fn run(args: &ChangesArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if args.script {
+        println!("{}", render_script(&reports, release));
+        return ExitCode::SUCCESS;
+    }
     if args.json {
         let out = ChangesJson {
             ticket: issue.number,
@@ -576,15 +811,17 @@ Latest Info: **Deferred to F46**\n";
             ]
             .into_iter(),
         );
+        // The comment's order first (it is the newest list), then what
+        // only the body lists.
         let bugs: Vec<u64> = entries.iter().map(|e| e.bug).collect();
-        assert_eq!(bugs, vec![2203221, 2448388, 2508469]);
-        let shadow = &entries[2];
+        assert_eq!(bugs, vec![2448388, 2508469, 2203221]);
+        let shadow = &entries[1];
         assert_eq!(shadow.info, "Deferred to F46");
         assert_eq!(
             (shadow.noted.as_str(), shadow.noted_by.as_str()),
             ("2026-09-09", "gotmax23")
         );
-        assert_eq!(entries[0].noted_by, "report", "untouched by the comment");
+        assert_eq!(entries[2].noted_by, "report", "untouched by the comment");
     }
 
     #[test]
@@ -623,6 +860,7 @@ Latest Info: **Deferred to F46**\n";
             section: section.map(str::to_string),
             noted: "2026-09-09".into(),
             noted_by: "gotmax23".into(),
+            order: (0, 0),
         };
         let reports = vec![
             Report {
@@ -633,6 +871,9 @@ Latest Info: **Deferred to F46**\n";
                 last_change: at("2026-09-09T00:00:00Z"),
                 needinfo: Some(("ngompa13".into(), Some(at("2026-08-31T10:35:42Z")))),
                 stale: false,
+                ticket: None,
+                ticket_url: None,
+                wiki_broken: None,
             },
             Report {
                 entry: entry("Toolchain", 2503684, "ASSIGNED", None),
@@ -642,12 +883,15 @@ Latest Info: **Deferred to F46**\n";
                 last_change: at("2026-09-10T00:00:00Z"),
                 needinfo: None,
                 stale: true,
+                ticket: None,
+                ticket_url: None,
+                wiki_broken: None,
             },
         ];
         let text = render(&reports, 45, NaiveDate::from_ymd_opt(2026, 9, 22).unwrap());
         assert!(
             text.starts_with(
-                "## Needs a decision — still open against F45 (1)\n\n\
+                "## Needs a decision — still open against F45 (1, in the ticket's order)\n\n\
                  - **[Relocate](https://fedoraproject.org/wiki/Changes/Relocate)** — @ngompa\n"
             ),
             "{text}"
@@ -664,7 +908,7 @@ Latest Info: **Deferred to F46**\n";
             "{text}"
         );
         assert!(
-            text.contains("## Code complete or done — nothing to decide (1)\n\n- **[Toolchain]"),
+            text.contains("## Code complete or done — nothing to decide (1, in the ticket's order)\n\n- **[Toolchain]"),
             "{text}"
         );
         assert!(
@@ -683,5 +927,148 @@ Latest Info: **Deferred to F46**\n";
             "{text}"
         );
         assert!(!text.contains("Retargeted"), "empty groups are left out");
+    }
+
+    #[test]
+    fn entries_come_in_the_tickets_order_newest_listing_first() {
+        // The body lists A, B, C; a later comment lists C then A. The
+        // room reads the newest list: C, A, then B from the body.
+        let block = |name: &str, bug: u64| {
+            format!(
+                "Change: [{name}](https://fedoraproject.org/wiki/Changes/{name})\nOwner:s): @x\n\
+                 Tracker ID: [#{bug}](https://bugzilla.redhat.com/show_bug.cgi?id={bug})\n\
+                 Status: ASSIGNED\nLatest Info: -\n\n"
+            )
+        };
+        let body = format!("{}{}{}", block("A", 1), block("B", 2), block("C", 3));
+        let comment = format!("{}{}", block("C", 3), block("A", 1));
+        let entries = latest_entries(
+            [
+                (body.as_str(), "2026-08-31", "report"),
+                (comment.as_str(), "2026-09-09", "gotmax23"),
+            ]
+            .into_iter(),
+        );
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["C", "A", "B"]);
+        assert_eq!(entries[0].noted_by, "gotmax23");
+        assert_eq!(entries[2].noted_by, "report");
+    }
+
+    #[test]
+    fn a_change_ticket_is_recognised_by_slug_name_or_every_word() {
+        assert!(ticket_matches("Change: LLVM 23", "LLVM 23", Some("llvm23")));
+        assert!(ticket_matches(
+            "Change: RelocateRpmRepoConfigsToUsr",
+            "Relocate RPM repository configs to /usr",
+            Some("RelocateRpmRepoConfigsToUsr")
+        ));
+        assert!(ticket_matches(
+            "Change: Grub EFI For Confidential Computing",
+            "GRUB EFI for Confidential Computing",
+            Some("Grub2LightForConfidentialComputing")
+        ));
+        // Every word of the name, in a title that says more.
+        assert!(ticket_matches(
+            "Change: Encapsule isolated devel containers",
+            "Encapsule devel containers",
+            Some("Encapsule_devel_containers")
+        ));
+        // Not a Change ticket, or another Change.
+        assert!(!ticket_matches(
+            "F45 Incomplete Changes Report",
+            "LLVM 23",
+            None
+        ));
+        assert!(!ticket_matches(
+            "Change: LLVM 22",
+            "LLVM 23",
+            Some("llvm23")
+        ));
+        assert!(!ticket_matches(
+            "Change: UseKmsconVTConsole",
+            "LLVM 23",
+            Some("llvm23")
+        ));
+    }
+
+    #[test]
+    fn the_script_pairs_a_topic_with_the_fesco_ticket_and_lists_the_rest() {
+        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
+        let report = |name: &str, state: State, ticket: Option<u64>| Report {
+            entry: Entry {
+                name: name.into(),
+                wiki: Some(format!("https://fedoraproject.org/wiki/Changes/{name}")),
+                bug: 1,
+                ..Entry::default()
+            },
+            state,
+            bz_status: "ASSIGNED".into(),
+            resolution: String::new(),
+            last_change: at("2026-09-09T00:00:00Z"),
+            needinfo: None,
+            stale: false,
+            ticket,
+            ticket_url: ticket
+                .map(|n| format!("https://forge.fedoraproject.org/fesco/tickets/issues/{n}")),
+            wiki_broken: None,
+        };
+        let out = render_script(
+            &[
+                report("LLVM 23", State::Decision, Some(3629)),
+                report("Encapsule devel containers", State::Decision, None),
+                report("mkosi-initrd", State::Retargeted, Some(2990)),
+            ],
+            45,
+        );
+        assert_eq!(
+            out,
+            "!topic F45 Change: LLVM 23\n!fesco 3629\n\
+             !topic F45 Change: Encapsule devel containers\n\
+             # no FESCo ticket found for Encapsule devel containers; !link https://fedoraproject.org/wiki/Changes/Encapsule devel containers\n\
+             # mkosi-initrd — retargeted (!fesco 2990)"
+        );
+    }
+
+    #[test]
+    fn a_broken_wiki_link_is_replaced_from_the_bug_and_reported() {
+        assert_eq!(
+            wiki_in(
+                "This is a tracking bug for Change: LLVM 23\nFor more details, see: \
+                 https://fedoraproject.org/wiki/Changes/LLVM-23\n\nUpdate all llvm"
+            )
+            .as_deref(),
+            Some("https://fedoraproject.org/wiki/Changes/LLVM-23")
+        );
+        assert_eq!(wiki_in("no page here"), None);
+        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
+        let r = Report {
+            entry: Entry {
+                name: "LLVM 23".into(),
+                wiki: Some("https://fedoraproject.org/wiki/Changes/LLVM-23".into()),
+                bug: 2499980,
+                status: "ASSIGNED".into(),
+                ..Entry::default()
+            },
+            state: State::Complete,
+            bz_status: "ON_QA".into(),
+            resolution: String::new(),
+            last_change: at("2026-09-10T00:00:00Z"),
+            needinfo: None,
+            stale: true,
+            ticket: Some(3629),
+            ticket_url: Some("https://forge.fedoraproject.org/fesco/tickets/issues/3629".into()),
+            wiki_broken: Some("https://fedoraproject.org/wiki/Changes/llvm23".into()),
+        };
+        let text = render(&[r], 45, NaiveDate::from_ymd_opt(2026, 9, 24).unwrap());
+        assert!(text.contains("- **[LLVM 23](https://fedoraproject.org/wiki/Changes/LLVM-23)**"));
+        assert!(
+            text.contains(
+                "- LLVM 23: ticket links https://fedoraproject.org/wiki/Changes/llvm23, which does \
+             not resolve; bz [#2499980](https://bugzilla.redhat.com/show_bug.cgi?id=2499980) \
+             says https://fedoraproject.org/wiki/Changes/LLVM-23"
+            ),
+            "{text}"
+        );
     }
 }

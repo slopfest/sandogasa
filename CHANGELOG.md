@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### fesco-chair: `changes` keeps the ticket's order and hands the chair the meeting lines
+
+Working through the F45 Incomplete Changes Report at the 2026-09-22
+meeting, the chair used the report `changes` had posted and the room
+lost the thread: "can we just go through the list in order please?" —
+the report grouped Changes by where Bugzilla puts them and sorted each
+group alphabetically, while everyone else was reading the ticket's own
+list. Meanwhile the chair typed a `!topic F45 Change: <name>` and a
+`!fesco <ticket>` for each Change by hand, opening every Change to find
+the ticket it had been approved in.
+
+Within a group the Changes now come in the ticket's order: the newest
+list's order first (gotmax's, edited in place through the week — an
+edited list counts from its edit, not its posting), then whatever only
+older lists carry. Each Change carries the FESCo ticket it was
+approved in, found on the tracker by its wiki slug or name (`Change:
+LLVM 23`, `Change: RelocateRpmRepoConfigsToUsr`, `Change: Encapsule
+isolated devel containers` for "Encapsule devel containers"). And
+`--script` prints the chair's lines instead of the report — a `!topic
+F45 Change: <name>` and `!fesco <ticket>` pair per Change that needs a
+decision, in that order, the rest as comments — to paste as the
+meeting goes. sandogasa-forgejo gains `Client::search_repo_issues` and
+`IssueComment::updated_at`.
+
+The same meeting found the report's LLVM 23 link dead: the ticket's
+lists carry `Changes/llvm23`, typed by hand and copied from list to
+list, where the page is `Changes/LLVM-23`. A wiki link that does not
+resolve is now replaced by the page the tracker bug's description
+names ("For more details, see: …", written by the wrangler's tooling),
+and the Change Wrangler's closing section says which link was wrong and
+what the bug says.
+
 ### fesco-chair: the announcement shouts the verdict, not the sentence
 
 The summary for the 2026-09-22 meeting announced ticket 3685 as

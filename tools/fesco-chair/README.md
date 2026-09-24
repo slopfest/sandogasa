@@ -121,6 +121,7 @@ the next meeting on …") is printed to stderr.
 ```sh
 fesco-chair changes                    # the open "Incomplete Changes Report"
 fesco-chair changes --ticket 3682      # a specific report ticket
+fesco-chair changes --script           # the chair's !topic / !fesco lines
 fesco-chair changes --json             # machine-readable
 ```
 
@@ -142,15 +143,29 @@ the Changes:
 - **Retargeted** — blocking the next release's tracker instead
 - **On neither tracker** — worth a look
 
-The output is Markdown, ready to paste into the ticket: a heading per
-group and a list item per Change with its wiki page, owners, the bug's
-status, resolution and last change, an unanswered `needinfo?` with
-whom it asks and for how long, and the ticket's latest line on it. A
-block whose stated status Bugzilla no longer has is marked `[ticket
-says …]`, and a closing section lists those for the Change Wrangler,
-whose list it is — the tool never edits the ticket. The report ticket is the open
-`meeting` ticket titled "Incomplete Changes Report" unless `--ticket`
-names one. Bugzilla is read anonymously.
+Within a group the Changes come in the ticket's order — the newest
+list's order first, then whatever only older lists carry — which is
+the order the room follows, and a list edited in place counts from
+its edit. The output is Markdown, ready to paste into the ticket: a
+heading per group and a list item per Change with its wiki page,
+owners, the bug's status, resolution and last change, an unanswered
+`needinfo?` with whom it asks and for how long, the ticket's latest
+line on it, and the FESCo ticket the Change was approved in, found on
+the tracker by the Change's wiki slug or name (`Change: LLVM 23`,
+`Change: RelocateRpmRepoConfigsToUsr`). A block whose stated status
+Bugzilla no longer has is marked `[ticket says …]`; a wiki link that
+does not resolve (the ticket's are typed by hand) is replaced by the
+page the tracker bug's description names; and a closing section lists
+both kinds for the Change Wrangler, whose list it is — the tool never
+edits the ticket. The report ticket is the open `meeting`
+ticket titled "Incomplete Changes Report" unless `--ticket` names one.
+Bugzilla is read anonymously.
+
+`--script` prints the chair's zodbot lines instead of the report: a
+`!topic F45 Change: <name>` and `!fesco <ticket>` pair per Change that
+needs a decision, in the ticket's order, then the rest as comments so
+nothing is skipped by accident. Paste each pair as the meeting reaches
+it.
 
 ### `config`
 

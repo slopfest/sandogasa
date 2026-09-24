@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH fesco-chair 1 2026-09-22 "sandogasa 0.24.1" "Sandogasa Manual"
+.TH fesco-chair 1 2026-09-24 "sandogasa 0.24.1" "Sandogasa Manual"
 .SH NAME
 fesco\-chair \- FESCo meeting chair helper — agenda, day\-of script, summary email, ticket votes
 .SH SYNOPSIS
@@ -56,7 +56,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS fesco-chair changes
-\fBfesco\-chair changes\fR [\fB\-\-ticket\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBfesco\-chair changes\fR [\fB\-\-ticket\fR] [\fB\-\-json\fR] [\fB\-\-script\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Where each Change on the Incomplete Changes Report stands
 .TP
@@ -65,6 +65,9 @@ The report ticket (default: the open meeting ticket titled "... Incomplete Chang
 .TP
 \fB\-\-json\fR
 Machine\-readable JSON output
+.TP
+\fB\-\-script\fR
+The chair\*(Aqs zodbot lines for the meeting instead of the report: a `!topic FNN Change: <name>` and `!fesco <ticket>` pair per Change that needs a decision, in the ticket\*(Aqs order
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
