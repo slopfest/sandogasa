@@ -61,8 +61,9 @@ enum Command {
     /// show the last response on those that have not.
     Ping(PingArgs),
 
-    /// Close a tracking issue (retire-issue suggestion) after
-    /// verifying JIRA is resolved and the build is untagged.
+    /// Close a tracking issue for a reason — landed, superseded or
+    /// abandoned — labelling it, telling the MR, closing the MR of
+    /// an abandoned change.
     Retire(RetireArgs),
 
     /// Report JIRA status and suggested next action for each

@@ -201,7 +201,8 @@ announcement's third channel once the Jira crate can write.
 ### `retire`
 
 ```sh
-cpu-sig-tracker retire <issue-url | package> [--release cNs] [--yes] [--force] [--claim]
+cpu-sig-tracker retire <issue-url | package> [--release cNs] \
+    [--reason landed|abandoned] [--yes] [--force] [--claim]
 ```
 
 Takes the tracking issue's URL, or the package name: a name is
@@ -210,13 +211,40 @@ shows), `--release` picking the release when the package is tracked in
 several; without it, several matches are listed and chosen by number
 at a terminal, and are an error in an unattended run.
 
-Closes the tracking issue after verifying the linked JIRA is resolved
-and the package is no longer tagged in `-release` Koji. Sets GitLab
-work-item status to `Done` / `Won't do` (mirroring the JIRA
-resolution), stamps `due_date` from JIRA's `resolutiondate`, leaves
-an audit-trail comment, and transitions the issue to closed.
-`--yes` skips the prompt; `--force` bypasses the precondition
-checks.
+A tracking issue closes for a reason, and the reason is the one
+question you answer: is the problem fixed in stock, or is the SIG
+giving up?
+
+- **landed** — the problem is fixed in stock. Something has to say
+  so: the SIG's MR merged; a commit on stock's release branch names
+  the change (the tracking issue's RHEL key, the RHEL key in the MR's
+  branch name, a CVE id from either title, the MR's title); the RHEL
+  issue was resolved as Done; or, when none of those is on record, you
+  confirm at the prompt that you verified it, which the audit note
+  then says in your name. Stock merely being past the SIG's build is
+  not a reason — that is the rebase case `ping` reports — and the tool
+  says so instead of suggesting anything.
+- **abandoned** — the SIG gives up on the change, Bugzilla's CANTFIX.
+  Nothing to verify beyond the build being untagged.
+
+`--reason` names it; omitted, it is inferred from the MR, stock's
+history and the RHEL issue and offered as the default at a terminal,
+and taken as is with `--yes` (an unattended run with nothing to infer
+from is an error). The build must be untagged from `-release` Koji in
+every case (retire follows `untag`); `--force` bypasses the checks.
+The RHEL issue's state is reported for the record and stamps
+`due_date` from its `resolutiondate` when resolved, but decides
+nothing on its own.
+
+The issue closes with a label saying how it ended — `landed` when the
+SIG's own MR merged, `superseded` when the fix reached stock another
+way, `abandoned` — the work-item status `Done` or `Won't do`, and an
+audit-trail comment naming the evidence. When the upstream MR is still
+open it is told, in those words, that the SIG has retired the Proposed
+Update; an abandoned change's MR is the SIG's own and is closed with
+that note. A comment on the RHEL issue is not posted yet: it waits on
+Jira write support, and will be made only when a stock commit names
+that RHEL key.
 
 It also offers to assign the issue to you as it closes it — triage is
 work worth crediting. `--claim` takes it without asking; `--yes` alone
@@ -282,7 +310,7 @@ cpu-sig-tracker status -i cpu-sig.toml --refresh
 
 # Once Stream catches up: untag, then retire.
 cpu-sig-tracker untag xz --release c10s --yes
-cpu-sig-tracker retire xz --release c10s --yes
+cpu-sig-tracker retire xz --release c10s --reason landed --yes
 ```
 
 ## System-wide configuration

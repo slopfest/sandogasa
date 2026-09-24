@@ -19,7 +19,137 @@ use sandogasa_koji::{list_tagged_nvrs, parse_nvr_name};
 
 use crate::dump_inventory::proposed_updates_tag;
 use crate::gitlab;
+use crate::ping::{evidence_tokens, find_evidence};
+use crate::status::{
+    fetch_proposed_updates_nvrs, fetch_stream_nvrs, parse_mr_line, scan_mr_url_in_body,
+    stream_newer_than_proposed,
+};
 use crate::utils::{Check, parse_jira_key_from_body, report_check};
+
+/// Why a Proposed Update is retired — the one question the operator
+/// answers: is the problem fixed in stock, or is the SIG giving up?
+/// How it got fixed is read from the evidence and becomes the label
+/// (see [`Reason::label`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Reason {
+    /// The problem is fixed in stock — by the SIG's MR merging, or
+    /// another way (labelled `superseded`).
+    Landed,
+    /// The SIG gives up on the change (Bugzilla's CANTFIX).
+    Abandoned,
+}
+
+impl Reason {
+    /// The label put on the tracking issue: `landed` when the SIG's
+    /// own MR merged, `superseded` when the fix reached stock another
+    /// way — a stock commit naming it, the RHEL issue resolved, or the
+    /// operator's own verification — and `abandoned`.
+    pub fn label(self, mr_merged: bool) -> &'static str {
+        match self {
+            Reason::Landed if mr_merged => "landed",
+            Reason::Landed => "superseded",
+            Reason::Abandoned => "abandoned",
+        }
+    }
+
+    /// The GitLab work-item status the issue closes with.
+    pub fn work_item_status(self) -> &'static str {
+        match self {
+            Reason::Landed => "Done",
+            Reason::Abandoned => "Won't do",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "landed" | "fixed" | "l" | "f" => Some(Reason::Landed),
+            "abandoned" | "a" => Some(Reason::Abandoned),
+            _ => None,
+        }
+    }
+}
+
+/// What is known about the change when it is retired, the material
+/// the reason is inferred from and checked against.
+#[derive(Debug, Default)]
+pub struct RetireFacts {
+    /// The upstream MR the tracking issue names, and its state as
+    /// GitLab reports it (`None` when it could not be read).
+    pub mr_url: Option<String>,
+    pub mr_state: Option<String>,
+    /// The SIG's `-release` build and stock's build.
+    pub release_nvr: Option<String>,
+    pub stream_nvr: Option<String>,
+    /// Why the problem counts as fixed in stock, when something says
+    /// so: `MR merged`, a stock commit naming the change, the RHEL
+    /// issue resolved as Done, or the operator's own verification.
+    pub landed_by: Option<String>,
+    /// The RHEL issue's resolution, when it is resolved.
+    pub jira_resolution: Option<String>,
+}
+
+impl RetireFacts {
+    pub fn mr_merged(&self) -> bool {
+        self.mr_state.as_deref() == Some("merged")
+    }
+
+    /// Stock is past the SIG's build with nothing saying the fix is
+    /// in — the rebase case, never a reason to retire.
+    pub fn stock_past_without_evidence(&self) -> bool {
+        self.landed_by.is_none()
+            && stream_newer_than_proposed(self.release_nvr.as_deref(), self.stream_nvr.as_deref())
+    }
+}
+
+/// The reason the facts point at, if they point anywhere: landed on
+/// evidence, abandoned when the RHEL issue was closed without a fix.
+/// Stock being past the SIG's build points at a rebase, not here.
+pub fn suggest_reason(f: &RetireFacts) -> Option<Reason> {
+    if f.landed_by.is_some() {
+        return Some(Reason::Landed);
+    }
+    f.jira_resolution.as_deref().map(|_| Reason::Abandoned)
+}
+
+/// What has to hold for the reason, beyond the build being untagged:
+/// landed wants the evidence (or the operator's word, recorded as
+/// such), abandoned nothing more.
+pub fn reason_check(reason: Reason, f: &RetireFacts) -> Check {
+    match reason {
+        Reason::Landed => match &f.landed_by {
+            Some(why) => Check::Pass(why.clone()),
+            None => Check::Fail(
+                "nothing says the fix is in stock: the MR is not merged and no stock commit \
+                 names the change (its RHEL key, CVE or title); verify it yourself at the \
+                 prompt, or --force"
+                    .to_string(),
+            ),
+        },
+        Reason::Abandoned => Check::Pass("the SIG's call; nothing to verify".to_string()),
+    }
+}
+
+/// The note left on the upstream MR when the SIG retires the change
+/// it carries, so its reviewers hear it from the SIG rather than from
+/// a closed tracking issue nobody follows.
+pub fn mr_note_body(reason: Reason, f: &RetireFacts, issue_url: &str) -> String {
+    let what = match reason {
+        Reason::Landed => format!(
+            "the problem this change addresses is fixed in CentOS Stream now ({}), so the \
+             CentOS Proposed Updates SIG has retired its Proposed Update carrying it. This \
+             merge request can be closed if it is not already.",
+            f.landed_by.as_deref().unwrap_or("fixed in stock")
+        ),
+        Reason::Abandoned => "the CentOS Proposed Updates SIG is withdrawing this change and \
+             closing this merge request with it; the Proposed Update that carried it is \
+             retired."
+            .to_string(),
+    };
+    format!(
+        "Note from the SIG: {what}\n\nTracking issue: {issue_url}\n\n<!-- cpu-sig-tracker: retired {} -->\n",
+        reason.label(f.mr_merged())
+    )
+}
 
 const KOJI_PROFILE: &str = "cbs";
 
@@ -35,13 +165,20 @@ pub struct RetireArgs {
     #[arg(long)]
     pub release: Option<String>,
 
+    /// Why: landed (the problem is fixed in stock — labelled
+    /// `superseded` when not by the SIG's own MR) or abandoned (the
+    /// SIG gives up). Inferred from the MR, stock and the RHEL issue
+    /// when omitted, and asked at a terminal.
+    #[arg(long, value_enum)]
+    pub reason: Option<Reason>,
+
     /// Skip the interactive confirmation prompt.
     #[arg(short, long)]
     pub yes: bool,
 
-    /// Skip the retire-issue precondition checks (JIRA
-    /// resolved, build untagged). Use when the tool can't
-    /// reach JIRA/Koji or when you're sure the conditions hold.
+    /// Skip the precondition checks (build untagged, and what the
+    /// reason needs). Use when the tool can't reach Koji/GitLab or
+    /// when you're sure the conditions hold.
     #[arg(long)]
     pub force: bool,
 
@@ -88,23 +225,61 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     }
 
     let body = issue.description.as_deref().unwrap_or("");
+    // The tool's own issues say the release on a body line; a
+    // hand-filed one says it with its label, or the operator does.
     let release = parse_release_from_body(body)
-        .ok_or("could not parse `- **Release**:` line from issue body")?;
+        .or_else(|| args.release.clone())
+        .or_else(|| release_from_labels(&issue.labels))
+        .ok_or(
+            "no release: the issue body has no `- **Release**:` line and no `c<N>s` label; \
+             pass --release",
+        )?;
     let package = gitlab::package_from_issue_url(&issue.web_url)
         .ok_or("could not derive package name from issue URL")?;
     let jira_key = parse_jira_key_from_body(body);
 
-    // Precondition 1: JIRA resolved.
+    // The RHEL issue: informational, and one source of the reason.
     let jira_check = crate::jira::check_resolved(jira_key.as_deref(), args.verbose);
-
-    // Precondition 2: no pu build tagged.
-    let build_check = check_package_untagged(&release, package, args.verbose);
-
     report_check("JIRA resolved", &jira_check.check);
+
+    // Precondition: no pu build tagged (retire follows untag).
+    let build_check = check_package_untagged(&release, package, args.verbose);
     report_check("no pu build tagged", &build_check);
 
+    // What the reason is judged against: the MR, stock and its
+    // history, the RHEL resolution.
+    let mut facts = gather_facts(&issue, body, package, &release, &jira_check, args.verbose);
+    if facts.stock_past_without_evidence() {
+        eprintln!(
+            "note: stock {} is past the SIG's {} but nothing says the fix is in it — that is \
+             the rebase case (`ping` says rebase-build), not a reason to retire",
+            facts.stream_nvr.as_deref().unwrap_or("?"),
+            facts.release_nvr.as_deref().unwrap_or("?")
+        );
+    }
+    let reason = resolve_reason(args, &facts)?;
+    // The fix in stock with nothing on record saying so: the operator
+    // can say so, and the audit note then says who did.
+    if reason == Reason::Landed && facts.landed_by.is_none() && !args.yes {
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal()
+            && sandogasa_cli::confirm(
+                &format!(
+                    "Nothing on record says the fix is in stock ({}). Have you verified it is?",
+                    facts.stream_nvr.as_deref().unwrap_or("stock build unknown")
+                ),
+                false,
+            )?
+        {
+            facts.landed_by = Some(verified_by_operator());
+        }
+    }
+    let label = reason.label(facts.mr_merged());
+    let reason_check = reason_check(reason, &facts);
+    report_check(&format!("reason {label}"), &reason_check);
+
     let preconditions_ok =
-        matches!(&jira_check.check, Check::Pass(_)) && matches!(&build_check, Check::Pass(_));
+        matches!(&build_check, Check::Pass(_)) && matches!(&reason_check, Check::Pass(_));
     if !preconditions_ok && !args.force {
         return Err(
             "retire preconditions not met; re-run with --force to override or fix the \
@@ -113,11 +288,30 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
         );
     }
 
+    // The MR, when it is still open, is told; an abandoned change's
+    // MR is the SIG's own and is closed with it.
+    let mr_open = facts.mr_state.as_deref() == Some("opened");
+    let close_mr = mr_open && reason == Reason::Abandoned;
+
     println!();
     println!("Will close {}", issue.web_url);
     println!("  title:   {}", issue.title);
     println!("  package: {package}");
     println!("  release: {release}");
+    println!("  reason:  {label} (status {})", reason.work_item_status());
+    if let Some(url) = &facts.mr_url {
+        println!(
+            "  MR:      {url} — {}{}",
+            facts.mr_state.as_deref().unwrap_or("state unknown"),
+            if close_mr {
+                "; a note, then closed"
+            } else if mr_open {
+                "; a note"
+            } else {
+                ""
+            }
+        );
+    }
     let start_date = derive_start_date(package, &release, &issue, args.verbose);
     if let Some((date, source)) = &start_date {
         println!("  start_date: {date} (from {source})");
@@ -135,18 +329,17 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
         &jira_check.check,
         &build_check,
         args.force,
+        Some((label, &reason_check)),
     );
     if args.verbose {
         eprintln!("[cpu-sig-tracker] posting audit note");
     }
     client.add_note(iid, &note)?;
 
-    // Flip the work-item status so browsers of the GitLab UI
-    // see a terminal state, not just a closed issue. Mirrors
-    // the JIRA resolution: "Done" for actual fixes, "Won't do"
-    // for Won't Do / Obsolete / Cannot Reproduce / …
-    let terminal_status =
-        crate::status::gitlab_status_for_resolution(jira_check.resolution_name.as_deref());
+    // Flip the work-item status so browsers of the GitLab UI see a
+    // terminal state, not just a closed issue: "Done" for a change
+    // that made it (landed or superseded), "Won't do" for one given up.
+    let terminal_status = reason.work_item_status();
     if args.verbose {
         eprintln!("[cpu-sig-tracker] setting work-item status to {terminal_status}");
     }
@@ -182,6 +375,8 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     }
     let update = gitlab::IssueUpdate {
         state_event: Some("close".to_string()),
+        // The reason, as a label a search can find.
+        add_labels: Some(label.to_string()),
         // Replaces the assignee set rather than adding to it, which is
         // what claiming means here: a retired issue's owner is whoever
         // retired it.
@@ -194,7 +389,182 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
         Some((_, who)) => eprintln!("closed {} (assigned to {who})", issue.web_url),
         None => eprintln!("closed {}", issue.web_url),
     }
+
+    // Tell the MR, and close it when the SIG withdraws the change.
+    if mr_open && let Some(url) = &facts.mr_url {
+        tell_mr(url, reason, &facts, &issue.web_url, close_mr, args.verbose);
+    }
     Ok(())
+}
+
+/// Read what the reason is inferred from and checked against. Every
+/// lookup is best-effort: a MR or a stock history that cannot be read
+/// leaves its fact unknown, and the reason then has to come from the
+/// operator (or --force).
+fn gather_facts(
+    issue: &gitlab::Issue,
+    body: &str,
+    package: &str,
+    release: &str,
+    jira: &crate::jira::JiraCheck,
+    verbose: bool,
+) -> RetireFacts {
+    let base = crate::utils::gitlab_base();
+    let mut f = RetireFacts {
+        jira_resolution: jira.resolution_name.clone(),
+        ..Default::default()
+    };
+    f.mr_url = parse_mr_line(body)
+        .map(|(u, _)| u)
+        .or_else(|| scan_mr_url_in_body(body));
+    let mut mr_title = String::new();
+    let mut mr_branch = String::new();
+    if let Some(url) = &f.mr_url {
+        let fetched: Result<sandogasa_gitlab::MergeRequest, Box<dyn std::error::Error>> =
+            match gitlab::parse_mr_url(url) {
+                Ok((_, project, iid)) => {
+                    gitlab::client(&base, &project).and_then(|c| c.merge_request(iid))
+                }
+                Err(e) => Err(e.into()),
+            };
+        match fetched {
+            Ok(mr) => {
+                f.mr_state = Some(mr.state.clone());
+                mr_title = mr.title.clone();
+                mr_branch = mr.source_branch.clone();
+            }
+            Err(e) => {
+                if verbose {
+                    eprintln!("[cpu-sig-tracker] cannot read {url}: {e}");
+                }
+            }
+        }
+    }
+    f.release_nvr = fetch_proposed_updates_nvrs(release, verbose).remove(package);
+    f.stream_nvr = fetch_stream_nvrs(release, &[package.to_string()], verbose).remove(package);
+    f.landed_by = if f.mr_state.as_deref() == Some("merged") {
+        Some("MR merged".to_string())
+    } else {
+        let tokens = evidence_tokens(body, &issue.title, &mr_title, &mr_branch);
+        match gitlab::client(&base, &format!("redhat/centos-stream/rpms/{package}"))
+            .and_then(|c| c.branch_commits(release))
+        {
+            Ok(commits) => find_evidence(&commits, &tokens),
+            Err(e) => {
+                if verbose {
+                    eprintln!("[cpu-sig-tracker] cannot read stock history: {e}");
+                }
+                None
+            }
+        }
+    }
+    .or_else(|| match jira.resolution_name.as_deref() {
+        Some(r @ ("Done" | "Fixed" | "Resolved")) => Some(format!("RHEL issue resolved {r}")),
+        _ => None,
+    });
+    f
+}
+
+/// The reason: `--reason`, else the facts' suggestion — taken as is
+/// with `-y`, offered as the default at a terminal — else an error
+/// naming the choices, since a run nobody watches must not guess why
+/// a change is being dropped.
+fn resolve_reason(
+    args: &RetireArgs,
+    f: &RetireFacts,
+) -> Result<Reason, Box<dyn std::error::Error>> {
+    use std::io::IsTerminal;
+    if let Some(r) = args.reason {
+        return Ok(r);
+    }
+    let suggested = suggest_reason(f);
+    if args.yes || !std::io::stdin().is_terminal() {
+        return suggested.ok_or_else(|| {
+            "no reason could be inferred (MR not merged, no stock commit names the change, RHEL \
+             issue open); pass --reason landed|abandoned"
+                .into()
+        });
+    }
+    ask_reason(suggested, |q| {
+        use std::io::{BufRead, Write};
+        eprint!("{q}");
+        std::io::stderr().flush().ok()?;
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line).ok()?;
+        Some(line)
+    })
+}
+
+/// Ask for the reason with `suggested` as the default, through `read`
+/// (given the prompt, answering the line or `None` on EOF).
+fn ask_reason(
+    suggested: Option<Reason>,
+    read: impl FnOnce(&str) -> Option<String>,
+) -> Result<Reason, Box<dyn std::error::Error>> {
+    let default = suggested
+        .map(|r| format!(", default {}", r.label(true)))
+        .unwrap_or_default();
+    let q = format!("Why retire it? [landed (fixed in stock)/abandoned{default}]: ");
+    let line = read(&q).unwrap_or_default();
+    match (Reason::parse(&line), line.trim().is_empty(), suggested) {
+        (Some(r), _, _) => Ok(r),
+        (None, true, Some(r)) => Ok(r),
+        _ => Err("no reason chosen".into()),
+    }
+}
+
+/// What the audit note says when the operator, not the record,
+/// vouches for the fix being in stock.
+fn verified_by_operator() -> String {
+    let who = gitlab::load_token()
+        .ok()
+        .and_then(|t| sandogasa_gitlab::current_user(&crate::utils::gitlab_base(), &t).ok())
+        .map(|u| u.username)
+        .unwrap_or_else(|| "the operator".to_string());
+    format!("verified by {who}: the fix is in stock (no commit on record names it)")
+}
+
+/// Leave the reason's note on the open MR and, for an abandoned
+/// change, close it — the SIG's own MR, withdrawn with the change.
+/// Failures warn: the tracking issue is closed already, and the note
+/// can be written by hand.
+fn tell_mr(
+    url: &str,
+    reason: Reason,
+    f: &RetireFacts,
+    issue_url: &str,
+    close: bool,
+    verbose: bool,
+) {
+    let Ok((_, project, iid)) = gitlab::parse_mr_url(url) else {
+        eprintln!("warning: unrecognised MR URL {url}; nothing posted there");
+        return;
+    };
+    let client = match gitlab::client(&crate::utils::gitlab_base(), &project) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("warning: cannot reach {project}: {e}; nothing posted on the MR");
+            return;
+        }
+    };
+    if verbose {
+        eprintln!("[cpu-sig-tracker] noting the retirement on {project}!{iid}");
+    }
+    match client.add_merge_request_note(iid, &mr_note_body(reason, f, issue_url)) {
+        Ok(()) => eprintln!("noted on {url}"),
+        Err(e) => eprintln!("warning: could not note on {url}: {e}"),
+    }
+    if close {
+        match client.edit_merge_request(
+            iid,
+            &sandogasa_gitlab::MergeRequestUpdate {
+                state_event: Some("close".to_string()),
+            },
+        ) {
+            Ok(_) => eprintln!("closed {url}"),
+            Err(e) => eprintln!("warning: could not close {url}: {e}"),
+        }
+    }
 }
 
 /// Whether to assign the issue to the person retiring it, and to whom.
@@ -322,14 +692,21 @@ fn compose_audit_note(
     jira_check: &Check,
     build_check: &Check,
     forced: bool,
+    reason: Option<(&str, &Check)>,
 ) -> String {
+    let reason_part = match reason {
+        Some((label, c)) => format!(" Reason: {label} — {}.", c.detail()),
+        None => String::new(),
+    };
     let jira_part = match jira_key {
         Some(k) => format!(" JIRA {k}: {}", jira_check.detail()),
         None => String::new(),
     };
     let build_part = format!(" Build: {}", build_check.detail());
     let forced_part = if forced { " (--force)" } else { "" };
-    format!("Closing via `cpu-sig-tracker retire`{forced_part}.{jira_part}{build_part}")
+    format!(
+        "Closing via `cpu-sig-tracker retire`{forced_part}.{reason_part}{jira_part}{build_part}"
+    )
 }
 
 /// Best-effort start_date for the tracking issue we're about
@@ -355,6 +732,19 @@ fn derive_start_date(
         .as_deref()
         .and_then(crate::utils::parse_iso_date)
         .map(|d| (d, "GitLab issue created_at"))
+}
+
+/// The `c<N>s` label among an issue's labels, the release a hand-filed
+/// tracking issue names that way.
+fn release_from_labels(labels: &[String]) -> Option<String> {
+    labels
+        .iter()
+        .find(|l| {
+            l.strip_prefix('c')
+                .and_then(|r| r.strip_suffix('s'))
+                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .cloned()
 }
 
 /// Find the `c<N>s` release label in `- **Release**: c10s`.
@@ -428,10 +818,108 @@ mod tests {
         );
     }
 
+    fn facts(mr_state: Option<&str>, release: Option<&str>, stream: Option<&str>) -> RetireFacts {
+        RetireFacts {
+            mr_url: Some("https://gitlab.example/rpms/x/-/merge_requests/1".into()),
+            mr_state: mr_state.map(str::to_string),
+            release_nvr: release.map(str::to_string),
+            stream_nvr: stream.map(str::to_string),
+            landed_by: None,
+            jira_resolution: None,
+        }
+    }
+
+    #[test]
+    fn the_reason_is_read_off_the_facts_and_the_label_says_how_it_got_fixed() {
+        // Evidence from stock's history, MR not merged: landed, labelled
+        // superseded — upstream got there another way.
+        let mut f = facts(
+            Some("opened"),
+            Some("x-1-13~proposed.el10"),
+            Some("x-1-13.el10"),
+        );
+        f.landed_by = Some("stock commit 99e0f170 (Fix CVE) names CVE-2026-1".into());
+        assert_eq!(suggest_reason(&f), Some(Reason::Landed));
+        assert!(matches!(reason_check(Reason::Landed, &f), Check::Pass(_)));
+        assert_eq!(Reason::Landed.label(f.mr_merged()), "superseded");
+        // The SIG's own MR merged: landed proper.
+        let mut f = facts(
+            Some("merged"),
+            Some("x-1-13~proposed.el10"),
+            Some("x-1-14.el10"),
+        );
+        f.landed_by = Some("MR merged".into());
+        assert_eq!(Reason::Landed.label(f.mr_merged()), "landed");
+        // Stock past the SIG's build and no evidence: the rebase case —
+        // no suggestion, and landed fails its check.
+        let f = facts(
+            Some("closed"),
+            Some("x-1-13~proposed.el10"),
+            Some("x-1-14.el10"),
+        );
+        assert!(f.stock_past_without_evidence());
+        assert_eq!(suggest_reason(&f), None);
+        assert!(matches!(reason_check(Reason::Landed, &f), Check::Fail(_)));
+        // Nothing moved, RHEL issue closed as Won't Do: abandoned.
+        let mut f = facts(
+            Some("opened"),
+            Some("x-1-13~proposed.el10"),
+            Some("x-1-12.el10"),
+        );
+        f.jira_resolution = Some("Won't Do".into());
+        assert_eq!(suggest_reason(&f), Some(Reason::Abandoned));
+        assert!(matches!(
+            reason_check(Reason::Abandoned, &f),
+            Check::Pass(_)
+        ));
+        assert_eq!(Reason::Abandoned.label(false), "abandoned");
+        // Nothing at all: no suggestion.
+        assert_eq!(suggest_reason(&facts(Some("opened"), None, None)), None);
+    }
+
+    #[test]
+    fn the_reason_prompt_takes_a_word_a_letter_or_the_default() {
+        assert_eq!(
+            ask_reason(Some(Reason::Landed), |_| Some("\n".into())).unwrap(),
+            Reason::Landed
+        );
+        assert_eq!(
+            ask_reason(None, |_| Some("a\n".into())).unwrap(),
+            Reason::Abandoned
+        );
+        assert_eq!(
+            ask_reason(None, |_| Some("Fixed\n".into())).unwrap(),
+            Reason::Landed
+        );
+        assert!(ask_reason(None, |_| Some("\n".into())).is_err());
+        assert!(ask_reason(Some(Reason::Landed), |_| Some("maybe\n".into())).is_err());
+        assert!(ask_reason(None, |_| None).is_err());
+    }
+
+    #[test]
+    fn the_mr_is_told_in_the_reasons_words() {
+        let mut f = facts(
+            Some("opened"),
+            Some("x-1-13~proposed.el10"),
+            Some("x-1-14.el10"),
+        );
+        let issue = "https://gitlab.example/CentOS/proposed_updates/rpms/x/-/issues/1";
+        let abandoned = mr_note_body(Reason::Abandoned, &f, issue);
+        assert!(abandoned.contains("withdrawing this change") && abandoned.contains(issue));
+        assert!(abandoned.contains("<!-- cpu-sig-tracker: retired abandoned -->"));
+        f.landed_by = Some("verified by salimma: the fix is in stock".into());
+        let landed = mr_note_body(Reason::Landed, &f, issue);
+        assert!(landed.contains("fixed in CentOS Stream now (verified by salimma"));
+        assert!(landed.contains("<!-- cpu-sig-tracker: retired superseded -->"));
+        assert_eq!(Reason::Abandoned.work_item_status(), "Won't do");
+        assert_eq!(Reason::Landed.work_item_status(), "Done");
+    }
+
     fn args(claim: bool, yes: bool) -> RetireArgs {
         RetireArgs {
             issue: "https://gitlab.example/g/p/-/issues/1".to_string(),
             release: None,
+            reason: None,
             yes,
             force: false,
             claim,
@@ -461,14 +949,24 @@ mod tests {
     }
 
     #[test]
+    fn a_hand_filed_issue_names_its_release_with_a_label() {
+        let labels: Vec<String> = ["bugfix", "c10s"].map(str::to_string).into();
+        assert_eq!(release_from_labels(&labels).as_deref(), Some("c10s"));
+        let none: Vec<String> = ["bugfix", "cs", "c1x0s"].map(str::to_string).into();
+        assert_eq!(release_from_labels(&none), None);
+    }
+
+    #[test]
     fn audit_note_includes_jira_and_build() {
         let note = compose_audit_note(
             Some("RHEL-12345"),
             &Check::Pass("RHEL-12345 — Closed (Done)".to_string()),
             &Check::Pass("no xz build tagged in proposed_updates10s-…".to_string()),
             false,
+            Some(("landed", &Check::Pass("MR merged".to_string()))),
         );
         assert!(note.contains("cpu-sig-tracker retire"));
+        assert!(note.contains("Reason: landed — MR merged"));
         assert!(note.contains("JIRA RHEL-12345"));
         assert!(note.contains("no xz build"));
         assert!(!note.contains("--force"));
@@ -481,6 +979,7 @@ mod tests {
             &Check::Skipped("no JIRA key found".to_string()),
             &Check::Fail("still tagged".to_string()),
             true,
+            None,
         );
         assert!(note.contains("--force"));
         assert!(note.contains("still tagged"));
@@ -630,6 +1129,7 @@ mod tests {
         let args = RetireArgs {
             issue: "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1".to_string(),
             release: None,
+            reason: None,
             yes: true,
             force: false,
             claim: false,
@@ -743,6 +1243,7 @@ mod tests {
         let args = RetireArgs {
             issue: "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/1".to_string(),
             release: None,
+            reason: None,
             yes: true,
             force: false,
             claim: true,

@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: `retire` closes a tracking issue for a reason
+
+A closed tracking issue said nothing about why. PackageKit's is
+closing because hughsie shipped the fix himself, blktrace's c10s one
+will close once its change lands, and one day one will close because
+the SIG gives up — three different stories, one closed issue, and the
+SIG's own MR upstream left open with no word from the SIG. `retire`
+also required the RHEL issue to be resolved, which for a change that
+landed through stock (PackageKit's RHEL-170526 is still New) forced
+`--force`.
+
+`retire` now asks one question — is the problem fixed in stock
+(**landed**), or is the SIG giving up (**abandoned**)? — and reads how
+it got fixed from the evidence: the SIG's MR merged, a stock commit
+naming the change (read the way `ping` reads it), the RHEL issue
+resolved as Done, or, when nothing is on record, the operator's own
+verification at the prompt, recorded in the audit note by name. That
+evidence is landed's precondition beside the build being untagged;
+the RHEL issue's state becomes a matter of record rather than a gate.
+Stock being past the SIG's build is never taken as a reason — that is
+the rebase case `ping` reports, and `retire` says so instead of
+suggesting anything. `--reason` names it; omitted, it is inferred and
+offered as the default at a terminal, and taken as is with `--yes`.
+
+The issue closes with a label saying how it ended — `landed` when the
+SIG's own MR merged, `superseded` when the fix reached stock another
+way, `abandoned` — the status `Done` or `Won't do` accordingly, and
+the audit note naming the evidence. An open upstream MR is told in
+those words, and an abandoned change's MR — the SIG's own — is closed
+with that note. sandogasa-gitlab gains `Client::edit_merge_request`.
+A hand-filed issue, adopted by `list-issues`, has no `- **Release**:`
+line; `retire` now reads the release from its `c<N>s` label or from
+`--release` instead of refusing.
+
+Not yet: a comment on the RHEL issue, which waits on Jira write
+support and will be made only when a stock commit names that key.
+
 ### cpu-sig-tracker: `ping` calls a change landed only on evidence
 
 A first cut of `ping` read stock carrying the SIG's NVR minus

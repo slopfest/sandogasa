@@ -152,18 +152,31 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker retire
-\fBcpu\-sig\-tracker retire\fR [\fB\-\-release\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-\-claim\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE\fR> 
+\fBcpu\-sig\-tracker retire\fR [\fB\-\-release\fR] [\fB\-\-reason\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-\-claim\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE\fR> 
 .PP
-Close a tracking issue (retire\-issue suggestion) after verifying JIRA is resolved and the build is untagged
+Close a tracking issue for a reason — landed, superseded or abandoned — labelling it, telling the MR, closing the MR of an abandoned change
 .TP
 \fB\-\-release\fR \fI<RELEASE>\fR
 With a package name: the release to retire it in (e.g. `c10s`), when it is tracked in several
+.TP
+\fB\-\-reason\fR \fI<REASON>\fR
+Why: landed (the problem is fixed in stock — labelled `superseded` when not by the SIG\*(Aqs own MR) or abandoned (the SIG gives up). Inferred from the MR, stock and the RHEL issue when omitted, and asked at a terminal
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+landed: The problem is fixed in stock — by the SIG\*(Aqs MR merging, or another way (labelled `superseded`)
+.IP \(bu 2
+abandoned: The SIG gives up on the change (Bugzilla\*(Aqs CANTFIX)
+.RE
 .TP
 \fB\-y\fR, \fB\-\-yes\fR
 Skip the interactive confirmation prompt
 .TP
 \fB\-\-force\fR
-Skip the retire\-issue precondition checks (JIRA resolved, build untagged). Use when the tool can\*(Aqt reach JIRA/Koji or when you\*(Aqre sure the conditions hold
+Skip the precondition checks (build untagged, and what the reason needs). Use when the tool can\*(Aqt reach Koji/GitLab or when you\*(Aqre sure the conditions hold
 .TP
 \fB\-\-claim\fR
 Also assign the issue to you as it is closed.

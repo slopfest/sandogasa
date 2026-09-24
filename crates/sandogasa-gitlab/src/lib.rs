@@ -559,6 +559,22 @@ impl Client {
         Ok(blocking_json_ok(resp, &format!("GitLab PUT {url}"))?)
     }
 
+    /// Edit a merge request — today, to close it (`state_event:
+    /// close`) when the SIG withdraws the change it carries.
+    pub fn edit_merge_request(
+        &self,
+        iid: u64,
+        updates: &MergeRequestUpdate,
+    ) -> Result<MergeRequest, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/merge_requests/{iid}",
+            self.base_url, encoded
+        );
+        let resp = self.http.put(&url).json(updates).send()?;
+        Ok(blocking_json_ok(resp, &format!("GitLab PUT {url}"))?)
+    }
+
     /// Fetch the work-item status for an issue via GraphQL.
     ///
     /// Returns the status name (e.g. "To do", "In progress")
@@ -924,6 +940,14 @@ pub fn project_path_from_issue_url(web_url: &str) -> Option<String> {
     } else {
         Some(path.to_string())
     }
+}
+
+/// Parameters for editing a merge request.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct MergeRequestUpdate {
+    /// `close` or `reopen`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_event: Option<String>,
 }
 
 /// Parameters for editing an issue.
@@ -2458,6 +2482,33 @@ mod tests {
             .create();
         let p = project_summary(&server.url(), "tok", 10).unwrap();
         assert_eq!(p.path_with_namespace, "CentOS/Hyperscale/rpms/perf");
+        mock.assert();
+    }
+
+    #[test]
+    fn edit_merge_request_closes_it() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("PUT", "/api/v4/projects/g%2Fp/merge_requests/5")
+            .match_body(mockito::Matcher::PartialJsonString(
+                r#"{"state_event": "close"}"#.to_string(),
+            ))
+            .with_status(200)
+            .with_body(
+                r#"{"iid": 5, "title": "t", "state": "closed", "web_url": "https://gitlab.example/mr/5",
+                    "source_branch": "c10s-RHEL-123605", "target_branch": "c10s"}"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        let mr = client
+            .edit_merge_request(
+                5,
+                &MergeRequestUpdate {
+                    state_event: Some("close".into()),
+                },
+            )
+            .unwrap();
+        assert_eq!(mr.state, "closed");
         mock.assert();
     }
 }
