@@ -86,19 +86,74 @@ pub fn dep_name(dep: &str) -> &str {
     dep.split_whitespace().next().unwrap_or(dep)
 }
 
+/// Trim the parentheses a boolean expression leaves on an operand
+/// (`(foo` → `foo`), keeping those that belong to a capability name
+/// (`crate(x/default)` is already balanced).
+fn trim_parens(tok: &str) -> &str {
+    let balance = |s: &str| s.matches('(').count() as isize - s.matches(')').count() as isize;
+    let mut tok = tok;
+    while balance(tok) > 0
+        && let Some(rest) = tok.strip_prefix('(')
+    {
+        tok = rest;
+    }
+    while balance(tok) < 0
+        && let Some(rest) = tok.strip_suffix(')')
+    {
+        tok = rest;
+    }
+    tok
+}
+
+/// The capability names a dependency can be satisfied by: one for a
+/// plain dependency, and for a boolean (rich) one every operand a
+/// provider has to carry.
+///
+/// The Rust macros write every crate dependency as a version range,
+/// `(crate(foo/default) >= 1.0.0 with crate(foo/default) < 2.0.0~)`,
+/// so treating the whole expression as one name loses the provider
+/// (the first token would be `(crate(foo/default)`, parenthesis and
+/// all). The operand after `if`, `unless`, `with` or `without` is a
+/// condition rather than something to install, so it is skipped —
+/// only `and`, `or` and `else` introduce another capability.
+pub fn dep_names(dep: &str) -> Vec<&str> {
+    let dep = dep.trim();
+    let Some(inner) = dep.strip_prefix('(').and_then(|d| d.strip_suffix(')')) else {
+        return vec![dep_name(dep)];
+    };
+    let mut names = Vec::new();
+    let mut skip_next = false;
+    let mut tokens = inner.split_whitespace();
+    while let Some(tok) = tokens.next() {
+        match tok {
+            "and" | "or" | "else" => skip_next = false,
+            "if" | "unless" | "with" | "without" => skip_next = true,
+            ">=" | "<=" | ">" | "<" | "=" => {
+                tokens.next();
+            }
+            _ if !std::mem::take(&mut skip_next) => names.push(trim_parens(tok)),
+            _ => {}
+        }
+    }
+    names
+}
+
 impl PkgInfo {
     /// Whether this package satisfies `dep`: by exact Provides match,
-    /// by the capability's name token, or by its own package name.
-    /// The version constraint is fedrq's business — a package only
-    /// appears in a `-P` answer if it satisfied the constraint — so
-    /// attribution back to the asked-for dependency is by name.
+    /// by one of the capability names the dependency can be met by
+    /// ([`dep_names`], so a boolean dependency matches on its
+    /// operands), or by its own package name. The version constraint
+    /// is fedrq's business — a package only appears in a `-P` answer
+    /// if it satisfied the constraint — so attribution back to the
+    /// asked-for dependency is by name.
     pub fn satisfies(&self, dep: &str) -> bool {
-        let name = dep_name(dep);
-        self.name == name
-            || self
-                .provides
-                .iter()
-                .any(|pr| pr == dep || dep_name(pr) == name)
+        dep_names(dep).into_iter().any(|name| {
+            self.name == name
+                || self
+                    .provides
+                    .iter()
+                    .any(|pr| pr == dep || dep_name(pr) == name)
+        })
     }
 
     /// Build a package record from parts — for callers that
@@ -776,5 +831,40 @@ mod tests {
         let fq = Fedrq::default();
         let result = fq.src_nvrs(&[]).unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn dep_names_reads_a_boolean_dependency_by_its_operands() {
+        // What the Rust macros write for every crate dependency.
+        assert_eq!(
+            dep_names("(crate(cairo-rs/png) >= 0.22.0 with crate(cairo-rs/png) < 0.23.0~)"),
+            ["crate(cairo-rs/png)"]
+        );
+        assert_eq!(dep_names("foo >= 1.2"), ["foo"]);
+        assert_eq!(dep_names("(a or b)"), ["a", "b"]);
+        assert_eq!(dep_names("((a or b) and c)"), ["a", "b", "c"]);
+        // A condition is not something to install.
+        assert_eq!(dep_names("(a if b)"), ["a"]);
+        assert_eq!(dep_names("(a if b else c)"), ["a", "c"]);
+        assert_eq!(dep_names("(a unless b)"), ["a"]);
+        assert_eq!(dep_names("(a without b)"), ["a"]);
+    }
+
+    #[test]
+    fn a_provider_satisfies_the_boolean_dependency_that_asked_for_it() {
+        // Regression: the dependency's first token is
+        // "(crate(cairo-rs/png)", parenthesis and all, so matching on
+        // it alone dropped the provider and the package silently left
+        // the closure (issue #15).
+        let dep = "(crate(cairo-rs/png) >= 0.22.0 with crate(cairo-rs/png) < 0.23.0~)";
+        let pkg = PkgInfo::new(
+            "rust-cairo-rs+png-devel",
+            vec![],
+            vec!["crate(cairo-rs/png) = 0.22.9".to_string()],
+            Some("rust-cairo-rs".to_string()),
+            "rawhide",
+        );
+        assert!(pkg.satisfies(dep));
+        assert!(!pkg.satisfies("(crate(drm/default) >= 0.14.0 with crate(drm/default) < 0.15.0~)"));
     }
 }

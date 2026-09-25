@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### ebranch: a boolean BuildRequires no longer vanishes from the closure
+
+`resolve` called `rust-tiny-dfr` ready to branch to EPEL 10 with
+nothing to build first, and the build then failed in mock with twelve
+unsatisfied dependencies. Every crate dependency a Rust package
+declares is written as a version range — `(crate(cairo-rs/png) >=
+0.22.0 with crate(cairo-rs/png) < 0.23.0~)` — and each one was being
+dropped without a word, so a package whose 29 build requirements
+include 25 crates was judged on the four plain ones. The same closure
+now names 57 packages in 11 phases, the nine crates the build asked
+for among them, which is also what `check-crate` reports for the same
+crate and branch.
+
+fedrq answered those queries correctly all along; the providers were
+lost on the way back. Since v0.23.0 a level of the walk resolves in
+one batched query, and each provider is attributed to the dependency
+that asked for it by capability name. That name was the dependency's
+first whitespace token, which for a boolean expression carries the
+opening parenthesis — `(crate(cairo-rs/png)` never matches the
+provider's `crate(cairo-rs/png)`. `sandogasa_fedrq::dep_names` now
+reads a boolean dependency as the operands a provider has to carry,
+skipping the one after `if`, `unless`, `with` or `without` because a
+condition is not something to install, and `PkgInfo::satisfies`
+matches on any of them.
+
+A dependency that nothing provides on either branch was also skipped
+in silence, which is what let this read as "ready to branch" instead
+of 25 unresolvable dependencies; `resolve` now warns and names it.
+
+Reported as issue #15.
+
 ## v0.25.0
 
 ### fesco-chair: a MODIFIED Change is still reviewed

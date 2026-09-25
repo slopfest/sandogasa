@@ -869,6 +869,13 @@ impl sandogasa_closure::engine::Policy for ClosurePolicy<'_> {
                 let source_resolved =
                     cached_first(&cache.source, dep_str, |d| resolver.resolve_source(d));
                 let Some(provider) = source_resolved else {
+                    // Nothing on either branch provides it, so there is
+                    // no package to branch -- say so rather than drop it
+                    // silently, which reads as "ready to branch".
+                    eprintln!(
+                        "warning: {pkg}: {dep_str} is provided by nothing \
+                         on either branch, so it is left out of the closure"
+                    );
                     continue;
                 };
                 if provider == pkg || options.exclude.contains(&provider) {
@@ -1606,6 +1613,38 @@ pub fn build_reason(pkg: &str, closure: &Closure) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_batched_answer_is_attributed_to_the_boolean_dep_that_asked() {
+        // Regression (issue #15): the Rust macros write every crate
+        // dependency as a version range, and attributing the batch by
+        // the dependency's first token -- "(crate(cairo-rs/png)",
+        // parenthesis and all -- matched nothing, so the provider was
+        // dropped and `resolve` called the package ready to branch.
+        let deps = [
+            "(crate(cairo-rs/png) >= 0.22.0 with crate(cairo-rs/png) < 0.23.0~)".to_string(),
+            "cargo-rpm-macros >= 24".to_string(),
+        ];
+        let providers = [
+            sandogasa_fedrq::PkgInfo::new(
+                "rust-cairo-rs+png-devel",
+                vec![],
+                vec!["crate(cairo-rs/png) = 0.22.9".to_string()],
+                Some("rust-cairo-rs".to_string()),
+                "rawhide",
+            ),
+            sandogasa_fedrq::PkgInfo::new(
+                "cargo-rpm-macros",
+                vec![],
+                vec!["cargo-rpm-macros = 26.3".to_string()],
+                Some("rust-packaging".to_string()),
+                "rawhide",
+            ),
+        ];
+        let attributed = attribute_providers(&deps, &providers);
+        assert_eq!(attributed[&deps[0]], ["rust-cairo-rs"]);
+        assert_eq!(attributed[&deps[1]], ["rust-packaging"]);
+    }
 
     #[test]
     fn a_provider_in_the_script_names_what_needed_it() {
