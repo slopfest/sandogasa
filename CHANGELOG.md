@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.25.1
 
 ### ebranch: a boolean BuildRequires no longer vanishes from the closure
 

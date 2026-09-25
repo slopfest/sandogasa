@@ -51,7 +51,7 @@ members = [
 # "slum" or post-apocalyptic robots in popular culture.
 
 [workspace.package]
-version = "0.25.0"
+version = "0.25.1"
 edition = "2024"
 # The oldest rustc that builds the workspace; `make msrv-check` proves
 # it. 1.95 stabilized `if let` guards on match arms (fedora-cve-triage
