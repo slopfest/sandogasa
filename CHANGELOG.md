@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### ebranch: a provider only answers the dependency whose version range it fits
+
+`resolve --check-install` gave a package a clean bill and the build
+then failed on a dependency it had not mentioned: `rust-tiny-dfr`
+against an EPEL 10 side tag, where one of `rust-input-linux`'s
+subpackages needs tokio-util 0.6 and the side tag has only 0.7. The
+closure now pulls in the compat package the build was asking for.
+
+That source package ships subpackages for both tokio-util 0.6 and 0.7,
+so a single batched query carried both ranges, and the answer to it is
+the union with nothing saying which provider came back for which
+dependency. Attribution matched on capability name alone, on the
+reasoning that fedrq had already applied the constraint — true of one
+dependency per query, false of a batch. The 0.7 provider was handed to
+the 0.6 dependency, which then counted as satisfied by the target.
+Providers are now checked against the constraint themselves, using the
+version each states in its own Provides, so a compat package is missed
+no more. This affects plain dependencies as much as boolean ones: two
+constraints on one capability in the same batch collided either way.
+
+The same pass fixes a mistake in v0.25.1: `with` was treated as
+introducing a condition, like `if`, when it asks for a single package
+carrying both operands. That dropped the upper bound of every version
+range, so `>= 0.6.0 with < 0.7.0~` accepted 0.7.19. `sandogasa_fedrq::
+dep_names` consequently returns a name once per operand that mentions
+it, twice for a range.
+
+`sandogasa_rpmvercmp::constraint_satisfied` is new, moved out of
+ebranch so both it and the matcher evaluate an RPM constraint the same
+way, tilde and missing release included.
+
+Fixes #16.
+
 ## v0.25.1
 
 ### ebranch: a boolean BuildRequires no longer vanishes from the closure

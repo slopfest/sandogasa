@@ -2070,6 +2070,7 @@ name = "sandogasa-fedrq"
 version = "0.25.1"
 dependencies = [
  "dirs",
+ "sandogasa-rpmvercmp",
  "serde",
  "serde_json",
 ]

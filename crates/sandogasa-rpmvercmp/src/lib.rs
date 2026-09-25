@@ -115,6 +115,30 @@ pub fn rpmvercmp(a: &str, b: &str) -> Ordering {
     }
 }
 
+/// Whether an available `version-release` satisfies `op required`
+/// under RPM semantics: when the required version carries no release,
+/// the available release is ignored.
+///
+/// `op` is one of `=`, `>=`, `<=`, `>`, `<`; anything else is not
+/// satisfied. An epoch in the constraint (rare) compares against
+/// epoch 0 when the available version carries none.
+pub fn constraint_satisfied(available_vr: &str, op: &str, required: &str) -> bool {
+    let available = if required.contains('-') {
+        available_vr
+    } else {
+        available_vr.split('-').next().unwrap_or(available_vr)
+    };
+    let ord = compare_evr(available, required);
+    match op {
+        "=" => ord == Ordering::Equal,
+        ">=" => ord != Ordering::Less,
+        "<=" => ord != Ordering::Greater,
+        ">" => ord == Ordering::Greater,
+        "<" => ord == Ordering::Less,
+        _ => false,
+    }
+}
+
 /// Compare two EVR (epoch:version-release) strings.
 ///
 /// Parses the optional `epoch:` prefix and optional `-release` suffix,

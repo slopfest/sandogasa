@@ -105,6 +105,75 @@ fn trim_parens(tok: &str) -> &str {
     tok
 }
 
+/// Whether a token is an RPM version-comparison operator.
+fn is_op(tok: &str) -> bool {
+    matches!(tok, ">=" | "<=" | ">" | "<" | "=")
+}
+
+/// A dependency's terms — each a capability and the version
+/// constraint on it — and whether meeting any one of them is enough.
+///
+/// A plain dependency is a single term. A boolean (rich) one is its
+/// operands. `and`, `or`, `else` and `with` each introduce another
+/// term, while the operand after `if`, `unless` or `without` states a
+/// condition rather than something to install and is left out. `or`
+/// and `else` offer alternatives, so any term will do; otherwise the
+/// provider has to meet them all, which is what makes the version
+/// range the Rust macros write — `(crate(foo) >= 1.0.0 with
+/// crate(foo) < 2.0.0~)` — mean one package inside both bounds.
+///
+/// `with` in particular asks for a single package carrying both
+/// operands, so treating its right-hand side as a condition would
+/// drop the upper bound and let any newer version through.
+fn dep_terms(dep: &str) -> (Vec<(&str, Option<(&str, &str)>)>, bool) {
+    let dep = dep.trim();
+    let Some(inner) = dep.strip_prefix('(').and_then(|d| d.strip_suffix(')')) else {
+        let mut parts = dep.split_whitespace();
+        let name = parts.next().unwrap_or(dep);
+        let constraint = match (parts.next(), parts.next()) {
+            (Some(op), Some(ver)) if is_op(op) => Some((op, ver)),
+            _ => None,
+        };
+        return (vec![(name, constraint)], false);
+    };
+    let mut terms: Vec<(&str, Option<(&str, &str)>)> = Vec::new();
+    let mut any = false;
+    let mut skip_next = false;
+    // The term an operator would constrain, unset once a keyword or a
+    // skipped condition intervenes.
+    let mut open: Option<usize> = None;
+    let mut tokens = inner.split_whitespace();
+    while let Some(tok) = tokens.next() {
+        open = match tok {
+            "or" | "else" => {
+                any = true;
+                skip_next = false;
+                None
+            }
+            "and" | "with" => {
+                skip_next = false;
+                None
+            }
+            "if" | "unless" | "without" => {
+                skip_next = true;
+                None
+            }
+            _ if is_op(tok) => {
+                if let (Some(i), Some(ver)) = (open, tokens.next()) {
+                    terms[i].1 = Some((tok, ver));
+                }
+                open
+            }
+            _ if std::mem::take(&mut skip_next) => None,
+            _ => {
+                terms.push((trim_parens(tok), None));
+                Some(terms.len() - 1)
+            }
+        };
+    }
+    (terms, any)
+}
+
 /// The capability names a dependency can be satisfied by: one for a
 /// plain dependency, and for a boolean (rich) one every operand a
 /// provider has to carry.
@@ -113,47 +182,72 @@ fn trim_parens(tok: &str) -> &str {
 /// `(crate(foo/default) >= 1.0.0 with crate(foo/default) < 2.0.0~)`,
 /// so treating the whole expression as one name loses the provider
 /// (the first token would be `(crate(foo/default)`, parenthesis and
-/// all). The operand after `if`, `unless`, `with` or `without` is a
-/// condition rather than something to install, so it is skipped —
-/// only `and`, `or` and `else` introduce another capability.
+/// all). A name repeated by both ends of a range is returned twice;
+/// callers that care about the constraints want [`PkgInfo::satisfies`].
 pub fn dep_names(dep: &str) -> Vec<&str> {
-    let dep = dep.trim();
-    let Some(inner) = dep.strip_prefix('(').and_then(|d| d.strip_suffix(')')) else {
-        return vec![dep_name(dep)];
-    };
-    let mut names = Vec::new();
-    let mut skip_next = false;
-    let mut tokens = inner.split_whitespace();
-    while let Some(tok) = tokens.next() {
-        match tok {
-            "and" | "or" | "else" => skip_next = false,
-            "if" | "unless" | "with" | "without" => skip_next = true,
-            ">=" | "<=" | ">" | "<" | "=" => {
-                tokens.next();
-            }
-            _ if !std::mem::take(&mut skip_next) => names.push(trim_parens(tok)),
-            _ => {}
-        }
+    dep_terms(dep).0.into_iter().map(|(name, _)| name).collect()
+}
+
+/// Split a Provides entry into its capability and version
+/// (`crate(foo) = 1.2` → `("crate(foo)", Some("1.2"))`).
+fn provide_parts(provide: &str) -> (&str, Option<&str>) {
+    let mut parts = provide.split_whitespace();
+    let name = parts.next().unwrap_or(provide);
+    match (parts.next(), parts.next()) {
+        (Some("="), Some(ver)) => (name, Some(ver)),
+        _ => (name, None),
     }
-    names
 }
 
 impl PkgInfo {
+    /// Whether one of this package's terms is met: a Provides (or
+    /// the package's own name) carrying `name`, at a version the
+    /// constraint accepts when both sides state one.
+    fn term_met(&self, name: &str, constraint: Option<(&str, &str)>) -> bool {
+        let accepts = |version: Option<&str>| match (constraint, version) {
+            (Some((op, required)), Some(v)) => {
+                sandogasa_rpmvercmp::constraint_satisfied(v, op, required)
+            }
+            // Nothing to compare: a bare capability, or a provider
+            // that states no version.
+            _ => true,
+        };
+        let mut stated = self
+            .provides
+            .iter()
+            .map(|pr| provide_parts(pr))
+            .filter(|(pname, _)| *pname == name)
+            .peekable();
+        if stated.peek().is_some() {
+            // The package states this capability, so its own name adds
+            // nothing: a version outside the constraint is a miss, not
+            // a reason to fall back to an unversioned match.
+            return stated.any(|(_, pver)| accepts(pver));
+        }
+        self.name == name && accepts(self.vr().as_deref())
+    }
+
     /// Whether this package satisfies `dep`: by exact Provides match,
-    /// by one of the capability names the dependency can be met by
-    /// ([`dep_names`], so a boolean dependency matches on its
-    /// operands), or by its own package name. The version constraint
-    /// is fedrq's business — a package only appears in a `-P` answer
-    /// if it satisfied the constraint — so attribution back to the
-    /// asked-for dependency is by name.
+    /// or by meeting the dependency's terms ([`dep_terms`]) — every
+    /// one of them, or any single one when the dependency offers
+    /// alternatives.
+    ///
+    /// The version constraint is checked here rather than left to
+    /// fedrq. A package only appears in a `-P` answer if it satisfied
+    /// the constraint, but a batched answer is the union over several
+    /// dependencies, so a provider that came back for `>= 0.7.0` must
+    /// not be attributed to a `< 0.7.0~` dependency asked in the same
+    /// query.
     pub fn satisfies(&self, dep: &str) -> bool {
-        dep_names(dep).into_iter().any(|name| {
-            self.name == name
-                || self
-                    .provides
-                    .iter()
-                    .any(|pr| pr == dep || dep_name(pr) == name)
-        })
+        if self.provides.iter().any(|pr| pr == dep) {
+            return true;
+        }
+        let (terms, any) = dep_terms(dep);
+        if any {
+            terms.iter().any(|(name, c)| self.term_met(name, *c))
+        } else {
+            !terms.is_empty() && terms.iter().all(|(name, c)| self.term_met(name, *c))
+        }
     }
 
     /// Build a package record from parts — for callers that
@@ -838,7 +932,7 @@ mod tests {
         // What the Rust macros write for every crate dependency.
         assert_eq!(
             dep_names("(crate(cairo-rs/png) >= 0.22.0 with crate(cairo-rs/png) < 0.23.0~)"),
-            ["crate(cairo-rs/png)"]
+            ["crate(cairo-rs/png)", "crate(cairo-rs/png)"]
         );
         assert_eq!(dep_names("foo >= 1.2"), ["foo"]);
         assert_eq!(dep_names("(a or b)"), ["a", "b"]);
@@ -848,6 +942,9 @@ mod tests {
         assert_eq!(dep_names("(a if b else c)"), ["a", "c"]);
         assert_eq!(dep_names("(a unless b)"), ["a"]);
         assert_eq!(dep_names("(a without b)"), ["a"]);
+        // `with` is a conjunction, not a condition: both ends of a
+        // range have to be kept.
+        assert_eq!(dep_names("(a with b)"), ["a", "b"]);
     }
 
     #[test]
@@ -866,5 +963,53 @@ mod tests {
         );
         assert!(pkg.satisfies(dep));
         assert!(!pkg.satisfies("(crate(drm/default) >= 0.14.0 with crate(drm/default) < 0.15.0~)"));
+    }
+
+    #[test]
+    fn a_provider_outside_the_range_does_not_satisfy_it() {
+        // Regression (issue #16): both ranges are asked in one batched
+        // query, the answer is their union, and matching by capability
+        // name alone handed the 0.7 provider to the 0.6 dependency.
+        let range = |lo: &str, hi: &str| {
+            format!("(crate(tokio-util) >= {lo} with crate(tokio-util) < {hi}~)")
+        };
+        let provider = |version: &str| {
+            PkgInfo::new(
+                "rust-tokio-util-devel",
+                vec![],
+                vec![format!("crate(tokio-util) = {version}")],
+                Some("rust-tokio-util".to_string()),
+                "rawhide",
+            )
+        };
+        assert!(!provider("0.7.19").satisfies(&range("0.6.0", "0.7.0")));
+        assert!(provider("0.7.19").satisfies(&range("0.7.0", "0.8.0")));
+        assert!(provider("0.6.10").satisfies(&range("0.6.0", "0.7.0")));
+        // The tilde sorts below the release it precedes.
+        assert!(!provider("0.7.0").satisfies(&range("0.6.0", "0.7.0")));
+    }
+
+    #[test]
+    fn a_plain_versioned_dependency_is_checked_too() {
+        let pkg = PkgInfo::new(
+            "python3-setuptools",
+            vec![],
+            vec!["python3-setuptools = 69.0.3".to_string()],
+            Some("python-setuptools".to_string()),
+            "c10s",
+        );
+        assert!(!pkg.satisfies("python3-setuptools >= 77"));
+        assert!(pkg.satisfies("python3-setuptools >= 69"));
+        assert!(pkg.satisfies("python3-setuptools"));
+        // A provider that states no version cannot be judged, so it
+        // still counts.
+        let bare = PkgInfo::new(
+            "python3-setuptools",
+            vec![],
+            vec!["python3-setuptools".to_string()],
+            None,
+            "c10s",
+        );
+        assert!(bare.satisfies("python3-setuptools >= 77"));
     }
 }

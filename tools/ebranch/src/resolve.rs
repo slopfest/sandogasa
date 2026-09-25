@@ -439,29 +439,9 @@ pub(crate) fn parse_versioned_dep(dep: &str) -> Option<(&str, Option<(&str, &str
     }
 }
 
-/// Whether an available `version-release` satisfies `op required`
-/// under RPM semantics: when the required version carries no release,
-/// the available release is ignored.
-///
-/// Note: the base probe returns V-R without the epoch, so an epoch in
-/// the constraint (rare) compares against epoch 0.
-pub(crate) fn constraint_satisfied(available_vr: &str, op: &str, required: &str) -> bool {
-    use std::cmp::Ordering::*;
-    let available = if required.contains('-') {
-        available_vr
-    } else {
-        available_vr.split('-').next().unwrap_or(available_vr)
-    };
-    let ord = sandogasa_rpmvercmp::compare_evr(available, required);
-    match op {
-        "=" => ord == Equal,
-        ">=" => ord != Less,
-        "<=" => ord != Greater,
-        ">" => ord == Greater,
-        "<" => ord == Less,
-        _ => false,
-    }
-}
+/// RPM constraint evaluation, re-exported so this module's callers
+/// and tests keep the shorter name.
+pub(crate) use sandogasa_rpmvercmp::constraint_satisfied;
 
 /// How a would-be-missing dep relates to the base distro.
 enum BaseClass {
@@ -1613,6 +1593,29 @@ pub fn build_reason(pkg: &str, closure: &Closure) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_batched_answer_respects_the_version_range_that_asked() {
+        // Regression (issue #16): one source package's subpackages ask
+        // for tokio-util at 0.6 and at 0.7, the batched answer is the
+        // union, and attributing by name alone let the 0.7 provider
+        // satisfy the 0.6 dependency -- so the compat package was
+        // never reported as missing.
+        let deps = [
+            "(crate(tokio-util) >= 0.6.0 with crate(tokio-util) < 0.7.0~)".to_string(),
+            "(crate(tokio-util) >= 0.7.0 with crate(tokio-util) < 0.8.0~)".to_string(),
+        ];
+        let providers = [sandogasa_fedrq::PkgInfo::new(
+            "rust-tokio-util-devel",
+            vec![],
+            vec!["crate(tokio-util) = 0.7.19".to_string()],
+            Some("rust-tokio-util".to_string()),
+            "epel10",
+        )];
+        let attributed = attribute_providers(&deps, &providers);
+        assert!(attributed[&deps[0]].is_empty());
+        assert_eq!(attributed[&deps[1]], ["rust-tokio-util"]);
+    }
 
     #[test]
     fn a_batched_answer_is_attributed_to_the_boolean_dep_that_asked() {
