@@ -20,7 +20,10 @@
 //! - **`rhbz#` references in the new changelog entries.** A bug fixed
 //!   in Rawhide is closed when that build lands, so it is no longer
 //!   open and the first source misses it — but a branch update
-//!   carrying the same fix still closes it for that branch.
+//!   carrying the same fix still closes it for that branch. Only for
+//!   a package the target already has: a package arriving for the
+//!   first time brings every entry it ever had, and those bugs were
+//!   closed by builds on another branch.
 //!
 //! A candidate is proposed only if [`crate::karma::bug_verdict`]
 //! would score it +1, so what gets attached and what gets voted on
@@ -92,8 +95,9 @@ fn ends_with_resolution_keyword(text: &str) -> bool {
 /// has.
 ///
 /// Scanning the whole changelog would attach bugs fixed years ago in
-/// releases the target has had all along. `since` is `None` for a
-/// package the target does not have yet, where every entry is new.
+/// releases the target has had all along. `None` treats every entry
+/// as new, which is why [`candidates`] does not call it that way for
+/// a package the target lacks — see the note there.
 pub fn new_entry_bug_refs(changelog: &str, since: Option<&str>) -> Vec<u64> {
     let mut found = Vec::new();
     for (evr, body) in changelog_entries(changelog) {
@@ -135,6 +139,33 @@ fn changelog_entries(changelog: &str) -> Vec<(Option<&str>, String)> {
     entries
 }
 
+/// Bugs named in the changelog entries an update introduces, by bug
+/// id, with the package that named each.
+///
+/// A package the target does not have yet brings its whole history
+/// with it, and every bug in that history was closed by a build on
+/// the branch it came from. Anything still open is proposed by the
+/// open-bug source instead, so there is nothing here to find and a
+/// great deal of noise to avoid: a 31-package EPEL newpackage update
+/// proposed 150 long-closed bugs this way.
+fn changelog_candidates(
+    changelogs: &BTreeMap<String, String>,
+    old_versions: &BTreeMap<String, Option<String>>,
+) -> BTreeMap<u64, String> {
+    let mut found: BTreeMap<u64, String> = BTreeMap::new();
+    for (package, changelog) in changelogs {
+        let Some(since) = old_versions.get(package).and_then(Option::as_deref) else {
+            continue;
+        };
+        for id in new_entry_bug_refs(changelog, Some(since)) {
+            found
+                .entry(id)
+                .or_insert_with(|| format!("named in {package}'s new changelog entries"));
+        }
+    }
+    found
+}
+
 /// Propose bugs for an update: those still open against a package it
 /// builds, and those named in the changelog entries it introduces.
 ///
@@ -147,15 +178,7 @@ pub async fn candidates(
     update: &UpdateFacts<'_>,
     already_listed: &[u64],
 ) -> Vec<Candidate> {
-    let mut from_changelog: BTreeMap<u64, String> = BTreeMap::new();
-    for (package, changelog) in changelogs {
-        let since = old_versions.get(package).and_then(Option::as_deref);
-        for id in new_entry_bug_refs(changelog, since) {
-            from_changelog
-                .entry(id)
-                .or_insert_with(|| format!("named in {package}'s new changelog entries"));
-        }
-    }
+    let from_changelog = changelog_candidates(changelogs, old_versions);
 
     let open = open_bugs_for_components(bz, update.builds).await;
     let mut wanted: Vec<u64> = open.keys().copied().collect();
@@ -315,5 +338,29 @@ mod tests {
         assert_eq!(entries[0].0, Some("1.0.8-1"));
         assert!(entries[0].1.contains("RHBZ#2344815"));
         assert_eq!(entries[3].0, Some("0.4.3-1"));
+    }
+
+    #[test]
+    fn a_package_the_target_lacks_contributes_no_changelog_bugs() {
+        // Regression (issue #17): an EPEL newpackage update proposed
+        // 150 bugs, every one closed years earlier by a Fedora build,
+        // because a package with no previous version had its whole
+        // history read as new.
+        let changelogs = BTreeMap::from([("widget".to_string(), CHANGELOG.to_string())]);
+
+        let arriving = BTreeMap::from([("widget".to_string(), None)]);
+        assert!(changelog_candidates(&changelogs, &arriving).is_empty());
+
+        // Absent from the map entirely is the same answer.
+        assert!(changelog_candidates(&changelogs, &BTreeMap::new()).is_empty());
+
+        // A package the target has keeps the source it was written for.
+        let updating = BTreeMap::from([("widget".to_string(), Some("0.6.3-1".to_string()))]);
+        let found = changelog_candidates(&changelogs, &updating);
+        assert_eq!(
+            found.get(&2344815).map(String::as_str),
+            Some("named in widget's new changelog entries")
+        );
+        assert!(!found.contains_key(&2200001));
     }
 }

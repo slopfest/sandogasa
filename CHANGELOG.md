@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### ebranch: a branch's first update proposes the request that asked for it
+
+Submitting the update that brings 31 Rust packages to EPEL 10 offered
+150 bugs to close, every one of them a years-old `rust-glib-0.20.4 is
+available` closed by a Fedora build long before, and left out the one
+bug the update answers: "Please branch and build rust-tiny-dfr in
+epel10". The same update now proposes that request and nothing else.
+
+Two causes. A package the target does not have yet has no version to
+compare changelog entries against, so every entry it ever had counted
+as introduced by this update and every bug named anywhere in its
+history was proposed. That source exists to catch a bug already closed
+by a Rawhide build of the same fix, which cannot apply to a package
+with no history on the branch, and anything still open is proposed by
+the open-bug source regardless — so it is now skipped for a package
+arriving for the first time.
+
+The other is that a branch request had no verdict at all. It is open
+against the package, so it reached the vote logic, but with no version
+in its title it fell through to the version comparison and came back
+undecided, and only a bug the update would vote +1 on is proposed.
+Requests are now answered by the package being built, with the release
+compared by family, since the request names `epel10` while the update
+targets `epel10.4`. ebranch writes these summaries itself in
+`file-requests`, so the wording it matches is its own.
+
+Fixes #17.
+
 ### ebranch: a provider only answers the dependency whose version range it fits
 
 `resolve --check-install` gave a package a clean bill and the build

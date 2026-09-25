@@ -88,6 +88,23 @@ pub fn review_request_package(summary: &str) -> Option<String> {
     Some(rest.split_whitespace().next()?.to_string())
 }
 
+/// Extract the package and branch from a branch-request bug summary
+/// of the form `"Please branch and build <package> in <branch>"` —
+/// the wording ebranch's own `file-requests` writes, and the one the
+/// EPEL documentation suggests. A trailing period is tolerated.
+pub fn branch_request_parts(summary: &str) -> Option<(String, String)> {
+    const PREFIX: &str = "please branch and build ";
+    let summary = summary.trim().trim_end_matches('.');
+    let (prefix, rest) = summary.split_at_checked(PREFIX.len())?;
+    prefix.eq_ignore_ascii_case(PREFIX).then_some(())?;
+    let mut words = rest.split_whitespace();
+    let package = words.next()?;
+    words.next().filter(|w| w.eq_ignore_ascii_case("in"))?;
+    let branch = words.next()?;
+    words.next().is_none().then_some(())?;
+    Some((package.to_string(), branch.to_string()))
+}
+
 /// Classify a Bugzilla bug into a [`BugKind`].
 ///
 /// Returns `Review` for bugs filed against the "Package Review"
@@ -656,5 +673,27 @@ mod tests {
         let trackers = TrackerIds::default();
         let bug = make_bug("foo crashes on startup", "foo", &[], &[]);
         assert_eq!(classify(&bug, &trackers), BugKind::Other);
+    }
+
+    #[test]
+    fn branch_request_parts_reads_the_summary_ebranch_files() {
+        assert_eq!(
+            branch_request_parts("Please branch and build rust-tiny-dfr in epel10"),
+            Some(("rust-tiny-dfr".to_string(), "epel10".to_string()))
+        );
+        // The body ends in a period; some filers keep it in the title.
+        assert_eq!(
+            branch_request_parts("please branch and build foo in epel9."),
+            Some(("foo".to_string(), "epel9".to_string()))
+        );
+        assert_eq!(branch_request_parts("Please branch and build foo"), None);
+        assert_eq!(
+            branch_request_parts("Please branch and build foo in epel10 and epel9"),
+            None
+        );
+        assert_eq!(
+            branch_request_parts("rust-tiny-dfr-0.3.7 is available"),
+            None
+        );
     }
 }

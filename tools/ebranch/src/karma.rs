@@ -222,6 +222,28 @@ pub(crate) fn bug_verdict(bug: &BugFacts, update: &UpdateFacts<'_>) -> Verdict {
         };
     }
 
+    // A branch request is answered by the branch existing and the
+    // package being built there, which is what this update is. The
+    // request names a release family (`epel10`) while the update
+    // targets a branch within it (`epel10.4`), so both are normalised
+    // before they are compared.
+    if let Some((pkg, branch)) = sandogasa_bugclass::bugzilla::branch_request_parts(title) {
+        let family =
+            |b: &str| sandogasa_bugclass::bugzilla::product_version_for_branch(b).map(|(_, v)| v);
+        if family(&branch) != family(update.branch) {
+            return Verdict::Unknown;
+        }
+        return match builds.iter().find(|(p, _)| *p == pkg) {
+            Some((p, v)) => Verdict::Decided {
+                karma: 1,
+                reason: format!("update builds {p}-{v} for {branch}, which is what was requested"),
+            },
+            None => Verdict::Missing {
+                reason: format!("update builds no {pkg}, which is what was requested for {branch}"),
+            },
+        };
+    }
+
     // A CVE tracker for this release, on a package the update builds:
     // the build either reaches the fix every source agrees on or it
     // does not. A tracker for another release, or one no source has a
@@ -1071,6 +1093,44 @@ mod tests {
         assert_eq!(derive_karma(&report(false, false, false, false)).0, 0);
         // Stale side-tag data carried into the analysis.
         assert_eq!(derive_karma(&report(true, false, false, true)).0, 0);
+    }
+
+    #[test]
+    fn a_branch_request_is_answered_by_the_branch_being_built() {
+        // Regression (issue #17): the request that asked for this very
+        // update had no verdict, so it was never proposed -- while the
+        // request says epel10 and the update targets epel10.4.
+        let builds = vec![("rust-tiny-dfr".to_string(), "0.3.7".to_string())];
+        let trackers = trackers();
+        let update = UpdateFacts {
+            builds: &builds,
+            trackers: &trackers,
+            branch: "epel10.4",
+            unsatisfied: &[],
+            full_analysis: true,
+        };
+        let request = |pkg: &str, branch: &str| {
+            bug(
+                &format!("Please branch and build {pkg} in {branch}"),
+                Some(pkg),
+            )
+        };
+        let (karma, note) = decided(bug_verdict(&request("rust-tiny-dfr", "epel10"), &update))
+            .expect("a built package answers the request");
+        assert_eq!(karma, 1);
+        assert!(note.contains("rust-tiny-dfr-0.3.7"), "{note}");
+        // A request for a release this update does not target is the
+        // user's call, not a +1.
+        assert!(is_unknown(bug_verdict(
+            &request("rust-tiny-dfr", "epel9"),
+            &update
+        )));
+        // A request for a package the update does not build is missing,
+        // not decided.
+        assert!(
+            decided(bug_verdict(&request("rust-drm", "epel10"), &update)).is_none(),
+            "an unbuilt package must not be proposed"
+        );
     }
 
     /// A bug as Bugzilla would describe it.
