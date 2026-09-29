@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a Go package that compiles a binary keeps its CVE
+
+The false-positive sweep offered to close CVE-2025-58189, a flaw in Go's
+`crypto/tls`, as NOTABUG against golang-entgo-ent, on the grounds that
+the package "neither bundles nor links it". It does: the package ships a
+compiled `ent` binary, and a Go binary has the standard library linked
+into it, so the fix reaches it only by a rebuild. Such a bug now goes to
+a human with the reason, the way a Rust crate's already does. A Go
+package whose subpackages are all noarch compiles nothing and is still
+cleared, which is what most of them are.
+
+The same line called the toolchain "go2rpm". Fedora's Go toolchain is
+`golang`, which provides `go`; go2rpm generates spec files. Two causes,
+both fixed: a name was taken for a versioned build of the library when
+its digits ran straight into another word — go2rpm read as a build of go
+the way gstreamer1-plugins-good reads as one of gstreamer, and now a
+version suffix has to be the whole remainder or be delimited from it —
+and a library of no ecosystem was looked up only by name glob, never by
+what provides it, so nothing found golang for go.
+
+Fixes #18.
+
 ### ebranch: a branch's first update proposes the request that asked for it
 
 Submitting the update that brings 31 Rust packages to EPEL 10 offered
