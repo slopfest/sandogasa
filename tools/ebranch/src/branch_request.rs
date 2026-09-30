@@ -253,14 +253,45 @@ fn match_nvrs_to_packages(nvrs: &[String], packages: &[String]) -> BTreeMap<Stri
 /// Which of `packages` a branch carries as source packages, with
 /// their version-release.
 fn src_probe(branch: &str, packages: &[String]) -> Result<BTreeMap<String, String>, String> {
+    src_probe_repo(branch, None, packages)
+}
+
+/// [`src_probe`] against one repo class of a branch.
+fn src_probe_repo(
+    branch: &str,
+    repo: Option<&str>,
+    packages: &[String],
+) -> Result<BTreeMap<String, String>, String> {
     let fedrq = sandogasa_fedrq::Fedrq {
         branch: Some(branch.to_string()),
-        repo: None,
+        repo: repo.map(str::to_string),
     };
     let nvrs = fedrq
         .src_nvrs(packages)
         .map_err(|e| format!("pre-flight ({branch}): {e}"))?;
     Ok(match_nvrs_to_packages(&nvrs, packages))
+}
+
+/// What the target branch already has, counting updates-testing.
+///
+/// A package whose branch request was acted on days ago sits in
+/// testing, not yet stable — cxxopts was there while a second request
+/// for it was being filed. A branch that has no testing repo is not an
+/// error: the stable answer stands and the reason is said once.
+fn target_probe(branch: &str, packages: &[String]) -> Result<BTreeMap<String, String>, String> {
+    let mut present = src_probe(branch, packages)?;
+    match src_probe_repo(branch, Some("@testing"), packages) {
+        Ok(testing) => {
+            for (pkg, vr) in testing {
+                present.entry(pkg).or_insert(vr);
+            }
+        }
+        Err(e) => eprintln!(
+            "warning: could not read {branch} updates-testing ({e}); a package \
+             branched but not yet stable will look missing"
+        ),
+    }
+    Ok(present)
 }
 
 /// Split the not-yet-filed packages into ones to file and ones to skip
@@ -374,9 +405,19 @@ pub(crate) fn adoptable(
         else {
             continue;
         };
-        if family(&bug_branch) != wanted || !bug.component.iter().any(|c| *c == pkg) {
+        let Some(component) = bug
+            .component
+            .iter()
+            .find(|c| sandogasa_bugclass::bugzilla::branch_request_names(&pkg, c))
+        else {
+            continue;
+        };
+        if family(&bug_branch) != wanted {
             continue;
         }
+        // The component is what gets branched, whatever subpackage the
+        // request happened to name.
+        let pkg = component.clone();
         // The oldest one is the request; a later duplicate is not.
         found
             .entry(pkg)
@@ -489,7 +530,7 @@ pub async fn file_batch(
     // however old the version there is. It reaches this point when the
     // closure wanted a capability that branch's older build does not
     // provide -- a soname from the source branch's build, say.
-    let target_present = src_probe(&opts.branch, &candidates)?;
+    let target_present = target_probe(&opts.branch, &candidates)?;
     let (to_file, skipped) = partition_filable(
         report,
         candidates,
@@ -1128,11 +1169,21 @@ mod tests {
             bug(2400001, "et-6.2.13 is available", "et"),
             // Names a package it was not filed against.
             bug(2400002, "Please branch and build gtest in epel10", "et"),
+            // Names a subpackage, and says more after the branch: this
+            // is rhbz#2531397's shape, which the first matcher missed
+            // and a duplicate was filed over.
+            bug(
+                2400003,
+                "Please branch and build cxxopts-devel in epel10 and other epel10.x branches",
+                "cxxopts",
+            ),
         ];
         // The report targets a minor of the release the request names.
         let found = adoptable(&bugs, "epel10.4");
         assert_eq!(found.get("et"), Some(&2368920));
-        assert_eq!(found.len(), 1, "{found:?}");
+        // Recorded under the component, not the subpackage asked for.
+        assert_eq!(found.get("cxxopts"), Some(&2400003));
+        assert_eq!(found.len(), 2, "{found:?}");
         assert!(adoptable(&bugs, "epel9").contains_key("cxxopts"));
     }
 

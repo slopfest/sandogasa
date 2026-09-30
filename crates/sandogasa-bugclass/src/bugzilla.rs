@@ -91,7 +91,14 @@ pub fn review_request_package(summary: &str) -> Option<String> {
 /// Extract the package and branch from a branch-request bug summary
 /// of the form `"Please branch and build <package> in <branch>"` —
 /// the wording ebranch's own `file-requests` writes, and the one the
-/// EPEL documentation suggests. A trailing period is tolerated.
+/// EPEL documentation suggests.
+///
+/// People write these by hand, so what follows the branch is ignored:
+/// rhbz#2531397 asks for a package "in epel10 and other epel10.x
+/// branches", and the first branch named is the one to compare. The
+/// package may be a subpackage of the component the bug was filed
+/// against (`cxxopts-devel` against `cxxopts`), which is the caller's
+/// to reconcile — see [`branch_request_names`].
 pub fn branch_request_parts(summary: &str) -> Option<(String, String)> {
     const PREFIX: &str = "please branch and build ";
     let summary = summary.trim().trim_end_matches('.');
@@ -100,9 +107,22 @@ pub fn branch_request_parts(summary: &str) -> Option<(String, String)> {
     let mut words = rest.split_whitespace();
     let package = words.next()?;
     words.next().filter(|w| w.eq_ignore_ascii_case("in"))?;
-    let branch = words.next()?;
-    words.next().is_none().then_some(())?;
+    let branch = words.next()?.trim_end_matches(',');
     Some((package.to_string(), branch.to_string()))
+}
+
+/// Whether a branch request naming `package` is a request for
+/// `component`, the package it was filed against.
+///
+/// A request often names a subpackage — `cxxopts-devel` is what a
+/// dependent actually wanted — while the bug is filed against the
+/// source package. Anything the component is a prefix of, at a name
+/// boundary, is the same package's.
+pub fn branch_request_names(package: &str, component: &str) -> bool {
+    package == component
+        || package
+            .strip_prefix(component)
+            .is_some_and(|rest| rest.starts_with('-'))
 }
 
 /// Classify a Bugzilla bug into a [`BugKind`].
@@ -687,13 +707,32 @@ mod tests {
             Some(("foo".to_string(), "epel9".to_string()))
         );
         assert_eq!(branch_request_parts("Please branch and build foo"), None);
+        // Written by hand, and the first branch named is the one to
+        // compare (rhbz#2531397).
         assert_eq!(
-            branch_request_parts("Please branch and build foo in epel10 and epel9"),
-            None
+            branch_request_parts(
+                "Please branch and build cxxopts-devel in epel10 and other epel10.x branches"
+            ),
+            Some(("cxxopts-devel".to_string(), "epel10".to_string()))
+        );
+        assert_eq!(
+            branch_request_parts("Please branch and build foo in epel10, epel9"),
+            Some(("foo".to_string(), "epel10".to_string()))
         );
         assert_eq!(
             branch_request_parts("rust-tiny-dfr-0.3.7 is available"),
             None
         );
+    }
+
+    #[test]
+    fn a_request_may_name_a_subpackage_of_the_component() {
+        // rhbz#2531397 asks for cxxopts-devel and is filed against
+        // cxxopts.
+        assert!(branch_request_names("cxxopts-devel", "cxxopts"));
+        assert!(branch_request_names("cxxopts", "cxxopts"));
+        // Not a subpackage, just a name that starts the same way.
+        assert!(!branch_request_names("cxxopts2", "cxxopts"));
+        assert!(!branch_request_names("gtest", "cxxopts"));
     }
 }

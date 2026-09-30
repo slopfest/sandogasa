@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### ebranch: a hand-written branch request is recognised as one
+
+A request for `et`'s dependency had been open since 10 September —
+"Please branch and build cxxopts-devel in epel10 and other epel10.x
+branches" — and a second one was filed for the same package today
+before it was noticed. Two things hid it. The summary names the
+subpackage a dependent actually wanted, `cxxopts-devel`, while the bug
+is filed against `cxxopts`; and it says more after the branch, where
+the matcher expected the summary to end. Both are how people write
+these by hand.
+
+A request is now matched by the first branch it names, whatever follows,
+and a package that is the component or one of its subpackages counts as
+that component's. It is adopted under the component, since that is what
+gets branched.
+
+The other half of the miss was the pre-flight reading only stable
+repositories. The September request had been acted on: cxxopts 3.3.1 was
+in EPEL 10 updates-testing while the duplicate was being filed. The
+target pre-flight now counts updates-testing too, and says so once when
+a branch has no testing repository to read.
+
 ### ebranch: a package already branched is not requested again
 
 Resolving `et` for EPEL 10 offered to file a branch request for
