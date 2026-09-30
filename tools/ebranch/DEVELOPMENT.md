@@ -95,3 +95,29 @@ Two rules follow for anything built on this:
   dates a request from `bug.creation_time`, so adopting an old request
   makes it immediately escalatable; that is correct, and it is why
   adoption asks before it happens when a terminal is there to ask.
+
+## A resolver test states a package universe, not an expected answer
+
+`testrepo` describes repositories — names, sources, versions, Provides
+and files — and lets the resolver query them. Prefer it to the older
+`MockResolver`, which maps a dependency string straight to the source
+package that answers it.
+
+The distinction is not stylistic. Three bugs lived precisely in what
+that mapping cannot express (#15, #16, #21), and every one of them
+passed the old tests:
+
+- fedrq answers a **batch** with the union of the providers it found,
+  saying nothing about which dependency each came back for. Attribution
+  happens afterwards, in our code, and that is where the bugs were.
+- A package's **Provides carry versions but never file paths**, so a
+  path can only be answered by the file list and can never be
+  attributed from a batch.
+- A capability's version is **its own**, not the package's:
+  freetype-devel 2.13.2 provides `pkgconfig(freetype2) = 26.1.20`.
+
+So the fixture matches dependencies itself rather than calling
+`PkgInfo::satisfies`, which is one of the things under test — a fixture
+agreeing with the code by construction passes whatever the code does.
+Keep it that way when extending it, and check a new test fails with the
+fix reverted before trusting it.

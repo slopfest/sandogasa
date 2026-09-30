@@ -15,6 +15,8 @@ mod karma;
 mod resolve;
 mod review_deps;
 mod submit;
+#[cfg(test)]
+mod testrepo;
 mod wip;
 
 use resolve::{

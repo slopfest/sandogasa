@@ -171,7 +171,7 @@ pub fn load_report(path: &str) -> Result<ResolveReport, String> {
 }
 
 /// Trait abstracting fedrq operations for testability.
-pub trait DepResolver: Send + Sync {
+pub(crate) trait DepResolver: Send + Sync {
     /// Validate that the source and target configurations are usable.
     /// Called once before resolution begins. Return an error message
     /// if the configuration is invalid (e.g. bad fedrq branch/repo).
@@ -674,7 +674,7 @@ fn prefetch_resolutions(
 /// Attribute a batched `-P` answer back to the dependencies asked
 /// for: fedrq returns the union of providers, and which one answers
 /// which dependency is recoverable by name from their Provides.
-fn attribute_providers(
+pub(crate) fn attribute_providers(
     deps: &[String],
     providers: &[sandogasa_fedrq::PkgInfo],
 ) -> BTreeMap<String, Vec<String>> {
@@ -1979,6 +1979,126 @@ packages = ["a"]
             deps: &[String],
         ) -> Result<BTreeMap<String, Vec<String>>, String> {
             Self::attribute(self.0.resolve_target_many(deps))
+        }
+    }
+
+    /// The resolver, asked against package universes rather than a
+    /// table of expected answers. See `testrepo` for why.
+    mod against_a_repo {
+        use super::*;
+        use crate::testrepo::{Pkg, Repo, RepoResolver};
+
+        #[test]
+        fn a_crate_range_finds_the_package_that_answers_it() {
+            // Issue #15: every Rust crate dependency is a range, and
+            // the whole expression was being read as one capability
+            // name, parenthesis and all, so no provider ever matched.
+            let dep = "(crate(cairo-rs/png) >= 0.22.0 with crate(cairo-rs/png) < 0.23.0~)";
+            let source = Repo::new()
+                .source("rust-tiny-dfr", &[dep])
+                .source("rust-cairo-rs", &[])
+                .with(
+                    Pkg::new("rust-cairo-rs+png-devel", "rust-cairo-rs", "0.22.9-1.fc46")
+                        .provides("crate(cairo-rs/png)", Some("0.22.9")),
+                );
+            let resolver = RepoResolver::new(source, Repo::new());
+
+            let closure = resolve_closure(
+                &resolver,
+                &["rust-tiny-dfr".to_string()],
+                "rawhide",
+                "epel10",
+            )
+            .unwrap();
+            assert!(closure.closure.contains_key("rust-cairo-rs"), "{closure:?}");
+        }
+
+        #[test]
+        fn a_provider_answers_only_the_range_it_fits() {
+            // Issue #16: both ranges go out in one query, the answer is
+            // their union, and matching by name alone handed the 0.7
+            // provider to the 0.6 dependency.
+            let old = "(crate(tokio-util) >= 0.6.0 with crate(tokio-util) < 0.7.0~)";
+            let new = "(crate(tokio-util) >= 0.7.0 with crate(tokio-util) < 0.8.0~)";
+            let source = Repo::new()
+                .source("rust-input-linux", &[])
+                .source("rust-tokio-util0.6", &[])
+                .with(
+                    Pkg::new(
+                        "rust-input-linux+tokio-util-0_6-devel",
+                        "rust-input-linux",
+                        "0.7.1-5",
+                    )
+                    .requires(&[old]),
+                )
+                .with(
+                    Pkg::new(
+                        "rust-input-linux+tokio-util-0_7-devel",
+                        "rust-input-linux",
+                        "0.7.1-5",
+                    )
+                    .requires(&[new]),
+                )
+                .with(
+                    Pkg::new(
+                        "rust-tokio-util0.6-devel",
+                        "rust-tokio-util0.6",
+                        "0.6.10-12",
+                    )
+                    .provides("crate(tokio-util)", Some("0.6.10")),
+                );
+            // The target has only the newer one, as the side tag did.
+            let target = Repo::new().with(
+                Pkg::new("rust-tokio-util-devel", "rust-tokio-util", "0.7.19-1")
+                    .provides("crate(tokio-util)", Some("0.7.19")),
+            );
+            let resolver = RepoResolver::new(source, target);
+
+            let closure = resolve_closure(
+                &resolver,
+                &["rust-input-linux".to_string()],
+                "rawhide",
+                "epel10",
+            )
+            .unwrap();
+            let report = check_installability(
+                &resolver,
+                &closure,
+                &ResolveOptions::default(),
+                &BTreeSet::new(),
+            );
+            // The 0.6 requirement is unmet and names the compat package;
+            // the 0.7 one is answered by the target and says nothing.
+            assert!(
+                report.additional_packages.contains("rust-tokio-util0.6"),
+                "{report:?}"
+            );
+        }
+
+        #[test]
+        fn a_file_dependency_is_answered_although_no_provides_names_it() {
+            // Issue #21: a repository answers a path from its file
+            // list, and a package's Provides never mention it, so the
+            // batched answer cannot be attributed to the path.
+            let source = Repo::new()
+                .source("widget", &[])
+                .with(Pkg::new("widget", "widget", "1-1.fc46").requires(&["/usr/bin/pkg-config"]));
+            let target = Repo::new().with(
+                Pkg::new("pkgconf-pkg-config", "pkgconf", "0.29.1-3.el10")
+                    .provides("pkg-config", Some("0.29.1-3"))
+                    .files(&["/usr/bin/pkg-config"]),
+            );
+            let resolver = RepoResolver::new(source, target);
+
+            let closure =
+                resolve_closure(&resolver, &["widget".to_string()], "rawhide", "c10s").unwrap();
+            let report = check_installability(
+                &resolver,
+                &closure,
+                &ResolveOptions::default(),
+                &BTreeSet::new(),
+            );
+            assert!(report.issues.is_empty(), "{:?}", report.issues);
         }
     }
 
