@@ -1021,7 +1021,7 @@ family, records what it finds under `[branch_requests]`, and asks first
 when a terminal is there to answer. An adopted request is escalated like
 any other, counting from the day it was filed.
 
-Before filing, both `file-request` and `file-requests` run two
+Before filing, both `file-request` and `file-requests` run three
 pre-flights. A source pre-flight skips packages that are not in the
 source branch (rawhide for a check-crate report): there is nothing to
 branch from, and a package new to Fedora needs a package review first
@@ -1030,8 +1030,10 @@ that exist as source packages in the base distro behind the branch
 (epel10 → c10s, epel9 → al9; override with `--base-branch`) — a branch
 request for a base-distro package is always CANTFIX — and report
 packages marked as overrides (an alternate package needs a **new
-package review**, not a branch request). The pre-flights re-check the
-repos themselves, so stale or pre-guard reports can't slip one through.
+package review**, not a branch request). A target pre-flight skips
+packages already branched: an older version there is an update, not a
+branch. The pre-flights re-check the repos themselves, so stale or
+pre-guard reports can't slip one through.
 
 Escalate requests that have sat in NEW for at least a week —
 adds a `needinfo?` ping and marks them so they're not pinged

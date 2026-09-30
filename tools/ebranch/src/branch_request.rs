@@ -275,6 +275,8 @@ fn partition_filable(
     base_present: &BTreeMap<String, String>,
     base_label: &str,
     source_present: &BTreeMap<String, String>,
+    target_present: &BTreeMap<String, String>,
+    target_label: &str,
 ) -> (Vec<String>, Vec<String>) {
     let mut to_file = Vec::new();
     let mut skipped = Vec::new();
@@ -296,6 +298,12 @@ fn partition_filable(
                 "skipping {pkg}: present in base distro {base_label} \
                  ({vr}) — EPEL must not replace it (a branch request \
                  would be CANTFIX)"
+            ));
+        } else if let Some(vr) = target_present.get(&pkg) {
+            skipped.push(format!(
+                "skipping {pkg}: already branched to {target_label} \
+                 ({vr}) — nothing to request; an older version there is \
+                 an update, not a branch"
             ));
         } else {
             to_file.push(pkg);
@@ -477,12 +485,19 @@ pub async fn file_batch(
         }
     };
     let base_label = opts.base_branch.as_deref().unwrap_or("base");
+    // Target pre-flight: a package already branched needs no request,
+    // however old the version there is. It reaches this point when the
+    // closure wanted a capability that branch's older build does not
+    // provide -- a soname from the source branch's build, say.
+    let target_present = src_probe(&opts.branch, &candidates)?;
     let (to_file, skipped) = partition_filable(
         report,
         candidates,
         &base_present,
         base_label,
         &source_present,
+        &target_present,
+        &opts.branch,
     );
     for msg in &skipped {
         eprintln!("{msg}");
@@ -878,8 +893,15 @@ mod tests {
 
         let mut candidates = report.packages.clone();
         candidates.push("rust-nowhere".to_string());
-        let (to_file, skipped) =
-            partition_filable(&report, candidates, &base_present, "c10s", &source_present);
+        let (to_file, skipped) = partition_filable(
+            &report,
+            candidates,
+            &base_present,
+            "c10s",
+            &source_present,
+            &BTreeMap::new(),
+            "epel10",
+        );
         assert_eq!(to_file, vec!["rust-newthing".to_string()]);
         assert_eq!(skipped.len(), 3);
         assert!(skipped.iter().any(|m| m.contains("rust-nowhere")
@@ -892,6 +914,47 @@ mod tests {
             skipped
                 .iter()
                 .any(|m| m.contains("rust-alt") && m.contains("package review"))
+        );
+    }
+
+    #[test]
+    fn partition_filable_skips_a_package_already_branched() {
+        // Regression (issue #25): abseil-cpp has been in EPEL 10 for
+        // months, but it is neither in the base distro nor missing from
+        // the source, so nothing stopped a request being filed for it.
+        let report = ResolveReport {
+            source_branch: "rawhide".into(),
+            target_branch: "epel10".into(),
+            packages: vec!["abseil-cpp".into(), "cxxopts".into()],
+            edges: BTreeMap::new(),
+            branch_requests: BTreeMap::new(),
+            blocked_by_base: BTreeMap::new(),
+            overrides: BTreeSet::new(),
+        };
+        let source_present: BTreeMap<String, String> = report
+            .packages
+            .iter()
+            .map(|p| (p.clone(), "1-1.fc46".to_string()))
+            .collect();
+        let target_present =
+            BTreeMap::from([("abseil-cpp".to_string(), "20240722.2-1.el10_3".to_string())]);
+        let (to_file, skipped) = partition_filable(
+            &report,
+            report.packages.clone(),
+            &BTreeMap::new(),
+            "c10s",
+            &source_present,
+            &target_present,
+            "epel10",
+        );
+        assert_eq!(to_file, vec!["cxxopts".to_string()]);
+        assert_eq!(skipped.len(), 1);
+        assert!(
+            skipped[0].contains("abseil-cpp")
+                && skipped[0].contains("already branched to epel10")
+                && skipped[0].contains("20240722.2-1.el10_3"),
+            "{}",
+            skipped[0]
         );
     }
 

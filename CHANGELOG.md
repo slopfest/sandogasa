@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ebranch: a package already branched is not requested again
+
+Resolving `et` for EPEL 10 offered to file a branch request for
+abseil-cpp, which has been in EPEL 10 since last year as
+`abseil-cpp-20240722.2-1.el10_3`. It is not in the base distro and it is
+in rawhide, so neither existing pre-flight had anything to say, and
+nothing looked at the branch the request would have been filed for.
+
+`file-requests` now runs a third pre-flight against the target branch
+and skips what is already there, naming the version so the reader can
+judge: an older build on the target is an update, not a branch.
+
+What made abseil-cpp look missing at all is a separate fault, filed as
+issue #23. Its requirement came from a soname rawhide's binaries were
+built against, which the target's older build does not provide and a
+rebuild there would never ask for.
+
+Fixes #25.
+
 ### ebranch: a dependency the target cannot condition on asks for nothing
 
 Resolving `et` for EPEL 10 proposed branching `openssl3`, Fedora's
