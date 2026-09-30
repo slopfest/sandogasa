@@ -268,6 +268,20 @@ impl PkgInfo {
         }
     }
 
+    /// The version this package states for `capability`, which is the
+    /// capability's own and not the package's: freetype-devel 2.13.2
+    /// provides `pkgconfig(freetype2) = 26.1.20`, and a constraint
+    /// written against the capability has to be measured against that.
+    ///
+    /// `None` when the package does not state the capability, or
+    /// states it without a version.
+    pub fn capability_version(&self, capability: &str) -> Option<&str> {
+        self.provides.iter().find_map(|pr| {
+            let (name, version) = provide_parts(pr);
+            (name == capability).then_some(version).flatten()
+        })
+    }
+
     /// Build a package record from parts — for callers that
     /// reconstruct packages from stored data rather than a fedrq
     /// answer (the struct is `#[non_exhaustive]`, so a literal
@@ -1049,5 +1063,36 @@ mod tests {
         assert_eq!(dep_condition("(a unless b)"), None);
         assert_eq!(dep_condition("foo >= 1"), None);
         assert_eq!(dep_condition("(a and b)"), None);
+    }
+
+    #[test]
+    fn a_capability_states_its_own_version() {
+        // Reported against ebranch as issue #28: freetype numbers its
+        // pkgconfig capability on the library interface.
+        let pkg = PkgInfo::new(
+            "freetype-devel",
+            vec![],
+            vec![
+                "freetype-devel = 2.13.2-8.el10".to_string(),
+                "pkgconfig(freetype2) = 26.1.20".to_string(),
+                "pkgconfig(freetype2)(aarch-64)".to_string(),
+            ],
+            Some("freetype".to_string()),
+            "c10s",
+        );
+        assert_eq!(
+            pkg.capability_version("pkgconfig(freetype2)"),
+            Some("26.1.20")
+        );
+        assert_eq!(
+            pkg.capability_version("freetype-devel"),
+            Some("2.13.2-8.el10")
+        );
+        // Stated without a version, and not stated at all.
+        assert_eq!(
+            pkg.capability_version("pkgconfig(freetype2)(aarch-64)"),
+            None
+        );
+        assert_eq!(pkg.capability_version("pkgconfig(cairo)"), None);
     }
 }

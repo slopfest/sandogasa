@@ -201,6 +201,9 @@ pub(crate) trait DepResolver: Send + Sync {
     /// (RHEL / CentOS Stream / AlmaLinux). Only called when the
     /// base-distro guard is active; the default (no base configured)
     /// reports nothing in base.
+    /// The base-distro providers of a capability, each with the
+    /// version to measure a constraint against — the capability's own
+    /// where it states one, the package's otherwise.
     fn resolve_base_vr(&self, _dep: &str) -> Result<Vec<(String, String)>, String> {
         Ok(vec![])
     }
@@ -1559,7 +1562,17 @@ impl DepResolver for FedrqResolver {
                 let mut found: Vec<(String, String)> = providers
                     .iter()
                     .filter(|p| p.satisfies(cap))
-                    .filter_map(|p| Some((p.source_name.clone()?, p.vr()?)))
+                    .filter_map(|p| {
+                        // The capability's own version where it states
+                        // one: a constraint on pkgconfig(freetype2) is
+                        // written against 26.1.20, not against the
+                        // package's 2.13.2 (issue #28).
+                        let version = p
+                            .capability_version(cap)
+                            .map(str::to_string)
+                            .or_else(|| p.vr())?;
+                        Some((p.source_name.clone()?, version))
+                    })
                     .collect();
                 found.dedup();
                 (cap.clone(), found)
@@ -2072,6 +2085,46 @@ packages = ["a"]
             assert!(
                 report.additional_packages.contains("rust-tokio-util0.6"),
                 "{report:?}"
+            );
+        }
+
+        #[test]
+        fn a_capability_is_judged_by_its_own_version() {
+            // Issue #28: freetype numbers its pkgconfig capability on
+            // the library interface, 26.1.20, while the package is
+            // 2.13.2. Comparing the constraint against the package
+            // declared cairo blocked by a base distro that satisfies
+            // it comfortably.
+            let dep = "pkgconfig(freetype2) >= 9.7.3";
+            let source = Repo::new()
+                .source("cairo", &[dep])
+                .source("freetype", &[])
+                .with(
+                    Pkg::new("freetype-devel", "freetype", "2.14.1-1.fc46")
+                        .provides("pkgconfig(freetype2)", Some("27.1.20")),
+                );
+            let base = Repo::new().with(
+                Pkg::new("freetype-devel", "freetype", "2.13.2-8.el10")
+                    .provides("pkgconfig(freetype2)", Some("26.1.20")),
+            );
+            let resolver = RepoResolver::new(source, Repo::new()).with_base(base);
+
+            let closure = resolve_closure_with_options(
+                &resolver,
+                &["cairo".to_string()],
+                "rawhide",
+                "epel10",
+                &guard_opts(&[]),
+            )
+            .unwrap();
+            assert!(
+                closure.blocked_by_base.is_empty(),
+                "the base satisfies it: {:?}",
+                closure.blocked_by_base
+            );
+            assert!(
+                !closure.closure.contains_key("freetype"),
+                "nothing to branch: {closure:?}"
             );
         }
 

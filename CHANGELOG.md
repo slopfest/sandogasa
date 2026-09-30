@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### ebranch: a capability's constraint is measured against the capability
+
+Resolving `rust-startup-disk` for EPEL 10 reported freetype as blocked
+by the base distro — "needs pkgconfig(freetype2) >= 9.7.3 (cairo); c10s
+has 2.13.2-8.el10" — which reads oddly because the two numbers describe
+different things. FreeType numbers its pkgconfig capability on the
+library interface, and CentOS Stream 10's freetype-devel 2.13.2 provides
+`pkgconfig(freetype2) = 26.1.20`, comfortably past what cairo asks for.
+The guard was comparing the constraint against the package's version
+instead, so a satisfied dependency looked like a wall. That closure now
+reports nothing blocked.
+
+Both directions were wrong: a package could be declared blocked where
+the base satisfies it, and a base that does not satisfy a constraint
+could pass where its package version happened to be higher than the
+capability's. `sandogasa_fedrq::PkgInfo::capability_version` reads the
+version a provider states for the capability asked about, and the
+base-distro probe reports that, falling back to the package's version
+for a dependency on a package name.
+
+Fixes #28.
+
 ### ebranch: a request closed as a duplicate is followed to the live one
 
 A report can record a branch request that was later closed as a

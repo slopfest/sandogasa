@@ -265,10 +265,21 @@ impl DepResolver for RepoResolver {
         let Some(base) = &self.base else {
             return Ok(vec![]);
         };
+        // The capability's own version where it states one, as a real
+        // query reports it (issue #28).
+        let capability = dep.split_whitespace().next().unwrap_or(dep);
         Ok(base
             .providers(dep)
             .into_iter()
-            .map(|p| (p.source.clone(), p.vr.clone()))
+            .map(|p| {
+                let version = p
+                    .provides
+                    .iter()
+                    .find(|(cap, _)| cap == capability)
+                    .and_then(|(_, v)| v.clone())
+                    .unwrap_or_else(|| p.vr.clone());
+                (p.source.clone(), version)
+            })
             .collect())
     }
 
