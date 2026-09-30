@@ -256,7 +256,7 @@ async fn open_bugs_for_components(
 
 /// Percent-encode a query value. Package names are conservative, but
 /// a `+` in one would otherwise be read as a space.
-fn urlencode(value: &str) -> String {
+pub(crate) fn urlencode(value: &str) -> String {
     value
         .bytes()
         .map(|b| match b {

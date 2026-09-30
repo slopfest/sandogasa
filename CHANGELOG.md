@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### ebranch: an existing branch request is adopted, not filed again
+
+`file-requests` knew only the requests its own report recorded, so a
+request filed by hand, from another report, or by another maintainer
+was invisible and would have been opened a second time. Both packages
+in front of us had one: rhbz#2368920 for `et` and rhbz#2367248 for
+`rust-tiny-dfr`, opened by hand in May, months before the tool saw
+either package.
+
+It now searches Bugzilla for open requests against the packages it is
+about to file for, matches them by summary and release family — a
+request naming `epel10` answers a report targeting `epel10.4` — and
+records what it finds under `[branch_requests]`, so the rest of the run
+treats it as the request for that package. Adoption asks first when
+there is a terminal to ask on, because the bug belongs to whoever filed
+it and `escalate` dates a request from the day it was filed, which
+makes an old one escalatable at once.
+
+Fixes #22.
+
 ### ebranch: a file dependency is no longer reported as unresolvable
 
 Checking `et` for EPEL 10 reported nine installability problems, among

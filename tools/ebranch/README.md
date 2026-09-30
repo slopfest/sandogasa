@@ -1013,6 +1013,14 @@ Bug IDs and a `pinged` flag are stored in the report under
 `[branch_requests]`, whichever kind it is, so re-runs skip
 already-filed packages.
 
+A package that already has an open branch request — filed by hand, from
+another report, or by another maintainer — is adopted rather than filed
+again. `file-requests` searches Bugzilla for open requests against the
+packages it is about to file for, matching them by summary and release
+family, records what it finds under `[branch_requests]`, and asks first
+when a terminal is there to answer. An adopted request is escalated like
+any other, counting from the day it was filed.
+
 Before filing, both `file-request` and `file-requests` run two
 pre-flights. A source pre-flight skips packages that are not in the
 source branch (rawhide for a check-crate report): there is nothing to

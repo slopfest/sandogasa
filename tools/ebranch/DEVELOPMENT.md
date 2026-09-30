@@ -73,3 +73,25 @@ inside the same list, with the `"@default"` entry standing for it —
 TOML has no `+=`. So: keep the built-in list to crates Fedora never
 packages as dependencies, and never add a second, merged list on top
 of it.
+
+## A branch request is matched by its summary, not by who filed it
+
+`file-requests` adopts an open request it did not file. The match is
+`Please branch and build <package> in <branch>` parsed out of the
+summary, with the release compared by family so a request naming
+`epel10` answers a report targeting `epel10.4`, and with the package
+required to be the component the bug was filed against — a request
+mentioned in another package's bug is not that package's request.
+
+Two rules follow for anything built on this:
+
+- **Never key adoption on the filer, the creator, or a marker this tool
+  writes.** The requests worth adopting are exactly the ones nobody here
+  filed: rhbz#2368920 for `et` and rhbz#2367248 for `rust-tiny-dfr` were
+  both opened by hand, months before the tool saw those packages.
+- **An adopted request is somebody else's bug.** Its `depends_on` may
+  already carry links a human added, so `link_requests` adds to that
+  graph (`{"depends_on": {"add": …}}`) and never sets it. `escalate`
+  dates a request from `bug.creation_time`, so adopting an old request
+  makes it immediately escalatable; that is correct, and it is why
+  adoption asks before it happens when a terminal is there to ask.

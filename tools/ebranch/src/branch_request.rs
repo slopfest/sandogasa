@@ -18,6 +18,7 @@
 //!   a week.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::IsTerminal;
 
 use sandogasa_bugzilla::BzClient;
 
@@ -303,6 +304,106 @@ fn partition_filable(
     (to_file, skipped)
 }
 
+/// The packages still to file for: those with no request recorded and
+/// none adopted in this run.
+///
+/// A dry run adopts nothing for real, so without the second condition
+/// the preview offers to file for a package it has just said it would
+/// adopt.
+fn still_to_file(
+    candidates: Vec<String>,
+    report: &ResolveReport,
+    adopted: &BTreeSet<String>,
+) -> Vec<String> {
+    candidates
+        .into_iter()
+        .filter(|p| !report.branch_requests.contains_key(p) && !adopted.contains(p))
+        .collect()
+}
+
+/// Whether to adopt an existing request as this package's: a prompt
+/// when there is somebody to answer it, and yes otherwise.
+///
+/// Adopting is the productive answer — the alternative is a duplicate
+/// bug on a public tracker — but it is somebody else's bug, and
+/// `escalate` will ping it once it is old enough, counting from the
+/// day it was filed rather than the day it was adopted. So the prompt
+/// says that, and a run with nobody watching takes the default.
+fn adopt_request(pkg: &str, rhbz: u64) -> bool {
+    println!("{pkg} already has an open branch request: rhbz#{rhbz}");
+    if !std::io::stdin().is_terminal() {
+        println!("  adopting it; escalate may ping it once it is old enough");
+        return true;
+    }
+    sandogasa_cli::confirm(
+        &format!("  adopt rhbz#{rhbz} (escalate may then ping it)?"),
+        true,
+    )
+    .unwrap_or(true)
+}
+
+/// The branch requests already open for `packages`, whoever filed
+/// them, as package to bug id.
+///
+/// A request is matched by its summary rather than by who filed it, so
+/// one opened by hand counts: the wording is the one this module
+/// writes and the EPEL documentation suggests. The release is compared
+/// by family, since a request says `epel10` where a report may target
+/// `epel10.4`, and a bug is kept only when the package it names is the
+/// component it was filed against — a request mentioned in another
+/// package's bug is not that package's request.
+pub(crate) fn adoptable(
+    bugs: &[sandogasa_bugzilla::models::Bug],
+    branch: &str,
+) -> BTreeMap<String, u64> {
+    let family =
+        |b: &str| sandogasa_bugclass::bugzilla::product_version_for_branch(b).map(|(_, v)| v);
+    let wanted = family(branch);
+    let mut found: BTreeMap<String, u64> = BTreeMap::new();
+    for bug in bugs {
+        let Some((pkg, bug_branch)) =
+            sandogasa_bugclass::bugzilla::branch_request_parts(&bug.summary)
+        else {
+            continue;
+        };
+        if family(&bug_branch) != wanted || !bug.component.iter().any(|c| *c == pkg) {
+            continue;
+        }
+        // The oldest one is the request; a later duplicate is not.
+        found
+            .entry(pkg)
+            .and_modify(|id| *id = (*id).min(bug.id))
+            .or_insert(bug.id);
+    }
+    found
+}
+
+/// Ask Bugzilla for the open branch requests among `packages`.
+async fn search_existing(
+    bz: &BzClient,
+    packages: &[String],
+    branch: &str,
+) -> BTreeMap<String, u64> {
+    if packages.is_empty() {
+        return BTreeMap::new();
+    }
+    let mut query: Vec<String> = packages
+        .iter()
+        .map(|p| format!("component={}", crate::discover::urlencode(p)))
+        .collect();
+    query.push("bug_status=__open__".to_string());
+    match bz.search(&query.join("&"), 0).await {
+        Ok(bugs) => adoptable(&bugs, branch),
+        Err(e) => {
+            eprintln!(
+                "warning: could not search Bugzilla for existing branch requests ({e}); \
+                 a request filed outside this tool would be duplicated"
+            );
+            BTreeMap::new()
+        }
+    }
+}
+
 // ---- batch file-requests with linking ----
 
 /// File requests for every package in `report` that doesn't
@@ -332,6 +433,32 @@ pub async fn file_batch(
         .filter(|p| !report.branch_requests.contains_key(*p))
         .cloned()
         .collect();
+
+    // A request filed by hand, from another report, or by another
+    // maintainer is invisible to the report's own record. Adopt it
+    // rather than opening a second bug for the same package.
+    let mut changed = false;
+    let mut adopted: BTreeSet<String> = BTreeSet::new();
+    for (pkg, rhbz) in search_existing(&bz, &candidates, &opts.branch).await {
+        if opts.dry_run {
+            println!("would adopt existing request for {pkg}: rhbz#{rhbz}");
+            adopted.insert(pkg);
+            continue;
+        }
+        if !adopt_request(&pkg, rhbz) {
+            continue;
+        }
+        report.branch_requests.insert(
+            pkg.clone(),
+            BranchRequest {
+                rhbz,
+                pinged: false,
+            },
+        );
+        adopted.insert(pkg);
+        changed = true;
+    }
+    let candidates = still_to_file(candidates, report, &adopted);
 
     // Source pre-flight: a check-crate report lists crates nobody has
     // packaged yet beside ones that only want branching, and a resolve
@@ -380,7 +507,6 @@ pub async fn file_batch(
 
     let blocks = resolve_refs(&bz, blocked).await?;
 
-    let mut changed = false;
     for pkg in &to_file {
         let rhbz = file_one(
             &bz,
@@ -902,5 +1028,73 @@ mod tests {
             check_crate::load_report(crate_path).unwrap().crate_name,
             "tiny-dfr"
         );
+    }
+
+    #[test]
+    fn an_open_request_filed_elsewhere_is_adopted() {
+        // Regression (issue #22): file-requests only knew the requests
+        // the report recorded, so rhbz#2368920 -- "Please branch and
+        // build et in epel10", filed by hand in May -- would have been
+        // duplicated.
+        let bug = |id: u64, summary: &str, component: &str| {
+            serde_json::from_value::<sandogasa_bugzilla::models::Bug>(serde_json::json!({
+                "id": id,
+                "summary": summary,
+                "status": "NEW",
+                "resolution": "",
+                "product": "Fedora EPEL",
+                "component": [component],
+                "severity": "unspecified",
+                "priority": "unspecified",
+                "assigned_to": "someone",
+                "creator": "someone",
+                "creation_time": "2025-05-28T09:02:27Z",
+                "last_change_time": "2025-05-28T09:02:27Z",
+            }))
+            .expect("a bug as Bugzilla sends it")
+        };
+        let bugs = [
+            bug(2368920, "Please branch and build et in epel10", "et"),
+            // Another release's request is not this one.
+            bug(
+                2400000,
+                "Please branch and build cxxopts in epel9",
+                "cxxopts",
+            ),
+            // Not a request at all.
+            bug(2400001, "et-6.2.13 is available", "et"),
+            // Names a package it was not filed against.
+            bug(2400002, "Please branch and build gtest in epel10", "et"),
+        ];
+        // The report targets a minor of the release the request names.
+        let found = adoptable(&bugs, "epel10.4");
+        assert_eq!(found.get("et"), Some(&2368920));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(adoptable(&bugs, "epel9").contains_key("cxxopts"));
+    }
+
+    #[test]
+    fn the_oldest_open_request_wins() {
+        // Two people filed for the same package; the first is the
+        // request and the second is the duplicate.
+        let bug = |id: u64| {
+            serde_json::from_value::<sandogasa_bugzilla::models::Bug>(serde_json::json!({
+                "id": id,
+                "summary": "Please branch and build et in epel10",
+                "status": "NEW",
+                "resolution": "",
+                "product": "Fedora EPEL",
+                "component": ["et"],
+                "severity": "unspecified",
+                "priority": "unspecified",
+                "assigned_to": "someone",
+                "creator": "someone",
+                "creation_time": "2025-05-28T09:02:27Z",
+                "last_change_time": "2025-05-28T09:02:27Z",
+            }))
+            .expect("a bug as Bugzilla sends it")
+        };
+        let found = adoptable(&[bug(2400003), bug(2368920)], "epel10");
+        assert_eq!(found.get("et"), Some(&2368920));
     }
 }
