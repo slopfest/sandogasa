@@ -35,6 +35,9 @@ pub struct Bug {
     pub summary: String,
     pub status: String,
     pub resolution: String,
+    /// The bug this one was closed as a duplicate of, when it was.
+    #[serde(default)]
+    pub dupe_of: Option<u64>,
     pub product: String,
     /// Red Hat's Bugzilla lists a bug's components; a stock Bugzilla
     /// 5 (openSUSE's) names one. Both read as a list.

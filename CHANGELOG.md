@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### ebranch: a request closed as a duplicate is followed to the live one
+
+A report can record a branch request that was later closed as a
+duplicate, and nothing noticed. It happened here: a request for cxxopts
+was closed against the older one that was already being worked, leaving
+the report naming a dead bug. `escalate` read it as CLOSED and moved on,
+so the live request went unpinged, and linking would have pointed at the
+dead one.
+
+Both commands now follow the pointer Bugzilla provides, rewrite the
+record and say so, naming the bug before and after. `file-requests`
+refreshes everything a report holds in one query and looks up only the
+closed ones. Following stops after four hops or on a loop, and the
+`pinged` flag resets when a request moves, since a ping on the old bug
+was not a ping on the new one.
+
+Fixes #26.
+
 ### ebranch: a hand-written branch request is recognised as one
 
 A request for `et`'s dependency had been open since 10 September —

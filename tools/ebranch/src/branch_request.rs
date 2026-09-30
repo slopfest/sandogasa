@@ -360,6 +360,86 @@ fn still_to_file(
         .collect()
 }
 
+/// Bring a report's recorded requests up to date, replacing any that
+/// were closed as duplicates with the bug they point at.
+///
+/// One query for the lot, then a lookup only for the closed ones.
+async fn refresh_recorded(bz: &BzClient, report: &mut ResolveReport) -> Result<bool, String> {
+    let ids: Vec<u64> = report.branch_requests.values().map(|r| r.rhbz).collect();
+    if ids.is_empty() {
+        return Ok(false);
+    }
+    let superseded: BTreeMap<u64, sandogasa_bugzilla::models::Bug> = bz
+        .bugs(&ids)
+        .await
+        .map_err(|e| format!("could not read the recorded requests: {e}"))?
+        .into_iter()
+        .filter(|b| b.status == "CLOSED" && b.dupe_of.is_some())
+        .map(|b| (b.id, b))
+        .collect();
+    let mut changed = false;
+    for (pkg, req) in report.branch_requests.iter_mut() {
+        let Some(bug) = superseded.get(&req.rhbz) else {
+            continue;
+        };
+        let live = follow_duplicate(bz, pkg, bug.clone()).await?;
+        if live.id != req.rhbz {
+            req.rhbz = live.id;
+            req.pinged = false;
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
+/// How many duplicate pointers to follow before giving up: a
+/// duplicate can be closed as a duplicate of another, but a chain this
+/// long is a loop or a mess either way.
+const DUPE_HOPS: usize = 4;
+
+/// Follow a request closed as a duplicate to the bug it points at.
+///
+/// A recorded request can be superseded while nobody is looking: today
+/// rhbz#2543941 was closed as a duplicate of the older rhbz#2531397,
+/// leaving a report naming a dead bug that `escalate` reads as CLOSED
+/// and skips, so the live request goes unpinged.
+///
+/// Returns the bug to act on, which is the one passed in when it is not
+/// a duplicate. The `pinged` flag belongs to the bug it was set on, so
+/// a caller that follows a pointer clears it.
+async fn follow_duplicate(
+    bz: &BzClient,
+    pkg: &str,
+    bug: sandogasa_bugzilla::models::Bug,
+) -> Result<sandogasa_bugzilla::models::Bug, String> {
+    let mut bug = bug;
+    let mut seen = vec![bug.id];
+    for _ in 0..DUPE_HOPS {
+        let Some(next) = bug.dupe_of.filter(|_| bug.status == "CLOSED") else {
+            return Ok(bug);
+        };
+        if seen.contains(&next) {
+            eprintln!("warning: {pkg}: rhbz#{next} is part of a duplicate loop; leaving it alone");
+            return Ok(bug);
+        }
+        println!(
+            "{pkg}: rhbz#{} was closed as a duplicate of rhbz#{next}",
+            bug.id
+        );
+        seen.push(next);
+        bug = bz
+            .bug(next)
+            .await
+            .map_err(|e| format!("failed to fetch rhbz#{next} for {pkg}: {e}"))?;
+    }
+    eprintln!(
+        "warning: {pkg}: followed {DUPE_HOPS} duplicate pointers and there are more; \
+         stopping at rhbz#{}",
+        bug.id
+    );
+    Ok(bug)
+}
+
 /// Whether to adopt an existing request as this package's: a prompt
 /// when there is somebody to answer it, and yes otherwise.
 ///
@@ -483,10 +563,14 @@ pub async fn file_batch(
         .cloned()
         .collect();
 
+    // A recorded request can have been closed as a duplicate since the
+    // report was written, which would leave linking and escalation
+    // pointing at a dead bug.
+    let mut changed = refresh_recorded(&bz, report).await?;
+
     // A request filed by hand, from another report, or by another
     // maintainer is invisible to the report's own record. Adopt it
     // rather than opening a second bug for the same package.
-    let mut changed = false;
     let mut adopted: BTreeSet<String> = BTreeSet::new();
     for (pkg, rhbz) in search_existing(&bz, &candidates, &opts.branch).await {
         if opts.dry_run {
@@ -671,6 +755,14 @@ pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool
             .bug(req.rhbz)
             .await
             .map_err(|e| format!("failed to fetch rhbz#{} for {pkg}: {e}", req.rhbz))?;
+        let bug = follow_duplicate(&bz, pkg, bug).await?;
+        if bug.id != req.rhbz {
+            // The request moved, so what we know about the old bug does
+            // not carry over: a ping on it was not a ping on this one.
+            req.rhbz = bug.id;
+            req.pinged = false;
+            changed = true;
+        }
         let days = (now - bug.creation_time).num_days();
         match ping_decision(&bug.status, days, req.pinged) {
             PingDecision::AlreadyPinged => {
@@ -1210,5 +1302,81 @@ mod tests {
         };
         let found = adoptable(&[bug(2400003), bug(2368920)], "epel10");
         assert_eq!(found.get("et"), Some(&2368920));
+    }
+
+    /// A bug as Bugzilla's REST API returns it, with only the fields
+    /// this module reads set to anything interesting.
+    fn bug_json(id: u64, status: &str, dupe_of: Option<u64>) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "summary": "Please branch and build cxxopts in epel10",
+            "status": status,
+            "resolution": if dupe_of.is_some() { "DUPLICATE" } else { "" },
+            "dupe_of": dupe_of,
+            "product": "Fedora EPEL",
+            "component": ["cxxopts"],
+            "severity": "unspecified",
+            "priority": "unspecified",
+            "assigned_to": "someone",
+            "creator": "someone",
+            "creation_time": "2026-09-10T10:56:39Z",
+            "last_change_time": "2026-09-30T14:25:03Z",
+        })
+    }
+
+    #[tokio::test]
+    async fn a_request_closed_as_a_duplicate_is_followed() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // rhbz#2543941 was closed today as a duplicate of the older
+        // rhbz#2531397, which is the one still being worked (issue #26).
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/2543941"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(2543941, "CLOSED", Some(2531397))]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/2531397"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(2531397, "ON_QA", None)]
+            })))
+            .mount(&server)
+            .await;
+
+        let bz = BzClient::new(&server.uri());
+        let start = bz.bug(2543941).await.expect("the recorded bug");
+        let live = follow_duplicate(&bz, "cxxopts", start)
+            .await
+            .expect("the bug it points at");
+        assert_eq!(live.id, 2531397);
+        assert_eq!(live.status, "ON_QA");
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_loop_stops_rather_than_spinning() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        for (id, dupe) in [(1u64, 2u64), (2, 1)] {
+            Mock::given(method("GET"))
+                .and(path(format!("/rest/bug/{id}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "bugs": [bug_json(id, "CLOSED", Some(dupe))]
+                })))
+                .mount(&server)
+                .await;
+        }
+
+        let bz = BzClient::new(&server.uri());
+        let start = bz.bug(1).await.expect("the recorded bug");
+        let stopped = follow_duplicate(&bz, "loopy", start)
+            .await
+            .expect("a loop is not an error");
+        assert_eq!(stopped.id, 2, "stops on the bug it has already seen");
     }
 }
