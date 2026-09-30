@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### ebranch: a file dependency is no longer reported as unresolvable
+
+Checking `et` for EPEL 10 reported nine installability problems, among
+them `/usr/bin/bash`, `/usr/bin/sh`, `/usr/bin/perl` and six copies of
+`/usr/bin/pkg-config` — all present on the target, and all resolved by
+fedrq when asked for them one at a time. The same check now reports
+nothing, which is the truth.
+
+This is the third place the batched resolution lost an answer fedrq had
+given, after boolean dependencies and version ranges. A level is asked
+in one query and each provider is attributed back to the dependency
+that wanted it by capability name, but a package's Provides carry its
+capabilities, not its file paths: the provider of `/usr/bin/pkg-config`
+states `pkg-config = 0.29.1-3` and nothing resembling a path, so no
+match was possible and the dependency was recorded as provided by
+nothing anywhere. A path cannot be attributed from the metadata a batch
+asks for, so file dependencies are now resolved on their own, cached as
+before, at one query per distinct path.
+
+Fixes #21.
+
 ### fedora-cve-triage: a Go package that compiles a binary keeps its CVE
 
 The false-positive sweep offered to close CVE-2025-58189, a flaw in Go's

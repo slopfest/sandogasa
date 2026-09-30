@@ -576,13 +576,31 @@ fn record_blocked(
 /// to the source), so the per-package pass that follows never has to
 /// resolve a capability on its own. A failed batch leaves the caches
 /// untouched and the per-package pass falls back to single lookups.
+/// Whether a dependency has to be resolved on its own rather than in
+/// a batch.
+///
+/// A batched answer is attributed back to the dependency that asked by
+/// capability name, and a package's Provides carry its capabilities,
+/// not its file paths — `/usr/bin/pkg-config` matches nothing
+/// `pkgconf-pkg-config` states, though fedrq resolves it perfectly
+/// well when asked for it alone. So a file dependency goes one at a
+/// time, where the answer needs no attribution.
+fn needs_single_query(dep: &str) -> bool {
+    sandogasa_fedrq::dep_names(dep)
+        .iter()
+        .any(|name| name.starts_with('/'))
+}
+
 fn prefetch_resolutions(
     resolver: &dyn DepResolver,
     cache: &ResolveCache,
     guard_active: bool,
     deps: impl IntoIterator<Item = String>,
 ) {
-    let wanted: BTreeSet<String> = deps.into_iter().collect();
+    let wanted: BTreeSet<String> = deps
+        .into_iter()
+        .filter(|d| !needs_single_query(d))
+        .collect();
     let first_real = |v: Option<&Vec<String>>| -> Option<String> {
         v.and_then(|v| v.iter().find(|s| *s != "(none)").cloned())
     };
@@ -1887,6 +1905,91 @@ packages = ["a"]
         fn resolve_base_vr(&self, dep: &str) -> Result<Vec<(String, String)>, String> {
             Ok(self.base_resolve.get(dep).cloned().unwrap_or_default())
         }
+    }
+
+    /// A resolver that loses a file dependency in a batch, as the real
+    /// one does: fedrq answers, but the answer is attributed back by
+    /// capability name and a package's Provides carry no file paths.
+    /// Single lookups answer for the one dependency asked, so they are
+    /// unaffected.
+    struct AttributedBatch(MockResolver);
+
+    impl AttributedBatch {
+        fn attribute(
+            answered: Result<BTreeMap<String, Vec<String>>, String>,
+        ) -> Result<BTreeMap<String, Vec<String>>, String> {
+            Ok(answered?
+                .into_iter()
+                .map(|(dep, providers)| {
+                    let providers = if dep.starts_with('/') {
+                        vec![]
+                    } else {
+                        providers
+                    };
+                    (dep, providers)
+                })
+                .collect())
+        }
+    }
+
+    impl DepResolver for AttributedBatch {
+        fn buildrequires(&self, srpm: &str) -> Result<Vec<String>, String> {
+            self.0.buildrequires(srpm)
+        }
+        fn resolve_source(&self, dep: &str) -> Result<Vec<String>, String> {
+            self.0.resolve_source(dep)
+        }
+        fn resolve_target(&self, dep: &str) -> Result<Vec<String>, String> {
+            self.0.resolve_target(dep)
+        }
+        fn src_exists(&self, srpm: &str) -> Result<bool, String> {
+            self.0.src_exists(srpm)
+        }
+        fn subpkg_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
+            self.0.subpkg_requires(srpm)
+        }
+        fn resolve_source_many(
+            &self,
+            deps: &[String],
+        ) -> Result<BTreeMap<String, Vec<String>>, String> {
+            Self::attribute(self.0.resolve_source_many(deps))
+        }
+        fn resolve_target_many(
+            &self,
+            deps: &[String],
+        ) -> Result<BTreeMap<String, Vec<String>>, String> {
+            Self::attribute(self.0.resolve_target_many(deps))
+        }
+    }
+
+    #[test]
+    fn a_file_dependency_is_resolved_outside_the_batch() {
+        // Regression (issue #21): /usr/bin/pkg-config, /usr/bin/bash and
+        // friends were reported unresolvable although the target has
+        // them -- a batched answer cannot be attributed to a path.
+        assert!(needs_single_query("/usr/bin/pkg-config"));
+        assert!(needs_single_query("(/usr/bin/sh if bash)"));
+        assert!(!needs_single_query("pkgconfig(openssl) >= 3"));
+
+        let mut inner = MockResolver::new();
+        inner.add_buildrequires("mypkg", &[]);
+        inner.add_subpkg_requires("mypkg", &["/usr/bin/pkg-config"]);
+        inner.add_target_resolve("/usr/bin/pkg-config", "pkgconf");
+        let resolver = AttributedBatch(inner);
+
+        let closure =
+            resolve_closure(&resolver, &["mypkg".to_string()], "rawhide", "c10s").unwrap();
+        let report = check_installability(
+            &resolver,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
+        assert!(
+            report.issues.is_empty(),
+            "the target provides it: {:?}",
+            report.issues
+        );
     }
 
     /// A resolver whose single-item lookups panic: the walks must reach
