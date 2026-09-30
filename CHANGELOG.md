@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### ebranch: a dependency the target cannot condition on asks for nothing
+
+Resolving `et` for EPEL 10 proposed branching `openssl3`, Fedora's
+OpenSSL 3.x compat package, into a target whose base distro already
+ships that same version as `openssl`. The requirement came from
+openssl's own subpackages — `(openssl3-libs if openssl3-libs)` — which
+applies only where `openssl3-libs` is installed, and the target has
+none. Such a dependency is now left alone rather than chased, and the
+closure for that package drops from fourteen entries to thirteen.
+
+Only a plain `if` counts: `(A if B else C)` requires one of the two
+either way, and `(A unless B)` requires A precisely where B is absent.
+
 ### ebranch: an existing branch request is adopted, not filed again
 
 `file-requests` knew only the requests its own report recorded, so a

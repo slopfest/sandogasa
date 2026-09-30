@@ -576,6 +576,22 @@ fn record_blocked(
 /// to the source), so the per-package pass that follows never has to
 /// resolve a capability on its own. A failed batch leaves the caches
 /// untouched and the per-package pass falls back to single lookups.
+/// Whether a dependency asks for nothing on the target because the
+/// capability it is conditioned on is not there.
+///
+/// `(openssl3-libs if openssl3-libs)`, which openssl's own subpackages
+/// carry, is a requirement only where openssl3-libs is installed. A
+/// target without it is asked for nothing, so chasing the first
+/// operand puts a package in the closure that nobody needs — Fedora's
+/// openssl3 compat package, proposed for branching beside a base
+/// distro already shipping that version as openssl.
+fn condition_unmet_on_target(resolver: &dyn DepResolver, cache: &ResolveCache, dep: &str) -> bool {
+    match sandogasa_fedrq::dep_condition(dep) {
+        Some(cond) => cached_first(&cache.target, cond, |d| resolver.resolve_target(d)).is_none(),
+        None => false,
+    }
+}
+
 /// Whether a dependency has to be resolved on its own rather than in
 /// a batch.
 ///
@@ -864,6 +880,9 @@ impl sandogasa_closure::engine::Policy for ClosurePolicy<'_> {
                 if target_resolved.is_some() {
                     continue;
                 }
+                if condition_unmet_on_target(resolver, cache, dep_str) {
+                    continue;
+                }
                 let source_resolved =
                     cached_first(&cache.source, dep_str, |d| resolver.resolve_source(d));
                 let Some(provider) = source_resolved else {
@@ -1125,7 +1144,8 @@ fn check_installability_with_cache(
                 let target_resolved =
                     cached_first(&cache.target, dep_str, |d| resolver.resolve_target(d));
 
-                if target_resolved.is_some() {
+                if target_resolved.is_some() || condition_unmet_on_target(resolver, cache, dep_str)
+                {
                     continue;
                 }
 
@@ -1963,6 +1983,44 @@ packages = ["a"]
     }
 
     #[test]
+    fn a_condition_the_target_cannot_meet_asks_for_nothing() {
+        // openssl's subpackages carry (openssl3-libs if openssl3-libs).
+        // Chasing the first operand branched Fedora's openssl3 compat
+        // package into a target whose base distro already ships that
+        // version as openssl.
+        let dep = "(openssl3-libs if openssl3-libs)";
+        let mut inner = MockResolver::new();
+        inner.add_buildrequires("mypkg", &[]);
+        inner.add_subpkg_requires("mypkg", &[dep]);
+        inner.add_source_resolve(dep, "openssl3");
+
+        let closure = resolve_closure(&inner, &["mypkg".to_string()], "rawhide", "c10s").unwrap();
+        let report = check_installability(
+            &inner,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
+        assert!(report.issues.is_empty(), "{:?}", report.issues);
+        assert!(
+            report.additional_packages.is_empty(),
+            "{:?}",
+            report.additional_packages
+        );
+
+        // Where the target does have the condition, it is a real
+        // requirement again.
+        inner.add_target_resolve("openssl3-libs", "openssl3-compat");
+        let report = check_installability(
+            &inner,
+            &closure,
+            &ResolveOptions::default(),
+            &BTreeSet::new(),
+        );
+        assert!(report.additional_packages.contains("openssl3"));
+    }
+
+    #[test]
     fn a_file_dependency_is_resolved_outside_the_batch() {
         // Regression (issue #21): /usr/bin/pkg-config, /usr/bin/bash and
         // friends were reported unresolvable although the target has
@@ -2480,9 +2538,12 @@ packages = ["a"]
     #[test]
     fn guard_rich_dep_bypasses_classification() {
         // Rich deps can't be parsed into cap+constraint; they keep the
-        // pre-guard behavior (missing → descend).
+        // pre-guard behavior (missing → descend). The condition has a
+        // provider on the target, so the dependency is a requirement
+        // at all — see `a_condition_the_target_cannot_meet_asks_for_nothing`.
         let mut resolver = MockResolver::new();
         resolver.add_buildrequires("mypkg", &["(python3-foo if weird)"]);
+        resolver.add_target_resolve("weird", "weird-pkg");
         resolver.add_source_resolve("(python3-foo if weird)", "python-foo");
         resolver.add_base_resolve("python3-foo", "python-foo", "1.0-1.el10");
         resolver.add_buildrequires("python-foo", &[]);

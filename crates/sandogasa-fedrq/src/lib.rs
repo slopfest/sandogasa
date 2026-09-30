@@ -174,6 +174,24 @@ fn dep_terms(dep: &str) -> (Vec<(&str, Option<(&str, &str)>)>, bool) {
     (terms, any)
 }
 
+/// The capability a dependency is conditioned on, when meeting it is
+/// the only thing that makes the dependency a requirement at all.
+///
+/// `(A if B)` requires A only where B is installed, so a target
+/// without B has no requirement here. `(A if B else C)` always
+/// requires one of the two and `(A unless B)` requires A precisely
+/// where B is absent, so neither is conditional in that sense and both
+/// return `None`.
+pub fn dep_condition(dep: &str) -> Option<&str> {
+    let dep = dep.trim();
+    let inner = dep.strip_prefix('(').and_then(|d| d.strip_suffix(')'))?;
+    let mut tokens = inner.split_whitespace().skip_while(|t| *t != "if");
+    tokens.next()?;
+    let condition = trim_parens(tokens.next()?);
+    // An `else` gives the dependency something to require either way.
+    (!tokens.any(|t| t == "else")).then_some(condition)
+}
+
 /// The capability names a dependency can be satisfied by: one for a
 /// plain dependency, and for a boolean (rich) one every operand a
 /// provider has to carry.
@@ -1011,5 +1029,25 @@ mod tests {
             "c10s",
         );
         assert!(bare.satisfies("python3-setuptools >= 77"));
+    }
+
+    #[test]
+    fn dep_condition_reads_only_a_plain_if() {
+        // openssl's own subpackages carry this one; a target without
+        // openssl3-libs is asked for nothing.
+        assert_eq!(
+            dep_condition("(openssl3-libs if openssl3-libs)"),
+            Some("openssl3-libs")
+        );
+        assert_eq!(
+            dep_condition("(protobuf-compiler = 33.5-8.fc46 if protobuf-compiler)"),
+            Some("protobuf-compiler")
+        );
+        // Either way something is required.
+        assert_eq!(dep_condition("(a if b else c)"), None);
+        // `unless` requires a precisely where b is absent.
+        assert_eq!(dep_condition("(a unless b)"), None);
+        assert_eq!(dep_condition("foo >= 1"), None);
+        assert_eq!(dep_condition("(a and b)"), None);
     }
 }
