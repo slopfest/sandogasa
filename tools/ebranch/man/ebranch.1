@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-09-25 "sandogasa 0.25.1" "Sandogasa Manual"
+.TH ebranch 1 2026-10-01 "sandogasa 0.25.1" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -605,12 +605,15 @@ the mapping or to enable the guard for targets
 it can\*(Aqt infer (e.g. epel8).
 .TP
 \fB\-\-no\-auto\-exclude\-install\fR
-Disable auto\-exclusion of default packages
-(e.g. glibc) from installability checks.
+Deprecated; has no effect.
 
-By default, packages whose version mismatch
-between branches is expected and harmless
-are excluded automatically.
+It used to re\-enable library dependencies
+(libc.so.6(GLIBC_2.38)(64bit)) in
+installability checks. Those record what the
+source branch\*(Aqs build linked against, not what
+a rebuild on the target needs, so they are
+never checked now and there is nothing to
+re\-enable.
 .TP
 \fB\-\-max\-depth\fR \fI<MAX_DEPTH>\fR [default: 0]
 Max recursion depth (0 = unlimited)
@@ -730,12 +733,15 @@ the mapping or to enable the guard for targets
 it can\*(Aqt infer (e.g. epel8).
 .TP
 \fB\-\-no\-auto\-exclude\-install\fR
-Disable auto\-exclusion of default packages
-(e.g. glibc) from installability checks.
+Deprecated; has no effect.
 
-By default, packages whose version mismatch
-between branches is expected and harmless
-are excluded automatically.
+It used to re\-enable library dependencies
+(libc.so.6(GLIBC_2.38)(64bit)) in
+installability checks. Those record what the
+source branch\*(Aqs build linked against, not what
+a rebuild on the target needs, so they are
+never checked now and there is nothing to
+re\-enable.
 .TP
 \fB\-\-max\-depth\fR \fI<MAX_DEPTH>\fR [default: 0]
 Max recursion depth (0 = unlimited)

@@ -282,9 +282,6 @@ pub struct ResolveOptions {
     pub exclude: BTreeSet<String>,
     /// Source packages to exclude from installability expansion.
     pub exclude_install: BTreeSet<String>,
-    /// When true, auto-exclude default packages (e.g. glibc)
-    /// from installability checks.
-    pub auto_exclude: bool,
     /// Base-distro branch behind the target (e.g. `c10s` for epel10).
     /// `Some` activates the base-distro guard: deps whose provider is
     /// in the base at an unsatisfying version are blocked instead of
@@ -1131,7 +1128,7 @@ fn check_installability_with_cache(
             .flatten()
             .map(|d| d.trim().to_string())
             .filter(|d| !sandogasa_depfilter::is_rpm_internal_dep(d))
-            .filter(|d| !(options.auto_exclude && sandogasa_depfilter::is_solib_symbol_dep(d))),
+            .filter(|d| !sandogasa_depfilter::is_library_dep(d)),
     );
 
     // Process all packages in parallel.
@@ -1151,6 +1148,7 @@ fn check_installability_with_cache(
             };
 
             let mut unsatisfied: Vec<UnsatisfiedRequires> = Vec::new();
+            let mut ignored_libraries = 0usize;
             let mut seen_providers: BTreeSet<String> = BTreeSet::new();
             let mut additional: Vec<String> = Vec::new();
             let mut blocked_candidates: Vec<BlockedCandidate> = Vec::new();
@@ -1161,7 +1159,13 @@ fn check_installability_with_cache(
                 if sandogasa_depfilter::is_rpm_internal_dep(dep_str) {
                     continue;
                 }
-                if options.auto_exclude && sandogasa_depfilter::is_solib_symbol_dep(dep_str) {
+                // A library the source branch's linker wrote down is
+                // not what the rebuild will ask for: it links whatever
+                // the target ships and the dependency is regenerated.
+                // What the package really needs is its BuildRequires,
+                // which the closure walk reads (issue #23).
+                if sandogasa_depfilter::is_library_dep(dep_str) {
+                    ignored_libraries += 1;
                     continue;
                 }
 
@@ -1224,6 +1228,14 @@ fn check_installability_with_cache(
                         });
                     }
                 }
+            }
+
+            if options.verbose && ignored_libraries > 0 {
+                eprintln!(
+                    "[installability] {pkg}: ignored {ignored_libraries} library \
+                     dependency(ies) of the source branch's build; a rebuild on the \
+                     target regenerates them, so its BuildRequires are what govern"
+                );
             }
 
             if unsatisfied.is_empty() && blocked_candidates.is_empty() {
@@ -3283,7 +3295,6 @@ packages = ["a"]
         resolver.add_subpkg_requires("a", &["libc.so.6(GLIBC_2.38)(64bit)"]);
 
         let options = ResolveOptions {
-            auto_exclude: true,
             ..Default::default()
         };
         let closure = resolve_closure(&resolver, &["a".to_string()], "rawhide", "epel10").unwrap();
@@ -3293,8 +3304,10 @@ packages = ["a"]
     }
 
     #[test]
-    fn test_solib_symbol_deps_not_skipped_without_auto_exclude() {
-        // Without auto_exclude, solib symbol deps are checked normally.
+    fn a_library_dependency_is_ignored_whatever_auto_exclude_says() {
+        // `--no-auto-exclude-install` used to turn symbol-versioned
+        // deps back on. It no longer does: neither form says anything
+        // about the rebuild, so neither is checked (issue #23).
         let mut resolver = MockResolver::new();
         resolver.add_buildrequires("a", &[]);
         resolver.add_subpkg_requires("a", &["libc.so.6(GLIBC_2.38)(64bit)"]);
@@ -3303,14 +3316,17 @@ packages = ["a"]
         let options = ResolveOptions::default(); // auto_exclude: false
         let closure = resolve_closure(&resolver, &["a".to_string()], "rawhide", "epel10").unwrap();
         let report = check_installability(&resolver, &closure, &options, &BTreeSet::new());
-        assert!(report.issues.contains_key("a"));
-        assert!(report.additional_packages.contains("glibc"));
+        assert!(report.issues.is_empty(), "{:?}", report.issues);
+        assert!(report.additional_packages.is_empty());
     }
 
     #[test]
-    fn test_soname_deps_not_skipped_with_auto_exclude() {
-        // Soname deps (empty first parens) are real ABI deps and
-        // must NOT be skipped even with auto_exclude.
+    fn a_soname_is_not_a_requirement_of_the_rebuild() {
+        // Until #23 a soname was followed as a real ABI dependency.
+        // It is not, for a branch: `libbpf.so.1` records what the
+        // source branch's build linked against, and the rebuild links
+        // whatever the target ships. What the package needs is in its
+        // BuildRequires, which the closure walk reads.
         let mut resolver = MockResolver::new();
         resolver.add_buildrequires("a", &[]);
         resolver.add_subpkg_requires("a", &["libbpf.so.1()(64bit)"]);
@@ -3319,10 +3335,9 @@ packages = ["a"]
         resolver.add_subpkg_requires("libbpf", &[]);
 
         let options = ResolveOptions {
-            auto_exclude: true,
             ..Default::default()
         };
-        let (closure, _report) = resolve_with_installability(
+        let (closure, report) = resolve_with_installability(
             &resolver,
             &["a".to_string()],
             "rawhide",
@@ -3330,8 +3345,11 @@ packages = ["a"]
             &options,
         )
         .unwrap();
-        // libbpf should be pulled into the closure (soname dep is real).
-        assert!(closure.closure.contains_key("libbpf"));
+        assert!(
+            !closure.closure.contains_key("libbpf"),
+            "the rebuild asks the target for its own libbpf: {closure:?}"
+        );
+        assert!(report.issues.is_empty(), "{:?}", report.issues);
     }
 
     #[test]
@@ -3344,7 +3362,6 @@ packages = ["a"]
         resolver.add_source_resolve("libc.so.6(GLIBC_2.38)(64bit)", "glibc");
 
         let options = ResolveOptions {
-            auto_exclude: true,
             ..Default::default()
         };
         let (closure, report) = resolve_with_installability(

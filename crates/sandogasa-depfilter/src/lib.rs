@@ -23,9 +23,9 @@ pub fn is_solib_dep(dep: &str) -> bool {
 /// the target branch, so they are not meaningful for cross-branch
 /// installability checks.
 ///
-/// Soname deps like `libbpf.so.1()(64bit)` return `false` — they
-/// are also auto-generated but match the soversion, so changes
-/// reflect real ABI bumps that matter for installability.
+/// Soname deps like `libbpf.so.1()(64bit)` return `false` here; see
+/// [`is_library_dep`] for why they are discounted when the question is
+/// whether a package can be *rebuilt* on another branch.
 pub fn is_solib_symbol_dep(dep: &str) -> bool {
     let Some(so_pos) = dep.find(".so.") else {
         return false;
@@ -39,6 +39,23 @@ pub fn is_solib_symbol_dep(dep: &str) -> bool {
         return false;
     };
     close > 0
+}
+
+/// Return `true` if `dep` is a library a linker produced, soname and
+/// all: `libcrypto.so.4()(64bit)`, `libabsl_log.so.2608.0.0()(64bit)`.
+///
+/// These record what the build they came from linked against, not what
+/// the source needs. Rebuilt on another branch, the same source links
+/// whatever that branch ships and the dependency is regenerated to
+/// match — so measuring a branch by them asks a question nobody will
+/// ask. `et` built in Rawhide requires `libprotobuf.so.33.5`, while its
+/// spec asks only for `protobuf-lite-devel`, which CentOS Stream 10
+/// satisfies at 3.19.6.
+///
+/// What the source really needs is in its BuildRequires, which is what
+/// the closure walk reads.
+pub fn is_library_dep(dep: &str) -> bool {
+    dep.contains(".so.") || dep.ends_with(".so")
 }
 
 /// Return `true` if `dep` is an RPM-internal or auto-generated
@@ -108,5 +125,20 @@ mod tests {
         assert!(!is_rpm_internal_dep("glibc"));
         assert!(!is_rpm_internal_dep("libc.so.6()(64bit)"));
         assert!(!is_rpm_internal_dep("pkgconfig(dracut)"));
+    }
+
+    #[test]
+    fn library_deps_are_what_a_linker_wrote() {
+        assert!(is_library_dep("libcrypto.so.4()(64bit)"));
+        assert!(is_library_dep(
+            "libabsl_log_internal_message.so.2608.0.0()(64bit)"
+        ));
+        assert!(is_library_dep("libc.so.6(GLIBC_2.38)(64bit)"));
+        assert!(is_library_dep("libfoo.so"));
+        // Capabilities a spec writes by hand are not.
+        assert!(!is_library_dep("pkgconfig(openssl)"));
+        assert!(!is_library_dep("protobuf-lite-devel"));
+        assert!(!is_library_dep("crate(serde) = 1.0.229"));
+        assert!(!is_library_dep("/usr/bin/pkg-config"));
     }
 }

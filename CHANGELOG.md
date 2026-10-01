@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### ebranch: a rebuild is judged by BuildRequires, not by the old build's libraries
+
+`resolve --check-install` derived eleven packages for `et` that a real
+mock build never asked for. It was reading the dependencies Rawhide's
+linker wrote into the binaries — `libprotobuf.so.33.5`,
+`libabsl_log_internal_message.so.2608.0.0` and the like — and asking
+whether CentOS Stream 10 satisfies them. It does not, and never will:
+rebuilt there, the same source links Stream's protobuf and the
+dependency is regenerated to match. Those entries then drew in openssl,
+protobuf, abseil-cpp, gtest and the whole mingw chain, each of which
+`file-requests` refused anyway. The same check now reports what mock
+does: cxxopts and simpleini, nothing else.
+
+Library dependencies are therefore no longer checked for
+installability. What a package needs is in its BuildRequires, which the
+closure walk already reads. With `-v`, each package says how many were
+ignored.
+
+`--no-auto-exclude-install` is deprecated. It existed to turn
+symbol-versioned library dependencies back on, and neither form is
+checked now, so it has nothing left to control. Passing it warns and
+changes nothing, so a script that does keeps working; it will be
+removed in a later release.
+
+Fixes #23.
+
 ### ebranch: a package waiting in updates-testing counts as branched
 
 `resolve` read the target's stable repositories only, so a package

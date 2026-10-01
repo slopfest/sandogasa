@@ -207,12 +207,16 @@ ebranch check-crate --from rbw.toml --copr-script > build.sh
 - `--max-depth N` — limit recursion depth (useful for exploring large
   dependency trees incrementally)
 - `--check-install` — verify subpackage installability and expand the
-  closure with any additionally needed packages
+  closure with any additionally needed packages. Library dependencies a
+  linker wrote (`libcrypto.so.4()(64bit)`) are not checked: they record
+  what the source branch's build linked against, while the rebuild
+  links what the target ships and has them regenerated. What a package
+  needs is in its BuildRequires, which the closure walk reads
 - `--exclude-install PKG,...` — exclude source packages from
   installability checks (deps they provide are treated as satisfied)
-- `--no-auto-exclude-install` — disable automatic exclusion of solib symbol
-  version deps (e.g. `libc.so.6(GLIBC_2.38)(64bit)`) from
-  installability checks
+- `--no-auto-exclude-install` — **deprecated, does nothing.** It used
+  to re-enable library dependencies in installability checks; those are
+  never checked now, so there is nothing to re-enable
 - `-j N` / `--jobs N` — number of parallel fedrq queries
   (0 = number of CPUs, the default)
 - `--koji` — output as a Koji chain build string
