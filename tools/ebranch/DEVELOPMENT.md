@@ -121,3 +121,24 @@ So the fixture matches dependencies itself rather than calling
 agreeing with the code by construction passes whatever the code does.
 Keep it that way when extending it, and check a new test fails with the
 fix reverted before trusting it.
+
+## An external query goes behind a trait, so the flow around it can be tested
+
+`file-requests` asks a `SourceProbe` what a branch has, rather than
+calling fedrq itself. A run passes the fedrq-backed probe; a test passes
+a table of which branch holds which package, at which version, in which
+repo class — the repo class included, because a package waiting in
+updates-testing is branched and a pre-flight that misses that files a
+duplicate.
+
+That is what makes the whole filing batch testable: one run over a real
+closure shape, with Bugzilla on loopback, asserting that a package the
+base distro owns, one already branched, and one nobody has packaged all
+stay out of Bugzilla, while an open request is adopted and the one
+remaining package is filed. Mount exactly the writes you expect, so an
+unexpected one fails the test rather than passing quietly.
+
+Apply the same shape to the queries still called directly — check-update
+drives fedrq, Koji and Bodhi, check-crate drives crates.io — when their
+flows need covering. The decision code is worth testing; the transport
+is not.

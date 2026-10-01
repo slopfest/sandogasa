@@ -252,8 +252,45 @@ fn match_nvrs_to_packages(nvrs: &[String], packages: &[String]) -> BTreeMap<Stri
 /// package through (the rhbz#2482250 failure mode).
 /// Which of `packages` a branch carries as source packages, with
 /// their version-release.
-fn src_probe(branch: &str, packages: &[String]) -> Result<BTreeMap<String, String>, String> {
-    src_probe_repo(branch, None, packages)
+/// What a branch has, asked of something that can answer.
+///
+/// The pre-flights are the part of filing most worth testing — they
+/// are what stops a request being opened for a package the base distro
+/// owns, for one already branched, or for one nobody has packaged —
+/// and they are the part bound to an external tool. Behind this trait
+/// a test answers from a table and a run answers from fedrq.
+pub(crate) trait SourceProbe: Sync {
+    /// The source packages among `packages` present on `branch`, each
+    /// with its `version-release`. `repo` names a repo class to ask
+    /// within, such as `@testing`.
+    fn present(
+        &self,
+        branch: &str,
+        repo: Option<&str>,
+        packages: &[String],
+    ) -> Result<BTreeMap<String, String>, String>;
+}
+
+/// The probe a real run uses.
+pub(crate) struct FedrqProbe;
+
+impl SourceProbe for FedrqProbe {
+    fn present(
+        &self,
+        branch: &str,
+        repo: Option<&str>,
+        packages: &[String],
+    ) -> Result<BTreeMap<String, String>, String> {
+        src_probe_repo(branch, repo, packages)
+    }
+}
+
+fn src_probe(
+    probe: &dyn SourceProbe,
+    branch: &str,
+    packages: &[String],
+) -> Result<BTreeMap<String, String>, String> {
+    probe.present(branch, None, packages)
 }
 
 /// [`src_probe`] against one repo class of a branch.
@@ -278,9 +315,13 @@ fn src_probe_repo(
 /// testing, not yet stable — cxxopts was there while a second request
 /// for it was being filed. A branch that has no testing repo is not an
 /// error: the stable answer stands and the reason is said once.
-fn target_probe(branch: &str, packages: &[String]) -> Result<BTreeMap<String, String>, String> {
-    let mut present = src_probe(branch, packages)?;
-    match src_probe_repo(branch, Some("@testing"), packages) {
+fn target_probe(
+    probe: &dyn SourceProbe,
+    branch: &str,
+    packages: &[String],
+) -> Result<BTreeMap<String, String>, String> {
+    let mut present = src_probe(probe, branch, packages)?;
+    match probe.present(branch, Some("@testing"), packages) {
         Ok(testing) => {
             for (pkg, vr) in testing {
                 present.entry(pkg).or_insert(vr);
@@ -545,6 +586,7 @@ pub async fn file_batch(
     report: &mut ResolveReport,
     blocked: &[String],
     opts: &Options,
+    probe: &dyn SourceProbe,
 ) -> Result<bool, String> {
     let bz = BzClient::new(&opts.bugzilla_url)
         .with_api_key(opts.api_key.clone())
@@ -596,10 +638,10 @@ pub async fn file_batch(
     // Source pre-flight: a check-crate report lists crates nobody has
     // packaged yet beside ones that only want branching, and a resolve
     // report may be stale.
-    let source_present = src_probe(&report.source_branch, &candidates)?;
+    let source_present = src_probe(probe, &report.source_branch, &candidates)?;
     // Base-distro pre-flight (defense in depth against stale reports).
     let base_present = match &opts.base_branch {
-        Some(base) => src_probe(base, &candidates)?,
+        Some(base) => src_probe(probe, base, &candidates)?,
         None => {
             eprintln!(
                 "warning: no base-distro mapping for {}; base-distro \
@@ -614,7 +656,7 @@ pub async fn file_batch(
     // however old the version there is. It reaches this point when the
     // closure wanted a capability that branch's older build does not
     // provide -- a soname from the source branch's build, say.
-    let target_present = target_probe(&opts.branch, &candidates)?;
+    let target_present = target_probe(probe, &opts.branch, &candidates)?;
     let (to_file, skipped) = partition_filable(
         report,
         candidates,
@@ -839,7 +881,7 @@ pub fn run_file_request(
         // in the base distro is always CANTFIX (rhbz#2482250).
         match &opts.base_branch {
             Some(base) => {
-                if let Some(vr) = src_probe(base, &[pkg.to_string()])?.get(pkg) {
+                if let Some(vr) = src_probe(&FedrqProbe, base, &[pkg.to_string()])?.get(pkg) {
                     return Err(format!(
                         "{pkg} is in the base distro {base} ({vr}); EPEL must \
                          not replace it — a branch request would be CANTFIX. \
@@ -907,7 +949,7 @@ pub fn run_file_requests(
     rt.block_on(async {
         let mut file = ReportFile::load(report_path)?;
         let mut report = file.view();
-        let changed = file_batch(&mut report, blocked, opts).await?;
+        let changed = file_batch(&mut report, blocked, opts, &FedrqProbe).await?;
         if changed && !opts.dry_run {
             file.save(&report, report_path)?;
         }
@@ -1737,5 +1779,162 @@ mod tests {
             ),
         ]);
         preview_links(&edges, &requests);
+    }
+
+    /// A probe answering from a table: which branch has which package,
+    /// at which version, in which repo class.
+    #[derive(Default)]
+    struct FakeProbe {
+        /// (branch, repo) -> package -> version-release.
+        present: BTreeMap<(String, Option<String>), BTreeMap<String, String>>,
+    }
+
+    impl FakeProbe {
+        fn has(mut self, branch: &str, repo: Option<&str>, pkg: &str, vr: &str) -> Self {
+            self.present
+                .entry((branch.to_string(), repo.map(str::to_string)))
+                .or_default()
+                .insert(pkg.to_string(), vr.to_string());
+            self
+        }
+    }
+
+    impl SourceProbe for FakeProbe {
+        fn present(
+            &self,
+            branch: &str,
+            repo: Option<&str>,
+            packages: &[String],
+        ) -> Result<BTreeMap<String, String>, String> {
+            let key = (branch.to_string(), repo.map(str::to_string));
+            Ok(self
+                .present
+                .get(&key)
+                .map(|have| {
+                    packages
+                        .iter()
+                        .filter_map(|p| have.get(p).map(|vr| (p.clone(), vr.clone())))
+                        .collect()
+                })
+                .unwrap_or_default())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_filing_run_files_only_what_is_left_after_the_pre_flights() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // The et closure as it really stands: one package the base
+        // distro owns, one already branched and sitting in testing, one
+        // nobody has packaged, one with a request open already, and one
+        // genuinely to file for.
+        let probe = FakeProbe::default()
+            .has("rawhide", None, "et", "6.2.13-1.fc46")
+            .has("rawhide", None, "cxxopts", "3.3.1-1.fc46")
+            .has("rawhide", None, "simpleini", "4.22-1.fc46")
+            .has("rawhide", None, "openssl", "4.0-1.fc46")
+            .has("c10s", None, "openssl", "3.5.8-1.el10")
+            .has("epel10", Some("@testing"), "cxxopts", "3.3.1-1.el10_3");
+
+        let server = MockServer::start().await;
+        // Only et has a request open already.
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{
+                    "id": 2368920,
+                    "summary": "Please branch and build et in epel10",
+                    "status": "NEW",
+                    "resolution": "",
+                    "product": "Fedora EPEL",
+                    "component": ["et"],
+                    "severity": "unspecified",
+                    "priority": "unspecified",
+                    "assigned_to": "someone",
+                    "creator": "someone",
+                    "creation_time": "2026-05-28T09:02:27Z",
+                    "last_change_time": "2026-05-28T09:02:27Z",
+                }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/bug"))
+            .and(body_partial_json(
+                serde_json::json!({"component": "simpleini"}),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 2543942})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut report = ResolveReport {
+            source_branch: "rawhide".into(),
+            target_branch: "epel10".into(),
+            packages: vec![
+                "et".into(),
+                "cxxopts".into(),
+                "openssl".into(),
+                "simpleini".into(),
+                "unpackaged".into(),
+            ],
+            edges: BTreeMap::new(),
+            branch_requests: BTreeMap::new(),
+            blocked_by_base: BTreeMap::new(),
+            overrides: BTreeSet::new(),
+        };
+        let mut opts = mock_opts(&server.uri(), false);
+        opts.base_branch = Some("c10s".to_string());
+
+        let changed = file_batch(&mut report, &[], &opts, &probe)
+            .await
+            .expect("the run completes");
+        assert!(changed);
+        // et adopted the open request; simpleini was filed; the other
+        // three never reached Bugzilla, and the mock would have failed
+        // the test had they been posted.
+        assert_eq!(report.branch_requests["et"].rhbz, 2368920);
+        assert_eq!(report.branch_requests["simpleini"].rhbz, 2543942);
+        assert_eq!(
+            report.branch_requests.len(),
+            2,
+            "{:?}",
+            report.branch_requests
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_writes_nothing_anywhere() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let probe = FakeProbe::default().has("rawhide", None, "simpleini", "4.22-1.fc46");
+        let server = MockServer::start().await;
+        // Reading is allowed; a POST is not mounted, so filing would
+        // fail the run outright.
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": []})))
+            .mount(&server)
+            .await;
+
+        let mut report = ResolveReport {
+            source_branch: "rawhide".into(),
+            target_branch: "epel10".into(),
+            packages: vec!["simpleini".into()],
+            edges: BTreeMap::new(),
+            branch_requests: BTreeMap::new(),
+            blocked_by_base: BTreeMap::new(),
+            overrides: BTreeSet::new(),
+        };
+        let opts = mock_opts(&server.uri(), true);
+        let changed = file_batch(&mut report, &[], &opts, &probe)
+            .await
+            .expect("a dry run completes");
+        assert!(!changed);
+        assert!(report.branch_requests.is_empty());
     }
 }
