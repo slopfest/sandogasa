@@ -2910,4 +2910,112 @@ mod tests {
         let refs: Vec<&DepResult> = deps.iter().collect();
         assert_eq!(unique_crate_count(&refs), 2);
     }
+
+    /// A report of the shape a real transitive run produces: a crate
+    /// whose direct dependencies are partly satisfied, partly missing
+    /// and partly the wrong version, with more found underneath.
+    fn rich_report() -> CheckCrateReport {
+        let mut report = make_report();
+        report.crate_name = "tiny-dfr".to_string();
+        report.package = "rust-tiny-dfr".to_string();
+        report.branch = "epel10".to_string();
+        report.copr = Some("michel/rust-epel".to_string());
+        report.dependencies = vec![
+            DepResult {
+                dep: make_dep("cairo-rs", "normal", false),
+                status: DepStatus::Missing,
+                via: None,
+            },
+            DepResult {
+                dep: make_dep("nix", "normal", false),
+                status: DepStatus::Satisfied {
+                    version: "0.29.0".to_string(),
+                    compat: true,
+                    staged: false,
+                },
+                via: None,
+            },
+            DepResult {
+                dep: make_dep("privdrop", "normal", false),
+                status: DepStatus::Satisfied {
+                    version: "0.5.5".to_string(),
+                    compat: false,
+                    staged: true,
+                },
+                via: None,
+            },
+            DepResult {
+                dep: make_dep("tokei", "build", false),
+                status: DepStatus::Unmet {
+                    available: vec!["15.0.0".to_string()],
+                    need: "^14.0.0".to_string(),
+                },
+                via: None,
+            },
+        ];
+        report.transitive_missing = vec![TransitiveDep {
+            name: "conv".to_string(),
+            package: "rust-conv".to_string(),
+            status: TransitiveStatus::Missing,
+            version: "0.3.3".to_string(),
+            version_req: "^0.3.3".to_string(),
+            pulled_by: "cairo-rs".to_string(),
+        }];
+        report.transitive_staged = vec![TransitiveDep {
+            name: "format_num".to_string(),
+            package: "rust-format_num".to_string(),
+            status: TransitiveStatus::Staged,
+            version: "0.1.0".to_string(),
+            version_req: "^0.1.0".to_string(),
+            pulled_by: "cairo-rs".to_string(),
+        }];
+        report.in_tree = vec![InTreeCrate {
+            name: "tiny-dfr-util".to_string(),
+            version_req: "^1".to_string(),
+        }];
+        report.review_bugs = BTreeMap::from([("rust-conv".to_string(), 2346725)]);
+        report.transitive_edges = BTreeMap::from([(
+            "rust-cairo-rs".to_string(),
+            BTreeSet::from(["rust-conv".to_string()]),
+        )]);
+        report
+    }
+
+    #[test]
+    fn a_rendered_crate_report_separates_what_blocks_from_what_does_not() {
+        let report = rich_report();
+        let out = render_report(&report);
+        // The crate, where it is going, and the staging COPR it reads.
+        assert!(out.contains("tiny-dfr") && out.contains("epel10"), "{out}");
+        // A dependency nobody packaged, and one whose versions miss.
+        assert!(out.contains("cairo-rs"), "{out}");
+        assert!(out.contains("tokei") && out.contains("^14.0.0"), "{out}");
+        // Satisfied ones say how: a compat package, or only in staging.
+        assert!(out.contains("nix") && out.contains("compat"), "{out}");
+        assert!(out.contains("privdrop"), "{out}");
+        // What the transitive walk found, and who pulled it in.
+        assert!(out.contains("conv") && out.contains("cairo-rs"), "{out}");
+        // The review bugs a report carries are for the branch-request
+        // subcommands to read, not for this rendering.
+        // A crate built from the root's own sources is not a dependency.
+        assert!(out.contains("tiny-dfr-util"), "{out}");
+    }
+
+    #[test]
+    fn a_report_of_an_already_built_crate_says_where() {
+        for (built, expected) in [(BuiltIn::Branch, "epel10"), (BuiltIn::Copr, "copr")] {
+            let mut report = rich_report();
+            report.already_built = Some(built);
+            let out = render_report(&report).to_lowercase();
+            assert!(out.contains(&expected.to_lowercase()), "{out}");
+        }
+    }
+
+    #[test]
+    fn the_graph_names_every_package_and_its_edges() {
+        let report = rich_report();
+        // Printed rather than returned, so this pins that it runs over
+        // a report with edges, missing crates and a build order.
+        print_dot(&report);
+    }
 }

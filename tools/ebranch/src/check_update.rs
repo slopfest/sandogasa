@@ -3754,4 +3754,128 @@ mod tests {
             InputKind::SideTag(_)
         ));
     }
+
+    /// A report of the shape a real run produces: packages updated,
+    /// Provides gained and lost, a side tag lagging behind, and a
+    /// reverse dependency that would break.
+    fn full_report() -> CheckUpdateReport {
+        let mut result = broken("libfoo.so.1");
+        result.issues[0].kind = BreakKind::Fti;
+        CheckUpdateReport {
+            input: "epel10.4-build-side-152994".to_string(),
+            branch: "c10s".to_string(),
+            dist_branch: Some("epel10.4".to_string()),
+            repo: Some("@epel".to_string()),
+            updated_packages: vec!["libfoo".to_string(), "widget".to_string()],
+            changes: vec![
+                PackageChange {
+                    package: "libfoo".to_string(),
+                    old: Some("1.2-3.el10".to_string()),
+                    new: "2.0-1.el10".to_string(),
+                },
+                PackageChange {
+                    package: "widget".to_string(),
+                    old: None,
+                    new: "1.0-1.el10".to_string(),
+                },
+            ],
+            full_analysis: true,
+            changed_provides: vec![
+                ChangedProvide {
+                    old: "libfoo.so.1".to_string(),
+                    new: Some("libfoo.so.2".to_string()),
+                },
+                ChangedProvide {
+                    old: "libfoo-legacy.so.0".to_string(),
+                    new: None,
+                },
+            ],
+            installability_issues: vec![dep("plasma-settings", "libfoo.so.1")],
+            stale_side_tag: vec![StaleSideTag {
+                package: "widget".to_string(),
+                expected_nvr: "widget-1.0-1.el10".to_string(),
+                actual_vr: Some("0.9-1.el10".to_string()),
+            }],
+            skip_reason: None,
+            reverse_deps: BTreeMap::from([("kpat".to_string(), result)]),
+        }
+    }
+
+    #[test]
+    fn a_rendered_report_carries_every_section_it_found() {
+        let report = full_report();
+        let out = render_report(&report, false);
+        // The update and where it is going.
+        assert!(out.contains("epel10.4-build-side-152994"), "{out}");
+        assert!(out.contains("c10s") && out.contains("@epel"), "{out}");
+        // A package updated and a package new, counted apart.
+        assert!(out.contains("2") && out.contains("new"), "{out}");
+        // What changed is counted, and what was lost is named.
+        assert!(
+            out.contains("**Changed Provides:** 2 (1 updated, 1 removed)"),
+            "{out}"
+        );
+        assert!(out.contains("libfoo-legacy.so.0"), "{out}");
+        assert!(out.contains("plasma-settings"), "{out}");
+        assert!(out.contains("kpat"), "{out}");
+        // The side tag that has not caught up.
+        assert!(out.contains("widget-1.0-1.el10"), "{out}");
+    }
+
+    #[test]
+    fn a_detailed_report_lists_what_the_summary_counts() {
+        let report = full_report();
+        let brief = render_report(&report, false);
+        let detailed = render_report(&report, true);
+        assert!(
+            detailed.len() > brief.len(),
+            "detail adds the packages the summary only counts"
+        );
+        assert!(detailed.contains("libfoo"), "{detailed}");
+    }
+
+    #[test]
+    fn a_skipped_report_says_why_rather_than_reporting_nothing() {
+        // Each reason has to reach the reader: a silent empty report
+        // reads as "no breakage expected", which is the opposite.
+        for (reason, expected) in [
+            (
+                SkipReason::TestingLag {
+                    expected: vec!["widget-1.0-1.el10".to_string()],
+                },
+                "widget-1.0-1.el10",
+            ),
+            (SkipReason::Epel10TestingUnsupported, "side tag"),
+            (
+                SkipReason::NoSource {
+                    bodhi_status: Some("pending".to_string()),
+                },
+                "pending",
+            ),
+        ] {
+            let mut report = full_report();
+            // The note is what an incomplete analysis says instead of
+            // a verdict, so the two go together.
+            report.full_analysis = false;
+            report.skip_reason = Some(reason);
+            let out = render_report(&report, false);
+            assert!(
+                out.to_lowercase().contains(&expected.to_lowercase()),
+                "expected {expected} in: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_incomplete_analysis_does_not_read_as_a_clean_bill() {
+        let mut report = full_report();
+        report.full_analysis = false;
+        report.installability_issues.clear();
+        report.reverse_deps.clear();
+        let out = render_report(&report, false);
+        assert!(
+            !out.contains("No breakage expected"),
+            "nothing found is not the same as nothing wrong: {out}"
+        );
+    }
 }

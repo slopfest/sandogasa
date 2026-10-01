@@ -1379,4 +1379,363 @@ mod tests {
             .expect("a loop is not an error");
         assert_eq!(stopped.id, 2, "stops on the bug it has already seen");
     }
+
+    /// An options set pointed at a mock Bugzilla.
+    fn mock_opts(url: &str, dry_run: bool) -> Options {
+        Options {
+            bugzilla_url: url.to_string(),
+            api_key: "not-a-key".to_string(),
+            branch: "epel10".to_string(),
+            fas: Some("alice".to_string()),
+            sig: None,
+            dry_run,
+            verbose: false,
+            base_branch: None,
+        }
+    }
+
+    /// A report holding one request for one package.
+    fn report_with(pkg: &str, rhbz: u64, pinged: bool) -> ResolveReport {
+        ResolveReport {
+            source_branch: "rawhide".into(),
+            target_branch: "epel10".into(),
+            packages: vec![pkg.to_string()],
+            edges: BTreeMap::new(),
+            branch_requests: BTreeMap::from([(pkg.to_string(), BranchRequest { rhbz, pinged })]),
+            blocked_by_base: BTreeMap::new(),
+            overrides: BTreeSet::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn escalate_pings_a_request_that_has_sat_in_new() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let old = chrono::Utc::now() - chrono::Duration::days(30);
+        let mut bug = bug_json(2368920, "NEW", None);
+        bug["creation_time"] = serde_json::json!(old.to_rfc3339());
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/2368920"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": [bug]})),
+            )
+            .mount(&server)
+            .await;
+        // update_verified reads the bugs before writing, then writes.
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(2368920, "NEW", None)]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/2368920"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{"id": 2368920, "changes": {}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut report = report_with("et", 2368920, false);
+        let changed = escalate(&mut report, &mock_opts(&server.uri(), false))
+            .await
+            .expect("the ping goes through");
+        assert!(changed);
+        assert!(
+            report.branch_requests["et"].pinged,
+            "a pinged request is marked so it is not pinged twice"
+        );
+    }
+
+    #[tokio::test]
+    async fn escalate_waits_while_a_request_is_young() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let fresh = chrono::Utc::now() - chrono::Duration::days(2);
+        let mut bug = bug_json(2543942, "NEW", None);
+        bug["creation_time"] = serde_json::json!(fresh.to_rfc3339());
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/2543942"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": [bug]})),
+            )
+            .mount(&server)
+            .await;
+        // Nothing is written: no PUT is mounted, so one would fail the
+        // request outright.
+
+        let mut report = report_with("simpleini", 2543942, false);
+        let changed = escalate(&mut report, &mock_opts(&server.uri(), false))
+            .await
+            .expect("waiting is not an error");
+        assert!(!changed);
+        assert!(!report.branch_requests["simpleini"].pinged);
+    }
+
+    #[tokio::test]
+    async fn escalate_follows_a_duplicate_before_deciding() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // The recorded request was closed against an older one that is
+        // already being worked, so there is nothing to ping -- but the
+        // record must move to the live bug (issue #26).
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/2543941"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(2543941, "CLOSED", Some(2531397))]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/2531397"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(2531397, "ON_QA", None)]
+            })))
+            .mount(&server)
+            .await;
+
+        let mut report = report_with("cxxopts", 2543941, true);
+        let changed = escalate(&mut report, &mock_opts(&server.uri(), false))
+            .await
+            .expect("following a duplicate is not an error");
+        assert!(changed);
+        let req = &report.branch_requests["cxxopts"];
+        assert_eq!(req.rhbz, 2531397);
+        assert!(!req.pinged, "the new bug has had no ping of ours");
+    }
+
+    #[tokio::test]
+    async fn filing_falls_back_to_fedora_when_the_component_is_not_in_epel() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // A package nobody has branched has no EPEL component yet, so
+        // Bugzilla refuses the EPEL product and the request goes to
+        // Fedora/rawhide instead -- which is why rhbz#2367248 for
+        // rust-tiny-dfr lives under Fedora while rhbz#2368920 for et
+        // lives under Fedora EPEL.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/bug"))
+            .and(body_partial_json(
+                serde_json::json!({"product": "Fedora EPEL"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": "There is no component named 'widget' in product 'Fedora EPEL'."
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/bug"))
+            .and(body_partial_json(serde_json::json!({
+                "product": "Fedora",
+                "version": "rawhide",
+                "component": "widget",
+                "summary": "Please branch and build widget in epel10",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 4242})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let bz = BzClient::new(&server.uri());
+        let id = file_one(&bz, "widget", "epel10", Some("alice"), None, &[], &[])
+            .await
+            .expect("the Fedora attempt answers");
+        assert_eq!(id, 4242);
+    }
+
+    #[tokio::test]
+    async fn linking_adds_to_the_edges_a_human_already_drew() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // rhbz#2368920 already carried a depends_on somebody added by
+        // hand, so the update has to add rather than set (issue #22).
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(2368920, "NEW", None)]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/2368920"))
+            .and(body_partial_json(
+                serde_json::json!({"depends_on": {"add": [2531397]}}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{"id": 2368920, "changes": {}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let bz = BzClient::new(&server.uri());
+        let edges = BTreeMap::from([(
+            "et".to_string(),
+            BTreeSet::from(["cxxopts".to_string(), "unfiled".to_string()]),
+        )]);
+        let requests = BTreeMap::from([
+            (
+                "et".to_string(),
+                BranchRequest {
+                    rhbz: 2368920,
+                    pinged: false,
+                },
+            ),
+            (
+                "cxxopts".to_string(),
+                BranchRequest {
+                    rhbz: 2531397,
+                    pinged: false,
+                },
+            ),
+        ]);
+        // `unfiled` has no request, so it contributes no edge.
+        link_requests(&bz, &edges, &requests, false)
+            .await
+            .expect("the link goes through");
+    }
+
+    #[tokio::test]
+    async fn searching_finds_the_open_request_for_a_candidate() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("bug_status", "__open__"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [
+                    bug_json(2368920, "NEW", None),
+                    // Open against the same component, but not a request.
+                    {
+                        "id": 2400001,
+                        "summary": "cxxopts-3.3.1 is available",
+                        "status": "NEW",
+                        "resolution": "",
+                        "product": "Fedora",
+                        "component": ["cxxopts"],
+                        "severity": "unspecified",
+                        "priority": "unspecified",
+                        "assigned_to": "someone",
+                        "creator": "someone",
+                        "creation_time": "2026-05-28T09:02:27Z",
+                        "last_change_time": "2026-05-28T09:02:27Z",
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let bz = BzClient::new(&server.uri());
+        let found = search_existing(&bz, &["cxxopts".to_string()], "epel10.4").await;
+        assert_eq!(found.get("cxxopts"), Some(&2368920));
+        assert_eq!(found.len(), 1, "{found:?}");
+    }
+
+    #[tokio::test]
+    async fn a_search_that_fails_warns_rather_than_stopping_the_run() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Bugzilla being unreachable must not stop a filing run; the
+        // cost is that a request filed elsewhere may be duplicated, and
+        // the warning says so.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let bz = BzClient::new(&server.uri());
+        let found = search_existing(&bz, &["cxxopts".to_string()], "epel10").await;
+        assert!(found.is_empty());
+    }
+
+    #[tokio::test]
+    async fn refreshing_moves_a_record_off_a_duplicate() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // The batch read of what the report records.
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(2543941, "CLOSED", Some(2531397))]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/2543941"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(2543941, "CLOSED", Some(2531397))]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/2531397"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(2531397, "ON_QA", None)]
+            })))
+            .mount(&server)
+            .await;
+
+        let bz = BzClient::new(&server.uri());
+        let mut report = report_with("cxxopts", 2543941, true);
+        let changed = refresh_recorded(&bz, &mut report)
+            .await
+            .expect("the read succeeds");
+        assert!(changed);
+        assert_eq!(report.branch_requests["cxxopts"].rhbz, 2531397);
+        assert!(!report.branch_requests["cxxopts"].pinged);
+
+        // A report holding nothing asks Bugzilla nothing.
+        let mut empty = report_with("cxxopts", 2531397, false);
+        empty.branch_requests.clear();
+        assert!(!refresh_recorded(&bz, &mut empty).await.unwrap());
+    }
+
+    #[test]
+    fn previewing_links_names_only_the_packages_with_requests() {
+        let edges = BTreeMap::from([
+            (
+                "et".to_string(),
+                BTreeSet::from(["cxxopts".to_string(), "unfiled".to_string()]),
+            ),
+            // A package with no request of its own is skipped.
+            ("unfiled".to_string(), BTreeSet::from(["et".to_string()])),
+        ]);
+        let requests = BTreeMap::from([
+            (
+                "et".to_string(),
+                BranchRequest {
+                    rhbz: 2368920,
+                    pinged: false,
+                },
+            ),
+            (
+                "cxxopts".to_string(),
+                BranchRequest {
+                    rhbz: 2531397,
+                    pinged: false,
+                },
+            ),
+        ]);
+        preview_links(&edges, &requests);
+    }
 }
