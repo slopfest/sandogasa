@@ -36,8 +36,8 @@ fmt: ## Format the workspace in place
 	$(CARGO) fmt --all
 
 .PHONY: clippy
-clippy: ## Lint the workspace, tests included
-	$(CARGO) clippy --workspace --all-targets
+clippy: ## Lint the workspace, tests included; a warning fails the gate
+	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 .PHONY: man
 man: ## Regenerate every tool's man page from its clap definition

@@ -40,7 +40,7 @@
 
 ## Code Style
 - Always run `cargo fmt` before committing
-- Commits must not introduce `cargo clippy --workspace` warnings or errors. Fix any clippy issues in code you touch
+- Commits must not introduce `cargo clippy --workspace` warnings or errors. Fix any clippy issues in code you touch. `make clippy` passes `-D warnings`, so a warning fails the gate rather than scrolling past: before that (2026-10-01) a complex-type warning rode along in a commit and was only noticed days later
 - Every source file must start with `// SPDX-License-Identifier: Apache-2.0 OR MIT`
 - CLI help text (`-h` and `--help`) must not exceed 80 characters per line
 - Keep the `Command` enum variants in `main.rs` sorted alphabetically (this determines the order in `--help` output)
