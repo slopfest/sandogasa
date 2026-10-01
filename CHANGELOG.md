@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.25.2
 
 ### fedora-cve-triage: a Go CVE is answered by the toolchain the build used
 
