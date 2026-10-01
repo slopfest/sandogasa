@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### ebranch: the walk stops at a package the base distro builds
+
+A dependency the base distro does not provide at any version told the
+base-distro guard nothing, so the walk descended into whatever Rawhide
+offered. `ucrt64-filesystem` is one: CentOS Stream has mingw-filesystem
+but no ucrt64 subpackages, so the closure grew the whole mingw chain,
+every member of which `file-requests` then refused as a base-distro
+package.
+
+A provider whose source package the base already builds is now recorded
+as blocked, with the rest of the blocked list, instead of being walked
+into. Listing it as work was never right: EPEL must not replace a base
+package, so a branch request for one is always refused.
+
+Fixes #24.
+
 ### ebranch: a rebuild is judged by BuildRequires, not by the old build's libraries
 
 `resolve --check-install` derived eleven packages for `et` that a real

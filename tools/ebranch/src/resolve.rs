@@ -208,6 +208,16 @@ pub(crate) trait DepResolver: Send + Sync {
         Ok(vec![])
     }
 
+    /// Whether the base distro builds this source package.
+    ///
+    /// A provider the base already ships cannot be branched — EPEL must
+    /// not replace a base package — so descending into it walks a
+    /// subtree nothing can act on. The default reports nothing in base,
+    /// for a resolver with no base configured.
+    fn base_src_exists(&self, _srpm: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+
     // Batched forms. The walks call these once per BFS level; the
     // defaults loop over the single-item methods, so an implementor
     // that cannot batch (or a test double) needs nothing new. A real
@@ -944,6 +954,26 @@ impl sandogasa_closure::engine::Policy for ClosurePolicy<'_> {
                         }
                     }
                 }
+                // The capability guard above answers for a dep the
+                // base satisfies or satisfies too old. This answers for
+                // the rest: a provider whose source the base already
+                // builds cannot be branched either, whatever capability
+                // led here — `ucrt64-filesystem` leads to mingw-filesystem,
+                // which Stream ships (issue #24). Descending would walk
+                // a subtree `file-requests` refuses anyway.
+                if options.base_branch.is_some()
+                    && resolver.base_src_exists(&provider).unwrap_or(false)
+                    && !options.overrides.contains(&provider)
+                {
+                    if seen_providers.insert(provider.clone()) {
+                        blocked_candidates.push(BlockedCandidate {
+                            provider,
+                            dep: raw_dep.clone(),
+                            base_vr: "its own source package".to_string(),
+                        });
+                    }
+                    continue;
+                }
                 if seen_providers.insert(provider.clone()) {
                     missing_deps.push(MissingDep {
                         dep: raw_dep.clone(),
@@ -1515,6 +1545,13 @@ impl DepResolver for FedrqResolver {
         match &self.base {
             Some(base) => base.resolve_source_vr(dep).map_err(|e| e.to_string()),
             None => Ok(vec![]),
+        }
+    }
+
+    fn base_src_exists(&self, srpm: &str) -> Result<bool, String> {
+        match &self.base {
+            Some(base) => base.src_exists(srpm).map_err(|e| e.to_string()),
+            None => Ok(false),
         }
     }
 
@@ -2145,6 +2182,44 @@ packages = ["a"]
             assert!(
                 report.additional_packages.contains("rust-tokio-util0.6"),
                 "{report:?}"
+            );
+        }
+
+        #[test]
+        fn the_walk_stops_at_a_package_the_base_distro_builds() {
+            // Issue #24: `ucrt64-filesystem` is not in Stream at any
+            // version, so the capability guard says nothing, and the
+            // walk descended into mingw-filesystem — which Stream does
+            // build, so a branch request for it is refused anyway.
+            let source = Repo::new()
+                .source("widget", &["ucrt64-filesystem"])
+                .source("mingw-filesystem", &[])
+                .with(
+                    Pkg::new("mingw64-filesystem", "mingw-filesystem", "148-9.fc46")
+                        .provides("ucrt64-filesystem", Some("148")),
+                );
+            let base = Repo::new().source("mingw-filesystem", &[]).with(
+                Pkg::new("mingw64-filesystem", "mingw-filesystem", "148-7.el10")
+                    .provides("mingw64-filesystem", Some("148-7.el10")),
+            );
+            let resolver = RepoResolver::new(source, Repo::new()).with_base(base);
+
+            let closure = resolve_closure_with_options(
+                &resolver,
+                &["widget".to_string()],
+                "rawhide",
+                "epel10",
+                &guard_opts(&[]),
+            )
+            .unwrap();
+            assert!(
+                !closure.closure.contains_key("mingw-filesystem"),
+                "EPEL must not replace it: {closure:?}"
+            );
+            assert!(
+                closure.blocked_by_base.contains_key("mingw-filesystem"),
+                "and the report says why: {:?}",
+                closure.blocked_by_base
             );
         }
 

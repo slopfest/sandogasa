@@ -95,7 +95,7 @@ impl Pkg {
 #[derive(Debug, Default, Clone)]
 pub struct Repo {
     packages: Vec<Pkg>,
-    buildrequires: BTreeMap<String, Vec<String>>,
+    pub(crate) buildrequires: BTreeMap<String, Vec<String>>,
 }
 
 impl Repo {
@@ -275,6 +275,13 @@ impl DepResolver for RepoResolver {
             .filter(|p| p.source == srpm)
             .flat_map(|p| p.requires.clone())
             .collect())
+    }
+
+    fn base_src_exists(&self, srpm: &str) -> Result<bool, String> {
+        Ok(self
+            .base
+            .as_ref()
+            .is_some_and(|base| base.buildrequires.contains_key(srpm)))
     }
 
     fn resolve_base_vr(&self, dep: &str) -> Result<Vec<(String, String)>, String> {
