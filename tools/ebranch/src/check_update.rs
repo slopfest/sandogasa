@@ -332,6 +332,7 @@ pub(crate) struct Services<'a> {
     pub koji: &'a dyn KojiQuery,
     pub bodhi: &'a dyn BodhiQuery,
     pub repos: &'a dyn Repos,
+    pub update_repo: &'a dyn UpdateRepoBuilder,
 }
 
 /// One repository view a check reads: a branch, a repo class, or both.
@@ -350,6 +351,34 @@ pub(crate) trait RepoQuery: Sync {
 
     /// The binary package names a source package built here.
     fn subpkgs_names(&self, srpm: &str) -> Result<Vec<String>, String>;
+
+    /// `(name, version, release)` for each binary package of a source.
+    fn subpkgs_nvrs(&self, srpm: &str) -> Result<Vec<(String, String, String)>, String>;
+
+    /// `(source, version-release)` for each named binary package.
+    fn pkgs_source_vr(&self, names: &[&str]) -> Result<Vec<(String, String)>, String>;
+
+    /// Everything the subpackages of a source declare.
+    fn subpkgs_provides(&self, srpm: &str) -> Result<Vec<String>, String>;
+
+    /// Everything one binary package declares.
+    fn pkg_provides(&self, name: &str) -> Result<Vec<String>, String>;
+
+    /// What the package providing a capability declares, which is how
+    /// a changed Provide is traced back to what replaced it.
+    fn provides_of_provider(&self, capability: &str) -> Result<Vec<String>, String>;
+
+    /// What one binary package requires.
+    fn pkg_requires(&self, name: &str) -> Result<Vec<String>, String>;
+
+    /// What the subpackages of a source require.
+    fn subpkgs_requires(&self, srpm: &str) -> Result<Vec<String>, String>;
+
+    /// What a source package requires: its BuildRequires.
+    fn src_requires(&self, srpm: &str) -> Result<Vec<String>, String>;
+
+    /// The source packages requiring any of these capabilities.
+    fn whatrequires(&self, packages: &[String]) -> Result<Vec<String>, String>;
 }
 
 /// Where a check gets its repository views.
@@ -380,6 +409,61 @@ impl RepoQuery for sandogasa_fedrq::Fedrq {
 
     fn subpkgs_names(&self, srpm: &str) -> Result<Vec<String>, String> {
         sandogasa_fedrq::Fedrq::subpkgs_names(self, srpm).map_err(|e| e.to_string())
+    }
+
+    fn subpkgs_nvrs(&self, srpm: &str) -> Result<Vec<(String, String, String)>, String> {
+        sandogasa_fedrq::Fedrq::subpkgs_nvrs(self, srpm).map_err(|e| e.to_string())
+    }
+
+    fn pkgs_source_vr(&self, names: &[&str]) -> Result<Vec<(String, String)>, String> {
+        sandogasa_fedrq::Fedrq::pkgs_source_vr(self, names).map_err(|e| e.to_string())
+    }
+
+    fn subpkgs_provides(&self, srpm: &str) -> Result<Vec<String>, String> {
+        sandogasa_fedrq::Fedrq::subpkgs_provides(self, srpm).map_err(|e| e.to_string())
+    }
+
+    fn pkg_provides(&self, name: &str) -> Result<Vec<String>, String> {
+        sandogasa_fedrq::Fedrq::pkg_provides(self, name).map_err(|e| e.to_string())
+    }
+
+    fn provides_of_provider(&self, capability: &str) -> Result<Vec<String>, String> {
+        sandogasa_fedrq::Fedrq::provides_of_provider(self, capability).map_err(|e| e.to_string())
+    }
+
+    fn pkg_requires(&self, name: &str) -> Result<Vec<String>, String> {
+        sandogasa_fedrq::Fedrq::pkg_requires(self, name).map_err(|e| e.to_string())
+    }
+
+    fn subpkgs_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
+        sandogasa_fedrq::Fedrq::subpkgs_requires(self, srpm).map_err(|e| e.to_string())
+    }
+
+    fn src_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
+        sandogasa_fedrq::Fedrq::src_requires(self, srpm).map_err(|e| e.to_string())
+    }
+
+    fn whatrequires(&self, packages: &[String]) -> Result<Vec<String>, String> {
+        sandogasa_fedrq::Fedrq::whatrequires(self, packages).map_err(|e| e.to_string())
+    }
+}
+
+/// Building a local repository of an update's builds, which downloads
+/// them with the Bodhi client and indexes them with createrepo_c.
+///
+/// Injected for the same reason as the rest: it is a subprocess that
+/// reaches the network, and a test that wanders into it waits minutes
+/// for a real download.
+pub(crate) trait UpdateRepoBuilder: Sync {
+    fn build(&self, alias: &str, nvrs: &[String], verbose: bool) -> Result<PathBuf, String>;
+}
+
+/// The downloader a real run uses.
+pub(crate) struct BodhiDownload;
+
+impl UpdateRepoBuilder for BodhiDownload {
+    fn build(&self, alias: &str, nvrs: &[String], verbose: bool) -> Result<PathBuf, String> {
+        local_update_repo(alias, nvrs, verbose)
     }
 }
 
@@ -479,6 +563,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
             koji: &koji,
             bodhi: &BodhiApi,
             repos: &FedrqRepos,
+            update_repo: &BodhiDownload,
         },
     )
 }
@@ -687,10 +772,6 @@ pub(crate) fn check_update_with(
     // the branch/repo pair before anything is queried: the queries
     // below fold an error into "no packages", and a refused pair
     // would read as every dependency unsatisfied.
-    let stable_fedrq = sandogasa_fedrq::Fedrq {
-        branch: Some(branch.clone()),
-        repo: opts.repo.clone(),
-    };
     let stable = services.repos.view(Some(&branch), opts.repo.as_deref());
     stable.repolist().map_err(|e| {
         format!(
@@ -752,24 +833,21 @@ pub(crate) fn check_update_with(
         .or(bodhi_branch)
         .unwrap_or_else(|| branch.clone());
 
-    let side_tag_fedrq = side_tag.as_ref().map(|tag| sandogasa_fedrq::Fedrq {
-        branch: None,
-        repo: Some(format!("@koji:{tag}")),
-    });
+    let side_tag_fedrq = side_tag
+        .as_ref()
+        .map(|tag| services.repos.view(None, Some(&format!("@koji:{tag}"))));
 
     // A COPR is queried like any plain repo class: the branch picks
     // the chroot (`fedrq -r @copr:owner/project -b epel9`).
-    let copr_fedrq = copr_spec.as_ref().map(|spec| sandogasa_fedrq::Fedrq {
-        branch: Some(new_branch.clone()),
-        repo: Some(format!("@copr:{spec}")),
+    let copr_fedrq = copr_spec.as_ref().map(|spec| {
+        services
+            .repos
+            .view(Some(&new_branch), Some(&format!("@copr:{spec}")))
     });
 
     // Prefer @testing when the update has been pushed to testing,
     // since it has authoritative repo metadata (no staleness issue).
-    let testing_fedrq = sandogasa_fedrq::Fedrq {
-        branch: Some(new_branch),
-        repo: Some("@testing".to_string()),
-    };
+    let testing_fedrq = services.repos.view(Some(&new_branch), Some("@testing"));
 
     // Two gates: Bodhi must say the update is in testing (when we know),
     // and @testing must actually carry one of the expected NVRs (covers
@@ -823,12 +901,12 @@ pub(crate) fn check_update_with(
     // RPMs (unlike koji side-tag repos), so subpackage queries work
     // directly, and COPR regenerates repodata itself after each build —
     // no koji staleness/regen machinery.
-    let new_repo = if has_testing {
-        Some((&testing_fedrq, "using @testing for new provides"))
+    let new_repo: Option<(&(dyn RepoQuery + Send + Sync), &str)> = if has_testing {
+        Some((testing_fedrq.as_ref(), "using @testing for new provides"))
     } else {
         copr_fedrq
             .as_ref()
-            .map(|fq| (fq, "comparing provides via the COPR repo"))
+            .map(|fq| (fq.as_ref(), "comparing provides via the COPR repo"))
     };
     if let Some((new_fq, how)) = new_repo {
         if opts.verbose {
@@ -842,7 +920,7 @@ pub(crate) fn check_update_with(
             .into_iter()
             .collect();
         let changed =
-            compute_changed_provides_via_subpkgs(&updated_packages, &stable_fedrq, new_fq);
+            compute_changed_provides_via_subpkgs(&updated_packages, stable.as_ref(), new_fq);
         return run_provides_analysis(
             input,
             &branch,
@@ -851,7 +929,7 @@ pub(crate) fn check_update_with(
             &new_bins,
             changed,
             vec![],
-            &stable_fedrq,
+            stable.as_ref(),
             new_fq,
             opts,
         );
@@ -902,8 +980,8 @@ pub(crate) fn check_update_with(
         let changed = compute_changed_provides_via_koji(
             &nvrs,
             &updated_packages,
-            &stable_fedrq,
-            side_fq,
+            stable.as_ref(),
+            side_fq.as_ref(),
             opts.koji_profile.as_deref(),
             opts.verbose,
         );
@@ -916,8 +994,8 @@ pub(crate) fn check_update_with(
             &koji_bins,
             changed,
             stale_side_tag,
-            &stable_fedrq,
-            side_fq,
+            stable.as_ref(),
+            side_fq.as_ref(),
             opts,
         );
     }
@@ -932,12 +1010,9 @@ pub(crate) fn check_update_with(
     if let Some(alias) = bodhi_alias.as_deref()
         && !nvrs.is_empty()
     {
-        match local_update_repo(alias, &nvrs, opts.verbose) {
+        match services.update_repo.build(alias, &nvrs, opts.verbose) {
             Ok(dir) => {
-                let local_fq = sandogasa_fedrq::Fedrq {
-                    branch: None,
-                    repo: Some(local_repo_class(&dir)),
-                };
+                let local_fq = services.repos.view(None, Some(&local_repo_class(&dir)));
                 if opts.verbose {
                     eprintln!(
                         "[check-update] comparing provides via a local repo of the update's \
@@ -954,8 +1029,8 @@ pub(crate) fn check_update_with(
                 let changed = compute_changed_provides_via_koji(
                     &nvrs,
                     &updated_packages,
-                    &stable_fedrq,
-                    &local_fq,
+                    stable.as_ref(),
+                    local_fq.as_ref(),
                     opts.koji_profile.as_deref(),
                     opts.verbose,
                 );
@@ -967,8 +1042,8 @@ pub(crate) fn check_update_with(
                     &koji_bins,
                     changed,
                     vec![],
-                    &stable_fedrq,
-                    &local_fq,
+                    stable.as_ref(),
+                    local_fq.as_ref(),
                     opts,
                 );
             }
@@ -1000,7 +1075,7 @@ pub(crate) fn check_update_with(
     }
 
     let rev_dep_sources = filter_none(
-        stable_fedrq
+        stable
             .whatrequires(&all_subpkg_names)
             .map_err(|e| format!("whatrequires failed: {e}"))?,
     );
@@ -2186,8 +2261,8 @@ fn local_update_repo(alias: &str, nvrs: &[String], verbose: bool) -> Result<Path
 /// report such provides as removed.
 fn compute_changed_provides_via_subpkgs(
     updated_packages: &[String],
-    stable_fedrq: &sandogasa_fedrq::Fedrq,
-    new_fedrq: &sandogasa_fedrq::Fedrq,
+    stable_fedrq: &(dyn RepoQuery + Send + Sync),
+    new_fedrq: &(dyn RepoQuery + Send + Sync),
 ) -> Vec<ChangedProvide> {
     let old_provides: BTreeSet<String> = updated_packages
         .par_iter()
@@ -2210,8 +2285,8 @@ fn compute_changed_provides_via_subpkgs(
 fn compute_changed_provides_via_koji(
     nvrs: &[String],
     updated_packages: &[String],
-    stable_fedrq: &sandogasa_fedrq::Fedrq,
-    side_tag_fedrq: &sandogasa_fedrq::Fedrq,
+    stable_fedrq: &(dyn RepoQuery + Send + Sync),
+    side_tag_fedrq: &(dyn RepoQuery + Send + Sync),
     koji_profile: Option<&str>,
     verbose: bool,
 ) -> Vec<ChangedProvide> {
@@ -2267,8 +2342,8 @@ fn check_update_installability(
     updated_packages: &[String],
     binary_names: &[String],
     new_provides_full: &[String],
-    new_fedrq: &sandogasa_fedrq::Fedrq,
-    stable_fedrq: &sandogasa_fedrq::Fedrq,
+    new_fedrq: &(dyn RepoQuery + Send + Sync),
+    stable_fedrq: &(dyn RepoQuery + Send + Sync),
     verbose: bool,
 ) -> Vec<UnsatisfiedDep> {
     if verbose {
@@ -2383,8 +2458,8 @@ fn run_provides_analysis(
     binary_names: &[String],
     changed_provides: Vec<ChangedProvide>,
     stale_side_tag: Vec<StaleSideTag>,
-    stable_fedrq: &sandogasa_fedrq::Fedrq,
-    new_fedrq: &sandogasa_fedrq::Fedrq,
+    stable_fedrq: &(dyn RepoQuery + Send + Sync),
+    new_fedrq: &(dyn RepoQuery + Send + Sync),
     opts: &CheckUpdateOptions,
 ) -> Result<CheckUpdateReport, String> {
     if opts.verbose {
@@ -4106,11 +4181,22 @@ mod tests {
         }
     }
 
+    /// No local repository: a check that wants one in a test would
+    /// otherwise download an update's builds over the network.
+    struct NoDownload;
+
+    impl UpdateRepoBuilder for NoDownload {
+        fn build(&self, alias: &str, _nvrs: &[String], _verbose: bool) -> Result<PathBuf, String> {
+            Err(format!("no local repo for {alias} in tests"))
+        }
+    }
+
     fn services<'a>(koji: &'a dyn KojiQuery, bodhi: &'a dyn BodhiQuery) -> Services<'a> {
         Services {
             koji,
             bodhi,
             repos: &NoRepos,
+            update_repo: &NoDownload,
         }
     }
 
@@ -4189,4 +4275,132 @@ mod tests {
     // update went stable, and the caller's branch winning over the
     // update's release — but both run on past Bodhi into fedrq, which
     // a test must not reach. They belong with the fedrq injection.
+
+    /// A repository that exists and holds nothing, which is enough for
+    /// a check that is only meant to get as far as resolving its
+    /// input. Each query says "nothing here" rather than failing, the
+    /// way an empty repo answers.
+    struct EmptyRepo;
+
+    impl RepoQuery for EmptyRepo {
+        fn repolist(&self) -> Result<Vec<String>, String> {
+            Ok(vec!["fixture".to_string()])
+        }
+        fn src_nvrs(&self, _packages: &[String]) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn subpkgs_names(&self, _srpm: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn subpkgs_nvrs(&self, _srpm: &str) -> Result<Vec<(String, String, String)>, String> {
+            Ok(vec![])
+        }
+        fn pkgs_source_vr(&self, _names: &[&str]) -> Result<Vec<(String, String)>, String> {
+            Ok(vec![])
+        }
+        fn subpkgs_provides(&self, _srpm: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn pkg_provides(&self, _name: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn provides_of_provider(&self, _capability: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn pkg_requires(&self, _name: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn subpkgs_requires(&self, _srpm: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn src_requires(&self, _srpm: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn whatrequires(&self, _packages: &[String]) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+    }
+
+    /// Repositories that answer, recording which branch and repo class
+    /// each view was asked for.
+    #[derive(Default)]
+    struct FakeRepos {
+        asked: Mutex<Vec<(Option<String>, Option<String>)>>,
+    }
+
+    impl Repos for FakeRepos {
+        fn view(
+            &self,
+            branch: Option<&str>,
+            repo: Option<&str>,
+        ) -> Box<dyn RepoQuery + Send + Sync> {
+            self.asked
+                .lock()
+                .unwrap()
+                .push((branch.map(str::to_string), repo.map(str::to_string)));
+            Box::new(EmptyRepo)
+        }
+    }
+
+    #[test]
+    fn an_update_whose_side_tag_is_gone_falls_back_to_its_own_builds() {
+        // A side tag is deleted once its update goes stable. The update
+        // still lists what it shipped, and that is what to check.
+        let koji = FakeKoji::default().missing_tag("epel10.4-build-side-152994");
+        let bodhi = FakeBodhi(update_info(
+            Some("epel10.4-build-side-152994"),
+            &["et-6.2.13-1.el10_4", "cxxopts-3.3.1-1.el10_4"],
+            Some("epel10.4"),
+        ));
+        let repos = FakeRepos::default();
+        let report = check_update_with(
+            "FEDORA-EPEL-2026-e07539fe30",
+            &CheckUpdateOptions {
+                branch: Some("c10s".to_string()),
+                repo: Some("@epel".to_string()),
+                ..Default::default()
+            },
+            &Services {
+                koji: &koji,
+                bodhi: &bodhi,
+                repos: &repos,
+                update_repo: &NoDownload,
+            },
+        )
+        .expect("the update's own builds are enough to go on");
+        assert_eq!(report.updated_packages.len(), 2, "{report:?}");
+        assert_eq!(report.branch, "c10s");
+    }
+
+    #[test]
+    fn the_branch_asked_for_decides_which_repositories_are_read() {
+        // The caller's branch wins over the update's release, and the
+        // views asked for follow it rather than the release.
+        let koji = FakeKoji::default();
+        let bodhi = FakeBodhi(update_info(None, &["et-6.2.13-1.el10_4"], Some("epel10.4")));
+        let repos = FakeRepos::default();
+        let report = check_update_with(
+            "FEDORA-EPEL-2026-e07539fe30",
+            &CheckUpdateOptions {
+                branch: Some("c10s".to_string()),
+                repo: Some("@epel".to_string()),
+                ..Default::default()
+            },
+            &Services {
+                koji: &koji,
+                bodhi: &bodhi,
+                repos: &repos,
+                update_repo: &NoDownload,
+            },
+        )
+        .expect("the check runs against the branch asked for");
+        assert_eq!(report.branch, "c10s");
+        let asked = repos.asked.lock().unwrap();
+        assert!(
+            asked
+                .iter()
+                .any(|(b, r)| b.as_deref() == Some("c10s") && r.as_deref() == Some("@epel")),
+            "the stable view follows the branch asked for: {asked:?}"
+        );
+    }
 }
