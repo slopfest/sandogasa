@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased
+
+### ebranch: ask dist-git before asking a person
+
+`file-requests` asked somebody to branch a package without checking
+whether the branch existed or whether the asker could make it. Both
+were true of `et`: dist-git has had an epel10 branch for months, and
+the person filing was already an admin on the package.
+
+A package dist-git has branched is now asked to be **built** rather
+than branched, keeping the bug — it anchors the `depends_on` edges of
+everything waiting on it — while dropping a request for work that is
+done; `Please build <package> in <branch>` is recognised as a request
+too, so such a bug is adopted like any other.
+
+Where the asker holds owner, admin or commit access, the run says so,
+prints the `fedpkg request-branch` command and offers to run it —
+`--repo` means it works from anywhere, not just a dist-git checkout of
+the package. That prompt defaults to no, since it writes to Fedora's
+infrastructure. Either way the run then asks whether to file a request
+anyway as a record; one filed after the asker requested the branch
+themselves says so, and drops the co-maintainer offer, which has no
+place on a bug about your own package. Collaborator access counts as well, since
+that is how EPEL access is usually granted — but it is scoped to a
+branch pattern that is not always set up to reach the branch at hand,
+so the scope is read from dist-git's `/contributors` and matched the
+way Pagure matches it. `epel*` covers `epel10`, `epel9` does not, and a
+scope that cannot be read asks a maintainer as before.
+
+Such a request is assigned to the asker as it is filed, from the new
+`[bugzilla] email` config key: it is their own bookkeeping, and
+assigning it afterwards would mail the package's watchers a second
+time to say so.
+
+The links drawn between requests are sent as minor updates for the
+same reason — wiring up a 31-package batch mailed everyone watching
+each package. A link Bugzilla refuses no longer ends the run either:
+it is reported and the remaining edges are drawn, since the bug IDs
+just filed are written back to the report only once linking returns,
+and stopping threw them away.
+
+A new `[packager] provenpackager = true` adds one line to a request
+for a build of an already-branched package: that the asker could do
+the build themselves in an emergency. It is declared rather than
+looked up, and does nothing else. Provenpackager is the right to build
+any package, not to branch one, so it can never decide whether to
+offer a branch, and exercising it on somebody else's package is the
+exception rather than the way to move a request along.
+
 ## v0.25.2
 
 ### fedora-cve-triage: a Go CVE is answered by the toolchain the build used

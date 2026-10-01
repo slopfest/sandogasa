@@ -100,10 +100,15 @@ pub fn review_request_package(summary: &str) -> Option<String> {
 /// against (`cxxopts-devel` against `cxxopts`), which is the caller's
 /// to reconcile — see [`branch_request_names`].
 pub fn branch_request_parts(summary: &str) -> Option<(String, String)> {
-    const PREFIX: &str = "please branch and build ";
+    /// Both wordings: a package with no branch yet is asked for both,
+    /// one already branched is asked only to be built. Longest first,
+    /// so "branch and build" is not read as "build".
+    const PREFIXES: [&str; 2] = ["please branch and build ", "please build "];
     let summary = summary.trim().trim_end_matches('.');
-    let (prefix, rest) = summary.split_at_checked(PREFIX.len())?;
-    prefix.eq_ignore_ascii_case(PREFIX).then_some(())?;
+    let rest = PREFIXES.iter().find_map(|prefix| {
+        let (head, rest) = summary.split_at_checked(prefix.len())?;
+        head.eq_ignore_ascii_case(prefix).then_some(rest)
+    })?;
     let mut words = rest.split_whitespace();
     let package = words.next()?;
     words.next().filter(|w| w.eq_ignore_ascii_case("in"))?;
@@ -734,5 +739,21 @@ mod tests {
         // Not a subpackage, just a name that starts the same way.
         assert!(!branch_request_names("cxxopts2", "cxxopts"));
         assert!(!branch_request_names("gtest", "cxxopts"));
+    }
+
+    #[test]
+    fn a_build_request_is_a_request_too() {
+        // A package branched but never built is asked only to be
+        // built, and that bug still anchors the requests waiting on it.
+        assert_eq!(
+            branch_request_parts("Please build et in epel10"),
+            Some(("et".to_string(), "epel10".to_string()))
+        );
+        // The longer wording is not read as the shorter one.
+        assert_eq!(
+            branch_request_parts("Please branch and build et in epel10"),
+            Some(("et".to_string(), "epel10".to_string()))
+        );
+        assert_eq!(branch_request_parts("Please rebuild et in epel10"), None);
     }
 }

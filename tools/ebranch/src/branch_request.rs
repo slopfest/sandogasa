@@ -42,9 +42,78 @@ pub struct Options {
     /// replace base-distro packages, and a branch request for one is
     /// always CANTFIX (rhbz#2482250).
     pub base_branch: Option<String>,
+    /// Bugzilla account to assign a request to when the asker files it
+    /// about work they could have done themselves — bookkeeping they
+    /// own rather than a question for a maintainer.
+    pub email: Option<String>,
+    /// Whether the asker holds provenpackager, from the config file.
+    /// Only ever adds a note to a build request; see
+    /// [`note_provenpackager`].
+    pub provenpackager: bool,
 }
 
 // ---- request / ping body templates (ported) ----
+
+/// What a request is actually asking for.
+///
+/// A branch can exist for months with nothing built in it — `et` was
+/// branched for epel10 long before any build — and such a package
+/// still wants a bug: it anchors the `depends_on` edges of everything
+/// waiting on it. What it must not say is "please branch", which is
+/// done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestKind {
+    /// No branch yet: ask for the branch and the build.
+    Branch,
+    /// Branched already: ask for the build alone.
+    Build,
+    /// The branch was just asked for by the person filing: the bug is
+    /// their record of it, and the anchor for what depends on it.
+    Requested,
+}
+
+impl RequestKind {
+    /// The summary line, which is also what [`adoptable`] matches and
+    /// what `sandogasa_bugclass` parses.
+    pub fn summary(self, pkg: &str, branch: &str) -> String {
+        match self {
+            // A self-served request keeps the asking summary: it is
+            // what `adoptable` matches and what sandogasa-bugclass
+            // parses, so a re-run finds this bug like any other.
+            RequestKind::Branch | RequestKind::Requested => {
+                format!("Please branch and build {pkg} in {branch}")
+            }
+            RequestKind::Build => format!("Please build {pkg} in {branch}"),
+        }
+    }
+
+    /// What the request asks for, for a one-line report.
+    pub fn asked_for(self) -> &'static str {
+        match self {
+            RequestKind::Branch => "branch",
+            RequestKind::Build => "build",
+            RequestKind::Requested => "record of a branch",
+        }
+    }
+
+    /// The opening line of the description.
+    fn asking(self, pkg: &str, branch: &str) -> String {
+        match self {
+            RequestKind::Branch => format!("Please branch and build {pkg} in {branch}.\n"),
+            RequestKind::Build => format!(
+                "{branch} already has a {pkg} branch in dist-git, but nothing \
+                 built from it.\nPlease build {pkg} in {branch}.\n"
+            ),
+            RequestKind::Requested => format!(
+                "I have asked for the {branch} branch of {pkg} myself, with\n\
+                 fedpkg request-branch.\n\
+                 \n\
+                 This bug records that and anchors the requests that depend \
+                 on it.\n"
+            ),
+        }
+    }
+}
 
 /// Build the request description, choosing the co-maintainer
 /// offer based on whether a FAS and/or SIG was given. Returns an
@@ -56,7 +125,23 @@ pub fn request_description(
     fas: Option<&str>,
     sig: Option<&str>,
 ) -> Result<String, String> {
-    let base = format!("Please branch and build {pkg} in {branch}.\n");
+    request_description_for(RequestKind::Branch, pkg, branch, fas, sig)
+}
+
+/// [`request_description`] for a given kind of request.
+pub fn request_description_for(
+    kind: RequestKind,
+    pkg: &str,
+    branch: &str,
+    fas: Option<&str>,
+    sig: Option<&str>,
+) -> Result<String, String> {
+    let base = kind.asking(pkg, branch);
+    // Nobody is being asked for anything on a bug you filed about
+    // your own package, so the co-maintainer offer has no place on it.
+    if kind == RequestKind::Requested {
+        return Ok(base);
+    }
     match (fas, sig) {
         (None, None) => Ok(base),
         // Each action URL sits alone on its own line so it linkifies
@@ -161,10 +246,37 @@ pub async fn file_one(
     blocks: &[u64],
     depends_on: &[u64],
 ) -> Result<u64, String> {
-    let summary = format!("Please branch and build {pkg} in {branch}");
-    let description = request_description(pkg, branch, fas, sig)?;
+    file_one_of_kind(
+        bz,
+        RequestKind::Branch,
+        pkg,
+        branch,
+        fas,
+        sig,
+        blocks,
+        depends_on,
+        None,
+    )
+    .await
+}
 
-    let epel = serde_json::json!({
+/// [`file_one`] for a given kind of request.
+#[allow(clippy::too_many_arguments)]
+pub async fn file_one_of_kind(
+    bz: &BzClient,
+    kind: RequestKind,
+    pkg: &str,
+    branch: &str,
+    fas: Option<&str>,
+    sig: Option<&str>,
+    blocks: &[u64],
+    depends_on: &[u64],
+    claim: Option<&str>,
+) -> Result<u64, String> {
+    let summary = kind.summary(pkg, branch);
+    let description = request_description_for(kind, pkg, branch, fas, sig)?;
+
+    let mut epel = serde_json::json!({
         "product": "Fedora EPEL",
         "version": branch,
         "component": pkg,
@@ -173,6 +285,11 @@ pub async fn file_one(
         "blocks": blocks,
         "depends_on": depends_on,
     });
+    // Claimed as it is filed rather than reassigned afterwards: the
+    // bug is the asker's own record of work they are doing, and an
+    // update would mail everybody watching the package a second time
+    // to say so.
+    sandogasa_bugzilla::claim::apply_claim(&mut epel, claim);
     let resp = bz
         .create(&epel)
         .await
@@ -182,7 +299,7 @@ pub async fn file_one(
     }
 
     // Component not in EPEL → request the Fedora branch instead.
-    let fedora = serde_json::json!({
+    let mut fedora = serde_json::json!({
         "product": "Fedora",
         "version": "rawhide",
         "component": pkg,
@@ -191,6 +308,7 @@ pub async fn file_one(
         "blocks": blocks,
         "depends_on": depends_on,
     });
+    sandogasa_bugzilla::claim::apply_claim(&mut fedora, claim);
     let resp2 = bz
         .create(&fedora)
         .await
@@ -481,6 +599,142 @@ async fn follow_duplicate(
     Ok(bug)
 }
 
+/// What to do about a package the asker could branch themselves.
+///
+/// Asking somebody else to do work you have rights to do is the thing
+/// worth catching; what happens next is the operator's call, since a
+/// bug is still wanted when it anchors the requests waiting on it.
+///
+/// Only access dist-git records for the person counts. A
+/// provenpackager has nothing to do with this: that right is to
+/// *build* any package, not to branch one, so it can never answer the
+/// question here.
+///
+/// Known gap: a group listed on the project — `rust-sig` holds commit
+/// on rust-tokio, for instance — grants its members access that this
+/// does not see, because knowing it needs the asker's group
+/// membership. Such a package is offered no branch and gets a request
+/// instead, which is the safe direction.
+fn offer_to_branch(pkg: &str, branch: &str, standing: &BranchStanding, dry_run: bool) -> Offer {
+    let Some(access) = standing.access else {
+        return Offer::only_file();
+    };
+    if !standing.may_branch() {
+        return Offer::only_file();
+    }
+    let how = match standing.scope {
+        Some(true) => format!("{access:?} access covering {branch}"),
+        _ => format!("{access:?} access"),
+    };
+    println!("{pkg}: you have {how} in dist-git, so you can branch it for {branch} yourself:");
+    println!("  fedpkg request-branch --repo {pkg} {branch}");
+    if dry_run || !std::io::stdin().is_terminal() {
+        println!("{}", unattended_record_note(dry_run));
+        return Offer::only_file();
+    }
+    // Default no: it writes to Fedora's infrastructure, and an
+    // absent-minded Enter should not file a releng ticket.
+    let requested = sandogasa_cli::confirm(&format!("  run it for {pkg} now?"), false)
+        .unwrap_or(false)
+        && match request_branch(pkg, branch) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("warning: {e}");
+                false
+            }
+        };
+    let file = sandogasa_cli::confirm(
+        &format!("  file a request for {pkg} anyway, as a record?"),
+        true,
+    )
+    .unwrap_or(true);
+    Offer { requested, file }
+}
+
+/// What came of offering to branch a package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Offer {
+    /// The branch was asked for from this run.
+    requested: bool,
+    /// File a bug as well.
+    file: bool,
+}
+
+impl Offer {
+    /// The answer where no offer arises: file, as before.
+    fn only_file() -> Self {
+        Offer {
+            requested: false,
+            file: true,
+        }
+    }
+
+    /// What to ask Bugzilla for, given what dist-git said and what the
+    /// asker just did about it.
+    fn kind(self, standing: Option<&BranchStanding>) -> RequestKind {
+        match self.requested {
+            true => RequestKind::Requested,
+            false => request_kind(standing),
+        }
+    }
+}
+
+/// Ask releng for the branch, the way a packager would by hand.
+///
+/// `--repo` is what makes this usable from anywhere: without it
+/// `fedpkg` wants to be run inside a dist-git checkout of the package,
+/// and this runs over a whole closure of them. Output is inherited so
+/// the ticket URL fedpkg prints reaches the person who asked for it.
+fn request_branch(pkg: &str, branch: &str) -> Result<(), String> {
+    // `fedpkg --version` is not a thing — it exits 2 with a usage
+    // message — so probe with `help`, as koji is probed.
+    sandogasa_cli::require_tools(&[("fedpkg", "sudo dnf install fedpkg", Some("help"))])?;
+    let status = std::process::Command::new("fedpkg")
+        .args(["request-branch", "--repo", pkg, branch])
+        .status()
+        .map_err(|e| format!("could not run fedpkg: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("fedpkg request-branch for {pkg} {status}"))
+    }
+}
+
+/// What a run that cannot put the question says about the record.
+///
+/// A dry run has a terminal and simply is not asking yet, so it says
+/// the question is coming rather than answering it on the asker's
+/// behalf; a real run with nothing on stdin has nobody to ask and
+/// keeps the request, which is what the command was invoked to do.
+fn unattended_record_note(dry_run: bool) -> &'static str {
+    if dry_run {
+        "  would ask whether to run it, and whether to file a request anyway, \
+         as a record and an anchor for what depends on it"
+    } else {
+        "  stdin is not a terminal, so filing a request anyway, as a record \
+         and an anchor for what depends on it"
+    }
+}
+
+/// Note, on a request for a build of an already-branched package,
+/// that a provenpackager could do that build themselves. Printed
+/// after the line naming the request it annotates, since it is a
+/// footnote on that package and reads as orphaned above it.
+///
+/// Provenpackager is the right to build any package, not to branch
+/// one, so it never answers [`offer_to_branch`]; and Fedora's
+/// convention is that it is for emergencies, not for getting on with
+/// things. Hence a line of prose and nothing else: no prompt, no
+/// command to paste, and the word "emergency" in it.
+fn provenpackager_note(pkg: &str, kind: RequestKind, provenpackager: bool) -> Option<String> {
+    (provenpackager && kind == RequestKind::Build).then(|| {
+        format!(
+            "  note: you are a provenpackager, so in an emergency you could \
+             build {pkg} yourself — the exception, not the way to get this done"
+        )
+    })
+}
+
 /// Whether to adopt an existing request as this package's: a prompt
 /// when there is somebody to answer it, and yes otherwise.
 ///
@@ -500,6 +754,143 @@ fn adopt_request(pkg: &str, rhbz: u64) -> bool {
         true,
     )
     .unwrap_or(true)
+}
+
+/// What dist-git says about branching a package: whether the branch is
+/// already there, and whether the person asking could make it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct BranchStanding {
+    /// The branch exists in dist-git, built or not. `et` was branched
+    /// for epel10 months before anything was built there, and a
+    /// request for it is a request for work already done.
+    pub branched: bool,
+    /// The access the asker holds, when they hold any: owner, admin or
+    /// commit means they can branch it themselves rather than ask.
+    pub access: Option<sandogasa_distgit::AccessLevel>,
+    /// For collaborator access, whether its branch scope reaches the
+    /// branch being asked for. `None` when the question does not
+    /// arise, or when dist-git could not be asked.
+    pub scope: Option<bool>,
+}
+
+impl BranchStanding {
+    /// Whether the asker can act rather than ask.
+    ///
+    /// Collaborator counts, but only once its branch scope has been
+    /// read and covers the branch in question. That is how EPEL access
+    /// is usually granted — as a collaborator scoped to `epel*` — and
+    /// the scope is not always set up to reach the branch being asked
+    /// for. Anything unread or unreachable asks a person instead.
+    pub fn may_branch(&self) -> bool {
+        use sandogasa_distgit::AccessLevel::*;
+        match self.access {
+            Some(Owner | Admin | Commit) => true,
+            Some(Collaborator) => self.scope == Some(true),
+            _ => false,
+        }
+    }
+}
+
+/// Whether a collaborator's branch scope covers `branch`.
+///
+/// Pagure splits the scope on commas and matches each pattern against
+/// the ref name with `fnmatch` (`is_repo_collaborator` in
+/// `pagure/utils.py`), so `epel*` covers `epel10` and `epel9` covers
+/// nothing else. Only `*` is honoured here; a pattern using fnmatch's
+/// `?` or `[seq]` reads as not covering, which asks a person rather
+/// than assuming the right to act.
+fn scope_covers(patterns: &str, branch: &str) -> bool {
+    patterns
+        .split(',')
+        .any(|p| crate::check_crate::glob_match(p.trim(), branch))
+}
+
+/// The branch scope of `user`'s collaborator access, as dist-git
+/// publishes it: `Some(true)` when it reaches `branch`.
+///
+/// This is a second request, made only for a collaborator, because the
+/// project endpoint names collaborators without saying what they may
+/// touch — only `/contributors` carries the pattern.
+async fn collaborator_scope(
+    client: &sandogasa_distgit::DistGitClient,
+    package: &str,
+    user: &str,
+    branch: &str,
+) -> Option<bool> {
+    match client.get_contributors(package).await {
+        Ok(c) => c
+            .users
+            .collaborators
+            .iter()
+            .find(|c| c.name() == user)
+            .map(|c| c.branches().is_none_or(|p| scope_covers(p, branch))),
+        Err(e) => {
+            eprintln!("warning: could not read {package}'s collaborator scope ({e})");
+            None
+        }
+    }
+}
+
+/// What to ask for, given what dist-git says: a package already
+/// branched needs building, not branching.
+fn request_kind(standing: Option<&BranchStanding>) -> RequestKind {
+    match standing {
+        Some(s) if s.branched => RequestKind::Build,
+        _ => RequestKind::Branch,
+    }
+}
+
+/// Who a request should be assigned to as it is filed: the asker,
+/// when they could have branched the package themselves and chose to
+/// file anyway. Such a bug is their own record of work they are
+/// doing, and leaving it on the maintainer asks them for something
+/// nobody is waiting on. Everything else stays unassigned, which is
+/// how Bugzilla says "the component's maintainer".
+fn claim_for<'a>(standing: Option<&BranchStanding>, opts: &'a Options) -> Option<&'a str> {
+    standing
+        .filter(|s| s.may_branch())
+        .and(opts.email.as_deref())
+}
+
+/// Ask dist-git where a package stands for a branch.
+///
+/// Failure is not fatal and not silent: without this the run behaves
+/// as it did before, filing a request and possibly duplicating work.
+pub(crate) async fn branch_standing(
+    client: &sandogasa_distgit::DistGitClient,
+    package: &str,
+    branch: &str,
+    fas: Option<&str>,
+) -> BranchStanding {
+    let branched = match client.project_branches(package).await {
+        Ok(Some(branches)) => branches.iter().any(|b| b == branch),
+        Ok(None) => false,
+        Err(e) => {
+            eprintln!("warning: could not read {package}'s branches from dist-git ({e})");
+            false
+        }
+    };
+    let access = match fas {
+        Some(user) => match client.get_acls(package).await {
+            Ok(acls) => acls.user_level(user),
+            Err(e) => {
+                eprintln!("warning: could not read {package}'s access list ({e})");
+                None
+            }
+        },
+        None => None,
+    };
+    let scope = match (access, fas) {
+        (Some(sandogasa_distgit::AccessLevel::Collaborator), Some(user)) => {
+            collaborator_scope(client, package, user, branch).await
+        }
+        _ => None,
+    };
+    BranchStanding {
+        branched,
+        access,
+        scope,
+    }
 }
 
 /// The branch requests already open for `packages`, whoever filed
@@ -657,6 +1048,16 @@ pub async fn file_batch(
     // closure wanted a capability that branch's older build does not
     // provide -- a soname from the source branch's build, say.
     let target_present = target_probe(probe, &opts.branch, &candidates)?;
+    // What dist-git says: a branch that exists needs no request, and an
+    // asker with access can make one rather than ask for it.
+    let distgit = sandogasa_distgit::DistGitClient::new();
+    let mut standing: BTreeMap<String, BranchStanding> = BTreeMap::new();
+    for pkg in &candidates {
+        standing.insert(
+            pkg.clone(),
+            branch_standing(&distgit, pkg, &opts.branch, opts.fas.as_deref()).await,
+        );
+    }
     let (to_file, skipped) = partition_filable(
         report,
         candidates,
@@ -679,7 +1080,28 @@ pub async fn file_batch(
 
     if opts.dry_run {
         for pkg in &to_file {
-            println!("would file branch request for {pkg} in {}", opts.branch);
+            let kind = request_kind(standing.get(pkg));
+            if let Some(stands) = standing.get(pkg) {
+                offer_to_branch(pkg, &opts.branch, stands, true);
+            }
+            println!(
+                "would file {} request for {pkg} in {}{}{}",
+                kind.asked_for(),
+                opts.branch,
+                // Where the offer above was made, the filing is the
+                // asker's to decide, not something to state.
+                match standing.get(pkg).is_some_and(|s| s.may_branch()) {
+                    true => " if you say yes",
+                    false => "",
+                },
+                match claim_for(standing.get(pkg), opts) {
+                    Some(email) => format!(", assigned to {email}"),
+                    None => String::new(),
+                }
+            );
+            if let Some(note) = provenpackager_note(pkg, kind, opts.provenpackager) {
+                println!("{note}");
+            }
         }
         // Links among already-recorded requests (a re-run);
         // newly-filed ones don't have IDs to preview yet.
@@ -690,17 +1112,30 @@ pub async fn file_batch(
     let blocks = resolve_refs(&bz, blocked).await?;
 
     for pkg in &to_file {
-        let rhbz = file_one(
+        let offer = match standing.get(pkg) {
+            Some(stands) => offer_to_branch(pkg, &opts.branch, stands, opts.dry_run),
+            None => Offer::only_file(),
+        };
+        if !offer.file {
+            continue;
+        }
+        let kind = offer.kind(standing.get(pkg));
+        let rhbz = file_one_of_kind(
             &bz,
+            kind,
             pkg,
             &opts.branch,
             opts.fas.as_deref(),
             opts.sig.as_deref(),
             &blocks,
             &[],
+            claim_for(standing.get(pkg), opts),
         )
         .await?;
-        println!("filed {pkg}: rhbz#{rhbz}");
+        println!("filed {pkg}: rhbz#{rhbz} ({})", kind.asked_for());
+        if let Some(note) = provenpackager_note(pkg, kind, opts.provenpackager) {
+            println!("{note}");
+        }
         report.branch_requests.insert(
             pkg.clone(),
             BranchRequest {
@@ -713,7 +1148,7 @@ pub async fn file_batch(
 
     // Link: each package's request depends on its dependencies'
     // requests. Done after filing so every rhbz exists.
-    link_requests(&bz, &report.edges, &report.branch_requests, opts.verbose).await?;
+    link_requests(&bz, &report.edges, &report.branch_requests, opts.verbose).await;
 
     Ok(changed)
 }
@@ -721,12 +1156,20 @@ pub async fn file_batch(
 /// Add `depends_on` links between filed requests following the
 /// package dependency edges. Only links packages that both have
 /// a recorded request. Existing links aren't removed.
+///
+/// A bug that cannot be linked is reported and the rest are drawn
+/// anyway. Bugzilla is unreliable enough under a batch of writes that
+/// one refusal is not a reason to abandon the other thirty edges, and
+/// the bug IDs just filed are only written back to the report when
+/// this returns — stopping here would lose them. Linking is additive
+/// and idempotent, so the fix is to run `file-requests` again.
 async fn link_requests(
     bz: &BzClient,
     pkg_edges: &BTreeMap<String, BTreeSet<String>>,
     requests: &BTreeMap<String, BranchRequest>,
     verbose: bool,
-) -> Result<(), String> {
+) {
+    let mut failed: Vec<u64> = Vec::new();
     for (pkg, deps) in pkg_edges {
         let Some(req) = requests.get(pkg) else {
             continue;
@@ -745,21 +1188,33 @@ async fn link_requests(
             );
         }
         // Additive update so we never clobber unrelated links; a failed
-        // request is read back before it counts as failed.
-        let body = serde_json::json!({ "depends_on": { "add": dep_ids } });
+        // request is read back before it counts as failed. Minor, so
+        // drawing a graph edge does not mail everyone watching the
+        // package: a 31-package batch is otherwise 31 notifications
+        // about bookkeeping (issue #30).
+        let body = serde_json::json!({
+            "depends_on": { "add": dep_ids },
+            "minor_update": true,
+        });
         let out = bz.update_verified(req.rhbz, &body, 3).await;
         if let Some(note) = out.note() {
             eprintln!("note: rhbz#{}: {note}", req.rhbz);
         }
         if !out.complete() {
-            return Err(format!(
-                "failed to link rhbz#{}: {}",
+            eprintln!(
+                "warning: could not link rhbz#{} ({pkg}): {}",
                 req.rhbz,
                 out.last_error.unwrap_or_default()
-            ));
+            );
+            failed.push(req.rhbz);
         }
     }
-    Ok(())
+    if !failed.is_empty() {
+        eprintln!(
+            "warning: {} request(s) left unlinked: {failed:?} — every bug was              filed and recorded; re-run file-requests to draw the rest",
+            failed.len()
+        );
+    }
 }
 
 fn preview_links(
@@ -1433,6 +1888,8 @@ mod tests {
             dry_run,
             verbose: false,
             base_branch: None,
+            email: None,
+            provenpackager: false,
         }
     }
 
@@ -1645,9 +2102,71 @@ mod tests {
             ),
         ]);
         // `unfiled` has no request, so it contributes no edge.
-        link_requests(&bz, &edges, &requests, false)
-            .await
-            .expect("the link goes through");
+        link_requests(&bz, &edges, &requests, false).await;
+    }
+
+    #[tokio::test]
+    async fn a_bug_bugzilla_refuses_to_link_does_not_stop_the_others() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Bugzilla is wonky under a batch of writes; one refusal must
+        // not abandon the rest of the graph, nor the bug IDs the
+        // caller has yet to write back to the report.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug_json(1, "NEW", None), bug_json(2, "NEW", None)]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/1"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        // The second bug is still attempted, and succeeds.
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{"id": 2, "changes": {}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // No backoff: the retries are the behaviour under test, not
+        // the waiting between them.
+        let bz = BzClient::new(&server.uri()).with_retry_backoff(std::time::Duration::ZERO);
+        let edges = BTreeMap::from([
+            ("a".to_string(), BTreeSet::from(["dep".to_string()])),
+            ("b".to_string(), BTreeSet::from(["dep".to_string()])),
+        ]);
+        let requests = BTreeMap::from([
+            (
+                "a".to_string(),
+                BranchRequest {
+                    rhbz: 1,
+                    pinged: false,
+                },
+            ),
+            (
+                "b".to_string(),
+                BranchRequest {
+                    rhbz: 2,
+                    pinged: false,
+                },
+            ),
+            (
+                "dep".to_string(),
+                BranchRequest {
+                    rhbz: 3,
+                    pinged: false,
+                },
+            ),
+        ]);
+        link_requests(&bz, &edges, &requests, false).await;
     }
 
     #[tokio::test]
@@ -1936,5 +2455,177 @@ mod tests {
             .expect("a dry run completes");
         assert!(!changed);
         assert!(report.branch_requests.is_empty());
+    }
+
+    #[test]
+    fn a_branched_package_is_asked_to_be_built_not_branched() {
+        // Issue #30: et has had an epel10 branch in dist-git since
+        // months before anything was built there. A request for it is
+        // still worth filing — the dependency edges anchor on it — but
+        // asking to branch what is branched reads as noise.
+        let branched = BranchStanding {
+            branched: true,
+            access: None,
+            scope: None,
+        };
+        assert_eq!(request_kind(Some(&branched)), RequestKind::Build);
+        assert_eq!(request_kind(None), RequestKind::Branch);
+        assert_eq!(
+            request_kind(Some(&BranchStanding::default())),
+            RequestKind::Branch
+        );
+
+        assert_eq!(
+            RequestKind::Build.summary("et", "epel10"),
+            "Please build et in epel10"
+        );
+        let body = request_description_for(RequestKind::Build, "et", "epel10", None, None).unwrap();
+        assert!(
+            body.contains("already has a et branch in dist-git"),
+            "{body}"
+        );
+        assert!(!body.contains("Please branch and build"), "{body}");
+    }
+
+    #[test]
+    fn access_decides_whether_one_can_branch_rather_than_ask() {
+        use sandogasa_distgit::AccessLevel::*;
+        let with = |access| BranchStanding {
+            branched: false,
+            access: Some(access),
+            scope: None,
+        };
+        // salimma is an admin on et, so the request was asking for work
+        // they could do.
+        assert!(with(Admin).may_branch());
+        assert!(with(Owner).may_branch());
+        assert!(with(Commit).may_branch());
+        // Collaborator is how EPEL access is usually granted, but only
+        // where its scope reaches the branch being asked for: a scope
+        // that stops short, or one that could not be read, asks a
+        // person. A ticket holder never acts.
+        assert!(!with(Collaborator).may_branch());
+        assert!(
+            BranchStanding {
+                branched: false,
+                access: Some(Collaborator),
+                scope: Some(true),
+            }
+            .may_branch()
+        );
+        assert!(
+            !BranchStanding {
+                branched: false,
+                access: Some(Collaborator),
+                scope: Some(false),
+            }
+            .may_branch()
+        );
+        assert!(!with(Ticket).may_branch());
+        assert!(!BranchStanding::default().may_branch());
+    }
+
+    #[test]
+    fn a_collaborator_scope_is_read_the_way_pagure_reads_it() {
+        // fzf grants epel-packagers-sig "epel*", which is the common
+        // shape; a scope naming one branch covers only that one.
+        assert!(scope_covers("epel*", "epel10"));
+        assert!(scope_covers("epel*", "epel9"));
+        assert!(!scope_covers("epel9", "epel10"));
+        assert!(!scope_covers("rawhide", "epel10"));
+        // Comma-separated, each pattern trimmed, as Pagure splits it.
+        assert!(scope_covers("rawhide, epel10", "epel10"));
+        assert!(scope_covers("f4*,epel*", "epel10.3"));
+        assert!(!scope_covers("f4*, epel9*", "epel10"));
+        assert!(!scope_covers("", "epel10"));
+    }
+
+    #[test]
+    fn a_request_is_claimed_only_when_it_is_the_asker_s_own_bookkeeping() {
+        let mut opts = mock_opts("http://127.0.0.1:1", true);
+        opts.email = Some("me@example.com".into());
+        let can = BranchStanding {
+            branched: false,
+            access: Some(sandogasa_distgit::AccessLevel::Commit),
+            scope: None,
+        };
+        let cannot = BranchStanding {
+            branched: false,
+            access: Some(sandogasa_distgit::AccessLevel::Ticket),
+            scope: None,
+        };
+        assert_eq!(claim_for(Some(&can), &opts), Some("me@example.com"));
+        // Somebody else's package: the bug is a question for them, and
+        // assigning it to us would take it off their list.
+        assert_eq!(claim_for(Some(&cannot), &opts), None);
+        assert_eq!(claim_for(None, &opts), None);
+        // No configured account, nothing to claim as.
+        opts.email = None;
+        assert_eq!(claim_for(Some(&can), &opts), None);
+    }
+
+    #[test]
+    fn a_branch_the_asker_requested_is_recorded_not_asked_for() {
+        // The summary stays in the family `adoptable` matches, so a
+        // re-run finds the bug; the body says what actually happened.
+        assert_eq!(
+            RequestKind::Requested.summary("cpdup", "epel10"),
+            RequestKind::Branch.summary("cpdup", "epel10")
+        );
+        let body =
+            request_description_for(RequestKind::Requested, "cpdup", "epel10", None, None).unwrap();
+        assert!(
+            body.contains("I have asked for the epel10 branch"),
+            "{body}"
+        );
+        assert!(body.contains("fedpkg request-branch"), "{body}");
+        assert!(!body.contains("Please branch and build"), "{body}");
+        // No co-maintainer offer on your own package, however the run
+        // was invoked.
+        let with_offer =
+            request_description_for(RequestKind::Requested, "cpdup", "epel10", Some("me"), None)
+                .unwrap();
+        assert_eq!(with_offer, body);
+        // And the kind follows what the asker did, not just dist-git.
+        let unbranched = BranchStanding::default();
+        assert_eq!(
+            Offer {
+                requested: true,
+                file: true
+            }
+            .kind(Some(&unbranched)),
+            RequestKind::Requested
+        );
+        assert_eq!(
+            Offer::only_file().kind(Some(&unbranched)),
+            RequestKind::Branch
+        );
+    }
+
+    #[test]
+    fn a_dry_run_says_the_question_is_coming_rather_than_answering_it() {
+        // The prompt is real; only a run with nobody to ask decides on
+        // the asker's behalf.
+        let dry = unattended_record_note(true);
+        assert!(dry.contains("would ask whether to run it"), "{dry}");
+        assert!(dry.contains("whether to file a request"), "{dry}");
+        let unattended = unattended_record_note(false);
+        assert!(unattended.contains("not a terminal"), "{unattended}");
+        assert!(
+            unattended.contains("filing a request anyway"),
+            "{unattended}"
+        );
+    }
+
+    #[test]
+    fn provenpackager_is_mentioned_only_for_a_build_of_a_branched_package() {
+        let note = provenpackager_note("et", RequestKind::Build, true).expect("a note");
+        assert!(note.contains("emergency"), "{note}");
+        assert!(note.contains("exception"), "{note}");
+        // Branching is not something provenpackager can do, so a
+        // branch request must not raise it — nor must a run by
+        // somebody who does not hold it.
+        assert_eq!(provenpackager_note("et", RequestKind::Branch, true), None);
+        assert_eq!(provenpackager_note("et", RequestKind::Build, false), None);
     }
 }

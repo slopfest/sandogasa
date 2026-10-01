@@ -20,6 +20,32 @@ pub struct EbranchConfig {
     /// `[check-crate]` table.
     #[serde(default, rename = "check-crate")]
     pub check_crate: CheckCrateConfig,
+    /// `[packager]` table: who is asking, and what they may do.
+    #[serde(default)]
+    pub packager: PackagerConfig,
+}
+
+/// Who is running this, and what they may do beyond what a project's
+/// own access list says.
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct PackagerConfig {
+    /// FAS username, the default for `--fas`. It is what dist-git is
+    /// asked about when deciding whether a branch request is a
+    /// question for somebody else, and what a co-maintainer offer
+    /// names.
+    #[serde(default)]
+    pub fas: String,
+    /// Whether they hold provenpackager.
+    ///
+    /// Declared rather than looked up, and deliberately: a
+    /// provenpackager may build any package but may not branch one,
+    /// and Fedora's convention is that the build right is for
+    /// emergencies rather than for getting on with things. So this
+    /// only ever adds a note to a request for a build that is already
+    /// branched, naming it as the exception it is. It never offers,
+    /// never acts, and has nothing to do with branching.
+    #[serde(default)]
+    pub provenpackager: bool,
 }
 
 /// NVD configuration.
@@ -151,6 +177,54 @@ pub struct BugzillaConfig {
     pub api_key: String,
     #[serde(default)]
     pub url: String,
+    /// The Bugzilla account to assign a request to when it is the
+    /// asker's own bookkeeping rather than something to ask of a
+    /// maintainer.
+    #[serde(default)]
+    pub email: String,
+}
+
+/// The Bugzilla account to claim bookkeeping requests as, if set.
+pub fn bugzilla_email() -> Option<String> {
+    sandogasa_config::ConfigFile::for_tool("ebranch")
+        .load::<EbranchConfig>()
+        .ok()
+        .map(|c| c.bugzilla.email)
+        .filter(|e| !e.is_empty())
+}
+
+/// Whether the config declares the asker a provenpackager.
+pub fn is_provenpackager() -> bool {
+    packager().provenpackager
+}
+
+/// The configured FAS username, if any: the fallback for `--fas`.
+pub fn packager_fas() -> Option<String> {
+    Some(packager().fas).filter(|f| !f.is_empty())
+}
+
+/// The `[packager]` table as configured.
+fn packager() -> PackagerConfig {
+    sandogasa_config::ConfigFile::for_tool("ebranch")
+        .load::<EbranchConfig>()
+        .map(|c| c.packager)
+        .unwrap_or_default()
+}
+
+/// Whether dist-git lists `fas` in the provenpackager group.
+///
+/// Read from dist-git's mirror of the FAS group rather than from
+/// FASJSON, which would need a Kerberos ticket to answer a question
+/// asked once during setup. The mirror can lag, so the answer is
+/// offered as the default of a prompt rather than written straight to
+/// the file, and `None` means the lookup failed, not that the answer
+/// is no.
+async fn looks_like_provenpackager(fas: &str) -> Option<bool> {
+    sandogasa_distgit::DistGitClient::new()
+        .get_group_members("provenpackager")
+        .await
+        .ok()
+        .map(|members| members.iter().any(|m| m == fas))
 }
 
 /// Load the Bugzilla API key, checking (in order):
@@ -226,6 +300,52 @@ pub async fn cmd_config() -> Result<(), String> {
         }
     }
 
+    // Bugzilla account: optional, and only ever used to assign a
+    // request the asker files about their own work to themselves.
+    if config.bugzilla.email.is_empty()
+        && let Some(email) = sandogasa_config::prompt_optional_field(
+            "Bugzilla",
+            "account e-mail (optional, to claim your own requests)",
+            false,
+        )
+        .map_err(|e| format!("failed to read e-mail: {e}"))?
+    {
+        config.bugzilla.email = email;
+    }
+
+    // FAS: who is asking. Everything dist-git is asked about a
+    // package needs this, so it is worth having in the file rather
+    // than on every command line.
+    if config.packager.fas.is_empty()
+        && let Some(fas) = sandogasa_config::prompt_optional_field(
+            "FAS",
+            "username (optional, the default for --fas)",
+            false,
+        )
+        .map_err(|e| format!("failed to read FAS username: {e}"))?
+    {
+        config.packager.fas = fas;
+    }
+
+    // Provenpackager: looked up rather than asked cold, since few
+    // people think of themselves in those terms day to day. The
+    // lookup only sets the default; the answer is the packager's.
+    if !config.packager.fas.is_empty() {
+        print!("Checking provenpackager membership... ");
+        let found = looks_like_provenpackager(&config.packager.fas).await;
+        match found {
+            Some(true) => println!("{} is a provenpackager.", config.packager.fas),
+            Some(false) => println!("not a member."),
+            None => println!("could not ask dist-git."),
+        }
+        config.packager.provenpackager = sandogasa_cli::confirm(
+            "Note on build requests that you could build a branched package \
+             yourself in an emergency?",
+            found.unwrap_or(config.packager.provenpackager),
+        )
+        .map_err(|e| format!("failed to read answer: {e}"))?;
+    }
+
     // NVD API key: optional, for judging CVE trackers against the
     // fix NVD records.
     if config.nvd.api_key.is_empty() {
@@ -274,6 +394,25 @@ pub async fn cmd_config() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_packager_table_carries_who_is_asking() {
+        let cfg: EbranchConfig = toml::from_str(
+            r#"
+            [packager]
+            fas = "salimma"
+            provenpackager = true
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.packager.fas, "salimma");
+        assert!(cfg.packager.provenpackager);
+        // Absent is the same as unset: no FAS to fall back to, and no
+        // claim of provenpackager.
+        let bare: EbranchConfig = toml::from_str("").unwrap();
+        assert!(bare.packager.fas.is_empty());
+        assert!(!bare.packager.provenpackager);
+    }
 
     #[test]
     fn check_crate_excludes_parse_from_their_table_and_default_empty() {

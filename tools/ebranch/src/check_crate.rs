@@ -1495,8 +1495,9 @@ fn matches_in_tree_glob(list: &[String], name: &str) -> bool {
         .any(|g| g != IN_TREE_REPOSITORY && glob_match(g, name))
 }
 
-/// Shell-style `*` matching, enough for `uu_*` and `*-sys`.
-fn glob_match(pattern: &str, name: &str) -> bool {
+/// Shell-style `*` matching, enough for `uu_*` and `*-sys` — and for
+/// a collaborator's `epel*` branch scope, which is why it is shared.
+pub(crate) fn glob_match(pattern: &str, name: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
     if parts.len() == 1 {
         return pattern == name;

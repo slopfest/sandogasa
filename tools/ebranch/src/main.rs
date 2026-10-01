@@ -657,7 +657,8 @@ struct BranchRequestCommon {
     #[arg(long, env = "BUGZILLA_API_KEY")]
     api_key: Option<String>,
 
-    /// FAS of the reporter, if willing to co-maintain.
+    /// FAS of the reporter, if willing to co-maintain (defaults to
+    /// the FAS from `ebranch config`).
     #[arg(long)]
     fas: Option<String>,
 
@@ -869,11 +870,13 @@ fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Opt
         bugzilla_url: c.bugzilla_url.clone(),
         api_key,
         branch: c.branch.clone(),
-        fas: c.fas.clone(),
+        fas: c.fas.clone().or_else(config::packager_fas),
         sig: c.sig.clone(),
         dry_run: c.dry_run,
         verbose: c.verbose,
         base_branch: resolve::base_branch_for(c.base_branch.as_deref(), Some(&c.branch), None),
+        email: config::bugzilla_email(),
+        provenpackager: config::is_provenpackager(),
     })
 }
 

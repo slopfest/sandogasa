@@ -142,3 +142,62 @@ Apply the same shape to the queries still called directly — check-update
 drives fedrq, Koji and Bodhi, check-crate drives crates.io — when their
 flows need covering. The decision code is worth testing; the transport
 is not.
+
+## Only dist-git's own access list decides whether to act on a package
+
+`file-requests` offers to branch a package when the project records
+the asker as owner, admin or commit — or as a collaborator whose
+branch scope reaches the branch in question. Collaborator is in that
+list deliberately: it is how EPEL access is usually granted, and
+refusing it would send the common EPEL case back to filing a bug for
+work the asker could do. But the scope is a branch pattern and is not
+always set up to reach the branch at hand, so it is checked rather
+than assumed: the project endpoint names collaborators without their
+scope, and `/contributors` carries it. Match it the way Pagure does
+(`is_repo_collaborator` in `pagure/utils.py`): split on commas, trim,
+and glob each pattern against the branch name. A scope that cannot be
+read is not an offer.
+
+Do not reach for `/hascommit?user=&branch=` here, however exactly it
+seems to phrase the question. It answers for a provenpackager on every
+package in Fedora, so it cannot tell access on this project from the
+blanket right below — it returns true for `kernel` and `bash`.
+
+Two things that look like access are not, and must not be folded in:
+
+- **Provenpackager** is the right to *build* any package, not to
+  branch one, so it cannot answer this question at all. It is declared
+  in the config rather than looked up, and all it ever does is add a
+  line to a request for a build of an already-branched package saying
+  the asker could do that build in an emergency. Fedora's convention
+  is that this is the exception; do not make it something the tool
+  offers, prompts for, or acts on.
+- **Group membership.** A group on the project (`rust-sig` holds commit
+  on rust-tokio) does grant its members access, but reading it needs
+  the asker's group list, which this does not fetch. Such a package is
+  offered no branch and gets a request instead — the safe direction.
+
+Acting is offered, never assumed. The branch is requested only by an
+interactive run, from a prompt defaulting to no, and the bug is a
+second question with its own prompt — a dry run says both questions
+are coming rather than answering them, and a run with nothing on stdin
+files the bug as the command always did. `fedpkg` is probed with
+`help`: `fedpkg --version` exits 2 with a usage message.
+
+A request the asker files about a package they could have branched is
+assigned to them as it is filed (`[bugzilla] email`), never reassigned
+afterwards: a second write would mail everybody watching the package
+to say the asker had claimed their own bookkeeping. Same reason the
+`depends_on` links are sent with `minor_update`.
+
+## Drawing the request graph must not be able to lose a filed bug
+
+`file_batch` writes the bug IDs it filed back to the report only after
+`link_requests` returns, so a link failure that propagated would
+discard them — bugs are on a public tracker by then, and the report no
+longer knows about them. Linking therefore reports a refusal and
+carries on: each bug gets one update carrying all its edges, with
+`minor_update` so a graph edge does not mail the package's watchers,
+and Bugzilla is unreliable enough under a batch of writes that one
+refusal says nothing about the next. The writes are additive and
+idempotent, so re-running `file-requests` fills in what is missing.

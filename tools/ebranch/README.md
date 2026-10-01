@@ -1045,6 +1045,39 @@ Bug IDs and a `pinged` flag are stored in the report under
 `[branch_requests]`, whichever kind it is, so re-runs skip
 already-filed packages.
 
+`file-requests` asks dist-git about each package before filing. A
+package already branched there is asked to be **built**, not branched —
+a branch can exist for months with nothing built in it, and that bug
+still anchors the requests waiting on it. Where you hold owner, admin
+or commit access, it says so, prints the `fedpkg request-branch`
+command, and offers to run it for you (`--repo` means no dist-git
+checkout is needed); the prompt defaults to no. Either way it then asks
+whether to file a request anyway as a record. A bug filed after you
+asked for the branch yourself says so rather than asking a maintainer
+to do what is already in hand, and makes no co-maintainer offer.
+Collaborator access counts too — it is how EPEL access is usually
+granted — but only once dist-git has been asked which branches it
+covers: a scope of `epel*` reaches `epel10`, one of `epel9` does not,
+and a scope that cannot be read asks a maintainer as before. A request filed that way is assigned to you as it is filed —
+it is your own bookkeeping, not a question for the maintainer — if
+`[bugzilla] email` is set in the config file, which `ebranch config`
+asks for. `--fas` can be left off entirely when `[packager] fas` is
+set, which is what the dist-git questions above are asked with.
+
+With `provenpackager = true` under `[packager]`, a request for a build
+of an already-branched package adds a line saying you could do that
+build yourself in an emergency. That is all it does: provenpackager
+is the right to build any package, not to branch one, and building
+somebody else's package is the exception rather than the way to get a
+branch request moving.
+
+The `depends_on` links drawn between requests are sent as minor
+updates, so wiring up a 31-package batch does not mail everyone
+watching each package. Each bug takes one update carrying all its
+edges, and a bug Bugzilla refuses is reported and skipped rather than
+ending the run — every request is still filed and recorded, and
+re-running `file-requests` draws the links that are missing.
+
 A package that already has an open branch request — filed by hand, from
 another report, or by another maintainer — is adopted rather than filed
 again. `file-requests` searches Bugzilla for open requests against the
@@ -1087,6 +1120,21 @@ per key by `~/.config/ebranch/config.toml`, with command-line flags
 overriding both. A system file alone is enough — no per-user file is
 required — and either may also carry a `[defaults]` table pinning flag
 defaults (see the root `DEVELOPMENT.md`).
+
+A `[packager]` table says who is asking:
+
+```toml
+[packager]
+fas = "salimma"
+provenpackager = true
+```
+
+`fas` is the default for `--fas` — the name dist-git is asked about
+when deciding whether a package is yours to branch, and the one a
+co-maintainer offer carries. `provenpackager` adds the emergency note
+to a build request, as above. `ebranch config` asks for the FAS, then
+looks the name up in dist-git's copy of the provenpackager group and
+offers what it found as the answer to confirm.
 
 A `[check-crate]` table lists crates to ignore in every run, direct
 or transitive, as if they were not dependencies — Fedora almost
