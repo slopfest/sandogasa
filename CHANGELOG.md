@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ebranch: a package waiting in updates-testing counts as branched
+
+`resolve` read the target's stable repositories only, so a package
+whose branch request was acted on days ago still looked missing and was
+listed as work to do. Resolving `et` for EPEL 10 proposed building
+cxxopts, which has been branched since May and sits in updates-testing
+at 3.3.1; the same closure now names simpleini alone.
+
+The target's testing repository is asked for whatever stable does not
+answer, in one query rather than one per dependency. Which repository
+that is depends on how the target was named: a plain branch has its
+own, while the CBS pattern — `-b c10s -r @epel` — has none, because
+fedrq knows no `@epel-testing` for a base branch, so EPEL's own branch
+is read instead (c10s to epel10, c9s and al9 to epel9, al8 to epel8). A
+side tag or COPR carries its builds already and is asked nothing.
+
+Base-OS dependencies are unaffected either way. A target of `epel10`
+cannot see them at all, which is what the base-distro guard is for.
+
 ### dbranch: the test identity stops racing with itself
 
 Two tests gave git a committer identity through `GIT_CONFIG_COUNT` and

@@ -1419,6 +1419,24 @@ fn main() -> ExitCode {
             branch: args.target.clone(),
             repo: args.target_repo.clone(),
         },
+        // Where updates-testing lives for this target. A plain branch
+        // has its own; the CBS pattern (-b c10s -r @epel) has none,
+        // since fedrq knows no @epel-testing for a base branch, so it
+        // reads EPEL's own branch instead. A side tag or COPR carries
+        // its builds already and gets nothing.
+        target_testing: match (args.target.as_deref(), args.target_repo.as_deref()) {
+            (Some(branch), None) => Some(sandogasa_fedrq::Fedrq {
+                branch: Some(branch.to_string()),
+                repo: Some("@testing".to_string()),
+            }),
+            (Some(branch), Some(repo)) if repo.contains("@epel") => {
+                resolve::epel_branch_for_base(branch).map(|epel| sandogasa_fedrq::Fedrq {
+                    branch: Some(epel.to_string()),
+                    repo: Some("@testing".to_string()),
+                })
+            }
+            _ => None,
+        },
         base: base_branch.as_ref().map(|b| sandogasa_fedrq::Fedrq {
             branch: Some(b.clone()),
             repo: None,

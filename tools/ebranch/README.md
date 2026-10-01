@@ -39,6 +39,34 @@ At least one of `--source` / `--source-repo` and one of `--target` /
 fedrq combines them (e.g. `--target c10s --target-repo @epel` queries
 CentOS Stream 10 base repos plus EPEL).
 
+The two ways of naming an EPEL target see different things, and both
+work:
+
+| target | sees | base packages |
+| --- | --- | --- |
+| `--target epel10` | EPEL only | through the base-distro guard, which probes c10s |
+| `--target c10s --target-repo @epel` | Stream's repos plus EPEL | directly |
+
+### updates-testing counts as branched
+
+A dependency the target's stable repositories do not satisfy is looked
+for in its updates-testing before it is called missing. A package whose
+branch request was acted on days ago is built and tagged — Koji's
+buildroot has it — so proposing to build it again is work already done.
+
+Which testing repository that is follows how the target was named:
+
+- `--target epel10` reads that branch's own `@testing`.
+- `--target c10s --target-repo @epel` reads **epel10**'s `@testing`:
+  fedrq has no `@epel-testing` for a base branch. c9s and al9 map to
+  epel9, al8 to epel8.
+- A side tag or COPR target is not asked, carrying its own builds.
+
+It costs one query per level rather than one per dependency, and only
+for what stable left unanswered. Base-OS content is never read from
+testing: that is the base-distro guard's question, and it asks what the
+base ships today.
+
 Koji repos can be used as source (`--source-repo @koji:f45-build`).
 Since `@koji:` repos only index binary RPMs, ebranch automatically
 uses `@koji-src:` for source RPM queries (BuildRequires, subpackage

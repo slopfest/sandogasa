@@ -199,6 +199,8 @@ fn split_once_word<'a>(text: &'a str, word: &str) -> Option<(&'a str, &'a str)> 
 pub struct RepoResolver {
     pub source: Repo,
     pub target: Repo,
+    /// The target's updates-testing, asked for what stable lacks.
+    pub target_testing: Option<Repo>,
     pub base: Option<Repo>,
 }
 
@@ -207,8 +209,14 @@ impl RepoResolver {
         RepoResolver {
             source,
             target,
+            target_testing: None,
             base: None,
         }
+    }
+
+    pub fn with_testing(mut self, testing: Repo) -> Self {
+        self.target_testing = Some(testing);
+        self
     }
 
     pub fn with_base(mut self, base: Repo) -> Self {
@@ -244,7 +252,15 @@ impl DepResolver for RepoResolver {
     }
 
     fn resolve_target(&self, dep: &str) -> Result<Vec<String>, String> {
-        Ok(self.target.sources_for(dep))
+        let found = self.target.sources_for(dep);
+        if !found.is_empty() {
+            return Ok(found);
+        }
+        Ok(self
+            .target_testing
+            .as_ref()
+            .map(|t| t.sources_for(dep))
+            .unwrap_or_default())
     }
 
     fn src_exists(&self, srpm: &str) -> Result<bool, String> {
@@ -294,6 +310,20 @@ impl DepResolver for RepoResolver {
         &self,
         deps: &[String],
     ) -> Result<BTreeMap<String, Vec<String>>, String> {
-        Self::batched(&self.target, deps)
+        let mut answered = Self::batched(&self.target, deps)?;
+        let Some(testing) = &self.target_testing else {
+            return Ok(answered);
+        };
+        let unanswered: Vec<String> = answered
+            .iter()
+            .filter(|(_, providers)| providers.is_empty())
+            .map(|(dep, _)| dep.clone())
+            .collect();
+        for (dep, providers) in Self::batched(testing, &unanswered)? {
+            if !providers.is_empty() {
+                answered.insert(dep, providers);
+            }
+        }
+        Ok(answered)
     }
 }

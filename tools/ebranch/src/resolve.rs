@@ -364,6 +364,12 @@ pub struct FedrqResolver {
     /// subpackage Requires queries need `@koji-src:` instead.
     pub source_src: Option<sandogasa_fedrq::Fedrq>,
     pub target: sandogasa_fedrq::Fedrq,
+    /// The target's updates-testing, consulted alongside it. A package
+    /// whose branch request was acted on days ago is there and not yet
+    /// stable: it is branched, and Koji's buildroot has it, so a
+    /// closure that calls it missing proposes work already done.
+    /// `None` where the target has no testing repo to read.
+    pub target_testing: Option<sandogasa_fedrq::Fedrq>,
     /// Base-distro repos behind an EPEL target (the base-distro
     /// guard's probe). `None` = guard inactive.
     pub base: Option<sandogasa_fedrq::Fedrq>,
@@ -404,6 +410,21 @@ pub fn epel_base_branch(branch: &str) -> Option<&'static str> {
 /// with an `@epel` target repo (the CBS pattern, e.g. `-t c10s
 /// --target-repo @epel`) also maps. Anything else — Fedora targets,
 /// unmapped EPEL branches like epel8 — leaves the guard inactive.
+/// The EPEL branch whose updates-testing serves a base-distro target.
+///
+/// The CBS pattern names the base and layers EPEL over it — `-b c10s
+/// -r @epel` — and fedrq has no testing class for that shape: c10s
+/// knows nothing of `@epel-testing`. EPEL's own branch does, so the
+/// mapping runs the other way from [`epel_base_branch`].
+pub fn epel_branch_for_base(branch: &str) -> Option<&'static str> {
+    match branch {
+        "c10s" => Some("epel10"),
+        "c9s" | "al9" => Some("epel9"),
+        "al8" => Some("epel8"),
+        _ => None,
+    }
+}
+
 pub fn base_branch_for(
     base_flag: Option<&str>,
     target_branch: Option<&str>,
@@ -1454,9 +1475,16 @@ impl DepResolver for FedrqResolver {
     }
 
     fn resolve_target(&self, dep: &str) -> Result<Vec<String>, String> {
-        self.target
+        let mut found = self
+            .target
             .resolve_to_source(dep)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        if found.is_empty()
+            && let Some(testing) = &self.target_testing
+        {
+            found = testing.resolve_to_source(dep).unwrap_or_default();
+        }
+        Ok(found)
     }
 
     fn src_exists(&self, srpm: &str) -> Result<bool, String> {
@@ -1545,7 +1573,27 @@ impl DepResolver for FedrqResolver {
             .target
             .providers_info(deps)
             .map_err(|e| e.to_string())?;
-        Ok(attribute_providers(deps, &providers))
+        let mut answered = attribute_providers(deps, &providers);
+        // Ask updates-testing for what stable did not answer, in one
+        // more query rather than one per dependency.
+        let Some(testing) = &self.target_testing else {
+            return Ok(answered);
+        };
+        let unanswered: Vec<String> = answered
+            .iter()
+            .filter(|(_, providers)| providers.is_empty())
+            .map(|(dep, _)| dep.clone())
+            .collect();
+        if unanswered.is_empty() {
+            return Ok(answered);
+        }
+        let staged = testing.providers_info(&unanswered).unwrap_or_default();
+        for (dep, providers) in attribute_providers(&unanswered, &staged) {
+            if !providers.is_empty() {
+                answered.insert(dep, providers);
+            }
+        }
+        Ok(answered)
     }
 
     fn resolve_base_vr_many(
@@ -2089,6 +2137,32 @@ packages = ["a"]
         }
 
         #[test]
+        fn a_package_waiting_in_testing_is_already_branched() {
+            // Issue #27: cxxopts was in EPEL 10 updates-testing on the
+            // strength of a request filed in May, and the closure still
+            // listed it as a package to build.
+            let source = Repo::new()
+                .source("et", &["cxxopts-devel"])
+                .source("cxxopts", &[])
+                .with(
+                    Pkg::new("cxxopts-devel", "cxxopts", "3.3.1-1.fc46")
+                        .provides("cxxopts-devel", Some("3.3.1-1.fc46")),
+                );
+            let testing = Repo::new().with(
+                Pkg::new("cxxopts-devel", "cxxopts", "3.3.1-1.el10_3")
+                    .provides("cxxopts-devel", Some("3.3.1-1.el10_3")),
+            );
+            let resolver = RepoResolver::new(source, Repo::new()).with_testing(testing);
+
+            let closure =
+                resolve_closure(&resolver, &["et".to_string()], "rawhide", "epel10").unwrap();
+            assert!(
+                !closure.closure.contains_key("cxxopts"),
+                "it is branched and built, only not stable yet: {closure:?}"
+            );
+        }
+
+        #[test]
         fn a_capability_is_judged_by_its_own_version() {
             // Issue #28: freetype numbers its pkgconfig capability on
             // the library interface, 26.1.20, while the package is
@@ -2370,6 +2444,7 @@ packages = ["a"]
             source: bogus(),
             source_src: None,
             target: bogus(),
+            target_testing: None,
             base: None,
             source_graph: Some(graph),
             source_offline: Default::default(),
@@ -3322,5 +3397,16 @@ packages = ["a"]
         let report = check_installability(&resolver, &closure, &ResolveOptions::default(), &skip);
         assert!(report.issues.contains_key("b"));
         assert!(!report.issues.contains_key("a"));
+    }
+
+    #[test]
+    fn epel_testing_is_found_through_epels_own_branch() {
+        // fedrq has no @epel-testing for a base branch, so the testing
+        // view for `-b c10s -r @epel` comes from epel10 (issue #27).
+        assert_eq!(epel_branch_for_base("c10s"), Some("epel10"));
+        assert_eq!(epel_branch_for_base("c9s"), Some("epel9"));
+        assert_eq!(epel_branch_for_base("al9"), Some("epel9"));
+        assert_eq!(epel_branch_for_base("rawhide"), None);
+        assert_eq!(epel_branch_for_base("f44"), None);
     }
 }
