@@ -331,6 +331,56 @@ fn expire_repo(repoid_prefix: &str, what: &str, verbose: bool) {
 pub(crate) struct Services<'a> {
     pub koji: &'a dyn KojiQuery,
     pub bodhi: &'a dyn BodhiQuery,
+    pub repos: &'a dyn Repos,
+}
+
+/// One repository view a check reads: a branch, a repo class, or both.
+///
+/// Only what this step converts: whether the branch and repo class
+/// resolve at all, which source packages are there, and what binaries
+/// they built. The Provides comparison and the reverse-dependency walk
+/// still ask fedrq directly, and the views they need come with them.
+pub(crate) trait RepoQuery: Sync {
+    /// The repositories the view resolves to, which is also how a
+    /// check proves the branch and repo class exist.
+    fn repolist(&self) -> Result<Vec<String>, String>;
+
+    /// The NVRs of the given source packages present in the view.
+    fn src_nvrs(&self, packages: &[String]) -> Result<Vec<String>, String>;
+
+    /// The binary package names a source package built here.
+    fn subpkgs_names(&self, srpm: &str) -> Result<Vec<String>, String>;
+}
+
+/// Where a check gets its repository views.
+pub(crate) trait Repos: Sync {
+    fn view(&self, branch: Option<&str>, repo: Option<&str>) -> Box<dyn RepoQuery + Send + Sync>;
+}
+
+/// The fedrq a real run reads.
+pub(crate) struct FedrqRepos;
+
+impl Repos for FedrqRepos {
+    fn view(&self, branch: Option<&str>, repo: Option<&str>) -> Box<dyn RepoQuery + Send + Sync> {
+        Box::new(sandogasa_fedrq::Fedrq {
+            branch: branch.map(str::to_string),
+            repo: repo.map(str::to_string),
+        })
+    }
+}
+
+impl RepoQuery for sandogasa_fedrq::Fedrq {
+    fn repolist(&self) -> Result<Vec<String>, String> {
+        sandogasa_fedrq::Fedrq::repolist(self).map_err(|e| e.to_string())
+    }
+
+    fn src_nvrs(&self, packages: &[String]) -> Result<Vec<String>, String> {
+        sandogasa_fedrq::Fedrq::src_nvrs(self, packages).map_err(|e| e.to_string())
+    }
+
+    fn subpkgs_names(&self, srpm: &str) -> Result<Vec<String>, String> {
+        sandogasa_fedrq::Fedrq::subpkgs_names(self, srpm).map_err(|e| e.to_string())
+    }
 }
 
 /// What a check asks Bodhi: the one update it was given.
@@ -428,6 +478,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         &Services {
             koji: &koji,
             bodhi: &BodhiApi,
+            repos: &FedrqRepos,
         },
     )
 }
@@ -640,7 +691,8 @@ pub(crate) fn check_update_with(
         branch: Some(branch.clone()),
         repo: opts.repo.clone(),
     };
-    stable_fedrq.repolist().map_err(|e| {
+    let stable = services.repos.view(Some(&branch), opts.repo.as_deref());
+    stable.repolist().map_err(|e| {
         format!(
             "fedrq cannot query {branch}{}: {e}",
             opts.repo
@@ -654,7 +706,7 @@ pub(crate) fn check_update_with(
     // query gives each package's stable V-R (absent ⇒ newly introduced),
     // paired with the V-R the update ships. Cheap (a single batched
     // call) and drives the grouped-by-version-transition view.
-    let stable_srcs = stable_fedrq.src_nvrs(&updated_packages).unwrap_or_default();
+    let stable_srcs = stable.src_nvrs(&updated_packages).unwrap_or_default();
     let old_vr: BTreeMap<&str, String> = stable_srcs
         .iter()
         .filter_map(|nvr| sandogasa_koji::parse_nvr(nvr).map(|(n, v, r)| (n, format!("{v}-{r}"))))
@@ -679,7 +731,7 @@ pub(crate) fn check_update_with(
 
     let all_subpkg_names: Vec<String> = updated_packages
         .par_iter()
-        .flat_map(|srpm| filter_none(stable_fedrq.subpkgs_names(srpm).unwrap_or_default()))
+        .flat_map(|srpm| filter_none(stable.subpkgs_names(srpm).unwrap_or_default()))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -1962,14 +2014,14 @@ fn testing_branch_from_side_tag(tag: Option<&str>) -> Option<String> {
     Some(format!("epel{}", &rest[..release_end]))
 }
 
-struct BodhiUpdateInfo {
-    side_tag: Option<String>,
-    nvrs: Vec<String>,
-    release_name: Option<String>,
+pub(crate) struct BodhiUpdateInfo {
+    pub(crate) side_tag: Option<String>,
+    pub(crate) nvrs: Vec<String>,
+    pub(crate) release_name: Option<String>,
     /// Branch from the Bodhi release (e.g. "epel9", "f44").
-    release_branch: Option<String>,
+    pub(crate) release_branch: Option<String>,
     /// Update status ("pending", "testing", "stable", ...).
-    status: String,
+    pub(crate) status: String,
 }
 
 /// Fetch a Bodhi update and extract its key fields.
@@ -4039,8 +4091,27 @@ mod tests {
         }
     }
 
+    /// Repositories nothing reads: a check that gets as far as fedrq
+    /// has gone further than the test meant it to, and saying so beats
+    /// a minute of real queries.
+    struct NoRepos;
+
+    impl Repos for NoRepos {
+        fn view(
+            &self,
+            branch: Option<&str>,
+            repo: Option<&str>,
+        ) -> Box<dyn RepoQuery + Send + Sync> {
+            panic!("fedrq asked for {branch:?} {repo:?}; this check should not need it");
+        }
+    }
+
     fn services<'a>(koji: &'a dyn KojiQuery, bodhi: &'a dyn BodhiQuery) -> Services<'a> {
-        Services { koji, bodhi }
+        Services {
+            koji,
+            bodhi,
+            repos: &NoRepos,
+        }
     }
 
     fn side_tag_opts() -> CheckUpdateOptions {
@@ -4093,7 +4164,7 @@ mod tests {
         BodhiUpdateInfo {
             side_tag: side_tag.map(str::to_string),
             nvrs: nvrs.iter().map(|n| n.to_string()).collect(),
-            release_name: Some("Fedora EPEL 10".to_string()),
+            release_name: None,
             release_branch: branch.map(str::to_string),
             status: "pending".to_string(),
         }

@@ -110,6 +110,10 @@ fn is_op(tok: &str) -> bool {
     matches!(tok, ">=" | "<=" | ">" | "<" | "=")
 }
 
+/// One term of a dependency: a capability, and the version constraint
+/// written against it when there is one.
+type DepTerm<'a> = (&'a str, Option<(&'a str, &'a str)>);
+
 /// A dependency's terms — each a capability and the version
 /// constraint on it — and whether meeting any one of them is enough.
 ///
@@ -125,7 +129,7 @@ fn is_op(tok: &str) -> bool {
 /// `with` in particular asks for a single package carrying both
 /// operands, so treating its right-hand side as a condition would
 /// drop the upper bound and let any newer version through.
-fn dep_terms(dep: &str) -> (Vec<(&str, Option<(&str, &str)>)>, bool) {
+fn dep_terms(dep: &str) -> (Vec<DepTerm<'_>>, bool) {
     let dep = dep.trim();
     let Some(inner) = dep.strip_prefix('(').and_then(|d| d.strip_suffix(')')) else {
         let mut parts = dep.split_whitespace();
@@ -136,7 +140,7 @@ fn dep_terms(dep: &str) -> (Vec<(&str, Option<(&str, &str)>)>, bool) {
         };
         return (vec![(name, constraint)], false);
     };
-    let mut terms: Vec<(&str, Option<(&str, &str)>)> = Vec::new();
+    let mut terms: Vec<DepTerm<'_>> = Vec::new();
     let mut any = false;
     let mut skip_next = false;
     // The term an operator would constrain, unset once a keyword or a
