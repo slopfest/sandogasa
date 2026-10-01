@@ -30,7 +30,7 @@ pub enum InputKind {
 }
 
 /// Options for the check-update command.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CheckUpdateOptions {
     pub branch: Option<String>,
     pub repo: Option<String>,
@@ -324,6 +324,43 @@ fn expire_repo(repoid_prefix: &str, what: &str, verbose: bool) {
     }
 }
 
+/// What a check asks Koji.
+///
+/// Behind this trait a test answers from tables and a run shells out to
+/// the client. The profile belongs to the implementation, so a caller
+/// never has to carry it: a check talks to one Koji.
+pub(crate) trait KojiQuery: Sync {
+    /// The current NVRs in a tag.
+    fn list_tagged(&self, tag: &str) -> Result<Vec<String>, String>;
+
+    /// The external repos a build tag inherits, or `None` when the tag
+    /// cannot be read — which is not fatal: the caller falls back.
+    fn external_repos(&self, tag: &str) -> Option<Vec<String>>;
+
+    /// The binary RPM names a build produced. An unreadable build is an
+    /// empty list, as it was before this was asked through a trait.
+    fn build_rpms(&self, nvr: &str) -> Vec<String>;
+}
+
+/// The Koji a real run talks to.
+pub(crate) struct KojiCli {
+    pub profile: Option<String>,
+}
+
+impl KojiQuery for KojiCli {
+    fn list_tagged(&self, tag: &str) -> Result<Vec<String>, String> {
+        koji_list_tagged(tag, self.profile.as_deref())
+    }
+
+    fn external_repos(&self, tag: &str) -> Option<Vec<String>> {
+        sandogasa_koji::list_external_repos(tag, self.profile.as_deref()).ok()
+    }
+
+    fn build_rpms(&self, nvr: &str) -> Vec<String> {
+        sandogasa_koji::build_rpms(nvr, self.profile.as_deref()).unwrap_or_default()
+    }
+}
+
 /// List NVRs in a Koji tag via `koji list-tagged --quiet`.
 pub fn koji_list_tagged(tag: &str, profile: Option<&str>) -> Result<Vec<String>, String> {
     // `--latest` (via `list_tagged`) so a side tag that accumulated
@@ -359,6 +396,21 @@ fn is_no_such_tag(err: &str) -> bool {
 
 /// Run the check-update analysis.
 pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdateReport, String> {
+    check_update_with(
+        input,
+        opts,
+        &KojiCli {
+            profile: opts.koji_profile.clone(),
+        },
+    )
+}
+
+/// [`check_update`] against a given Koji.
+pub(crate) fn check_update_with(
+    input: &str,
+    opts: &CheckUpdateOptions,
+    koji: &dyn KojiQuery,
+) -> Result<CheckUpdateReport, String> {
     // Phase 0: Determine the update source (side tag / COPR spec),
     // NVRs, branch, Bodhi release branch, and Bodhi update status
     // (None for side-tag and COPR input).
@@ -381,7 +433,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
                         b
                     }
                 };
-                let nvrs = koji_list_tagged(&tag, opts.koji_profile.as_deref()).map_err(|e| {
+                let nvrs = koji.list_tagged(&tag).map_err(|e| {
                     if is_no_such_tag(&e) {
                         format!(
                             "side tag {tag} does not exist — deleted once its update went \
@@ -406,7 +458,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
                 // unless the tag is gone (deleted once the update went
                 // stable), when the update's own build list is what there is.
                 let (side_tag, nvrs) = match info.side_tag {
-                    Some(tag) => match koji_list_tagged(&tag, opts.koji_profile.as_deref()) {
+                    Some(tag) => match koji.list_tagged(&tag) {
                         Ok(koji_nvrs) => (Some(tag), koji_nvrs),
                         Err(e) if is_no_such_tag(&e) => {
                             eprintln!(
@@ -488,7 +540,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         branch,
         opts.repo.clone(),
         opts.testing_branch.clone(),
-        |tag| sandogasa_koji::list_external_repos(tag, opts.koji_profile.as_deref()).ok(),
+        |tag| koji.external_repos(tag),
     )?;
     if let Some(note) = &mapped.note {
         eprintln!("[check-update] {note}");
@@ -735,9 +787,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
         // Binary RPM names from koji (for installability checking).
         let koji_bins: Vec<String> = nvrs
             .iter()
-            .flat_map(|nvr| {
-                sandogasa_koji::build_rpms(nvr, opts.koji_profile.as_deref()).unwrap_or_default()
-            })
+            .flat_map(|nvr| koji.build_rpms(nvr))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -817,10 +867,7 @@ pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdat
                 }
                 let koji_bins: Vec<String> = nvrs
                     .iter()
-                    .flat_map(|nvr| {
-                        sandogasa_koji::build_rpms(nvr, opts.koji_profile.as_deref())
-                            .unwrap_or_default()
-                    })
+                    .flat_map(|nvr| koji.build_rpms(nvr))
                     .collect::<BTreeSet<_>>()
                     .into_iter()
                     .collect();
@@ -1180,6 +1227,25 @@ pub fn render_report(report: &CheckUpdateReport, detailed: bool) -> String {
         );
     }
     let _ = writeln!(o);
+
+    // An update with no packages was not examined, so there is no
+    // verdict to give: a mistyped side tag, or one whose builds are not
+    // tagged yet, would otherwise read as a clean bill.
+    let examined_nothing = report.updated_packages.is_empty()
+        && report.changes.is_empty()
+        && report.changed_provides.is_empty()
+        && report.installability_issues.is_empty()
+        && report.reverse_deps.is_empty();
+    if examined_nothing {
+        let _ = writeln!(
+            o,
+            "Nothing to check: no builds found for `{}`. A side tag whose \
+             builds are not tagged yet, or a name that does not match, \
+             looks like this.",
+            report.input
+        );
+        return o;
+    }
 
     let clean = removed.is_empty() && report.installability_issues.is_empty() && broken.is_empty();
     if clean && !detailed {
@@ -3877,5 +3943,84 @@ mod tests {
             !out.contains("No breakage expected"),
             "nothing found is not the same as nothing wrong: {out}"
         );
+    }
+
+    /// A Koji answering from tables rather than a subprocess.
+    #[derive(Default)]
+    struct FakeKoji {
+        tagged: BTreeMap<String, Result<Vec<String>, String>>,
+    }
+
+    impl FakeKoji {
+        fn tag(mut self, tag: &str, nvrs: &[&str]) -> Self {
+            self.tagged.insert(
+                tag.to_string(),
+                Ok(nvrs.iter().map(|n| n.to_string()).collect()),
+            );
+            self
+        }
+
+        fn missing_tag(mut self, tag: &str) -> Self {
+            self.tagged.insert(
+                tag.to_string(),
+                Err(format!("koji: error: No such tag: {tag}")),
+            );
+            self
+        }
+    }
+
+    impl KojiQuery for FakeKoji {
+        fn list_tagged(&self, tag: &str) -> Result<Vec<String>, String> {
+            self.tagged
+                .get(tag)
+                .cloned()
+                .unwrap_or_else(|| Err(format!("koji: error: No such tag: {tag}")))
+        }
+
+        fn external_repos(&self, _tag: &str) -> Option<Vec<String>> {
+            None
+        }
+
+        fn build_rpms(&self, _nvr: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    fn side_tag_opts() -> CheckUpdateOptions {
+        CheckUpdateOptions {
+            branch: Some("c10s".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_side_tag_koji_does_not_know_says_it_may_have_been_deleted() {
+        // A side tag is removed once its update goes stable, and the
+        // message has to point somewhere useful rather than repeat
+        // Koji's complaint.
+        let koji = FakeKoji::default().missing_tag("epel10.4-build-side-152994");
+        let err = check_update_with("epel10.4-build-side-152994", &side_tag_opts(), &koji)
+            .expect_err("an unknown tag stops the check");
+        assert!(err.contains("does not exist"), "{err}");
+        assert!(err.contains("Bodhi update"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_side_tag_reports_nothing_examined() {
+        // A tag with no builds is reported rather than refused, and
+        // the rendering says nothing was examined: "No breakage
+        // expected" would be a verdict on nothing.
+        let koji = FakeKoji::default().tag("epel10.4-build-side-1", &[]);
+        let report = check_update_with("epel10.4-build-side-1", &side_tag_opts(), &koji)
+            .expect("an empty tag is not an error");
+        assert!(report.updated_packages.is_empty());
+        assert!(report.changes.is_empty());
+        assert_eq!(report.branch, "c10s");
+
+        // And it says so rather than giving a verdict on nothing.
+        let out = render_report(&report, false);
+        assert!(out.contains("Nothing to check"), "{out}");
+        assert!(out.contains("epel10.4-build-side-1"), "{out}");
+        assert!(!out.contains("No breakage expected"), "{out}");
     }
 }

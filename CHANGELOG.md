@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### ebranch: an update with nothing in it is not a clean bill
+
+`check-update` on a side tag with no builds printed "No breakage
+expected", which is a verdict on nothing examined. A mistyped tag, or
+one whose builds have not been tagged yet, looked exactly like an
+update that was checked and found harmless. It now says nothing was
+found and names what it looked for.
+
+The clean line is still printed when a real update turns out to break
+nothing; what changed is that it is no longer reached when the report
+is empty.
+
 ### ebranch: a capability's constraint is measured against the capability
 
 Resolving `rust-startup-disk` for EPEL 10 reported freetype as blocked
