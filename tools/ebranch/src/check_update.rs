@@ -324,6 +324,29 @@ fn expire_repo(repoid_prefix: &str, what: &str, verbose: bool) {
     }
 }
 
+/// The services a check talks to.
+///
+/// Grouped so a test supplies what it needs and the signature does not
+/// grow a parameter per service. A run passes the real ones.
+pub(crate) struct Services<'a> {
+    pub koji: &'a dyn KojiQuery,
+    pub bodhi: &'a dyn BodhiQuery,
+}
+
+/// What a check asks Bodhi: the one update it was given.
+pub(crate) trait BodhiQuery: Sync {
+    fn update(&self, alias: &str) -> Result<BodhiUpdateInfo, String>;
+}
+
+/// The Bodhi a real run talks to.
+pub(crate) struct BodhiApi;
+
+impl BodhiQuery for BodhiApi {
+    fn update(&self, alias: &str) -> Result<BodhiUpdateInfo, String> {
+        fetch_bodhi_update(alias)
+    }
+}
+
 /// What a check asks Koji.
 ///
 /// Behind this trait a test answers from tables and a run shells out to
@@ -396,21 +419,26 @@ fn is_no_such_tag(err: &str) -> bool {
 
 /// Run the check-update analysis.
 pub fn check_update(input: &str, opts: &CheckUpdateOptions) -> Result<CheckUpdateReport, String> {
+    let koji = KojiCli {
+        profile: opts.koji_profile.clone(),
+    };
     check_update_with(
         input,
         opts,
-        &KojiCli {
-            profile: opts.koji_profile.clone(),
+        &Services {
+            koji: &koji,
+            bodhi: &BodhiApi,
         },
     )
 }
 
-/// [`check_update`] against a given Koji.
+/// [`check_update`] against given services.
 pub(crate) fn check_update_with(
     input: &str,
     opts: &CheckUpdateOptions,
-    koji: &dyn KojiQuery,
+    services: &Services<'_>,
 ) -> Result<CheckUpdateReport, String> {
+    let koji = services.koji;
     // Phase 0: Determine the update source (side tag / COPR spec),
     // NVRs, branch, Bodhi release branch, and Bodhi update status
     // (None for side-tag and COPR input).
@@ -446,7 +474,7 @@ pub(crate) fn check_update_with(
                 (Some(tag), None, nvrs, branch, None, None)
             }
             InputKind::BodhiAlias(alias) => {
-                let info = fetch_bodhi_update(&alias)?;
+                let info = services.bodhi.update(&alias)?;
 
                 let branch = resolve_bodhi_branch(
                     opts.branch.clone(),
@@ -3986,6 +4014,35 @@ mod tests {
         }
     }
 
+    /// A Bodhi nothing asks: a side-tag check never reaches it, and a
+    /// test that does reach it has said so by supplying another.
+    struct NoBodhi;
+
+    impl BodhiQuery for NoBodhi {
+        fn update(&self, alias: &str) -> Result<BodhiUpdateInfo, String> {
+            panic!("Bodhi asked for {alias}; this check should not need it");
+        }
+    }
+
+    /// A Bodhi answering with one update.
+    struct FakeBodhi(BodhiUpdateInfo);
+
+    impl BodhiQuery for FakeBodhi {
+        fn update(&self, _alias: &str) -> Result<BodhiUpdateInfo, String> {
+            Ok(BodhiUpdateInfo {
+                side_tag: self.0.side_tag.clone(),
+                nvrs: self.0.nvrs.clone(),
+                release_name: self.0.release_name.clone(),
+                release_branch: self.0.release_branch.clone(),
+                status: self.0.status.clone(),
+            })
+        }
+    }
+
+    fn services<'a>(koji: &'a dyn KojiQuery, bodhi: &'a dyn BodhiQuery) -> Services<'a> {
+        Services { koji, bodhi }
+    }
+
     fn side_tag_opts() -> CheckUpdateOptions {
         CheckUpdateOptions {
             branch: Some("c10s".to_string()),
@@ -3999,8 +4056,12 @@ mod tests {
         // message has to point somewhere useful rather than repeat
         // Koji's complaint.
         let koji = FakeKoji::default().missing_tag("epel10.4-build-side-152994");
-        let err = check_update_with("epel10.4-build-side-152994", &side_tag_opts(), &koji)
-            .expect_err("an unknown tag stops the check");
+        let err = check_update_with(
+            "epel10.4-build-side-152994",
+            &side_tag_opts(),
+            &services(&koji, &NoBodhi),
+        )
+        .expect_err("an unknown tag stops the check");
         assert!(err.contains("does not exist"), "{err}");
         assert!(err.contains("Bodhi update"), "{err}");
     }
@@ -4011,8 +4072,12 @@ mod tests {
         // the rendering says nothing was examined: "No breakage
         // expected" would be a verdict on nothing.
         let koji = FakeKoji::default().tag("epel10.4-build-side-1", &[]);
-        let report = check_update_with("epel10.4-build-side-1", &side_tag_opts(), &koji)
-            .expect("an empty tag is not an error");
+        let report = check_update_with(
+            "epel10.4-build-side-1",
+            &side_tag_opts(),
+            &services(&koji, &NoBodhi),
+        )
+        .expect("an empty tag is not an error");
         assert!(report.updated_packages.is_empty());
         assert!(report.changes.is_empty());
         assert_eq!(report.branch, "c10s");
@@ -4023,4 +4088,34 @@ mod tests {
         assert!(out.contains("epel10.4-build-side-1"), "{out}");
         assert!(!out.contains("No breakage expected"), "{out}");
     }
+
+    fn update_info(side_tag: Option<&str>, nvrs: &[&str], branch: Option<&str>) -> BodhiUpdateInfo {
+        BodhiUpdateInfo {
+            side_tag: side_tag.map(str::to_string),
+            nvrs: nvrs.iter().map(|n| n.to_string()).collect(),
+            release_name: Some("Fedora EPEL 10".to_string()),
+            release_branch: branch.map(str::to_string),
+            status: "pending".to_string(),
+        }
+    }
+
+    #[test]
+    fn an_update_without_a_release_branch_says_so_rather_than_guessing() {
+        // Nothing names the branch: not the update's release, not the
+        // caller. Guessing would check the wrong repositories.
+        let koji = FakeKoji::default();
+        let bodhi = FakeBodhi(update_info(None, &["et-6.2.13-1.el10_4"], None));
+        let err = check_update_with(
+            "FEDORA-EPEL-2026-e07539fe30",
+            &CheckUpdateOptions::default(),
+            &services(&koji, &bodhi),
+        )
+        .expect_err("an unknown branch stops the check");
+        assert!(!err.is_empty(), "the reason is given: {err}");
+    }
+
+    // Two more paths want testing here — a side tag deleted once its
+    // update went stable, and the caller's branch winning over the
+    // update's release — but both run on past Bodhi into fedrq, which
+    // a test must not reach. They belong with the fedrq injection.
 }
