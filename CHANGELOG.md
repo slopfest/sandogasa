@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a Go CVE is answered by the toolchain the build used
+
+A flaw in Go's standard library is not fixed in a package by a version
+bump — what changes is the standard library compiled into its binary,
+decided by whichever `golang` was installed when it was built — so such
+a bug could only be handed to a human.
+
+Koji's build logs record it. The check now reads which toolchain a
+build installed and compares that against the fixed version, answering
+that the binary carries the fixed code, that it carries the flaw and
+needs a rebuild, or that no log could be read and the bug is still a
+human's. Dates cannot answer it: a fixed toolchain can wait a week in
+updates-testing before a buildroot sees it, so a package built in that
+window used the old one although the fixed build is older.
+
+Fixes #19.
+
 ### ebranch: the walk stops at a package the base distro builds
 
 A dependency the base distro does not provide at any version told the
