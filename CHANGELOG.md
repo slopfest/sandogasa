@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### dbranch: the test identity stops racing with itself
+
+Two tests gave git a committer identity through `GIT_CONFIG_COUNT` and
+six more variables, set on the whole process while the test binary ran
+multi-threaded. A git spawned between the count and the last value saw
+three settings and two values and died with "missing config value
+GIT_CONFIG_VALUE_2", which failed the coverage gate on 2026-10-01 and
+passed on the re-run. The variables also leaked into every later test
+that shelled out to git.
+
+The identity is a file now, with `GIT_CONFIG_GLOBAL` pointing at it, so
+a race can at worst send a test to another test's identical file.
+Nothing user-visible changes; a gate that failed on timing taught
+people to re-run it, which is how a real failure gets waved through.
+
+Fixes #29.
+
 ### ebranch: an update with nothing in it is not a clean bill
 
 `check-update` on a side tag with no builds printed "No breakage

@@ -706,21 +706,10 @@ mod tests {
             mrconfig: None,
         };
         // Real commits need an identity the fixture cannot pre-set in a
-        // clone; git picks it up from the environment.
-        // SAFETY: tests in this module run single-threaded per process
-        // for env access only via Command, so set for the child instead.
+        // clone, and clone() spawns git itself, so it has to come from
+        // the environment.
         let ui = ui();
-        // Route the identity through the repo config after the clone by
-        // running clone with HOME-independent config via GIT_CONFIG_*.
-        unsafe {
-            std::env::set_var("GIT_CONFIG_COUNT", "3");
-            std::env::set_var("GIT_CONFIG_KEY_0", "user.name");
-            std::env::set_var("GIT_CONFIG_VALUE_0", "T");
-            std::env::set_var("GIT_CONFIG_KEY_1", "user.email");
-            std::env::set_var("GIT_CONFIG_VALUE_1", "t@x");
-            std::env::set_var("GIT_CONFIG_KEY_2", "commit.gpgsign");
-            std::env::set_var("GIT_CONFIG_VALUE_2", "false");
-        }
+        let _identity = git_identity();
         clone(&ui, &opts).unwrap();
         assert_eq!(git::current_branch(&dir).unwrap(), "debian/latest");
         assert_eq!(git::remotes(&dir), ["upstream"]);
@@ -797,21 +786,42 @@ mod tests {
         git(up, &["checkout", "-q", "main"]);
     }
 
+    /// An identity for the commits a clone makes, in one file that
+    /// `GIT_CONFIG_GLOBAL` points at.
+    ///
+    /// The count form — `GIT_CONFIG_COUNT` with a key and value per
+    /// setting — needs seven variables set together, and this binary is
+    /// multi-threaded: a git spawned between the count and the last
+    /// value sees three settings and two values, and dies with "missing
+    /// config value GIT_CONFIG_VALUE_2". That failed the coverage gate
+    /// on 2026-10-01 and passed on the re-run (issue #29). One variable
+    /// cannot tear: the worst a race does now is point a test at
+    /// another test's file, which says the same thing.
+    ///
+    /// The returned handle keeps the file alive for the test's life.
+    fn git_identity() -> tempfile::NamedTempFile {
+        use std::io::Write as _;
+        let mut config = tempfile::NamedTempFile::new().expect("a temp git config");
+        write!(
+            config,
+            "[user]\n\tname = T\n\temail = t@x\n[commit]\n\tgpgsign = false\n"
+        )
+        .expect("writing the identity");
+        // SAFETY: one variable, written with a path that is valid for
+        // as long as the returned handle lives.
+        unsafe {
+            std::env::set_var("GIT_CONFIG_GLOBAL", config.path());
+        }
+        config
+    }
+
     #[test]
     fn clone_can_start_from_upstreams_packaging_branch() {
         let up = upstream();
         add_upstream_packaging(up.path());
         let theirs = git::rev_parse(up.path(), "debian/latest").unwrap();
         let work = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("GIT_CONFIG_COUNT", "3");
-            std::env::set_var("GIT_CONFIG_KEY_0", "user.name");
-            std::env::set_var("GIT_CONFIG_VALUE_0", "T");
-            std::env::set_var("GIT_CONFIG_KEY_1", "user.email");
-            std::env::set_var("GIT_CONFIG_VALUE_1", "t@x");
-            std::env::set_var("GIT_CONFIG_KEY_2", "commit.gpgsign");
-            std::env::set_var("GIT_CONFIG_VALUE_2", "false");
-        }
+        let _identity = git_identity();
         let opts = |dir: &str, packaging: Option<bool>| CloneOptions {
             url: up.path().to_string_lossy().into_owned(),
             dir: Some(work.path().join(dir)),

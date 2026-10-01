@@ -662,3 +662,23 @@ the fork's project.
 - **Stage pipeline order:** `merge → build → lint → push → upload →
   tag`. `all` = `merge,build,lint,push` (upload/tag are deliberate
   publish/release steps, opt-in).
+
+## A test gives git an identity through one variable, not seven
+
+`GIT_CONFIG_COUNT` with a key and value per setting needs seven
+environment variables set together, and a test binary is
+multi-threaded. A git spawned between the count and the last value sees
+three settings and two values and dies with "missing config value
+GIT_CONFIG_VALUE_2" — which is what failed the coverage gate on
+2026-10-01 while `make check` passed on the same tree (issue #29). The
+variables also leaked, since nothing unset them.
+
+Write the identity into a temporary file and point `GIT_CONFIG_GLOBAL`
+at it, as `git_identity` does. One variable cannot tear: the worst a
+race does is point a test at another test's file, which says the same
+thing. Keep the returned handle alive for the test, or the file is gone
+before git reads it.
+
+The same applies to anything else a test has to tell a child process:
+prefer one variable over several that only make sense together, and
+prefer passing it to the command over setting it on the process.
