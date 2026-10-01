@@ -16,7 +16,7 @@ use crate::dag;
 // ---- Public types ----
 
 /// Options for the check-crate command.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CheckCrateOptions {
     pub branch: Option<String>,
     pub repo: Option<String>,
@@ -264,20 +264,43 @@ pub fn check_crate(
     init_cache(opts.refresh);
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| format!("failed to create async runtime: {e}"))?;
+    let registry = CratesIo { rt: &rt };
+    let repos = RepoStack {
+        base: Box::new(sandogasa_fedrq::Fedrq {
+            branch: opts.branch.clone(),
+            repo: opts.repo.clone(),
+        }),
+        copr: opts.copr.as_ref().map(|c| {
+            Box::new(sandogasa_fedrq::Fedrq {
+                branch: opts.branch.clone(),
+                repo: Some(format!("@copr:{c}")),
+            }) as Box<dyn CapabilityIndex>
+        }),
+    };
+    check_crate_with(name, version, opts, &registry, &repos)
+}
 
+/// [`check_crate`] against a given registry.
+pub(crate) fn check_crate_with(
+    name: &str,
+    version: Option<&str>,
+    opts: &CheckCrateOptions,
+    registry: &dyn CrateRegistry,
+    repos: &RepoStack,
+) -> Result<CheckCrateReport, String> {
     // Resolve version.
     let version = match version {
         Some(v) => {
             if opts.verbose {
                 eprintln!("[check-crate] resolving version {v} for {name}");
             }
-            rt.block_on(resolve_version(name, v))?
+            registry.resolve_version(name, v)?
         }
         None => {
             if opts.verbose {
                 eprintln!("[check-crate] fetching latest version for {name}");
             }
-            rt.block_on(fetch_latest_version(name))?
+            registry.latest_version(name)?
         }
     };
 
@@ -288,7 +311,7 @@ pub fn check_crate(
     // Fedora builds an application with its default features and a
     // library with all of them, so a library root's optional deps are
     // as required as any other (same for every transitive crate).
-    let library_root = !rt.block_on(is_application(name, &version));
+    let library_root = !registry.is_application(name, &version);
     // An application's Fedora build may enable more than the
     // defaults: --features says which; otherwise the rawhide spec's
     // own %cargo_generate_buildrequires line does, when the package
@@ -305,9 +328,7 @@ pub fn check_crate(
         }
         seeds.extend(opts.features.iter().cloned());
         source = "--features";
-    } else if let Some((pkg, sf)) =
-        rt.block_on(spec_features_from_rawhide(name, opts.package.as_deref()))
-    {
+    } else if let Some((pkg, sf)) = registry.spec_features(name, opts.package.as_deref()) {
         if !sf.no_default {
             seeds.push("default".to_string());
         }
@@ -332,8 +353,7 @@ pub fn check_crate(
             }
         );
     }
-    let (deps, dep_features) =
-        rt.block_on(fetch_dependencies_with_features(name, &version, &seeds))?;
+    let (deps, dep_features) = registry.dependencies(name, &version, &seeds)?;
     // Excluded crates are ignored outright — direct or transitive —
     // as if they were not dependencies: Fedora drops them.
     let (deps, ignored): (Vec<CrateDep>, Vec<CrateDep>) = deps
@@ -368,17 +388,6 @@ pub fn check_crate(
             _ => {}
         }
     }
-    let repos = RepoStack {
-        base: sandogasa_fedrq::Fedrq {
-            branch: opts.branch.clone(),
-            repo: opts.repo.clone(),
-        },
-        copr: opts.copr.as_ref().map(|c| sandogasa_fedrq::Fedrq {
-            branch: opts.branch.clone(),
-            repo: Some(format!("@copr:{c}")),
-        }),
-    };
-
     if opts.verbose {
         match &opts.copr {
             Some(c) => eprintln!(
@@ -434,11 +443,11 @@ pub fn check_crate(
     // neither does the repo: rawhide still carries stale rust-uu_*
     // packages nobody retired, so the glob is trusted as written.
     let root_repo = in_tree_repository_rule(&opts.in_tree)
-        .then(|| rt.block_on(fetch_repository(name)))
+        .then(|| registry.repository(name))
         .flatten();
     let is_in_tree = |dep: &str| -> bool {
         matches_in_tree_glob(&opts.in_tree, dep)
-            || (root_repo.is_some() && rt.block_on(fetch_repository(dep)) == root_repo)
+            || (root_repo.is_some() && registry.repository(dep) == root_repo)
     };
     let mut in_tree: Vec<InTreeCrate> = Vec::new();
     let mut queue: VecDeque<(String, String, Vec<String>)> = VecDeque::new();
@@ -479,7 +488,7 @@ pub fn check_crate(
     let mut member_deps: Vec<(CrateDep, String)> = Vec::new();
     let mut seen_member_deps: HashSet<(String, String)> = HashSet::new();
     while let Some((member, req, feats)) = queue.pop_front() {
-        let Ok(mversion) = rt.block_on(resolve_matching_version(&member, &req)) else {
+        let Ok(mversion) = registry.resolve_matching_version(&member, &req) else {
             if opts.verbose {
                 eprintln!("[check-crate] warning: no version of in-tree {member} matches {req}");
             }
@@ -487,9 +496,7 @@ pub fn check_crate(
         };
         let mut mseeds = vec!["default".to_string()];
         mseeds.extend(feats);
-        let Ok((mdeps, mfeats)) = rt.block_on(fetch_dependencies_with_features(
-            &member, &mversion, &mseeds,
-        )) else {
+        let Ok((mdeps, mfeats)) = registry.dependencies(&member, &mversion, &mseeds) else {
             continue;
         };
         // A member is built as a dependency, never tested on its own:
@@ -551,8 +558,8 @@ pub fn check_crate(
             let mut expansion_opts = opts.clone();
             expansion_opts.exclude.extend(in_tree_names.iter().cloned());
             let (deps, staged, edges) = expand_transitive(
-                &rt,
-                &repos,
+                registry,
+                repos,
                 &dependencies,
                 &expansion_opts,
                 library_root || spec_all,
@@ -1037,7 +1044,7 @@ fn should_expand(dep: &CrateDep, opts: &CheckCrateOptions, all_features: bool) -
 /// missing. Returns a deduplicated list of transitively-missing crates
 /// and a dependency edge map for build-order computation.
 fn expand_transitive(
-    rt: &tokio::runtime::Runtime,
+    registry: &dyn CrateRegistry,
     repos: &RepoStack,
     direct_results: &[DepResult],
     opts: &CheckCrateOptions,
@@ -1080,7 +1087,7 @@ fn expand_transitive(
             eprintln!("[check-crate] expanding transitive deps for {crate_name}");
         }
 
-        let version = match rt.block_on(resolve_matching_version(&crate_name, &version_req)) {
+        let version = match registry.resolve_matching_version(&crate_name, &version_req) {
             Ok(v) => v,
             Err(e) => {
                 if opts.verbose {
@@ -1091,11 +1098,10 @@ fn expand_transitive(
         };
         resolved_versions.insert(crate_name.clone(), version.clone());
 
-        let deps = match rt.block_on(fetch_dependencies(
-            &crate_name,
-            &version,
-            &["default".to_string()],
-        )) {
+        let deps = match registry
+            .dependencies(&crate_name, &version, &["default".to_string()])
+            .map(|(deps, _)| deps)
+        {
             Ok(d) => d,
             Err(e) => {
                 if opts.verbose {
@@ -1848,16 +1854,6 @@ async fn resolve_matching_version(name: &str, version_req: &str) -> Result<Strin
 ///
 /// Resolves default features to mark optional deps activated by
 /// defaults as non-optional (since RPMs are built with defaults).
-async fn fetch_dependencies(
-    name: &str,
-    version: &str,
-    seeds: &[String],
-) -> Result<Vec<CrateDep>, String> {
-    Ok(fetch_dependencies_with_features(name, version, seeds)
-        .await?
-        .0)
-}
-
 /// [`fetch_dependencies`], also returning the features the enabled
 /// set requests of each dependency (`dep/feature` entries).
 async fn fetch_dependencies_with_features(
@@ -1912,18 +1908,121 @@ fn built_label(where_: BuiltIn, opts: &CheckCrateOptions) -> String {
     }
 }
 
+/// A release's dependencies, with the features the enabled set asks
+/// of each: `dep/feature` entries by dependency name.
+type CrateDeps = (Vec<CrateDep>, BTreeMap<String, Vec<String>>);
+
+/// What a check asks crates.io.
+///
+/// `check_crate` is synchronous and blocks on each request, so this is
+/// a plain trait: the real implementation borrows the runtime the
+/// check already made, and a test answers from its own tables without
+/// the registry, the network or a runtime being involved.
+pub(crate) trait CrateRegistry: Sync {
+    /// The newest version of a crate.
+    fn latest_version(&self, name: &str) -> Result<String, String>;
+
+    /// The newest version matching a partial version (`1.2` → `1.2.7`).
+    fn resolve_version(&self, name: &str, partial: &str) -> Result<String, String>;
+
+    /// The newest version satisfying a requirement (`^0.3.3`).
+    fn resolve_matching_version(&self, name: &str, req: &str) -> Result<String, String>;
+
+    /// A release's dependencies, and the features the enabled set asks
+    /// of each — `dep/feature` entries.
+    fn dependencies(
+        &self,
+        name: &str,
+        version: &str,
+        seeds: &[String],
+    ) -> Result<CrateDeps, String>;
+
+    /// The crate's repository URL, when it states one.
+    fn repository(&self, name: &str) -> Option<String>;
+
+    /// Whether a release ships a binary, which decides whether its
+    /// optional dependencies count.
+    fn is_application(&self, name: &str, version: &str) -> bool;
+
+    /// The features rawhide's spec enables for a crate, read from
+    /// dist-git, with the package it was found under.
+    fn spec_features(
+        &self,
+        crate_name: &str,
+        package: Option<&str>,
+    ) -> Option<(String, SpecFeatures)>;
+}
+
+/// crates.io, read through the runtime the check already holds.
+pub(crate) struct CratesIo<'a> {
+    pub rt: &'a tokio::runtime::Runtime,
+}
+
+impl CrateRegistry for CratesIo<'_> {
+    fn latest_version(&self, name: &str) -> Result<String, String> {
+        self.rt.block_on(fetch_latest_version(name))
+    }
+
+    fn resolve_version(&self, name: &str, partial: &str) -> Result<String, String> {
+        self.rt.block_on(resolve_version(name, partial))
+    }
+
+    fn resolve_matching_version(&self, name: &str, req: &str) -> Result<String, String> {
+        self.rt.block_on(resolve_matching_version(name, req))
+    }
+
+    fn dependencies(
+        &self,
+        name: &str,
+        version: &str,
+        seeds: &[String],
+    ) -> Result<CrateDeps, String> {
+        self.rt
+            .block_on(fetch_dependencies_with_features(name, version, seeds))
+    }
+
+    fn repository(&self, name: &str) -> Option<String> {
+        self.rt.block_on(fetch_repository(name))
+    }
+
+    fn is_application(&self, name: &str, version: &str) -> bool {
+        self.rt.block_on(is_application(name, version))
+    }
+
+    fn spec_features(
+        &self,
+        crate_name: &str,
+        package: Option<&str>,
+    ) -> Option<(String, SpecFeatures)> {
+        self.rt
+            .block_on(spec_features_from_rawhide(crate_name, package))
+    }
+}
+
 /// The repos a dependency is checked against: the branch, and the
 /// staging COPR layered over it (`--copr`), consulted for whatever the
 /// branch does not satisfy. fedrq's `@copr:` repo is standalone, so
 /// the layering is two queries, which is also what attributes a hit.
-struct RepoStack {
-    base: sandogasa_fedrq::Fedrq,
-    copr: Option<sandogasa_fedrq::Fedrq>,
+pub(crate) struct RepoStack {
+    base: Box<dyn CapabilityIndex>,
+    copr: Option<Box<dyn CapabilityIndex>>,
+}
+
+/// What a check asks of a repository: which packages provide these
+/// capabilities, and what each of them declares.
+pub(crate) trait CapabilityIndex: Sync {
+    fn providers(&self, capabilities: &[String]) -> Vec<sandogasa_fedrq::PkgInfo>;
+}
+
+impl CapabilityIndex for sandogasa_fedrq::Fedrq {
+    fn providers(&self, capabilities: &[String]) -> Vec<sandogasa_fedrq::PkgInfo> {
+        self.providers_info(capabilities).unwrap_or_default()
+    }
 }
 
 impl RepoStack {
     fn check(&self, deps: &[&CrateDep]) -> Vec<DepStatus> {
-        let mut statuses = check_deps_in_repo(&self.base, deps);
+        let mut statuses = check_deps_in_repo(self.base.as_ref(), deps);
         let Some(copr) = &self.copr else {
             return statuses;
         };
@@ -1937,7 +2036,10 @@ impl RepoStack {
             return statuses;
         }
         let subset: Vec<&CrateDep> = rest.iter().map(|&i| deps[i]).collect();
-        for (i, s) in rest.into_iter().zip(check_deps_in_repo(copr, &subset)) {
+        for (i, s) in rest
+            .into_iter()
+            .zip(check_deps_in_repo(copr.as_ref(), &subset))
+        {
             if let DepStatus::Satisfied {
                 version, compat, ..
             } = s
@@ -1956,8 +2058,8 @@ impl RepoStack {
 /// Check if a dependency is available in the target repo and if
 /// the version satisfies the requirement.
 #[cfg(test)]
-fn check_dep_in_repo(fedrq: &sandogasa_fedrq::Fedrq, dep: &CrateDep) -> DepStatus {
-    check_deps_in_repo(fedrq, &[dep]).remove(0)
+fn check_dep_in_repo(repo: &dyn CapabilityIndex, dep: &CrateDep) -> DepStatus {
+    check_deps_in_repo(repo, &[dep]).remove(0)
 }
 
 /// Check several dependencies against the repo in one fedrq
@@ -1966,9 +2068,9 @@ fn check_dep_in_repo(fedrq: &sandogasa_fedrq::Fedrq, dep: &CrateDep) -> DepStatu
 /// the per-crate decision is the same as ever. A repo the query
 /// cannot reach reads as "nothing provides anything", as the
 /// single-crate query always did.
-fn check_deps_in_repo(fedrq: &sandogasa_fedrq::Fedrq, deps: &[&CrateDep]) -> Vec<DepStatus> {
+fn check_deps_in_repo(repo: &dyn CapabilityIndex, deps: &[&CrateDep]) -> Vec<DepStatus> {
     let caps: Vec<String> = deps.iter().map(|d| format!("crate({})", d.name)).collect();
-    let providers = fedrq.providers_info(&caps).unwrap_or_default();
+    let providers = repo.providers(&caps);
     deps.iter()
         .zip(&caps)
         .map(|(dep, cap)| {
@@ -3017,5 +3119,128 @@ mod tests {
         // Printed rather than returned, so this pins that it runs over
         // a report with edges, missing crates and a build order.
         print_dot(&report);
+    }
+
+    /// A crates.io answering from tables: versions, dependencies and
+    /// whether a release ships a binary.
+    #[derive(Default)]
+    struct FakeRegistry {
+        /// crate -> the version a requirement resolves to.
+        versions: BTreeMap<String, String>,
+        /// crate -> its dependencies.
+        deps: BTreeMap<String, Vec<CrateDep>>,
+    }
+
+    impl FakeRegistry {
+        fn crate_at(mut self, name: &str, version: &str, deps: Vec<CrateDep>) -> Self {
+            self.versions.insert(name.to_string(), version.to_string());
+            self.deps.insert(name.to_string(), deps);
+            self
+        }
+    }
+
+    impl CrateRegistry for FakeRegistry {
+        fn latest_version(&self, name: &str) -> Result<String, String> {
+            self.versions
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("no crate {name}"))
+        }
+        fn resolve_version(&self, name: &str, _partial: &str) -> Result<String, String> {
+            self.latest_version(name)
+        }
+        fn resolve_matching_version(&self, name: &str, _req: &str) -> Result<String, String> {
+            self.latest_version(name)
+        }
+        fn dependencies(
+            &self,
+            name: &str,
+            _version: &str,
+            _seeds: &[String],
+        ) -> Result<CrateDeps, String> {
+            Ok((
+                self.deps.get(name).cloned().unwrap_or_default(),
+                BTreeMap::new(),
+            ))
+        }
+        fn repository(&self, _name: &str) -> Option<String> {
+            None
+        }
+        fn is_application(&self, _name: &str, _version: &str) -> bool {
+            false
+        }
+        fn spec_features(
+            &self,
+            _crate_name: &str,
+            _package: Option<&str>,
+        ) -> Option<(String, SpecFeatures)> {
+            None
+        }
+    }
+
+    /// A repository holding the crates named, each at one version.
+    struct FakeIndex(BTreeMap<String, String>);
+
+    impl CapabilityIndex for FakeIndex {
+        fn providers(&self, capabilities: &[String]) -> Vec<sandogasa_fedrq::PkgInfo> {
+            capabilities
+                .iter()
+                .filter_map(|cap| {
+                    let name = cap.strip_prefix("crate(")?.strip_suffix(')')?;
+                    let version = self.0.get(name)?;
+                    Some(sandogasa_fedrq::PkgInfo::new(
+                        format!("rust-{name}-devel"),
+                        vec![],
+                        vec![format!("{cap} = {version}")],
+                        Some(format!("rust-{name}")),
+                        "fixture",
+                    ))
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_check_reports_each_dependency_as_the_branch_leaves_it() {
+        // The whole command against tables: no crates.io, no fedrq, no
+        // runtime. tiny-dfr's shape — one dependency the branch has,
+        // one it has at a version the requirement refuses, and one
+        // nobody packaged.
+        let registry = FakeRegistry::default().crate_at(
+            "tiny-dfr",
+            "0.3.7",
+            vec![
+                make_dep("nix", "normal", false),
+                make_dep("tokei", "normal", false),
+                make_dep("cairo-rs", "normal", false),
+            ],
+        );
+        let repos = RepoStack {
+            base: Box::new(FakeIndex(BTreeMap::from([
+                ("nix".to_string(), "1.5.0".to_string()),
+                ("tokei".to_string(), "0.1.0".to_string()),
+            ]))),
+            copr: None,
+        };
+        let opts = CheckCrateOptions {
+            branch: Some("epel10".to_string()),
+            label: "epel10".to_string(),
+            ..Default::default()
+        };
+
+        let report = check_crate_with("tiny-dfr", None, &opts, &registry, &repos)
+            .expect("the check runs on tables alone");
+        assert_eq!(report.crate_version, "0.3.7");
+        let status = |name: &str| {
+            report
+                .dependencies
+                .iter()
+                .find(|d| d.dep.name == name)
+                .map(|d| d.status.clone())
+                .unwrap_or_else(|| panic!("{name} missing from {report:?}"))
+        };
+        assert!(matches!(status("nix"), DepStatus::Satisfied { .. }));
+        assert!(matches!(status("tokei"), DepStatus::Unmet { .. }));
+        assert!(matches!(status("cairo-rs"), DepStatus::Missing));
     }
 }
