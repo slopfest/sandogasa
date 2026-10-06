@@ -49,6 +49,50 @@ any package, not to branch one, so it can never decide whether to
 offer a branch, and exercising it on somebody else's package is the
 exception rather than the way to move a request along.
 
+### fedora-cve-triage: a CVE in a Go module is judged by its import path
+
+A CVE in a Go library — not the toolchain, but something like
+`golang.org/x/crypto` — was never judged at all. Twelve of them on one
+component in a single run, each skipped for a reason that was wrong
+about the facts:
+
+```
+[bundled-library] bug 2489894: skip — summary names golang.org/x/crypto/ssh, NVD names the crypto go package
+[bundled-library] bug 2503242: skip — Fedora has no package named like the crypto go package
+```
+
+Fedora packages it, and says so precisely: `golang-x-crypto` provides
+`golang(golang.org/x/crypto/ssh) = 0.39.0-2.fc43`, one provide per
+import path with the version on it — the same shape as
+`python3dist(…)`, `crate(…)` and `npm(…)`, which this check already
+resolves libraries through. Go was simply not wired up as an
+ecosystem.
+
+The name to use is the summary's. NVD calls the product `crypto`,
+which is not a package, a module or an import path and resolves to
+nothing; the bot's summary carries `golang.org/x/crypto/ssh`, which
+resolves exactly. The two were read as a disagreement and the bug was
+dropped; they are the same library, and one of the names is usable.
+
+From there the existing machinery applies. A declared
+`bundled(golang(<module>)) = <version>` is compared against the fix —
+the declaration names the module, so a CVE in a directory beneath it
+is matched to its module root. A package built against the packaged
+module is judged by the `golang-x-crypto-devel` in its buildroot, the
+mechanism from the Go toolchain and Rust crate work.
+
+What is still not answerable now says so. A package built with
+`go-vendor-tools` declares no `bundled(…)` at all and its buildroot
+never had the module, so the version compiled into it is recorded
+nowhere: "its buildroot never had the golang.org/x/crypto/ssh Go
+module, so the copy linked into it is vendored and its version is
+recorded nowhere — review by hand". That is deliberately not read as
+"unused", which is what the same absence means for a Rust crate —
+Fedora has no vendored Rust and plenty of vendored Go.
+
+Also fixed on the way: a bundled copy older than the fix was not
+counted as a conclusive finding, so it was never recorded on its bug.
+
 ### fedora-cve-triage: a build that already carries the fix closes its bug
 
 A statically linked dependency is fixed by a rebuild, not by a version
