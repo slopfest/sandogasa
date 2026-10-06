@@ -4,6 +4,8 @@
 
 # sandogasa
 
+[![AI-DECLARATION: copilot](https://img.shields.io/badge/䷼%20AI--DECLARATION-copilot-fee2e2?labelColor=fee2e2)](https://ai-declaration.md)
+
 [![Packaging status](https://repology.org/badge/vertical-allrepos/sandogasa.svg)](https://repology.org/project/sandogasa/versions)
 
 Cross-distribution packaging tools and libraries, focused primarily on
