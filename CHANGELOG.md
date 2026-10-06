@@ -51,6 +51,34 @@ exception rather than the way to move a request along.
 
 ## Unreleased
 
+### fedora-cve-triage: the run's closing lists carry what a check concluded
+
+The last thing a run said about its most actionable bugs was that
+nothing could be said about them:
+
+```
+note: bug 2408180: golang-entgo-ent was built against golang 0:1.23~rc1-2.fc41,
+below the fix in 1.24.8 — its binary carries the flaw and needs a rebuild
+…
+Product mismatch — skipped (4):
+  bug 2408180 — component 'golang-entgo-ent', NVD product(s): go
+```
+
+Both lines were right. A check that states a verdict in a note does not
+*claim* the bug, so the bug carries on to the checks after it, and the
+last of them reports what it could not judge — by which point the note
+is hundreds of lines up a run that covers hundreds of bugs, and nobody
+scrolls back. The closing lists now carry the note under the bug:
+
+```
+  bug 2408180 — component 'golang-entgo-ent', NVD product(s): go
+    (bundled-library: golang-entgo-ent was built against golang 0:1.23~rc1-2.fc41,
+     below the fix in 1.24.8 — its binary carries the flaw and needs a rebuild)
+```
+
+The lists stay complete, which is what they are for. Notes from every
+check are carried, `unshipped-tools`' included.
+
 ### fedora-cve-triage: an EPEL bug is looked up against the distro beneath EPEL
 
 A CVE bug filed for an EPEL branch was skipped before anything could be
