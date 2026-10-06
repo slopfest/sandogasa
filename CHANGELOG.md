@@ -49,6 +49,32 @@ any package, not to branch one, so it can never decide whether to
 offer a branch, and exercising it on somebody else's package is the
 exception rather than the way to move a request along.
 
+### fedora-cve-triage: a build that already carries the fix closes its bug
+
+A statically linked dependency is fixed by a rebuild, not by a version
+bump, so no comparison of the package's own version can see it — which
+is why these bugs ended a run as product mismatches, with the answer
+sitting in a note just above:
+
+```
+note: bug 2410708: google-guest-agent was built against golang 1.25.4-1.fc43, at
+or past the fix in 1.25.2, so its binary carries the fixed code
+…
+Product mismatch — skipped: bug 2410708 — NVD product(s): go
+```
+
+The buildroot already settles it. What was missing is the update that
+shipped that build, which is one scan of the component's updates — and
+from there this is an ordinary already-fixed bug, so it takes the
+`bodhi-check` path it always had: the same `StableFix` result, the same
+review, the same `ERRATA` close with `cf_fixed_in` naming the build.
+Four google-guest-agent bugs that reported as mismatches now report as
+stable fixes.
+
+A bug a check acts on is not also commented on — the close says what
+the comment would have. A build no update lists, or one still in
+testing, is left where it was.
+
 ### fedora-cve-triage: a conclusive finding is recorded on the bug
 
 The most useful thing a run produced was thrown away. These are
