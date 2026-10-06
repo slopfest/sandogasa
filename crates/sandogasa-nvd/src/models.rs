@@ -377,6 +377,20 @@ impl CveResponse {
             .collect()
     }
 
+    /// The CVE's English description, as NVD records it.
+    ///
+    /// What makes a bare CVE number mean something to a person being
+    /// asked to decide about it (issue #36).
+    pub fn english_description(&self) -> Option<&str> {
+        self.vulnerabilities.first().and_then(|v| {
+            v.cve
+                .descriptions
+                .iter()
+                .find(|d| d.lang == "en")
+                .map(|d| d.value.as_str())
+        })
+    }
+
     /// Extract tool/binary names that this CVE specifically affects.
     ///
     /// Looks for patterns in the English descriptions and bug summary that

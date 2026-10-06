@@ -49,6 +49,35 @@ any package, not to branch one, so it can never decide whether to
 offer a branch, and exercising it on somebody else's package is the
 exception rather than the way to move a request along.
 
+### fedora-cve-triage: the fixed-version prompt says what it is asking about
+
+The prompt that asks whether to trust an advisory's fixed version gave
+a CVE number and a version, and nothing to judge them by:
+
+```
+CVE-2025-58183: NVD lists no fixed version (Deferred); an advisory says
+"fixed in 1.25.2". Treat this as fixed in 1.25.2? [y/N]:
+```
+
+Answering it well means knowing what the CVE is in, which page made
+the claim, and what the answer settles — and the answer is durable: it
+can be written to `[fixed_versions]`, where it decides later runs, and
+it closes live security bugs. It now carries all of that:
+
+```
+CVE-2025-58183 (go, NVD: Deferred)
+  Unbounded allocation when parsing a crafted tar archive.
+  3 bug(s) here: fzf [epel-9], fzf [epel-10], golang-entgo-ent [43]
+  https://github.com/golang/go/issues/75678 says "fixed in 1.25.2"
+NVD lists no fixed version. Treat CVE-2025-58183 as fixed in 1.25.2? [y/N]:
+```
+
+The URL is the addition that matters most: "an advisory says" was the
+one claim in the old prompt that could not be checked, and a release
+tag, a GitHub advisory and a vendor page are not equally good
+evidence. Where a candidate cannot be traced to a page, the prompt says
+so rather than implying an advisory.
+
 ### fedora-cve-triage: a tool name has to be something Fedora ships
 
 `unshipped-tools` proposed closing bugs on the strength of a "tool"
