@@ -51,6 +51,45 @@ exception rather than the way to move a request along.
 
 ## Unreleased
 
+### fedora-cve-triage: an EPEL bug is looked up against the distro beneath EPEL
+
+A CVE bug filed for an EPEL branch was skipped before anything could be
+judged, because the library it named looked unpackaged:
+
+```
+[bundled-library] bug 2398918: skip — Fedora has no package named like go
+[bundled-library] bug 2451513: skip — Fedora has no package named like plexus-utils
+```
+
+Both are packaged. An `epel*` branch carries EPEL's own content and
+nothing of the distribution beneath it, so `fedrq pkgs -b epel10 -P go`
+finds nothing while `golang` sits in c10s. Every per-branch query now
+asks the base distro with EPEL layered over it — `-b c10s -r @epel`,
+which is additive — and the mapping that ebranch already had for this
+moved to `sandogasa-fedrq`, where both tools share it. It gained epel8
+(→ al8) on the way, so ebranch's base-distro guard now covers epel8
+branch requests as well, where it previously stayed off.
+
+Five bugs that reached the end of a run unjudged are now answered, each
+against its own buildroot rather than Fedora's:
+
+```
+note: bug 2398918: fzf was built against golang 1.23.1-4.el10, below the fix in
+1.23.12 — its binary carries the flaw and needs a rebuild
+note: bug 2398986: fzf was built against golang 1.22.9-2.el9_5, below the fix …
+FP: bug 2451513 — … (CVE in plexus-utils, packaged as plexus-utils;
+plexus-components-pom neither bundles nor links it)
+```
+
+Seeing EPEL's packages exposed a second fault behind the fzf bugs. A
+vendored Go package declares each module it carries, and `bundled(go`
+is a prefix of every one of them, so `bundled(golang(github.com/rivo/
+uniseg)) = 0.4.7` read as a bundled copy of Go itself — without a
+usable version, which ended the judgement. A bundled name must now end
+where the library's does, a version suffix aside: `bundled(gstreamer1)`
+is still a copy of GStreamer, while a module is not the toolchain. This
+is the trap `go` matching `go2rpm` and `go-rpm-macros` sprang before.
+
 ### fedora-cve-triage: a crate CVE is answered by the buildroot that compiled it
 
 A CVE in a Rust crate, filed against a package that links that crate

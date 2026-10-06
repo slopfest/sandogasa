@@ -391,47 +391,20 @@ pub struct FedrqResolver {
     pub source_online: std::sync::atomic::AtomicUsize,
 }
 
-/// The base-distro branch to probe for an EPEL-ish branch name.
-///
-/// - `epel9*` (and `c9s`) → **al9**: fedrq's `c9s` layers epel9 +
-///   epel9-next on top of CentOS Stream 9 ("EPEL 9 is weird"), so
-///   probing it would see EPEL's own packages; AlmaLinux 9 is a clean
-///   RHEL 9 stand-in. UBI is not usable (incomplete package set).
-/// - `epel10*` / `c10s` → **c10s** (clean base).
-/// - anything else (epel8, Fedora branches) → `None` — no safe base
-///   known; the guard stays off unless `--base-branch` is given.
-pub fn epel_base_branch(branch: &str) -> Option<&'static str> {
-    if branch.starts_with("epel10") || branch == "c10s" {
-        Some("c10s")
-    } else if branch.starts_with("epel9") || branch == "c9s" || branch == "al9" {
-        Some("al9")
-    } else {
-        None
-    }
-}
+/// The EPEL branch mappings, re-exported so this module's callers and
+/// its tests keep the shorter names. They moved to `sandogasa-fedrq`
+/// because fedora-cve-triage needs the same answer: an EPEL bug has to
+/// be looked up against the base distro with EPEL layered over it, or
+/// the library it names looks unpackaged (issue #32).
+pub use sandogasa_fedrq::{epel_base_branch, epel_branch_for_base};
 
 /// Resolve the base-distro branch for the guard, if any.
 ///
 /// Order: an explicit `--base-branch` always wins; an `epel*` target
 /// branch uses the built-in mapping; a base-ish target branch paired
 /// with an `@epel` target repo (the CBS pattern, e.g. `-t c10s
-/// --target-repo @epel`) also maps. Anything else — Fedora targets,
-/// unmapped EPEL branches like epel8 — leaves the guard inactive.
-/// The EPEL branch whose updates-testing serves a base-distro target.
-///
-/// The CBS pattern names the base and layers EPEL over it — `-b c10s
-/// -r @epel` — and fedrq has no testing class for that shape: c10s
-/// knows nothing of `@epel-testing`. EPEL's own branch does, so the
-/// mapping runs the other way from [`epel_base_branch`].
-pub fn epel_branch_for_base(branch: &str) -> Option<&'static str> {
-    match branch {
-        "c10s" => Some("epel10"),
-        "c9s" | "al9" => Some("epel9"),
-        "al8" => Some("epel8"),
-        _ => None,
-    }
-}
-
+/// --target-repo @epel`) also maps. A Fedora target leaves the guard
+/// inactive.
 pub fn base_branch_for(
     base_flag: Option<&str>,
     target_branch: Option<&str>,
@@ -2681,7 +2654,10 @@ packages = ["a"]
         assert_eq!(epel_base_branch("epel9"), Some("al9"));
         assert_eq!(epel_base_branch("c9s"), Some("al9"));
         assert_eq!(epel_base_branch("al9"), Some("al9"));
-        assert_eq!(epel_base_branch("epel8"), None);
+        // epel8 maps too, since fedrq knows al8 and the guard is as
+        // right there as on 9 and 10 (issue #32).
+        assert_eq!(epel_base_branch("epel8"), Some("al8"));
+        assert_eq!(epel_base_branch("al8"), Some("al8"));
         assert_eq!(epel_base_branch("rawhide"), None);
         assert_eq!(epel_base_branch("f45"), None);
     }
@@ -2702,8 +2678,13 @@ packages = ["a"]
             base_branch_for(None, Some("epel9"), None),
             Some("al9".to_string())
         );
-        // Unmapped EPEL branch → guard off (caller warns).
-        assert_eq!(base_branch_for(None, Some("epel8"), None), None);
+        // epel8 maps to al8 now, so the guard covers it as well.
+        assert_eq!(
+            base_branch_for(None, Some("epel8"), None),
+            Some("al8".to_string())
+        );
+        // A Fedora target leaves the guard off (caller warns).
+        assert_eq!(base_branch_for(None, Some("rawhide"), None), None);
         // CBS pattern: base-ish branch + @epel repo → the branch's base.
         assert_eq!(
             base_branch_for(None, Some("c10s"), Some("@epel")),

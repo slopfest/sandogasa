@@ -326,6 +326,55 @@ fn cache_base() -> PathBuf {
 }
 
 /// Return the fedrq smartcache directory (`$XDG_CACHE_HOME/fedrq`).
+/// The base-distro branch an EPEL branch layers over, which is also
+/// the branch fedrq has to be asked about to see the whole picture:
+/// an `epel*` branch carries EPEL's own content and nothing of the
+/// distribution beneath it, so `fedrq pkgs -b epel10 -P go` finds
+/// nothing while `golang` sits in c10s.
+///
+/// EPEL 9 is the odd one: c9s layers epel9 *and* epel9-next, so
+/// AlmaLinux stands in for RHEL 9. A base branch maps to itself, so a
+/// caller can pass either.
+pub fn epel_base_branch(branch: &str) -> Option<&'static str> {
+    if branch.starts_with("epel10") || branch == "c10s" {
+        Some("c10s")
+    } else if branch.starts_with("epel9") || branch == "c9s" || branch == "al9" {
+        Some("al9")
+    } else if branch.starts_with("epel8") || branch == "al8" {
+        Some("al8")
+    } else {
+        None
+    }
+}
+
+/// The EPEL branch whose updates-testing serves a base-distro target.
+///
+/// The CBS pattern names the base and layers EPEL over it — `-b c10s
+/// -r @epel` — and fedrq has no testing class for that shape: c10s
+/// knows nothing of `@epel-testing`. EPEL's own branch does, so the
+/// mapping runs the other way from [`epel_base_branch`].
+pub fn epel_branch_for_base(branch: &str) -> Option<&'static str> {
+    match branch {
+        "c10s" => Some("epel10"),
+        "c9s" | "al9" => Some("epel9"),
+        "al8" => Some("epel8"),
+        _ => None,
+    }
+}
+
+/// The `-b`/`-r` arguments that ask fedrq about everything visible on
+/// `branch`.
+///
+/// An EPEL branch is asked as its base distro with EPEL layered over
+/// it, which is additive: `-b c10s -r @epel` answers for `bash` as
+/// well as for an EPEL package. Anything else is asked as itself.
+pub fn branch_args(branch: &str) -> Vec<&str> {
+    match epel_base_branch(branch) {
+        Some(base) if branch.starts_with("epel") => vec!["-b", base, "-r", "@epel"],
+        _ => vec!["-b", branch],
+    }
+}
+
 pub fn cache_dir() -> PathBuf {
     cache_base().join("fedrq")
 }
@@ -792,6 +841,36 @@ fn parse_source_vr_lines(raw: Vec<String>) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_epel_branch_is_queried_as_its_base_with_epel_over_it() {
+        // Issue #32: `-b epel10` sees EPEL's own content and nothing
+        // of the distribution beneath it, so `golang` and
+        // `plexus-utils` look unpackaged.
+        assert_eq!(branch_args("epel10"), ["-b", "c10s", "-r", "@epel"]);
+        assert_eq!(branch_args("epel10.3"), ["-b", "c10s", "-r", "@epel"]);
+        assert_eq!(branch_args("epel9"), ["-b", "al9", "-r", "@epel"]);
+        assert_eq!(branch_args("epel8"), ["-b", "al8", "-r", "@epel"]);
+        // Everything else is asked as itself, the base branches
+        // included: `-b c10s` already sees c10s.
+        assert_eq!(branch_args("rawhide"), ["-b", "rawhide"]);
+        assert_eq!(branch_args("f45"), ["-b", "f45"]);
+        assert_eq!(branch_args("c10s"), ["-b", "c10s"]);
+    }
+
+    #[test]
+    fn the_epel_mappings_are_inverses_where_both_know_a_branch() {
+        for (epel, base) in [("epel10", "c10s"), ("epel9", "al9"), ("epel8", "al8")] {
+            assert_eq!(epel_base_branch(epel), Some(base));
+            assert_eq!(epel_branch_for_base(base), Some(epel));
+        }
+        // c9s layers epel9 and epel9-next, so AlmaLinux stands in for
+        // RHEL 9 and the pair is not symmetric there.
+        assert_eq!(epel_base_branch("c9s"), Some("al9"));
+        assert_eq!(epel_branch_for_base("c9s"), Some("epel9"));
+        assert_eq!(epel_base_branch("f45"), None);
+        assert_eq!(epel_branch_for_base("rawhide"), None);
+    }
 
     #[test]
     fn pkginfo_carries_version_release_only_when_asked() {
