@@ -49,7 +49,32 @@ any package, not to branch one, so it can never decide whether to
 offer a branch, and exercising it on somebody else's package is the
 exception rather than the way to move a request along.
 
-## Unreleased
+### fedora-cve-triage: the reassignment pass runs before the checks that read the branch (breaking config)
+
+Every check after `fix-version` reads the branch the bug names, and
+that branch is not always one the package is on. Red Hat ProdSec files
+one `[epel-all]` tracker on the newest EPEL release whatever the
+package is branched for, so `magicmirror` — which is in EPEL 9 alone —
+collected 56 bugs against epel10, and each one drew a line like this
+before `fix-version` got to say they were misfiled:
+
+```
+note: bug 2447209: fedrq returned no provides for magicmirror on epel10, so
+whether it bundles the flatted Node module cannot be told — review by hand
+```
+
+Nothing about it was unclear: the package is not in epel10. `fix-version`
+now runs second, after `rejected-cve` alone — a withdrawn CVE wants
+closing whatever branch its bug names — so the checks that read a
+branch read the one the package actually ships on. A reassigned bug is
+claimed by that pass, so the other checks see it on the next run, once
+the move has landed.
+
+**Breaking for a config that pins `checks`:** an explicit list is
+honoured in the order it is written, so one that places `fix-version`
+after the false-positive checks keeps the old behaviour and the old
+noise. Move `fix-version` to the front of that list, or drop the key to
+take the default order.
 
 ### fedora-cve-triage: the run's closing lists carry what a check concluded
 
