@@ -49,6 +49,32 @@ any package, not to branch one, so it can never decide whether to
 offer a branch, and exercising it on somebody else's package is the
 exception rather than the way to move a request along.
 
+### fedora-cve-triage: a tool name has to be something Fedora ships
+
+`unshipped-tools` proposed closing bugs on the strength of a "tool"
+that was an ordinary English word:
+
+```
+[1/3] bug 2450270 — … Denial of Service due to excessive buffering of specially
+crafted packets [fedora-43] (tools: of)
+[3/3] bug 2526429 — … Denial of Service via invalid binary POST requests
+[fedora-all] (tools: invalid)
+```
+
+`invalid` comes straight out of the second summary, where `binary` is
+an adjective's noun rather than a program, and `of` the same way from a
+sentence containing "of the binary". Each then read as "the package
+does not ship it", which is true of any word that is not a program —
+and the default answer at the prompt is `(a)pply`.
+
+A candidate name is now kept only if some package ships a binary of
+that name, which `xmlcatalog` does and `of` never will. The word list
+that caught `well-known binary` remains, with these two added, but it
+can only ever know the words that have already gone wrong. This gives
+up the true positives where a CVE names a tool Fedora packages nowhere
+— the component does not ship that either, so the bug really was a
+false positive — which is the right direction to lose one in.
+
 ### fedora-cve-triage: the reassignment pass runs before the checks that read the branch (breaking config)
 
 Every check after `fix-version` reads the branch the bug names, and

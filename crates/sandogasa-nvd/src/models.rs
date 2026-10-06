@@ -547,11 +547,13 @@ const TOOL_QUALIFIERS: &[&str] = &["tool", "utility", "binary", "executable"];
 const NOT_TOOL_NAMES: &[&str] = &[
     "affected",
     "any",
+    "invalid",
     "cli",
     "command-line",
     "compiled",
     "each",
     "malicious",
+    "of",
     "resulting",
     "same",
     "some",
@@ -1472,6 +1474,23 @@ mod tests {
         let names = extract_tool_names_from_text("A tool for testing");
         // "A" is too short to be a binary name
         assert!(names.is_empty());
+    }
+
+    #[test]
+    fn a_word_standing_where_a_name_would_be_is_not_a_tool() {
+        // Both out of real summaries: "via invalid binary POST
+        // requests" and a sentence carrying "of the binary". Each read
+        // downstream as a tool magicmirror does not ship (issue #35).
+        assert!(
+            extract_tool_names_from_text("Denial of Service via invalid binary POST requests")
+                .is_empty()
+        );
+        assert!(extract_tool_names_from_text("a flaw in the handling of the binary").is_empty());
+        // A name still is one.
+        assert_eq!(
+            extract_tool_names_from_text("buffer overflow in the xmlcatalog utility"),
+            ["xmlcatalog"]
+        );
     }
 
     #[test]
