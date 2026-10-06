@@ -49,6 +49,40 @@ any package, not to branch one, so it can never decide whether to
 offer a branch, and exercising it on somebody else's package is the
 exception rather than the way to move a request along.
 
+## Unreleased
+
+### fedora-cve-triage: a crate CVE is answered by the buildroot that compiled it
+
+A CVE in a Rust crate, filed against a package that links that crate
+statically, ended as "review by hand" — twice for nushell and
+roxmltree, and it would have repeated for every crate CVE filed against
+every Rust application in Fedora. The check could see no declared
+`bundled(crate(roxmltree))`, which is exactly what a package built
+against Fedora's packaged crates looks like, so it had nothing to judge.
+
+Koji knows. nushell's build installed `rust-roxmltree-devel-0.21.1`,
+and the buildroot answers both halves of the question: a crate reaches
+a binary only by having been there, and the version it was there at is
+the one compiled in. The reading was already written for Go, where the
+same reasoning applies to the toolchain (v0.25.2), so this generalises
+it rather than adding a second mechanism: the version at or past the
+fix means the binary carries the fixed code, below it means a rebuild
+is what fixes the package, and a log that was read without the crate in
+it clears the bug outright. Only a log that could not be fetched leaves
+the bug a human's, and the note now says which of the two happened.
+
+The spec's `BuildRequires` is the weaker source and is not used for
+this. rust2rpm writes one per direct dependency, so a transitive crate
+appears only through another package's requires, and where it is
+written down it can be a boolean dep — nushell's is
+`(crate(roxmltree/default) >= 0.21.0 with crate(roxmltree/default) <
+0.22.0~)` — that no prefix match sees.
+
+A Rust package with no architecture-specific subpackage now reads as
+carrying no crate at all, the way a Go package in that position already
+did: it compiles nothing, and Fedora has no dynamically linked Rust for
+it to reach a crate another way.
+
 ## v0.25.2
 
 ### fedora-cve-triage: a Go CVE is answered by the toolchain the build used
