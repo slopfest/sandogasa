@@ -75,7 +75,7 @@ up the true positives where a CVE names a tool Fedora packages nowhere
 — the component does not ship that either, so the bug really was a
 false positive — which is the right direction to lose one in.
 
-### fedora-cve-triage: the reassignment pass runs before the checks that read the branch (breaking config)
+### fedora-cve-triage: the reassignment pass runs before the checks that read the branch
 
 Every check after `fix-version` reads the branch the bug names, and
 that branch is not always one the package is on. Red Hat ProdSec files
@@ -96,11 +96,11 @@ branch read the one the package actually ships on. A reassigned bug is
 claimed by that pass, so the other checks see it on the next run, once
 the move has landed.
 
-**Breaking for a config that pins `checks`:** an explicit list is
-honoured in the order it is written, so one that places `fix-version`
-after the false-positive checks keeps the old behaviour and the old
-noise. Move `fix-version` to the front of that list, or drop the key to
-take the default order.
+Only the default order changed. A config that pins `checks` is
+honoured as written, as it always was, so one that places
+`fix-version` after the false-positive checks keeps the old behaviour
+— and the old noise. Move `fix-version` to the front of that list, or
+drop the key, to pick this up.
 
 ### fedora-cve-triage: the run's closing lists carry what a check concluded
 
