@@ -49,6 +49,58 @@ any package, not to branch one, so it can never decide whether to
 offer a branch, and exercising it on somebody else's package is the
 exception rather than the way to move a request along.
 
+### fedora-cve-triage: a conclusive finding is recorded on the bug
+
+The most useful thing a run produced was thrown away. These are
+conclusions, not guesses:
+
+```
+note: bug 2409925: fscrypt was built against golang 1.20.10-1.el9_3, below the
+fix in 1.24.8 — its binary carries the flaw and needs a rebuild
+```
+
+and they lived in one terminal until the scrollback went. The
+maintainer was never told that a rebuild fixes their bug — which
+matters precisely because the volume of low-quality CVE filings
+teaches people to ignore these — and the next run redid every NVD
+lookup and `root.log` read to reach the same words.
+
+A run now offers to comment on each bug it has settled and to mark it
+`Triaged`, in one update so it is one notification. A finding that the
+package carries the flaw says it is real, in those words.
+
+The comment records which *analysis* reached the conclusion —
+`fedora-cve-triage 0.25.3 (analysis 1):` — and that number, not the
+release, decides what a later run re-reads. Both halves matter.
+Verdicts improve, and not subtly: the same four golang-entgo-ent bugs
+were called false positives by v0.24.1 and "needs a rebuild" by
+v0.25.2, so a finding cannot be trusted forever. But re-reading every
+open bug on every release means NVD lookups — five requests per thirty
+seconds without a key — for bugs whose answer cannot have changed,
+which is how a sweep of a few hundred bugs becomes unusable. So the
+number is bumped when a change could alter a verdict and left alone
+for wording, reporting and prompts.
+
+A bug carrying the current analysis is dropped before any check runs,
+and only bugs with the keyword have their comments fetched, so that
+costs one request per triaged bug. When the analysis has moved on, the
+bug is re-read — and if the new verdict says exactly what the old
+comment says, nothing is posted: Bugzilla has no way to edit a comment
+(`PUT /bug/comment/<id>` is not a route), so reposting would stack one
+identical paragraph per release. What changes is worth saying, and a
+rebuilt package reads as built against a different toolchain, which is
+the sentence a maintainer wants.
+
+Only conclusive findings are written. "Review by hand" is the absence
+of a finding and says nothing to a maintainer, so it stays in the run
+output where it belongs. Nothing is written without `--apply`, and
+each finding is reviewed like every other write.
+
+The keyword follows Fedora's own triage convention — "mark it as
+triaged so that others will not duplicate your efforts", and "do not
+change the bug's status"
+([BugZappers/How_to_Triage](https://fedoraproject.org/wiki/BugZappers/How_to_Triage)).
+
 ### fedora-cve-triage: the fixed-version prompt says what it is asking about
 
 The prompt that asks whether to trust an advisory's fixed version gave
