@@ -137,7 +137,11 @@ lookup and `root.log` read to reach the same words.
 
 A run now offers to comment on each bug it has settled and to mark it
 `Triaged`, in one update so it is one notification. A finding that the
-package carries the flaw says it is real, in those words.
+package carries the flaw adds that it is "a real finding rather than a
+false positive: the bug should stay open until the fix reaches this
+package" — the remedy is already in the finding, and what a maintainer
+buried in low-quality filings needs is the part that says this one is
+not noise.
 
 The comment records which *analysis* reached the conclusion —
 `fedora-cve-triage 0.25.3 (analysis 1):` — and that number, not the
