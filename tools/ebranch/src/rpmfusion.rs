@@ -181,11 +181,15 @@ pub struct ReleaseState {
     pub branched: bool,
 }
 
-/// Where RPM Fusion's dist-git serves git over HTTP. Their cgit does
-/// not expose a plain-file view and their Koji needs credentials, so
-/// the ref list is the one thing about their packaging that can be
-/// read from outside — enough to say which branches exist, not what
-/// is in them.
+/// Where RPM Fusion's dist-git serves git over HTTP.
+///
+/// Git only: their cgit answers 404 for every path, its own index
+/// included, so this is a remote and never a link to show anyone.
+/// Their Koji needs credentials too, which leaves the ref list as
+/// the one thing about their packaging readable from outside —
+/// enough to say which branches exist, not what is in them. A
+/// `--depth 1` clone does reach the spec, which is how the version
+/// in dist-git could be read as well (not done here).
 const DISTGIT: &str = "https://pkgs.rpmfusion.org/git";
 
 /// The branches RPM Fusion's dist-git has for a package.
@@ -369,10 +373,11 @@ Fedora update(s):
         o,
         "Reported by sandogasa ebranch. The shipped column is read from RPM"
     );
-    let _ = writeln!(
-        o,
-        "Fusion's own repositories, the dist-git column from {DISTGIT}."
-    );
+    // The remote, not a page: RPM Fusion's cgit answers 404 for
+    // every path including its own index, so a bare host URL in a
+    // bug sent to them is a broken link. Name the command instead.
+    let _ = writeln!(o, "Fusion's own repositories, the dist-git column from");
+    let _ = writeln!(o, "  git ls-remote {DISTGIT}/{{free,nonfree}}/{rf}.git");
     let _ = writeln!(
         o,
         "Neither shows a build that exists but has not been released, which"
@@ -459,6 +464,14 @@ pub fn bug_fields(
         "version": bz_version(counterparts.release()),
         "summary": summary,
         "description": bug_body(fedora, rf, evr.as_deref(), states, aliases, *autopush_on),
+        // Red Hat's Bugzilla defaults these; RPM Fusion's refuses the
+        // create without them ("You must select/enter a OS"). The
+        // values are the ones their instance offers, read from
+        // `field/bug/op_sys` and `field/bug/rep_platform` rather than
+        // guessed: GNU/Linux is the only operating system it lists,
+        // and a rebuild request is not about one architecture.
+        "op_sys": "GNU/Linux",
+        "platform": "All",
     })
 }
 
@@ -1028,6 +1041,9 @@ name = "libheif-freeworld"
         assert_eq!(f["component"], "libheif-freeworld");
         assert_eq!(f["product"], "Fedora");
         assert_eq!(f["version"], "f43");
+        // Their Bugzilla refuses a create without these two.
+        assert_eq!(f["op_sys"], "GNU/Linux");
+        assert_eq!(f["platform"], "All");
         assert_eq!(
             f["summary"],
             "libheif-freeworld: rebuild for libheif 1.23.6-1"

@@ -36,6 +36,23 @@ Every guess is checked against the inventory before it counts, so the
 rule can be generous without inventing packages, and a stale table
 entry degrades to "no counterpart" rather than to a wrong bug.
 
+### ebranch: the bug their Bugzilla will actually take
+
+Filing was refused with "You must select/enter a OS" once the
+credential was accepted. Red Hat's Bugzilla defaults `op_sys` and
+`rep_platform`; RPM Fusion's requires them on a create. Both values
+come from their instance rather than a guess — `field/bug/op_sys`
+offers `GNU/Linux` alone, and a rebuild request is not about one
+architecture, so the platform is `All`. With those,
+[bug 7564](https://bugzilla.rpmfusion.org/show_bug.cgi?id=7564) was
+filed, carrying seven Bodhi updates across six RPM Fusion releases.
+
+The bug also printed `https://pkgs.rpmfusion.org/git` as where the
+dist-git column came from. That is a 404 for anyone who clicks it —
+their cgit answers 404 for every path, its own index included — so a
+bug sent to another project carried a broken link. It now names the
+command that produced the column instead.
+
 ### ebranch: neutral about what a counterpart is
 
 The bug said `libheif-freeworld` "is built against" `libheif`. That is
