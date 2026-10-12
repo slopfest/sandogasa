@@ -36,6 +36,48 @@ Every guess is checked against the inventory before it counts, so the
 rule can be generous without inventing packages, and a stale table
 entry degrades to "no counterpart" rather than to a wrong bug.
 
+### Every tool checks a credential the same way
+
+Nine credentials across seven tools each had their own configure-time
+flow, and two of them validated nothing. `poi-tracker` checked a
+Bugzilla API key by running a bug search — which Bugzilla serves to
+anyone — so it reported a key that could never write as valid, exactly
+as `ebranch` did before it was fixed. It now asks to create a bug with
+no fields, which the credential is checked before and which cannot
+create anything, because every required field is absent.
+
+The rest proved something, but none of them offered a way out. A
+refused credential was saved with a warning and an instruction to
+rerun, which is the shape `CLAUDE.md` says to avoid: detect a fixable
+problem, offer to fix it, carry on.
+
+`sandogasa_cli::credential` is now the one flow. A refusal offers a
+replacement; declining keeps what is there, because a value edited by
+hand to watch the check fail must not be replaced by something that
+assumes a typo. An empty answer keeps it too rather than aborting the
+command. Nothing is offered where stdin is not a terminal, since
+`confirm` returns its default on an empty line and asking anyway turns
+"nobody is here" into whichever answer the default happens to be.
+
+A check that *could not be made* — a rate limit, an unreachable API —
+is reported as such and offers nothing, because it says nothing about
+the credential. Three tools got that wrong in opposite directions:
+`hs-relmon` and `cpu-sig-tracker` propagated the error and killed
+`configure` outright, while `sandogasa-report` re-prompted for GitLab
+alone and kept the token for every other forge. Both now keep it.
+
+Where a check proves the identity as well as the secret — Bugzilla's
+`valid_login`, JIRA's `whoami` — a refusal names the address too,
+since replacing the key is the wrong fix when the email is what is
+wrong.
+
+The helper carries a noun for what it is holding, because telling
+somebody their API key was refused when they configured a token is its
+own small confusion. It comes in a blocking form as well as an async
+one: several tools validate with a blocking call, and routing those
+through an async helper would mean each carrying a runtime, and
+panicking where one already exists.
+
 ### sandogasa-fedrq: a test can see what fedrq is asked
 
 Every query was built and spawned in one step, so nothing could

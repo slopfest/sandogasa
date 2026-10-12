@@ -39,30 +39,26 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
 fn prompt_gitlab_token(
     existing: Option<&GitlabConfig>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    if let Some(cfg) = existing {
-        eprint!("Validating existing GitLab token... ");
-        match sandogasa_gitlab::validate_token(&gitlab_base(), &cfg.access_token) {
-            Ok(true) => {
-                eprintln!("valid.");
-                return Ok(cfg.access_token.clone());
-            }
-            Ok(false) => eprintln!("invalid."),
-            Err(e) => eprintln!("check failed ({e}); re-prompting."),
-        }
+    let have = existing.map(|c| c.access_token.clone()).unwrap_or_default();
+    if have.is_empty() {
+        eprintln!("A GitLab personal access token with 'api' scope is needed.");
     }
-
     let token =
-        rpassword::prompt_password("Paste a GitLab personal access token with 'api' scope: ")?;
-    let token = token.trim().to_string();
+        sandogasa_cli::credential::validated_key_blocking("GitLab", "token", have, |token| {
+            match sandogasa_gitlab::validate_token(&gitlab_base(), token) {
+                Ok(true) => sandogasa_cli::credential::KeyVerdict::Accepted("valid.".to_string()),
+                Ok(false) => {
+                    sandogasa_cli::credential::KeyVerdict::Refused("not accepted.".to_string())
+                }
+                Err(e) => {
+                    sandogasa_cli::credential::KeyVerdict::Unknown(format!("could not check: {e}"))
+                }
+            }
+        })
+        .key;
     if token.is_empty() {
         return Err("no GitLab token provided".into());
     }
-
-    eprint!("Validating GitLab token... ");
-    if !sandogasa_gitlab::validate_token(&gitlab_base(), &token)? {
-        return Err("GitLab token is invalid".into());
-    }
-    eprintln!("valid.");
     Ok(token)
 }
 
@@ -72,17 +68,30 @@ fn prompt_gitlab_token(
 fn prompt_jira(
     existing: Option<&JiraConfig>,
 ) -> Result<Option<JiraConfig>, Box<dyn std::error::Error>> {
+    // The credentials are a pair, so a refusal may be either half —
+    // which is why this falls back to asking for both rather than
+    // replacing the token alone.
     if let Some(cfg) = existing {
-        eprint!("Validating existing JIRA credentials... ");
-        match crate::jira::whoami(cfg.email.clone(), cfg.access_token.clone()) {
-            Ok(me) => {
-                eprintln!("valid ({}).", me.display_name);
-                return Ok(Some(JiraConfig {
-                    email: cfg.email.clone(),
-                    access_token: cfg.access_token.clone(),
-                }));
-            }
-            Err(e) => eprintln!("{e}; re-prompting."),
+        let email = cfg.email.clone();
+        let checked = sandogasa_cli::credential::validated_key_blocking(
+            "JIRA",
+            "API token",
+            cfg.access_token.clone(),
+            |token| match crate::jira::whoami(email.clone(), token.to_string()) {
+                Ok(me) => sandogasa_cli::credential::KeyVerdict::Accepted(format!(
+                    "valid ({}).",
+                    me.display_name
+                )),
+                Err(e) => sandogasa_cli::credential::KeyVerdict::Refused(format!(
+                    "{e} — the token, or the account it belongs to, is not the one JIRA has."
+                )),
+            },
+        );
+        if checked.accepted {
+            return Ok(Some(JiraConfig {
+                email: cfg.email.clone(),
+                access_token: checked.key,
+            }));
         }
     }
 

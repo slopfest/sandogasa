@@ -365,30 +365,40 @@ type ValidateFn = fn(&str, &str) -> Result<bool, Box<dyn std::error::Error>>;
 /// the token and the user doesn't want to persist it.
 ///
 /// `prompt` is the full rpassword prompt (it names the scope the
-/// forge needs). `keep_on_unreachable` decides what an `Err` from
-/// validating the *existing* token means: `true` keeps it so a
-/// transient outage doesn't force re-entry, `false` re-prompts.
+/// forge needs). A failed check keeps the existing token for every
+/// forge: an unreachable API says nothing about a credential, and
+/// discarding one over a transient outage is guesswork.
 fn prompt_token(
     instance: &str,
     existing: Option<&str>,
     prompt: &str,
-    keep_on_unreachable: bool,
     validate: ValidateFn,
 ) -> Result<TokenChoice, Box<dyn std::error::Error>> {
     if let Some(tok) = existing {
-        eprint!("  Validating existing {instance} token... ");
-        match validate(instance, tok) {
-            Ok(true) => {
-                eprintln!("valid.");
-                return Ok(TokenChoice::KeepExisting);
-            }
-            Ok(false) => eprintln!("invalid — re-prompting."),
-            Err(e) if keep_on_unreachable => {
-                eprintln!("check failed ({e}); keeping existing token.");
-                return Ok(TokenChoice::KeepExisting);
-            }
-            Err(e) => eprintln!("check failed ({e}); re-prompting."),
+        // An unreachable API keeps the token for every forge now, not
+        // only those that asked for it: a failed check says nothing
+        // about the credential, and re-prompting on one is guesswork
+        // that throws away a token that may be perfectly good.
+        let checked = sandogasa_cli::credential::validated_key_blocking(
+            instance,
+            "token",
+            tok.to_string(),
+            |token| {
+                use sandogasa_cli::credential::KeyVerdict;
+                match validate(instance, token) {
+                    Ok(true) => KeyVerdict::Accepted("valid.".to_string()),
+                    Ok(false) => KeyVerdict::Refused(format!("rejected by {instance}.")),
+                    Err(e) => KeyVerdict::Unknown(format!("check failed ({e}); keeping it.")),
+                }
+            },
+        );
+        if checked.key == tok {
+            return Ok(TokenChoice::KeepExisting);
         }
+        if checked.key.is_empty() {
+            return Ok(TokenChoice::Skipped);
+        }
+        return Ok(TokenChoice::Saved(checked.key));
     }
     let token = rpassword::prompt_password(prompt)?;
     let token = token.trim().to_string();
@@ -419,7 +429,6 @@ fn prompt_gitlab_token(
             "  Paste a personal access token for {instance} with 'api' scope \
              (enter to skip): "
         ),
-        false,
         sandogasa_gitlab::validate_token,
     )
 }
@@ -438,7 +447,6 @@ fn prompt_github_token(
             "  Paste a personal access token for {instance} with 'repo' scope \
              (enter to skip): "
         ),
-        true,
         sandogasa_github::validate_token,
     )
 }
@@ -457,7 +465,6 @@ fn prompt_forgejo_token(
             "  Paste a personal access token for {instance} \
              (enter to skip): "
         ),
-        true,
         sandogasa_forgejo::validate_token,
     )
 }
@@ -476,7 +483,6 @@ fn prompt_sourcehut_token(
             "  Paste a personal access token for {instance} \
              (from meta.sr.ht/oauth2/personal-token; enter to skip): "
         ),
-        true,
         sandogasa_sourcehut::validate_token,
     )
 }

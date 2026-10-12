@@ -1452,32 +1452,31 @@ fn run_prune_one(
 const GITLAB_BASE: &str = "https://gitlab.com";
 
 fn configure_gitlab() -> Result<(), Box<dyn std::error::Error>> {
-    let existing_token = config::load()
+    let existing = config::load()
         .ok()
-        .and_then(|c| c.gitlab.map(|g| g.access_token));
-
-    if let Some(token) = &existing_token {
-        eprint!("Validating existing token... ");
-        if gitlab::validate_token(GITLAB_BASE, token)? {
-            eprintln!("valid.");
-            return Ok(());
-        }
-        eprintln!("invalid.");
+        .and_then(|c| c.gitlab.map(|g| g.access_token))
+        .unwrap_or_default();
+    if existing.is_empty() {
+        eprintln!("A GitLab personal access token with 'api' scope is needed.");
     }
-
-    let token = rpassword::prompt_password(
-        "Paste a GitLab personal access token \
-        with 'api' scope: ",
-    )?;
+    let token =
+        sandogasa_cli::credential::validated_key_blocking("GitLab", "token", existing, |token| {
+            match gitlab::validate_token(GITLAB_BASE, token) {
+                Ok(true) => sandogasa_cli::credential::KeyVerdict::Accepted("valid.".to_string()),
+                Ok(false) => {
+                    sandogasa_cli::credential::KeyVerdict::Refused("not accepted.".to_string())
+                }
+                // GitLab being unreachable says nothing about the token,
+                // and used to abort `configure` outright through a `?`.
+                Err(e) => {
+                    sandogasa_cli::credential::KeyVerdict::Unknown(format!("could not check: {e}"))
+                }
+            }
+        })
+        .key;
     if token.is_empty() {
         return Err("no token provided".into());
     }
-
-    eprint!("Validating token... ");
-    if !gitlab::validate_token(GITLAB_BASE, &token)? {
-        return Err("token is invalid".into());
-    }
-    eprintln!("valid.");
 
     let cfg = config::Config {
         gitlab: Some(config::GitlabConfig {

@@ -152,19 +152,34 @@ fn cmd_config() -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     }
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let email = cfg.bugzilla.email.clone();
+    // `valid_login` sends the key and asks whether it belongs to this
+    // account, so it proves both — which is also why a refusal names
+    // the address as well as the key.
+    cfg.bugzilla.api_key = sandogasa_cli::credential::validated_key_blocking(
+        "Bugzilla",
+        "API key",
+        cfg.bugzilla.api_key.clone(),
+        |key| {
+            use sandogasa_cli::credential::KeyVerdict;
+            let client = match BzClient::new(BUGZILLA_URL).with_api_key(key.to_string()) {
+                Ok(c) => c,
+                Err(e) => return KeyVerdict::Unknown(format!("could not check: {e}")),
+            };
+            match rt.block_on(client.valid_login(&email)) {
+                Ok(true) => KeyVerdict::Accepted("valid.".to_string()),
+                Ok(false) => KeyVerdict::Refused(format!(
+                    "not recognised for {email} — the key, or the address, is not the \
+                     one Bugzilla has."
+                )),
+                Err(e) => KeyVerdict::Unknown(format!("could not validate: {e}")),
+            }
+        },
+    )
+    .key;
     cf.save(&cfg).map_err(|e| e.to_string())?;
     eprintln!("Saved to {}", cf.path().display());
-
-    let client = BzClient::new(BUGZILLA_URL)
-        .with_api_key(cfg.bugzilla.api_key.clone())
-        .map_err(|e| e.to_string())?;
-    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    eprint!("Validating API key… ");
-    match rt.block_on(client.valid_login(&cfg.bugzilla.email)) {
-        Ok(true) => eprintln!("valid."),
-        Ok(false) => eprintln!("login not recognized (check the email/key)."),
-        Err(e) => eprintln!("could not validate: {e}"),
-    }
     Ok(())
 }
 

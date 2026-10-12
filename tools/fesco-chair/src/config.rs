@@ -57,23 +57,24 @@ pub fn cmd_config() -> Result<(), String> {
         println!("Forgejo token: (set — delete the config file to replace it)");
     }
 
-    // Validate against the instance; a network hiccup shouldn't lose
-    // the token the user just pasted, so save regardless and warn.
-    print!("Validating token against {}... ", sources::FORGE_URL);
-    match sandogasa_forgejo::validate_token(sources::FORGE_URL, &config.forgejo.token) {
-        Ok(true) => println!("valid."),
-        Ok(false) => {
-            println!("rejected.");
-            eprintln!(
-                "warning: {} rejected the token; it was saved but won't work",
-                sources::FORGE_URL
-            );
-        }
-        Err(e) => {
-            println!("could not verify.");
-            eprintln!("warning: {e}; the token was saved unverified");
-        }
-    }
+    // Validated against the instance; a network hiccup shouldn't lose
+    // the token just pasted, so a check that could not be made keeps
+    // it and says so. A rejection offers a replacement instead of
+    // leaving the only remedy as editing the file.
+    config.forgejo.token = sandogasa_cli::credential::validated_key_blocking(
+        "Forgejo",
+        "token",
+        config.forgejo.token.clone(),
+        |token| {
+            use sandogasa_cli::credential::KeyVerdict;
+            match sandogasa_forgejo::validate_token(sources::FORGE_URL, token) {
+                Ok(true) => KeyVerdict::Accepted("valid.".to_string()),
+                Ok(false) => KeyVerdict::Refused(format!("{} rejected it.", sources::FORGE_URL)),
+                Err(e) => KeyVerdict::Unknown(format!("could not verify: {e}")),
+            }
+        },
+    )
+    .key;
 
     cf.save(&config)
         .map_err(|e| format!("failed to save config: {e}"))?;

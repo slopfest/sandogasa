@@ -4,6 +4,7 @@
 
 pub mod cache;
 pub mod claim;
+pub mod credential;
 pub mod date;
 /// The version a tool shows: the `git describe --tags --dirty --always`
 /// of the checkout it was built from (`v0.22.0-74-ge11cff1-dirty`),

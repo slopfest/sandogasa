@@ -199,18 +199,34 @@ pub async fn cmd_config() -> Result<(), String> {
         println!("dist-git API token: (set)");
     }
 
-    print!("Validating API key... ");
-    let bz = sandogasa_bugzilla::BzClient::new(&config.bugzilla.url)
-        .with_api_key(config.bugzilla.api_key.clone())
-        .map_err(|e| e.to_string())?;
-    match bz.search("product=Fedora&limit=1", 1).await {
-        Ok(_) => println!("valid."),
-        Err(e) => {
-            println!("failed.");
-            eprintln!("warning: {e}");
-            eprintln!("The key was saved but may not work.");
-        }
-    }
+    // Checked by trying to use it, not by searching: Bugzilla serves
+    // bug searches to anyone, so the old check passed for a key that
+    // could never write. `api_key_accepted` asks to create a bug with
+    // no fields, which the credential is checked before, and which
+    // cannot create anything because every required field is absent.
+    let url = config.bugzilla.url.clone();
+    config.bugzilla.api_key = sandogasa_cli::credential::validated_key(
+        "Bugzilla",
+        "API key",
+        config.bugzilla.api_key.clone(),
+        move |key| {
+            let url = url.clone();
+            Box::pin(async move {
+                use sandogasa_cli::credential::KeyVerdict;
+                let bz = match sandogasa_bugzilla::BzClient::new(&url).with_api_key(key) {
+                    Ok(bz) => bz,
+                    Err(e) => return KeyVerdict::Unknown(format!("could not check: {e}")),
+                };
+                match bz.api_key_accepted().await {
+                    Ok(true) => KeyVerdict::Accepted("accepted.".to_string()),
+                    Ok(false) => KeyVerdict::Refused("refused.".to_string()),
+                    Err(e) => KeyVerdict::Unknown(format!("could not check: {e}")),
+                }
+            })
+        },
+    )
+    .await
+    .key;
 
     cf.save(&config)
         .map_err(|e| format!("failed to save config: {e}"))?;

@@ -306,70 +306,6 @@ pub fn resolve_api_key(cli_key: Option<&str>) -> Result<String, String> {
         .to_string())
 }
 
-/// What a credential check concluded.
-enum KeyVerdict {
-    /// The service took it.
-    Accepted(String),
-    /// The service refused it. Worth offering to replace.
-    Refused(String),
-    /// The check could not be made — a network error, a service that
-    /// is down. Not the key's fault, so nothing is offered.
-    Unknown(String),
-}
-
-/// Validate a credential, offering to replace one that is refused.
-///
-/// Every key this command checks goes through here, so a refusal
-/// always offers the same way out rather than each check inventing
-/// one — or, as all three did until now, simply reporting the problem
-/// and saving the bad value anyway.
-///
-/// Declining is the point of the prompt rather than an afterthought:
-/// a key edited by hand to watch the check fail must not be replaced
-/// by something that assumes a typo. The offer defaults to yes, and
-/// is skipped where stdin is not a terminal and nobody can answer.
-async fn validated_key<F>(label: &str, key: String, check: F) -> String
-where
-    F: Fn(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = KeyVerdict>>>,
-{
-    let mut key = key;
-    loop {
-        print!("Validating {label} key... ");
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-        match check(key.clone()).await {
-            KeyVerdict::Accepted(note) => {
-                println!("{note}");
-                return key;
-            }
-            KeyVerdict::Unknown(note) => {
-                println!("{note}");
-                return key;
-            }
-            KeyVerdict::Refused(note) => {
-                println!("{note}");
-                if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                    eprintln!("warning: the {label} key was saved but will not work.");
-                    return key;
-                }
-                match sandogasa_cli::confirm(&format!("enter a new {label} key?"), true) {
-                    Ok(true) => {}
-                    _ => {
-                        eprintln!("warning: keeping the {label} key as it is; it will not work.");
-                        return key;
-                    }
-                }
-                match sandogasa_config::prompt_field(label, "API key", true, None) {
-                    Ok(new) if !new.trim().is_empty() => key = new.trim().to_string(),
-                    _ => {
-                        eprintln!("warning: nothing entered; keeping the {label} key as it is.");
-                        return key;
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Interactive config setup.
 pub async fn cmd_config() -> Result<(), String> {
     let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
@@ -398,22 +334,37 @@ pub async fn cmd_config() -> Result<(), String> {
     }
 
     let url = config.bugzilla.url.clone();
-    config.bugzilla.api_key =
-        validated_key("Bugzilla", config.bugzilla.api_key.clone(), move |k| {
+    config.bugzilla.api_key = sandogasa_cli::credential::validated_key(
+        "Bugzilla",
+        "API key",
+        config.bugzilla.api_key.clone(),
+        move |k| {
             let url = url.clone();
             Box::pin(async move {
                 let bz = match sandogasa_bugzilla::BzClient::new(&url).with_api_key(k) {
                     Ok(bz) => bz,
-                    Err(e) => return KeyVerdict::Unknown(format!("could not check: {e}")),
+                    Err(e) => {
+                        return sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                            "could not check: {e}"
+                        ));
+                    }
                 };
                 match bz.api_key_accepted().await {
-                    Ok(true) => KeyVerdict::Accepted("accepted.".to_string()),
-                    Ok(false) => KeyVerdict::Refused("refused.".to_string()),
-                    Err(e) => KeyVerdict::Unknown(format!("could not check: {e}")),
+                    Ok(true) => {
+                        sandogasa_cli::credential::KeyVerdict::Accepted("accepted.".to_string())
+                    }
+                    Ok(false) => {
+                        sandogasa_cli::credential::KeyVerdict::Refused("refused.".to_string())
+                    }
+                    Err(e) => sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                        "could not check: {e}"
+                    )),
                 }
             })
-        })
-        .await;
+        },
+    )
+    .await
+    .key;
 
     // Bugzilla account: optional, and only ever used to assign a
     // request the asker files about their own work to themselves.
@@ -482,14 +433,14 @@ pub async fn cmd_config() -> Result<(), String> {
         println!("NVD API key: (set)");
     }
     if !config.nvd.api_key.is_empty() {
-        config.nvd.api_key = validated_key("NVD", config.nvd.api_key.clone(), |k| {
+        config.nvd.api_key = sandogasa_cli::credential::validated_key("NVD", "API key", config.nvd.api_key.clone(), |k| {
             Box::pin(async move {
                 use sandogasa_cve::cache::KeyCheck;
                 match sandogasa_cve::cache::check_api_key(&k).await {
-                    KeyCheck::Accepted => KeyVerdict::Accepted(
+                    KeyCheck::Accepted => sandogasa_cli::credential::KeyVerdict::Accepted(
                         "valid; NVD lookups pace at 0.6 s instead of 6 s.".to_string(),
                     ),
-                    KeyCheck::Refused => KeyVerdict::Refused(
+                    KeyCheck::Refused => sandogasa_cli::credential::KeyVerdict::Refused(
                         "not accepted (404): NVD does not know this key — it is mistyped, \
                          or not yet activated; the activation link arrives by mail after \
                          the request."
@@ -497,16 +448,16 @@ pub async fn cmd_config() -> Result<(), String> {
                     ),
                     // Rate limiting says nothing about the key, so
                     // offering to replace it would be wrong.
-                    KeyCheck::Throttled(status) => KeyVerdict::Unknown(format!(
+                    KeyCheck::Throttled(status) => sandogasa_cli::credential::KeyVerdict::Unknown(format!(
                         "NVD refused the request ({status}) — rate limited; try again in a minute"
                     )),
                     KeyCheck::Unreachable(e) => {
-                        KeyVerdict::Unknown(format!("could not check: {e}"))
+                        sandogasa_cli::credential::KeyVerdict::Unknown(format!("could not check: {e}"))
                     }
                 }
             })
         })
-        .await;
+        .await.key;
     }
 
     // RPM Fusion's Bugzilla: a separate instance with a separate
@@ -554,25 +505,41 @@ pub async fn cmd_config() -> Result<(), String> {
     if !key.is_empty() {
         let url = config.rpmfusion_bugzilla.url.clone();
         let rest = config.rpmfusion_bugzilla.rest_path.clone();
-        config.rpmfusion_bugzilla.api_key = validated_key("RPM Fusion Bugzilla", key, move |k| {
-            let (url, rest) = (url.clone(), rest.clone());
-            Box::pin(async move {
-                let bz = match sandogasa_bugzilla::BzClient::new(&url)
-                    .with_rest_path(&rest)
-                    .with_stock_auth()
-                    .with_api_key(k)
-                {
-                    Ok(bz) => bz,
-                    Err(e) => return KeyVerdict::Unknown(format!("could not check: {e}")),
-                };
-                match bz.api_key_accepted().await {
-                    Ok(true) => KeyVerdict::Accepted("accepted.".to_string()),
-                    Ok(false) => KeyVerdict::Refused("refused.".to_string()),
-                    Err(e) => KeyVerdict::Unknown(format!("could not check: {e}")),
-                }
-            })
-        })
-        .await;
+        config.rpmfusion_bugzilla.api_key = sandogasa_cli::credential::validated_key(
+            "RPM Fusion Bugzilla",
+            "API key",
+            key,
+            move |k| {
+                let (url, rest) = (url.clone(), rest.clone());
+                Box::pin(async move {
+                    let bz = match sandogasa_bugzilla::BzClient::new(&url)
+                        .with_rest_path(&rest)
+                        .with_stock_auth()
+                        .with_api_key(k)
+                    {
+                        Ok(bz) => bz,
+                        Err(e) => {
+                            return sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                                "could not check: {e}"
+                            ));
+                        }
+                    };
+                    match bz.api_key_accepted().await {
+                        Ok(true) => {
+                            sandogasa_cli::credential::KeyVerdict::Accepted("accepted.".to_string())
+                        }
+                        Ok(false) => {
+                            sandogasa_cli::credential::KeyVerdict::Refused("refused.".to_string())
+                        }
+                        Err(e) => sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                            "could not check: {e}"
+                        )),
+                    }
+                })
+            },
+        )
+        .await
+        .key;
     }
 
     cf.save(&config)
@@ -589,19 +556,25 @@ mod tests {
     /// A check that answers whatever the test says, without a
     /// network or a terminal.
     fn answering(
-        verdict: fn(String) -> KeyVerdict,
-    ) -> impl Fn(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = KeyVerdict>>> {
+        verdict: fn(String) -> sandogasa_cli::credential::KeyVerdict,
+    ) -> impl Fn(
+        String,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = sandogasa_cli::credential::KeyVerdict>>,
+    > {
         move |k| Box::pin(async move { verdict(k) })
     }
 
     #[tokio::test]
     async fn a_key_the_service_takes_is_kept() {
-        let kept = validated_key(
+        let kept = sandogasa_cli::credential::validated_key(
             "Test",
+            "API key",
             "good".to_string(),
-            answering(|_| KeyVerdict::Accepted("accepted.".into())),
+            answering(|_| sandogasa_cli::credential::KeyVerdict::Accepted("accepted.".into())),
         )
-        .await;
+        .await
+        .key;
         assert_eq!(kept, "good");
     }
 
@@ -610,12 +583,16 @@ mod tests {
         // A rate limit or an unreachable service says nothing about
         // the key, so it must not be treated as a refusal — nothing
         // is offered and nothing is discarded.
-        let kept = validated_key(
+        let kept = sandogasa_cli::credential::validated_key(
             "Test",
+            "API key",
             "maybe".to_string(),
-            answering(|_| KeyVerdict::Unknown("could not check.".into())),
+            answering(|_| {
+                sandogasa_cli::credential::KeyVerdict::Unknown("could not check.".into())
+            }),
         )
-        .await;
+        .await
+        .key;
         assert_eq!(kept, "maybe");
     }
 
@@ -624,12 +601,14 @@ mod tests {
         // Non-interactively the offer cannot be made, so the value
         // stands and the run says so rather than prompting into a
         // pipe or discarding what the user configured.
-        let kept = validated_key(
+        let kept = sandogasa_cli::credential::validated_key(
             "Test",
+            "API key",
             "bad".to_string(),
-            answering(|_| KeyVerdict::Refused("refused.".into())),
+            answering(|_| sandogasa_cli::credential::KeyVerdict::Refused("refused.".into())),
         )
-        .await;
+        .await
+        .key;
         assert_eq!(kept, "bad");
     }
 
