@@ -647,8 +647,14 @@ impl Fedrq {
     }
 
     /// Return the Provides of a binary package (by name).
+    ///
+    /// `--notsrc` for the same reason as [`Self::pkg_requires`]: the
+    /// query matches by name, and a source package usually shares a
+    /// binary's name. Letting its provides in would widen the set of
+    /// capabilities an update looks able to satisfy, which hides a
+    /// real breakage rather than inventing a false one.
     pub fn pkg_provides(&self, name: &str) -> Result<Vec<String>, Error> {
-        self.query(&["pkgs", "-F", "provides"], &[name])
+        self.query(&["pkgs", "--notsrc", "-F", "provides"], &[name])
     }
 
     /// Map binary package names to their source and version-release in
@@ -672,8 +678,17 @@ impl Fedrq {
     }
 
     /// Return the Requires of a binary package by name.
+    ///
+    /// `--notsrc` because the query matches by name, and a source
+    /// package usually shares its name with one of its binaries. In a
+    /// repository that indexes source RPMs — `@testing` and COPR do,
+    /// koji side tags do not — the answer would otherwise be the
+    /// union of the binary's Requires and the source's BuildRequires,
+    /// and nothing downstream could tell them apart. `libheif` came
+    /// back needing `gcc-c++` and `pkgconfig(sdl2)`, which read as an
+    /// update nobody could install.
     pub fn pkg_requires(&self, name: &str) -> Result<Vec<String>, Error> {
-        self.query(&["pkgs", "-F", "requires"], &[name])
+        self.query(&["pkgs", "--notsrc", "-F", "requires"], &[name])
     }
 
     /// Return the Provides of packages that provide a given capability.

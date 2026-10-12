@@ -36,6 +36,41 @@ Every guess is checked against the inventory before it counts, so the
 rule can be generous without inventing packages, and a stale table
 entry degrades to "no counterpart" rather than to a wrong bug.
 
+### ebranch: a BuildRequires no longer reads as an uninstallable update
+
+`check-update` reported an EPEL 10.2 update as having an
+installability issue over `pkgconfig(sdl2)`, a dependency no package
+in the build requires. The same build on 10.3 and 10.4 was clean. The
+finding was blocking — it drives the derived karma to 0 or -1, so
+`--submit` refuses without an override — and it was convincing enough
+to prompt a plan to disable SDL support in a package that had nothing
+wrong with it.
+
+`pkgconfig(sdl2)` is a BuildRequires. Nothing shipped needs it: the
+only SDL dependency in the build is `libSDL2-2.0.so.0` on
+`libheif-tools`, which `sdl2-compat` satisfies from base. It reached
+an install-time check because `pkg_requires` matches by **name**, and
+a source package usually shares a name with one of its binaries —
+so against a repository that indexes source RPMs (`@testing` and COPR
+do, koji side tags do not) the answer was the union of the binary's
+Requires and the source's BuildRequires. The minors differed only in
+which repository each resolved against.
+
+Both `pkg_requires` and `pkg_provides` now pass `--notsrc`. The
+provides case never produced a visible symptom but is the more
+dangerous of the two: a source package's provides widen the set of
+capabilities an update appears to satisfy, hiding a real breakage
+rather than inventing a false one.
+
+A completed build is proof its BuildRequires were satisfiable, so
+asking again afterwards — against repositories the buildroot does not
+use — can only produce false positives. Adding CRB to the
+released-minor repository set would have silenced this one while
+leaving that category error in place.
+
+Nothing asserts the flag: `sandogasa-fedrq` shells out to `fedrq`
+directly, so no test can see what it was asked (#42).
+
 ### ebranch: the bug their Bugzilla will actually take
 
 Filing was refused with "You must select/enter a OS" once the
