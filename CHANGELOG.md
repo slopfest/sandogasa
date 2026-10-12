@@ -36,6 +36,15 @@ Every guess is checked against the inventory before it counts, so the
 rule can be generous without inventing packages, and a stale table
 entry degrades to "no counterpart" rather than to a wrong bug.
 
+### ebranch: neutral about what a counterpart is
+
+The bug said `libheif-freeworld` "is built against" `libheif`. That is
+true of an add-on — it requires `libheif%{_isa} = %{version}` and
+supplies codec plugins — and false of a drop-in replacement like
+`mesa-freeworld`, which supplies mesa's own libraries instead of
+depending on them. RPM Fusion ships both shapes, so the bug and the
+Bodhi comment now say "counterpart", which is true of either.
+
 ### ebranch: a batch you can follow
 
 Three things made a seven-update run harder to follow than it needed

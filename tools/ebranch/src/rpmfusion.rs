@@ -297,9 +297,15 @@ pub fn bug_body(
         Some(evr) => format!("{fedora} {}", without_dist(evr)),
         None => fedora.to_string(),
     };
+    // "Counterpart", not "built against": RPM Fusion ships both
+    // shapes. libheif-freeworld is an add-on that requires libheif
+    // and supplies plugins, while mesa-freeworld is a drop-in
+    // replacement that supplies mesa's own libraries. One sentence
+    // has to be true of both.
+    let _ = writeln!(o, "Fedora is shipping an update for {moving}. RPM Fusion's");
     let _ = writeln!(
         o,
-        "Fedora is shipping an update for {moving}, which {rf} is built against."
+        "{rf} is its counterpart and needs rebuilding to stay in step."
     );
     let _ = writeln!(o);
     match autopush_on {
@@ -486,7 +492,7 @@ async fn open_rebuild_request(
 /// The note added to the review comment posted on a Bodhi update.
 ///
 /// RPM Fusion users meet a Fedora update as a broken install — their
-/// counterpart is built against the old version — and say so on the
+/// counterpart still matches the old version — and say so on the
 /// update, sometimes with a -1. Saying it first, on the update
 /// itself, is the point: the reader learns that the pairing is known,
 /// that a rebuild is being asked for, and where to follow it.
@@ -507,8 +513,8 @@ pub fn comment_note(
     for (fedora, rf) in counterparts {
         let _ = write!(
             o,
-            "- `{rf}` is built against `{fedora}` and needs rebuilding \
-             before this reaches stable"
+            "- `{rf}` is RPM Fusion's counterpart to `{fedora}` and needs \
+             rebuilding before this reaches stable"
         );
         match filed.get(fedora) {
             Some(url) => {
@@ -744,7 +750,14 @@ mod tests {
         );
         // The dist tag is dropped: one request covers every release,
         // so naming .fc43 would date the whole bug to one of them.
-        assert!(body.contains("libheif 1.23.6-1,"), "{body}");
+        assert!(body.contains("libheif 1.23.6-1."), "{body}");
+        // Neutral about the relationship: RPM Fusion ships both
+        // add-ons (libheif-freeworld requires libheif and supplies
+        // plugins) and drop-in replacements (mesa-freeworld supplies
+        // mesa's own libraries), so the bug must not claim either.
+        assert!(body.contains("is its"), "{body}");
+        assert!(body.contains("counterpart"), "{body}");
+        assert!(!body.contains("built against"), "{body}");
         assert!(!body.contains("1.23.6-1.fc43"), "{body}");
         assert!(body.contains("1.23.5-1.fc43"), "{body}");
         assert!(body.contains("branched"), "{body}");
@@ -791,7 +804,7 @@ mod tests {
         }];
         let body = bug_body("libheif", "libheif-freeworld", None, &states, &[], false);
         assert!(
-            body.contains("Fedora is shipping an update for libheif,"),
+            body.contains("Fedora is shipping an update for libheif."),
             "{body}"
         );
         assert!(
