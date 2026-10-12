@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-10-06 "sandogasa 0.25.3" "Sandogasa Manual"
+.TH ebranch 1 2026-10-12 "sandogasa 0.25.3" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -127,7 +127,7 @@ Print help
 <\fITOML\fR>
 Path to TOML analysis file from check\-crate \-\-toml
 .SS ebranch check-update
-\fBebranch check\-update\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-testing\-branch\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-json\fR] [\fB\-\-detailed\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-refresh\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-give\-karma\fR] [\fB\-\-comment\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-submit\fR] [\fB\-\-notes\fR] [\fB\-\-notes\-file\fR] [\fB\-\-type\fR] [\fB\-\-severity\fR] [\fB\-\-bug\fR] [\fB\-\-stable\-karma\fR] [\fB\-\-unstable\-karma\fR] [\fB\-\-disable\-autokarma\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIINPUT\fR> 
+\fBebranch check\-update\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-testing\-branch\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-json\fR] [\fB\-\-detailed\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-refresh\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-give\-karma\fR] [\fB\-\-comment\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-submit\fR] [\fB\-\-notes\fR] [\fB\-\-notes\-file\fR] [\fB\-\-type\fR] [\fB\-\-severity\fR] [\fB\-\-bug\fR] [\fB\-\-stable\-karma\fR] [\fB\-\-unstable\-karma\fR] [\fB\-\-disable\-autokarma\fR] [\fB\-\-rpmfusion\-inventory\fR] [\fB\-\-rpmfusion\-renames\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIINPUT\fR> 
 .PP
 Check if an update would break reverse dependencies
 .TP
@@ -266,11 +266,17 @@ Negative karma that unpushes (default \-3)
 \fB\-\-disable\-autokarma\fR
 Don\*(Aqt auto\-push at the karma thresholds
 .TP
+\fB\-\-rpmfusion\-inventory\fR \fI<PATH>\fR
+RPM Fusion inventory (poi\-tracker sync\-rpmfusion). A package with a counterpart there never auto\-pushes
+.TP
+\fB\-\-rpmfusion\-renames\fR \fI<PATH>\fR
+Fedora\-to\-RPM\-Fusion renames for counterparts the naming does not make guessable (configs/rpmfusion/renames.toml)
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIINPUT\fR>
-The update to check, one of:
+The update(s) to check, each one of:
 \- a Koji side tag (f45\-build\-side\-143123)
 \- a Bodhi update alias or URL
   (FEDORA\-EPEL\-2026\-f9eaa11e18)
@@ -278,6 +284,19 @@ The update to check, one of:
   (@rust/uutils\-and\-nushell) or its URL. COPR
   input requires \-b (\-b epel9 also picks the
   chroot, epel\-9\-*).
+
+Several may be given, comma\-separated or
+repeated, to carry one change across releases
+in a single run:
+
+  ebranch check\-update f45\-build\-side\-1,f44\-build\-side\-2 \-\-submit
+
+They are checked and submitted in order, and
+every input is validated before any of them is
+submitted. RPM Fusion is told once per package
+afterwards, with every update linked — which is
+why a fan\-out belongs in one run: three EPEL
+minors are one rebuild for them, not three.
 .SS ebranch check-wip
 \fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-target\fR] [\fB\-\-offline\fR] [\fB\-\-no\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-rescan\-reviews\fR] [\fB\-\-side\-tag\fR] [\fB\-\-add\fR] [\fB\-\-forget\fR] [\fB\-\-set\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR> 
 .PP

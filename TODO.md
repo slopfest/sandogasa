@@ -563,6 +563,18 @@ has to reach EPEL before then, rewrite that one guard as a nested
   (none → needinfo'd → releng-filed) so `escalate` knows which step
   each request is on, and the releng-filing branch in `escalate`.
 
+## RPM Fusion: ship the fedrq config downstream (2026-10-12)
+
+`configs/fedrq/rpmfusion.toml` and `configs/fedrq/repos/rpmfusion.repo`
+are what let `poi-tracker sync-rpmfusion` and `ebranch check-update
+--rpmfusion-inventory` reach RPM Fusion at all, and nothing installs
+them: the Fedora spec (`~/src/fedora/pkgs-sig-rust/sandogasa/`) needs a
+`fedrq-config-rpmfusion` subpackage, copying the
+`fedrq-config-centos-snapshot` stanzas (`%package -n`, the install
+loop, `%files -n`). Until it exists the files have to be copied into
+`~/.config/fedrq/` by hand, with `repos/` beside them, which is what
+the error message from a sync against an unknown branch says.
+
 ## sandogasa-review adoption
 
 - (2026-06-29) Surveyed the workspace for other tools that could adopt the

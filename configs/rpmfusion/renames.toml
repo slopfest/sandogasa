@@ -1,0 +1,40 @@
+# Fedora package -> its RPM Fusion counterpart, where the name alone
+# does not say so.
+#
+# RPM Fusion rebuilds Fedora packages with the codecs Fedora strips, so
+# an update to one often needs the other rebuilt in step. Three shapes
+# occur, measured against rpmfusion-f43 (263 source packages):
+#
+#   same name           5  ffmpeg, fdkaac, mixxx, mpd, qtox
+#   <name>-freeworld    7  libheif -> libheif-freeworld, mesa, audacity,
+#                          cairo-dock, obs-studio, qt5-qtwebengine, xmms2
+#   neither             4  listed below
+#
+# The first two are derived, not listed: `ebranch check-update` tries
+# the Fedora name itself, then this table, then `<name>-freeworld`, and
+# accepts a candidate only if the generated RPM Fusion inventory
+# actually has it. That is what lets the suffix guess be generous
+# without being wrong — the repodata has the last word, not the guess.
+#
+# So this table only needs the cases the guess misses. All four are the
+# same miss: RPM Fusion names the companion after the *plugins* rather
+# than the package (vlc -> vlc-plugins-freeworld), or Fedora's own name
+# already carries a -free suffix.
+#
+# Contributions welcome: add an entry when you find a counterpart
+# neither rule reaches. Keys are Fedora source package names, values
+# the RPM Fusion ones. To check an entry before sending it, both sides
+# have to exist:
+#
+#   fedrq pkgs -b f43 -F source -- <fedora-name>
+#   fedrq pkgs -b rpmfusion-f43 -F source -- <rpmfusion-name>
+#
+# A value RPM Fusion does not ship is ignored rather than trusted, so
+# a wrong entry degrades to "no counterpart found" instead of filing a
+# bug against a package that is not there.
+
+[renames]
+"gstreamer1-plugins-bad-free" = "gstreamer1-plugins-bad-freeworld"
+qmmp = "qmmp-plugins-freeworld"
+vlc = "vlc-plugins-freeworld"
+xpra = "xpra-codecs-freeworld"

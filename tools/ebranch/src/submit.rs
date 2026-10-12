@@ -28,8 +28,17 @@ pub struct SubmitOptions {
     pub severity: String,
     /// Bug IDs to associate (closed when the update goes stable).
     pub bugs: Vec<u64>,
-    /// Push automatically at the karma thresholds.
+    /// Push automatically at the karma thresholds. Forced off when
+    /// `rpmfusion` is non-empty — see [`SubmitOptions::autokarma`].
     pub autokarma: bool,
+    /// RPM Fusion counterparts of this update's packages, as
+    /// (Fedora name, RPM Fusion name). Non-empty means the update
+    /// must not reach stable on karma alone: RPM Fusion has to
+    /// rebuild its side first, and an autopush would land the pair
+    /// broken for anyone with both repositories enabled. Empty
+    /// whenever `--rpmfusion-inventory` was not given, so the guard
+    /// costs nothing when it is not asked for.
+    pub rpmfusion: Vec<(String, String)>,
     pub stable_karma: i32,
     pub unstable_karma: i32,
     /// Skip the submission confirmation.
@@ -190,6 +199,17 @@ async fn propose_bugs(
     Ok(candidates.iter().map(|c| c.bug_id).collect())
 }
 
+/// Whether the update may autopush, given what the operator asked
+/// for and what RPM Fusion ships.
+///
+/// `--disable-autokarma` turns it off; so does a counterpart, and the
+/// flag cannot turn it back on. The operator's switch is an override
+/// in one direction only, because the other direction is the one that
+/// breaks users' systems.
+fn effective_autokarma(opts: &SubmitOptions) -> bool {
+    opts.autokarma && opts.rpmfusion.is_empty()
+}
+
 /// Format the submission plan shown for confirmation. Leads with the
 /// package list — the whole point of checking before submitting is
 /// spotting a subpackage update that is accidentally missing one.
@@ -216,14 +236,28 @@ fn plan_text(tag: &str, packages: &[String], bugs: &[u64], opts: &SubmitOptions)
             .join(", ");
         let _ = writeln!(o, "  bugs (closed on stable): {listed}");
     }
-    if opts.autokarma {
+    if effective_autokarma(opts) {
         let _ = writeln!(
             o,
             "  autopush at karma +{} (unpush at {})",
             opts.stable_karma, opts.unstable_karma
         );
-    } else {
+    } else if opts.rpmfusion.is_empty() {
         let _ = writeln!(o, "  autopush: disabled");
+    } else {
+        // Name the counterparts rather than just disabling: a policy
+        // the operator cannot see applied is one they cannot check.
+        let pairs = opts
+            .rpmfusion
+            .iter()
+            .map(|(fedora, rf)| format!("{fedora} -> {rf}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            o,
+            "  autopush: disabled — RPM Fusion ships a counterpart ({pairs}), \
+             which needs rebuilding before this reaches stable"
+        );
     }
     let mut lines = opts.notes.lines();
     let first = lines.next().unwrap_or("");
@@ -303,7 +337,7 @@ pub fn run(
             severity: opts.severity.clone(),
             bugs: bugs.clone(),
             close_bugs: true,
-            autokarma: opts.autokarma,
+            autokarma: effective_autokarma(opts),
             stable_karma: opts.stable_karma,
             unstable_karma: opts.unstable_karma,
         };
@@ -340,7 +374,45 @@ mod tests {
             unstable_karma: -3,
             assume_yes: false,
             koji_profile: None,
+            rpmfusion: vec![],
         }
+    }
+
+    #[test]
+    fn an_rpm_fusion_counterpart_disables_autopush_and_says_why() {
+        // libheif pairs with RPM Fusion's libheif-freeworld: letting
+        // this reach stable on karma would leave the pair broken for
+        // anyone with both repositories enabled.
+        let mut o = opts();
+        o.rpmfusion = vec![("libheif".to_string(), "libheif-freeworld".to_string())];
+        assert!(!effective_autokarma(&o));
+        let text = plan_text("f43-build-side-1", &["libheif".to_string()], &[], &o);
+        assert!(text.contains("autopush: disabled"), "{text}");
+        assert!(text.contains("libheif -> libheif-freeworld"), "{text}");
+        assert!(text.contains("needs rebuilding"), "{text}");
+        // The operator's flag cannot switch it back on: the override
+        // runs one way, because the other way is the one that breaks
+        // users' systems.
+        o.autokarma = true;
+        assert!(!effective_autokarma(&o));
+    }
+
+    #[test]
+    fn an_update_rpm_fusion_does_not_ship_keeps_autopush() {
+        // The common case: no counterpart, nothing changes, and the
+        // plan says what it always said.
+        let o = opts();
+        assert!(effective_autokarma(&o));
+        let text = plan_text("f43-build-side-1", &["zlib".to_string()], &[], &o);
+        assert!(text.contains("autopush at karma +3"), "{text}");
+        assert!(!text.contains("RPM Fusion"), "{text}");
+        // And --disable-autokarma still disables it on its own, with
+        // no counterpart to explain.
+        let mut off = opts();
+        off.autokarma = false;
+        let text = plan_text("f43-build-side-1", &["zlib".to_string()], &[], &off);
+        assert!(text.contains("autopush: disabled"), "{text}");
+        assert!(!text.contains("RPM Fusion"), "{text}");
     }
 
     #[test]

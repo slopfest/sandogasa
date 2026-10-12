@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH poi-tracker 1 2026-10-06 "sandogasa 0.25.3" "Sandogasa Manual"
+.TH poi-tracker 1 2026-10-12 "sandogasa 0.25.3" "Sandogasa Manual"
 .SH NAME
 poi\-tracker \- Package\-of\-interest tracker for Fedora, EPEL, and CentOS SIGs
 .SH SYNOPSIS
@@ -976,6 +976,43 @@ CentOS releases to count as currently shipped (CSV)
 .TP
 \fB\-\-name\fR \fI<NAME>\fR
 Inventory name (default: derived from group)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS poi-tracker sync-rpmfusion
+\fBpoi\-tracker sync\-rpmfusion\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-repo\fR] [\fB\-\-prune\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-name\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-r\fR|\fB\-\-release\fR> 
+.PP
+Sync inventory from RPM Fusion\*(Aqs repositories, one workload per release
+.TP
+\fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
+Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply
+.TP
+\fB\-r\fR, \fB\-\-release\fR \fI<REL,...>\fR
+Releases to scan (CSV): f43, f44, el10. Each becomes a workload, so the inventory can answer per release
+.TP
+\fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
+Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR [default: inventory.toml]
+Output TOML file
+.TP
+\fB\-C\fR, \fB\-\-directory\fR \fI<DIR>\fR
+Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there
+.TP
+\fB\-\-repo\fR \fI<CLASS>\fR
+fedrq repo class. The default covers free and nonfree together, which is what "does RPM Fusion ship this?" asks
+.TP
+\fB\-\-prune\fR
+Remove packages RPM Fusion ships for no release listed in the inventory. Scanning a subset never prunes what another release still ships
+.TP
+\fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
+Workspace file (default: ./kondo.toml when present) naming which inventory is which — owned, keeps, derived, retired, cull — plus the graph and walk settings, so each subcommand knows its inputs without \-i. Only fills flags not given on the command line; \-\-no\-defaults ignores it
+.TP
+\fB\-\-closure\fR \fI<NAME>\fR
+Which [[closure]] of the workspace a walk subcommand works on (default: the first)
+.TP
+\fB\-\-name\fR \fI<NAME>\fR
+Inventory name (default: rpmfusion)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

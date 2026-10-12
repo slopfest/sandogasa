@@ -201,3 +201,51 @@ carries on: each bug gets one update carrying all its edges, with
 and Bugzilla is unreliable enough under a batch of writes that one
 refusal says nothing about the next. The writes are additive and
 idempotent, so re-running `file-requests` fills in what is missing.
+
+## RPM Fusion branches per EL major; EPEL branches per RHEL minor
+
+The two projects do not line up, and the code has to bridge it rather
+than assume symmetry. EPEL branches per RHEL minor — one libheif
+update arrives as EPEL-10.2, 10.3 and 10.4, with dist tags like
+`.el10_3`. RPM Fusion publishes one branch and one repository per EL
+*major*: their dist-git has `el8`, `el9`, `el10` and nothing finer,
+`free-el-updates-released-10.4` is a 404 where `-10` is a 200, and
+their build is `libheif-freeworld-1.23.5-1.el10`. Their documented
+promise is "RHEL 10 or compatible like CentOS Stream", layered on EPEL.
+
+Two rules follow:
+
+- `workload_for_branch` collapses an EPEL minor to the major
+  (`epel10.4` → `el10`). Without it every EPEL-minor update — which is
+  how these updates actually arrive — errors out instead of being
+  checked.
+- One rebuild request covers every minor, so the bug is filed **once
+  per package per batch**, listing every update, not once per
+  invocation. Running the three EPEL minors as three commands opens
+  three bugs for one rebuild, which is why `check-update` takes a list.
+
+What their buildroot actually targets is not published: their Koji
+answers 401, their cgit exposes no plain-file view, and the wiki has no
+EL page. Do not write code that assumes a minor.
+
+## A guess about a package name only counts if the repodata agrees
+
+`rpmfusion::Counterparts::of` tries three names — the Fedora name, the
+`configs/rpmfusion/renames.toml` entry, then `<name>-freeworld` — and
+accepts one only if the generated inventory lists it. That ordering is
+load-bearing in both directions: the suffix rule can be generous
+because it cannot invent a package, and a stale table entry degrades to
+"no counterpart" rather than to a bug filed against something RPM
+Fusion does not ship.
+
+Measured against `rpmfusion-f43` (263 packages): five share a Fedora
+name, eleven end in `-freeworld` of which the rule resolves seven, four
+need a table entry. Keep the table for what the rules miss; do not
+grow rules to chase four packages.
+
+Counterparts are **per release**, never unioned: `mesa-freeworld` ships
+for f43 and not el10, and the question asked at submit time is about
+one release. The same applies to the inventory's own pruning — stale
+means "in no workload at all", so syncing one release cannot drop a
+package another still ships. Scoping the prune to the scanned releases
+deleted 13 packages the first time it was tried.

@@ -1,0 +1,87 @@
+# RPM Fusion's published repositories (`-b rpmfusion-f43`,
+# `-b rpmfusion-el10`; see ../rpmfusion.toml). The repo ids and
+# metalink URLs are the ones the rpmfusion-free-release and
+# rpmfusion-nonfree-release packages ship, with $releasever and
+# $basearch filled in by fedrq from the branch's capture group.
+#
+# The updates repos are skip_if_unavailable because they do not exist
+# for a release that has not gone GA: mirrors.rpmfusion.org answers 404
+# for free-fedora-updates-released-45 while F45 is branched, and
+# without this a query against a branched release would fail outright
+# rather than returning what the base repo has.
+#
+# gpgkey points at distribution-gpg-keys rather than the release
+# package, as repos/centos-hyperscale.repo does, so no RPM Fusion
+# release package has to be installed to query these. The keys are
+# per-release (RPM-GPG-KEY-rpmfusion-free-fedora-$releasever); they are
+# only consulted when installing a package, which fedrq never does.
+# Binaries only: the inventory maps them to source names with
+# `-F source`, which EL needs since it publishes no source repo.
+
+[rpmfusion-free]
+name=RPM Fusion for Fedora $releasever - Free
+metalink=https://mirrors.rpmfusion.org/metalink?repo=free-fedora-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-free-fedora-$releasever
+gpgcheck=1
+repo_gpgcheck=0
+enabled=0
+
+[rpmfusion-free-updates]
+name=RPM Fusion for Fedora $releasever - Free - Updates
+metalink=https://mirrors.rpmfusion.org/metalink?repo=free-fedora-updates-released-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-free-fedora-$releasever
+gpgcheck=1
+repo_gpgcheck=0
+skip_if_unavailable=1
+enabled=0
+
+[rpmfusion-free-updates-testing]
+name=RPM Fusion for Fedora $releasever - Free - Updates Testing
+metalink=https://mirrors.rpmfusion.org/metalink?repo=free-fedora-updates-testing-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-free-fedora-$releasever
+gpgcheck=1
+repo_gpgcheck=0
+skip_if_unavailable=1
+enabled=0
+
+[rpmfusion-nonfree]
+name=RPM Fusion for Fedora $releasever - Nonfree
+metalink=https://mirrors.rpmfusion.org/metalink?repo=nonfree-fedora-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-nonfree-fedora-$releasever
+gpgcheck=1
+repo_gpgcheck=0
+enabled=0
+
+[rpmfusion-nonfree-updates]
+name=RPM Fusion for Fedora $releasever - Nonfree - Updates
+metalink=https://mirrors.rpmfusion.org/metalink?repo=nonfree-fedora-updates-released-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-nonfree-fedora-$releasever
+gpgcheck=1
+repo_gpgcheck=0
+skip_if_unavailable=1
+enabled=0
+
+[rpmfusion-nonfree-updates-testing]
+name=RPM Fusion for Fedora $releasever - Nonfree - Updates Testing
+metalink=https://mirrors.rpmfusion.org/metalink?repo=nonfree-fedora-updates-testing-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-nonfree-fedora-$releasever
+gpgcheck=1
+repo_gpgcheck=0
+skip_if_unavailable=1
+enabled=0
+
+[rpmfusion-free-el]
+name=RPM Fusion for EL $releasever - Free - Updates
+metalink=https://mirrors.rpmfusion.org/metalink?repo=free-el-updates-released-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-free-el-$releasever
+gpgcheck=1
+repo_gpgcheck=0
+enabled=0
+
+[rpmfusion-nonfree-el]
+name=RPM Fusion for EL $releasever - Nonfree - Updates
+metalink=https://mirrors.rpmfusion.org/metalink?repo=nonfree-el-updates-released-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-nonfree-el-$releasever
+gpgcheck=1
+repo_gpgcheck=0
+enabled=0

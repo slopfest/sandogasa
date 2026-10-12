@@ -814,6 +814,42 @@ see — run one occasionally to true up. The full trade-off
 analysis lives in
 [`sandogasa-distgit`'s development notes](../../crates/sandogasa-distgit/DEVELOPMENT.md).
 
+### Sync from RPM Fusion
+
+Create or update an inventory of what RPM Fusion ships, one workload
+per release, so "does RPM Fusion ship this too?" is answered from data:
+
+```sh
+poi-tracker sync-rpmfusion --release f43,f44,f45,el9,el10 \
+    -o configs/rpmfusion/inventory.toml
+```
+
+```
+  rpmfusion-f43: 263 package(s)
+  rpmfusion-f44: 266 package(s)
+  rpmfusion-el10: 48 package(s)
+Synced RPM Fusion: 276 new, 276 total in configs/rpmfusion/inventory.toml
+```
+
+Each release is queried separately and becomes its own workload,
+because a package ships for one release and not another —
+`mesa-freeworld` is in f43 and not el10 — and the question asked of
+this inventory is per release. Releases are named as RPM Fusion builds
+them: `f43` for Fedora, `el10` for Enterprise Linux (one branch per
+major, not per RHEL minor).
+
+`--prune` drops packages RPM Fusion no longer ships anywhere in the
+inventory. Syncing a subset of releases is safe: a package is only
+stale when no workload still lists it, so `--prune --release f43`
+cannot remove something el10 ships.
+
+The query needs fedrq to know RPM Fusion, which comes from this
+repository's `configs/fedrq/rpmfusion.toml` — install it to
+`/etc/fedrq/` or `~/.config/fedrq/` with the `repos/` directory
+beside it. [`ebranch check-update`](../ebranch/README.md) reads the
+result to hold an update's auto-push when it touches a package RPM
+Fusion also builds.
+
 ### Sync from GitLab
 
 Create or update an inventory from a CentOS SIG's GitLab RPM

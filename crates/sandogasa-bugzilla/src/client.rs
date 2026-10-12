@@ -8,6 +8,10 @@ pub struct BzClient {
     base_url: String,
     client: Client,
     api_key: Option<String>,
+    /// The path the REST API hangs off. Red Hat's Bugzilla serves it
+    /// at `rest`; a stock Bugzilla 5 serves it at `rest.cgi`, which
+    /// is what RPM Fusion's 5.0.4 answers on.
+    rest_path: String,
     /// Pause before re-trying a failed write, multiplied by the
     /// attempt number.
     retry_backoff: std::time::Duration,
@@ -79,8 +83,20 @@ impl BzClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: build_http_client(),
             api_key: None,
+            rest_path: "rest".to_string(),
             retry_backoff: std::time::Duration::from_secs(5),
         }
+    }
+
+    /// Serve the REST API from a different path than `rest`.
+    ///
+    /// A stock Bugzilla 5 answers on `rest.cgi` — RPM Fusion's does,
+    /// and so does anything else not running Red Hat's fork. The
+    /// response models need no change: they already read a stock
+    /// Bugzilla 5, which is what `one_or_many` is for.
+    pub fn with_rest_path(mut self, path: &str) -> Self {
+        self.rest_path = path.trim_matches('/').to_string();
+        self
     }
 
     /// The pause before a retried write (default 5 s, times the
@@ -102,7 +118,12 @@ impl BzClient {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}/rest/{}", self.base_url, path.trim_start_matches('/'))
+        format!(
+            "{}/{}/{}",
+            self.base_url,
+            self.rest_path,
+            path.trim_start_matches('/')
+        )
     }
 
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -219,12 +240,12 @@ impl BzClient {
 
     /// Validate the API key by checking if the login is recognized.
     ///
-    /// Calls `GET /rest/valid_login?login={email}` with the configured
+    /// Calls `GET <rest>/valid_login?login={email}` with the configured
     /// API key.  Returns `Ok(true)` when valid, `Ok(false)` when the
     /// login is not recognized, and `Err` on network or auth errors
     /// (e.g. invalid API key → 400).
     pub async fn valid_login(&self, email: &str) -> Result<bool, reqwest::Error> {
-        let url = format!("{}/rest/valid_login?login={email}", self.base_url);
+        let url = self.url(&format!("valid_login?login={email}"));
         let resp: serde_json::Value = self
             .auth(self.client.get(&url))
             .send()
@@ -459,6 +480,20 @@ mod tests {
         assert_eq!(
             client.url("bug/12345"),
             "https://bugzilla.redhat.com/rest/bug/12345"
+        );
+        // A stock Bugzilla 5 hangs the API off rest.cgi instead —
+        // RPM Fusion's 5.0.4 answers there and 404s on /rest/.
+        let rpmfusion = BzClient::new("https://bugzilla.rpmfusion.org").with_rest_path("rest.cgi");
+        assert_eq!(
+            rpmfusion.url("bug/12345"),
+            "https://bugzilla.rpmfusion.org/rest.cgi/bug/12345"
+        );
+        // Slashes either side are the caller's convenience, not ours.
+        assert_eq!(
+            BzClient::new("https://b.example/")
+                .with_rest_path("/rest.cgi/")
+                .url("/bug"),
+            "https://b.example/rest.cgi/bug"
         );
     }
 

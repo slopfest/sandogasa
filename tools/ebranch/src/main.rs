@@ -14,6 +14,7 @@ mod discover;
 mod karma;
 mod resolve;
 mod review_deps;
+mod rpmfusion;
 mod submit;
 #[cfg(test)]
 mod testrepo;
@@ -221,17 +222,34 @@ re-enable."
 
 #[derive(clap::Args, Clone)]
 struct CheckUpdateArgs {
-    /// Koji side tag, Bodhi update alias/URL, or COPR project.
-    #[arg(long_help = "\
-The update to check, one of:
+    /// Koji side tags, Bodhi update aliases/URLs, or COPR projects.
+    #[arg(
+        required = true,
+        value_delimiter = ',',
+        long_help = "\
+The update(s) to check, each one of:
 - a Koji side tag (f45-build-side-143123)
 - a Bodhi update alias or URL
   (FEDORA-EPEL-2026-f9eaa11e18)
 - a COPR project: owner/project spec
   (@rust/uutils-and-nushell) or its URL. COPR
   input requires -b (-b epel9 also picks the
-  chroot, epel-9-*).")]
-    input: String,
+  chroot, epel-9-*).
+
+Several may be given, comma-separated or
+repeated, to carry one change across releases
+in a single run:
+
+  ebranch check-update f45-build-side-1,f44-build-side-2 --submit
+
+They are checked and submitted in order, and
+every input is validated before any of them is
+submitted. RPM Fusion is told once per package
+afterwards, with every update linked — which is
+why a fan-out belongs in one run: three EPEL
+minors are one rebuild for them, not three."
+    )]
+    input: Vec<String>,
 
     /// Branch to check against (e.g. epel9).
     #[arg(
@@ -449,6 +467,16 @@ severity for --type security.",
     /// Don't auto-push at the karma thresholds.
     #[arg(long, requires = "submit")]
     disable_autokarma: bool,
+
+    /// RPM Fusion inventory (poi-tracker sync-rpmfusion). A package
+    /// with a counterpart there never auto-pushes.
+    #[arg(long, value_name = "PATH")]
+    rpmfusion_inventory: Option<String>,
+
+    /// Fedora-to-RPM-Fusion renames for counterparts the naming does
+    /// not make guessable (configs/rpmfusion/renames.toml).
+    #[arg(long, value_name = "PATH", requires = "rpmfusion_inventory")]
+    rpmfusion_renames: Option<String>,
 }
 
 #[derive(clap::Args, Clone)]
@@ -862,6 +890,33 @@ fn exit_code(result: Result<(), String>) -> ExitCode {
     }
 }
 
+/// The RPM Fusion counterparts of an update's packages, for the
+/// release the update targets.
+///
+/// Separated from the submit so the lookup can fail loudly with the
+/// branch named: an update is for one Fedora release, and RPM Fusion
+/// ships a package for one release and not another.
+type RpmfusionFound = (rpmfusion::Counterparts, Vec<(String, String)>);
+
+fn rpmfusion_counterparts(
+    inventory: &str,
+    a: &CheckUpdateArgs,
+    report: &check_update::CheckUpdateReport,
+) -> Result<RpmfusionFound, String> {
+    let branch = report.dist_branch();
+    let release = rpmfusion::workload_for_branch(branch).ok_or_else(|| {
+        format!("RPM Fusion builds for no release matching {branch}; drop --rpmfusion-inventory")
+    })?;
+    let counterparts =
+        rpmfusion::Counterparts::load(inventory, a.rpmfusion_renames.as_deref(), &release)?;
+    let found = counterparts
+        .in_update(&report.updated_packages)
+        .into_iter()
+        .map(|(f, r)| (f.to_string(), r.to_string()))
+        .collect();
+    Ok((counterparts, found))
+}
+
 /// Build branch-request `Options` from the shared flags,
 /// resolving the API key (CLI flag → env → config file).
 fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Options, String> {
@@ -1109,39 +1164,51 @@ fn main() -> ExitCode {
     }
 
     if let Command::CheckUpdate(a) = &cli.command {
-        let input_kind = check_update::detect_input_type(&a.input);
-        // check-update needs koji for side tag queries — which Bodhi
-        // input may also trigger (side-tag-backed updates). COPR input
-        // never touches koji.
-        if !matches!(input_kind, check_update::InputKind::Copr { .. })
+        // Classify and validate every input before acting on any of
+        // them. A fan-out that submits two releases and only then
+        // rejects the third leaves the batch half-done, which is the
+        // failure this command exists to avoid.
+        let mut planned: Vec<(&String, Option<String>, Option<String>)> = Vec::new();
+        let mut needs_koji = false;
+        for input in &a.input {
+            let input_kind = check_update::detect_input_type(input);
+            // check-update needs koji for side tag queries — which
+            // Bodhi input may also trigger (side-tag-backed updates).
+            // COPR input never touches koji.
+            needs_koji |= !matches!(input_kind, check_update::InputKind::Copr { .. });
+            // Voting needs a Bodhi update; submitting needs a side tag
+            // (an alias means the update already exists). Fail fast on
+            // the wrong input kind.
+            let (vote_alias, side_tag) = match &input_kind {
+                check_update::InputKind::BodhiAlias(alias) => (Some(alias.clone()), None),
+                check_update::InputKind::SideTag(tag) => (None, Some(tag.clone())),
+                // COPRs are published through their own repos: nothing
+                // to vote on or submit.
+                check_update::InputKind::Copr { .. } => (None, None),
+            };
+            if a.give_karma && vote_alias.is_none() {
+                eprintln!(
+                    "error: --give-karma requires a Bodhi update alias or URL as input ({input})"
+                );
+                return ExitCode::FAILURE;
+            }
+            if a.submit && side_tag.is_none() {
+                let why = match &input_kind {
+                    check_update::InputKind::BodhiAlias(_) => {
+                        "this is a Bodhi update, so it has already been submitted"
+                    }
+                    _ => "a COPR is published through its own repos, not Bodhi",
+                };
+                eprintln!("error: --submit requires a Koji side tag as input; {why} ({input})");
+                return ExitCode::FAILURE;
+            }
+            planned.push((input, vote_alias, side_tag));
+        }
+        if needs_koji
             && let Err(e) =
                 sandogasa_cli::require_tools(&[("koji", "sudo dnf install koji", Some("version"))])
         {
             eprintln!("error: {e}");
-            return ExitCode::FAILURE;
-        }
-        // Voting needs a Bodhi update; submitting needs a side tag
-        // (an alias means the update already exists). Fail fast on
-        // the wrong input kind.
-        let (vote_alias, side_tag) = match &input_kind {
-            check_update::InputKind::BodhiAlias(alias) => (Some(alias.clone()), None),
-            check_update::InputKind::SideTag(tag) => (None, Some(tag.clone())),
-            // COPRs are published through their own repos: nothing to
-            // vote on or submit.
-            check_update::InputKind::Copr { .. } => (None, None),
-        };
-        if a.give_karma && vote_alias.is_none() {
-            eprintln!("error: --give-karma requires a Bodhi update alias or URL as input");
-            return ExitCode::FAILURE;
-        }
-        if a.submit && side_tag.is_none() {
-            let why = match &input_kind {
-                check_update::InputKind::BodhiAlias(_) => {
-                    "this is a Bodhi update, so it has already been submitted"
-                }
-                _ => "a COPR is published through its own repos, not Bodhi",
-            };
-            eprintln!("error: --submit requires a Koji side tag as input; {why}");
             return ExitCode::FAILURE;
         }
         if a.yes && !a.give_karma && !a.submit {
@@ -1195,138 +1262,240 @@ fn main() -> ExitCode {
                 !a.json && std::io::stdin().is_terminal()
             },
         };
-        return match check_update::check_update(&a.input, &opts) {
-            Ok(report) => {
-                if a.json {
-                    print_json(&report);
-                } else {
-                    check_update::print_report(&report, a.detailed);
-                }
-                let mut report = report;
-                // Let the reviewer curate the blocking findings
-                // (keep/explain/remove) before karma is derived / the
-                // pass gate is applied. Skipped under --yes or
-                // non-interactively, where every finding is kept
-                // (today's behavior). The curated report drives the
-                // karma, the posted comment, and the submit gate.
-                let mut addressed = Vec::new();
-                if (a.give_karma || a.submit) && !a.yes && opts.interactive {
-                    let findings = check_update::blocking_findings(&report);
-                    if !findings.is_empty() {
-                        eprintln!("── address findings ──");
-                        eprintln!(
-                            "(k)eep counts against the update / \
-                             (e)xplain accepts it / (r)emove drops it\n"
-                        );
-                        match sandogasa_review::resolve_interactive(findings, |f| f.summary()) {
-                            Ok(decisions) => {
-                                let (curated, expl) =
-                                    check_update::apply_resolutions(report, decisions);
-                                report = curated;
-                                addressed = expl;
+        if planned.len() > 1 {
+            eprintln!(
+                "\nChecking {} inputs in order: {}\n",
+                planned.len(),
+                planned
+                    .iter()
+                    .map(|(i, _, _)| i.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        // Each package's pending RPM Fusion bug, gathered across the
+        // whole batch and filed once at the end. Three EPEL minor
+        // updates are one rebuild for RPM Fusion, not three, so they
+        // must become one bug listing all three.
+        let mut pending: std::collections::BTreeMap<String, rpmfusion::Rebuild> =
+            std::collections::BTreeMap::new();
+        let mut counterparts_seen: Option<rpmfusion::Counterparts> = None;
+        let mut overall = ExitCode::SUCCESS;
+        // A failure stops the batch but does not abandon it: the
+        // loop breaks rather than returning, so whatever was already
+        // submitted still gets its RPM Fusion bug filed below. An
+        // update that is out with auto-push held and nobody told is
+        // the one state worse than not having submitted it.
+        'inputs: for (input, vote_alias, side_tag) in &planned {
+            if planned.len() > 1 {
+                eprintln!("── {input} ──");
+            }
+            match check_update::check_update(input, &opts) {
+                Ok(report) => {
+                    if a.json {
+                        print_json(&report);
+                    } else {
+                        check_update::print_report(&report, a.detailed);
+                    }
+                    // Ask RPM Fusion before anything else is decided, so a
+                    // run without --submit still says what it found: the
+                    // counterpart is worth knowing when reviewing the
+                    // update, not only when submitting it.
+                    let rpmfusion = match a.rpmfusion_inventory.as_deref() {
+                        Some(path) => match rpmfusion_counterparts(path, a, &report) {
+                            Ok((counterparts, found)) => {
+                                for (fedora, rf) in &found {
+                                    println!(
+                                        "RPM Fusion ships a counterpart: {fedora} -> {rf} \
+                                     (rebuild it before this goes stable)"
+                                    );
+                                }
+                                Some((counterparts, found))
                             }
                             Err(e) => {
                                 eprintln!("error: {e}");
-                                return ExitCode::FAILURE;
+                                overall = ExitCode::FAILURE;
+                                break 'inputs;
                             }
-                        }
-                    }
-                }
-                if a.give_karma
-                    && let Some(alias) = &vote_alias
-                {
-                    // The posted comment is the full Markdown report plus
-                    // an "addressed by the reviewer" section; --comment
-                    // adds reviewer notes near the top (prompted for
-                    // interactively when absent).
-                    let mut report_md = check_update::render_report(&report, a.detailed);
-                    report_md.push_str(&check_update::render_addressed(&addressed));
-                    if let Err(e) = karma::run(alias, &report, &report_md, a.comment.clone(), a.yes)
-                    {
-                        eprintln!("error: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                }
-                if a.submit
-                    && let Some(tag) = &side_tag
-                {
-                    // The pass gate reuses the karma derivation: +1 is
-                    // a clean pass; 0 (incomplete/stale analysis) or -1
-                    // (breakage) needs an explicit interactive override
-                    // — never auto-submitted, not even under --yes.
-                    let (karma, reason) = karma::derive_karma(&report);
-                    if karma < 1 {
-                        eprintln!("check did not pass cleanly: {reason}");
-                        if a.yes || !opts.interactive {
+                        },
+                        None => None,
+                    };
+                    let rpmfusion_found = rpmfusion
+                        .as_ref()
+                        .map(|(_, f)| f.clone())
+                        .unwrap_or_default();
+                    let mut report = report;
+                    // Let the reviewer curate the blocking findings
+                    // (keep/explain/remove) before karma is derived / the
+                    // pass gate is applied. Skipped under --yes or
+                    // non-interactively, where every finding is kept
+                    // (today's behavior). The curated report drives the
+                    // karma, the posted comment, and the submit gate.
+                    let mut addressed = Vec::new();
+                    if (a.give_karma || a.submit) && !a.yes && opts.interactive {
+                        let findings = check_update::blocking_findings(&report);
+                        if !findings.is_empty() {
+                            eprintln!("── address findings ──");
                             eprintln!(
-                                "not submitting — fix the update, or rerun \
-                                 interactively to override"
+                                "(k)eep counts against the update / \
+                             (e)xplain accepts it / (r)emove drops it\n"
                             );
-                            return ExitCode::FAILURE;
-                        }
-                        match sandogasa_cli::confirm("submit anyway?", false) {
-                            Ok(true) => {}
-                            Ok(false) => {
-                                eprintln!("aborted: update not submitted");
-                                return ExitCode::FAILURE;
-                            }
-                            Err(e) => {
-                                eprintln!("error: {e}");
-                                return ExitCode::FAILURE;
+                            match sandogasa_review::resolve_interactive(findings, |f| f.summary()) {
+                                Ok(decisions) => {
+                                    let (curated, expl) =
+                                        check_update::apply_resolutions(report, decisions);
+                                    report = curated;
+                                    addressed = expl;
+                                }
+                                Err(e) => {
+                                    eprintln!("error: {e}");
+                                    overall = ExitCode::FAILURE;
+                                    break 'inputs;
+                                }
                             }
                         }
                     }
-                    let sopts = submit::SubmitOptions {
-                        notes: submit_notes.clone().expect("resolved before the analysis"),
-                        update_type: a.update_type.clone(),
-                        severity: a.severity.clone(),
-                        bugs: a.bug.clone(),
-                        autokarma: !a.disable_autokarma,
-                        stable_karma: a.stable_karma,
-                        unstable_karma: a.unstable_karma,
-                        assume_yes: a.yes,
-                        koji_profile: a.koji_profile.clone(),
-                    };
-                    let aliases = match submit::run(tag, &report, &sopts) {
-                        Ok(aliases) => aliases,
-                        Err(e) => {
-                            eprintln!("error: {e}");
-                            return ExitCode::FAILURE;
-                        }
-                    };
-                    // Post the check report as a comment on the new
-                    // update — the same review-checklist flow as
-                    // --give-karma, including per-bug feedback on
-                    // whether the listed bugs are addressed. Bodhi
-                    // zeroes the submitter's overall karma on their
-                    // own update (karma::run detects that); the
-                    // per-bug feedback still counts.
-                    let mut report_md = check_update::render_report(&report, a.detailed);
-                    report_md.push_str(&check_update::render_addressed(&addressed));
-                    for alias in &aliases {
+                    if a.give_karma
+                        && let Some(alias) = &vote_alias
+                    {
+                        // The posted comment is the full Markdown report plus
+                        // an "addressed by the reviewer" section; --comment
+                        // adds reviewer notes near the top (prompted for
+                        // interactively when absent).
+                        let mut report_md = check_update::render_report(&report, a.detailed);
+                        report_md.push_str(&check_update::render_addressed(&addressed));
                         if let Err(e) =
                             karma::run(alias, &report, &report_md, a.comment.clone(), a.yes)
                         {
-                            eprintln!(
-                                "error: the update was submitted, but posting the review \
-                                 comment failed: {e}"
-                            );
-                            return ExitCode::FAILURE;
+                            eprintln!("error: {e}");
+                            overall = ExitCode::FAILURE;
+                            break 'inputs;
                         }
                     }
+                    if a.submit
+                        && let Some(tag) = &side_tag
+                    {
+                        // The pass gate reuses the karma derivation: +1 is
+                        // a clean pass; 0 (incomplete/stale analysis) or -1
+                        // (breakage) needs an explicit interactive override
+                        // — never auto-submitted, not even under --yes.
+                        let (karma, reason) = karma::derive_karma(&report);
+                        if karma < 1 {
+                            eprintln!("check did not pass cleanly: {reason}");
+                            if a.yes || !opts.interactive {
+                                eprintln!(
+                                    "not submitting — fix the update, or rerun \
+                                 interactively to override"
+                                );
+                                overall = ExitCode::FAILURE;
+                                break 'inputs;
+                            }
+                            match sandogasa_cli::confirm("submit anyway?", false) {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    eprintln!("aborted: update not submitted");
+                                    overall = ExitCode::FAILURE;
+                                    break 'inputs;
+                                }
+                                Err(e) => {
+                                    eprintln!("error: {e}");
+                                    overall = ExitCode::FAILURE;
+                                    break 'inputs;
+                                }
+                            }
+                        }
+                        let sopts = submit::SubmitOptions {
+                            notes: submit_notes.clone().expect("resolved before the analysis"),
+                            update_type: a.update_type.clone(),
+                            severity: a.severity.clone(),
+                            bugs: a.bug.clone(),
+                            autokarma: !a.disable_autokarma,
+                            stable_karma: a.stable_karma,
+                            unstable_karma: a.unstable_karma,
+                            assume_yes: a.yes,
+                            koji_profile: a.koji_profile.clone(),
+                            rpmfusion: rpmfusion_found.clone(),
+                        };
+                        let aliases = match submit::run(tag, &report, &sopts) {
+                            Ok(aliases) => aliases,
+                            Err(e) => {
+                                eprintln!("error: {e}");
+                                overall = ExitCode::FAILURE;
+                                break 'inputs;
+                            }
+                        };
+                        // Remember what RPM Fusion needs told, but file
+                        // after the whole batch: the bug has to link every
+                        // update that touched the package, and it only
+                        // exists once the submit has returned an alias.
+                        if let Some((counterparts, found)) = rpmfusion.as_ref()
+                            && !found.is_empty()
+                        {
+                            for (fedora, rf) in found {
+                                let entry = pending.entry(fedora.clone()).or_insert_with(|| {
+                                    rpmfusion::Rebuild {
+                                        fedora: fedora.clone(),
+                                        rf: rf.clone(),
+                                        evr: None,
+                                        branch: report.dist_branch().to_string(),
+                                        aliases: Vec::new(),
+                                    }
+                                });
+                                entry.aliases.extend(aliases.iter().cloned());
+                                if entry.evr.is_none() {
+                                    entry.evr = report
+                                        .changes
+                                        .iter()
+                                        .find(|c| &c.package == fedora)
+                                        .map(|c| c.new.clone());
+                                }
+                            }
+                            if counterparts_seen.is_none() {
+                                counterparts_seen = Some(counterparts.clone());
+                            }
+                        }
+                        // Post the check report as a comment on the new
+                        // update — the same review-checklist flow as
+                        // --give-karma, including per-bug feedback on
+                        // whether the listed bugs are addressed. Bodhi
+                        // zeroes the submitter's overall karma on their
+                        // own update (karma::run detects that); the
+                        // per-bug feedback still counts.
+                        let mut report_md = check_update::render_report(&report, a.detailed);
+                        report_md.push_str(&check_update::render_addressed(&addressed));
+                        for alias in &aliases {
+                            if let Err(e) =
+                                karma::run(alias, &report, &report_md, a.comment.clone(), a.yes)
+                            {
+                                eprintln!(
+                                    "error: the update was submitted, but posting the review \
+                                 comment failed: {e}"
+                                );
+                                overall = ExitCode::FAILURE;
+                                break 'inputs;
+                            }
+                        }
+                    }
+                    if report.reverse_deps.values().any(|r| r.status == "broken") {
+                        overall = ExitCode::FAILURE;
+                    }
                 }
-                let has_broken = report.reverse_deps.values().any(|r| r.status == "broken");
-                if has_broken {
-                    ExitCode::FAILURE
-                } else {
-                    ExitCode::SUCCESS
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    overall = ExitCode::FAILURE;
+                    break 'inputs;
                 }
             }
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::FAILURE
-            }
-        };
+        }
+        // One bug per package, naming every update of the batch that
+        // touched it.
+        if let Some(counterparts) = counterparts_seen.as_ref()
+            && !pending.is_empty()
+        {
+            let rebuilds: Vec<_> = pending.into_values().collect();
+            rpmfusion::file_bugs(counterparts, &rebuilds, a.yes);
+        }
+        return overall;
     }
 
     let (args, mode) = match &cli.command {

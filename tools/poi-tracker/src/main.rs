@@ -128,6 +128,9 @@ enum Command {
     SyncDistgit(SyncDistgitArgs),
     /// Sync inventory from a GitLab RPM group.
     SyncGitlab(SyncGitlabArgs),
+    /// Sync inventory from RPM Fusion's repositories, one workload
+    /// per release.
+    SyncRpmfusion(SyncRpmfusionArgs),
     /// Close open release-monitoring bugs as CANTFIX for any
     /// inventoried package that is retired on a dist-git branch.
     TriageRetired(TriageRetiredArgs),
@@ -992,6 +995,39 @@ struct SyncGitlabArgs {
     name: Option<String>,
 }
 
+#[derive(clap::Args)]
+struct SyncRpmfusionArgs {
+    /// Releases to scan (CSV): f43, f44, el10. Each becomes a
+    /// workload, so the inventory can answer per release.
+    #[arg(
+        short,
+        long,
+        required = true,
+        value_delimiter = ',',
+        value_name = "REL,..."
+    )]
+    release: Vec<String>,
+
+    /// Output TOML file.
+    #[arg(short, long, default_value = "inventory.toml")]
+    output: String,
+
+    /// fedrq repo class. The default covers free and nonfree
+    /// together, which is what "does RPM Fusion ship this?" asks.
+    #[arg(long, value_name = "CLASS")]
+    repo: Option<String>,
+
+    /// Remove packages RPM Fusion ships for no release listed in the
+    /// inventory. Scanning a subset never prunes what another
+    /// release still ships.
+    #[arg(long)]
+    prune: bool,
+
+    /// Inventory name (default: rpmfusion).
+    #[arg(long)]
+    name: Option<String>,
+}
+
 /// Command outcome: hard failures bubble up as an error (printed
 /// as `error: {e}` with a FAILURE exit by `main`); soft outcomes
 /// already reported inline (e.g. partial failures, "not found")
@@ -1100,6 +1136,7 @@ fn main() -> ExitCode {
             | Command::Reconcile(_)
             | Command::SyncDistgit(_)
             | Command::SyncGitlab(_)
+            | Command::SyncRpmfusion(_)
     );
 
     let paths = resolve_inventory_paths(&cli);
@@ -1131,6 +1168,7 @@ fn main() -> ExitCode {
         Command::Show(args) => cmd_show(&paths, args),
         Command::SyncDistgit(args) => cmd_sync_distgit(args),
         Command::SyncGitlab(args) => cmd_sync_gitlab(args),
+        Command::SyncRpmfusion(args) => cmd_sync_rpmfusion(args),
         Command::TriageRetired(args) => cmd_triage_retired(&paths, args),
         Command::TriageUpdates(args) => cmd_triage_updates(&paths, args),
         Command::Unkeep(args) => cmd_unkeep(&paths, args),
@@ -3514,6 +3552,101 @@ fn resolve_gitlab_url(args: &SyncGitlabArgs) -> Result<String, String> {
     Err("specify --url or --preset".to_string())
 }
 
+/// The fedrq branch a release name queries: `f43` → `rpmfusion-f43`,
+/// `el10` → `rpmfusion-el10`, matching the two release definitions in
+/// `configs/fedrq/rpmfusion.toml`. A name already carrying the prefix
+/// is left alone, so `--release rpmfusion-f43` works too.
+fn rpmfusion_branch(release: &str) -> String {
+    match release.starts_with("rpmfusion-") {
+        true => release.to_string(),
+        false => format!("rpmfusion-{release}"),
+    }
+}
+
+fn cmd_sync_rpmfusion(args: &SyncRpmfusionArgs) -> CmdResult {
+    sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])?;
+
+    let default_name = args.name.clone().unwrap_or_else(|| "rpmfusion".to_string());
+    let mut inventory = load_or_create_inventory(
+        &args.output,
+        "RPM Fusion",
+        "rpmfusion",
+        &default_name,
+        &args.release,
+    )?;
+    if let Some(ref name) = args.name {
+        inventory.inventory.name.clone_from(name);
+    }
+
+    // Query each release separately: a package can ship in RPM Fusion
+    // for one Fedora release and not another, and the submit-time
+    // check is per release, so the answer has to be kept per release
+    // rather than unioned away.
+    let mut added = 0usize;
+    for release in &args.release {
+        let branch = rpmfusion_branch(release);
+        let fedrq = sandogasa_fedrq::Fedrq {
+            branch: Some(branch.clone()),
+            repo: args.repo.clone(),
+        };
+        let names = fedrq
+            .all_sources()
+            .map_err(|e| format!("querying {branch}: {e}"))?;
+        if names.is_empty() {
+            return Err(format!(
+                "{branch} returned no packages — is configs/fedrq/rpmfusion.toml \
+                 installed where fedrq looks (/etc/fedrq/ or ~/.config/fedrq/, \
+                 with repos/ beside it)?"
+            )
+            .into());
+        }
+        eprintln!("  {branch}: {} package(s)", names.len());
+
+        added += add_new_packages(&mut inventory, names.iter().map(String::as_str), &[]).len();
+        // Membership is rebuilt, not added to: a package RPM Fusion
+        // dropped for this release has to leave this release's
+        // workload while staying in the inventory for the releases
+        // that still ship it. add_new_packages only ever adds.
+        let meta = inventory
+            .inventory
+            .workloads
+            .entry(release.clone())
+            .or_default();
+        meta.description
+            .get_or_insert_with(|| format!("RPM Fusion packages for {release}"));
+        meta.packages = names;
+    }
+
+    // Stale means "no release we know of ships it", which is the
+    // union of *every* workload once the scanned ones are rebuilt —
+    // not the union of what this run queried. Syncing one release
+    // must not prune a package that another release still ships, and
+    // scoping to the scanned releases would do exactly that: `--prune
+    // --release f43` dropped 13 packages that ship for f44 and el10.
+    // An unscanned release's workload is untouched above, so its
+    // packages are still listed and survive.
+    let everywhere: std::collections::HashSet<&str> = inventory
+        .inventory
+        .workloads
+        .values()
+        .flat_map(|w| w.packages.iter().map(String::as_str))
+        .collect();
+    let stale = stale_packages(&inventory, &everywhere, &[]);
+    let pruned = stale.len();
+    prune_or_warn_stale(&mut inventory, &stale, args.prune);
+
+    sandogasa_inventory::save(&inventory, &args.output)?;
+    print_sync_summary(
+        "RPM Fusion",
+        added,
+        pruned,
+        args.prune,
+        &inventory,
+        &args.output,
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
 fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> CmdResult {
     let group_url = resolve_gitlab_url(args)?;
 
@@ -3643,6 +3776,18 @@ fn cmd_sync_gitlab(args: &SyncGitlabArgs) -> CmdResult {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_rpm_fusion_release_names_its_fedrq_branch() {
+        // The two release definitions in configs/fedrq/rpmfusion.toml:
+        // Fedora by number, EL by major (they publish one branch per
+        // major, not per RHEL minor).
+        assert_eq!(rpmfusion_branch("f43"), "rpmfusion-f43");
+        assert_eq!(rpmfusion_branch("el10"), "rpmfusion-el10");
+        // Already-qualified names pass through, so --release can be
+        // spelled either way without silently querying rpmfusion-rpmfusion-f43.
+        assert_eq!(rpmfusion_branch("rpmfusion-f43"), "rpmfusion-f43");
+    }
+
     /// The committed man page is generated from this CLI; see
     /// `sandogasa_cli::man` and `scripts/gen-man.sh`.
     #[test]

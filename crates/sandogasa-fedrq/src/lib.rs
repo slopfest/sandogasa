@@ -774,6 +774,24 @@ impl Fedrq {
         self.query(&["pkgs", "--src", "-F", "requires"], &[srpm])
     }
 
+    /// Every source package the branch's repositories carry, sorted
+    /// and deduplicated.
+    ///
+    /// `fedrq pkgs -F source -- '*'`: the binaries are enumerated and
+    /// mapped to the source that built them, which is what makes this
+    /// work against a repository that publishes no source tree of its
+    /// own — RPM Fusion's EL repositories, for one.
+    ///
+    /// This is the one query that *means* to sweep a whole repository,
+    /// so unlike [`Self::src_nvrs`] it takes no operands to guard.
+    pub fn all_sources(&self) -> Result<Vec<String>, Error> {
+        let mut out = self.query(&["pkgs", "-F", "source"], &["*"])?;
+        out.retain(|s| !s.trim().is_empty() && s != "(none)");
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
     /// Return the NVRs of the given source packages on this
     /// branch, in a single fedrq call.
     ///

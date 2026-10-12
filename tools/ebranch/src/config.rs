@@ -23,6 +23,54 @@ pub struct EbranchConfig {
     /// `[packager]` table: who is asking, and what they may do.
     #[serde(default)]
     pub packager: PackagerConfig,
+    /// `[rpmfusion-bugzilla]` table: RPM Fusion runs its own
+    /// Bugzilla, so coordinating with them needs its own account.
+    #[serde(default, rename = "rpmfusion-bugzilla")]
+    pub rpmfusion_bugzilla: RpmfusionBugzillaConfig,
+}
+
+/// RPM Fusion's Bugzilla, where counterpart rebuild requests go.
+///
+/// A separate instance from Red Hat's, running a stock Bugzilla 5
+/// whose REST API hangs off `rest.cgi` rather than `rest`, so it needs
+/// its own URL, path and key rather than borrowing `[bugzilla]`.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RpmfusionBugzillaConfig {
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_rpmfusion_url")]
+    pub url: String,
+    #[serde(default = "default_rpmfusion_rest_path")]
+    pub rest_path: String,
+}
+
+fn default_rpmfusion_url() -> String {
+    "https://bugzilla.rpmfusion.org".to_string()
+}
+
+fn default_rpmfusion_rest_path() -> String {
+    "rest.cgi".to_string()
+}
+
+impl Default for RpmfusionBugzillaConfig {
+    fn default() -> Self {
+        RpmfusionBugzillaConfig {
+            api_key: String::new(),
+            url: default_rpmfusion_url(),
+            rest_path: default_rpmfusion_rest_path(),
+        }
+    }
+}
+
+/// RPM Fusion's Bugzilla as configured, when a key is set. `None`
+/// means "do not file", which is how an unconfigured run stays
+/// read-only rather than failing.
+pub fn rpmfusion_bugzilla() -> Option<RpmfusionBugzillaConfig> {
+    let cfg = sandogasa_config::ConfigFile::for_tool("ebranch")
+        .load::<EbranchConfig>()
+        .ok()?
+        .rpmfusion_bugzilla;
+    (!cfg.api_key.is_empty()).then_some(cfg)
 }
 
 /// Who is running this, and what they may do beyond what a project's
@@ -384,6 +432,52 @@ pub async fn cmd_config() -> Result<(), String> {
         }
     }
 
+    // RPM Fusion's Bugzilla: a separate instance with a separate
+    // account, asked for last because it is only needed by someone
+    // who maintains a package RPM Fusion also builds. Skipping it
+    // leaves check-update holding auto-push and filing nothing,
+    // which is the safe half of the guard.
+    if config.rpmfusion_bugzilla.api_key.is_empty() {
+        println!(
+            "\nRPM Fusion runs its own Bugzilla. A key there lets check-update \
+             file the rebuild request for a counterpart (libheif -> \
+             libheif-freeworld) instead of only holding the update's auto-push. \
+             Generate one at {}/userprefs.cgi?tab=apikey, or leave empty to skip.",
+            config.rpmfusion_bugzilla.url
+        );
+        if let Some(key) = sandogasa_config::prompt_optional_field(
+            "RPM Fusion Bugzilla",
+            "API key (optional, empty to skip)",
+            true,
+        )
+        .map_err(|e| format!("failed to read RPM Fusion API key: {e}"))?
+        {
+            config.rpmfusion_bugzilla.api_key = key;
+        }
+    } else {
+        println!("RPM Fusion Bugzilla API key: (set)");
+    }
+    if !config.rpmfusion_bugzilla.api_key.is_empty() {
+        print!("Validating RPM Fusion API key... ");
+        match sandogasa_bugzilla::BzClient::new(&config.rpmfusion_bugzilla.url)
+            .with_rest_path(&config.rpmfusion_bugzilla.rest_path)
+            .with_api_key(config.rpmfusion_bugzilla.api_key.clone())
+        {
+            Ok(bz) => match bz.search("product=Fedora&limit=1", 1).await {
+                Ok(_) => println!("valid."),
+                Err(e) => {
+                    println!("failed.");
+                    eprintln!("warning: {e}");
+                    eprintln!("The key was saved but may not work.");
+                }
+            },
+            Err(e) => {
+                println!("failed.");
+                eprintln!("warning: {e}");
+            }
+        }
+    }
+
     cf.save(&config)
         .map_err(|e| format!("failed to save config: {e}"))?;
     println!("\nConfig saved to {}", cf.path().display());
@@ -394,6 +488,46 @@ pub async fn cmd_config() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rpm_fusion_bugzilla_defaults_to_their_instance_and_rest_cgi() {
+        // An absent table still points at RPM Fusion rather than at
+        // Red Hat's Bugzilla, so only the key has to be configured.
+        let bare: EbranchConfig = toml::from_str("").unwrap();
+        assert_eq!(
+            bare.rpmfusion_bugzilla.url,
+            "https://bugzilla.rpmfusion.org"
+        );
+        assert_eq!(bare.rpmfusion_bugzilla.rest_path, "rest.cgi");
+        assert!(bare.rpmfusion_bugzilla.api_key.is_empty());
+        // A key alone is enough; the other two keep their defaults.
+        let keyed: EbranchConfig = toml::from_str(
+            r#"
+            [rpmfusion-bugzilla]
+            api_key = "secret"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(keyed.rpmfusion_bugzilla.api_key, "secret");
+        assert_eq!(keyed.rpmfusion_bugzilla.rest_path, "rest.cgi");
+        // And a stock instance elsewhere can override both.
+        let other: EbranchConfig = toml::from_str(
+            r#"
+            [rpmfusion-bugzilla]
+            api_key = "k"
+            url = "https://bz.example"
+            rest_path = "rest"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(other.rpmfusion_bugzilla.url, "https://bz.example");
+        assert_eq!(other.rpmfusion_bugzilla.rest_path, "rest");
+        // The table is spelled with a dash, not an underscore: a
+        // mis-spelled table is silently ignored rather than applied,
+        // which would leave filing unconfigured with no sign why.
+        let dashed = toml::to_string(&other).unwrap();
+        assert!(dashed.contains("[rpmfusion-bugzilla]"), "{dashed}");
+    }
 
     #[test]
     fn the_packager_table_carries_who_is_asking() {

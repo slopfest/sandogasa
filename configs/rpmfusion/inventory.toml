@@ -1,0 +1,1741 @@
+[inventory]
+name = "rpmfusion"
+description = "Packages synced from RPM Fusion (rpmfusion)"
+maintainer = "rpmfusion"
+labels = []
+private_fields = []
+
+[inventory.workloads.el10]
+description = "RPM Fusion packages for el10"
+packages = [
+    "broadcom-wl",
+    "buildsys-build-rpmfusion",
+    "deadbeef",
+    "ffmpeg",
+    "gstreamer1-plugins-bad-freeworld",
+    "gstreamer1-plugins-ugly",
+    "jellyfin",
+    "lamco-rdp-server",
+    "libaacs",
+    "libbdplus",
+    "libde265",
+    "libdvbcsa",
+    "libdvdcss",
+    "libheif-freeworld",
+    "mjpegtools",
+    "mock-rpmfusion-free",
+    "mock-rpmfusion-nonfree",
+    "motion",
+    "mplayer",
+    "mythtv",
+    "mythweb",
+    "nvidia-580xx-kmod",
+    "nvidia-modprobe",
+    "nvidia-persistenced",
+    "nvidia-settings-580xx",
+    "nvidia-xconfig",
+    "python-rpmfusion",
+    "rfpkg",
+    "rfpkg-minimal",
+    "rfpkgdb-cli",
+    "rpmfusion-free-release",
+    "rpmfusion-nonfree-release",
+    "rpmfusion-packager",
+    "rtmpdump",
+    "unifi",
+    "unrar",
+    "v4l2loopback",
+    "v4l2loopback-kmod",
+    "vlc-plugins-freeworld",
+    "vvdec",
+    "vvenc",
+    "x264",
+    "x265",
+    "xmltv",
+    "xorg-x11-drv-nvidia-580xx",
+    "xtables-addons",
+    "xtables-addons-kmod",
+    "zoneminder",
+]
+
+[inventory.workloads.el9]
+description = "RPM Fusion packages for el9"
+packages = [
+    "audacious-plugins-freeworld",
+    "broadcom-wl",
+    "buildsys-build-rpmfusion",
+    "compat-ffmpeg4",
+    "ffmpeg",
+    "gstreamer1-plugins-bad-freeworld",
+    "gstreamer1-plugins-ugly",
+    "libaacs",
+    "libbdplus",
+    "libde265",
+    "libdvbcsa",
+    "libfame",
+    "libheif-freeworld",
+    "mjpegtools",
+    "mock-rpmfusion-free",
+    "mock-rpmfusion-nonfree",
+    "motion",
+    "mpd",
+    "mplayer",
+    "mythtv",
+    "mythweb",
+    "nvidia-580xx-kmod",
+    "nvidia-modprobe",
+    "nvidia-persistenced",
+    "nvidia-settings-580xx",
+    "nvidia-vaapi-driver",
+    "nvidia-xconfig",
+    "obs-studio-freeworld",
+    "pgplot",
+    "rfpkg",
+    "rfpkg-minimal",
+    "rfpkgdb-cli",
+    "rpmfusion-free-release",
+    "rpmfusion-nonfree-release",
+    "rpmfusion-packager",
+    "rtmpdump",
+    "unifi",
+    "unrar",
+    "v4l2loopback",
+    "v4l2loopback-kmod",
+    "vlc-plugins-freeworld",
+    "x264",
+    "x265",
+    "xmltv",
+    "xorg-x11-drv-nvidia-580xx",
+    "xpra-codecs-freeworld",
+    "xrick",
+    "xtables-addons",
+    "xtables-addons-kmod",
+    "zoneminder",
+]
+
+[inventory.workloads.f43]
+description = "RPM Fusion packages for f43"
+packages = [
+    "BasiliskII",
+    "EmptyEpsilon",
+    "Frodo",
+    "HandBrake",
+    "Nestopia",
+    "ProjectX",
+    "SDLPoP",
+    "TestU01",
+    "abuse",
+    "acoustid-fingerprinter",
+    "amap",
+    "amrnb",
+    "amrwb",
+    "amule",
+    "arcem",
+    "assaultcube",
+    "audacity-freeworld",
+    "ayugram-desktop",
+    "broadcom-wl",
+    "buildsys-build-rpmfusion",
+    "cairo-dock-freeworld",
+    "cannonball",
+    "clipgrab",
+    "cmus",
+    "compat-ffmpeg4",
+    "comskip",
+    "curlew",
+    "d1x",
+    "deadbeef",
+    "deadbeef-mpris2-plugin",
+    "desmume",
+    "devedeng",
+    "dgen-sdl",
+    "dhewm3",
+    "doc",
+    "doom-shareware",
+    "dream",
+    "dvbcut",
+    "dvd-slideshow",
+    "dvd95",
+    "dvdstyler",
+    "dynamips",
+    "etlegacy",
+    "faac",
+    "fceux",
+    "fdk-aac",
+    "fdkaac",
+    "ffmpeg",
+    "ffmulticonverter",
+    "firebird-emu",
+    "freeguide",
+    "frobtads",
+    "fs-uae",
+    "fs-uae-arcade",
+    "fs-uae-launcher",
+    "fuse-emulator-roms",
+    "gambatte",
+    "game-data-packager",
+    "get-flash-videos",
+    "girl",
+    "gltron",
+    "gnuboy",
+    "gr-dab",
+    "gstreamer1-plugins-bad-freeworld",
+    "gstreamer1-plugins-ugly",
+    "gsview",
+    "gtetrinet",
+    "h264enc",
+    "imagination",
+    "intel-ipu6-kmod",
+    "iozone",
+    "jellyfin",
+    "kffmpegthumbnailer",
+    "kodi",
+    "kodi-inputstream-adaptive",
+    "kodi-inputstream-rtmp",
+    "kodi-peripheral-joystick",
+    "kodi-platform",
+    "kodi-pvr-argustv",
+    "kodi-pvr-demo",
+    "kodi-pvr-dvblink",
+    "kodi-pvr-dvbviewer",
+    "kodi-pvr-filmon",
+    "kodi-pvr-hdhomerun",
+    "kodi-pvr-hts",
+    "kodi-pvr-iptvsimple",
+    "kodi-pvr-mediaportal-tvserver",
+    "kodi-pvr-mythtv",
+    "kodi-pvr-nextpvr",
+    "kodi-pvr-njoy",
+    "kodi-pvr-pctv",
+    "kodi-pvr-stalker",
+    "kodi-pvr-vbox",
+    "kodi-pvr-vdr-vnsi",
+    "kodi-pvr-vuplus",
+    "kodi-pvr-wmc",
+    "kodi-visualization-matrix",
+    "kodi-visualization-spectrum",
+    "lamco-rdp-server",
+    "larabie-fonts",
+    "lha",
+    "libaacs",
+    "libbdplus",
+    "libde265",
+    "libdvbcsa",
+    "libfreeaptx",
+    "libheif-freeworld",
+    "libmimic",
+    "libndi",
+    "libshairport",
+    "lightspark",
+    "lives",
+    "lpf-cleartype-fonts",
+    "lpf-mscore-fonts",
+    "lpf-mscore-tahoma-fonts",
+    "ltris",
+    "makemkv-bin",
+    "makemkv-oss",
+    "mamory",
+    "man-pages-posix",
+    "mari0",
+    "mate-applet-streamer",
+    "medialibrary",
+    "megamario",
+    "mesa-freeworld",
+    "mimms",
+    "mingw-libmad",
+    "mixxx",
+    "mmsrip",
+    "moc",
+    "mock-rpmfusion-free",
+    "mock-rpmfusion-nonfree",
+    "mod_h264_streaming",
+    "motion",
+    "mp3diags",
+    "mp4tools",
+    "mpd",
+    "mpgtx",
+    "mplayer",
+    "mythtv",
+    "mythtv-status",
+    "mythweb",
+    "ndi-sdk",
+    "nrdp",
+    "nvidia-kmod",
+    "nvidia-modprobe",
+    "nvidia-persistenced",
+    "nvidia-settings",
+    "nvidia-xconfig",
+    "obs-studio-freeworld",
+    "obs-studio-plugin-distroav",
+    "ogmrip",
+    "osmose",
+    "p54pci-firmware",
+    "pangzero",
+    "pdflib-lite",
+    "performous",
+    "perl-IP-Country",
+    "perl-PGPLOT",
+    "pgplot",
+    "pipewire-codec-aptx",
+    "pithos",
+    "plus4emu",
+    "ppsspp",
+    "proas",
+    "pushover",
+    "pxsup2dast",
+    "pyskool",
+    "python-ffmpeg-normalize",
+    "python-ffmpeg-progress-yield",
+    "python-rpmfusion",
+    "python-vlc",
+    "qmmp-plugins-freeworld",
+    "qt-heif-image-plugin",
+    "qt5-qtwebengine-freeworld",
+    "qtav",
+    "qtox",
+    "qwinff",
+    "r5u87x-firmware",
+    "rfpkg",
+    "rfpkg-minimal",
+    "rfpkgdb-cli",
+    "roadfighter",
+    "rpmfusion-free-appstream-data",
+    "rpmfusion-free-obsolete-packages",
+    "rpmfusion-free-release",
+    "rpmfusion-nonfree-appstream-data",
+    "rpmfusion-nonfree-obsolete-packages",
+    "rpmfusion-nonfree-release",
+    "rpmfusion-packager",
+    "rtmpdump",
+    "simplescreenrecorder",
+    "slowmovideo",
+    "smc",
+    "smc-music",
+    "smtube",
+    "snes9x",
+    "sox-plugins-nonfree",
+    "spear-demo",
+    "spectrum-roms",
+    "stella",
+    "stepmania",
+    "streamripper",
+    "swftools",
+    "tarsnap",
+    "telegram-desktop",
+    "terminatorX",
+    "tg_owt",
+    "tilem",
+    "tivodecode-ng",
+    "torrentzip",
+    "tvheadend",
+    "uade",
+    "unifi",
+    "unrar",
+    "v4l2-relayd",
+    "v4l2loopback",
+    "v4l2loopback-kmod",
+    "vagalume",
+    "vcmi",
+    "vdr-burn",
+    "vdr-markad",
+    "vdr-mp3",
+    "vdr-mpv",
+    "vdr-plex",
+    "vdr-skindesigner",
+    "vdr-softhddevice",
+    "vdr-tvguideng",
+    "vdr-weatherforecast",
+    "vdr-xineliboutput",
+    "vdrsync",
+    "vice",
+    "videomorph",
+    "vlc-plugins-freeworld",
+    "vvdec",
+    "vvenc",
+    "welle-io",
+    "wolf3d-shareware",
+    "wolf4sdl",
+    "wormsofprey",
+    "wormsofprey-data",
+    "x264",
+    "x265",
+    "xbill",
+    "xcpc",
+    "xmltv",
+    "xmms2-freeworld",
+    "xmris",
+    "xorg-x11-drv-nvidia",
+    "xpra-codecs-freeworld",
+    "xrick",
+    "xroar",
+    "xt7-player-mpv",
+    "xtables-addons",
+    "xtables-addons-kmod",
+    "xv",
+    "xvid4conf",
+    "xvst",
+    "yabause",
+    "yapeSDL",
+    "zboy",
+    "zerotier-one",
+    "zoneminder",
+]
+
+[inventory.workloads.f44]
+description = "RPM Fusion packages for f44"
+packages = [
+    "BasiliskII",
+    "EmptyEpsilon",
+    "Frodo",
+    "HandBrake",
+    "Nestopia",
+    "ProjectX",
+    "SDLPoP",
+    "TestU01",
+    "abuse",
+    "acoustid-fingerprinter",
+    "amap",
+    "amrnb",
+    "amrwb",
+    "amule",
+    "arcem",
+    "assaultcube",
+    "audacity-freeworld",
+    "ayugram-desktop",
+    "broadcom-wl",
+    "buildsys-build-rpmfusion",
+    "cairo-dock-freeworld",
+    "cannonball",
+    "clipgrab",
+    "cmus",
+    "compat-ffmpeg4",
+    "comskip",
+    "curlew",
+    "d1x",
+    "deadbeef",
+    "desmume",
+    "devedeng",
+    "dgen-sdl",
+    "dhewm3",
+    "doc",
+    "doom-shareware",
+    "dream",
+    "dvbcut",
+    "dvd-slideshow",
+    "dvd95",
+    "dvdstyler",
+    "dynamips",
+    "etlegacy",
+    "faac",
+    "fceux",
+    "fdk-aac",
+    "fdkaac",
+    "ffmpeg",
+    "ffmulticonverter",
+    "firebird-emu",
+    "freeguide",
+    "frobtads",
+    "fs-uae",
+    "fs-uae-arcade",
+    "fs-uae-launcher",
+    "fuse-emulator-roms",
+    "gambatte",
+    "game-data-packager",
+    "get-flash-videos",
+    "girl",
+    "gltron",
+    "gnuboy",
+    "gr-dab",
+    "gstreamer1-plugins-bad-freeworld",
+    "gstreamer1-plugins-ugly",
+    "gsview",
+    "gtetrinet",
+    "h264enc",
+    "imagination",
+    "intel-ipu6-kmod",
+    "iozone",
+    "jellyfin",
+    "kodi",
+    "kodi-inputstream-adaptive",
+    "kodi-inputstream-rtmp",
+    "kodi-peripheral-joystick",
+    "kodi-platform",
+    "kodi-pvr-argustv",
+    "kodi-pvr-demo",
+    "kodi-pvr-dvblink",
+    "kodi-pvr-dvbviewer",
+    "kodi-pvr-filmon",
+    "kodi-pvr-hdhomerun",
+    "kodi-pvr-hts",
+    "kodi-pvr-iptvsimple",
+    "kodi-pvr-mediaportal-tvserver",
+    "kodi-pvr-mythtv",
+    "kodi-pvr-nextpvr",
+    "kodi-pvr-njoy",
+    "kodi-pvr-pctv",
+    "kodi-pvr-stalker",
+    "kodi-pvr-vbox",
+    "kodi-pvr-vdr-vnsi",
+    "kodi-pvr-vuplus",
+    "kodi-pvr-wmc",
+    "kodi-visualization-matrix",
+    "kodi-visualization-spectrum",
+    "lamco-rdp-server",
+    "larabie-fonts",
+    "lha",
+    "libaacs",
+    "libbdplus",
+    "libde265",
+    "libdvbcsa",
+    "libfreeaptx",
+    "libheif-freeworld",
+    "libmimic",
+    "libndi",
+    "libshairport",
+    "lightspark",
+    "lives",
+    "lpf-cleartype-fonts",
+    "lpf-mscore-fonts",
+    "lpf-mscore-tahoma-fonts",
+    "ltris",
+    "makemkv-bin",
+    "makemkv-oss",
+    "mamory",
+    "man-pages-posix",
+    "mari0",
+    "mate-applet-streamer",
+    "medialibrary",
+    "megamario",
+    "mesa-freeworld",
+    "mimms",
+    "mingw-libmad",
+    "mmsrip",
+    "moc",
+    "mock-rpmfusion-free",
+    "mock-rpmfusion-nonfree",
+    "mod_h264_streaming",
+    "motion",
+    "mp3diags",
+    "mp4tools",
+    "mpd",
+    "mpgtx",
+    "mplayer",
+    "mythtv",
+    "mythtv-status",
+    "mythweb",
+    "ndi-sdk",
+    "nrdp",
+    "nvidia-580xx-kmod",
+    "nvidia-kmod",
+    "nvidia-modprobe",
+    "nvidia-open-kmod",
+    "nvidia-persistenced",
+    "nvidia-settings",
+    "nvidia-settings-580xx",
+    "nvidia-xconfig",
+    "obs-studio-freeworld",
+    "obs-studio-plugin-distroav",
+    "ogmrip",
+    "osmose",
+    "pangzero",
+    "pdflib-lite",
+    "performous",
+    "perl-IP-Country",
+    "perl-PGPLOT",
+    "pgplot",
+    "pico-sdk",
+    "picotool",
+    "pipewire-codec-aptx",
+    "pithos",
+    "plus4emu",
+    "ppsspp",
+    "proas",
+    "pushover",
+    "pxsup2dast",
+    "pyskool",
+    "python-ffmpeg-normalize",
+    "python-ffmpeg-progress-yield",
+    "python-rpmfusion",
+    "python-vlc",
+    "qmmp-plugins-freeworld",
+    "qt-heif-image-plugin",
+    "qt5-qtwebengine-freeworld",
+    "qtav",
+    "qtox",
+    "qwinff",
+    "r5u87x-firmware",
+    "redumper",
+    "rfpkg",
+    "rfpkg-minimal",
+    "rfpkgdb-cli",
+    "roadfighter",
+    "rpmfusion-free-appstream-data",
+    "rpmfusion-free-obsolete-packages",
+    "rpmfusion-free-release",
+    "rpmfusion-nonfree-appstream-data",
+    "rpmfusion-nonfree-obsolete-packages",
+    "rpmfusion-nonfree-release",
+    "rpmfusion-packager",
+    "rtmpdump",
+    "simplescreenrecorder",
+    "slowmovideo",
+    "smc",
+    "smc-music",
+    "smtube",
+    "snes9x",
+    "sox-plugins-nonfree",
+    "spear-demo",
+    "spectrum-roms",
+    "stella",
+    "stepmania",
+    "streamripper",
+    "swftools",
+    "tarsnap",
+    "telegram-desktop",
+    "terminatorX",
+    "tg_owt",
+    "tilem",
+    "tivodecode-ng",
+    "torrentzip",
+    "tvheadend",
+    "uade",
+    "unifi",
+    "unifi-lts",
+    "unrar",
+    "v4l2-relayd",
+    "v4l2loopback",
+    "v4l2loopback-kmod",
+    "vagalume",
+    "vcmi",
+    "vdr-burn",
+    "vdr-markad",
+    "vdr-mp3",
+    "vdr-mpv",
+    "vdr-plex",
+    "vdr-skindesigner",
+    "vdr-softhddevice",
+    "vdr-tvguideng",
+    "vdr-weatherforecast",
+    "vdr-xineliboutput",
+    "vdrsync",
+    "vice",
+    "videomorph",
+    "vlc-plugins-freeworld",
+    "vvdec",
+    "vvenc",
+    "welle-io",
+    "wolf3d-shareware",
+    "wolf4sdl",
+    "wormsofprey",
+    "wormsofprey-data",
+    "x264",
+    "x265",
+    "xbill",
+    "xcpc",
+    "xmltv",
+    "xmris",
+    "xorg-x11-drv-nvidia",
+    "xorg-x11-drv-nvidia-580xx",
+    "xpra-codecs-freeworld",
+    "xrick",
+    "xroar",
+    "xt7-player-mpv",
+    "xtables-addons",
+    "xtables-addons-kmod",
+    "xv",
+    "xvid4conf",
+    "xvst",
+    "yabause",
+    "yapeSDL",
+    "zboy",
+    "zerotier-one",
+    "zoneminder",
+]
+
+[inventory.workloads.f45]
+description = "RPM Fusion packages for f45"
+packages = [
+    "BasiliskII",
+    "EmptyEpsilon",
+    "Frodo",
+    "HandBrake",
+    "Nestopia",
+    "ProjectX",
+    "SDLPoP",
+    "TestU01",
+    "abuse",
+    "acoustid-fingerprinter",
+    "amrnb",
+    "amrwb",
+    "arcem",
+    "assaultcube",
+    "audacity-freeworld",
+    "ayugram-desktop",
+    "broadcom-wl",
+    "buildsys-build-rpmfusion",
+    "cairo-dock-freeworld",
+    "cannonball",
+    "clipgrab",
+    "cmus",
+    "compat-ffmpeg4",
+    "comskip",
+    "curlew",
+    "d1x",
+    "deadbeef",
+    "desmume",
+    "devedeng",
+    "dgen-sdl",
+    "dhewm3",
+    "doc",
+    "doom-shareware",
+    "dream",
+    "dvbcut",
+    "dvd-slideshow",
+    "dvd95",
+    "dvdstyler",
+    "dynamips",
+    "etlegacy",
+    "faac",
+    "fceux",
+    "fdk-aac",
+    "ffmpeg",
+    "ffmulticonverter",
+    "firebird-emu",
+    "freeguide",
+    "frobtads",
+    "fs-uae",
+    "fs-uae-arcade",
+    "fs-uae-launcher",
+    "fuse-emulator-roms",
+    "gambatte",
+    "game-data-packager",
+    "get-flash-videos",
+    "girl",
+    "gltron",
+    "gnuboy",
+    "gr-dab",
+    "gstreamer1-plugins-bad-freeworld",
+    "gstreamer1-plugins-ugly",
+    "gsview",
+    "gtetrinet",
+    "h264enc",
+    "imagination",
+    "intel-ipu6-kmod",
+    "iozone",
+    "jellyfin",
+    "kodi",
+    "kodi-inputstream-adaptive",
+    "kodi-inputstream-rtmp",
+    "kodi-peripheral-joystick",
+    "kodi-platform",
+    "kodi-pvr-argustv",
+    "kodi-pvr-demo",
+    "kodi-pvr-dvblink",
+    "kodi-pvr-dvbviewer",
+    "kodi-pvr-filmon",
+    "kodi-pvr-hdhomerun",
+    "kodi-pvr-hts",
+    "kodi-pvr-iptvsimple",
+    "kodi-pvr-mediaportal-tvserver",
+    "kodi-pvr-mythtv",
+    "kodi-pvr-nextpvr",
+    "kodi-pvr-njoy",
+    "kodi-pvr-pctv",
+    "kodi-pvr-stalker",
+    "kodi-pvr-vbox",
+    "kodi-pvr-vdr-vnsi",
+    "kodi-pvr-vuplus",
+    "kodi-pvr-wmc",
+    "kodi-visualization-matrix",
+    "kodi-visualization-spectrum",
+    "lamco-rdp-server",
+    "larabie-fonts",
+    "lha",
+    "libaacs",
+    "libbdplus",
+    "libde265",
+    "libdvbcsa",
+    "libfreeaptx",
+    "libheif-freeworld",
+    "libmimic",
+    "libndi",
+    "libshairport",
+    "lightspark",
+    "lives",
+    "lpf-cleartype-fonts",
+    "lpf-mscore-fonts",
+    "lpf-mscore-tahoma-fonts",
+    "ltris",
+    "makemkv-bin",
+    "makemkv-oss",
+    "mamory",
+    "man-pages-posix",
+    "mari0",
+    "mate-applet-streamer",
+    "medialibrary",
+    "megamario",
+    "mesa-freeworld",
+    "mimms",
+    "mmsrip",
+    "moc",
+    "mock-rpmfusion-free",
+    "mock-rpmfusion-nonfree",
+    "mod_h264_streaming",
+    "motion",
+    "mp3diags",
+    "mp4tools",
+    "mpgtx",
+    "mplayer",
+    "mythtv",
+    "mythtv-status",
+    "mythweb",
+    "ndi-sdk",
+    "nrdp",
+    "nvidia-580xx-kmod",
+    "nvidia-kmod",
+    "nvidia-modprobe",
+    "nvidia-persistenced",
+    "nvidia-settings",
+    "nvidia-settings-580xx",
+    "nvidia-xconfig",
+    "obs-studio-freeworld",
+    "obs-studio-plugin-distroav",
+    "ogmrip",
+    "osmose",
+    "pangzero",
+    "performous",
+    "perl-IP-Country",
+    "perl-PGPLOT",
+    "pgplot",
+    "pico-sdk",
+    "picotool",
+    "pipewire-codec-aptx",
+    "pithos",
+    "plus4emu",
+    "ppsspp",
+    "proas",
+    "pushover",
+    "pxsup2dast",
+    "pyskool",
+    "python-ffmpeg-normalize",
+    "python-ffmpeg-progress-yield",
+    "python-rpmfusion",
+    "python-vlc",
+    "qt-heif-image-plugin",
+    "qtav",
+    "qwinff",
+    "r5u87x-firmware",
+    "redumper",
+    "rfpkg",
+    "rfpkg-minimal",
+    "rfpkgdb-cli",
+    "roadfighter",
+    "rpmfusion-free-appstream-data",
+    "rpmfusion-free-obsolete-packages",
+    "rpmfusion-free-release",
+    "rpmfusion-nonfree-appstream-data",
+    "rpmfusion-nonfree-obsolete-packages",
+    "rpmfusion-nonfree-release",
+    "rpmfusion-packager",
+    "simplescreenrecorder",
+    "slowmovideo",
+    "smc",
+    "smc-music",
+    "smtube",
+    "snes9x",
+    "sox-plugins-nonfree",
+    "spear-demo",
+    "spectrum-roms",
+    "stella",
+    "stepmania",
+    "streamripper",
+    "swftools",
+    "tarsnap",
+    "telegram-desktop",
+    "terminatorX",
+    "tg_owt",
+    "tilem",
+    "tivodecode-ng",
+    "torrentzip",
+    "tvheadend",
+    "uade",
+    "unifi",
+    "unifi-lts",
+    "unrar",
+    "v4l2-relayd",
+    "v4l2loopback",
+    "v4l2loopback-kmod",
+    "vagalume",
+    "vcmi",
+    "vdr-burn",
+    "vdr-markad",
+    "vdr-mp3",
+    "vdr-mpv",
+    "vdr-plex",
+    "vdr-skindesigner",
+    "vdr-softhddevice",
+    "vdr-tvguideng",
+    "vdr-weatherforecast",
+    "vdr-xineliboutput",
+    "vdrsync",
+    "vice",
+    "videomorph",
+    "vlc-plugins-freeworld",
+    "vvdec",
+    "vvenc",
+    "welle-io",
+    "wolf3d-shareware",
+    "wolf4sdl",
+    "wormsofprey",
+    "wormsofprey-data",
+    "x264",
+    "x265",
+    "xbill",
+    "xcpc",
+    "xmltv",
+    "xmris",
+    "xorg-x11-drv-nvidia",
+    "xorg-x11-drv-nvidia-580xx",
+    "xpra-codecs-freeworld",
+    "xrick",
+    "xroar",
+    "xt7-player-mpv",
+    "xtables-addons",
+    "xtables-addons-kmod",
+    "xv",
+    "xvid4conf",
+    "xvst",
+    "yabause",
+    "yapeSDL",
+    "zboy",
+    "zerotier-one",
+    "zoneminder",
+]
+
+[[package]]
+name = "BasiliskII"
+
+[[package]]
+name = "EmptyEpsilon"
+
+[[package]]
+name = "Frodo"
+
+[[package]]
+name = "HandBrake"
+
+[[package]]
+name = "Nestopia"
+
+[[package]]
+name = "ProjectX"
+
+[[package]]
+name = "SDLPoP"
+
+[[package]]
+name = "TestU01"
+
+[[package]]
+name = "abuse"
+
+[[package]]
+name = "acoustid-fingerprinter"
+
+[[package]]
+name = "amap"
+
+[[package]]
+name = "amrnb"
+
+[[package]]
+name = "amrwb"
+
+[[package]]
+name = "amule"
+
+[[package]]
+name = "arcem"
+
+[[package]]
+name = "assaultcube"
+
+[[package]]
+name = "audacious-plugins-freeworld"
+
+[[package]]
+name = "audacity-freeworld"
+
+[[package]]
+name = "ayugram-desktop"
+
+[[package]]
+name = "broadcom-wl"
+
+[[package]]
+name = "buildsys-build-rpmfusion"
+
+[[package]]
+name = "cairo-dock-freeworld"
+
+[[package]]
+name = "cannonball"
+
+[[package]]
+name = "clipgrab"
+
+[[package]]
+name = "cmus"
+
+[[package]]
+name = "compat-ffmpeg4"
+
+[[package]]
+name = "comskip"
+
+[[package]]
+name = "curlew"
+
+[[package]]
+name = "d1x"
+
+[[package]]
+name = "deadbeef"
+
+[[package]]
+name = "deadbeef-mpris2-plugin"
+
+[[package]]
+name = "desmume"
+
+[[package]]
+name = "devedeng"
+
+[[package]]
+name = "dgen-sdl"
+
+[[package]]
+name = "dhewm3"
+
+[[package]]
+name = "doc"
+
+[[package]]
+name = "doom-shareware"
+
+[[package]]
+name = "dream"
+
+[[package]]
+name = "dvbcut"
+
+[[package]]
+name = "dvd-slideshow"
+
+[[package]]
+name = "dvd95"
+
+[[package]]
+name = "dvdstyler"
+
+[[package]]
+name = "dynamips"
+
+[[package]]
+name = "etlegacy"
+
+[[package]]
+name = "faac"
+
+[[package]]
+name = "fceux"
+
+[[package]]
+name = "fdk-aac"
+
+[[package]]
+name = "fdkaac"
+
+[[package]]
+name = "ffmpeg"
+
+[[package]]
+name = "ffmulticonverter"
+
+[[package]]
+name = "firebird-emu"
+
+[[package]]
+name = "freeguide"
+
+[[package]]
+name = "frobtads"
+
+[[package]]
+name = "fs-uae"
+
+[[package]]
+name = "fs-uae-arcade"
+
+[[package]]
+name = "fs-uae-launcher"
+
+[[package]]
+name = "fuse-emulator-roms"
+
+[[package]]
+name = "gambatte"
+
+[[package]]
+name = "game-data-packager"
+
+[[package]]
+name = "get-flash-videos"
+
+[[package]]
+name = "girl"
+
+[[package]]
+name = "gltron"
+
+[[package]]
+name = "gnuboy"
+
+[[package]]
+name = "gr-dab"
+
+[[package]]
+name = "gstreamer1-plugins-bad-freeworld"
+
+[[package]]
+name = "gstreamer1-plugins-ugly"
+
+[[package]]
+name = "gsview"
+
+[[package]]
+name = "gtetrinet"
+
+[[package]]
+name = "h264enc"
+
+[[package]]
+name = "imagination"
+
+[[package]]
+name = "intel-ipu6-kmod"
+
+[[package]]
+name = "iozone"
+
+[[package]]
+name = "jellyfin"
+
+[[package]]
+name = "kffmpegthumbnailer"
+
+[[package]]
+name = "kodi"
+
+[[package]]
+name = "kodi-inputstream-adaptive"
+
+[[package]]
+name = "kodi-inputstream-rtmp"
+
+[[package]]
+name = "kodi-peripheral-joystick"
+
+[[package]]
+name = "kodi-platform"
+
+[[package]]
+name = "kodi-pvr-argustv"
+
+[[package]]
+name = "kodi-pvr-demo"
+
+[[package]]
+name = "kodi-pvr-dvblink"
+
+[[package]]
+name = "kodi-pvr-dvbviewer"
+
+[[package]]
+name = "kodi-pvr-filmon"
+
+[[package]]
+name = "kodi-pvr-hdhomerun"
+
+[[package]]
+name = "kodi-pvr-hts"
+
+[[package]]
+name = "kodi-pvr-iptvsimple"
+
+[[package]]
+name = "kodi-pvr-mediaportal-tvserver"
+
+[[package]]
+name = "kodi-pvr-mythtv"
+
+[[package]]
+name = "kodi-pvr-nextpvr"
+
+[[package]]
+name = "kodi-pvr-njoy"
+
+[[package]]
+name = "kodi-pvr-pctv"
+
+[[package]]
+name = "kodi-pvr-stalker"
+
+[[package]]
+name = "kodi-pvr-vbox"
+
+[[package]]
+name = "kodi-pvr-vdr-vnsi"
+
+[[package]]
+name = "kodi-pvr-vuplus"
+
+[[package]]
+name = "kodi-pvr-wmc"
+
+[[package]]
+name = "kodi-visualization-matrix"
+
+[[package]]
+name = "kodi-visualization-spectrum"
+
+[[package]]
+name = "lamco-rdp-server"
+
+[[package]]
+name = "larabie-fonts"
+
+[[package]]
+name = "lha"
+
+[[package]]
+name = "libaacs"
+
+[[package]]
+name = "libbdplus"
+
+[[package]]
+name = "libde265"
+
+[[package]]
+name = "libdvbcsa"
+
+[[package]]
+name = "libdvdcss"
+
+[[package]]
+name = "libfame"
+
+[[package]]
+name = "libfreeaptx"
+
+[[package]]
+name = "libheif-freeworld"
+
+[[package]]
+name = "libmimic"
+
+[[package]]
+name = "libndi"
+
+[[package]]
+name = "libshairport"
+
+[[package]]
+name = "lightspark"
+
+[[package]]
+name = "lives"
+
+[[package]]
+name = "lpf-cleartype-fonts"
+
+[[package]]
+name = "lpf-mscore-fonts"
+
+[[package]]
+name = "lpf-mscore-tahoma-fonts"
+
+[[package]]
+name = "ltris"
+
+[[package]]
+name = "makemkv-bin"
+
+[[package]]
+name = "makemkv-oss"
+
+[[package]]
+name = "mamory"
+
+[[package]]
+name = "man-pages-posix"
+
+[[package]]
+name = "mari0"
+
+[[package]]
+name = "mate-applet-streamer"
+
+[[package]]
+name = "medialibrary"
+
+[[package]]
+name = "megamario"
+
+[[package]]
+name = "mesa-freeworld"
+
+[[package]]
+name = "mimms"
+
+[[package]]
+name = "mingw-libmad"
+
+[[package]]
+name = "mixxx"
+
+[[package]]
+name = "mjpegtools"
+
+[[package]]
+name = "mmsrip"
+
+[[package]]
+name = "moc"
+
+[[package]]
+name = "mock-rpmfusion-free"
+
+[[package]]
+name = "mock-rpmfusion-nonfree"
+
+[[package]]
+name = "mod_h264_streaming"
+
+[[package]]
+name = "motion"
+
+[[package]]
+name = "mp3diags"
+
+[[package]]
+name = "mp4tools"
+
+[[package]]
+name = "mpd"
+
+[[package]]
+name = "mpgtx"
+
+[[package]]
+name = "mplayer"
+
+[[package]]
+name = "mythtv"
+
+[[package]]
+name = "mythtv-status"
+
+[[package]]
+name = "mythweb"
+
+[[package]]
+name = "ndi-sdk"
+
+[[package]]
+name = "nrdp"
+
+[[package]]
+name = "nvidia-580xx-kmod"
+
+[[package]]
+name = "nvidia-kmod"
+
+[[package]]
+name = "nvidia-modprobe"
+
+[[package]]
+name = "nvidia-open-kmod"
+
+[[package]]
+name = "nvidia-persistenced"
+
+[[package]]
+name = "nvidia-settings"
+
+[[package]]
+name = "nvidia-settings-580xx"
+
+[[package]]
+name = "nvidia-vaapi-driver"
+
+[[package]]
+name = "nvidia-xconfig"
+
+[[package]]
+name = "obs-studio-freeworld"
+
+[[package]]
+name = "obs-studio-plugin-distroav"
+
+[[package]]
+name = "ogmrip"
+
+[[package]]
+name = "osmose"
+
+[[package]]
+name = "p54pci-firmware"
+
+[[package]]
+name = "pangzero"
+
+[[package]]
+name = "pdflib-lite"
+
+[[package]]
+name = "performous"
+
+[[package]]
+name = "perl-IP-Country"
+
+[[package]]
+name = "perl-PGPLOT"
+
+[[package]]
+name = "pgplot"
+
+[[package]]
+name = "pico-sdk"
+
+[[package]]
+name = "picotool"
+
+[[package]]
+name = "pipewire-codec-aptx"
+
+[[package]]
+name = "pithos"
+
+[[package]]
+name = "plus4emu"
+
+[[package]]
+name = "ppsspp"
+
+[[package]]
+name = "proas"
+
+[[package]]
+name = "pushover"
+
+[[package]]
+name = "pxsup2dast"
+
+[[package]]
+name = "pyskool"
+
+[[package]]
+name = "python-ffmpeg-normalize"
+
+[[package]]
+name = "python-ffmpeg-progress-yield"
+
+[[package]]
+name = "python-rpmfusion"
+
+[[package]]
+name = "python-vlc"
+
+[[package]]
+name = "qmmp-plugins-freeworld"
+
+[[package]]
+name = "qt-heif-image-plugin"
+
+[[package]]
+name = "qt5-qtwebengine-freeworld"
+
+[[package]]
+name = "qtav"
+
+[[package]]
+name = "qtox"
+
+[[package]]
+name = "qwinff"
+
+[[package]]
+name = "r5u87x-firmware"
+
+[[package]]
+name = "redumper"
+
+[[package]]
+name = "rfpkg"
+
+[[package]]
+name = "rfpkg-minimal"
+
+[[package]]
+name = "rfpkgdb-cli"
+
+[[package]]
+name = "roadfighter"
+
+[[package]]
+name = "rpmfusion-free-appstream-data"
+
+[[package]]
+name = "rpmfusion-free-obsolete-packages"
+
+[[package]]
+name = "rpmfusion-free-release"
+
+[[package]]
+name = "rpmfusion-nonfree-appstream-data"
+
+[[package]]
+name = "rpmfusion-nonfree-obsolete-packages"
+
+[[package]]
+name = "rpmfusion-nonfree-release"
+
+[[package]]
+name = "rpmfusion-packager"
+
+[[package]]
+name = "rtmpdump"
+
+[[package]]
+name = "simplescreenrecorder"
+
+[[package]]
+name = "slowmovideo"
+
+[[package]]
+name = "smc"
+
+[[package]]
+name = "smc-music"
+
+[[package]]
+name = "smtube"
+
+[[package]]
+name = "snes9x"
+
+[[package]]
+name = "sox-plugins-nonfree"
+
+[[package]]
+name = "spear-demo"
+
+[[package]]
+name = "spectrum-roms"
+
+[[package]]
+name = "stella"
+
+[[package]]
+name = "stepmania"
+
+[[package]]
+name = "streamripper"
+
+[[package]]
+name = "swftools"
+
+[[package]]
+name = "tarsnap"
+
+[[package]]
+name = "telegram-desktop"
+
+[[package]]
+name = "terminatorX"
+
+[[package]]
+name = "tg_owt"
+
+[[package]]
+name = "tilem"
+
+[[package]]
+name = "tivodecode-ng"
+
+[[package]]
+name = "torrentzip"
+
+[[package]]
+name = "tvheadend"
+
+[[package]]
+name = "uade"
+
+[[package]]
+name = "unifi"
+
+[[package]]
+name = "unifi-lts"
+
+[[package]]
+name = "unrar"
+
+[[package]]
+name = "v4l2-relayd"
+
+[[package]]
+name = "v4l2loopback"
+
+[[package]]
+name = "v4l2loopback-kmod"
+
+[[package]]
+name = "vagalume"
+
+[[package]]
+name = "vcmi"
+
+[[package]]
+name = "vdr-burn"
+
+[[package]]
+name = "vdr-markad"
+
+[[package]]
+name = "vdr-mp3"
+
+[[package]]
+name = "vdr-mpv"
+
+[[package]]
+name = "vdr-plex"
+
+[[package]]
+name = "vdr-skindesigner"
+
+[[package]]
+name = "vdr-softhddevice"
+
+[[package]]
+name = "vdr-tvguideng"
+
+[[package]]
+name = "vdr-weatherforecast"
+
+[[package]]
+name = "vdr-xineliboutput"
+
+[[package]]
+name = "vdrsync"
+
+[[package]]
+name = "vice"
+
+[[package]]
+name = "videomorph"
+
+[[package]]
+name = "vlc-plugins-freeworld"
+
+[[package]]
+name = "vvdec"
+
+[[package]]
+name = "vvenc"
+
+[[package]]
+name = "welle-io"
+
+[[package]]
+name = "wolf3d-shareware"
+
+[[package]]
+name = "wolf4sdl"
+
+[[package]]
+name = "wormsofprey"
+
+[[package]]
+name = "wormsofprey-data"
+
+[[package]]
+name = "x264"
+
+[[package]]
+name = "x265"
+
+[[package]]
+name = "xbill"
+
+[[package]]
+name = "xcpc"
+
+[[package]]
+name = "xmltv"
+
+[[package]]
+name = "xmms2-freeworld"
+
+[[package]]
+name = "xmris"
+
+[[package]]
+name = "xorg-x11-drv-nvidia"
+
+[[package]]
+name = "xorg-x11-drv-nvidia-580xx"
+
+[[package]]
+name = "xpra-codecs-freeworld"
+
+[[package]]
+name = "xrick"
+
+[[package]]
+name = "xroar"
+
+[[package]]
+name = "xt7-player-mpv"
+
+[[package]]
+name = "xtables-addons"
+
+[[package]]
+name = "xtables-addons-kmod"
+
+[[package]]
+name = "xv"
+
+[[package]]
+name = "xvid4conf"
+
+[[package]]
+name = "xvst"
+
+[[package]]
+name = "yabause"
+
+[[package]]
+name = "yapeSDL"
+
+[[package]]
+name = "zboy"
+
+[[package]]
+name = "zerotier-one"
+
+[[package]]
+name = "zoneminder"

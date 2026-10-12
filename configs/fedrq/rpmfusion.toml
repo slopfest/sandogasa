@@ -1,0 +1,58 @@
+# RPM Fusion releases for fedrq.
+#
+#   fedrq pkgs -b rpmfusion-f43 -F source libheif-freeworld  # free + nonfree
+#   fedrq pkgs -b rpmfusion-f43 -r free vlc-plugins-freeworld
+#   fedrq pkgs -b rpmfusion-el10 -F source ffmpeg
+#
+# RPM Fusion rebuilds Fedora packages with the codecs Fedora has to
+# strip, so a package can need upgrading in lockstep with a counterpart
+# here: Fedora's libheif pairs with RPM Fusion's libheif-freeworld.
+# `poi-tracker sync-rpmfusion` turns these repos into an inventory so
+# that pairing is answered from data rather than from memory.
+#
+# The default class is free *and* nonfree, because the question these
+# repos are queried with — "does RPM Fusion ship this too?" — does not
+# care which side of the free/nonfree line the answer sits on.
+#
+# Fedora and EL are separate releases because their repo layouts differ:
+# Fedora publishes a per-release base repo plus updates, while EL
+# publishes only updates-released (there is no `free-el-$releasever`).
+# The capture group becomes $releasever in repos/rpmfusion.repo, whose
+# repo ids match the rpmfusion-*-release packages.
+#
+# Install beside the other files where fedrq looks: /etc/fedrq/ or
+# ~/.config/fedrq/, with the repos/ directory alongside.
+
+[releases.rpmfusion]
+matcher = '^rpmfusion-f(\d+)$'
+defpaths = ["rpmfusion.repo"]
+system_repos = false
+
+# Both halves by default: a counterpart is a counterpart wherever it
+# ships. The updates repos carry packages added after a release went
+# GA, so base alone would miss them; they are skip_if_unavailable in
+# the .repo file because a branched release has none yet.
+defs.base = [
+    "rpmfusion-free",
+    "rpmfusion-free-updates",
+    "rpmfusion-nonfree",
+    "rpmfusion-nonfree-updates",
+]
+defs.free = ["rpmfusion-free", "rpmfusion-free-updates"]
+defs.nonfree = ["rpmfusion-nonfree", "rpmfusion-nonfree-updates"]
+defs.testing = [
+    "@base",
+    "rpmfusion-free-updates-testing",
+    "rpmfusion-nonfree-updates-testing",
+]
+
+[releases.rpmfusion-el]
+matcher = '^rpmfusion-el(\d+)$'
+defpaths = ["rpmfusion.repo"]
+system_repos = false
+
+# EL has no base repo: everything is published through
+# updates-released, which is why these groups name only those.
+defs.base = ["rpmfusion-free-el", "rpmfusion-nonfree-el"]
+defs.free = ["rpmfusion-free-el"]
+defs.nonfree = ["rpmfusion-nonfree-el"]

@@ -1,5 +1,92 @@
 # Changelog
 
+## Unreleased
+
+### ebranch, poi-tracker: keep an update in step with RPM Fusion
+
+Some Fedora packages have to move in lockstep with a counterpart in
+RPM Fusion, which rebuilds the same upstream with the codecs Fedora
+strips. Fedora's `libheif` pairs with RPM Fusion's
+`libheif-freeworld`, and an update that reaches stable before that
+rebuild leaves the pair broken for anyone with both repositories
+enabled. Nothing in the workspace knew RPM Fusion existed, so the
+coordination was entirely a matter of remembering.
+
+`poi-tracker sync-rpmfusion --release f43,f44,f45,el9,el10` writes an
+inventory of what RPM Fusion ships, one workload per release — 276
+packages in about seven seconds. The query goes through fedrq, which
+learns RPM Fusion from a new `configs/fedrq/rpmfusion.toml`, so the
+repositories are declared once in the usual place rather than hardcoded.
+
+`ebranch check-update --rpmfusion-inventory` then names any counterpart
+in the report, and at `--submit` forces auto-push off so the update
+cannot reach stable on karma alone. `--disable-autokarma` already
+existed; the guard only takes it away, and never gives it back — the
+flag overrides in one direction, because the other direction is the one
+that breaks systems. The plan says which package and which counterpart,
+since a policy applied invisibly is one nobody can check.
+
+Finding a counterpart needs more than a name match. Measured against
+`rpmfusion-f43`: of 263 packages only five share a Fedora name
+(`ffmpeg` among them), eleven carry a `-freeworld` suffix of which the
+suffix rule resolves seven, and four need the committed
+`configs/rpmfusion/renames.toml` — all four because RPM Fusion names
+the companion after the plugins (`vlc` → `vlc-plugins-freeworld`).
+Every guess is checked against the inventory before it counts, so the
+rule can be generous without inventing packages, and a stale table
+entry degrades to "no counterpart" rather than to a wrong bug.
+
+### ebranch: check-update takes several inputs
+
+`check-update` now accepts a list — `f45-build-side-1,f44-build-side-2`
+— and carries one change across releases in a single run. Every input
+is classified and validated before any of them is submitted, so a typo
+in the third tag cannot leave the first two submitted.
+
+Taking a list is what makes telling RPM Fusion correct rather than
+merely convenient. RPM Fusion branches per EL *major* while EPEL
+branches per RHEL *minor*: their dist-git has `el8`, `el9`, `el10` and
+nothing finer, `free-el-updates-released-10.4` is a 404, and their
+package is
+`libheif-freeworld-1.23.5-1.el10` where EPEL's is
+`libheif-1.23.5-4.el10_3`. So one libheif update arriving as EPEL-10.2,
+10.3 and 10.4 is *one* rebuild for them. Filing per invocation would
+open three bugs for it; the batch opens one, listing every update.
+
+A failure partway through still stops the batch, but RPM Fusion is
+told about whatever already went out: an update sitting with its
+auto-push held and nobody asked to rebuild is the one outcome worse
+than not having submitted it.
+
+### ebranch: the bug filed with RPM Fusion says what they already have
+
+A rebuild request that only asks is the shape of bug this workspace
+spends its time disproving. This one carries a table instead: what RPM
+Fusion currently ships of the counterpart for each release, whether
+their dist-git is branched for it, and every Bodhi update to follow.
+
+```
+  release  shipped               dist-git
+  f43      1.23.5-1.fc43         branched
+  el10     1.23.5-1.el10         branched
+```
+
+The shipped column comes from RPM Fusion's own repositories and the
+dist-git column from `git ls-remote` against pkgs.rpmfusion.org. The
+bug also says what neither column can see: their Koji needs
+credentials, so a build that exists but has not been released is
+invisible, and saying so stops the table from reading as "nothing is
+built".
+
+Filing goes to RPM Fusion's own Bugzilla, which is a stock Bugzilla 5
+serving REST from `rest.cgi` rather than `rest`; `BzClient` takes the
+path as configuration now. Credentials live in a new
+`[rpmfusion-bugzilla]` section that `ebranch config` now asks for and
+validates, after the Red Hat and NVD keys it already collected. Without
+a key the run says so and files nothing — the held auto-push is the
+part that matters, and a missing credential must not fail a submit that
+already succeeded.
+
 ## v0.25.3
 
 ### ebranch: ask dist-git before asking a person

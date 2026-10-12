@@ -25,6 +25,7 @@ sandogasa-cve = { workspace = true }
 sandogasa-depfilter = { workspace = true }
 sandogasa-distgit = { workspace = true }
 sandogasa-fedrq = { workspace = true }
+sandogasa-inventory = { workspace = true }
 sandogasa-koji = { workspace = true }
 sandogasa-review = { workspace = true }
 sandogasa-rpmvercmp = { workspace = true }
