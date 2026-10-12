@@ -576,7 +576,7 @@ matter would be guessing.
 
 Do it when #40 and the end-to-end filing are done, not before.
 
-## RPM Fusion: two write paths proven only in the lab (2026-10-12)
+## ebranch: three paths proven only in the lab (2026-10-12)
 
 Both wait for a real libheif-style update rather than another write on
 [bug 7564](https://bugzilla.rpmfusion.org/show_bug.cgi?id=7564):
@@ -591,8 +591,25 @@ Both wait for a real libheif-style update rather than another write on
   next run against it will correctly find a difference and comment
   once more. Check the run after that one stays silent.
 
-Both are read-only to verify: `--rpmfusion-dry-run` reports what it
-would do, including "no change since the last comment".
+- **Submitting builds by NVR is not implemented at all** (#43). It was
+  the primary half of the original request and only the side-tag half
+  was built; v0.25.4's notes describe "several inputs" in a way that
+  is true of side tags and not of builds. To be carried as a
+  downstream patch, so the diff stays inside `check_update.rs`,
+  `submit.rs` and `main.rs`.
+
+- **Submitting several side tags in one run has never executed.** The
+  pre-pass, the dedupe and `plan_text` are tested, but `submit::run`
+  creating updates from a batch has not run against Bodhi: every live
+  run used Bodhi aliases, which `--submit` rejects by design.
+  Testing it needs side tags, which building sandogasa 0.25.4 across
+  branches does not by itself produce — that gives NVRs, which is #43.
+  Start with two rather than seven, and without `-y`, so each plan is
+  confirmed separately.
+
+The first two are read-only to verify: `--rpmfusion-dry-run` reports
+what it would do, including "no change since the last comment". The
+third creates Bodhi updates, so it wants care rather than a dry run.
 
 ## RPM Fusion: ship the fedrq config downstream (2026-10-12)
 
