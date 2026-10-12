@@ -3563,6 +3563,41 @@ fn rpmfusion_branch(release: &str) -> String {
     }
 }
 
+/// Which Fedora release rawhide currently is, as the **highest**
+/// dist tag across the repository (`1.fc46` → `f46`).
+///
+/// Recorded as a label on the rawhide workload, because RPM Fusion
+/// says "rawhide" everywhere a number would go — in their repo ids
+/// (`free-fedora-rawhide`) and in their Bugzilla's version list
+/// alike — while the Fedora update being checked says `f46`. Nothing
+/// at either end carries that correspondence, so the inventory does.
+///
+/// It has to be the maximum, not any one package and not the most
+/// common one: a rawhide repository keeps whatever was last built, so
+/// a package nobody has rebuilt this cycle still carries an older
+/// tag. On 2026-10-12 it held 292 `fc45` against 131 `fc46` with
+/// stragglers back to `fc37` — so the first package said f45, the
+/// mode said f45, and only the maximum said f46. Stragglers are
+/// always behind, never ahead, which is what makes the max safe.
+fn rawhide_label(fedrq: &sandogasa_fedrq::Fedrq, names: &[String]) -> Option<String> {
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let newest = fedrq
+        .pkgs_source_vr(&refs)
+        .ok()?
+        .into_iter()
+        .filter_map(|(_, vr)| {
+            vr.rsplit_once(".fc")?
+                .1
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse::<u32>()
+                .ok()
+        })
+        .max()?;
+    Some(format!("f{newest}"))
+}
+
 fn cmd_sync_rpmfusion(args: &SyncRpmfusionArgs) -> CmdResult {
     sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])?;
 
@@ -3614,6 +3649,12 @@ fn cmd_sync_rpmfusion(args: &SyncRpmfusionArgs) -> CmdResult {
             .or_default();
         meta.description
             .get_or_insert_with(|| format!("RPM Fusion packages for {release}"));
+        if release == "rawhide"
+            && let Some(label) = rawhide_label(&fedrq, &names)
+        {
+            eprintln!("    rawhide is currently {label}");
+            meta.labels = Some(vec![label]);
+        }
         meta.packages = names;
     }
 

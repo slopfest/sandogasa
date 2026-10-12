@@ -23,6 +23,12 @@ pub struct BodhiUser {
 pub struct Update {
     pub alias: String,
     pub status: String,
+    /// Whether the update pushes itself to stable at the karma
+    /// threshold. Read, never written here: an update that someone
+    /// else owns is theirs to configure, and a tool that silently
+    /// flipped it would be doing the thing it warns about.
+    #[serde(default)]
+    pub autokarma: bool,
     /// Submitter. Bodhi zeroes overall karma from the submitter
     /// on their own updates (per-bug feedback still counts).
     #[serde(default)]

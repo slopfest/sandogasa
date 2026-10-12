@@ -477,6 +477,27 @@ severity for --type security.",
     /// not make guessable (configs/rpmfusion/renames.toml).
     #[arg(long, value_name = "PATH", requires = "rpmfusion_inventory")]
     rpmfusion_renames: Option<String>,
+
+    /// File the RPM Fusion rebuild request for an update that already
+    /// exists, instead of only naming the counterpart.
+    #[arg(
+        long,
+        requires = "rpmfusion_inventory",
+        long_help = "\
+File the RPM Fusion rebuild request for an
+update that has already been submitted.
+
+--submit files automatically for the update it
+creates. This is for the ones it cannot reach:
+an update submitted through Bodhi's web UI, one
+that predates this flag, or one whose earlier
+run stopped between the submit and the filing.
+
+Give every alias for the same change in one
+run, so they become one bug listing all of
+them, exactly as a batch of side tags would."
+    )]
+    rpmfusion_file: bool,
 }
 
 #[derive(clap::Args, Clone)]
@@ -898,6 +919,66 @@ fn exit_code(result: Result<(), String>) -> ExitCode {
 /// ships a package for one release and not another.
 type RpmfusionFound = (rpmfusion::Counterparts, Vec<(String, String)>);
 
+/// A review comment held back until the RPM Fusion bug exists.
+///
+/// The comment has to name the counterpart and link its rebuild
+/// request, and the request cannot be filed until every input has
+/// been seen — one change across six releases is one bug. So the
+/// comments wait for the filing rather than the filing racing them.
+struct PendingComment {
+    /// The updates to post it on: one for an existing update, every
+    /// alias `submit` returned for a new one.
+    aliases: Vec<String>,
+    report: check_update::CheckUpdateReport,
+    /// The rendered report, before the RPM Fusion note is appended.
+    report_md: String,
+    /// This update's counterparts, as (Fedora name, RPM Fusion name).
+    counterparts: Vec<(String, String)>,
+    /// Whether the update auto-pushes at the karma threshold, when
+    /// that is known. Reported in the comment, never changed: an
+    /// update that already exists belongs to whoever submitted it.
+    autopush: Option<bool>,
+}
+
+/// Record a package's rebuild request, merging it with whatever
+/// earlier inputs of the batch already noted for the same package.
+///
+/// Shared by the two ways an update reaches RPM Fusion — one this run
+/// submitted, and one that already existed — because the bug they
+/// produce is the same bug, and a change spread over both must still
+/// come out as one.
+fn remember_rebuilds(
+    pending: &mut std::collections::BTreeMap<String, rpmfusion::Rebuild>,
+    found: &[(String, String)],
+    report: &check_update::CheckUpdateReport,
+    aliases: &[String],
+    autopush_on: bool,
+) {
+    for (fedora, rf) in found {
+        let entry = pending
+            .entry(fedora.clone())
+            .or_insert_with(|| rpmfusion::Rebuild {
+                fedora: fedora.clone(),
+                rf: rf.clone(),
+                evr: None,
+                branch: report.dist_branch().to_string(),
+                aliases: Vec::new(),
+                autopush_on: false,
+            });
+        entry.aliases.extend(aliases.iter().cloned());
+        // One update left on is enough: the bug must not promise a
+        // hold that only some of the listed updates have.
+        entry.autopush_on |= autopush_on;
+        if entry.evr.is_none() {
+            entry.evr = report
+                .changes
+                .iter()
+                .find(|c| &c.package == fedora)
+                .map(|c| c.new.clone());
+        }
+    }
+}
+
 fn rpmfusion_counterparts(
     inventory: &str,
     a: &CheckUpdateArgs,
@@ -1192,6 +1273,13 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::FAILURE;
             }
+            if a.rpmfusion_file && vote_alias.is_none() {
+                eprintln!(
+                    "error: --rpmfusion-file requires a Bodhi update alias or URL as input \
+                     ({input}); --submit already files for the update it creates"
+                );
+                return ExitCode::FAILURE;
+            }
             if a.submit && side_tag.is_none() {
                 let why = match &input_kind {
                     check_update::InputKind::BodhiAlias(_) => {
@@ -1280,6 +1368,9 @@ fn main() -> ExitCode {
         let mut pending: std::collections::BTreeMap<String, rpmfusion::Rebuild> =
             std::collections::BTreeMap::new();
         let mut counterparts_seen: Option<rpmfusion::Counterparts> = None;
+        // Review comments, posted once the RPM Fusion bug they link
+        // has been filed.
+        let mut comments: Vec<PendingComment> = Vec::new();
         let mut overall = ExitCode::SUCCESS;
         // A failure stops the batch but does not abandon it: the
         // loop breaks rather than returning, so whatever was already
@@ -1310,6 +1401,17 @@ fn main() -> ExitCode {
                                      (rebuild it before this goes stable)"
                                     );
                                 }
+                                // Said here as well as in the comment: the
+                                // operator is who can act on it, and they
+                                // are not necessarily going to read back
+                                // what was posted.
+                                if !found.is_empty() && report.autokarma == Some(true) {
+                                    eprintln!(
+                                        "warning: {input} still auto-pushes at its karma \
+                                         threshold, so it can reach stable before RPM \
+                                         Fusion rebuilds. This does not change it for you."
+                                    );
+                                }
                                 Some((counterparts, found))
                             }
                             Err(e) => {
@@ -1324,6 +1426,25 @@ fn main() -> ExitCode {
                         .as_ref()
                         .map(|(_, f)| f.clone())
                         .unwrap_or_default();
+                    // An update that already exists has no submit to
+                    // hang the filing off, so record it here instead.
+                    // Nothing else in the run can reach these: a Bodhi
+                    // alias is rejected by --submit precisely because
+                    // the update is already out.
+                    if a.rpmfusion_file
+                        && let Some(alias) = vote_alias
+                        && let Some((counterparts, found)) = rpmfusion.as_ref()
+                        && !found.is_empty()
+                    {
+                        remember_rebuilds(
+                            &mut pending,
+                            found,
+                            &report,
+                            std::slice::from_ref(alias),
+                            report.autokarma == Some(true),
+                        );
+                        counterparts_seen.get_or_insert_with(|| counterparts.clone());
+                    }
                     let mut report = report;
                     // Let the reviewer curate the blocking findings
                     // (keep/explain/remove) before karma is derived / the
@@ -1361,16 +1482,20 @@ fn main() -> ExitCode {
                         // The posted comment is the full Markdown report plus
                         // an "addressed by the reviewer" section; --comment
                         // adds reviewer notes near the top (prompted for
-                        // interactively when absent).
+                        // interactively when absent). Held until the batch
+                        // is done so it can carry the RPM Fusion bug.
                         let mut report_md = check_update::render_report(&report, a.detailed);
                         report_md.push_str(&check_update::render_addressed(&addressed));
-                        if let Err(e) =
-                            karma::run(alias, &report, &report_md, a.comment.clone(), a.yes)
-                        {
-                            eprintln!("error: {e}");
-                            overall = ExitCode::FAILURE;
-                            break 'inputs;
-                        }
+                        comments.push(PendingComment {
+                            aliases: vec![alias.to_string()],
+                            report: report.clone(),
+                            report_md,
+                            counterparts: rpmfusion_found.clone(),
+                            // Read from the update itself, so a counterpart
+                            // sitting behind an auto-push that is still on
+                            // gets said out loud rather than assumed.
+                            autopush: report.autokarma,
+                        });
                     }
                     if a.submit
                         && let Some(tag) = &side_tag
@@ -1431,31 +1556,11 @@ fn main() -> ExitCode {
                         if let Some((counterparts, found)) = rpmfusion.as_ref()
                             && !found.is_empty()
                         {
-                            for (fedora, rf) in found {
-                                let entry = pending.entry(fedora.clone()).or_insert_with(|| {
-                                    rpmfusion::Rebuild {
-                                        fedora: fedora.clone(),
-                                        rf: rf.clone(),
-                                        evr: None,
-                                        branch: report.dist_branch().to_string(),
-                                        aliases: Vec::new(),
-                                    }
-                                });
-                                entry.aliases.extend(aliases.iter().cloned());
-                                if entry.evr.is_none() {
-                                    entry.evr = report
-                                        .changes
-                                        .iter()
-                                        .find(|c| &c.package == fedora)
-                                        .map(|c| c.new.clone());
-                                }
-                            }
-                            if counterparts_seen.is_none() {
-                                counterparts_seen = Some(counterparts.clone());
-                            }
+                            remember_rebuilds(&mut pending, found, &report, &aliases, false);
+                            counterparts_seen.get_or_insert_with(|| counterparts.clone());
                         }
-                        // Post the check report as a comment on the new
-                        // update — the same review-checklist flow as
+                        // The check report is posted as a comment on the
+                        // new update — the same review-checklist flow as
                         // --give-karma, including per-bug feedback on
                         // whether the listed bugs are addressed. Bodhi
                         // zeroes the submitter's overall karma on their
@@ -1463,18 +1568,14 @@ fn main() -> ExitCode {
                         // per-bug feedback still counts.
                         let mut report_md = check_update::render_report(&report, a.detailed);
                         report_md.push_str(&check_update::render_addressed(&addressed));
-                        for alias in &aliases {
-                            if let Err(e) =
-                                karma::run(alias, &report, &report_md, a.comment.clone(), a.yes)
-                            {
-                                eprintln!(
-                                    "error: the update was submitted, but posting the review \
-                                 comment failed: {e}"
-                                );
-                                overall = ExitCode::FAILURE;
-                                break 'inputs;
-                            }
-                        }
+                        comments.push(PendingComment {
+                            aliases: aliases.clone(),
+                            report: report.clone(),
+                            report_md,
+                            counterparts: rpmfusion_found.clone(),
+                            // A counterpart is exactly what turned it off.
+                            autopush: Some(rpmfusion_found.is_empty() && !a.disable_autokarma),
+                        });
                     }
                     if report.reverse_deps.values().any(|r| r.status == "broken") {
                         overall = ExitCode::FAILURE;
@@ -1488,12 +1589,32 @@ fn main() -> ExitCode {
             }
         }
         // One bug per package, naming every update of the batch that
-        // touched it.
+        // touched it. Before the comments, so each can link it.
+        let mut filed = std::collections::BTreeMap::new();
         if let Some(counterparts) = counterparts_seen.as_ref()
             && !pending.is_empty()
         {
             let rebuilds: Vec<_> = pending.into_values().collect();
-            rpmfusion::file_bugs(counterparts, &rebuilds, a.yes);
+            filed = rpmfusion::file_bugs(counterparts, &rebuilds, a.yes);
+        }
+        // The review comments, each carrying whichever rebuild request
+        // covers its packages. An RPM Fusion user meets one of these
+        // updates as a broken install and says so on the update, so
+        // the note has to be on the update rather than only in a bug
+        // they have no reason to look at.
+        for c in &comments {
+            let mut body = c.report_md.clone();
+            body.push_str(&rpmfusion::comment_note(
+                &c.counterparts,
+                &filed,
+                c.autopush,
+            ));
+            for alias in &c.aliases {
+                if let Err(e) = karma::run(alias, &c.report, &body, a.comment.clone(), a.yes) {
+                    eprintln!("error: posting the review comment on {alias} failed: {e}");
+                    overall = ExitCode::FAILURE;
+                }
+            }
         }
         return overall;
     }

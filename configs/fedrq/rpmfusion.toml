@@ -46,6 +46,25 @@ defs.testing = [
     "rpmfusion-nonfree-updates-testing",
 ]
 
+# Rawhide needs its own release because its repo ids carry the word
+# rather than a number (free-fedora-rawhide, not free-fedora-46), so
+# the matcher above cannot reach it. The capture is the word itself,
+# which makes $releasever "rawhide" and the shared repo definitions
+# resolve unchanged — fedrq requires exactly one capture group, and
+# this is what that group is for here.
+#
+# Only the base repos: rawhide is composed continuously and has no
+# updates repo. The updates entries are skip_if_unavailable anyway,
+# but naming them would imply they exist.
+[releases.rpmfusion-rawhide]
+matcher = '^rpmfusion-(rawhide)$'
+defpaths = ["rpmfusion.repo"]
+system_repos = false
+
+defs.base = ["rpmfusion-free", "rpmfusion-nonfree"]
+defs.free = ["rpmfusion-free"]
+defs.nonfree = ["rpmfusion-nonfree"]
+
 [releases.rpmfusion-el]
 matcher = '^rpmfusion-el(\d+)$'
 defpaths = ["rpmfusion.repo"]

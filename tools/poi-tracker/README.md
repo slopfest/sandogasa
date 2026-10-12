@@ -838,6 +838,11 @@ this inventory is per release. Releases are named as RPM Fusion builds
 them: `f43` for Fedora, `el10` for Enterprise Linux (one branch per
 major, not per RHEL minor).
 
+`rawhide` is a release name like any other, and the workload records
+which Fedora release rawhide currently is so a check for that release
+finds it. It is re-read on every sync, so it follows the next branch
+point by itself.
+
 `--prune` drops packages RPM Fusion no longer ships anywhere in the
 inventory. Syncing a subset of releases is safe: a package is only
 stale when no workload still lists it, so `--prune --release f43`

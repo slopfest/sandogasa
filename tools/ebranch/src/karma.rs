@@ -1019,6 +1019,7 @@ mod tests {
             );
         }
         CheckUpdateReport {
+            autokarma: None,
             input: "FEDORA-2026-test".to_string(),
             branch: "f44".to_string(),
             dist_branch: None,

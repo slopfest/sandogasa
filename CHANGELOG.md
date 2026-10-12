@@ -36,6 +36,158 @@ Every guess is checked against the inventory before it counts, so the
 rule can be generous without inventing packages, and a stale table
 entry degrades to "no counterpart" rather than to a wrong bug.
 
+### ebranch: the RPM Fusion bug could never have been filed
+
+Filing came back "You must log in before using this part of Bugzilla"
+with a perfectly good API key. `BzClient` sent it as a bearer token,
+which is Red Hat's extension; a stock Bugzilla 5 ignores that header
+and answers exactly as it answers an anonymous request, so the error
+pointed at the login rather than at the client.
+
+That version reads a key from a write's body or from a URL parameter,
+and nothing else — an `X-BUGZILLA-API-KEY` header is ignored too, and
+a GET carrying the key in a JSON body simply returns results. Writes
+now carry `Bugzilla_api_key` in the body, which keeps the credential
+out of URLs and so out of server access logs. Reads carry nothing,
+because the data read is public.
+
+### ebranch: config checks a key by trying to use it
+
+`ebranch config` reported a key as valid that had been pasted three
+times into a hidden prompt and was 120 characters long. It validated
+by running a bug search, and RPM Fusion's Bugzilla serves searches to
+anyone, so the check passed a credential that could never write. The
+same was true of the Red Hat key.
+
+Both now authenticate for real: a create with **no fields at all**.
+Bugzilla checks the credential before it validates the fields, so a
+refused key answers 306 and a missing one 410, while an accepted key
+gets as far as complaining about the absent product — and nothing can
+be created, because every required field is missing. Both instances
+behave identically. A local shape check runs first and names the
+actual mistake, since a key of exactly double length is what a
+duplicated paste leaves behind.
+
+A refused key used to be saved with a warning and a suggestion to
+rerun. Every key the command checks now goes through one helper that
+offers to re-enter it instead — defaulting to yes, skipped where
+stdin is not a terminal, and **taking no for an answer**, because a
+value edited by hand to watch the check fail must not be replaced by
+something that assumes a typo. A rate limit or an unreachable service
+is reported as "could not check" and offers nothing, since neither
+says anything about the key. The helper is ebranch's for now; the
+seven other tools that validate credentials each have their own flow
+(#41).
+
+### ebranch: the update says what RPM Fusion needs, where people read it
+
+An RPM Fusion user meets one of these updates as a broken install and
+says so on the update, sometimes with a -1. The bug asked their
+maintainer for a rebuild but nothing told anyone reading the Bodhi
+update that the pairing was known.
+
+The review comment now carries the counterpart and a link to the
+rebuild request. To link it, comments are posted after the batch
+rather than during it: the request cannot be filed until every input
+has been seen, because one change across six releases is one bug. That
+also converges the two paths — `--submit` and `--give-karma` build the
+same comment now, differing only in where the alias came from.
+
+With no key configured the counterpart is still named, without a link.
+The warning is the useful half.
+
+### ebranch: an existing rebuild request is answered, not duplicated
+
+Filing was unconditional, so a second run — or a second person with
+the tool — would ask RPM Fusion twice for the same work. An open
+request on the component whose summary mentions a rebuild is now found
+first; the new version is added to it as a comment, and the update's
+review comment links that bug. Matching on component and the word
+"rebuild" finds a request a human wrote as well as one this tool did,
+while leaving unrelated open bugs alone.
+
+`rpmfusion::file_bugs` returns the URL filed per package rather than a
+list of ids, so the review comment can link the right one.
+
+### ebranch: an update's auto-push is reported, never changed
+
+`--rpmfusion-file` can be pointed at updates nobody held back, and the
+bug told RPM Fusion flatly that "the update(s) below have auto-push
+disabled". It now says which is true, and one listed update still
+auto-pushing is enough to say so — a maintainer reading it is deciding
+how urgently to rebuild.
+
+An update that already exists is somebody else's, so a wrong setting
+is flagged and left alone: the run warns, and the review comment says
+auto-push is still enabled and suggests disabling it. Only `--submit`,
+which sets the value itself, claims to have held anything.
+
+### ebranch: tell RPM Fusion about an update that already exists
+
+`--submit` files the rebuild request for the update it creates, which
+leaves out every update it cannot create: one submitted through
+Bodhi's web UI, one that predates this feature, one whose earlier run
+stopped between the submit and the filing. Those were detected and
+named and then nothing could be done about them.
+
+`--rpmfusion-file` takes Bodhi aliases and files for them, merging
+into the same request a `--submit` run would build — so a change
+spread across both still comes out as one bug. Seven libheif updates
+(F43/F44/F45 and EPEL-9/10.2/10.3/10.4) resolve to five RPM Fusion
+releases and one bug listing all seven.
+
+Without a configured key it renders the bug and files nothing, rather
+than printing a note and discarding the repository and dist-git
+queries it had just made: seeing what would be filed is how anyone
+decides whether to set an account up. `ebranch config` now asks for
+that key and validates it, after the Red Hat and NVD keys.
+
+### ebranch, poi-tracker: RPM Fusion's rawhide
+
+An update for rawhide failed outright — `RPM Fusion builds for no
+release matching rawhide` — and the test that should have caught it
+asserted the failure was correct, on the belief that rawhide takes no
+Bodhi updates. It does: `FEDORA-2026-141d1b546f` is one.
+
+`sync-rpmfusion --release rawhide` now reads their rawhide
+repositories, which carry the word where every other release carries a
+number (`free-fedora-rawhide`), and records which Fedora release
+rawhide currently is as a workload label. Both spellings reach it: a
+Bodhi update for rawhide reports the branch as `rawhide`, while a side
+tag for the same thing is `f46-build-side-NNN` and reports `f46`.
+
+The label is read rather than pinned, so it follows the next branch
+point without anyone editing it. It is the **highest** dist tag in the
+repository, not the first package's and not the most common: a rawhide
+repository keeps whatever was last built, and on 2026-10-12 it held
+292 `fc45` against 131 `fc46` with stragglers back to `fc37`. Only the
+maximum said f46.
+
+### ebranch: what the bug got wrong about RPM Fusion
+
+Three things, all found by rendering a real request rather than by
+reading the code, and all three would have gone to another project's
+tracker.
+
+The Bugzilla `version` field was the release number alone — `43`.
+Their products disagree and neither matches that: `Fedora` carries
+`f43`, `f44`, `f45` and `rawhide`, while `Fedora EPEL` carries the
+bare major `9`, `10`. Every Fedora-product bug would have been
+rejected. A Fedora workload now passes through unchanged and an `el`
+one loses its prefix.
+
+The dist-git column said `no branch` for rawhide on a package RPM
+Fusion carries, because they keep rawhide on `master`: the ref list
+for `libheif-freeworld` runs el8/el9/el10 and f36 through f45, with no
+f46 and no rawhide. Asking another project to do work while
+mis-stating what they already have is the failure this table exists to
+avoid.
+
+The bug's summary also named one dist tag — `rebuild for libheif
+1.23.6-1.fc43` — for a request covering six releases, dating the whole
+thing to whichever update happened to be checked first. It now reads
+`1.23.6-1`.
+
 ### ebranch: check-update takes several inputs
 
 `check-update` now accepts a list — `f45-build-side-1,f44-build-side-2`

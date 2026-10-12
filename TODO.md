@@ -563,6 +563,19 @@ has to reach EPEL before then, rewrite that one guard as a nested
   (none → needinfo'd → releng-filed) so `escalate` knows which step
   each request is on, and the releng-filing branch in `escalate`.
 
+## Consolidate the RPM Fusion CHANGELOG entries before release (2026-10-12)
+
+The Unreleased section carries eight headings for what a reader will
+see as one piece of work — RPM Fusion coordination — plus the defects
+found while testing it: the bearer-token auth, the hollow key
+validation, the BuildRequires false positive, the claims the bug made
+about Fedora's side. Each earned its own entry while the work was in
+flight, which is the right way round; the consolidation is deliberately
+deferred until the set is final, since deciding now which details
+matter would be guessing.
+
+Do it when #40 and the end-to-end filing are done, not before.
+
 ## RPM Fusion: ship the fedrq config downstream (2026-10-12)
 
 `configs/fedrq/rpmfusion.toml` and `configs/fedrq/repos/rpmfusion.repo`

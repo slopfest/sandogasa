@@ -249,3 +249,47 @@ one release. The same applies to the inventory's own pruning — stale
 means "in no workload at all", so syncing one release cannot drop a
 package another still ships. Scoping the prune to the scanned releases
 deleted 13 packages the first time it was tried.
+
+## Say what RPM Fusion already has, and get it right
+
+The bug this files asks another project for work, so every claim in it
+is a claim made to someone else about their own packages. Three were
+wrong on the first real render, and none of them were visible from the
+code:
+
+- The Bugzilla `version` was the release number alone (`43`). Their
+  two products disagree and neither offers that: `Fedora` carries
+  `f43`/`f44`/`f45`/`rawhide`, `Fedora EPEL` carries `9`/`10`. Read
+  them back from `/rest.cgi/product?names=<p>` rather than assuming
+  they mirror Red Hat's.
+- The dist-git column said `no branch` for rawhide on a package they
+  carry: they keep rawhide on `master`. `distgit_branch_for` maps it.
+- The summary named one dist tag for a request covering six releases.
+  `without_dist` strips it.
+
+The rule this leaves: **render the bug against live data before
+trusting any field in it**, and prefer reading a remote's own
+configuration over inferring it from a sibling project. `file_bugs`
+renders without an account for exactly this reason — the preview is
+the check.
+
+## Rawhide is spelled three ways and none of them agree
+
+RPM Fusion calls it `rawhide` (repo ids, Bugzilla versions, and
+`master` in dist-git). Bodhi calls an update for it `rawhide`. A side
+tag for it is `f46-build-side-NNN`. So:
+
+- `workload_for_branch` maps `rawhide` straight through, for the Bodhi
+  spelling.
+- `sync-rpmfusion --release rawhide` records the current number as a
+  workload **label**, and `Counterparts::load` resolves an unknown
+  release through that label, for the side-tag spelling.
+- The workload stays keyed `rawhide`, which is what makes
+  `bz_version` emit the `rawhide` their Bugzilla actually offers.
+
+The label is read, never pinned: it is the **highest** `.fcNN` in the
+repository. Not the first package's and not the most common one — a
+rawhide repository keeps whatever was last built, and on 2026-10-12 it
+held 292 `fc45` against 131 `fc46` with stragglers to `fc37`. The
+first package said f45, the mode said f45, the maximum said f46.
+Stragglers are behind, never ahead.

@@ -127,7 +127,7 @@ Print help
 <\fITOML\fR>
 Path to TOML analysis file from check\-crate \-\-toml
 .SS ebranch check-update
-\fBebranch check\-update\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-testing\-branch\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-json\fR] [\fB\-\-detailed\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-refresh\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-give\-karma\fR] [\fB\-\-comment\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-submit\fR] [\fB\-\-notes\fR] [\fB\-\-notes\-file\fR] [\fB\-\-type\fR] [\fB\-\-severity\fR] [\fB\-\-bug\fR] [\fB\-\-stable\-karma\fR] [\fB\-\-unstable\-karma\fR] [\fB\-\-disable\-autokarma\fR] [\fB\-\-rpmfusion\-inventory\fR] [\fB\-\-rpmfusion\-renames\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIINPUT\fR> 
+\fBebranch check\-update\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-testing\-branch\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-json\fR] [\fB\-\-detailed\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-refresh\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-give\-karma\fR] [\fB\-\-comment\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-submit\fR] [\fB\-\-notes\fR] [\fB\-\-notes\-file\fR] [\fB\-\-type\fR] [\fB\-\-severity\fR] [\fB\-\-bug\fR] [\fB\-\-stable\-karma\fR] [\fB\-\-unstable\-karma\fR] [\fB\-\-disable\-autokarma\fR] [\fB\-\-rpmfusion\-inventory\fR] [\fB\-\-rpmfusion\-renames\fR] [\fB\-\-rpmfusion\-file\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIINPUT\fR> 
 .PP
 Check if an update would break reverse dependencies
 .TP
@@ -271,6 +271,20 @@ RPM Fusion inventory (poi\-tracker sync\-rpmfusion). A package with a counterpar
 .TP
 \fB\-\-rpmfusion\-renames\fR \fI<PATH>\fR
 Fedora\-to\-RPM\-Fusion renames for counterparts the naming does not make guessable (configs/rpmfusion/renames.toml)
+.TP
+\fB\-\-rpmfusion\-file\fR
+File the RPM Fusion rebuild request for an
+update that has already been submitted.
+
+\-\-submit files automatically for the update it
+creates. This is for the ones it cannot reach:
+an update submitted through Bodhi\*(Aqs web UI, one
+that predates this flag, or one whose earlier
+run stopped between the submit and the filing.
+
+Give every alias for the same change in one
+run, so they become one bug listing all of
+them, exactly as a batch of side tags would.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

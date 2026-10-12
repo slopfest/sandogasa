@@ -885,6 +885,24 @@ branches per EL major while EPEL branches per RHEL minor, three EPEL
 minor updates are one rebuild for them — so submit them in one run and
 they become one bug, not three.
 
+### Telling RPM Fusion about an update that already exists
+
+`--submit` files for the update it creates. For one that already
+exists — submitted through Bodhi's web UI, or before this existed —
+pass the aliases with `--rpmfusion-file`:
+
+```sh
+ebranch check-update FEDORA-2026-e9bb998784,FEDORA-EPEL-2026-ec3c522676 \
+    --rpmfusion-inventory configs/rpmfusion/inventory.toml \
+    --rpmfusion-renames configs/rpmfusion/renames.toml \
+    --rpmfusion-file
+```
+
+Give every alias for the same change in one run and they become one
+bug listing all of them, the same way a batch of side tags does.
+Without a configured key the bug is rendered and nothing is filed, so
+this is also how to see what would be sent.
+
 ### Staging an update in a COPR
 
 A big update — a new crate stack, a version bump that drags its

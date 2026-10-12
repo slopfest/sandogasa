@@ -1,8 +1,11 @@
 # RPM Fusion's published repositories (`-b rpmfusion-f43`,
-# `-b rpmfusion-el10`; see ../rpmfusion.toml). The repo ids and
-# metalink URLs are the ones the rpmfusion-free-release and
-# rpmfusion-nonfree-release packages ship, with $releasever and
+# `-b rpmfusion-el10`, `-b rpmfusion-rawhide`; see ../rpmfusion.toml).
+# The repo ids and metalink URLs are the ones the rpmfusion-free-release
+# and rpmfusion-nonfree-release packages ship, with $releasever and
 # $basearch filled in by fedrq from the branch's capture group.
+# $releasever is a number for a released Fedora and the word "rawhide"
+# for rawhide, whose repo ids and keys spell it that way -- which is
+# why the Fedora stanzas below serve rawhide too.
 #
 # The updates repos are skip_if_unavailable because they do not exist
 # for a release that has not gone GA: mirrors.rpmfusion.org answers 404

@@ -12,6 +12,13 @@ pub struct BzClient {
     /// at `rest`; a stock Bugzilla 5 serves it at `rest.cgi`, which
     /// is what RPM Fusion's 5.0.4 answers on.
     rest_path: String,
+    /// Authenticate the way a stock Bugzilla 5 understands, by
+    /// naming the key in the request rather than in an
+    /// `Authorization` header. Red Hat's Bugzilla reads `Bearer`; a
+    /// stock Bugzilla 5 does not, and answers every write with "You
+    /// must log in before using this part of Bugzilla" —
+    /// indistinguishable from sending no credential at all.
+    stock_auth: bool,
     /// Pause before re-trying a failed write, multiplied by the
     /// attempt number.
     retry_backoff: std::time::Duration,
@@ -84,6 +91,7 @@ impl BzClient {
             client: build_http_client(),
             api_key: None,
             rest_path: "rest".to_string(),
+            stock_auth: false,
             retry_backoff: std::time::Duration::from_secs(5),
         }
     }
@@ -97,6 +105,77 @@ impl BzClient {
     pub fn with_rest_path(mut self, path: &str) -> Self {
         self.rest_path = path.trim_matches('/').to_string();
         self
+    }
+
+    /// Authenticate as a stock Bugzilla 5 expects.
+    ///
+    /// Verified against RPM Fusion's 5.0.4 on 2026-10-12: a key sent
+    /// as `Bugzilla_api_key` in a write's JSON body, or as an
+    /// `api_key` query parameter, is refused with code 306 ("The API
+    /// key you specified is invalid") when wrong — proving it was
+    /// read. The same key as a bearer token, or in an
+    /// `X-BUGZILLA-API-KEY` header, returns code 410 ("You must log
+    /// in"), exactly as an unauthenticated request does.
+    ///
+    /// Writes carry it in the body, which keeps the credential out
+    /// of URLs and therefore out of server access logs. Reads carry
+    /// nothing: a GET has no body to put it in (that version ignores
+    /// one), and the data this reads is public anyway. There is
+    /// deliberately no key-checking request — the only forms that
+    /// version authenticates are a write body and a query parameter,
+    /// and a credential does not belong in a URL just to test it.
+    /// [`Self::api_key_accepted`] checks a key without either, by
+    /// making a write that cannot succeed.
+    pub fn with_stock_auth(mut self) -> Self {
+        self.stock_auth = true;
+        self
+    }
+
+    /// The write body with the key added, for a stock Bugzilla 5.
+    fn authed_body(&self, body: &serde_json::Value) -> serde_json::Value {
+        match (&self.api_key, self.stock_auth, body.as_object()) {
+            (Some(key), true, Some(fields)) => {
+                let mut fields = fields.clone();
+                fields.insert(
+                    "Bugzilla_api_key".to_string(),
+                    serde_json::Value::String(key.clone()),
+                );
+                serde_json::Value::Object(fields)
+            }
+            _ => body.clone(),
+        }
+    }
+
+    /// Whether the server accepts the configured key.
+    ///
+    /// Asks to create a bug with no fields at all. Bugzilla checks
+    /// the credential before it validates the fields, so a key it
+    /// refuses answers 306 ("invalid API key") and a missing one 410
+    /// ("you must log in"), while a key it accepts gets as far as
+    /// complaining about the absent product. Nothing can be created:
+    /// every required field is missing.
+    ///
+    /// The key rides in the request body on a stock Bugzilla and in
+    /// the `Authorization` header on Red Hat's, so this never puts a
+    /// credential in a URL where a server's access log would keep it.
+    ///
+    /// A validation that only makes a request the server would have
+    /// answered anonymously proves nothing: RPM Fusion's instance
+    /// serves bug searches to anyone, so the obvious check passed for
+    /// a key that could never write.
+    pub async fn api_key_accepted(&self) -> Result<bool, reqwest::Error> {
+        if self.api_key.is_none() {
+            return Ok(false);
+        }
+        let resp: serde_json::Value = self
+            .auth(self.client.post(self.url("bug")))
+            .json(&self.authed_body(&serde_json::json!({})))
+            .send()
+            .await?
+            .json()
+            .await?;
+        let refused = matches!(resp.get("code").and_then(|c| c.as_u64()), Some(306 | 410));
+        Ok(!refused)
     }
 
     /// The pause before a retried write (default 5 s, times the
@@ -127,10 +206,11 @@ impl BzClient {
     }
 
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if let Some(ref key) = self.api_key {
-            req.bearer_auth(key)
-        } else {
-            req
+        match (&self.api_key, self.stock_auth) {
+            // A stock Bugzilla ignores the header; its key rides in
+            // the write body instead (see `authed_body`).
+            (Some(key), false) => req.bearer_auth(key),
+            _ => req,
         }
     }
 
@@ -272,7 +352,7 @@ impl BzClient {
         fields: &serde_json::Value,
     ) -> Result<CreateBugResponse, reqwest::Error> {
         self.auth(self.client.post(self.url("bug")))
-            .json(fields)
+            .json(&self.authed_body(fields))
             .send()
             .await?
             .json()
@@ -282,7 +362,7 @@ impl BzClient {
     /// Update a bug. Requires an API key. The body is a JSON object with fields to update.
     pub async fn update(&self, id: u64, body: &serde_json::Value) -> Result<(), reqwest::Error> {
         self.auth(self.client.put(self.url(&format!("bug/{id}"))))
-            .json(body)
+            .json(&self.authed_body(body))
             .send()
             .await?
             .error_for_status()?;
@@ -488,6 +568,36 @@ mod tests {
             rpmfusion.url("bug/12345"),
             "https://bugzilla.rpmfusion.org/rest.cgi/bug/12345"
         );
+        // A stock Bugzilla 5 ignores a bearer token, answering a
+        // write exactly as it answers an unauthenticated one.
+        let stock = BzClient::new("https://bugzilla.rpmfusion.org")
+            .with_rest_path("rest.cgi")
+            .with_stock_auth()
+            .with_api_key("secret".to_string())
+            .unwrap();
+        let req = stock
+            .auth(stock.client.get(stock.url("bug")))
+            .build()
+            .unwrap();
+        // Nothing on a read: a GET has no body to carry it, and the
+        // credential must not end up in a URL or a server's log.
+        assert_eq!(req.url().query(), None);
+        assert!(req.headers().get(reqwest::header::AUTHORIZATION).is_none());
+        // A write carries it in the body, which is what that version
+        // reads, alongside the caller's own fields.
+        let body = stock.authed_body(&serde_json::json!({"summary": "x"}));
+        assert_eq!(body["Bugzilla_api_key"], "secret");
+        assert_eq!(body["summary"], "x");
+        // Red Hat's takes the bearer token and leaves the body alone.
+        let fork = BzClient::new("https://bugzilla.redhat.com")
+            .with_api_key("secret".to_string())
+            .unwrap();
+        let req = fork.auth(fork.client.get(fork.url("bug"))).build().unwrap();
+        assert_eq!(req.url().query(), None);
+        assert!(req.headers().get(reqwest::header::AUTHORIZATION).is_some());
+        let body = fork.authed_body(&serde_json::json!({"summary": "x"}));
+        assert!(body.get("Bugzilla_api_key").is_none(), "{body}");
+
         // Slashes either side are the caller's convenience, not ours.
         assert_eq!(
             BzClient::new("https://b.example/")
@@ -495,6 +605,54 @@ mod tests {
                 .url("/bug"),
             "https://b.example/rest.cgi/bug"
         );
+    }
+
+    /// A Bugzilla that answers a create with one canned body.
+    async fn creating_answers(body: serde_json::Value) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn a_key_check_reads_the_refusal_not_the_http_status() {
+        // Bugzilla answers 200 with an error body, so the verdict is
+        // in the code: 306 is "that key is wrong", 410 is "you sent
+        // none" — which for a configured key means the same thing.
+        for code in [306, 410] {
+            let server = creating_answers(serde_json::json!({"error": true, "code": code})).await;
+            let bz = BzClient::new(&server.uri())
+                .with_api_key("k".to_string())
+                .unwrap();
+            assert!(
+                !bz.api_key_accepted().await.unwrap(),
+                "code {code} should read as refused"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_key_that_gets_as_far_as_the_missing_fields_is_accepted() {
+        // What an accepted key looks like: authentication passed and
+        // the complaint is about the empty bug, not the credential.
+        // Nothing is created, because every required field is absent.
+        let server = creating_answers(serde_json::json!({
+            "error": true,
+            "code": 106,
+            "message": "You must select/enter a product."
+        }))
+        .await;
+        let bz = BzClient::new(&server.uri())
+            .with_api_key("k".to_string())
+            .unwrap();
+        assert!(bz.api_key_accepted().await.unwrap());
+        // And with no key configured there is nothing to accept.
+        let bare = BzClient::new(&server.uri());
+        assert!(!bare.api_key_accepted().await.unwrap());
     }
 
     #[tokio::test]

@@ -138,7 +138,7 @@ pub struct StaleSideTag {
 }
 
 /// Result of checking a single reverse dependency.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct RevDepResult {
     /// "ok" or "broken".
     pub status: String,
@@ -148,7 +148,10 @@ pub struct RevDepResult {
 }
 
 /// Full result of the check-update command.
-#[derive(Debug, Serialize)]
+///
+/// `Clone` so a batch can hold each input's report until the RPM
+/// Fusion bug exists and the review comments can link it.
+#[derive(Clone, Debug, Serialize)]
 pub struct CheckUpdateReport {
     pub input: String,
     /// The fedrq branch the check ran against (`al9` for an EPEL 9
@@ -185,6 +188,11 @@ pub struct CheckUpdateReport {
     /// generic "no side tag" message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_reason: Option<SkipReason>,
+    /// Whether the update auto-pushes at the karma threshold, for an
+    /// input that is an existing Bodhi update. `None` for a side tag
+    /// or a COPR, where there is no update yet to have a setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autokarma: Option<bool>,
     pub reverse_deps: BTreeMap<String, RevDepResult>,
 }
 
@@ -584,7 +592,7 @@ pub(crate) fn check_update_with(
         InputKind::BodhiAlias(alias) => Some(alias),
         _ => None,
     };
-    let (side_tag, copr_spec, nvrs, branch, bodhi_branch, bodhi_status) =
+    let (side_tag, copr_spec, nvrs, branch, bodhi_branch, bodhi_status, bodhi_autokarma) =
         match detect_input_type(input) {
             InputKind::SideTag(tag) => {
                 let branch = match opts.branch.clone() {
@@ -607,7 +615,7 @@ pub(crate) fn check_update_with(
                         e
                     }
                 })?;
-                (Some(tag), None, nvrs, branch, None, None)
+                (Some(tag), None, nvrs, branch, None, None, None)
             }
             InputKind::BodhiAlias(alias) => {
                 let info = services.bodhi.update(&alias)?;
@@ -644,6 +652,7 @@ pub(crate) fn check_update_with(
                     branch,
                     info.release_branch,
                     Some(info.status),
+                    Some(info.autokarma),
                 )
             }
             InputKind::Copr { owner, project } => {
@@ -692,6 +701,7 @@ pub(crate) fn check_update_with(
                     Some(format!("{owner}/{project}")),
                     nvrs,
                     branch,
+                    None,
                     None,
                     None,
                 )
@@ -757,6 +767,7 @@ pub(crate) fn check_update_with(
             branch: branch.clone(),
             dist_branch: opts.testing_branch.clone(),
             repo: opts.repo.clone(),
+            autokarma: bodhi_autokarma,
             updated_packages: vec![],
             changes: vec![],
             full_analysis: side_tag.is_some() || copr_spec.is_some(),
@@ -932,6 +943,7 @@ pub(crate) fn check_update_with(
             stable.as_ref(),
             new_fq,
             opts,
+            bodhi_autokarma,
         );
     }
 
@@ -997,6 +1009,7 @@ pub(crate) fn check_update_with(
             stable.as_ref(),
             side_fq.as_ref(),
             opts,
+            bodhi_autokarma,
         );
     }
 
@@ -1045,6 +1058,7 @@ pub(crate) fn check_update_with(
                     stable.as_ref(),
                     local_fq.as_ref(),
                     opts,
+                    bodhi_autokarma,
                 );
             }
             Err(e) => eprintln!(
@@ -1106,6 +1120,7 @@ pub(crate) fn check_update_with(
         branch,
         dist_branch: opts.testing_branch.clone(),
         repo: opts.repo.clone(),
+        autokarma: bodhi_autokarma,
         updated_packages,
         changes,
         full_analysis: false,
@@ -2097,6 +2112,10 @@ pub(crate) struct BodhiUpdateInfo {
     pub(crate) release_branch: Option<String>,
     /// Update status ("pending", "testing", "stable", ...).
     pub(crate) status: String,
+    /// Whether the update pushes itself stable at the karma
+    /// threshold. Reported, never changed: an existing update
+    /// belongs to whoever submitted it.
+    pub(crate) autokarma: bool,
 }
 
 /// Fetch a Bodhi update and extract its key fields.
@@ -2120,6 +2139,7 @@ fn fetch_bodhi_update(alias: &str) -> Result<BodhiUpdateInfo, String> {
         release_name,
         release_branch,
         status: update.status,
+        autokarma: update.autokarma,
     })
 }
 
@@ -2461,6 +2481,7 @@ fn run_provides_analysis(
     stable_fedrq: &(dyn RepoQuery + Send + Sync),
     new_fedrq: &(dyn RepoQuery + Send + Sync),
     opts: &CheckUpdateOptions,
+    autokarma: Option<bool>,
 ) -> Result<CheckUpdateReport, String> {
     if opts.verbose {
         let updated_count = changed_provides.iter().filter(|c| c.is_updated()).count();
@@ -2505,6 +2526,7 @@ fn run_provides_analysis(
             branch: branch.to_string(),
             dist_branch: opts.testing_branch.clone(),
             repo: opts.repo.clone(),
+            autokarma,
             updated_packages: updated_packages.to_vec(),
             changes: changes.to_vec(),
             full_analysis: true,
@@ -2614,6 +2636,7 @@ fn run_provides_analysis(
         branch: branch.to_string(),
         dist_branch: opts.testing_branch.clone(),
         repo: opts.repo.clone(),
+        autokarma,
         updated_packages: updated_packages.to_vec(),
         changes: changes.to_vec(),
         full_analysis: true,
@@ -2854,6 +2877,7 @@ mod tests {
 
     fn skip_report(branch: &str, skip: SkipReason) -> CheckUpdateReport {
         CheckUpdateReport {
+            autokarma: None,
             input: "FEDORA-2026-test".to_string(),
             branch: branch.to_string(),
             dist_branch: None,
@@ -2941,6 +2965,7 @@ mod tests {
         reverse_deps: Vec<(&str, RevDepResult)>,
     ) -> CheckUpdateReport {
         CheckUpdateReport {
+            autokarma: None,
             input: "FEDORA-2026-test".to_string(),
             branch: "f44".to_string(),
             dist_branch: None,
@@ -3086,6 +3111,7 @@ mod tests {
     #[test]
     fn package_summary_groups_by_version_transition() {
         let report = CheckUpdateReport {
+            autokarma: None,
             input: "FEDORA-2026-x".to_string(),
             branch: "f43".to_string(),
             dist_branch: None,
@@ -3125,6 +3151,7 @@ mod tests {
     #[test]
     fn package_summary_names_small_groups() {
         let report = CheckUpdateReport {
+            autokarma: None,
             input: "x".to_string(),
             branch: "f43".to_string(),
             dist_branch: None,
@@ -3983,6 +4010,7 @@ mod tests {
         let mut result = broken("libfoo.so.1");
         result.issues[0].kind = BreakKind::Fti;
         CheckUpdateReport {
+            autokarma: None,
             input: "epel10.4-build-side-152994".to_string(),
             branch: "c10s".to_string(),
             dist_branch: Some("epel10.4".to_string()),
@@ -4157,6 +4185,7 @@ mod tests {
     impl BodhiQuery for FakeBodhi {
         fn update(&self, _alias: &str) -> Result<BodhiUpdateInfo, String> {
             Ok(BodhiUpdateInfo {
+                autokarma: false,
                 side_tag: self.0.side_tag.clone(),
                 nvrs: self.0.nvrs.clone(),
                 release_name: self.0.release_name.clone(),
@@ -4248,6 +4277,7 @@ mod tests {
 
     fn update_info(side_tag: Option<&str>, nvrs: &[&str], branch: Option<&str>) -> BodhiUpdateInfo {
         BodhiUpdateInfo {
+            autokarma: false,
             side_tag: side_tag.map(str::to_string),
             nvrs: nvrs.iter().map(|n| n.to_string()).collect(),
             release_name: None,

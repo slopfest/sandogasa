@@ -58,22 +58,30 @@ impl Counterparts {
         release: &str,
     ) -> Result<Self, String> {
         let inventory = sandogasa_inventory::load(inventory_path)?;
-        inventory.inventory.workloads.get(release).ok_or_else(|| {
-            format!(
-                "{inventory_path} has no packages for {release} — regenerate it \
-                     with `poi-tracker sync-rpmfusion --release {release}` (it has: {})",
-                match inventory.inventory.workloads.is_empty() {
-                    true => "nothing".to_string(),
-                    false => inventory
-                        .inventory
-                        .workloads
-                        .keys()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                }
-            )
-        })?;
+        let workloads = &inventory.inventory.workloads;
+        // A workload labelled with the release answers for it. That
+        // is how rawhide is reached: RPM Fusion calls it "rawhide" in
+        // their repo ids and in their Bugzilla's version list, while
+        // the update being checked is for f46, and `sync-rpmfusion`
+        // records the correspondence as a label rather than leaving
+        // every branched-release update to fail here.
+        let release = match workloads.contains_key(release) {
+            true => release.to_string(),
+            false => workloads
+                .iter()
+                .find(|(_, m)| m.labels.iter().flatten().any(|l| l == release))
+                .map(|(key, _)| key.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "{inventory_path} has no packages for {release} — regenerate it \
+                         with `poi-tracker sync-rpmfusion --release {release}` (it has: {})",
+                        match workloads.is_empty() {
+                            true => "nothing".to_string(),
+                            false => workloads.keys().cloned().collect::<Vec<_>>().join(", "),
+                        }
+                    )
+                })?,
+        };
         let shipped: BTreeMap<String, HashSet<String>> = inventory
             .inventory
             .workloads
@@ -92,7 +100,7 @@ impl Counterparts {
         Ok(Counterparts {
             shipped,
             renames,
-            release: release.to_string(),
+            release,
         })
     }
 
@@ -146,6 +154,14 @@ impl Counterparts {
 /// major, and a libheif update really does arrive as EPEL-10.2,
 /// EPEL-10.3 and EPEL-10.4 against the single `free-el-10`.
 pub fn workload_for_branch(branch: &str) -> Option<String> {
+    // Rawhide arrives spelled both ways and both have to land on the
+    // same workload: a Bodhi update for it reports the branch as
+    // "rawhide", while a side tag for it is f46-build-side-NNN and
+    // reports "f46". This handles the first; the second goes through
+    // the workload's label, which `sync-rpmfusion` records.
+    if branch == "rawhide" {
+        return Some(branch.to_string());
+    }
     if let Some(rest) = branch.strip_prefix("epel") {
         let major = rest.split_once('.').map_or(rest, |(major, _)| major);
         return (!major.is_empty() && major.chars().all(|c| c.is_ascii_digit()))
@@ -210,6 +226,33 @@ pub fn distgit_branches(rf: &str) -> Vec<String> {
     Vec::new()
 }
 
+/// The dist-git branch name for a release.
+///
+/// RPM Fusion keeps rawhide on `master`: their ref list for
+/// libheif-freeworld on 2026-10-12 ran el8/el9/el10 and f36 through
+/// f45, with no f46 and no rawhide, so `master` is what rawhide is
+/// developed on. Matching the release name alone reported "no branch"
+/// for a package they do in fact carry, which is the kind of wrong
+/// claim this bug exists to avoid making.
+fn distgit_branch_for(release: &str) -> &str {
+    match release {
+        "rawhide" => "master",
+        other => other,
+    }
+}
+
+/// The version without its dist tag (`1.23.6-1.fc43` → `1.23.6-1`).
+///
+/// One rebuild request covers every release, so naming the dist tag
+/// of whichever update happened to be checked first would date the
+/// whole bug to one of six releases.
+fn without_dist(evr: &str) -> &str {
+    match evr.rfind(".fc").or_else(|| evr.rfind(".el")) {
+        Some(at) => &evr[..at],
+        None => evr,
+    }
+}
+
 /// What RPM Fusion ships of `rf`, per release, and whether their
 /// dist-git is branched for it.
 pub fn survey(rf: &str, releases: &[&str], branches: &[String]) -> Vec<ReleaseState> {
@@ -227,7 +270,7 @@ pub fn survey(rf: &str, releases: &[&str], branches: &[String]) -> Vec<ReleaseSt
             ReleaseState {
                 release: (*release).to_string(),
                 shipped,
-                branched: branches.iter().any(|b| b == release),
+                branched: branches.iter().any(|b| b == distgit_branch_for(release)),
             }
         })
         .collect()
@@ -246,11 +289,12 @@ pub fn bug_body(
     fedora_evr: Option<&str>,
     states: &[ReleaseState],
     updates: &[String],
+    autopush_on: bool,
 ) -> String {
     use std::fmt::Write as _;
     let mut o = String::new();
     let moving = match fedora_evr {
-        Some(evr) => format!("{fedora} {evr}"),
+        Some(evr) => format!("{fedora} {}", without_dist(evr)),
         None => fedora.to_string(),
     };
     let _ = writeln!(
@@ -258,15 +302,29 @@ pub fn bug_body(
         "Fedora is shipping an update for {moving}, which {rf} is built against."
     );
     let _ = writeln!(o);
+    match autopush_on {
+        false => {
+            let _ = writeln!(
+                o,
+                "The update(s) below have auto-push disabled, so they will not reach"
+            );
+            let _ = writeln!(o, "stable before {rf} can be rebuilt.");
+        }
+        // Said rather than glossed: a maintainer deciding how
+        // urgently to rebuild needs to know the update is not being
+        // held back for them.
+        true => {
+            let _ = writeln!(
+                o,
+                "At least one update below still auto-pushes at its karma threshold,"
+            );
+            let _ = writeln!(o, "so it may reach stable before {rf} is rebuilt.");
+        }
+    }
     let _ = writeln!(
         o,
-        "The update(s) below have auto-push disabled, so they will not reach"
+        "If RPM Fusion's package is already at the new version, please ignore this."
     );
-    let _ = writeln!(
-        o,
-        "stable before {rf} can be rebuilt. If RPM Fusion's package is already"
-    );
-    let _ = writeln!(o, "at the new version, please ignore this.");
     let _ = writeln!(o);
     let _ = writeln!(o, "{rf} in RPM Fusion today:");
     let _ = writeln!(o);
@@ -327,12 +385,17 @@ pub fn bz_product(branch: &str) -> &'static str {
     }
 }
 
-/// The Bugzilla version field: the release number alone, as RPM
-/// Fusion's products list it (`43`, `10`).
+/// The Bugzilla version field, spelled as RPM Fusion's products
+/// list it.
+///
+/// The two products disagree, and both spellings are read from their
+/// Bugzilla rather than guessed: `Fedora` carries `f43`, `f44`, `f45`
+/// and `rawhide`, while `Fedora EPEL` carries the bare major `9`,
+/// `10`. So a Fedora workload passes through unchanged and an `el`
+/// one loses its prefix. Sending `43` for Fedora — the release number
+/// alone, as this first did — matches no version they offer.
 pub fn bz_version(release: &str) -> String {
-    release
-        .trim_start_matches(|c: char| !c.is_ascii_digit())
-        .to_string()
+    release.strip_prefix("el").unwrap_or(release).to_string()
 }
 
 /// One package's rebuild request, gathered across a whole batch.
@@ -351,6 +414,11 @@ pub struct Rebuild {
     pub branch: String,
     /// Every Bodhi update of the batch that touched the package.
     pub aliases: Vec<String>,
+    /// Whether any listed update still auto-pushes at its karma
+    /// threshold. The bug says what Fedora's side will do, and
+    /// promising a hold that is not in place is a promise to
+    /// somebody else about our own project.
+    pub autopush_on: bool,
 }
 
 /// The Bugzilla fields for one rebuild request.
@@ -369,12 +437,13 @@ pub fn bug_fields(
         evr,
         branch,
         aliases,
+        autopush_on,
     } = rebuild;
     // A package with no version to name still gets a usable summary
     // rather than one ending in a space.
     let summary = format!(
         "{rf}: rebuild for {fedora} {}",
-        evr.clone().unwrap_or_default()
+        evr.as_deref().map(without_dist).unwrap_or_default()
     )
     .trim_end()
     .to_string();
@@ -383,40 +452,146 @@ pub fn bug_fields(
         "component": rf,
         "version": bz_version(counterparts.release()),
         "summary": summary,
-        "description": bug_body(fedora, rf, evr.as_deref(), states, aliases),
+        "description": bug_body(fedora, rf, evr.as_deref(), states, aliases, *autopush_on),
     })
+}
+
+/// An open rebuild request already on this component, if there is
+/// one.
+///
+/// Filing is not idempotent and nothing else dedupes it, so a second
+/// run — or a second person with this tool — would ask RPM Fusion
+/// twice for the same work. Their tracker is not ours to litter.
+///
+/// Matched on the component plus the word "rebuild" in the summary,
+/// which finds a request a human wrote as well as one this tool did,
+/// while leaving unrelated open bugs on the package alone.
+async fn open_rebuild_request(
+    bz: &sandogasa_bugzilla::BzClient,
+    product: &str,
+    rf: &str,
+) -> Option<sandogasa_bugzilla::models::Bug> {
+    let query = format!(
+        "product={}&component={}&status=__open__",
+        product.replace(' ', "%20"),
+        rf
+    );
+    bz.search(&query, 50)
+        .await
+        .ok()?
+        .into_iter()
+        .find(|b| b.summary.to_lowercase().contains("rebuild"))
+}
+
+/// The note added to the review comment posted on a Bodhi update.
+///
+/// RPM Fusion users meet a Fedora update as a broken install — their
+/// counterpart is built against the old version — and say so on the
+/// update, sometimes with a -1. Saying it first, on the update
+/// itself, is the point: the reader learns that the pairing is known,
+/// that a rebuild is being asked for, and where to follow it.
+///
+/// `filed` maps a Fedora package to its bug URL. A counterpart with
+/// no entry is still worth stating, so a run without an account warns
+/// without linking rather than staying silent.
+pub fn comment_note(
+    counterparts: &[(String, String)],
+    filed: &BTreeMap<String, String>,
+    autopush: Option<bool>,
+) -> String {
+    use std::fmt::Write as _;
+    if counterparts.is_empty() {
+        return String::new();
+    }
+    let mut o = String::from("\n## RPM Fusion\n\n");
+    for (fedora, rf) in counterparts {
+        let _ = write!(
+            o,
+            "- `{rf}` is built against `{fedora}` and needs rebuilding \
+             before this reaches stable"
+        );
+        match filed.get(fedora) {
+            Some(url) => {
+                let _ = writeln!(o, " — tracked at {url}.");
+            }
+            None => {
+                let _ = writeln!(
+                    o,
+                    ". No rebuild request was filed from this run, so it is \
+                     not tracked anywhere yet."
+                );
+            }
+        }
+    }
+    match autopush {
+        // Reported, not corrected: an update that already exists
+        // belongs to whoever submitted it, and the reader is better
+        // placed to act than a tool reaching into their update.
+        Some(true) => {
+            let _ = writeln!(
+                o,
+                "\n**Auto-push is still enabled on this update**, so karma alone \
+                 can send it to stable before that rebuild lands. Consider \
+                 disabling it until then."
+            );
+        }
+        Some(false) => {
+            let _ = writeln!(
+                o,
+                "\nAuto-push is disabled on this update, so it cannot reach \
+                 stable on karma before that rebuild lands."
+            );
+        }
+        None => {}
+    }
+    o
 }
 
 /// File one bug per package that has an RPM Fusion counterpart.
 ///
-/// Returns the bug ids filed. Writes nothing when RPM Fusion's
-/// Bugzilla has no configured key: the point of the guard is the
-/// held auto-push, and a missing credential should not fail a submit
-/// that already succeeded.
-pub fn file_bugs(counterparts: &Counterparts, rebuilds: &[Rebuild], assume_yes: bool) -> Vec<u64> {
-    let Some(cfg) = crate::config::rpmfusion_bugzilla() else {
-        eprintln!(
-            "note: not filing with RPM Fusion — no [rpmfusion-bugzilla] api_key \
-             configured. The update's auto-push is still held."
-        );
-        return Vec::new();
+/// Returns the bug's URL for each Fedora package it filed for, so the
+/// review comment posted on the update can link it. Writes nothing
+/// when RPM Fusion's Bugzilla has no configured key: the point of the
+/// guard is the held auto-push, and a missing credential should not
+/// fail a submit that already succeeded.
+pub fn file_bugs(
+    counterparts: &Counterparts,
+    rebuilds: &[Rebuild],
+    assume_yes: bool,
+) -> BTreeMap<String, String> {
+    // Resolved before the loop but *not* returned on: without an
+    // account the bug is still worth rendering, because seeing what
+    // would be filed is how anyone decides whether to configure one.
+    // Reading the repositories and the ref list costs a second, and
+    // bailing here would spend it and show nothing.
+    let client = match crate::config::rpmfusion_bugzilla() {
+        None => {
+            eprintln!(
+                "note: no [rpmfusion-bugzilla] api_key configured — showing what \
+                 would be filed, and filing nothing. `ebranch config` sets one. \
+                 Any held auto-push stays held."
+            );
+            None
+        }
+        Some(cfg) => match sandogasa_bugzilla::BzClient::new(&cfg.url)
+            .with_rest_path(&cfg.rest_path)
+            .with_stock_auth()
+            .with_api_key(cfg.api_key.clone())
+        {
+            Ok(bz) => match tokio::runtime::Runtime::new() {
+                Ok(rt) => Some((bz, rt, cfg)),
+                Err(e) => {
+                    eprintln!("warning: no async runtime for filing with RPM Fusion: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                eprintln!("warning: RPM Fusion Bugzilla URL is not usable with a key: {e}");
+                None
+            }
+        },
     };
-    let Ok(bz) = sandogasa_bugzilla::BzClient::new(&cfg.url)
-        .with_rest_path(&cfg.rest_path)
-        .with_api_key(cfg.api_key.clone())
-    else {
-        eprintln!(
-            "warning: RPM Fusion Bugzilla URL is not usable with a key: {}",
-            cfg.url
-        );
-        return Vec::new();
-    };
-
-    let Ok(rt) = tokio::runtime::Runtime::new() else {
-        eprintln!("warning: no async runtime for filing with RPM Fusion");
-        return Vec::new();
-    };
-    let mut filed = Vec::new();
+    let mut filed = BTreeMap::new();
     for rebuild in rebuilds {
         let rf = &rebuild.rf;
         let releases = counterparts.releases_shipping(rf);
@@ -425,6 +600,33 @@ pub fn file_bugs(counterparts: &Counterparts, rebuilds: &[Rebuild], assume_yes: 
         let fields = bug_fields(counterparts, rebuild, &states);
         let said = |key| fields[key].as_str().unwrap_or_default();
         eprintln!("\n{}\n{}", said("summary"), said("description"));
+        let Some((bz, rt, cfg)) = client.as_ref() else {
+            continue;
+        };
+        // Already asked for? Then say what has changed since, rather
+        // than ask again. One open request per package is what their
+        // tracker wants; a second is noise for them and a split
+        // conversation for everyone.
+        let product = fields["product"].as_str().unwrap_or("Fedora");
+        if let Some(open) = rt.block_on(open_rebuild_request(bz, product, rf)) {
+            let url = format!("{}/show_bug.cgi?id={}", cfg.url, open.id);
+            eprintln!("already open, not filing again: {url} — {}", open.summary);
+            // Linked whether or not the comment goes on: the request
+            // exists, and the update should point at it.
+            filed.insert(rebuild.fedora.clone(), url.clone());
+            if !assume_yes
+                && !sandogasa_cli::confirm(&format!("add the above as a comment on {url}?"), true)
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            let comment = serde_json::json!({ "comment": { "body": said("description") } });
+            match rt.block_on(bz.update(open.id, &comment)) {
+                Ok(()) => eprintln!("commented on {url}"),
+                Err(e) => eprintln!("warning: commenting on {url} failed: {e}"),
+            }
+            continue;
+        }
         if !assume_yes
             && !sandogasa_cli::confirm(&format!("file this with RPM Fusion for {rf}?"), true)
                 .unwrap_or(false)
@@ -434,8 +636,9 @@ pub fn file_bugs(counterparts: &Counterparts, rebuilds: &[Rebuild], assume_yes: 
         match rt.block_on(bz.create(&fields)) {
             Ok(resp) => match resp.id {
                 Some(id) => {
-                    eprintln!("filed {}/show_bug.cgi?id={id}", cfg.url);
-                    filed.push(id);
+                    let url = format!("{}/show_bug.cgi?id={id}", cfg.url);
+                    eprintln!("filed {url}");
+                    filed.insert(rebuild.fedora.clone(), url);
                 }
                 None => eprintln!(
                     "warning: RPM Fusion did not create a bug for {rf}: {}",
@@ -537,8 +740,12 @@ mod tests {
             Some("1.23.6-1.fc43"),
             &states,
             &["FEDORA-2026-e9bb998784".to_string()],
+            false,
         );
-        assert!(body.contains("libheif 1.23.6-1.fc43"), "{body}");
+        // The dist tag is dropped: one request covers every release,
+        // so naming .fc43 would date the whole bug to one of them.
+        assert!(body.contains("libheif 1.23.6-1,"), "{body}");
+        assert!(!body.contains("1.23.6-1.fc43"), "{body}");
         assert!(body.contains("1.23.5-1.fc43"), "{body}");
         assert!(body.contains("branched"), "{body}");
         // A release RPM Fusion does not ship reads as absent, not as
@@ -557,6 +764,22 @@ mod tests {
     }
 
     #[test]
+    fn the_bug_does_not_promise_a_hold_that_is_not_in_place() {
+        // --rpmfusion-file can be pointed at an update nobody held
+        // back. Claiming otherwise is a promise to another project
+        // about our own, and the maintainer reading it is deciding
+        // how urgently to rebuild.
+        let held = bug_body("libheif", "libheif-freeworld", None, &[], &[], false);
+        assert!(held.contains("have auto-push disabled"), "{held}");
+        let loose = bug_body("libheif", "libheif-freeworld", None, &[], &[], true);
+        assert!(loose.contains("still auto-pushes"), "{loose}");
+        assert!(!loose.contains("auto-push disabled"), "{loose}");
+        // Either way the "ignore this if already done" line stays.
+        assert!(held.contains("please ignore this"), "{held}");
+        assert!(loose.contains("please ignore this"), "{loose}");
+    }
+
+    #[test]
     fn the_bug_still_reads_when_little_is_known() {
         // No version to name, nothing shipped anywhere, no updates to
         // link: the body must still say what it wants and why, rather
@@ -566,7 +789,7 @@ mod tests {
             shipped: None,
             branched: false,
         }];
-        let body = bug_body("libheif", "libheif-freeworld", None, &states, &[]);
+        let body = bug_body("libheif", "libheif-freeworld", None, &states, &[], false);
         assert!(
             body.contains("Fedora is shipping an update for libheif,"),
             "{body}"
@@ -581,7 +804,7 @@ mod tests {
         // An unshipped release shows a placeholder, not a blank.
         assert!(body.contains(" -  "), "{body}");
         // And with no releases at all it still renders a header row.
-        let none = bug_body("libheif", "libheif-freeworld", None, &[], &[]);
+        let none = bug_body("libheif", "libheif-freeworld", None, &[], &[], false);
         assert!(none.contains("release"), "{none}");
         assert!(none.contains("dist-git"), "{none}");
     }
@@ -681,6 +904,47 @@ vlc = \"vlc-plugins-freeworld\"
     }
 
     #[test]
+    fn a_labelled_workload_answers_for_the_release_it_names() {
+        // RPM Fusion calls rawhide "rawhide" in their repo ids and in
+        // their Bugzilla's versions, while the update being checked
+        // is for f46. The label carries the correspondence, so the
+        // check resolves instead of failing every branched-release
+        // update until someone re-pins the inventory.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("inventory.toml");
+        std::fs::write(
+            &path,
+            r#"
+[inventory]
+name = "rpmfusion"
+description = ""
+maintainer = ""
+labels = []
+private_fields = []
+
+[inventory.workloads.rawhide]
+description = "RPM Fusion packages for rawhide"
+labels = ["f46"]
+packages = ["libheif-freeworld"]
+
+[[package]]
+name = "libheif-freeworld"
+"#,
+        )
+        .unwrap();
+        let c = Counterparts::load(&path.to_string_lossy(), None, "f46").unwrap();
+        assert_eq!(c.of("libheif"), Some("libheif-freeworld"));
+        // The workload keeps its own name, which is what the bug's
+        // version field needs: their Fedora product offers "rawhide",
+        // never "f46".
+        assert_eq!(c.release(), "rawhide");
+        assert_eq!(bz_version(c.release()), "rawhide");
+        // An unlabelled release is still an error, so a stale
+        // inventory cannot quietly disable the guard.
+        assert!(Counterparts::load(&path.to_string_lossy(), None, "f47").is_err());
+    }
+
+    #[test]
     fn an_inventory_without_the_release_says_how_to_fix_it() {
         let dir = tempfile::tempdir().unwrap();
         let (inventory, renames) = written(dir.path());
@@ -716,12 +980,16 @@ vlc = \"vlc-plugins-freeworld\"
     #[test]
     fn the_bug_goes_to_the_product_the_branch_belongs_to() {
         // RPM Fusion's tracker mirrors Red Hat's layout, so an EPEL
-        // update files against Fedora EPEL and the version is the
-        // bare number their products list.
+        // update files against Fedora EPEL.
         assert_eq!(bz_product("f43"), "Fedora");
         assert_eq!(bz_product("epel10.4"), "Fedora EPEL");
-        assert_eq!(bz_version("f43"), "43");
+        // The versions are each product's own spelling, read from
+        // their Bugzilla: Fedora offers f43/f44/f45/rawhide and EPEL
+        // offers 8/9/10. A bare "43" matches nothing they have.
+        assert_eq!(bz_version("f43"), "f43");
+        assert_eq!(bz_version("rawhide"), "rawhide");
         assert_eq!(bz_version("el10"), "10");
+        assert_eq!(bz_version("el9"), "9");
     }
 
     #[test]
@@ -733,6 +1001,7 @@ vlc = \"vlc-plugins-freeworld\"
             evr: Some("1.23.6-1.fc43".to_string()),
             branch: "f43".to_string(),
             aliases: vec!["FEDORA-2026-e9bb998784".to_string()],
+            autopush_on: false,
         };
         let states = [ReleaseState {
             release: "f43".to_string(),
@@ -745,10 +1014,10 @@ vlc = \"vlc-plugins-freeworld\"
         // maintainer.
         assert_eq!(f["component"], "libheif-freeworld");
         assert_eq!(f["product"], "Fedora");
-        assert_eq!(f["version"], "43");
+        assert_eq!(f["version"], "f43");
         assert_eq!(
             f["summary"],
-            "libheif-freeworld: rebuild for libheif 1.23.6-1.fc43"
+            "libheif-freeworld: rebuild for libheif 1.23.6-1"
         );
         let body = f["description"].as_str().unwrap();
         assert!(body.contains("1.23.5-1.fc43"), "{body}");
@@ -766,6 +1035,7 @@ vlc = \"vlc-plugins-freeworld\"
             evr: None,
             branch: "epel10.4".to_string(),
             aliases: vec![],
+            autopush_on: false,
         };
         let f = bug_fields(&c, &rebuild, &[]);
         assert_eq!(f["summary"], "mesa-freeworld: rebuild for mesa");
@@ -787,6 +1057,77 @@ d4e5f6\trefs/heads/el10\n\
     }
 
     #[test]
+    fn the_update_comment_names_the_counterpart_and_links_its_bug() {
+        let found = [("libheif".to_string(), "libheif-freeworld".to_string())];
+        let filed = BTreeMap::from([(
+            "libheif".to_string(),
+            "https://bugzilla.rpmfusion.org/show_bug.cgi?id=7001".to_string(),
+        )]);
+        let note = comment_note(&found, &filed, Some(false));
+        assert!(note.contains("libheif-freeworld"), "{note}");
+        assert!(note.contains("show_bug.cgi?id=7001"), "{note}");
+        assert!(note.contains("Auto-push is disabled"), "{note}");
+    }
+
+    #[test]
+    fn the_comment_still_warns_when_no_bug_could_be_filed() {
+        // Without an account nothing is filed, but the warning is
+        // the useful half: an RPM Fusion user reading the update
+        // learns the pairing is known before hitting it.
+        let found = [("vlc".to_string(), "vlc-plugins-freeworld".to_string())];
+        let note = comment_note(&found, &BTreeMap::new(), None);
+        assert!(note.contains("vlc-plugins-freeworld"), "{note}");
+        assert!(note.contains("not tracked anywhere yet"), "{note}");
+        // Nothing claims an auto-push this run did not disable.
+        assert!(!note.contains("Auto-push"), "{note}");
+        // And an update with no counterpart gains no section at all.
+        assert!(comment_note(&[], &BTreeMap::new(), None).is_empty());
+    }
+
+    #[test]
+    fn an_update_that_still_auto_pushes_is_called_out() {
+        // The tool reports it and leaves it alone: an update that
+        // already exists belongs to whoever submitted it.
+        let found = [("libheif".to_string(), "libheif-freeworld".to_string())];
+        let note = comment_note(&found, &BTreeMap::new(), Some(true));
+        assert!(note.contains("Auto-push is still enabled"), "{note}");
+        assert!(note.contains("Consider disabling it"), "{note}");
+        // Never phrased as something this run did or will do.
+        assert!(!note.to_lowercase().contains("disabled it"), "{note}");
+    }
+
+    #[test]
+    fn rawhide_is_branched_as_master_in_their_dist_git() {
+        // Their ref list has el8/el9/el10 and f36..f45 and master —
+        // no f46, no rawhide. Matching on the release name alone
+        // printed "no branch" for a package they carry, which is a
+        // false claim to send another project.
+        assert_eq!(distgit_branch_for("rawhide"), "master");
+        assert_eq!(distgit_branch_for("f45"), "f45");
+        assert_eq!(distgit_branch_for("el9"), "el9");
+    }
+
+    #[test]
+    fn a_version_loses_its_dist_tag_but_keeps_its_release() {
+        // One request covers six releases, so the summary must not
+        // date itself to whichever update was checked first.
+        assert_eq!(without_dist("1.23.6-1.fc43"), "1.23.6-1");
+        assert_eq!(without_dist("1.23.6-1.el10_3"), "1.23.6-1");
+        // A version that carries no dist tag is left alone rather
+        // than truncated at the first dot.
+        assert_eq!(without_dist("1.23.6-1"), "1.23.6-1");
+    }
+
+    #[test]
+    fn rawhide_is_reached_by_either_spelling() {
+        // A Bodhi rawhide update says "rawhide"; a side tag for the
+        // same thing is f46-build-side-NNN and says "f46". Both must
+        // reach the one workload RPM Fusion publishes for rawhide.
+        assert_eq!(workload_for_branch("rawhide").as_deref(), Some("rawhide"));
+        assert_eq!(workload_for_branch("f46").as_deref(), Some("f46"));
+    }
+
+    #[test]
     fn a_branch_names_the_release_rpm_fusion_builds_for() {
         assert_eq!(workload_for_branch("f43").as_deref(), Some("f43"));
         // RPM Fusion builds for EL, not EPEL, and spells it so.
@@ -797,9 +1138,7 @@ d4e5f6\trefs/heads/el10\n\
         // all three face the same free-el-10.
         assert_eq!(workload_for_branch("epel10.3").as_deref(), Some("el10"));
         assert_eq!(workload_for_branch("epel10.4").as_deref(), Some("el10"));
-        // Rawhide takes no Bodhi updates, so it never reaches here;
-        // anything unrecognised declines rather than guessing.
-        assert_eq!(workload_for_branch("rawhide"), None);
+        // Anything unrecognised declines rather than guessing.
         assert_eq!(workload_for_branch("epel"), None);
         assert_eq!(workload_for_branch("f"), None);
     }
