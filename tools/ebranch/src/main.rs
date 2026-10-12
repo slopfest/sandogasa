@@ -919,6 +919,20 @@ fn exit_code(result: Result<(), String>) -> ExitCode {
 /// ships a package for one release and not another.
 type RpmfusionFound = (rpmfusion::Counterparts, Vec<(String, String)>);
 
+/// What an input refers to, independent of how it was written.
+///
+/// A batch is deduplicated on this rather than on the text given, so
+/// a bare alias and its Bodhi URL count as the one update they are.
+/// Analysing an update twice would also comment on it twice, and file
+/// against RPM Fusion listing it twice.
+fn input_identity(kind: &check_update::InputKind) -> String {
+    match kind {
+        check_update::InputKind::BodhiAlias(alias) => format!("update {alias}"),
+        check_update::InputKind::SideTag(tag) => format!("side tag {tag}"),
+        check_update::InputKind::Copr { owner, project } => format!("copr {owner}/{project}"),
+    }
+}
+
 /// A review comment held back until the RPM Fusion bug exists.
 ///
 /// The comment has to name the counterpart and link its rebuild
@@ -1251,8 +1265,18 @@ fn main() -> ExitCode {
         // failure this command exists to avoid.
         let mut planned: Vec<(&String, Option<String>, Option<String>)> = Vec::new();
         let mut needs_koji = false;
+        // What has already been planned, by what the input *is*
+        // rather than how it was written: a bare alias and its Bodhi
+        // URL are one update, and analysing it twice would also
+        // comment on it twice.
+        let mut already: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for input in &a.input {
             let input_kind = check_update::detect_input_type(input);
+            let identity = input_identity(&input_kind);
+            if !already.insert(identity.clone()) {
+                eprintln!("note: skipping {input} — {identity} is already in this run");
+                continue;
+            }
             // check-update needs koji for side tag queries — which
             // Bodhi input may also trigger (side-tag-backed updates).
             // COPR input never touches koji.
@@ -1371,6 +1395,8 @@ fn main() -> ExitCode {
         // Review comments, posted once the RPM Fusion bug they link
         // has been filed.
         let mut comments: Vec<PendingComment> = Vec::new();
+        // Counterpart pairings already named on stdout this run.
+        let mut announced: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         let mut overall = ExitCode::SUCCESS;
         // A failure stops the batch but does not abandon it: the
         // loop breaks rather than returning, so whatever was already
@@ -1395,11 +1421,19 @@ fn main() -> ExitCode {
                     let rpmfusion = match a.rpmfusion_inventory.as_deref() {
                         Some(path) => match rpmfusion_counterparts(path, a, &report) {
                             Ok((counterparts, found)) => {
+                                // Once per pairing, not once per input:
+                                // a batch carrying one change across
+                                // seven updates names the same
+                                // counterpart seven times, and after
+                                // the first it is noise. A run of one
+                                // update still prints it where it did.
                                 for (fedora, rf) in &found {
-                                    println!(
-                                        "RPM Fusion ships a counterpart: {fedora} -> {rf} \
-                                     (rebuild it before this goes stable)"
-                                    );
+                                    if announced.insert(format!("{fedora} -> {rf}")) {
+                                        println!(
+                                            "RPM Fusion ships a counterpart: {fedora} -> {rf} \
+                                             (rebuild it before this goes stable)"
+                                        );
+                                    }
                                 }
                                 // Said here as well as in the comment: the
                                 // operator is who can act on it, and they
@@ -1610,6 +1644,12 @@ fn main() -> ExitCode {
                 c.autopush,
             ));
             for alias in &c.aliases {
+                // Which update is being voted on, before the
+                // questions rather than after them: these all run
+                // together at the end of a batch, so without this the
+                // bug-feedback prompts arrive with no idea which of
+                // seven updates they belong to.
+                eprintln!("\n── {alias} ({}) ──", c.report.dist_branch());
                 if let Err(e) = karma::run(alias, &c.report, &body, a.comment.clone(), a.yes) {
                     eprintln!("error: posting the review comment on {alias} failed: {e}");
                     overall = ExitCode::FAILURE;
@@ -2150,6 +2190,32 @@ fn print_cycles(cycles: &[dag::Cycle], closure: &resolve::Closure) {
 
 #[cfg(test)]
 mod tests {
+    use super::input_identity;
+    use crate::check_update::detect_input_type;
+
+    #[test]
+    fn one_update_written_two_ways_is_one_input() {
+        // A batch is deduplicated on what an input refers to, not on
+        // its text, so pasting a URL beside the alias it contains
+        // does not analyse the update twice — which would comment on
+        // it twice and list it twice in the RPM Fusion bug.
+        let bare = input_identity(&detect_input_type("FEDORA-2026-e9bb998784"));
+        let url = input_identity(&detect_input_type(
+            "https://bodhi.fedoraproject.org/updates/FEDORA-2026-e9bb998784",
+        ));
+        assert_eq!(bare, url);
+        // Different updates stay different.
+        assert_ne!(
+            bare,
+            input_identity(&detect_input_type("FEDORA-2026-0ba06812ef"))
+        );
+        // As do the other input kinds, which share no namespace with
+        // an alias even if the text were to collide.
+        let tag = input_identity(&detect_input_type("f45-build-side-1"));
+        assert_ne!(tag, bare);
+        assert_eq!(tag, input_identity(&detect_input_type("f45-build-side-1")));
+    }
+
     /// The committed man page is generated from this CLI; see
     /// `sandogasa_cli::man` and `scripts/gen-man.sh`.
     #[test]

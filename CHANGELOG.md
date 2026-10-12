@@ -36,6 +36,29 @@ Every guess is checked against the inventory before it counts, so the
 rule can be generous without inventing packages, and a stale table
 entry degrades to "no counterpart" rather than to a wrong bug.
 
+### ebranch: a batch you can follow
+
+Three things made a seven-update run harder to follow than it needed
+to be.
+
+The bug-feedback prompts arrived with no indication of which update
+they belonged to. Comments post after the batch so each can link the
+rebuild request, which also moves them away from the per-input headers
+the analysis printed; each round now opens with the alias and its dist
+branch. Being asked to vote three times without knowing which of seven
+updates is being voted on is how a reviewer starts rubber-stamping.
+
+A batch carrying one change named the same counterpart once per
+update — seven times for seven updates. Said once per pairing now; a
+single-update run prints it exactly where it did.
+
+An input list was taken at face value, so the same update written two
+ways — a bare alias and its Bodhi URL — was analysed twice, would have
+been commented on twice, and would have been listed twice in the
+request filed with RPM Fusion. Inputs are deduplicated on what they
+refer to rather than on their text, and the run says which repeat it
+dropped.
+
 ### ebranch: the RPM Fusion bug could never have been filed
 
 Filing came back "You must log in before using this part of Bugzilla"
