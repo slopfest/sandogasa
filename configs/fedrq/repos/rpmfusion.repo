@@ -88,3 +88,21 @@ gpgkey=file:///usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-n
 gpgcheck=1
 repo_gpgcheck=0
 enabled=0
+
+[rpmfusion-free-el-testing]
+name=RPM Fusion for EL $releasever - Free - Updates Testing
+metalink=https://mirrors.rpmfusion.org/metalink?repo=free-el-updates-testing-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-free-el-$releasever
+gpgcheck=1
+repo_gpgcheck=0
+skip_if_unavailable=1
+enabled=0
+
+[rpmfusion-nonfree-el-testing]
+name=RPM Fusion for EL $releasever - Nonfree - Updates Testing
+metalink=https://mirrors.rpmfusion.org/metalink?repo=nonfree-el-updates-testing-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-nonfree-el-$releasever
+gpgcheck=1
+repo_gpgcheck=0
+skip_if_unavailable=1
+enabled=0

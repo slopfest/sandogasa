@@ -75,3 +75,12 @@ system_repos = false
 defs.base = ["rpmfusion-free-el", "rpmfusion-nonfree-el"]
 defs.free = ["rpmfusion-free-el"]
 defs.nonfree = ["rpmfusion-nonfree-el"]
+
+# EL has updates-testing too, which the Fedora side has had all along.
+# Without it a rebuild sitting in their testing repo reads as absent,
+# and the bug asks for work already done.
+defs.testing = [
+    "@base",
+    "rpmfusion-free-el-testing",
+    "rpmfusion-nonfree-el-testing",
+]

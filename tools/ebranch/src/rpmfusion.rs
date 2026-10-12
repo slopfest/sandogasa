@@ -177,8 +177,13 @@ pub struct ReleaseState {
     pub release: String,
     /// The version-release RPM Fusion currently ships, when it does.
     pub shipped: Option<String>,
-    /// Whether their dist-git has a branch for it.
-    pub branched: bool,
+    /// The version-release in their updates-testing, when it holds
+    /// something the stable repository does not.
+    pub testing: Option<String>,
+    /// The `Version:` in their dist-git branch's spec, when there is
+    /// a branch. Work committed but not yet built reads here and
+    /// nowhere else.
+    pub distgit: Option<String>,
 }
 
 /// Where RPM Fusion's dist-git serves git over HTTP.
@@ -192,42 +197,100 @@ pub struct ReleaseState {
 /// in dist-git could be read as well (not done here).
 const DISTGIT: &str = "https://pkgs.rpmfusion.org/git";
 
-/// The branches RPM Fusion's dist-git has for a package.
+/// The `Version:` in each dist-git branch's spec, by branch name.
+///
+/// One bare `--depth 1 --no-single-branch` clone covers every branch
+/// at once — 0.25 s for libheif-freeworld — so this costs less than
+/// the ref list it replaces while saying far more. A counterpart
+/// already committed at the new version is waiting on a build, not on
+/// somebody noticing; "branched" could not tell those apart.
 ///
 /// The namespace is not recorded in the inventory (both halves answer
 /// the same question), so free is tried first and nonfree second. A
-/// failure is not an error: the table simply says nothing about
-/// branches, which is better than failing a submit over a git probe.
-/// The branch names in `git ls-remote --heads` output.
+/// failure is not an error: the column simply says nothing, which is
+/// better than failing a submit over a git probe.
+pub fn distgit_versions(rf: &str) -> BTreeMap<String, String> {
+    distgit_versions_at(DISTGIT, rf)
+}
+
+/// [`distgit_versions`] against a given base, so a test can point it
+/// at repositories on disk: `git clone` takes a local path, and the
+/// failure worth guarding is silent — a clone that stops working
+/// returns nothing, and every release then reads "no branch" in a bug
+/// sent to another project.
+fn distgit_versions_at(base: &str, rf: &str) -> BTreeMap<String, String> {
+    let Ok(dir) = tempfile::tempdir() else {
+        return BTreeMap::new();
+    };
+    for namespace in ["free", "nonfree"] {
+        let url = format!("{base}/{namespace}/{rf}.git");
+        let repo = dir.path().join(namespace);
+        let cloned = std::process::Command::new("git")
+            .args([
+                "clone",
+                "--quiet",
+                "--bare",
+                "--depth",
+                "1",
+                "--no-single-branch",
+            ])
+            .arg(&url)
+            .arg(&repo)
+            .output();
+        if !matches!(cloned, Ok(ref out) if out.status.success()) {
+            continue;
+        }
+        let versions = versions_in(&repo, rf);
+        if !versions.is_empty() {
+            return versions;
+        }
+    }
+    BTreeMap::new()
+}
+
+/// The `Version:` on every branch of an already-cloned bare repo.
 ///
-/// Split out so the parsing is tested without a remote: the ref lines
-/// are `<sha>\trefs/heads/<branch>`, and anything else (an advertised
-/// capability line, a tag) carries no `refs/heads/` and is dropped.
-fn heads(stdout: &str) -> Vec<String> {
-    stdout
+/// Split from the clone so it can be tested against a repository made
+/// on disk, with no network: the rule worth guarding is which branch
+/// maps to which version, not that `git clone` works.
+fn versions_in(repo: &std::path::Path, rf: &str) -> BTreeMap<String, String> {
+    let Ok(refs) = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(repo)
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+        .output()
+    else {
+        return BTreeMap::new();
+    };
+    String::from_utf8_lossy(&refs.stdout)
         .lines()
-        .filter_map(|l| l.rsplit_once("refs/heads/").map(|(_, b)| b.to_string()))
+        .filter_map(|branch| {
+            let branch = branch.trim();
+            let show = std::process::Command::new("git")
+                .arg("--git-dir")
+                .arg(repo)
+                .arg("show")
+                .arg(format!("{branch}:{rf}.spec"))
+                .output()
+                .ok()?;
+            let version = spec_version(&String::from_utf8_lossy(&show.stdout))?;
+            Some((branch.to_string(), version))
+        })
         .collect()
 }
 
-pub fn distgit_branches(rf: &str) -> Vec<String> {
-    for namespace in ["free", "nonfree"] {
-        let url = format!("{DISTGIT}/{namespace}/{rf}.git");
-        let Ok(out) = std::process::Command::new("git")
-            .args(["ls-remote", "--heads", &url])
-            .output()
-        else {
-            return Vec::new();
-        };
-        if !out.status.success() {
-            continue;
-        }
-        let branches = heads(&String::from_utf8_lossy(&out.stdout));
-        if !branches.is_empty() {
-            return branches;
-        }
-    }
-    Vec::new()
+/// The `Version:` a spec declares, if it declares a plain one.
+///
+/// A spec whose version is a macro (`%{upstream_version}`) yields
+/// nothing rather than the macro text — an unexpanded `%{...}` in a
+/// bug sent to another project is worse than an empty column.
+fn spec_version(spec: &str) -> Option<String> {
+    let value = spec
+        .lines()
+        .find_map(|l| l.strip_prefix("Version:"))?
+        .trim()
+        .to_string();
+    (!value.is_empty() && !value.contains('%')).then_some(value)
 }
 
 /// The dist-git branch name for a release.
@@ -258,23 +321,35 @@ fn without_dist(evr: &str) -> &str {
 }
 
 /// What RPM Fusion ships of `rf`, per release, and whether their
-/// dist-git is branched for it.
-pub fn survey(rf: &str, releases: &[&str], branches: &[String]) -> Vec<ReleaseState> {
+/// dist-git holds for it.
+pub fn survey(
+    rf: &str,
+    releases: &[&str],
+    distgit: &BTreeMap<String, String>,
+) -> Vec<ReleaseState> {
+    let vr = |release: &str, repo: Option<&str>| {
+        sandogasa_fedrq::Fedrq {
+            branch: Some(format!("rpmfusion-{release}")),
+            repo: repo.map(str::to_string),
+        }
+        .pkgs_source_vr(&[rf])
+        .ok()
+        .and_then(|rows| rows.into_iter().next().map(|(_, v)| v))
+    };
     releases
         .iter()
         .map(|release| {
-            let fedrq = sandogasa_fedrq::Fedrq {
-                branch: Some(format!("rpmfusion-{release}")),
-                repo: None,
-            };
-            let shipped = fedrq
-                .pkgs_source_vr(&[rf])
-                .ok()
-                .and_then(|rows| rows.into_iter().next().map(|(_, vr)| vr));
+            let shipped = vr(release, None);
+            // `testing` includes the stable repos, so it answers with
+            // whichever is newer. Reported only when it differs, so
+            // the column says "there is something in testing" rather
+            // than repeating the released version on every row.
+            let testing = vr(release, Some("testing")).filter(|t| Some(t) != shipped.as_ref());
             ReleaseState {
                 release: (*release).to_string(),
                 shipped,
-                branched: branches.iter().any(|b| b == distgit_branch_for(release)),
+                testing,
+                distgit: distgit.get(distgit_branch_for(release)).cloned(),
             }
         })
         .collect()
@@ -344,17 +419,19 @@ pub fn bug_body(
         .max()
         .unwrap_or(7)
         .max(7);
-    let _ = writeln!(o, "  {:<width$}  {:<20}  dist-git", "release", "shipped");
+    let _ = writeln!(
+        o,
+        "  {:<width$}  {:<20}  {:<20}  dist-git",
+        "release", "shipped", "testing"
+    );
     for s in states {
         let _ = writeln!(
             o,
-            "  {:<width$}  {:<20}  {}",
+            "  {:<width$}  {:<20}  {:<20}  {}",
             s.release,
             s.shipped.as_deref().unwrap_or("-"),
-            match s.branched {
-                true => "branched",
-                false => "no branch",
-            }
+            s.testing.as_deref().unwrap_or("-"),
+            s.distgit.as_deref().unwrap_or("no branch"),
         );
     }
     if !updates.is_empty() {
@@ -376,13 +453,18 @@ Fedora update(s):
     // The remote, not a page: RPM Fusion's cgit answers 404 for
     // every path including its own index, so a bare host URL in a
     // bug sent to them is a broken link. Name the command instead.
-    let _ = writeln!(o, "Fusion's own repositories, the dist-git column from");
-    let _ = writeln!(o, "  git ls-remote {DISTGIT}/{{free,nonfree}}/{rf}.git");
     let _ = writeln!(
         o,
-        "Neither shows a build that exists but has not been released, which"
+        "Fusion's own repositories, updates-testing included; the dist-git"
     );
-    let _ = writeln!(o, "needs access this tool does not have.");
+    let _ = writeln!(o, "column is the Version: in each branch's spec, read with");
+    let _ = writeln!(o, "  git clone --bare --depth 1 --no-single-branch \\");
+    let _ = writeln!(o, "    {DISTGIT}/{{free,nonfree}}/{rf}.git");
+    let _ = writeln!(
+        o,
+        "A build that exists but has not reached updates-testing appears in"
+    );
+    let _ = writeln!(o, "none of them, and needs access this tool does not have.");
     o
 }
 
@@ -566,6 +648,65 @@ pub fn comment_note(
     o
 }
 
+/// Whether the newest comment already says exactly this.
+///
+/// Re-running on an unchanged update would otherwise repeat the
+/// table verbatim under the one above it. A body that differs —
+/// their repositories moved, another update joined the batch — is
+/// worth saying; the same body twice is noise on somebody else's bug.
+///
+/// The whole body is compared, so changing the wording of the text
+/// around the table counts as a change and costs one extra comment
+/// the first time a run follows such an edit. Comparing only the
+/// state would avoid that, but it would mean parsing a table back
+/// out of a comment somebody may have edited, and being wrong in
+/// that direction means staying silent when there was something to
+/// say.
+///
+/// Unreadable comments mean "say it": a failed read is not evidence
+/// that the thing was already said.
+fn said_already(
+    bz: &sandogasa_bugzilla::BzClient,
+    rt: &tokio::runtime::Runtime,
+    bug: u64,
+    body: &str,
+) -> bool {
+    rt.block_on(bz.comments(bug))
+        .ok()
+        .and_then(|cs| cs.last().map(|c| c.text.trim() == body.trim()))
+        .unwrap_or(false)
+}
+
+/// Whether to go ahead with a write, asking only when somebody can
+/// answer.
+///
+/// `confirm` reads a line from stdin and takes the default on an
+/// empty one, so at EOF — a pipe, a script, a background run — a
+/// prompt defaulting to yes silently becomes a yes. That is how a run
+/// meant as a preview posted a comment on another project's tracker.
+/// Without a terminal the answer is no, and the run says what it
+/// skipped.
+fn agreed(question: &str, writes: Writes) -> bool {
+    if writes.dry_run {
+        eprintln!(
+            "would, but for --dry-run: {}",
+            question.trim_end_matches('?')
+        );
+        return false;
+    }
+    if writes.assume_yes {
+        return true;
+    }
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!(
+            "nothing written: \"{}\" needs a terminal to answer, or -y to proceed",
+            question.trim_end_matches('?')
+        );
+        return false;
+    }
+    sandogasa_cli::confirm(question, true).unwrap_or(false)
+}
+
 /// File one bug per package that has an RPM Fusion counterpart.
 ///
 /// Returns the bug's URL for each Fedora package it filed for, so the
@@ -573,10 +714,26 @@ pub fn comment_note(
 /// when RPM Fusion's Bugzilla has no configured key: the point of the
 /// guard is the held auto-push, and a missing credential should not
 /// fail a submit that already succeeded.
+/// How far a run may go.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Writes {
+    /// Answer the prompts instead of asking.
+    pub assume_yes: bool,
+    /// Do everything except send: the duplicate check still runs, the
+    /// bug or comment is still rendered, and the run says what it
+    /// would have written and where.
+    ///
+    /// There was no way to see this short of having no account
+    /// configured, which stopped being a dry run the moment one was
+    /// — and that is how a run meant as a preview put a comment on
+    /// another project's tracker.
+    pub dry_run: bool,
+}
+
 pub fn file_bugs(
     counterparts: &Counterparts,
     rebuilds: &[Rebuild],
-    assume_yes: bool,
+    writes: Writes,
 ) -> BTreeMap<String, String> {
     // Resolved before the loop but *not* returned on: without an
     // account the bug is still worth rendering, because seeing what
@@ -614,8 +771,7 @@ pub fn file_bugs(
     for rebuild in rebuilds {
         let rf = &rebuild.rf;
         let releases = counterparts.releases_shipping(rf);
-        let branches = distgit_branches(rf);
-        let states = survey(rf, &releases, &branches);
+        let states = survey(rf, &releases, &distgit_versions(rf));
         let fields = bug_fields(counterparts, rebuild, &states);
         let said = |key| fields[key].as_str().unwrap_or_default();
         eprintln!("\n{}\n{}", said("summary"), said("description"));
@@ -633,10 +789,15 @@ pub fn file_bugs(
             // Linked whether or not the comment goes on: the request
             // exists, and the update should point at it.
             filed.insert(rebuild.fedora.clone(), url.clone());
-            if !assume_yes
-                && !sandogasa_cli::confirm(&format!("add the above as a comment on {url}?"), true)
-                    .unwrap_or(false)
-            {
+            // Nothing to add if the last thing said is still true.
+            // The duplicate check keeps a second *bug* off their
+            // tracker; without this, a re-run would still add a
+            // comment identical to the one above it.
+            if said_already(bz, rt, open.id, said("description")) {
+                eprintln!("no change since the last comment on {url}; saying nothing");
+                continue;
+            }
+            if !agreed(&format!("add the above as a comment on {url}?"), writes) {
                 continue;
             }
             let comment = serde_json::json!({ "comment": { "body": said("description") } });
@@ -646,10 +807,7 @@ pub fn file_bugs(
             }
             continue;
         }
-        if !assume_yes
-            && !sandogasa_cli::confirm(&format!("file this with RPM Fusion for {rf}?"), true)
-                .unwrap_or(false)
-        {
+        if !agreed(&format!("file this with RPM Fusion for {rf}?"), writes) {
             continue;
         }
         match rt.block_on(bz.create(&fields)) {
@@ -745,12 +903,15 @@ mod tests {
             ReleaseState {
                 release: "f43".to_string(),
                 shipped: Some("1.23.5-1.fc43".to_string()),
-                branched: true,
+                testing: None,
+                distgit: Some("1.23.6".to_string()),
             },
             ReleaseState {
                 release: "el10".to_string(),
                 shipped: None,
-                branched: false,
+
+                testing: None,
+                distgit: None,
             },
         ];
         let body = bug_body(
@@ -773,7 +934,12 @@ mod tests {
         assert!(!body.contains("built against"), "{body}");
         assert!(!body.contains("1.23.6-1.fc43"), "{body}");
         assert!(body.contains("1.23.5-1.fc43"), "{body}");
-        assert!(body.contains("branched"), "{body}");
+        // The dist-git column carries the version committed there,
+        // not merely that a branch exists: a counterpart already at
+        // the new version is waiting on a build, and asking for work
+        // that is done reads as not having looked.
+        assert!(body.contains("1.23.6"), "{body}");
+        assert!(body.contains("testing"), "{body}");
         // A release RPM Fusion does not ship reads as absent, not as
         // an empty column.
         assert!(body.contains("no branch"), "{body}");
@@ -782,8 +948,15 @@ mod tests {
             "{body}"
         );
         // Says plainly what it cannot see, so nobody reads the table
-        // as "nothing is built".
-        assert!(body.contains("has not been released"), "{body}");
+        // as "nothing is built". The blind spot is now narrow — only
+        // a build that has not reached updates-testing — because the
+        // testing column shows the rest.
+        assert!(body.contains("has not reached updates-testing"), "{body}");
+        // And the provenance names the method actually used: this
+        // said `git ls-remote` for a while after the column started
+        // coming from a clone of the spec.
+        assert!(body.contains("git clone --bare"), "{body}");
+        assert!(!body.contains("ls-remote"), "{body}");
         // And it tells them auto-push is already held, which is the
         // reassurance that makes the bug worth reading.
         assert!(body.contains("auto-push disabled"), "{body}");
@@ -813,7 +986,9 @@ mod tests {
         let states = vec![ReleaseState {
             release: "f43".to_string(),
             shipped: None,
-            branched: false,
+
+            testing: None,
+            distgit: None,
         }];
         let body = bug_body("libheif", "libheif-freeworld", None, &states, &[], false);
         assert!(
@@ -1032,7 +1207,8 @@ name = "libheif-freeworld"
         let states = [ReleaseState {
             release: "f43".to_string(),
             shipped: Some("1.23.5-1.fc43".to_string()),
-            branched: true,
+            testing: None,
+            distgit: Some("1.23.6".to_string()),
         }];
         let f = bug_fields(&c, &rebuild, &states);
         // The bug is filed against RPM Fusion's package, not Fedora's
@@ -1073,19 +1249,6 @@ name = "libheif-freeworld"
     }
 
     #[test]
-    fn only_heads_are_read_from_a_ref_listing() {
-        // What `git ls-remote --heads` prints, plus the kind of line
-        // that is not a branch: neither a tag nor a capability line
-        // may be reported as one.
-        let out = "\
-a1b2c3\trefs/heads/f43\n\
-d4e5f6\trefs/heads/el10\n\
-99aabb\trefs/tags/v1.0\n";
-        assert_eq!(heads(out), ["f43", "el10"]);
-        assert!(heads("").is_empty());
-    }
-
-    #[test]
     fn the_update_comment_names_the_counterpart_and_links_its_bug() {
         let found = [("libheif".to_string(), "libheif-freeworld".to_string())];
         let filed = BTreeMap::from([(
@@ -1123,6 +1286,205 @@ d4e5f6\trefs/heads/el10\n\
         assert!(note.contains("Consider disabling it"), "{note}");
         // Never phrased as something this run did or will do.
         assert!(!note.to_lowercase().contains("disabled it"), "{note}");
+    }
+
+    #[test]
+    fn a_comment_that_repeats_the_one_above_it_is_not_posted() {
+        // The duplicate check keeps a second *bug* off their
+        // tracker; this keeps a second identical *comment* off the
+        // first one. Re-running on an unchanged update otherwise
+        // repeats the table verbatim.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (server, bz) = rt.block_on(async {
+            use wiremock::matchers::{method, path};
+            use wiremock::{Mock, MockServer, ResponseTemplate};
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/rest/bug/7564/comment"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "bugs": {"7564": {"comments": [
+                        {"id": 1, "text": "an older note", "creator": "a",
+                         "creation_time": "2026-10-12T19:13:19Z", "is_private": false},
+                        {"id": 2, "text": "the current table\n", "creator": "a",
+                         "creation_time": "2026-10-12T20:16:12Z", "is_private": false}
+                    ]}}
+                })))
+                .mount(&server)
+                .await;
+            let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
+            (server, bz)
+        });
+        let _server = server;
+        // Matching the newest comment means there is nothing to add,
+        // trailing whitespace aside.
+        assert!(said_already(&bz, &rt, 7564, "the current table"));
+        // Matching an older one does not: the state moved away and
+        // back, which is worth saying.
+        assert!(!said_already(&bz, &rt, 7564, "an older note"));
+        // And anything new is worth saying.
+        assert!(!said_already(&bz, &rt, 7564, "their repos moved"));
+    }
+
+    #[test]
+    fn nothing_is_written_when_there_is_nobody_to_ask() {
+        // Tests have no terminal, which is the case this guards:
+        // `confirm` returns its default on an empty line, so at EOF a
+        // prompt defaulting to yes used to mean yes. A run meant as a
+        // preview put a comment on another project's tracker that
+        // way.
+        assert!(!agreed("file this?", Writes::default()));
+        // -y is the deliberate way to do it unattended, and still
+        // works without a terminal.
+        let yes = Writes {
+            assume_yes: true,
+            dry_run: false,
+        };
+        assert!(agreed("file this?", yes));
+        // A dry run declines even under -y: it exists to show what
+        // would happen, and the one way to check that safely must not
+        // depend on getting another flag right.
+        let dry = Writes {
+            assume_yes: true,
+            dry_run: true,
+        };
+        assert!(!agreed("file this?", dry));
+    }
+
+    /// A bare repo at `<base>/<namespace>/<rf>.git` with one branch
+    /// per (branch, version) pair, built on disk.
+    fn fake_distgit(base: &std::path::Path, namespace: &str, rf: &str, on: &[(&str, &str)]) {
+        let work = base.join("work").join(rf);
+        std::fs::create_dir_all(&work).unwrap();
+        let git = |args: &[&str], dir: &std::path::Path| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "commit.gpgsign=false"])
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@e")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@e")
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}");
+        };
+        let (first, rest) = on.split_first().expect("at least one branch");
+        git(&["init", "-q", "-b", first.0], &work);
+        for (branch, version) in std::iter::once(first).chain(rest) {
+            if *branch != first.0 {
+                git(&["checkout", "-q", "-b", branch], &work);
+            }
+            std::fs::write(
+                work.join(format!("{rf}.spec")),
+                format!("Version: {version}\n"),
+            )
+            .unwrap();
+            git(&["add", "-A"], &work);
+            git(&["commit", "-qm", branch], &work);
+        }
+        let bare = base.join(namespace).join(format!("{rf}.git"));
+        std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+        let out = std::process::Command::new("git")
+            .args(["clone", "-q", "--bare"])
+            .arg(&work)
+            .arg(&bare)
+            .output()
+            .expect("git clone");
+        assert!(out.status.success());
+    }
+
+    #[test]
+    fn the_dist_git_probe_reads_every_branch_and_falls_back_to_nonfree() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = format!("file://{}", dir.path().display());
+        fake_distgit(
+            dir.path(),
+            "free",
+            "libheif-freeworld",
+            &[("f43", "1.23.6"), ("el9", "1.23.5")],
+        );
+
+        // Every branch, not just the default one: without
+        // --no-single-branch the other releases would silently read
+        // as having no branch at all.
+        let found = distgit_versions_at(&base, "libheif-freeworld");
+        assert_eq!(found.get("f43").map(String::as_str), Some("1.23.6"));
+        assert_eq!(found.get("el9").map(String::as_str), Some("1.23.5"));
+
+        // A package only RPM Fusion's nonfree half carries is found
+        // by the fallback, not missed.
+        fake_distgit(dir.path(), "nonfree", "nvidia-thing", &[("f43", "570.1")]);
+        let nonfree = distgit_versions_at(&base, "nvidia-thing");
+        assert_eq!(nonfree.get("f43").map(String::as_str), Some("570.1"));
+
+        // And a package neither half has reports nothing rather than
+        // failing the run.
+        assert!(distgit_versions_at(&base, "not-packaged-here").is_empty());
+    }
+
+    #[test]
+    fn every_branch_of_a_dist_git_reports_its_own_version() {
+        // Built on disk rather than fetched: the rule worth guarding
+        // is that each branch reports the version *its* spec carries,
+        // which is what tells a rebuild already committed from one
+        // nobody has started.
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("work");
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                // Not the packager's config: a global
+                // commit.gpgsign would make this fixture try to sign
+                // as a user that does not exist, and the test has to
+                // pass in a build sandbox too.
+                .args(["-c", "commit.gpgsign=false"])
+                .arg("-C")
+                .arg(&work)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@e")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@e")
+                .output()
+                .expect("git")
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        std::fs::create_dir_all(&work).unwrap();
+        let spec = work.join("libheif-freeworld.spec");
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&work)
+            .args(["init", "-q", "-b", "f43"])
+            .output()
+            .expect("git init");
+        std::fs::write(&spec, "Name: libheif-freeworld\nVersion: 1.23.6\n").unwrap();
+        git(&["add", "libheif-freeworld.spec"]);
+        git(&["commit", "-qm", "f43"]);
+        git(&["checkout", "-q", "-b", "el9"]);
+        std::fs::write(&spec, "Name: libheif-freeworld\nVersion: 1.23.5\n").unwrap();
+        git(&["commit", "-qam", "el9"]);
+
+        let found = versions_in(&work.join(".git"), "libheif-freeworld");
+        assert_eq!(found.get("f43").map(String::as_str), Some("1.23.6"));
+        assert_eq!(found.get("el9").map(String::as_str), Some("1.23.5"));
+        // A package the branch does not carry reports nothing rather
+        // than an empty version.
+        assert!(versions_in(&work.join(".git"), "something-else").is_empty());
+    }
+
+    #[test]
+    fn a_spec_version_is_read_only_when_it_is_a_plain_one() {
+        assert_eq!(
+            spec_version("Name: x\nVersion:        1.23.6\nRelease: 1%{?dist}\n").as_deref(),
+            Some("1.23.6")
+        );
+        // A macro is left unread: an unexpanded %{...} in a bug sent
+        // to another project is worse than an empty column.
+        assert_eq!(spec_version("Version: %{upstream_version}\n"), None);
+        assert_eq!(spec_version("Version:\n"), None);
+        assert_eq!(spec_version("Name: x\n"), None);
     }
 
     #[test]

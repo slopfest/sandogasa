@@ -36,6 +36,111 @@ Every guess is checked against the inventory before it counts, so the
 rule can be generous without inventing packages, and a stale table
 entry degrades to "no counterpart" rather than to a wrong bug.
 
+### sandogasa-fedrq: a test can see what fedrq is asked
+
+Every query was built and spawned in one step, so nothing could
+assert what fedrq was actually asked — all of the crate's tests read
+its *output*. That is how `--notsrc` was missing for as long as it
+was: the bug only showed up far downstream, as a package that looked
+uninstallable.
+
+Building a command is now separate from running it, and
+`Command::get_args` does the rest. No stub binary on `PATH` and no
+environment variable, both of which are global while Rust's test
+threads run in parallel; no new field either, so the crate's
+callers are untouched. The two queries carrying `--notsrc` are
+guarded, and the same split fits any other query worth pinning (#42).
+
+The dist-git read in ebranch got the same treatment, in two layers:
+reading versions out of a clone is separated from making the clone,
+and the base URL is injectable, so the whole probe runs against
+repositories built on disk and cloned over `file://`. The failure it
+guards is silent — a clone that stops fetching every branch returns
+nothing, and every release then reads "no branch" in a bug sent to
+another project. Removing `--no-single-branch` was checked to make the
+test fail, because a guard that passes either way is not one. That
+fixture disables `commit.gpgsign` explicitly — a global setting would
+otherwise make it sign as a user who does not exist, and it has to
+pass in a build sandbox with no key at all.
+
+### ebranch: `--rpmfusion-dry-run` shows the write without making it
+
+There was no way to see what would be sent to RPM Fusion short of
+having no account configured — and that stopped being a preview the
+moment one was configured, which is how a run meant as a check put a
+comment on their tracker.
+
+`--rpmfusion-dry-run` runs the whole path, duplicate check included,
+renders the bug or the comment, and says what it would have written
+and where. It declines even under `-y`: the two together mean "show me
+what `-y` would do", and making the write flag win would leave the one
+safe way to check depending on *not* passing another flag. It also
+reaches the filing path on its own, so previewing a write does not
+require asking for one.
+
+Against an already-open request it reports that it would comment
+rather than file, which is the half that could not be seen before
+without doing it.
+
+And it may report that it would say nothing at all: a comment
+identical to the one above it is not posted. The duplicate check keeps
+a second *bug* off their tracker; this keeps a second identical
+*comment* off the first one, which is what a re-run on an unchanged
+update would otherwise produce. The whole body is compared, so editing
+the wording around the table counts as a change and costs one extra
+comment the first time a run follows such an edit — comparing only the
+state would mean parsing a table back out of a comment somebody may
+have edited, and being wrong that way means staying silent when there
+was something to say.
+
+### ebranch: a prompt with no terminal is no longer a yes
+
+A run meant as a preview posted a comment on RPM Fusion's tracker.
+`sandogasa_cli::confirm` reads a line from stdin and returns the
+**default** on an empty one, so at EOF — a pipe, a script, anything
+without a terminal — a prompt defaulting to yes silently became a yes.
+`confirm(...).unwrap_or(false)` looks like it fails safe and does not:
+it never errors there, it succeeds with the default.
+
+Both RPM Fusion writes now go through one helper that refuses without
+a terminal, naming what it skipped and how to do it deliberately. This
+is what `CLAUDE.md` already required of interactive prompts; the rule
+was there and the code did not follow it.
+
+`--rpmfusion-file` now also satisfies `-y`, which previously required
+`--give-karma` or `--submit` — a guard written before the flag
+existed, so the flag could not be used unattended at all.
+
+### ebranch: what RPM Fusion committed, not just that a branch exists
+
+The dist-git column said "branched", which is true of a package
+nobody has touched in a year and of one updated an hour ago. It is now
+the `Version:` committed to that branch's spec, and a `testing`
+column shows what has been built and pushed to updates-testing.
+
+On the first real bug this mattered. RPM Fusion committed
+`update to 1.23.6` to every libheif-freeworld branch at
+2026-10-11T22:15:57Z; the bug asking them to rebuild was filed
+2026-10-12T19:13:19Z, around 21 hours later, and said only
+"branched". The work was done and nothing in the report showed we had
+looked — the failure this table exists to avoid, in the one direction
+it was not guarding against.
+
+Reading it costs less than the ref list it replaces: one bare
+`--depth 1 --no-single-branch` clone covers every branch at once, a
+quarter of a second for libheif-freeworld. A version given as a macro
+is left unread rather than rendered as `%{upstream_version}`.
+
+The EL side had no updates-testing repositories configured at all,
+though `free-el-updates-testing-{9,10}` and the nonfree ones all
+exist, so an EL rebuild sitting in testing read as absent.
+
+Their Koji stays invisible: `koji.rpmfusion.org` answers 401 at the
+HTTP level for the whole host, and they do not tag builds in dist-git.
+What remains unseen is a build that exists but has not reached
+updates-testing, which is a much narrower claim than the bug used to
+make.
+
 ### ebranch: a BuildRequires no longer reads as an uninstallable update
 
 `check-update` reported an EPEL 10.2 update as having an

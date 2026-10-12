@@ -576,6 +576,24 @@ matter would be guessing.
 
 Do it when #40 and the end-to-end filing are done, not before.
 
+## RPM Fusion: two write paths proven only in the lab (2026-10-12)
+
+Both wait for a real libheif-style update rather than another write on
+[bug 7564](https://bugzilla.rpmfusion.org/show_bug.cgi?id=7564):
+
+- **`-y` has never completed a write against their Bugzilla.** The
+  plumbing is unit-tested and `--rpmfusion-dry-run` exercises
+  everything up to the send, but the last real write used the code
+  before `agreed()` existed.
+- **The no-change check is verified against a mock only.** Confirming
+  it live needs a comment in the *current* template to exist first,
+  and the newest comment on 7564 predates the provenance fix — so the
+  next run against it will correctly find a difference and comment
+  once more. Check the run after that one stays silent.
+
+Both are read-only to verify: `--rpmfusion-dry-run` reports what it
+would do, including "no change since the last comment".
+
 ## RPM Fusion: ship the fedrq config downstream (2026-10-12)
 
 `configs/fedrq/rpmfusion.toml` and `configs/fedrq/repos/rpmfusion.repo`

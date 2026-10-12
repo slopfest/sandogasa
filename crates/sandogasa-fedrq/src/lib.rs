@@ -518,17 +518,27 @@ impl Fedrq {
     /// here so the branch/repo options and the `--` separator (which
     /// keeps an operand starting with `-` from being read as a flag)
     /// are applied uniformly.
-    fn query<S: AsRef<std::ffi::OsStr>>(
-        &self,
-        args: &[&str],
-        operands: &[S],
-    ) -> Result<Vec<String>, Error> {
+    /// The command a query would run, built but not spawned.
+    ///
+    /// Split out so a test can read back what fedrq is being asked
+    /// without a stub binary on `PATH` or an environment variable —
+    /// both of which are global, and Rust's test threads run in
+    /// parallel. `Command::get_args` is the whole mechanism.
+    fn query_command<S: AsRef<std::ffi::OsStr>>(&self, args: &[&str], operands: &[S]) -> Command {
         let mut cmd = Command::new("fedrq");
         cmd.args(args);
         self.apply_opts(&mut cmd);
         cmd.arg("--");
         cmd.args(operands);
-        Self::run(&mut cmd)
+        cmd
+    }
+
+    fn query<S: AsRef<std::ffi::OsStr>>(
+        &self,
+        args: &[&str],
+        operands: &[S],
+    ) -> Result<Vec<String>, Error> {
+        Self::run(&mut self.query_command(args, operands))
     }
 
     /// Run `fedrq <args>… [opts] -- <operands>…` with a `json:`
@@ -654,7 +664,13 @@ impl Fedrq {
     /// capabilities an update looks able to satisfy, which hides a
     /// real breakage rather than inventing a false one.
     pub fn pkg_provides(&self, name: &str) -> Result<Vec<String>, Error> {
-        self.query(&["pkgs", "--notsrc", "-F", "provides"], &[name])
+        Self::run(&mut self.pkg_provides_command(name))
+    }
+
+    /// The command [`Self::pkg_provides`] runs. Separate for the same
+    /// reason as [`Self::pkg_requires_command`].
+    fn pkg_provides_command(&self, name: &str) -> Command {
+        self.query_command(&["pkgs", "--notsrc", "-F", "provides"], &[name])
     }
 
     /// Map binary package names to their source and version-release in
@@ -688,7 +704,14 @@ impl Fedrq {
     /// back needing `gcc-c++` and `pkgconfig(sdl2)`, which read as an
     /// update nobody could install.
     pub fn pkg_requires(&self, name: &str) -> Result<Vec<String>, Error> {
-        self.query(&["pkgs", "--notsrc", "-F", "requires"], &[name])
+        Self::run(&mut self.pkg_requires_command(name))
+    }
+
+    /// The command [`Self::pkg_requires`] runs. Separate so a test
+    /// can assert the `--notsrc` that keeps a source package's
+    /// BuildRequires out of a binary's answer.
+    fn pkg_requires_command(&self, name: &str) -> Command {
+        self.query_command(&["pkgs", "--notsrc", "-F", "requires"], &[name])
     }
 
     /// Return the Provides of packages that provide a given capability.
@@ -873,6 +896,36 @@ fn parse_source_vr_lines(raw: Vec<String>) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    /// The argv a command would run, as plain strings.
+    fn argv(cmd: &std::process::Command) -> Vec<String> {
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_name_query_asks_only_about_binary_packages() {
+        // These match by name, and a source package usually shares a
+        // name with one of its binaries. Against a repository that
+        // indexes source RPMs the answer would otherwise merge the
+        // binary's Requires with the source's BuildRequires, which
+        // read as an update nobody could install.
+        let f = Fedrq {
+            branch: Some("al10.2".to_string()),
+            repo: Some("@epel".to_string()),
+        };
+        for args in [
+            argv(&f.pkg_requires_command("libheif")),
+            argv(&f.pkg_provides_command("libheif")),
+        ] {
+            assert!(args.contains(&"--notsrc".to_string()), "{args:?}");
+            // And the operand still arrives after the separator, so a
+            // package named like a flag cannot be read as one.
+            let sep = args.iter().position(|a| a == "--").expect("separator");
+            assert_eq!(args[sep + 1], "libheif", "{args:?}");
+        }
+    }
+
     use super::*;
 
     #[test]

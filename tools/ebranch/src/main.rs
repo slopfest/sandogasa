@@ -478,6 +478,11 @@ severity for --type security.",
     #[arg(long, value_name = "PATH", requires = "rpmfusion_inventory")]
     rpmfusion_renames: Option<String>,
 
+    /// Do everything except send: show the RPM Fusion bug or comment
+    /// that would be written, and where.
+    #[arg(long, requires = "rpmfusion_inventory")]
+    rpmfusion_dry_run: bool,
+
     /// File the RPM Fusion rebuild request for an update that already
     /// exists, instead of only naming the counterpart.
     #[arg(
@@ -1297,10 +1302,13 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::FAILURE;
             }
-            if a.rpmfusion_file && vote_alias.is_none() {
+            if (a.rpmfusion_file || a.rpmfusion_dry_run)
+                && vote_alias.is_none()
+                && side_tag.is_none()
+            {
                 eprintln!(
-                    "error: --rpmfusion-file requires a Bodhi update alias or URL as input \
-                     ({input}); --submit already files for the update it creates"
+                    "error: --rpmfusion-file and --rpmfusion-dry-run want a Bodhi update \
+                     alias or URL as input ({input})"
                 );
                 return ExitCode::FAILURE;
             }
@@ -1323,8 +1331,11 @@ fn main() -> ExitCode {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
-        if a.yes && !a.give_karma && !a.submit {
-            eprintln!("error: --yes requires --give-karma or --submit");
+        // --rpmfusion-file belongs here too: it is the third thing
+        // that asks a question -- whether to file with RPM Fusion --
+        // and so the third that -y can answer.
+        if a.yes && !a.give_karma && !a.submit && !a.rpmfusion_file && !a.rpmfusion_dry_run {
+            eprintln!("error: --yes requires --give-karma, --submit or --rpmfusion-file");
             return ExitCode::FAILURE;
         }
         if a.comment.is_some() && !a.give_karma && !a.submit {
@@ -1465,7 +1476,7 @@ fn main() -> ExitCode {
                     // Nothing else in the run can reach these: a Bodhi
                     // alias is rejected by --submit precisely because
                     // the update is already out.
-                    if a.rpmfusion_file
+                    if (a.rpmfusion_file || a.rpmfusion_dry_run)
                         && let Some(alias) = vote_alias
                         && let Some((counterparts, found)) = rpmfusion.as_ref()
                         && !found.is_empty()
@@ -1629,7 +1640,11 @@ fn main() -> ExitCode {
             && !pending.is_empty()
         {
             let rebuilds: Vec<_> = pending.into_values().collect();
-            filed = rpmfusion::file_bugs(counterparts, &rebuilds, a.yes);
+            let writes = rpmfusion::Writes {
+                assume_yes: a.yes,
+                dry_run: a.rpmfusion_dry_run,
+            };
+            filed = rpmfusion::file_bugs(counterparts, &rebuilds, writes);
         }
         // The review comments, each carrying whichever rebuild request
         // covers its packages. An RPM Fusion user meets one of these
