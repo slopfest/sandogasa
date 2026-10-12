@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.25.4
 
 ### ebranch: `--fas` volunteers you, and omitting it no longer does
 
