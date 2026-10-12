@@ -6,469 +6,194 @@
 
 Some Fedora packages have to move in lockstep with a counterpart in
 RPM Fusion, which rebuilds the same upstream with the codecs Fedora
-strips. Fedora's `libheif` pairs with RPM Fusion's
-`libheif-freeworld`, and an update that reaches stable before that
-rebuild leaves the pair broken for anyone with both repositories
-enabled. Nothing in the workspace knew RPM Fusion existed, so the
-coordination was entirely a matter of remembering.
+strips. Fedora's `libheif` pairs with their `libheif-freeworld`, and
+an update that reaches stable before that rebuild leaves the pair
+broken for anyone with both repositories enabled. Nothing in the
+workspace knew RPM Fusion existed, so the coordination was a matter of
+remembering.
 
-`poi-tracker sync-rpmfusion --release f43,f44,f45,el9,el10` writes an
-inventory of what RPM Fusion ships, one workload per release — 276
-packages in about seven seconds. The query goes through fedrq, which
-learns RPM Fusion from a new `configs/fedrq/rpmfusion.toml`, so the
-repositories are declared once in the usual place rather than hardcoded.
+`poi-tracker sync-rpmfusion` writes an inventory of what they ship,
+one workload per release. The query goes through fedrq, which learns
+RPM Fusion from a new `configs/fedrq/rpmfusion.toml`, so the
+repositories are declared where every other repository this workspace
+queries is declared.
 
-`ebranch check-update --rpmfusion-inventory` then names any counterpart
-in the report, and at `--submit` forces auto-push off so the update
+`ebranch check-update --rpmfusion-inventory` names any counterpart in
+the report, and at `--submit` forces auto-push off so the update
 cannot reach stable on karma alone. `--disable-autokarma` already
-existed; the guard only takes it away, and never gives it back — the
-flag overrides in one direction, because the other direction is the one
-that breaks systems. The plan says which package and which counterpart,
-since a policy applied invisibly is one nobody can check.
-
-Finding a counterpart needs more than a name match. Measured against
-`rpmfusion-f43`: of 263 packages only five share a Fedora name
-(`ffmpeg` among them), eleven carry a `-freeworld` suffix of which the
-suffix rule resolves seven, and four need the committed
-`configs/rpmfusion/renames.toml` — all four because RPM Fusion names
-the companion after the plugins (`vlc` → `vlc-plugins-freeworld`).
-Every guess is checked against the inventory before it counts, so the
-rule can be generous without inventing packages, and a stale table
-entry degrades to "no counterpart" rather than to a wrong bug.
-
-### Every tool checks a credential the same way
-
-Nine credentials across seven tools each had their own configure-time
-flow, and two of them validated nothing. `poi-tracker` checked a
-Bugzilla API key by running a bug search — which Bugzilla serves to
-anyone — so it reported a key that could never write as valid, exactly
-as `ebranch` did before it was fixed. It now asks to create a bug with
-no fields, which the credential is checked before and which cannot
-create anything, because every required field is absent.
-
-The rest proved something, but none of them offered a way out. A
-refused credential was saved with a warning and an instruction to
-rerun, which is the shape `CLAUDE.md` says to avoid: detect a fixable
-problem, offer to fix it, carry on.
-
-`sandogasa_cli::credential` is now the one flow. A refusal offers a
-replacement; declining keeps what is there, because a value edited by
-hand to watch the check fail must not be replaced by something that
-assumes a typo. An empty answer keeps it too rather than aborting the
-command. Nothing is offered where stdin is not a terminal, since
-`confirm` returns its default on an empty line and asking anyway turns
-"nobody is here" into whichever answer the default happens to be.
-
-A check that *could not be made* — a rate limit, an unreachable API —
-is reported as such and offers nothing, because it says nothing about
-the credential. Three tools got that wrong in opposite directions:
-`hs-relmon` and `cpu-sig-tracker` propagated the error and killed
-`configure` outright, while `sandogasa-report` re-prompted for GitLab
-alone and kept the token for every other forge. Both now keep it.
-
-Where a check proves the identity as well as the secret — Bugzilla's
-`valid_login`, JIRA's `whoami` — a refusal names the address too,
-since replacing the key is the wrong fix when the email is what is
-wrong.
-
-The helper carries a noun for what it is holding, because telling
-somebody their API key was refused when they configured a token is its
-own small confusion. It comes in a blocking form as well as an async
-one: several tools validate with a blocking call, and routing those
-through an async helper would mean each carrying a runtime, and
-panicking where one already exists.
-
-### sandogasa-fedrq: a test can see what fedrq is asked
-
-Every query was built and spawned in one step, so nothing could
-assert what fedrq was actually asked — all of the crate's tests read
-its *output*. That is how `--notsrc` was missing for as long as it
-was: the bug only showed up far downstream, as a package that looked
-uninstallable.
-
-Building a command is now separate from running it, and
-`Command::get_args` does the rest. No stub binary on `PATH` and no
-environment variable, both of which are global while Rust's test
-threads run in parallel; no new field either, so the crate's
-callers are untouched. The two queries carrying `--notsrc` are
-guarded, and the same split fits any other query worth pinning (#42).
-
-The dist-git read in ebranch got the same treatment, in two layers:
-reading versions out of a clone is separated from making the clone,
-and the base URL is injectable, so the whole probe runs against
-repositories built on disk and cloned over `file://`. The failure it
-guards is silent — a clone that stops fetching every branch returns
-nothing, and every release then reads "no branch" in a bug sent to
-another project. Removing `--no-single-branch` was checked to make the
-test fail, because a guard that passes either way is not one. That
-fixture disables `commit.gpgsign` explicitly — a global setting would
-otherwise make it sign as a user who does not exist, and it has to
-pass in a build sandbox with no key at all.
-
-### ebranch: `--rpmfusion-dry-run` shows the write without making it
-
-There was no way to see what would be sent to RPM Fusion short of
-having no account configured — and that stopped being a preview the
-moment one was configured, which is how a run meant as a check put a
-comment on their tracker.
-
-`--rpmfusion-dry-run` runs the whole path, duplicate check included,
-renders the bug or the comment, and says what it would have written
-and where. It declines even under `-y`: the two together mean "show me
-what `-y` would do", and making the write flag win would leave the one
-safe way to check depending on *not* passing another flag. It also
-reaches the filing path on its own, so previewing a write does not
-require asking for one.
-
-Against an already-open request it reports that it would comment
-rather than file, which is the half that could not be seen before
-without doing it.
-
-And it may report that it would say nothing at all: a comment
-identical to the one above it is not posted. The duplicate check keeps
-a second *bug* off their tracker; this keeps a second identical
-*comment* off the first one, which is what a re-run on an unchanged
-update would otherwise produce. The whole body is compared, so editing
-the wording around the table counts as a change and costs one extra
-comment the first time a run follows such an edit — comparing only the
-state would mean parsing a table back out of a comment somebody may
-have edited, and being wrong that way means staying silent when there
-was something to say.
-
-### ebranch: a prompt with no terminal is no longer a yes
-
-A run meant as a preview posted a comment on RPM Fusion's tracker.
-`sandogasa_cli::confirm` reads a line from stdin and returns the
-**default** on an empty one, so at EOF — a pipe, a script, anything
-without a terminal — a prompt defaulting to yes silently became a yes.
-`confirm(...).unwrap_or(false)` looks like it fails safe and does not:
-it never errors there, it succeeds with the default.
-
-Both RPM Fusion writes now go through one helper that refuses without
-a terminal, naming what it skipped and how to do it deliberately. This
-is what `CLAUDE.md` already required of interactive prompts; the rule
-was there and the code did not follow it.
-
-`--rpmfusion-file` now also satisfies `-y`, which previously required
-`--give-karma` or `--submit` — a guard written before the flag
-existed, so the flag could not be used unattended at all.
-
-### ebranch: what RPM Fusion committed, not just that a branch exists
-
-The dist-git column said "branched", which is true of a package
-nobody has touched in a year and of one updated an hour ago. It is now
-the `Version:` committed to that branch's spec, and a `testing`
-column shows what has been built and pushed to updates-testing.
-
-On the first real bug this mattered. RPM Fusion committed
-`update to 1.23.6` to every libheif-freeworld branch at
-2026-10-11T22:15:57Z; the bug asking them to rebuild was filed
-2026-10-12T19:13:19Z, around 21 hours later, and said only
-"branched". The work was done and nothing in the report showed we had
-looked — the failure this table exists to avoid, in the one direction
-it was not guarding against.
-
-Reading it costs less than the ref list it replaces: one bare
-`--depth 1 --no-single-branch` clone covers every branch at once, a
-quarter of a second for libheif-freeworld. A version given as a macro
-is left unread rather than rendered as `%{upstream_version}`.
-
-The EL side had no updates-testing repositories configured at all,
-though `free-el-updates-testing-{9,10}` and the nonfree ones all
-exist, so an EL rebuild sitting in testing read as absent.
-
-Their Koji stays invisible: `koji.rpmfusion.org` answers 401 at the
-HTTP level for the whole host, and they do not tag builds in dist-git.
-What remains unseen is a build that exists but has not reached
-updates-testing, which is a much narrower claim than the bug used to
-make.
-
-### ebranch: a BuildRequires no longer reads as an uninstallable update
-
-`check-update` reported an EPEL 10.2 update as having an
-installability issue over `pkgconfig(sdl2)`, a dependency no package
-in the build requires. The same build on 10.3 and 10.4 was clean. The
-finding was blocking — it drives the derived karma to 0 or -1, so
-`--submit` refuses without an override — and it was convincing enough
-to prompt a plan to disable SDL support in a package that had nothing
-wrong with it.
-
-`pkgconfig(sdl2)` is a BuildRequires. Nothing shipped needs it: the
-only SDL dependency in the build is `libSDL2-2.0.so.0` on
-`libheif-tools`, which `sdl2-compat` satisfies from base. It reached
-an install-time check because `pkg_requires` matches by **name**, and
-a source package usually shares a name with one of its binaries —
-so against a repository that indexes source RPMs (`@testing` and COPR
-do, koji side tags do not) the answer was the union of the binary's
-Requires and the source's BuildRequires. The minors differed only in
-which repository each resolved against.
-
-Both `pkg_requires` and `pkg_provides` now pass `--notsrc`. The
-provides case never produced a visible symptom but is the more
-dangerous of the two: a source package's provides widen the set of
-capabilities an update appears to satisfy, hiding a real breakage
-rather than inventing a false one.
-
-A completed build is proof its BuildRequires were satisfiable, so
-asking again afterwards — against repositories the buildroot does not
-use — can only produce false positives. Adding CRB to the
-released-minor repository set would have silenced this one while
-leaving that category error in place.
-
-Nothing asserts the flag: `sandogasa-fedrq` shells out to `fedrq`
-directly, so no test can see what it was asked (#42).
-
-### ebranch: the bug their Bugzilla will actually take
-
-Filing was refused with "You must select/enter a OS" once the
-credential was accepted. Red Hat's Bugzilla defaults `op_sys` and
-`rep_platform`; RPM Fusion's requires them on a create. Both values
-come from their instance rather than a guess — `field/bug/op_sys`
-offers `GNU/Linux` alone, and a rebuild request is not about one
-architecture, so the platform is `All`. With those,
-[bug 7564](https://bugzilla.rpmfusion.org/show_bug.cgi?id=7564) was
-filed, carrying seven Bodhi updates across six RPM Fusion releases.
-
-The bug also printed `https://pkgs.rpmfusion.org/git` as where the
-dist-git column came from. That is a 404 for anyone who clicks it —
-their cgit answers 404 for every path, its own index included — so a
-bug sent to another project carried a broken link. It now names the
-command that produced the column instead.
-
-### ebranch: neutral about what a counterpart is
-
-The bug said `libheif-freeworld` "is built against" `libheif`. That is
-true of an add-on — it requires `libheif%{_isa} = %{version}` and
-supplies codec plugins — and false of a drop-in replacement like
-`mesa-freeworld`, which supplies mesa's own libraries instead of
-depending on them. RPM Fusion ships both shapes, so the bug and the
-Bodhi comment now say "counterpart", which is true of either.
-
-### ebranch: a batch you can follow
-
-Three things made a seven-update run harder to follow than it needed
-to be.
-
-The bug-feedback prompts arrived with no indication of which update
-they belonged to. Comments post after the batch so each can link the
-rebuild request, which also moves them away from the per-input headers
-the analysis printed; each round now opens with the alias and its dist
-branch. Being asked to vote three times without knowing which of seven
-updates is being voted on is how a reviewer starts rubber-stamping.
-
-A batch carrying one change named the same counterpart once per
-update — seven times for seven updates. Said once per pairing now; a
-single-update run prints it exactly where it did.
-
-An input list was taken at face value, so the same update written two
-ways — a bare alias and its Bodhi URL — was analysed twice, would have
-been commented on twice, and would have been listed twice in the
-request filed with RPM Fusion. Inputs are deduplicated on what they
-refer to rather than on their text, and the run says which repeat it
-dropped.
-
-### ebranch: the RPM Fusion bug could never have been filed
-
-Filing came back "You must log in before using this part of Bugzilla"
-with a perfectly good API key. `BzClient` sent it as a bearer token,
-which is Red Hat's extension; a stock Bugzilla 5 ignores that header
-and answers exactly as it answers an anonymous request, so the error
-pointed at the login rather than at the client.
-
-That version reads a key from a write's body or from a URL parameter,
-and nothing else — an `X-BUGZILLA-API-KEY` header is ignored too, and
-a GET carrying the key in a JSON body simply returns results. Writes
-now carry `Bugzilla_api_key` in the body, which keeps the credential
-out of URLs and so out of server access logs. Reads carry nothing,
-because the data read is public.
-
-### ebranch: config checks a key by trying to use it
-
-`ebranch config` reported a key as valid that had been pasted three
-times into a hidden prompt and was 120 characters long. It validated
-by running a bug search, and RPM Fusion's Bugzilla serves searches to
-anyone, so the check passed a credential that could never write. The
-same was true of the Red Hat key.
-
-Both now authenticate for real: a create with **no fields at all**.
-Bugzilla checks the credential before it validates the fields, so a
-refused key answers 306 and a missing one 410, while an accepted key
-gets as far as complaining about the absent product — and nothing can
-be created, because every required field is missing. Both instances
-behave identically. A local shape check runs first and names the
-actual mistake, since a key of exactly double length is what a
-duplicated paste leaves behind.
-
-A refused key used to be saved with a warning and a suggestion to
-rerun. Every key the command checks now goes through one helper that
-offers to re-enter it instead — defaulting to yes, skipped where
-stdin is not a terminal, and **taking no for an answer**, because a
-value edited by hand to watch the check fail must not be replaced by
-something that assumes a typo. A rate limit or an unreachable service
-is reported as "could not check" and offers nothing, since neither
-says anything about the key. The helper is ebranch's for now; the
-seven other tools that validate credentials each have their own flow
-(#41).
-
-### ebranch: the update says what RPM Fusion needs, where people read it
-
-An RPM Fusion user meets one of these updates as a broken install and
-says so on the update, sometimes with a -1. The bug asked their
-maintainer for a rebuild but nothing told anyone reading the Bodhi
-update that the pairing was known.
-
-The review comment now carries the counterpart and a link to the
-rebuild request. To link it, comments are posted after the batch
-rather than during it: the request cannot be filed until every input
-has been seen, because one change across six releases is one bug. That
-also converges the two paths — `--submit` and `--give-karma` build the
-same comment now, differing only in where the alias came from.
-
-With no key configured the counterpart is still named, without a link.
-The warning is the useful half.
-
-### ebranch: an existing rebuild request is answered, not duplicated
-
-Filing was unconditional, so a second run — or a second person with
-the tool — would ask RPM Fusion twice for the same work. An open
-request on the component whose summary mentions a rebuild is now found
-first; the new version is added to it as a comment, and the update's
-review comment links that bug. Matching on component and the word
-"rebuild" finds a request a human wrote as well as one this tool did,
-while leaving unrelated open bugs alone.
-
-`rpmfusion::file_bugs` returns the URL filed per package rather than a
-list of ids, so the review comment can link the right one.
-
-### ebranch: an update's auto-push is reported, never changed
-
-`--rpmfusion-file` can be pointed at updates nobody held back, and the
-bug told RPM Fusion flatly that "the update(s) below have auto-push
-disabled". It now says which is true, and one listed update still
-auto-pushing is enough to say so — a maintainer reading it is deciding
-how urgently to rebuild.
-
-An update that already exists is somebody else's, so a wrong setting
-is flagged and left alone: the run warns, and the review comment says
-auto-push is still enabled and suggests disabling it. Only `--submit`,
-which sets the value itself, claims to have held anything.
-
-### ebranch: tell RPM Fusion about an update that already exists
-
-`--submit` files the rebuild request for the update it creates, which
-leaves out every update it cannot create: one submitted through
-Bodhi's web UI, one that predates this feature, one whose earlier run
-stopped between the submit and the filing. Those were detected and
-named and then nothing could be done about them.
-
-`--rpmfusion-file` takes Bodhi aliases and files for them, merging
-into the same request a `--submit` run would build — so a change
-spread across both still comes out as one bug. Seven libheif updates
-(F43/F44/F45 and EPEL-9/10.2/10.3/10.4) resolve to five RPM Fusion
-releases and one bug listing all seven.
-
-Without a configured key it renders the bug and files nothing, rather
-than printing a note and discarding the repository and dist-git
-queries it had just made: seeing what would be filed is how anyone
-decides whether to set an account up. `ebranch config` now asks for
-that key and validates it, after the Red Hat and NVD keys.
-
-### ebranch, poi-tracker: RPM Fusion's rawhide
-
-An update for rawhide failed outright — `RPM Fusion builds for no
-release matching rawhide` — and the test that should have caught it
-asserted the failure was correct, on the belief that rawhide takes no
-Bodhi updates. It does: `FEDORA-2026-141d1b546f` is one.
-
-`sync-rpmfusion --release rawhide` now reads their rawhide
-repositories, which carry the word where every other release carries a
-number (`free-fedora-rawhide`), and records which Fedora release
-rawhide currently is as a workload label. Both spellings reach it: a
-Bodhi update for rawhide reports the branch as `rawhide`, while a side
-tag for the same thing is `f46-build-side-NNN` and reports `f46`.
-
-The label is read rather than pinned, so it follows the next branch
-point without anyone editing it. It is the **highest** dist tag in the
-repository, not the first package's and not the most common: a rawhide
-repository keeps whatever was last built, and on 2026-10-12 it held
-292 `fc45` against 131 `fc46` with stragglers back to `fc37`. Only the
-maximum said f46.
-
-### ebranch: what the bug got wrong about RPM Fusion
-
-Three things, all found by rendering a real request rather than by
-reading the code, and all three would have gone to another project's
-tracker.
-
-The Bugzilla `version` field was the release number alone — `43`.
-Their products disagree and neither matches that: `Fedora` carries
-`f43`, `f44`, `f45` and `rawhide`, while `Fedora EPEL` carries the
-bare major `9`, `10`. Every Fedora-product bug would have been
-rejected. A Fedora workload now passes through unchanged and an `el`
-one loses its prefix.
-
-The dist-git column said `no branch` for rawhide on a package RPM
-Fusion carries, because they keep rawhide on `master`: the ref list
-for `libheif-freeworld` runs el8/el9/el10 and f36 through f45, with no
-f46 and no rawhide. Asking another project to do work while
-mis-stating what they already have is the failure this table exists to
-avoid.
-
-The bug's summary also named one dist tag — `rebuild for libheif
-1.23.6-1.fc43` — for a request covering six releases, dating the whole
-thing to whichever update happened to be checked first. It now reads
-`1.23.6-1`.
-
-### ebranch: check-update takes several inputs
-
-`check-update` now accepts a list — `f45-build-side-1,f44-build-side-2`
-— and carries one change across releases in a single run. Every input
-is classified and validated before any of them is submitted, so a typo
-in the third tag cannot leave the first two submitted.
-
-Taking a list is what makes telling RPM Fusion correct rather than
-merely convenient. RPM Fusion branches per EL *major* while EPEL
-branches per RHEL *minor*: their dist-git has `el8`, `el9`, `el10` and
-nothing finer, `free-el-updates-released-10.4` is a 404, and their
-package is
-`libheif-freeworld-1.23.5-1.el10` where EPEL's is
-`libheif-1.23.5-4.el10_3`. So one libheif update arriving as EPEL-10.2,
-10.3 and 10.4 is *one* rebuild for them. Filing per invocation would
-open three bugs for it; the batch opens one, listing every update.
-
-A failure partway through still stops the batch, but RPM Fusion is
-told about whatever already went out: an update sitting with its
-auto-push held and nobody asked to rebuild is the one outcome worse
-than not having submitted it.
+existed; the guard only takes it away and never gives it back, because
+the other direction is the one that breaks systems.
+
+Finding a counterpart needs more than a name match. Of 263 packages in
+`rpmfusion-f43`, five share a Fedora name, eleven carry a `-freeworld`
+suffix of which a suffix rule resolves seven, and four need the
+committed `configs/rpmfusion/renames.toml` — all four because RPM
+Fusion names the companion after the plugins (`vlc` →
+`vlc-plugins-freeworld`). Every guess is checked against the inventory
+before it counts, so the rule can be generous without inventing
+packages.
+
+`check-update` takes several inputs, so one change goes out across
+releases in a single run, and inputs are deduplicated on what they
+refer to rather than on their text — a bare alias and its Bodhi URL
+are one update. This is what makes telling RPM Fusion correct rather
+than merely convenient: they branch per EL *major* while EPEL branches
+per RHEL *minor*, so one libheif update arriving as EPEL-10.2, 10.3
+and 10.4 is one rebuild for them. Filing per invocation would open
+three bugs for it.
+
+Rawhide arrives spelled two ways that both have to reach the one thing
+they publish: a Bodhi update for it reports `rawhide`, while a side tag
+for the same change is `f46-build-side-NNN` and reports `f46`. The
+first maps straight through; the second resolves through a label the
+sync records, read on every sync as the **highest** dist tag in the
+repository — not the first package's and not the most common, since a
+rawhide repository keeps whatever was last built. On 2026-10-12 it held
+292 `fc45` against 131 `fc46`, so only the maximum said f46.
 
 ### ebranch: the bug filed with RPM Fusion says what they already have
 
 A rebuild request that only asks is the shape of bug this workspace
-spends its time disproving. This one carries a table instead: what RPM
-Fusion currently ships of the counterpart for each release, whether
-their dist-git is branched for it, and every Bodhi update to follow.
+spends its time disproving. This one carries a table: what they ship
+for each release, what is in their updates-testing, and the `Version:`
+committed to each dist-git branch.
 
 ```
-  release  shipped               dist-git
-  f43      1.23.5-1.fc43         branched
-  el10     1.23.5-1.el10         branched
+  release  shipped               testing               dist-git
+  f43      1.23.5-1.fc43         -                     1.23.6
 ```
 
-The shipped column comes from RPM Fusion's own repositories and the
-dist-git column from `git ls-remote` against pkgs.rpmfusion.org. The
-bug also says what neither column can see: their Koji needs
-credentials, so a build that exists but has not been released is
-invisible, and saying so stops the table from reading as "nothing is
-built".
+That last column is the one that matters. RPM Fusion committed
+`update to 1.23.6` to every `libheif-freeworld` branch at
+2026-10-11T22:15:57Z; the first bug asking them to rebuild was filed
+some 21 hours later and said only "branched". The work was done and
+nothing in the report showed we had looked. Reading it costs a quarter
+of a second: one bare `--depth 1 --no-single-branch` clone covers every
+branch at once.
 
-Filing goes to RPM Fusion's own Bugzilla, which is a stock Bugzilla 5
-serving REST from `rest.cgi` rather than `rest`; `BzClient` takes the
-path as configuration now. Credentials live in a new
-`[rpmfusion-bugzilla]` section that `ebranch config` now asks for and
-validates, after the Red Hat and NVD keys it already collected. Without
-a key the run says so and files nothing — the held auto-push is the
-part that matters, and a missing credential must not fail a submit that
-already succeeded.
+Their Koji stays invisible — `koji.rpmfusion.org` answers 401 for the
+whole host and they do not tag builds in dist-git — so what remains
+unseen is a build that has not reached updates-testing, which the bug
+says rather than implying nothing is built.
+
+Several things the bug asserted about RPM Fusion were wrong, and every
+one was found by rendering a real request against live data rather
+than by reading the code:
+
+- The Bugzilla `version` was the release number alone (`43`), which
+  neither of their products offers: `Fedora` carries `f43`/`f44`/
+  `f45`/`rawhide` and `Fedora EPEL` carries `9`/`10`.
+- The dist-git column said `no branch` for rawhide on a package they
+  carry, because they keep rawhide on `master`.
+- The summary named one dist tag for a request covering six releases.
+- It promised the listed updates had auto-push disabled, which
+  `--rpmfusion-file` cannot know; one update still auto-pushing is
+  enough to say so.
+- It called the counterpart "built against" the Fedora package, true
+  of an add-on and false of a drop-in replacement. RPM Fusion ships
+  both, so it says "counterpart".
+- The provenance named a URL that 404s — their cgit answers 404 for
+  every path, its own index included.
+
+Their Bugzilla also needs `op_sys` and `platform` on a create, which
+Red Hat's defaults; both values are read from their own field
+definitions.
+
+### ebranch: telling RPM Fusion, and the update, without doing it twice
+
+An RPM Fusion user meets one of these updates as a broken install and
+says so on the update, sometimes with a -1. The review comment now
+names the counterpart and links the rebuild request, which is why
+comments post after the batch rather than during it: the request
+cannot be filed until every input has been seen.
+
+Nothing is written twice. An open request on the component is answered
+with a comment instead of a second bug, and a comment identical to the
+one above it is not posted at all. An update that already exists is
+somebody else's, so a wrong auto-push setting is reported and left
+alone — only `--submit`, which sets the value itself, claims to have
+held anything.
+
+Nothing is written unasked, either. `sandogasa_cli::confirm` returns
+its default on an empty line, so at EOF a prompt defaulting to yes
+silently became a yes, and a run meant as a preview put a comment on
+their tracker. Both writes now refuse without a terminal unless `-y`
+says otherwise, and `--rpmfusion-dry-run` runs the whole path —
+duplicate check included — renders what would be sent, and sends
+nothing. It declines even under `-y`, because the one safe way to
+check must not depend on *not* passing another flag.
+
+`--rpmfusion-file` files for an update that already exists: one
+submitted through Bodhi's web UI, one predating this, or one whose
+earlier run stopped between the submit and the filing.
+
+### ebranch, sandogasa-fedrq: a BuildRequires is not an install problem
+
+`check-update` reported an EPEL 10.2 update as uninstallable over
+`pkgconfig(sdl2)`, which no package in the build requires. The same
+build on 10.3 and 10.4 was clean. The finding was blocking — it drives
+the derived karma to 0 or -1, so `--submit` refuses — and it was
+convincing enough to prompt a plan to disable SDL support in a package
+that had nothing wrong with it.
+
+`pkgconfig(sdl2)` is a BuildRequires. It reached an install-time check
+because `pkg_requires` matches by **name**, and a source package
+usually shares a name with one of its binaries, so against a
+repository that indexes source RPMs — `@testing` and COPR do, koji
+side tags do not — the answer was the union of the binary's Requires
+and the source's BuildRequires. The minors differed only in which
+repository each resolved against.
+
+`pkg_requires` and `pkg_provides` now pass `--notsrc`. The provides
+case never produced a visible symptom and is the more dangerous of the
+two: a source package's provides widen the set of capabilities an
+update appears to satisfy, hiding a real breakage rather than
+inventing a false one. A completed build is proof its BuildRequires
+were satisfiable, so asking again afterwards can only produce false
+positives.
+
+Nothing could have caught it: every query was built and spawned in one
+step, and all of `sandogasa-fedrq`'s tests read fedrq's *output*.
+Building a command is now separate from running it, so
+`Command::get_args` can assert what fedrq is asked — no stub binary on
+`PATH` and no environment variable, both global while Rust's test
+threads run in parallel.
+
+### Every tool checks a credential the same way
+
+Nine credentials across seven tools each had their own configure-time
+flow, and two validated nothing. `ebranch` and `poi-tracker` both
+checked a Bugzilla API key by running a bug search — which Bugzilla
+serves to anyone — so a key that could never write passed. `ebranch`
+reported one pasted three times into a hidden prompt, 120 characters
+long, as valid; the first real attempt to file said "You must log in".
+
+Both now authenticate by asking to create a bug with **no fields at
+all**: the credential is checked before the fields are, so a refused
+key answers 306 and a missing one 410, while an accepted key gets as
+far as complaining about the absent product — and nothing can be
+created, because every required field is missing.
+
+That attempt also exposed how the key was sent. `BzClient` used a
+bearer token, which is Red Hat's extension; a stock Bugzilla 5 ignores
+it and answers exactly as it answers an anonymous request. Writes now
+carry `Bugzilla_api_key` in the body, which keeps the credential out
+of URLs and so out of server access logs.
+
+`sandogasa_cli::credential` is the one flow now. A refusal offers a
+replacement; declining keeps what is there, because a value edited by
+hand to watch the check fail must not be replaced by something that
+assumes a typo. Nothing is offered where stdin is not a terminal. A
+check that *could not be made* offers nothing either, since it says
+nothing about the credential — three tools got that wrong in opposite
+directions, `hs-relmon` and `cpu-sig-tracker` killing `configure`
+outright when GitLab was unreachable, and `sandogasa-report`
+re-prompting for GitLab alone while keeping the token for every other
+forge.
+
+Where a check proves the identity as well as the secret — Bugzilla's
+`valid_login`, JIRA's `whoami` — a refusal names the address too,
+since replacing the key is the wrong fix when the email is wrong.
 
 ## v0.25.3
 
