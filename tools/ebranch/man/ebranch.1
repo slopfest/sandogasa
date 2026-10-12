@@ -410,8 +410,18 @@ Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch 
 May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
 .RE
 .TP
-\fB\-\-fas\fR \fI<FAS>\fR
-FAS of the reporter, if willing to co\-maintain (defaults to the FAS from `ebranch config`)
+\fB\-\-fas\fR [\fI<FAS>\fR]
+Volunteer as co\-maintainer of the package.
+
+  (omitted)     file without volunteering
+  \-\-fas         the FAS from `ebranch config`
+  \-\-fas NAME    that FAS
+
+A bare \-\-fas takes the next word as the name,
+so put it last or separate the positionals
+with \-\-:
+
+  ebranch file\-requests \-\-fas \-\- pkgs.toml epel10
 .TP
 \fB\-\-sig\fR \fI<SIG>\fR
 Packaging SIG to offer as co\-maintainer (requires \-\-fas)
@@ -455,8 +465,18 @@ Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch 
 May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
 .RE
 .TP
-\fB\-\-fas\fR \fI<FAS>\fR
-FAS of the reporter, if willing to co\-maintain (defaults to the FAS from `ebranch config`)
+\fB\-\-fas\fR [\fI<FAS>\fR]
+Volunteer as co\-maintainer of the package.
+
+  (omitted)     file without volunteering
+  \-\-fas         the FAS from `ebranch config`
+  \-\-fas NAME    that FAS
+
+A bare \-\-fas takes the next word as the name,
+so put it last or separate the positionals
+with \-\-:
+
+  ebranch file\-requests \-\-fas \-\- pkgs.toml epel10
 .TP
 \fB\-\-sig\fR \fI<SIG>\fR
 Packaging SIG to offer as co\-maintainer (requires \-\-fas)
@@ -509,8 +529,18 @@ Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch 
 May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
 .RE
 .TP
-\fB\-\-fas\fR \fI<FAS>\fR
-FAS of the reporter, if willing to co\-maintain (defaults to the FAS from `ebranch config`)
+\fB\-\-fas\fR [\fI<FAS>\fR]
+Volunteer as co\-maintainer of the package.
+
+  (omitted)     file without volunteering
+  \-\-fas         the FAS from `ebranch config`
+  \-\-fas NAME    that FAS
+
+A bare \-\-fas takes the next word as the name,
+so put it last or separate the positionals
+with \-\-:
+
+  ebranch file\-requests \-\-fas \-\- pkgs.toml epel10
 .TP
 \fB\-\-sig\fR \fI<SIG>\fR
 Packaging SIG to offer as co\-maintainer (requires \-\-fas)

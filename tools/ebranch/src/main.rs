@@ -711,9 +711,26 @@ struct BranchRequestCommon {
     #[arg(long, env = "BUGZILLA_API_KEY")]
     api_key: Option<String>,
 
-    /// FAS of the reporter, if willing to co-maintain (defaults to
-    /// the FAS from `ebranch config`).
-    #[arg(long)]
+    /// Volunteer as co-maintainer: bare for the FAS from `ebranch
+    /// config`, or name one. Omit it to file without volunteering.
+    #[arg(
+        long,
+        num_args(0..=1),
+        default_missing_value = "",
+        value_name = "FAS",
+        long_help = "\
+Volunteer as co-maintainer of the package.
+
+  (omitted)     file without volunteering
+  --fas         the FAS from `ebranch config`
+  --fas NAME    that FAS
+
+A bare --fas takes the next word as the name,
+so put it last or separate the positionals
+with --:
+
+  ebranch file-requests --fas -- pkgs.toml epel10"
+    )]
     fas: Option<String>,
 
     /// Packaging SIG to offer as co-maintainer (requires --fas).
@@ -1017,6 +1034,21 @@ fn rpmfusion_counterparts(
     Ok((counterparts, found))
 }
 
+/// Who to offer as co-maintainer, if anyone.
+///
+/// Three cases: no `--fas` volunteers nobody, a bare `--fas` takes
+/// the configured FAS, and `--fas NAME` takes that name. The
+/// configured FAS used to apply whether or not the flag was passed,
+/// so every request filed by anyone with one volunteered them, and
+/// there was no way to file without.
+fn fas_to_offer(flag: Option<&str>, configured: Option<String>) -> Option<String> {
+    match flag {
+        None => None,
+        Some("") => configured,
+        Some(name) => Some(name.to_string()),
+    }
+}
+
 /// Build branch-request `Options` from the shared flags,
 /// resolving the API key (CLI flag → env → config file).
 fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Options, String> {
@@ -1025,7 +1057,7 @@ fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Opt
         bugzilla_url: c.bugzilla_url.clone(),
         api_key,
         branch: c.branch.clone(),
-        fas: c.fas.clone().or_else(config::packager_fas),
+        fas: fas_to_offer(c.fas.as_deref(), config::packager_fas()),
         sig: c.sig.clone(),
         dry_run: c.dry_run,
         verbose: c.verbose,
@@ -2207,6 +2239,26 @@ fn print_cycles(cycles: &[dag::Cycle], closure: &resolve::Closure) {
 mod tests {
     use super::input_identity;
     use crate::check_update::detect_input_type;
+
+    #[test]
+    fn fas_is_offered_only_when_asked_for() {
+        use super::fas_to_offer;
+        let configured = || Some("salimma".to_string());
+        // Omitted: nobody is volunteered. This used to fall back to
+        // the configured FAS, so every request volunteered whoever
+        // had one and there was no way to file without.
+        assert_eq!(fas_to_offer(None, configured()), None);
+        // Bare `--fas`: the configured one.
+        assert_eq!(fas_to_offer(Some(""), configured()), configured());
+        // Named: that one, even when a different FAS is configured.
+        assert_eq!(
+            fas_to_offer(Some("someone"), configured()).as_deref(),
+            Some("someone")
+        );
+        // Bare with nothing configured volunteers nobody rather than
+        // an empty name.
+        assert_eq!(fas_to_offer(Some(""), None), None);
+    }
 
     #[test]
     fn one_update_written_two_ways_is_one_input() {

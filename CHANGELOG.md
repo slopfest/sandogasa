@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### ebranch: `--fas` volunteers you, and omitting it no longer does
+
+`ebranch file-requests --fas` was an error — "a value is required" —
+and the only way to use the FAS from `ebranch config` was to leave the
+flag out entirely. That was also the only behaviour available: the
+configured FAS applied whether or not the flag was passed, so every
+request filed by anyone with one offered them as co-maintainer, and
+there was no way to file without volunteering.
+
+Three cases now, as the flag's own description always implied:
+
+| | |
+| --- | --- |
+| omitted | file without volunteering |
+| `--fas` | the FAS from `ebranch config` |
+| `--fas NAME` | that FAS |
+
+A bare `--fas` takes the next word as the name, so it goes last or the
+positionals are separated with `--`:
+
+```sh
+ebranch file-requests --fas -- pkgs.toml epel10
+```
+
+Anyone used to omitting the flag and being volunteered anyway now has
+to ask for it.
+
 ### ebranch, poi-tracker: keep an update in step with RPM Fusion
 
 Some Fedora packages have to move in lockstep with a counterpart in
