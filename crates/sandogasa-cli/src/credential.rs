@@ -71,8 +71,8 @@ pub fn next_step(verdict: &KeyVerdict, interactive: bool) -> Next {
 
 /// Say what is being checked, and flush so the verdict lands on the
 /// same line.
-fn announce(label: &str, secret: &str) {
-    print!("Validating {label} {secret}... ");
+fn announce(label: &str, noun: &str) {
+    print!("Validating {label} {noun}... ");
     let _ = std::io::Write::flush(&mut std::io::stdout());
 }
 
@@ -89,18 +89,18 @@ fn note(verdict: &KeyVerdict) -> &str {
 /// value edited by hand to watch the check fail must not be replaced
 /// by something that assumes a typo, and an empty answer keeps what
 /// is there instead of aborting the command.
-fn ask_replacement(label: &str, secret: &str) -> Option<String> {
-    match crate::confirm(&format!("enter a new {label} {secret}?"), true) {
+fn ask_replacement(label: &str, noun: &str) -> Option<String> {
+    match crate::confirm(&format!("enter a new {label} {noun}?"), true) {
         Ok(true) => {}
         _ => {
-            eprintln!("warning: keeping the {label} {secret} as it is; it will not work.");
+            eprintln!("warning: keeping the {label} {noun} as it is; it will not work.");
             return None;
         }
     }
-    match sandogasa_config::prompt_field(label, secret, true, None) {
+    match sandogasa_config::prompt_field(label, noun, true, None) {
         Ok(new) if !new.trim().is_empty() => Some(new.trim().to_string()),
         _ => {
-            eprintln!("warning: nothing entered; keeping the {label} {secret} as it is.");
+            eprintln!("warning: nothing entered; keeping the {label} {noun} as it is.");
             None
         }
     }
@@ -110,11 +110,11 @@ fn ask_replacement(label: &str, secret: &str) -> Option<String> {
 ///
 /// Shared by the blocking and async loops so they cannot drift: the
 /// only thing that differs between them is how the check is called.
-fn settle(label: &str, secret: &str, verdict: &KeyVerdict) -> Next {
+fn settle(label: &str, noun: &str, verdict: &KeyVerdict) -> Next {
     println!("{}", note(verdict));
     let step = next_step(verdict, std::io::stdin().is_terminal());
     if warn_kept(verdict, step) {
-        eprintln!("warning: the {label} {secret} was kept but will not work.");
+        eprintln!("warning: the {label} {noun} was kept but will not work.");
     }
     step
 }
@@ -130,24 +130,24 @@ fn warn_kept(verdict: &KeyVerdict, step: Next) -> bool {
 
 /// Validate a credential, offering to replace one that is refused.
 ///
-/// `secret` names what it is — "API key", "token" — and appears in
+/// `noun` names what it is — "API key", "token" — and appears in
 /// every line this prints, because telling somebody their API key is
 /// refused when they configured a token is its own small confusion.
-pub async fn validated_key<F>(label: &str, secret: &str, key: String, check: F) -> Checked
+pub async fn validated_key<F>(label: &str, noun: &str, key: String, check: F) -> Checked
 where
     F: Fn(String) -> Pin<Box<dyn Future<Output = KeyVerdict>>>,
 {
     let mut key = key;
     loop {
-        announce(label, secret);
+        announce(label, noun);
         let verdict = check(key.clone()).await;
-        if settle(label, secret, &verdict) == Next::Keep {
+        if settle(label, noun, &verdict) == Next::Keep {
             return Checked {
                 key,
                 accepted: matches!(verdict, KeyVerdict::Accepted(_)),
             };
         }
-        match ask_replacement(label, secret) {
+        match ask_replacement(label, noun) {
             Some(new) => key = new,
             None => {
                 return Checked {
@@ -164,21 +164,21 @@ where
 /// Several tools validate a token with a blocking call, and wrapping
 /// those in a runtime only to await them would mean each caller
 /// carrying one — and panicking where a runtime already exists.
-pub fn validated_key_blocking<F>(label: &str, secret: &str, key: String, check: F) -> Checked
+pub fn validated_key_blocking<F>(label: &str, noun: &str, key: String, check: F) -> Checked
 where
     F: Fn(&str) -> KeyVerdict,
 {
     let mut key = key;
     loop {
-        announce(label, secret);
+        announce(label, noun);
         let verdict = check(&key);
-        if settle(label, secret, &verdict) == Next::Keep {
+        if settle(label, noun, &verdict) == Next::Keep {
             return Checked {
                 key,
                 accepted: matches!(verdict, KeyVerdict::Accepted(_)),
             };
         }
-        match ask_replacement(label, secret) {
+        match ask_replacement(label, noun) {
             Some(new) => key = new,
             None => {
                 return Checked {

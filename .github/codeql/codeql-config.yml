@@ -1,0 +1,33 @@
+# CodeQL configuration for sandogasa.
+#
+# Only one query is excluded, and the reason is specific rather than
+# "it was noisy": rust/cleartext-logging cannot be right about this
+# workspace. It treats a username as sensitive data, and several tools
+# here exist precisely to print usernames — sandogasa-hattrack reports
+# what a contributor did across forges, sandogasa-pkg-acl prints who
+# you are authenticated as, sandogasa-report names the account it is
+# fetching for. Every one of its 38 findings on 2026-10-13 was a
+# username being printed as the tool's own output, or a prompt naming
+# the *kind* of credential it is about to ask for ("Enter Bugzilla API
+# key: "), never a credential value.
+#
+# It is excluded here rather than dismissed one alert at a time
+# because CodeQL has no alert-suppression query for Rust — the
+# `// codeql[rule-id]` comment that works for Go, Java, C#, Python and
+# JavaScript has no Rust equivalent — so every new line that prints a
+# username would raise another alert to dismiss by hand. A security
+# tab that always has three dozen known-false findings in it is one
+# nobody reads, which costs more than this query could ever find here.
+#
+# rust/cleartext-transmission is deliberately NOT excluded. Its
+# findings are false too — every client attaches credentials through
+# `with_api_key`, which calls `sandogasa_cli::ensure_secure_url` and
+# refuses anything but https or loopback — but CodeQL cannot see that
+# guard, and the query would catch a *new* client that forgot to call
+# it. Those are rare and worth reviewing, so they are dismissed
+# individually instead.
+name: sandogasa
+
+query-filters:
+  - exclude:
+      id: rust/cleartext-logging
