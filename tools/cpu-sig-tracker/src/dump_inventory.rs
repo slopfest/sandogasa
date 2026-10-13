@@ -126,6 +126,7 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
                 labels: vec![],
                 workloads: Default::default(),
                 private_fields: vec![],
+                synced: None,
             },
             package: vec![],
         }
@@ -295,6 +296,7 @@ mod tests {
                 labels: vec![],
                 workloads: Default::default(),
                 private_fields: vec![],
+                synced: None,
             },
             package: vec![],
         };

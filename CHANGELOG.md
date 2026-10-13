@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### ebranch, poi-tracker: find the RPM Fusion inventory, and say how old it is
+
+`--rpmfusion-inventory` had to be given a path, so the inventory a
+package ships was unusable without typing out where it lives. The flag
+now takes an optional value: on its own it reads
+`$XDG_DATA_HOME/ebranch/rpmfusion/inventory.toml` if you have generated
+one, and otherwise `/usr/share/ebranch/rpmfusion/inventory.toml`, which
+is where a package should install it. A path still wins over both, and
+`$SANDOGASA_DATADIR` relocates the system layer the way `$SANDOGASA_ETC`
+does for config.
+
+Under `ebranch/` rather than a project-wide directory because ebranch is
+the only tool that looks one up — `sync-rpmfusion` is always told where
+to write — so the per-tool rule the config, cache and state paths follow
+holds here too.
+
+The user's copy is preferred over the packaged one deliberately: an
+inventory is a snapshot of somebody else's repositories taken when it
+was generated, and RPM Fusion moves underneath it.
+
+Which is why it now carries the day it was taken. `sync-rpmfusion`
+writes `synced` into `[inventory]`, and ebranch prints the inventory it
+read and that date — a counterpart that looks wrong is usually one
+added after the snapshot was. An inventory written before this, or by
+hand, has no date and says so.
+
+Note for packagers: install the inventory under `/usr/share`, not
+`/etc`. It is generated data rather than configuration, and `/etc`
+would make it `%config(noreplace)` — pinning every user to the
+snapshot they first installed while the real thing moves on.
+
 ### sandogasa-distgit, sandogasa-jira, sandogasa-nvd: refuse a credential on a plaintext endpoint (breaking)
 
 Three clients would attach an API token to a base URL of any scheme, so

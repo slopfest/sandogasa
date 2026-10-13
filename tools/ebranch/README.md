@@ -861,7 +861,30 @@ ebranch check-update f43-build-side-1 \
 ```
 
 ```
+RPM Fusion inventory: configs/rpmfusion/inventory.toml (synced 2026-10-13)
 RPM Fusion ships a counterpart: libheif -> libheif-freeworld (rebuild it before this goes stable)
+```
+
+The flag takes the path on its own, so you do not have to name one:
+
+```sh
+ebranch check-update f43-build-side-1 --rpmfusion-inventory
+```
+
+It reads `$XDG_DATA_HOME/ebranch/rpmfusion/inventory.toml` if you have
+generated one there, and otherwise
+`/usr/share/ebranch/rpmfusion/inventory.toml`, where a package
+installs it. Your own copy wins, because the packaged one is a
+snapshot from when the package was built and RPM Fusion moves on
+without it — which is what the `synced` date in the line above is for.
+`$SANDOGASA_DATADIR` relocates the system path, for an installation
+somewhere other than `/usr/share`.
+
+From a checkout, name the file instead — it is not laid out the way an
+installation is:
+
+```sh
+ebranch check-update ... --rpmfusion-inventory configs/rpmfusion/inventory.toml
 ```
 
 With `--submit`, a counterpart turns auto-push off and the plan says

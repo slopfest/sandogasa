@@ -134,6 +134,7 @@ pub fn file_into_inventory(path: &str, name: &str, maintainer: &str) -> Result<b
                 labels: Vec::new(),
                 workloads: BTreeMap::new(),
                 private_fields: Vec::new(),
+                synced: None,
             },
             package: Vec::new(),
         }
@@ -592,6 +593,7 @@ pub fn to_inventory(
             labels: Vec::new(),
             workloads: BTreeMap::new(),
             private_fields: Vec::new(),
+            synced: None,
         },
         package: report
             .culled

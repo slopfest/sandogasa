@@ -3160,6 +3160,7 @@ fn load_or_create_inventory(
             labels: vec![],
             workloads: workloads_from_names(workloads),
             private_fields: vec![],
+            synced: None,
         },
         package: vec![],
     })
@@ -3675,6 +3676,12 @@ fn cmd_sync_rpmfusion(args: &SyncRpmfusionArgs) -> CmdResult {
     let stale = stale_packages(&inventory, &everywhere, &[]);
     let pruned = stale.len();
     prune_or_warn_stale(&mut inventory, &stale, args.prune);
+
+    // Stamp the day it was read. A copy of this shipped in a package
+    // is a snapshot of somebody else's repositories and goes stale
+    // without anything looking wrong, so the reader -- and ebranch,
+    // which may be using the packaged copy -- can see its age.
+    inventory.inventory.synced = Some(chrono::Local::now().date_naive().to_string());
 
     sandogasa_inventory::save(&inventory, &args.output)?;
     print_sync_summary(

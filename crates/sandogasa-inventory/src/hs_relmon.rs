@@ -301,6 +301,7 @@ mod tests {
                 labels: vec![],
                 workloads: BTreeMap::new(),
                 private_fields: vec![],
+                synced: None,
             },
             package: packages,
         }

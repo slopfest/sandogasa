@@ -99,6 +99,7 @@ pub fn import(json_str: &str) -> Result<Inventory, String> {
             labels: json.labels,
             workloads: BTreeMap::new(),
             private_fields: vec![],
+            synced: None,
         },
         package: packages,
     })

@@ -470,8 +470,10 @@ severity for --type security.",
     disable_autokarma: bool,
 
     /// RPM Fusion inventory (poi-tracker sync-rpmfusion). A package
-    /// with a counterpart there never auto-pushes.
-    #[arg(long, value_name = "PATH")]
+    /// with a counterpart there never auto-pushes. Without a path,
+    /// the inventory you generated is used, or the one your packages
+    /// shipped.
+    #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = "")]
     rpmfusion_inventory: Option<String>,
 
     /// Fedora-to-RPM-Fusion renames for counterparts the naming does
@@ -1017,6 +1019,50 @@ fn remember_rebuilds(
     }
 }
 
+/// The RPM Fusion inventory to read, given what `--rpmfusion-inventory`
+/// was handed.
+///
+/// A path names one. The flag on its own takes the first of these that
+/// exists, so the path does not have to be typed out:
+///
+/// 1. `$XDG_DATA_HOME/ebranch/rpmfusion/inventory.toml` — one you
+///    generated with `poi-tracker sync-rpmfusion -o`
+/// 2. `<datadir>/ebranch/rpmfusion/inventory.toml` — one a package
+///    shipped, where datadir is `$SANDOGASA_DATADIR` or `/usr/share`
+///
+/// Under `ebranch/` rather than a project-wide directory because this
+/// is the only tool that looks one up: `sync-rpmfusion` is always told
+/// where to write. That keeps the per-tool rule the config, cache and
+/// state paths already follow.
+///
+/// The user copy wins because the packaged one is a snapshot taken
+/// when the package was built, and RPM Fusion moves underneath it.
+/// `$SANDOGASA_DATADIR` relocates the system layer as `SANDOGASA_ETC`
+/// does for the config one.
+fn rpmfusion_inventory_path(flag: &str) -> Result<std::path::PathBuf, String> {
+    if !flag.is_empty() {
+        return Ok(std::path::PathBuf::from(flag));
+    }
+    let rel = std::path::Path::new("ebranch/rpmfusion/inventory.toml");
+    let mut tried: Vec<String> = Vec::new();
+    let datadir = std::env::var_os("SANDOGASA_DATADIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/usr/share"));
+    for base in [dirs::data_dir(), Some(datadir)].into_iter().flatten() {
+        let path = base.join(rel);
+        if path.is_file() {
+            return Ok(path);
+        }
+        tried.push(path.display().to_string());
+    }
+    Err(format!(
+        "no RPM Fusion inventory found; generate one with `poi-tracker \
+         sync-rpmfusion -o <path>` and pass it to --rpmfusion-inventory, \
+         or install one at {}",
+        tried.join(" or ")
+    ))
+}
+
 fn rpmfusion_counterparts(
     inventory: &str,
     a: &CheckUpdateArgs,
@@ -1028,6 +1074,20 @@ fn rpmfusion_counterparts(
     })?;
     let counterparts =
         rpmfusion::Counterparts::load(inventory, a.rpmfusion_renames.as_deref(), &release)?;
+    // Say which inventory answered and when it was taken. A packaged
+    // copy is a snapshot of somebody else's repositories, and a
+    // counterpart that looks wrong is usually one that was added
+    // after the snapshot was.
+    println!(
+        "RPM Fusion inventory: {inventory}{}",
+        match sandogasa_inventory::load(inventory)
+            .ok()
+            .and_then(|i| i.inventory.synced)
+        {
+            Some(day) => format!(" (synced {day})"),
+            None => " (no sync date recorded)".to_string(),
+        }
+    );
     let found = counterparts
         .in_update(&report.updated_packages)
         .into_iter()
@@ -1473,42 +1533,54 @@ fn main() -> ExitCode {
                     // run without --submit still says what it found: the
                     // counterpart is worth knowing when reviewing the
                     // update, not only when submitting it.
-                    let rpmfusion = match a.rpmfusion_inventory.as_deref() {
-                        Some(path) => match rpmfusion_counterparts(path, a, &report) {
-                            Ok((counterparts, found)) => {
-                                // Once per pairing, not once per input:
-                                // a batch carrying one change across
-                                // seven updates names the same
-                                // counterpart seven times, and after
-                                // the first it is noise. A run of one
-                                // update still prints it where it did.
-                                for (fedora, rf) in &found {
-                                    if announced.insert(format!("{fedora} -> {rf}")) {
-                                        println!(
-                                            "RPM Fusion ships a counterpart: {fedora} -> {rf} \
-                                             (rebuild it before this goes stable)"
-                                        );
-                                    }
-                                }
-                                // Said here as well as in the comment: the
-                                // operator is who can act on it, and they
-                                // are not necessarily going to read back
-                                // what was posted.
-                                if !found.is_empty() && report.autokarma == Some(true) {
-                                    eprintln!(
-                                        "warning: {input} still auto-pushes at its karma \
-                                         threshold, so it can reach stable before RPM \
-                                         Fusion rebuilds. This does not change it for you."
-                                    );
-                                }
-                                Some((counterparts, found))
-                            }
+                    let resolved = match a.rpmfusion_inventory.as_deref() {
+                        Some(flag) => match rpmfusion_inventory_path(flag) {
+                            Ok(path) => Some(path),
                             Err(e) => {
                                 eprintln!("error: {e}");
-                                overall = ExitCode::FAILURE;
-                                break 'inputs;
+                                return ExitCode::FAILURE;
                             }
                         },
+                        None => None,
+                    };
+                    let rpmfusion = match resolved.as_deref() {
+                        Some(path) => {
+                            match rpmfusion_counterparts(&path.to_string_lossy(), a, &report) {
+                                Ok((counterparts, found)) => {
+                                    // Once per pairing, not once per input:
+                                    // a batch carrying one change across
+                                    // seven updates names the same
+                                    // counterpart seven times, and after
+                                    // the first it is noise. A run of one
+                                    // update still prints it where it did.
+                                    for (fedora, rf) in &found {
+                                        if announced.insert(format!("{fedora} -> {rf}")) {
+                                            println!(
+                                                "RPM Fusion ships a counterpart: {fedora} -> {rf} \
+                                             (rebuild it before this goes stable)"
+                                            );
+                                        }
+                                    }
+                                    // Said here as well as in the comment: the
+                                    // operator is who can act on it, and they
+                                    // are not necessarily going to read back
+                                    // what was posted.
+                                    if !found.is_empty() && report.autokarma == Some(true) {
+                                        eprintln!(
+                                            "warning: {input} still auto-pushes at its karma \
+                                         threshold, so it can reach stable before RPM \
+                                         Fusion rebuilds. This does not change it for you."
+                                        );
+                                    }
+                                    Some((counterparts, found))
+                                }
+                                Err(e) => {
+                                    eprintln!("error: {e}");
+                                    overall = ExitCode::FAILURE;
+                                    break 'inputs;
+                                }
+                            }
+                        }
                         None => None,
                     };
                     let rpmfusion_found = rpmfusion

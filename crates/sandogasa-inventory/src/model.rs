@@ -71,6 +71,14 @@ pub struct InventoryMeta {
     /// Field names to strip from all packages on export.
     #[serde(default)]
     pub private_fields: Vec<String>,
+    /// The day the package list was last synced from its source, as
+    /// `YYYY-MM-DD`. An inventory generated from somebody else's
+    /// repositories is a snapshot and goes stale without anything
+    /// looking wrong, so a reader -- and a tool reading a copy
+    /// shipped in a package -- can see how old the answer is.
+    /// Absent in an inventory written by hand or before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced: Option<String>,
 }
 
 /// Per-workload metadata for content-resolver export.
@@ -434,6 +442,7 @@ mod tests {
                     ),
                 ]),
                 private_fields: vec!["poc".to_string(), "team".to_string()],
+                synced: None,
             },
             package: vec![],
         };
@@ -574,6 +583,7 @@ mod tests {
                 labels: vec![],
                 workloads: BTreeMap::new(),
                 private_fields: vec![],
+                synced: None,
             },
             package: vec![make_pkg("new-pkg")],
         };
@@ -647,6 +657,7 @@ mod tests {
                 labels: vec![],
                 workloads: BTreeMap::new(),
                 private_fields: vec![],
+                synced: None,
             },
             package: vec![make_pkg("foo")],
         };

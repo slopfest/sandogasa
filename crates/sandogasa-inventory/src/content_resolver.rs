@@ -148,6 +148,7 @@ mod tests {
                     ),
                 ]),
                 private_fields: vec!["poc".to_string()],
+                synced: None,
             },
             package: vec![
                 Package {

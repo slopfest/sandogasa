@@ -53,6 +53,13 @@
             "type": "string"
           }
         },
+        "synced": {
+          "description": "The day the package list was last synced from its source, as\n`YYYY-MM-DD`. An inventory generated from somebody else's\nrepositories is a snapshot and goes stale without anything\nlooking wrong, so a reader -- and a tool reading a copy\nshipped in a package -- can see how old the answer is.\nAbsent in an inventory written by hand or before this existed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "workloads": {
           "description": "Workload definitions. Keys are workload identifiers; values\ncarry per-workload metadata for content-resolver export.\nPackages without explicit workloads inherit all keys.",
           "type": "object",

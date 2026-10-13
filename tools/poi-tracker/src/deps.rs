@@ -29,6 +29,7 @@ pub fn to_inventory(
             labels: Vec::new(),
             workloads: BTreeMap::new(),
             private_fields: Vec::new(),
+            synced: None,
         },
         package: report
             .collected

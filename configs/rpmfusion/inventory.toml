@@ -4,6 +4,7 @@ description = "Packages synced from RPM Fusion (rpmfusion)"
 maintainer = "rpmfusion"
 labels = []
 private_fields = []
+synced = "2026-10-13"
 
 [inventory.workloads.el10]
 description = "RPM Fusion packages for el10"

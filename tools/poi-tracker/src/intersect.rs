@@ -72,6 +72,7 @@ mod tests {
                 labels: Vec::new(),
                 workloads: Default::default(),
                 private_fields: Vec::new(),
+                synced: None,
             },
             package: entries
                 .iter()

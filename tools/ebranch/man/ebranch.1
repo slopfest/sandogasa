@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-10-12 "sandogasa 0.25.4" "Sandogasa Manual"
+.TH ebranch 1 2026-10-13 "sandogasa 0.25.4" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -266,8 +266,8 @@ Negative karma that unpushes (default \-3)
 \fB\-\-disable\-autokarma\fR
 Don\*(Aqt auto\-push at the karma thresholds
 .TP
-\fB\-\-rpmfusion\-inventory\fR \fI<PATH>\fR
-RPM Fusion inventory (poi\-tracker sync\-rpmfusion). A package with a counterpart there never auto\-pushes
+\fB\-\-rpmfusion\-inventory\fR [\fI<PATH>\fR]
+RPM Fusion inventory (poi\-tracker sync\-rpmfusion). A package with a counterpart there never auto\-pushes. Without a path, the inventory you generated is used, or the one your packages shipped
 .TP
 \fB\-\-rpmfusion\-renames\fR \fI<PATH>\fR
 Fedora\-to\-RPM\-Fusion renames for counterparts the naming does not make guessable (configs/rpmfusion/renames.toml)
