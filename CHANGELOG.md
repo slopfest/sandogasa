@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a fix in some releases does not answer a family bug
+
+A bug fixed on one release and not another was closed on the strength of
+the one. `[fedora-all]` and `[epel-all]` cover every release of their
+family, and the verdict was the best across them — so an update that
+shipped outranked a release still carrying the flaw, and the bug was
+answered while users on that release were not.
+
+Such a bug now stays open. The comment names the updates that did fix a
+release and the releases still unfixed, and a `needinfo` asks the
+assignee about them, since a release left behind is an omission far more
+often than a decision. Nothing is closed, and `settled_bug` returns
+nothing for it, so no tracker block or resolution rides along either.
+With no assignee, or when the assignee is the person running the sweep,
+the comment stands alone and the flag is skipped.
+
+Telling "unfixed" from "not shipped here" is the whole difficulty, and
+`categorize_bug` could not: with no updates at all it returned `NoFix`,
+which reads as unfixed and would have asked a maintainer about EPEL 8
+for a package that was never in EPEL 8. A release now answers one of
+four ways — unreadable, not shipped, unfixed, or a verdict — where three
+of those used to be the same `None`. A package shipped in a release's GA
+and never updated also looks like "not shipped", which is the safe
+direction: it asks nobody rather than asking wrongly.
+
 ### fedora-cve-triage: a Bodhi query that fails is not a release with no updates
 
 A release could drop out of a bug's verdict without a word, and the loss
