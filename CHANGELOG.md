@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a tracker covers every release of its family
+
+A `[fedora-all]` bug was answered against rawhide alone. Both
+`sandogasa` bugs for CVE-2026-93600 are the shape that exposes it: the
+Fedora one read as *never affected*, because rawhide's oldest build
+already linked a fixed `rust-rustls-webpki`, while f43, f44 and f45 had
+shipped builds linking 0.103.10 and older for months. Closing it would
+have asserted that Fedora was never exposed, on the strength of the one
+release that happened not to be.
+
+ProdSec files one `[fedora-all]` tracker on rawhide and one
+`[epel-all]` on the newest EPEL release. That is where a bug is filed,
+not what it is about: each means every release of its family. EPEL was
+already read that way; Fedora was not, and had no marker of its own.
+Both now resolve through `family_releases`, which also leaves ELN out —
+it rides under the Fedora prefix and takes no reviewed updates.
+
+Widening the span alone would not have changed the answer, because the
+buildroot path returned the first release that answered and rawhide
+answers first. It now weighs every release and keeps the best, the rule
+the path beside it already followed: an update that shipped the fix
+outranks a release that never needed one, so a bug fixed in f43 and
+never relevant to rawhide reports the f43 update. The Fedora bug now
+names `sandogasa-0.11.1-1.fc43`, the first update to carry fixed code
+to a Fedora user — `0.11.0-1.fc43` was built but never shipped in an
+update, and a build nobody received fixed nothing.
+
 ### fedora-cve-triage: an update that fixed nothing is not the fix
 
 Both `sandogasa` bugs for CVE-2026-93600 were going to be closed as
@@ -30,15 +57,8 @@ a build there would assert the thing it denies. It keeps the
 per shade of already-fixed buys nothing — and the comment carries the
 evidence: the oldest build, the buildroot package and its version.
 
-The span is still the branch the bug names, which is not yet the whole
-question. ProdSec files one `[fedora-all]` tracker on rawhide and one
-`[epel-all]` on the newest EPEL release, but both mean every release of
-their family. Rawhide's oldest `sandogasa` build is `0.19.4-1.fc46`,
-which already carried the fix — so the Fedora bug reads as never
-affected, while f43, f44 and f45 shipped builds linking 0.103.10 and
-older for months. Every EPEL build ever made, `0.11.0-1.el10_2`
-included, already carried it. Widening a tracker to its whole family is
-the next change.
+The span is the branch the bug names, which is narrower than the bug —
+see the entry above, which widens it.
 
 ### fedora-cve-triage: take a GitHub token, and stop reading a refusal as an answer
 
