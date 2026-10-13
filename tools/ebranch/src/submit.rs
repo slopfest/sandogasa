@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use sandogasa_bodhi::models::NewUpdateFromTag;
+use sandogasa_bodhi::models::{NewUpdateFromTag, UpdateSource};
 use sandogasa_bodhi::{BodhiClient, auth};
 
 /// What to submit alongside the side tag.
@@ -213,6 +213,18 @@ fn effective_autokarma(opts: &SubmitOptions) -> bool {
 /// Format the submission plan shown for confirmation. Leads with the
 /// package list — the whole point of checking before submitting is
 /// spotting a subpackage update that is accidentally missing one.
+/// What the plan calls this submission.
+///
+/// A side tag names itself; a list of builds names the NVRs, since
+/// the packages line below shows source names and the dist tag is
+/// what says which release each update will be for.
+fn source_label(source: &UpdateSource) -> String {
+    match source {
+        UpdateSource::FromTag(tag) => tag.clone(),
+        UpdateSource::Builds(nvrs) => nvrs.join(", "),
+    }
+}
+
 fn plan_text(tag: &str, packages: &[String], bugs: &[u64], opts: &SubmitOptions) -> String {
     use std::fmt::Write as _;
     let mut o = String::new();
@@ -286,10 +298,11 @@ fn confirm_plan(
 /// Returns the created update alias(es) so the caller can post the
 /// check report as a follow-up comment.
 pub fn run(
-    tag: &str,
+    source: &UpdateSource,
     report: &crate::check_update::CheckUpdateReport,
     opts: &SubmitOptions,
 ) -> Result<Vec<String>, String> {
+    let label = source_label(source);
     let packages = &report.updated_packages;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let bz = sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com");
@@ -314,8 +327,8 @@ pub fn run(
 
     if opts.assume_yes {
         // No prompt, but still show what is being submitted.
-        eprint!("{}", plan_text(tag, packages, &bugs, opts));
-    } else if !confirm_plan(tag, packages, &bugs, opts)? {
+        eprint!("{}", plan_text(&label, packages, &bugs, opts));
+    } else if !confirm_plan(&label, packages, &bugs, opts)? {
         return Err("aborted: update not submitted".to_string());
     }
 
@@ -331,7 +344,7 @@ pub fn run(
             .with_token(token)
             .map_err(|e| e.to_string())?;
         let req = NewUpdateFromTag {
-            from_tag: tag.to_string(),
+            source: source.clone(),
             notes: opts.notes.clone(),
             update_type: opts.update_type.clone(),
             severity: opts.severity.clone(),

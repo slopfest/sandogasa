@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+### ebranch: submit builds by NVR, not only from a side tag (breaking)
+
+`check-update --submit` could only submit builds that lived in a Koji
+side tag, so a set of builds made without one could not be turned into
+updates at all. That was the primary half of the original request and
+only the side-tag half was built.
+
+NVRs are now an input kind, recognised by their dist tag. They are
+regrouped by release before anything is planned, because an update is
+one release's worth: twelve builds across four releases are four
+updates of three, not twelve of one. Bodhi would split a mixed list
+the same way, but then the whole batch is one confirmation instead of
+one plan per update — and the plan is where a missing subpackage gets
+caught.
+
+```sh
+ebranch check-update sandogasa-0.25.4-1.fc43,sandogasa-0.25.4-1.fc44 \
+    --submit --notes "..."
+```
+
+The grouping is by dist tag, which is a proxy for what Bodhi uses —
+the release a build's Koji tag belongs to. The two agree for every
+shape this tool meets, checked against live libheif updates where
+`fc43`..`fc46`, `el9`, `el10_2`, `el10_3`, `el10_4` and `eln159` each
+map to exactly one release and no release appears under two tags. A
+build whose dist tag disagreed with its tag would group wrongly; the
+alternative is a Koji round trip per build.
+
+An ELN build is refused rather than guessed at: ELN takes no reviewed
+updates, and inventing a branch would check it against repositories
+that are not its own.
+
+`sandogasa-bodhi`'s `NewUpdateFromTag` carries `source: UpdateSource`
+in place of `from_tag: String`, since a request now names either a tag
+or a list of builds. Callers constructing one need
+`UpdateSource::FromTag(tag)`.
+
 ## v0.25.4
 
 ### ebranch: `--fas` volunteers you, and omitting it no longer does

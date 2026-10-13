@@ -18,6 +18,7 @@ use serde::Serialize;
 // ---- Public types ----
 
 /// What kind of input the user provided.
+#[derive(Debug)]
 pub enum InputKind {
     /// A Koji side tag name (e.g. "epel9-build-side-133287").
     SideTag(String),
@@ -27,6 +28,84 @@ pub enum InputKind {
     /// `uutils-and-nushell`), from a copr URL or an `owner/project`
     /// spec.
     Copr { owner: String, project: String },
+    /// Builds named directly, as NVRs
+    /// (e.g. "sandogasa-0.25.4-1.fc43").
+    Builds(Vec<String>),
+}
+
+/// The dist tag an NVR ends with (`fc43`, `el10_2`, `eln159`), if it
+/// ends with one.
+///
+/// This is what groups builds into updates. Bodhi groups by the
+/// release a build's Koji tag belongs to; the dist tag agrees with
+/// that for every shape this tool meets — checked against real
+/// libheif updates, where `fc43`..`fc46`, `el9`, `el10_2`, `el10_3`,
+/// `el10_4` and `eln159` each map to exactly one release and no
+/// release appears under two tags. A build whose dist tag disagreed
+/// with its tag would group wrongly; the alternative is a Koji round
+/// trip per build.
+pub fn dist_tag(nvr: &str) -> Option<&str> {
+    let tag = nvr.rsplit_once('.')?.1;
+    // `eln` before `el`, or eln159 parses as el + "n159".
+    let rest = tag
+        .strip_prefix("fc")
+        .or_else(|| tag.strip_prefix("eln"))
+        .or_else(|| tag.strip_prefix("el"))?;
+    // `fc43` and `eln159` end there; `el10_2` carries the minor.
+    let (major, minor) = match rest.split_once('_') {
+        Some((a, b)) => (a, Some(b)),
+        None => (rest, None),
+    };
+    let numeric = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    (numeric(major) && minor.is_none_or(numeric)).then_some(tag)
+}
+
+/// Whether a token names a build rather than a tag or an alias.
+///
+/// A side tag is `<branch>-build-side-<digits>` and carries no dist
+/// tag, so the two cannot be confused — but the test is deliberately
+/// positive rather than "not a side tag", because the fallback for
+/// anything unrecognised is still a side tag and sending a build
+/// there is the cheaper mistake to make.
+fn looks_like_build(s: &str) -> bool {
+    s.matches('-').count() >= 2 && dist_tag(s).is_some()
+}
+
+/// Regroup a command line so each build input is one release's worth.
+///
+/// Inputs that are not builds pass through untouched and keep their
+/// order; builds are collected and re-emitted as one comma-joined
+/// input per dist tag, which is what makes a stack spanning four
+/// releases four updates rather than one per build.
+pub fn group_builds_by_release(inputs: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut by_tag: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for input in inputs {
+        match looks_like_build(input).then(|| dist_tag(input)).flatten() {
+            Some(tag) => by_tag.entry(tag).or_default().push(input.as_str()),
+            None => out.push(input.clone()),
+        }
+    }
+    out.extend(by_tag.into_values().map(|nvrs| nvrs.join(",")));
+    out
+}
+
+/// One update's builds, as NVRs sharing a dist tag.
+///
+/// Comma-joined because the caller groups builds by release first:
+/// an update is one release's worth, and Bodhi would otherwise split
+/// a mixed list into several, which is the same answer by a route
+/// nobody can confirm one update at a time. Every part has to look
+/// like a build, so one stray token leaves the whole input to the
+/// side-tag fallback rather than submitting part of it.
+fn parse_builds(input: &str) -> Option<Vec<String>> {
+    let parts: Vec<&str> = input.split(',').map(str::trim).collect();
+    if parts.is_empty() || !parts.iter().all(|p| looks_like_build(p)) {
+        return None;
+    }
+    let tags: std::collections::BTreeSet<&str> = parts.iter().filter_map(|p| dist_tag(p)).collect();
+    // A mixed group is the caller's bug, not something to paper over.
+    (tags.len() == 1).then(|| parts.iter().map(|p| p.to_string()).collect())
 }
 
 /// Options for the check-update command.
@@ -287,6 +366,8 @@ pub fn detect_input_type(input: &str) -> InputKind {
         // An owner/project spec (e.g. @rust/uutils-and-nushell) —
         // side tags and Bodhi aliases never contain '/'.
         InputKind::Copr { owner, project }
+    } else if let Some(nvrs) = parse_builds(input) {
+        InputKind::Builds(nvrs)
     } else {
         InputKind::SideTag(input.to_string())
     }
@@ -705,6 +786,20 @@ pub(crate) fn check_update_with(
                     None,
                     None,
                 )
+            }
+            InputKind::Builds(nvrs) => {
+                // The dist tag says which release these are for, and
+                // every build in a group shares it — the grouping is
+                // what put them together.
+                let branch = branch_for_builds(&nvrs, opts.branch.clone())?;
+                if opts.verbose {
+                    eprintln!(
+                        "[check-update] {} build(s) for {branch}: {}",
+                        nvrs.len(),
+                        nvrs.join(", ")
+                    );
+                }
+                (None, None, nvrs, branch, None, None, None)
             }
         };
 
@@ -2057,6 +2152,54 @@ pub fn branch_from_side_tag(tag: &str) -> Option<String> {
     let id = &tag[end + "-build-side-".len()..];
     (!prefix.is_empty() && !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
         .then(|| prefix.to_string())
+}
+
+/// The fedrq branch a dist tag belongs to: `fc43` is `f43`, `el9` is
+/// `epel9`, and an EPEL minor such as `el10_2` ships from `epel10.2`.
+///
+/// ELN has no branch here and returns nothing rather than guessing:
+/// it takes no reviewed updates, and inventing one would check an
+/// update against the wrong repositories.
+pub fn branch_for_dist_tag(tag: &str) -> Option<String> {
+    if let Some(n) = tag.strip_prefix("fc") {
+        return n
+            .chars()
+            .all(|c| c.is_ascii_digit())
+            .then(|| format!("f{n}"));
+    }
+    let rest = tag.strip_prefix("el")?;
+    let (major, minor) = match rest.split_once('_') {
+        Some((a, b)) => (a, Some(b)),
+        None => (rest, None),
+    };
+    if major.is_empty() || !major.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(match minor {
+        Some(m) if m.chars().all(|c| c.is_ascii_digit()) => format!("epel{major}.{m}"),
+        Some(_) => return None,
+        None => format!("epel{major}"),
+    })
+}
+
+/// The branch a group of builds is for.
+///
+/// `--branch` wins; otherwise the dist tag says it, and every build
+/// in a group shares one because the grouping is what put them
+/// together. An unreadable or unmapped tag is an error rather than a
+/// guess: checking against the wrong release's repositories would
+/// report breakage that is not there, or miss breakage that is.
+fn branch_for_builds(nvrs: &[String], explicit: Option<String>) -> Result<String, String> {
+    if let Some(b) = explicit {
+        return Ok(b);
+    }
+    let first = nvrs
+        .first()
+        .ok_or_else(|| "no builds to check".to_string())?;
+    let tag = dist_tag(first)
+        .ok_or_else(|| format!("could not read a dist tag from {first}; pass --branch"))?;
+    branch_for_dist_tag(tag)
+        .ok_or_else(|| format!("no branch matches the dist tag {tag}; pass --branch"))
 }
 
 /// Infer the fedrq branch for a side tag when `--branch` is omitted.
@@ -3628,6 +3771,106 @@ mod tests {
     }
 
     // --- branch_from_side_tag ---
+
+    #[test]
+    fn a_dist_tag_is_read_only_from_a_real_one() {
+        // Verified against live libheif updates: these nine tags each
+        // map to exactly one Bodhi release.
+        assert_eq!(dist_tag("sandogasa-0.25.4-1.fc43"), Some("fc43"));
+        assert_eq!(dist_tag("libheif-1.23.6-1.el10_2"), Some("el10_2"));
+        assert_eq!(dist_tag("libheif-1.23.6-1.eln159"), Some("eln159"));
+        // A side tag carries no dist tag, which is what keeps the two
+        // apart: sending one to Bodhi as a build is the mistake this
+        // prevents.
+        assert_eq!(dist_tag("f45-build-side-143123"), None);
+        assert_eq!(dist_tag("FEDORA-2026-e9bb998784"), None);
+        // Nor does anything merely containing a dot.
+        assert_eq!(dist_tag("some.name"), None);
+        assert_eq!(dist_tag("pkg-1-1.fcxx"), None);
+    }
+
+    #[test]
+    fn builds_are_told_from_tags_and_grouped_by_release() {
+        // A side tag stays a side tag, and an alias an alias.
+        assert!(matches!(
+            detect_input_type("f45-build-side-143123"),
+            InputKind::SideTag(_)
+        ));
+        assert!(matches!(
+            detect_input_type("FEDORA-2026-e9bb998784"),
+            InputKind::BodhiAlias(_)
+        ));
+        // One NVR is one update's builds.
+        match detect_input_type("sandogasa-0.25.4-1.fc43") {
+            InputKind::Builds(n) => assert_eq!(n, ["sandogasa-0.25.4-1.fc43"]),
+            other => panic!("{other:?}"),
+        }
+        // A mixed group is refused rather than submitted in part: it
+        // would otherwise become one update spanning two releases.
+        assert!(matches!(
+            detect_input_type("a-1-1.fc43,b-1-1.fc44"),
+            InputKind::SideTag(_)
+        ));
+
+        // Twelve builds across four releases are four updates of
+        // three, not twelve of one.
+        let inputs: Vec<String> = ["a", "b", "c"]
+            .iter()
+            .flat_map(|p| {
+                ["fc43", "fc44", "el9", "el10_2"]
+                    .iter()
+                    .map(move |t| format!("{p}-1-1.{t}"))
+            })
+            .collect();
+        let grouped = group_builds_by_release(&inputs);
+        assert_eq!(grouped.len(), 4, "{grouped:?}");
+        for group in &grouped {
+            match detect_input_type(group) {
+                InputKind::Builds(n) => assert_eq!(n.len(), 3, "{group}"),
+                other => panic!("{other:?}"),
+            }
+        }
+        // Anything that is not a build keeps its place in the order.
+        let mixed = group_builds_by_release(&[
+            "FEDORA-2026-e9bb998784".to_string(),
+            "a-1-1.fc43".to_string(),
+        ]);
+        assert_eq!(mixed[0], "FEDORA-2026-e9bb998784");
+        assert_eq!(mixed[1], "a-1-1.fc43");
+    }
+
+    #[test]
+    fn builds_take_their_branch_from_the_dist_tag_or_the_flag() {
+        let nvrs = vec!["sandogasa-0.25.4-1.fc43".to_string()];
+        assert_eq!(branch_for_builds(&nvrs, None).unwrap(), "f43");
+        // --branch wins, even against a dist tag that says otherwise.
+        assert_eq!(
+            branch_for_builds(&nvrs, Some("epel9".to_string())).unwrap(),
+            "epel9"
+        );
+        // ELN is refused rather than checked against repositories
+        // that are not its own.
+        let eln = vec!["sandogasa-0.25.4-1.eln159".to_string()];
+        assert!(
+            branch_for_builds(&eln, None)
+                .unwrap_err()
+                .contains("eln159")
+        );
+        // An empty group says so rather than panicking.
+        assert!(branch_for_builds(&[], None).is_err());
+    }
+
+    #[test]
+    fn a_dist_tag_names_the_branch_it_ships_from() {
+        assert_eq!(branch_for_dist_tag("fc43").as_deref(), Some("f43"));
+        assert_eq!(branch_for_dist_tag("el9").as_deref(), Some("epel9"));
+        // An EPEL minor ships from its own branch, as Bodhi records
+        // it: el10_2 is EPEL-10.2, not EPEL-10.
+        assert_eq!(branch_for_dist_tag("el10_2").as_deref(), Some("epel10.2"));
+        // ELN takes no reviewed updates, so it declines rather than
+        // checking against repositories that are not its own.
+        assert_eq!(branch_for_dist_tag("eln159"), None);
+    }
 
     #[test]
     fn branch_from_side_tag_fedora() {

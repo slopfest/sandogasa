@@ -375,8 +375,19 @@ impl BodhiClient {
         &self,
         req: &NewUpdateFromTag,
     ) -> Result<NewUpdateResponse, Box<dyn std::error::Error>> {
-        let mut form: Vec<(String, String)> = vec![
-            ("from_tag".to_string(), req.from_tag.clone()),
+        let mut form: Vec<(String, String)> = match &req.source {
+            crate::models::UpdateSource::FromTag(tag) => {
+                vec![("from_tag".to_string(), tag.clone())]
+            }
+            // Repeated rather than comma-joined: Bodhi's schema takes
+            // `builds` as a list, and a comma-joined value arrives as
+            // one build whose name contains commas.
+            crate::models::UpdateSource::Builds(nvrs) => nvrs
+                .iter()
+                .map(|nvr| ("builds".to_string(), nvr.clone()))
+                .collect(),
+        };
+        form.extend([
             ("notes".to_string(), req.notes.clone()),
             ("type".to_string(), req.update_type.clone()),
             ("severity".to_string(), req.severity.clone()),
@@ -384,7 +395,7 @@ impl BodhiClient {
             ("autokarma".to_string(), req.autokarma.to_string()),
             ("stable_karma".to_string(), req.stable_karma.to_string()),
             ("unstable_karma".to_string(), req.unstable_karma.to_string()),
-        ];
+        ]);
         if !req.bugs.is_empty() {
             let bugs = req
                 .bugs
@@ -901,7 +912,7 @@ mod tests {
 
     fn from_tag_request() -> crate::models::NewUpdateFromTag {
         crate::models::NewUpdateFromTag {
-            from_tag: "epel9-build-side-133287".to_string(),
+            source: crate::models::UpdateSource::FromTag("epel9-build-side-133287".to_string()),
             notes: "Update uutils to 0.2".to_string(),
             update_type: "enhancement".to_string(),
             severity: "unspecified".to_string(),

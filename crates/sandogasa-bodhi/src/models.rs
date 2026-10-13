@@ -153,13 +153,26 @@ pub struct SingleCommentResponse {
     pub caveats: Vec<Caveat>,
 }
 
-/// Fields for creating an update from a Koji side tag
-/// (`POST /updates/` with `from_tag` — the API behind
-/// `bodhi updates new --from-tag`).
+/// What an update is made from.
+///
+/// A side tag names builds indirectly and is always one release, so
+/// Bodhi makes one update from it. A list of builds may span releases
+/// — Bodhi splits those into an update each, which is why
+/// [`NewUpdateResponse`] has two shapes.
+#[derive(Debug, Clone)]
+pub enum UpdateSource {
+    /// A Koji side tag holding the builds.
+    FromTag(String),
+    /// Explicit NVRs, as `bodhi updates new` takes them.
+    Builds(Vec<String>),
+}
+
+/// Fields for creating an update (`POST /updates/` — the API behind
+/// `bodhi updates new`, with or without `--from-tag`).
 #[derive(Debug, Clone)]
 pub struct NewUpdateFromTag {
-    /// The Koji side tag holding the builds.
-    pub from_tag: String,
+    /// Where the builds come from.
+    pub source: UpdateSource,
     /// Update notes/description (markdown; shown to users).
     pub notes: String,
     /// `bugfix` | `enhancement` | `security` | `newpackage`.

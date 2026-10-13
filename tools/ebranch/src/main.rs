@@ -3,6 +3,7 @@
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use sandogasa_bodhi::models::UpdateSource;
 
 mod branch_request;
 mod check_crate;
@@ -952,6 +953,7 @@ fn input_identity(kind: &check_update::InputKind) -> String {
         check_update::InputKind::BodhiAlias(alias) => format!("update {alias}"),
         check_update::InputKind::SideTag(tag) => format!("side tag {tag}"),
         check_update::InputKind::Copr { owner, project } => format!("copr {owner}/{project}"),
+        check_update::InputKind::Builds(nvrs) => format!("builds {}", nvrs.join(",")),
     }
 }
 
@@ -1300,14 +1302,21 @@ fn main() -> ExitCode {
         // them. A fan-out that submits two releases and only then
         // rejects the third leaves the batch half-done, which is the
         // failure this command exists to avoid.
-        let mut planned: Vec<(&String, Option<String>, Option<String>)> = Vec::new();
+        let mut planned: Vec<(&String, Option<String>, Option<UpdateSource>)> = Vec::new();
         let mut needs_koji = false;
         // What has already been planned, by what the input *is*
         // rather than how it was written: a bare alias and its Bodhi
         // URL are one update, and analysing it twice would also
         // comment on it twice.
         let mut already: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for input in &a.input {
+        // Builds named on the command line are regrouped by release
+        // before anything is planned: an update is one release's
+        // worth, and twelve NVRs across four releases are four
+        // updates of three builds, not twelve of one. Bodhi would
+        // split a mixed list the same way, but then the whole batch
+        // is one confirmation instead of one per update.
+        let grouped = check_update::group_builds_by_release(&a.input);
+        for input in &grouped {
             let input_kind = check_update::detect_input_type(input);
             let identity = input_identity(&input_kind);
             if !already.insert(identity.clone()) {
@@ -1318,12 +1327,17 @@ fn main() -> ExitCode {
             // Bodhi input may also trigger (side-tag-backed updates).
             // COPR input never touches koji.
             needs_koji |= !matches!(input_kind, check_update::InputKind::Copr { .. });
-            // Voting needs a Bodhi update; submitting needs a side tag
-            // (an alias means the update already exists). Fail fast on
-            // the wrong input kind.
-            let (vote_alias, side_tag) = match &input_kind {
+            // Voting needs a Bodhi update; submitting needs builds,
+            // named directly or through a side tag (an alias means the
+            // update already exists). Fail fast on the wrong kind.
+            let (vote_alias, source) = match &input_kind {
                 check_update::InputKind::BodhiAlias(alias) => (Some(alias.clone()), None),
-                check_update::InputKind::SideTag(tag) => (None, Some(tag.clone())),
+                check_update::InputKind::SideTag(tag) => {
+                    (None, Some(UpdateSource::FromTag(tag.clone())))
+                }
+                check_update::InputKind::Builds(nvrs) => {
+                    (None, Some(UpdateSource::Builds(nvrs.clone())))
+                }
                 // COPRs are published through their own repos: nothing
                 // to vote on or submit.
                 check_update::InputKind::Copr { .. } => (None, None),
@@ -1334,9 +1348,7 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::FAILURE;
             }
-            if (a.rpmfusion_file || a.rpmfusion_dry_run)
-                && vote_alias.is_none()
-                && side_tag.is_none()
+            if (a.rpmfusion_file || a.rpmfusion_dry_run) && vote_alias.is_none() && source.is_none()
             {
                 eprintln!(
                     "error: --rpmfusion-file and --rpmfusion-dry-run want a Bodhi update \
@@ -1344,7 +1356,7 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::FAILURE;
             }
-            if a.submit && side_tag.is_none() {
+            if a.submit && source.is_none() {
                 let why = match &input_kind {
                     check_update::InputKind::BodhiAlias(_) => {
                         "this is a Bodhi update, so it has already been submitted"
@@ -1354,7 +1366,7 @@ fn main() -> ExitCode {
                 eprintln!("error: --submit requires a Koji side tag as input; {why} ({input})");
                 return ExitCode::FAILURE;
             }
-            planned.push((input, vote_alias, side_tag));
+            planned.push((input, vote_alias, source));
         }
         if needs_koji
             && let Err(e) =
@@ -1446,7 +1458,7 @@ fn main() -> ExitCode {
         // submitted still gets its RPM Fusion bug filed below. An
         // update that is out with auto-push held and nobody told is
         // the one state worse than not having submitted it.
-        'inputs: for (input, vote_alias, side_tag) in &planned {
+        'inputs: for (input, vote_alias, source) in &planned {
             if planned.len() > 1 {
                 eprintln!("── {input} ──");
             }
@@ -1575,7 +1587,7 @@ fn main() -> ExitCode {
                         });
                     }
                     if a.submit
-                        && let Some(tag) = &side_tag
+                        && let Some(source) = &source
                     {
                         // The pass gate reuses the karma derivation: +1 is
                         // a clean pass; 0 (incomplete/stale analysis) or -1
@@ -1618,7 +1630,7 @@ fn main() -> ExitCode {
                             koji_profile: a.koji_profile.clone(),
                             rpmfusion: rpmfusion_found.clone(),
                         };
-                        let aliases = match submit::run(tag, &report, &sopts) {
+                        let aliases = match submit::run(source, &report, &sopts) {
                             Ok(aliases) => aliases,
                             Err(e) => {
                                 eprintln!("error: {e}");
