@@ -1,0 +1,60 @@
+# CodeQL, converted from GitHub's default setup.
+#
+# The conversion exists for one reason: default setup generates its own
+# scanning config and ignores `.github/codeql/codeql-config.yml`, which
+# left rust/cleartext-logging reporting 32 usernames as leaked secrets
+# with no way to switch it off — CodeQL has no alert-suppression
+# comment for Rust either. The config file explains which query is
+# excluded and why; this workflow is what makes it read.
+#
+# `build-mode: none` for both languages, which is what default setup
+# used: CodeQL reads Rust from source rather than building it, so this
+# costs no cargo compile and needs no toolchain.
+#
+# `pull_request`, never `pull_request_target`, for the reason CI gives:
+# the latter would run a fork's code with this repository's secrets.
+name: CodeQL
+
+on:
+  # Markdown alone changes nothing either extractor reads. The
+  # workflows themselves are analysed, by the `actions` language, so
+  # only `**.md` is safe to skip here.
+  pull_request:
+    paths-ignore:
+      - '**.md'
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  schedule:
+    # Weekly, so a newly published query still gets run against code
+    # that has not changed since the query was written.
+    - cron: '27 5 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, rust]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
