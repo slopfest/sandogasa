@@ -133,8 +133,11 @@ same lines folded into a content commit have to be picked apart by
 hand. An upstream still maintaining their `debian/` is one whose delta
 is worth leaving alone — which only the packager knows. A `debian/`
 already in that layout is left alone with a note. A tag
-whose tree carries a `debian/` directory gets a warning (dpkg-source
-drops the orig's copy, so the two disagree). Writing the rest of
+whose tree carries a `debian/` directory gets a warning — here and at
+every `update`, since upstream can start shipping one at any release.
+dpkg-source drops the orig's copy so the two disagree, and merging
+such a tag also brings upstream's packaging onto the branch, where it
+meets yours. Writing the rest of
 `debian/` is up to you; with no packaging anywhere the next-step
 message prints a `dh_make` line to run. It moves `gbp.conf` aside and
 removes `debian/` first, because `dh_make` refuses to run at all when

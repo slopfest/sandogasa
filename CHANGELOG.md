@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### dbranch: a release tag carrying debian/ is a warning at every update
+
+`clone` warned when an upstream release tag's tree carried a `debian/`
+directory, and nothing warned afterwards. But upstream can start
+shipping one at any release — merging their packaging branch into the
+default one is all it takes — and `update` merges each new tag into
+the Debian branch, so the warning was in the one place it was least
+likely to be needed: the clone that saw a clean tag may have been
+years before.
+
+The check runs wherever a tag is about to be merged now, before the
+merge rather than after, and says what the merge does as well as what
+`dpkg-source` does: upstream's packaging lands on the branch, where it
+meets packaging that has been diverging from it since adoption —
+`Maintainer`, `Vcs-*` and anything reformatted since.
+
+Verified against an upstream whose `v0.1` is clean and whose `v0.2`
+carries `debian/`: the clone at `v0.1` is quiet, and the update to
+`v0.2` warns and then lands upstream's `debian/control` on the
+packaging branch, which is what the warning is about.
+
 ### dbranch: update says how far the packaging has diverged from upstream's
 
 Packaging adopted from upstream's own `debian/*` branch drifts from it

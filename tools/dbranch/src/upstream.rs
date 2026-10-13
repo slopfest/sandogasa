@@ -221,13 +221,7 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
     } else {
         release_tag(&dir, None, opts.upstream_version.as_deref())?
     };
-    if !ui.dry_run && git::tree_has_path(&dir, &tag, "debian") {
-        eprintln!(
-            "warning: the tree at {tag} carries a debian/ directory. dpkg-source drops \
-             the orig tarball's copy when unpacking, so the branch's debian/ wins, but \
-             the two will disagree; ask upstream to keep packaging on a branch instead"
-        );
-    }
+    warn_if_tag_carries_packaging(ui, &dir, &tag);
     let theirs = if ui.dry_run {
         eprintln!("    (if upstream carries a debian/* branch, offers to start from it)");
         None
@@ -683,6 +677,32 @@ fn missing_phrase(missing: &[&str]) -> String {
     }
 }
 
+/// Warn when a release tag's tree carries a `debian/` directory.
+///
+/// Checked wherever a tag is about to be merged -- at `clone`, and
+/// again at every `update`, because upstream can start shipping one
+/// at any release (merging their packaging branch into the default
+/// one is all it takes), and the clone that warned may have been
+/// years ago.
+///
+/// Two separate problems. `dpkg-source` drops the orig tarball's copy
+/// when unpacking, so the branch's `debian/` wins and the two
+/// disagree; and merging the tag brings their packaging onto this
+/// branch, where it meets the packaging that has been diverging from
+/// it -- `Maintainer`, `Vcs-*` and anything reformatted since.
+fn warn_if_tag_carries_packaging(ui: &Ui, repo: &Path, tag: &str) {
+    if ui.dry_run || !git::tree_has_path(repo, tag, "debian") {
+        return;
+    }
+    eprintln!(
+        "warning: the tree at {tag} carries a debian/ directory. dpkg-source drops \
+         the orig tarball's copy when unpacking, so the branch's debian/ wins, but \
+         the two will disagree; merging the tag also brings that packaging onto this \
+         branch, where it meets yours. Ask upstream to keep packaging on a branch \
+         instead"
+    );
+}
+
 /// Make upstream's gbp.conf serve this branch: `debian-branch` set to
 /// ours, and `upstream-tag`, `pristine-tar` and `pristine-tar-commit`
 /// added when absent (an existing `upstream-tag` is theirs to keep).
@@ -775,6 +795,9 @@ pub fn fetch_and_merge(
         eprintln!("note: {tag} is already merged; skipping the merge");
         return Ok((tag, version));
     }
+    // Before the merge, not after: this is the last moment the branch
+    // still holds only your packaging.
+    warn_if_tag_carries_packaging(ui, repo, &tag);
     ui.step(&format!(
         "Merge upstream {version} (tag {tag}) into the Debian branch"
     ));
