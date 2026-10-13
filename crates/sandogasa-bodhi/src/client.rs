@@ -135,7 +135,17 @@ impl BodhiClient {
             .releases
             .into_iter()
             .filter(|r| matches!(r.state.as_str(), "current" | "pending" | "frozen"))
-            .filter(|r| matches!(r.id_prefix.as_str(), "FEDORA" | "FEDORA-EPEL") && r.name != "ELN")
+            // EPEL Next is its own platform rather than a staging area:
+            // it builds against CentOS Stream, as `epel9-next` does for
+            // Stream 9 where `epel10` does for Stream 10, so a caller
+            // asking what is active wants it. ELN is excluded instead,
+            // taking no reviewed updates though it rides under FEDORA.
+            .filter(|r| {
+                matches!(
+                    r.id_prefix.as_str(),
+                    "FEDORA" | "FEDORA-EPEL" | "FEDORA-EPEL-NEXT"
+                ) && r.name != "ELN"
+            })
             .collect();
 
         Ok(active)
@@ -495,10 +505,13 @@ mod tests {
                     {"name": "F43", "branch": "f43", "id_prefix": "FEDORA", "state": "current"},
                     {"name": "EPEL-9", "branch": "epel9", "id_prefix": "FEDORA-EPEL", "state": "current"},
                     {"name": "ELN", "branch": "eln", "id_prefix": "FEDORA", "state": "current"},
+                    {"name": "EPEL-9N", "branch": "epel9-next", "id_prefix": "FEDORA-EPEL-NEXT",
+                     "state": "current"},
+                    {"name": "F45", "branch": "f45", "id_prefix": "FEDORA", "state": "frozen"},
                     {"name": "F42F", "branch": "f42f", "id_prefix": "FEDORA-FLATPAK", "state": "current"},
                     {"name": "F40", "branch": "f40", "id_prefix": "FEDORA", "state": "archived"}
                 ],
-                "total": 5,
+                "total": 7,
                 "page": 1,
                 "pages": 1
             })))
@@ -507,7 +520,11 @@ mod tests {
 
         let releases = client.active_releases().await.unwrap();
         let names: Vec<_> = releases.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, vec!["F43", "EPEL-9"]);
+        // EPEL Next is active; ELN, Flatpak and an archived release are
+        // not. A frozen release is still active -- F45 is frozen while
+        // it is branched, and rawhide is pending, so neither state is
+        // the plain "current" one might expect to filter on.
+        assert_eq!(names, vec!["F43", "EPEL-9", "EPEL-9N", "F45"]);
     }
 
     // ---- update_by_alias ----

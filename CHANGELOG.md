@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### sandogasa-bodhi, fedora-cve-triage: EPEL Next is an active release
+
+`active_releases` left EPEL Next out, so nothing in the workspace knew
+it existed. It is not a staging area for EPEL: it builds against CentOS
+Stream, as `epel9-next` does for Stream 9 where `epel10` does for
+Stream 10, and it carries content the matching EPEL release does not.
+`sandogasa` is its own example — plain `el9` stops at `0.23.0-3`, while
+`0.24.1` through `0.25.3` shipped only through EPEL-9N — so a CVE fixed
+in that range reads as unfixed for EPEL 9 and the bug stays open.
+
+`FEDORA-EPEL-NEXT` now counts as active, and an `[epel-all]` tracker
+covers it. The three other callers of `active_releases` — poi-tracker's
+retired-package prune and update triage, and ebranch's work-in-progress
+scan — map releases onto dist-git branches and Koji targets, and
+`epel9-next` is a real one in both, so they gain a branch they should
+have been looking at rather than losing anything.
+
+ELN still does not count, though it rides under the Fedora prefix: it
+takes no reviewed updates. Note that a release's state is not a guide
+here — F45 is `frozen` while branched and rawhide is `pending`, so
+`current` alone would drop both.
+
+### fedora-cve-triage: name every update that fixed a family tracker
+
+A `[fedora-all]` or `[epel-all]` bug was closed naming one update, when
+it is fixed once per release. `sandogasa`'s EPEL bug for CVE-2026-93600
+was answered with `0.11.3-1.el10_2` alone, though EPEL 9 and 10.3 each
+needed their own update and got one at a different version —
+`0.14.0-1.el9` and `0.14.0-1.el10_3`. The reporter was told about a
+third of what they asked, and `cf_fixed_in` named a build that fixes
+nothing for the other two releases.
+
+A stable fix now carries the updates that fixed the bug's other
+releases. The report lists them under the verdict, the review line
+names them before anything is written, the close comments one per
+release, and `cf_fixed_in` holds them all. Releases that were never
+affected contribute nothing, so the Fedora bug names f43, f44 and f45
+and leaves rawhide out, and the EPEL bug leaves out EPEL 10.4 — each
+was already carrying fixed code and no update fixed it.
+
+Writes are batched by the whole set rather than by the one build, so
+two bugs share a close only when the same updates fixed them.
+
 ### fedora-cve-triage: a tracker covers every release of its family
 
 A `[fedora-all]` bug was answered against rawhide alone. Both
