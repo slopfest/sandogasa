@@ -512,6 +512,68 @@ has to reach EPEL before then, rewrite that one guard as a nested
   mirror would do sooner. The printed `dh_make --createorig` step is
   likewise untried: opentmux's packaging was copied from tmux instead.
 
+- (2026-10-13) Let the fresh path seed a tailored `debian/rules`, not
+  just the stock one. `clone` with no packaging anywhere prints a
+  `dh_make` line (fixed 2026-10-13 so it actually runs), and what
+  dh_make writes is build-system agnostic by design — its whole
+  template is `%:` + `dh $@`, with debhelper picking the build system
+  itself. It ships one for meson (`Buildsystem/meson.pm`, beside
+  ninja, cmake, autoconf and the rest), so the stock rules already
+  builds a meson project; there is no meson template because none is
+  needed for the plain case.
+
+  What it cannot give you is the tailoring around it, and that is what
+  opentmux wants when its packaging is redone with meson: forcing
+  `--buildsystem=meson` where a tree carries both meson and a Makefile
+  and detection picks the other, meson options through
+  `override_dh_auto_configure -- -D…`, test and install overrides.
+  Those are per-project and nobody's default, which is the argument
+  for templates rather than a flag per knob.
+
+  Settled (2026-10-13): layered, the way config is everywhere else, so
+  that dbranch packaged for Debian finds what the package installed
+  while a checkout still runs without any of it in place. Two layers,
+  and they are not the same kind of thing — a lesson from the RPM
+  Fusion inventory the same day: templates dbranch *ships* are data
+  and belong under `<datadir>/dbranch/templates/` (`/usr/share`,
+  relocatable with `$SANDOGASA_DATADIR`), because `/etc` would make
+  them `%config(noreplace)` and pin every user to whatever shipped
+  when they first installed; templates a *person* writes or edits are
+  config, under `$XDG_CONFIG_HOME/dbranch/templates/` with a site
+  layer below (`$SANDOGASA_ETC`), user winning. A name on the command
+  line picks between them; absent, the fresh path can offer what it
+  found.
+
+  A worked case for "any of `debian/`": opentmux installs its binary
+  as `tmux`, and the package wants it as `opentmux` beside Debian's.
+  Three mechanisms, all declarative drop-ins except the last:
+
+  - `debian/<pkg>.install` through **dh-exec** renames —
+    `usr/bin/tmux => usr/bin/opentmux` under a
+    `#! /usr/bin/dh-exec` shebang, with `Build-Depends: dh-exec` and
+    the file marked executable (forget `chmod +x` and it is read as a
+    literal path list). Works for `.manpages` too; dh-exec special-
+    cases it. Plain debhelper cannot: `dh_install` says outright that
+    it "cannot rename files or directories".
+  - `debian/<pkg>.alternatives` (`dh_installalternatives`) for
+    standing in for Debian's tmux at `/usr/bin/tmux` —
+    Name/Link/Alternative, `Dependents:` carrying the manpage. A
+    second name, not a rename.
+  - a build-time option (meson), which is the only one that also
+    fixes what the binary says about itself: a packaging-level rename
+    leaves `--help`, completions and internal references saying
+    `tmux`. For a fork meant to be installed under its own name, ask
+    upstream for the option rather than renaming downstream forever.
+
+  All three are per-project policy, so they belong in a template and
+  in the pass after the automatic one, never derived.
+
+  Still open: whether it seeds only `debian/rules` or any of
+  `debian/`. Worth checking what debmake does here first — it is the
+  other dh_make, and it may already have the shape to borrow rather
+  than invent. Verify meson detection on the real opentmux tree before
+  assuming the plain case holds.
+
 - (2026-07-03, nice-to-have) the merge phase of proposed-updates and
   backports could run on non-Debian hosts (only build/upload truly need
   Debian); kept simple and symmetric for now with a full up-front host
