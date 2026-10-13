@@ -108,7 +108,29 @@ upstream's packaging branch without tracking it, the release tag is
 merged in, and their gbp.conf is completed — `debian-branch` set to
 yours, `upstream-tag` and the pristine-tar keys added when absent.
 Their packaging commits stay in the history, so diverging from them is
-ordinary commits and their later changes can still be merged. A tag
+ordinary commits and their later changes can still be merged.
+
+Adopted packaging is then pointed at whoever is packaging it now:
+`debian/control`'s `Maintainer` is set from `DEBFULLNAME`/`DEBEMAIL`,
+the names `dch` already uses, and `Vcs-Git`/`Vcs-Browser` to the
+packaging remote — converted to https, since `Vcs-Git` is the URL a
+stranger clones from rather than the one you push to. Upstream wrote
+that packaging but is not the one uploading it, and a `Vcs-*` naming
+their repository sends `debcheckout` somewhere the packaging is not.
+Each field is skipped with a note when its source is missing — unset
+`DEBEMAIL`, or no remote yet — rather than guessed at, and nothing
+else in `debian/` is touched.
+
+`--wrap-and-sort` additionally normalizes the adopted `debian/` with
+`wrap-and-sort --short-indent --wrap-always --sort-binary-packages
+--trailing-comma` (from devscripts), in a commit of its own. It is
+opt-in, and separate from the commit above, because formatting is what
+collides with upstream's own later edits: a formatting-only commit
+conflicts as a block and is resolved by re-running the tool, where the
+same lines folded into a content commit have to be picked apart by
+hand. An upstream still maintaining their `debian/` is one whose delta
+is worth leaving alone — which only the packager knows. A `debian/`
+already in that layout is left alone with a note. A tag
 whose tree carries a `debian/` directory gets a warning (dpkg-source
 drops the orig's copy, so the two disagree). Writing the rest of
 `debian/` is up to you; with no packaging anywhere the next-step

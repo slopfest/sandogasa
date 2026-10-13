@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### dbranch: adopted packaging names you, not upstream
+
+`clone --from-upstream-packaging` starts a Debian branch from
+upstream's own `debian/`, which then names upstream as `Maintainer` and
+points `Vcs-*` at their repository or nowhere. Both are wrong the
+moment the packaging is yours: the maintainer is whoever uploads it,
+and a `Vcs-*` naming upstream sends `debcheckout` and every future
+contributor to a repository the packaging does not live in. The
+next-step message said "review debian/ (Maintainer, changelog)" and
+left it there.
+
+The two fields with a single correct answer are now set mechanically.
+`Maintainer` comes from `DEBFULLNAME`/`DEBEMAIL`, the names `dch`
+already reads, so the control file and the changelog cannot disagree;
+`Vcs-Git` and `Vcs-Browser` come from the packaging remote, converted
+to https because `Vcs-Git` is what a stranger clones from rather than
+what you push to. Each is skipped with a note when its source is
+missing rather than guessed at, and the rest of `debian/` is still
+yours to read. Each stands on its own: the maintainer is known without
+a remote, and the URLs without `DEBEMAIL`.
+
+`clone --wrap-and-sort` additionally normalizes the adopted `debian/`
+with `wrap-and-sort --short-indent --wrap-always
+--sort-binary-packages --trailing-comma` (devscripts), in a commit of
+its own. Opt-in, and separate from the commit above, because
+formatting is what collides with upstream's own later edits: a
+formatting-only commit conflicts as a block and is resolved by
+re-running the tool, where the same lines folded into a content commit
+have to be picked apart by hand. Whether upstream still maintains
+their `debian/` — and so whether that delta is worth leaving alone —
+is something only the packager knows. A `debian/` already in that
+layout is left alone with a note.
+
 ### ebranch: remove `resolve --no-auto-exclude-install` (breaking CLI)
 
 The flag has done nothing since v0.25.2, where it was deprecated: it

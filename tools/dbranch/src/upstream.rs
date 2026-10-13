@@ -42,6 +42,9 @@ pub struct CloneOptions {
     /// add it as `origin` (nothing is pushed: the first push is
     /// `update --stage push`, which also adds the CI file).
     pub salsa: Option<String>,
+    /// Normalize adopted packaging with `wrap-and-sort`, in a commit
+    /// of its own.
+    pub wrap_and_sort: bool,
     /// Register the clone with myrepos (`mr config`).
     pub mr: bool,
     /// The mrconfig to register in; `None` is `~/.mrconfig`.
@@ -256,8 +259,8 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
                 ui.run_required(&plan::merge_argv(&tag), &dir)?;
             }
             complete_gbp_conf(ui, &dir, &opts.debian_branch, &format)?;
-            "review debian/ — it is upstream's packaging (Maintainer, changelog), and \
-             any change is an ordinary commit here"
+            "review debian/ — it is upstream's packaging, and any change is an ordinary \
+             commit here"
                 .to_string()
         }
         None => {
@@ -287,6 +290,12 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
         Some(namespace) => Some(publish_to_salsa(ui, &dir, namespace, &name)?),
         None => None,
     };
+    if from_upstream {
+        claim_packaging(ui, &dir, origin.as_deref())?;
+        if opts.wrap_and_sort {
+            normalize_packaging(ui, &dir)?;
+        }
+    }
     if let Some(mrconfig) = &mrconfig {
         register_mr(
             ui,
@@ -308,6 +317,122 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
         dir.display()
     );
     Ok(())
+}
+
+/// Point adopted packaging at whoever is packaging it now.
+///
+/// Upstream's `debian/` names them as `Maintainer` and, if it names a
+/// repository at all, theirs. Neither is true once it is being
+/// packaged here: the `Maintainer` is whoever uploads it, and `Vcs-*`
+/// has to name the repository the packaging actually lives in, or
+/// `debcheckout` and every future contributor is sent somewhere the
+/// packaging is not.
+///
+/// Deliberately mechanical, and it changes only what it can know: the
+/// maintainer from `DEBFULLNAME`/`DEBEMAIL`, as `dch` reads them, and
+/// the URLs from the packaging remote. Each is skipped with a note
+/// when its source is missing, rather than guessed at. Everything else
+/// in `debian/` is left for a person to read.
+fn claim_packaging(
+    ui: &Ui,
+    dir: &Path,
+    origin: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let maintainer = crate::control::maintainer_from_env();
+    let web = origin.and_then(crate::control::web_url_from_remote);
+    if maintainer.is_none() {
+        eprintln!(
+            "note: DEBFULLNAME/DEBEMAIL unset, so debian/control still names upstream as \
+             Maintainer — set them and edit it, or dch will disagree with it later"
+        );
+    }
+    if web.is_none() {
+        eprintln!("note: no packaging remote yet, so debian/control carries no Vcs-* fields");
+    }
+    // Each field stands on its own: the maintainer is known without a
+    // remote, and the URLs without DEBEMAIL.
+    let mut fields: Vec<(&str, String)> = Vec::new();
+    let (named, pointed) = (maintainer.is_some(), web.is_some());
+    if let Some(maintainer) = maintainer {
+        fields.push(("Maintainer", maintainer));
+    }
+    if let Some(web) = web {
+        let (vcs_git, vcs_browser) = crate::control::vcs_fields(&web);
+        fields.push(("Vcs-Git", vcs_git));
+        fields.push(("Vcs-Browser", vcs_browser));
+    }
+    if fields.is_empty() {
+        return Ok(());
+    }
+    // Packaging that has not got as far as a control file: there is
+    // nothing to point at anyone, and it is not a reason to fail the
+    // clone that produced it.
+    if !ui.dry_run && !dir.join("debian/control").is_file() {
+        eprintln!("note: no debian/control yet, so nothing names you as Maintainer");
+        return Ok(());
+    }
+    let (heading, subject) = match (named, pointed) {
+        (true, true) => (
+            "Name yourself as Maintainer and point Vcs-* at this repository",
+            "Set Maintainer and Vcs-* for this packaging repository",
+        ),
+        (true, false) => (
+            "Name yourself as Maintainer",
+            "Set Maintainer for this packaging repository",
+        ),
+        _ => (
+            "Point Vcs-* at this repository",
+            "Point Vcs-* at this packaging repository",
+        ),
+    };
+    ui.step(heading);
+    let rel = "debian/control";
+    let changed = crate::rebuild::edit_file(ui, dir, rel, |text| {
+        fields
+            .iter()
+            .try_fold(text.to_string(), |text, (field, value)| {
+                crate::control::set_source_field(&text, field, value)
+            })
+    })?;
+    if !changed {
+        return Ok(());
+    }
+    ui.run_required(&plan::git_add_argv(rel), dir)?;
+    ui.explain_diff_cached(dir, &[rel]);
+    ui.run_required(&plan::commit_file_argv(subject, rel), dir)
+}
+
+/// Normalize adopted packaging with `wrap-and-sort`, in a commit of
+/// its own.
+///
+/// Separate from the commit that set the maintainer because this is
+/// the change most likely to collide with upstream's own later edits:
+/// a formatting-only commit conflicts as a block and is resolved by
+/// re-running the tool, where the same lines folded into a content
+/// commit have to be picked apart by hand.
+///
+/// Opt-in for that same reason. Adopting upstream's packaging is meant
+/// to leave their later changes mergeable, and an upstream still
+/// maintaining their `debian/` is one whose delta is worth keeping
+/// small -- which only the packager knows.
+fn normalize_packaging(ui: &Ui, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if !ui.dry_run {
+        // --dry-run is a tutorial and must narrate anywhere, so the
+        // tool is only required when it is about to be run.
+        sandogasa_cli::require_tools(&[("wrap-and-sort", "devscripts", Some("--help"))])?;
+    }
+    ui.step("Normalize debian/ with wrap-and-sort");
+    ui.run_required(&plan::wrap_and_sort_argv(), dir)?;
+    if !ui.dry_run && !git::is_dirty(dir) {
+        eprintln!("note: debian/ is already in that layout; nothing to commit");
+        return Ok(());
+    }
+    ui.run_required(&plan::git_add_argv("debian"), dir)?;
+    ui.explain_diff_cached(dir, &["debian"]);
+    ui.run_required(
+        &plan::commit_file_argv("Normalize debian/ with wrap-and-sort", "debian"),
+        dir,
+    )
 }
 
 /// Create `<namespace>/<name>` on salsa — public, with the CI config
@@ -702,6 +827,7 @@ mod tests {
             upstream_remote: "upstream".to_string(),
             packaging: Some(false),
             salsa: None,
+            wrap_and_sort: false,
             mr: false,
             mrconfig: None,
         };
@@ -830,6 +956,7 @@ mod tests {
             upstream_remote: "upstream".to_string(),
             packaging,
             salsa: None,
+            wrap_and_sort: false,
             mr: false,
             mrconfig: None,
         };
@@ -883,6 +1010,7 @@ mod tests {
             upstream_remote: "upstream".to_string(),
             packaging: None,
             salsa: None,
+            wrap_and_sort: false,
             mr: true,
             mrconfig: None,
         };
@@ -981,6 +1109,7 @@ mod tests {
             packaging: None,
             // Both optional steps narrate under --dry-run without glab or mr.
             salsa: Some("michel".to_string()),
+            wrap_and_sort: false,
             mr: true,
             mrconfig: Some(work.path().join(".mrconfig")),
         };

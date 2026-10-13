@@ -682,3 +682,27 @@ before git reads it.
 The same applies to anything else a test has to tell a child process:
 prefer one variable over several that only make sense together, and
 prefer passing it to the command over setting it on the process.
+
+## A step that reads the environment takes every path in some test run
+
+`claim_packaging` sets `Maintainer` from `DEBFULLNAME`/`DEBEMAIL` and
+`Vcs-*` from the packaging remote, and each is absent often enough to
+matter: a packaging build has no `DEBEMAIL`, a clone without `--salsa`
+has no remote, and a developer's shell usually has both.
+
+So the clone fixtures do not pick a path — the environment running
+them does. `clone_can_start_from_upstreams_packaging_branch` passed
+for months with the step returning early on an unset `DEBEMAIL`, and
+failed the moment it ran somewhere that had one: the fixture's
+packaging branch carries `gbp.conf` and `changelog` but no
+`debian/control`, and the step read it with `edit_file`, which is a
+hard `NotFound`. The bug was in the step; the environment only chose
+whether to reach it.
+
+The rule that follows: a step reading the environment must degrade on
+every combination, because no test run covers them all — and the one
+that fails will be someone else's machine. Each field skips on its own
+with a note (the maintainer is known without a remote, the URLs
+without `DEBEMAIL`), a missing `debian/control` is a note rather than
+an error, and `--dry-run` narrates regardless, since it is a tutorial
+that has to run where the packaging tools do not.

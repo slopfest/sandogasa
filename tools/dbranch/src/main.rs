@@ -75,6 +75,11 @@ debian/ is left to you.")]
         #[arg(long, value_name = "NAMESPACE")]
         salsa: Option<String>,
 
+        /// Normalize adopted debian/ with wrap-and-sort, in its own
+        /// commit (devscripts).
+        #[arg(long)]
+        wrap_and_sort: bool,
+
         /// Register the clone with myrepos (mr config).
         #[arg(long)]
         mr: bool,
@@ -505,6 +510,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             from_upstream_packaging,
             fresh,
             salsa,
+            wrap_and_sort,
             mr,
             mrconfig,
             dry_run,
@@ -531,6 +537,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                     upstream_remote,
                     packaging,
                     salsa,
+                    wrap_and_sort,
                     mr,
                     mrconfig,
                 },

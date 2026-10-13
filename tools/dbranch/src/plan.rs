@@ -121,6 +121,25 @@ pub fn commit_file_argv(message: &str, file: &str) -> Vec<String> {
     argv(&["git", "commit", "-s", "-m", message, file])
 }
 
+/// `wrap-and-sort -d debian --short-indent --wrap-always
+/// --sort-binary-packages --trailing-comma` — normalize the packaging
+/// files to one layout.
+///
+/// `-d` names the `debian` directory itself, not the package root
+/// above it: pointed at the root, wrap-and-sort finds no control file
+/// and silently does nothing.
+pub fn wrap_and_sort_argv() -> Vec<String> {
+    argv(&[
+        "wrap-and-sort",
+        "-d",
+        "debian",
+        "--short-indent",
+        "--wrap-always",
+        "--sort-binary-packages",
+        "--trailing-comma",
+    ])
+}
+
 /// `git add <file>` — stage a newly created file so it can be shown with
 /// `git diff --cached` and committed (a brand-new file isn't picked up by
 /// a bare `git commit <file>`).

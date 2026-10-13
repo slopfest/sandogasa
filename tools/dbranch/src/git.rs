@@ -200,6 +200,21 @@ pub fn is_ancestor(repo: &Path, rev: &str, of: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the working tree differs from `HEAD`
+/// (`git diff --quiet`, inverted).
+///
+/// How a reformatting run is told from a no-op: `wrap-and-sort`
+/// rewrites in place and says nothing about whether it changed
+/// anything, so the tree is what answers.
+pub fn is_dirty(repo: &Path) -> bool {
+    Command::new("git")
+        .args(["diff", "--quiet"])
+        .current_dir(repo)
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(false)
+}
+
 /// A remote's branches, as plain names (`debian/latest`), sorted.
 pub fn remote_branches(repo: &Path, remote: &str) -> Vec<String> {
     Command::new("git")

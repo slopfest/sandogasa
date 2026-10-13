@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH dbranch 1 2026-10-12 "sandogasa 0.25.4" "Sandogasa Manual"
+.TH dbranch 1 2026-10-13 "sandogasa 0.25.4" "Sandogasa Manual"
 .SH NAME
 dbranch \- Propagate a Debian package across its Ubuntu PPA and Debian branches
 .SH SYNOPSIS
@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS dbranch clone
-\fBdbranch clone\fR [\fB\-\-upstream\-version\fR] [\fB\-\-debian\-branch\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-from\-upstream\-packaging\fR] [\fB\-\-fresh\fR] [\fB\-\-salsa\fR] [\fB\-\-mr\fR] [\fB\-\-mrconfig\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR] 
+\fBdbranch clone\fR [\fB\-\-upstream\-version\fR] [\fB\-\-debian\-branch\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-from\-upstream\-packaging\fR] [\fB\-\-fresh\fR] [\fB\-\-salsa\fR] [\fB\-\-wrap\-and\-sort\fR] [\fB\-\-mr\fR] [\fB\-\-mrconfig\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR] 
 .PP
 Clone upstream\*(Aqs git to package it straight from its tags (gbp\*(Aqs
 "upstream uses git, no tarballs" flow): clone with upstream as
@@ -50,6 +50,9 @@ Ignore any debian/* branch upstream carries; start at the tag
 .TP
 \fB\-\-salsa\fR \fI<NAMESPACE>\fR
 Create the packaging project on salsa.debian.org in this namespace and add it as origin (pushing is `update`\*(Aqs job)
+.TP
+\fB\-\-wrap\-and\-sort\fR
+Normalize adopted debian/ with wrap\-and\-sort, in its own commit (devscripts)
 .TP
 \fB\-\-mr\fR
 Register the clone with myrepos (mr config)
