@@ -477,7 +477,8 @@ severity for --type security.",
     rpmfusion_inventory: Option<String>,
 
     /// Fedora-to-RPM-Fusion renames for counterparts the naming does
-    /// not make guessable (configs/rpmfusion/renames.toml).
+    /// not make guessable (configs/rpmfusion/renames.toml). Found
+    /// beside the inventory when not given.
     #[arg(long, value_name = "PATH", requires = "rpmfusion_inventory")]
     rpmfusion_renames: Option<String>,
 
@@ -1019,6 +1020,44 @@ fn remember_rebuilds(
     }
 }
 
+/// Look for `name` in the two places RPM Fusion data lives, user copy
+/// first, and say which were tried when it is in neither.
+///
+/// 1. `$XDG_DATA_HOME/ebranch/rpmfusion/<name>`
+/// 2. `<datadir>/ebranch/rpmfusion/<name>`, where datadir is
+///    `$SANDOGASA_DATADIR` or `/usr/share`
+fn rpmfusion_data_file(name: &str) -> (Option<std::path::PathBuf>, Vec<String>) {
+    let datadir = std::env::var_os("SANDOGASA_DATADIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/usr/share"));
+    let mut tried = Vec::new();
+    for base in [dirs::data_dir(), Some(datadir)].into_iter().flatten() {
+        let path = base.join("ebranch/rpmfusion").join(name);
+        if path.is_file() {
+            return (Some(path), tried);
+        }
+        tried.push(path.display().to_string());
+    }
+    (None, tried)
+}
+
+/// The rename map to read, given what `--rpmfusion-renames` was handed.
+///
+/// Found the same way as the inventory, since a package installs the
+/// two side by side, and absent is not an error: without a map the
+/// counterpart is guessed from the name, which is right for most of
+/// them. Only an explicitly named file that is missing is worth
+/// failing over, and `Counterparts::load` says so when it cannot read
+/// what it was told to read.
+fn rpmfusion_renames_path(flag: Option<&str>) -> Option<String> {
+    match flag {
+        Some(path) => Some(path.to_string()),
+        None => rpmfusion_data_file("renames.toml")
+            .0
+            .map(|p| p.display().to_string()),
+    }
+}
+
 /// The RPM Fusion inventory to read, given what `--rpmfusion-inventory`
 /// was handed.
 ///
@@ -1043,17 +1082,9 @@ fn rpmfusion_inventory_path(flag: &str) -> Result<std::path::PathBuf, String> {
     if !flag.is_empty() {
         return Ok(std::path::PathBuf::from(flag));
     }
-    let rel = std::path::Path::new("ebranch/rpmfusion/inventory.toml");
-    let mut tried: Vec<String> = Vec::new();
-    let datadir = std::env::var_os("SANDOGASA_DATADIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/usr/share"));
-    for base in [dirs::data_dir(), Some(datadir)].into_iter().flatten() {
-        let path = base.join(rel);
-        if path.is_file() {
-            return Ok(path);
-        }
-        tried.push(path.display().to_string());
+    let (found, tried) = rpmfusion_data_file("inventory.toml");
+    if let Some(path) = found {
+        return Ok(path);
     }
     Err(format!(
         "no RPM Fusion inventory found; generate one with `poi-tracker \
@@ -1072,8 +1103,8 @@ fn rpmfusion_counterparts(
     let release = rpmfusion::workload_for_branch(branch).ok_or_else(|| {
         format!("RPM Fusion builds for no release matching {branch}; drop --rpmfusion-inventory")
     })?;
-    let counterparts =
-        rpmfusion::Counterparts::load(inventory, a.rpmfusion_renames.as_deref(), &release)?;
+    let renames = rpmfusion_renames_path(a.rpmfusion_renames.as_deref());
+    let counterparts = rpmfusion::Counterparts::load(inventory, renames.as_deref(), &release)?;
     // Say which inventory answered and when it was taken. A packaged
     // copy is a snapshot of somebody else's repositories, and a
     // counterpart that looks wrong is usually one that was added

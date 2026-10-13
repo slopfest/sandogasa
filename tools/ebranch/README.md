@@ -880,6 +880,12 @@ without it — which is what the `synced` date in the line above is for.
 `$SANDOGASA_DATADIR` relocates the system path, for an installation
 somewhere other than `/usr/share`.
 
+`--rpmfusion-renames` is found the same way, beside the inventory, so
+a packaged rename map is used without naming it. It matters for the
+counterparts the suffix rule misses: RPM Fusion calls VLC's companion
+`vlc-plugins-freeworld`, so without the map `vlc` resolves to nothing
+at all.
+
 From a checkout, name the file instead — it is not laid out the way an
 installation is:
 

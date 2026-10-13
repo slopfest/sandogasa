@@ -13,6 +13,12 @@ is where a package should install it. A path still wins over both, and
 `$SANDOGASA_DATADIR` relocates the system layer the way `$SANDOGASA_ETC`
 does for config.
 
+`--rpmfusion-renames` is found the same way, beside the inventory, so
+a packaged rename map is used without being named. That is what reaches
+the counterparts the `-freeworld` suffix rule misses — RPM Fusion calls
+VLC's companion `vlc-plugins-freeworld`, so without the map `vlc`
+resolves to nothing.
+
 Under `ebranch/` rather than a project-wide directory because ebranch is
 the only tool that looks one up — `sync-rpmfusion` is always told where
 to write — so the per-tool rule the config, cache and state paths follow
