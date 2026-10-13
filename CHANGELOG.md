@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a Bodhi query that fails is not a release with no updates
+
+A release could drop out of a bug's verdict without a word, and the loss
+reached Bugzilla. The Fedora bug for CVE-2026-93600 was closed naming
+`sandogasa-0.11.1-1.fc43` and `0.11.1-1.fc44`, while three runs of the
+same command before and after it also named `0.10.2-1.fc45` — the update
+that fixed f45, which had been shipping builds linked against a
+vulnerable `rust-rustls-webpki` since `0.10.0-1.fc45`.
+
+A failed query to Bodhi returned an empty list, which the caller could
+not tell from a release that has no updates. Three things made that
+invisible: the warning was behind `--verbose`, so an ordinary run said
+nothing; the empty answer was cached, so one failure settled every later
+question about that release; and nothing was retried, though a read is
+safe to repeat.
+
+Reads are now retried, a failure that outlasts them is reported whatever
+the verbosity — it changes the answer rather than explaining it — and it
+is not cached, so the next question gets a fresh attempt. The release is
+still left out of the verdict for now; saying so is the first half of
+the fix, and letting a release be *unknown* rather than empty is
+[#46](https://github.com/slopfest/sandogasa/issues/46).
+
 ### sandogasa-bodhi, fedora-cve-triage: EPEL Next is an active release
 
 `active_releases` left EPEL Next out, so nothing in the workspace knew
