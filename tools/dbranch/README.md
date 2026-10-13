@@ -320,6 +320,18 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   directory: the `.dsc` the `build` stage scratch-builds and the
   `.changes` the `upload` stage dputs.
 
+  After a successful `push`, packaging that started from upstream's
+  own `debian/*` branch says how far it has diverged and names the
+  command that shows it — `git log <upstream>/<branch>..<branch> --
+  debian`. The path limit is what makes the number mean anything:
+  merging a release tag brings all of upstream's code commits into the
+  range, so an unlimited count reports their work as your divergence.
+  What to send is a judgement — a fix under `debian/patches` belongs
+  upstream, recorded in DEP-3's `Forwarded:` (lintian's
+  `patch-not-forwarded-upstream` nags about it at lint time), while
+  `Maintainer`, `Vcs-*`, the Debian changelog and the CI config are
+  what make the packaging yours.
+
   In `update` only, `debian/copyright` is checked against the source
   first, with `lrc` (licenserecon), which compares it to what
   `licensecheck` finds. A new upstream release is what brings new

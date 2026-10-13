@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### dbranch: update says how far the packaging has diverged from upstream's
+
+Packaging adopted from upstream's own `debian/*` branch drifts from it
+with every change, and nothing said so — least of all at the moment
+the drift is published. After a successful push, `update` now says how
+many packaging commits are here that upstream's branch has not, and
+names the command that lists them.
+
+The count is limited to `debian`, which is what makes it mean
+anything: these branches share an upstream, so merging a release tag
+brings all of upstream's own code commits into the range. On fnlfmt
+that is 19 commits against the 1 that is actually ours.
+
+What to send is left as a judgement, because it is one: a fix under
+`debian/patches` belongs upstream — DEP-3's `Forwarded:` records it,
+and lintian's `patch-not-forwarded-upstream` already nags at lint time
+— while `Maintainer`, `Vcs-*`, the Debian changelog and the CI config
+are what make the packaging yours and would undo themselves if sent.
+
 ### dbranch: update checks debian/copyright against the source
 
 A new upstream release is what brings new files, new vendored code and

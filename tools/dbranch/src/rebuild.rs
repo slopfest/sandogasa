@@ -725,7 +725,47 @@ pub fn update(
         // PPA); `-y` answers the source-package and Debusine-workspace
         // prompts, which otherwise warn or fail on a non-tty as usual.
         opts.assume_yes,
-    )
+    )?;
+    // After the push, when the divergence is published and there is a
+    // natural moment to think about sending some of it on.
+    if opts.stages.push {
+        suggest_upstreaming(repo, &branch, upstream_git.as_ref());
+    }
+    Ok(())
+}
+
+/// Say what the packaging has gained since upstream's, once it is
+/// published, and name the command that shows it.
+///
+/// Only where upstream carries the packaging branch this one started
+/// from -- `clone --from-upstream-packaging` -- because only then is
+/// there a they to send anything to, and only then does the
+/// comparison mean something: dbranch merges and never rebases, so
+/// their commits stay ancestors of ours and the range is exactly the
+/// delta.
+///
+/// A suggestion, not a check. What belongs upstream is a judgement:
+/// code fixes in debian/patches do (DEP-3's `Forwarded:` records it,
+/// and lintian's patch-not-forwarded-upstream already nags at lint
+/// time), while Maintainer, Vcs-*, the Debian changelog and the CI
+/// config are what make the packaging ours and would undo themselves
+/// if sent.
+fn suggest_upstreaming(repo: &Path, branch: &str, upstream_git: Option<&UpstreamGit>) {
+    let Some(up) = upstream_git else { return };
+    if !git::remote_branch_exists(repo, &up.remote, branch) {
+        return;
+    }
+    let base = format!("{}/{branch}", up.remote);
+    match git::commits_ahead(repo, &base, branch, Some("debian")) {
+        Some(0) | None => {}
+        Some(n) => eprintln!(
+            "note: {n} packaging commit{} here that upstream's {branch} has not — \
+             `git log {base}..{branch} -- debian` shows them. A fix under \
+             debian/patches belongs upstream (record it in DEP-3's Forwarded:); \
+             Maintainer, Vcs-*, the changelog and the CI config belong here.",
+            if n == 1 { "" } else { "s" }
+        ),
+    }
 }
 
 /// The import stage: get onto the Debian branch, pull and import the
@@ -3928,6 +3968,51 @@ E: damo: an-error\n";
         let text = std::fs::read_to_string(p.join("debian/salsa-ci.yml")).unwrap();
         assert_eq!(text, salsaci::TEMPLATE);
         assert!(!text.contains("variables"));
+    }
+
+    /// The delta that matters is the packaging one. Merging a release
+    /// tag brings upstream's own commits into the range, so counting
+    /// the whole range reports their work as our divergence -- 19
+    /// against 1, measured on fnlfmt.
+    #[test]
+    fn the_packaging_delta_ignores_merged_upstream_commits() {
+        let work = tempfile::tempdir().unwrap();
+        let dir = work.path();
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(dir)
+                    .env("GIT_AUTHOR_NAME", "T")
+                    .env("GIT_AUTHOR_EMAIL", "t@e")
+                    .env("GIT_COMMITTER_NAME", "T")
+                    .env("GIT_COMMITTER_EMAIL", "t@e")
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["init", "-q", "-b", "theirs", "."]);
+        std::fs::create_dir_all(dir.join("debian")).unwrap();
+        std::fs::write(dir.join("debian/control"), "Source: x\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "packaging", "--no-gpg-sign"]);
+
+        git(&["checkout", "-q", "-b", "ours"]);
+        // Upstream's own code, as a release merge would bring in.
+        std::fs::write(dir.join("code.rs"), "fn main() {}\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "upstream code", "--no-gpg-sign"]);
+        // Ours, the one that is actually a divergence.
+        std::fs::write(dir.join("debian/control"), "Source: x\nMaintainer: Us\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "set maintainer", "--no-gpg-sign"]);
+
+        assert_eq!(git::commits_ahead(dir, "theirs", "ours", None), Some(2));
+        assert_eq!(
+            git::commits_ahead(dir, "theirs", "ours", Some("debian")),
+            Some(1)
+        );
     }
 
     #[test]

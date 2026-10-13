@@ -200,6 +200,33 @@ pub fn is_ancestor(repo: &Path, rev: &str, of: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// How many commits `head` has that `base` has not
+/// (`git rev-list --count base..head -- <path>`). `None` when either
+/// is unknown to this repository.
+///
+/// `path` is what makes the number mean anything when the branches
+/// share an upstream: merging a release tag brings all of upstream's
+/// code commits into the range, so comparing two packaging branches
+/// without limiting to `debian` counts their work as our divergence.
+/// On fnlfmt that was 19 commits against the 1 that was ours.
+pub fn commits_ahead(repo: &Path, base: &str, head: &str, path: Option<&str>) -> Option<usize> {
+    let range = format!("{base}..{head}");
+    let mut args = vec!["rev-list", "--count", &range];
+    if let Some(path) = path {
+        args.push("--");
+        args.push(path);
+    }
+    let out = Command::new("git")
+        .args(&args)
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok())
+        .flatten()
+}
+
 /// Whether the working tree differs from `HEAD`
 /// (`git diff --quiet`, inverted).
 ///
