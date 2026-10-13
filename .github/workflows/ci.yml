@@ -45,6 +45,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
+      # Ubuntu 24.04 runners refuse an unprivileged user namespace
+      # through AppArmor, so `unshare -rn` fails with "write failed
+      # /proc/self/uid_map". The sandbox is the point of this job, so
+      # lift the restriction rather than drop the check.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # Runs the suite with external network removed and the distro
       # tools shadowed, the way a Koji or buildd %check sees it. git
       # has to be present: dbranch and ebranch build fixture repos.
