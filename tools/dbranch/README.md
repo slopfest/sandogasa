@@ -320,6 +320,23 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   directory: the `.dsc` the `build` stage scratch-builds and the
   `.changes` the `upload` stage dputs.
 
+  In `update` only, `debian/copyright` is checked against the source
+  first, with `lrc` (licenserecon), which compares it to what
+  `licensecheck` finds. A new upstream release is what brings new
+  files and new copyright holders, and checking before the source
+  package is built means a fix does not invalidate it. When they
+  disagree, `lrc`'s table is printed and — interactively — `cme update
+  dpkg-copyright` is offered, in a commit of its own, since it
+  rewrites the whole file rather than the disputed field. A
+  non-interactive run reports and carries on, and a missing `lrc` is a
+  note rather than a failure. Placeholders are reported separately
+  (`no-info-found` from `cme`, `TODO` from `decopy`): `lrc` passes
+  them, because a placeholder is not a licence disagreement, but
+  neither is it something to upload. `rebuild` does not check — it
+  builds the same source for another suite, and an edit on a PPA or
+  backport branch is a delta that conflicts with the Debian branch on
+  every later merge.
+
   Whether the orig tarball is offered for upload depends on where the
   package is going. Uploads to the Debian archive — `update` to
   unstable, proposed-updates and backports, which share one pool — use

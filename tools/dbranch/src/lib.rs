@@ -7,6 +7,7 @@
 
 pub mod changelog;
 pub mod control;
+pub mod copyright;
 pub mod distroinfo;
 pub mod gbpconf;
 pub mod git;

@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### dbranch: update checks debian/copyright against the source
+
+A new upstream release is what brings new files, new vendored code and
+new copyright holders, and nothing said so. `debian/copyright` went
+out as whoever wrote it left it, however far the source had moved
+underneath.
+
+`update` now runs `lrc` (licenserecon) after the merge and before the
+source stage — where the answer changes, and while a fix is still
+cheap, since after that stage the `.dsc` is already built around the
+old file. When it disagrees, its table is printed and `cme update
+dpkg-copyright` is offered interactively, landing in a commit of its
+own because it rewrites the whole file rather than the disputed field:
+header order, `Upstream-Contact` layout and the holder lines all move,
+and the licence text is restructured into a standalone paragraph.
+
+Placeholders are reported separately, because `lrc` passes them: `cme`
+writes `no-info-found` where it could not attribute a file and
+`decopy` writes `Source: TODO`, and neither is a licence
+disagreement — but both are claims about somebody's copyright that no
+tool settled. Packaging adopted with no `debian/copyright` at all gets
+a note naming `decopy > debian/copyright`, which writes one from a
+scan of the source.
+
+Nothing here fails a run: a non-interactive update reports and carries
+on, and a missing `lrc` is a note, since the package still builds. And
+`rebuild` does not check at all — it builds the same source for
+another suite, so the copyright has not changed, and an edit made on a
+PPA or backport branch is a delta that conflicts with the Debian
+branch on every later merge.
+
 ### dbranch: clone prints a dh_make line that runs
 
 `clone` with no upstream packaging creates `debian/gbp.conf` and then

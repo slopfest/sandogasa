@@ -689,6 +689,11 @@ pub fn update(
         ensure_on_branch(ui, repo, &branch)?;
     }
 
+    // After the merge, before the source stage builds around the file.
+    if opts.stages.source {
+        copyright_stage(ui, repo)?;
+    }
+
     // The Debian branch targets unstable, whose Debusine suite is `sid`
     // (the wiki's `publish-to-sid-<pkg>` example).
     let upload = match &opts.debusine {
@@ -1098,6 +1103,98 @@ fn ensure_debusine_ready() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     Ok(())
+}
+
+/// Check `debian/copyright` against the source, and offer to
+/// reconcile it when it disagrees.
+///
+/// Runs in `update` only, after the new upstream is merged and before
+/// the source stage. That is where the answer changes -- a new release
+/// is what brings new files, new vendored code and new holders -- and
+/// where a fix is still cheap: after the source stage the `.dsc` is
+/// already built around the old file.
+///
+/// Deliberately not part of `rebuild`. A rebuild builds the same
+/// source for another suite, so nothing about the copyright has
+/// changed; and an edit made on a PPA or backport branch is a delta
+/// that conflicts with the Debian branch on every later merge.
+///
+/// Reports rather than fails. `lrc` disagreeing is a question for a
+/// person -- `cme` rewrites the whole file, which is not something to
+/// apply to somebody's packaging unasked -- so a non-interactive run
+/// says what it found and carries on.
+fn copyright_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let file = repo.join("debian/copyright");
+    if !ui.dry_run && !file.is_file() {
+        eprintln!(
+            "note: no debian/copyright to check — `{}` writes one from a scan of the              source (review it: a generated copyright is a claim about other people's              licences)",
+            plan::decopy_shell_line()
+        );
+        return Ok(());
+    }
+    // An advisory check, so a missing licenserecon is a note and not
+    // the end of the update: the package still builds, and whoever
+    // wanted the check can install it and run the stage again.
+    if !ui.dry_run && !sandogasa_cli::tool_exists("lrc") {
+        eprintln!(
+            "note: debian/copyright not checked — install licenserecon for `lrc`, \
+             which compares it against what licensecheck finds in the source"
+        );
+        return Ok(());
+    }
+    ui.step("Check debian/copyright against the source (licensecheck)");
+    let (code, out) = ui.run_capture(&plan::lrc_argv(), repo)?;
+    if code == 0 {
+        // It passes placeholders, so they are worth saying separately.
+        if let Some(warning) = std::fs::read_to_string(&file)
+            .ok()
+            .as_deref()
+            .and_then(crate::copyright::placeholder_warning)
+        {
+            eprintln!("warning: {warning}");
+        }
+        return Ok(());
+    }
+    eprint!("{out}");
+    let offer = format!(
+        "debian/copyright disagrees with the source — run `{}`? (it rewrites the whole          file, in its own commit)",
+        plan::cme_update_copyright_argv().join(" ")
+    );
+    if ui.dry_run || !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!(
+            "warning: debian/copyright disagrees with the source; `{}` reconciles it",
+            plan::cme_update_copyright_argv().join(" ")
+        );
+        return Ok(());
+    }
+    if !ui.confirm(&offer) {
+        return Ok(());
+    }
+    // Required here, unlike lrc: the offer was accepted, so failing
+    // is better than saying nothing and leaving the file as it was.
+    if !ui.dry_run {
+        sandogasa_cli::require_tools(&[("cme", "libconfig-model-dpkg-perl", Some("--version"))])?;
+    }
+    ui.step("Reconcile debian/copyright with the source");
+    ui.run_required(&plan::cme_update_copyright_argv(), repo)?;
+    if let Some(warning) = std::fs::read_to_string(&file)
+        .ok()
+        .as_deref()
+        .and_then(crate::copyright::placeholder_warning)
+    {
+        eprintln!("warning: {warning}");
+    }
+    if !git::is_dirty(repo) {
+        eprintln!("note: debian/copyright was already reconciled; nothing to commit");
+        return Ok(());
+    }
+    let rel = "debian/copyright";
+    ui.run_required(&plan::git_add_argv(rel), repo)?;
+    ui.explain_diff_cached(repo, &[rel]);
+    ui.run_required(
+        &plan::commit_file_argv("Reconcile debian/copyright with the source", rel),
+        repo,
+    )
 }
 
 /// The shared `build → lint → push → upload → tag` tail, driven by both

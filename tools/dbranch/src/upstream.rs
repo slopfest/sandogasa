@@ -314,6 +314,17 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
         if opts.wrap_and_sort {
             normalize_packaging(ui, &dir)?;
         }
+        // Not one of the essentials -- its absence does not stop the
+        // tree building -- but it does stop an upload, and the command
+        // that drafts one is worth naming while the tree is in front
+        // of you.
+        if !ui.dry_run && !dir.join("debian/copyright").is_file() {
+            eprintln!(
+                "note: upstream's packaging has no debian/copyright — `{}` drafts one \
+                 from a scan of the source, to be read before it is uploaded",
+                plan::decopy_shell_line()
+            );
+        }
     }
     if let Some(mrconfig) = &mrconfig {
         register_mr(

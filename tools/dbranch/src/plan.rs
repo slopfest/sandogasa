@@ -371,6 +371,35 @@ pub fn dh_make_argv(name: &str, version: &str) -> Vec<String> {
     argv(&["dh_make", "-p", &pkg, "--createorig"])
 }
 
+/// `lrc` — licenserecon, comparing debian/copyright against what
+/// `licensecheck` finds in the source. Exits 0 when they agree and
+/// non-zero (3, measured) when they disagree about a licence.
+pub fn lrc_argv() -> Vec<String> {
+    argv(&["lrc"])
+}
+
+/// `cme update dpkg-copyright` — reconcile an existing
+/// debian/copyright with the source.
+///
+/// It rewrites the whole file rather than the disputed field: header
+/// order, `Upstream-Contact` layout and the copyright holder lines all
+/// move, and the licence text is restructured into a standalone
+/// paragraph. Correct DEP-5, but not a small diff -- which is why it
+/// is offered rather than applied, and lands in a commit of its own.
+pub fn cme_update_copyright_argv() -> Vec<String> {
+    argv(&["cme", "update", "dpkg-copyright"])
+}
+
+/// `decopy > debian/copyright` — write a DEP-5 copyright from a scan
+/// of the source.
+///
+/// Printed as the shell line it is, because decopy writes the file to
+/// stdout; its progress bars go to stderr, so the redirect collects
+/// the document alone.
+pub fn decopy_shell_line() -> String {
+    "decopy > debian/copyright".to_string()
+}
+
 /// The shell line that runs `dh_make` in a tree that already has a
 /// `debian/`, as one dbranch has just put a gbp.conf in.
 ///
