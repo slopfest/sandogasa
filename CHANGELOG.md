@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### fedora-cve-triage: an update that fixed nothing is not the fix
+
+Both `sandogasa` bugs for CVE-2026-93600 were going to be closed as
+ERRATA against the newest build in each branch — `0.25.3-1.fc46` and
+`0.20.0-1.el10_3`. Neither fixed anything. The flaw is in a crate the
+build links in, so the buildroot settles it, and the buildroot
+bundled-library reads is whatever the branch ships *now*: a build that
+carries the fix says nothing about when the fix arrived. Closing
+against it credits the newest update with a fix that may be years
+older, and tells every reader that the builds before it were
+vulnerable.
+
+The question is now asked of the branch's own history. Builds are
+walked oldest update first, each one's buildroot read, and the first
+that carries a fixed version is the one the bug is judged against —
+the rule `categorize_bug` already applied to a package's own version,
+which the buildroot path had been bypassing. Reading stops at the first
+hit, so the common case of a flaw fixed long ago costs one log rather
+than one per update.
+
+When the *oldest* build already carries it, no update fixed anything
+and the branch was never affected. That is a new outcome rather than a
+quieter fix: it closes as NOTABUG with no `cf_fixed_in`, because naming
+a build there would assert the thing it denies. It keeps the
+`CVE-AlreadyFixed` tracker — the filing was still late, and a tracker
+per shade of already-fixed buys nothing — and the comment carries the
+evidence: the oldest build, the buildroot package and its version.
+
+The span is still the branch the bug names, which is not yet the whole
+question. ProdSec files one `[fedora-all]` tracker on rawhide and one
+`[epel-all]` on the newest EPEL release, but both mean every release of
+their family. Rawhide's oldest `sandogasa` build is `0.19.4-1.fc46`,
+which already carried the fix — so the Fedora bug reads as never
+affected, while f43, f44 and f45 shipped builds linking 0.103.10 and
+older for months. Every EPEL build ever made, `0.11.0-1.el10_2`
+included, already carried it. Widening a tracker to its whole family is
+the next change.
+
 ### fedora-cve-triage: take a GitHub token, and stop reading a refusal as an answer
 
 A sweep could quietly stop recognising Rust crates partway through. The
