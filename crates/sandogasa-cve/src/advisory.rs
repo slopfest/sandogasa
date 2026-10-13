@@ -89,6 +89,14 @@ pub fn ghsa_records(json: &str) -> Vec<(String, Vec<GhsaVuln>)> {
         .collect()
 }
 
+/// Whether a project's own advisories are still worth asking for.
+/// True when the global database answered with nothing — or, just as
+/// uninformative, only with records naming no affected package at
+/// all, which is what an entry GitHub has not curated yet looks like.
+pub fn needs_repo_advisories(records: &[(String, Vec<GhsaVuln>)]) -> bool {
+    records.iter().all(|(_, vulns)| vulns.is_empty())
+}
+
 /// The version a GitHub release-tag URL names — `…/releases/tag/v1.23.1`
 /// gives `1.23.1` — when a CVE's references point at the release that
 /// carried the fix. A candidate like any read from prose: the caller
@@ -134,6 +142,15 @@ pub fn repo_advisory_refs(urls: &[String]) -> Vec<(String, String, String)> {
 /// GitHub's API endpoint for one repository advisory.
 pub fn repo_advisory_url(owner: &str, repo: &str, ghsa_id: &str) -> String {
     format!("https://api.github.com/repos/{owner}/{repo}/security-advisories/{ghsa_id}")
+}
+
+/// GitHub's global database endpoint for one advisory by its GHSA id.
+/// Worth asking before the repository's own: the global record states
+/// an affected range per series with the version that closed it, where
+/// the repository form flattens every series into one range and lists
+/// the patched versions together.
+pub fn ghsa_id_url(ghsa_id: &str) -> String {
+    format!("https://api.github.com/advisories/{ghsa_id}")
 }
 
 /// A repository advisory's affected packages, in the shape
@@ -322,6 +339,30 @@ mod tests {
     }
 
     #[test]
+    fn needs_repo_advisories_when_the_database_names_no_package() {
+        assert!(needs_repo_advisories(&[]));
+        // CVE-2026-93600: GitHub's global record for it carries no
+        // affected package, while rustls/webpki's own advisory has the
+        // ranges — so an empty record must not pass for an answer.
+        assert!(needs_repo_advisories(&[(
+            "GHSA-fr4g-m728-g2mf".into(),
+            vec![]
+        )]));
+        assert!(!needs_repo_advisories(&[
+            ("GHSA-fr4g-m728-g2mf".into(), vec![]),
+            (
+                "GHSA-965h-392x-2mh5".into(),
+                vec![GhsaVuln {
+                    ecosystem: "cargo".into(),
+                    package: "rustls-webpki".into(),
+                    range: Some(">= 0.101.0".into()),
+                    patched: Some("0.103.12".into()),
+                }]
+            ),
+        ]));
+    }
+
+    #[test]
     fn ghsa_range_reads_each_bound_shape() {
         let r = ghsa_range("protobuf", ">= 6.30.0rc1, <= 6.33.4").unwrap();
         assert_eq!(r.start_including.as_deref(), Some("6.30.0rc1"));
@@ -432,6 +473,11 @@ mod tests {
         assert_eq!(
             repo_advisory_url("strukturag", "libheif", "GHSA-73p7-m7gg-w2jv"),
             "https://api.github.com/repos/strukturag/libheif/security-advisories/GHSA-73p7-m7gg-w2jv"
+        );
+        // The same advisory in the global database, which is asked first.
+        assert_eq!(
+            ghsa_id_url("GHSA-73p7-m7gg-w2jv"),
+            "https://api.github.com/advisories/GHSA-73p7-m7gg-w2jv"
         );
         // What GitHub answered for that advisory on 2026-09-23.
         let json = r#"{"ghsa_id": "GHSA-73p7-m7gg-w2jv", "cve_id": "CVE-2026-62292",

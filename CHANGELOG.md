@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+### fedora-cve-triage: take a GitHub token, and stop reading a refusal as an answer
+
+A sweep could quietly stop recognising Rust crates partway through. The
+tool asks GitHub for the language of a CVE's referenced repository —
+that is how it tells a crate's CVE from a system library's — and an
+anonymous caller gets sixty requests an hour from one address. Past
+that GitHub refuses, and the refusal was read as "no language", which
+became "this CVE is not Rust", which looked the library up under the
+wrong Fedora name: `rustls-webpki` instead of `rust-rustls-webpki`, so
+the check reported that Fedora has no package named like it and skipped
+a bug it had the answer to.
+
+Two things kept the refusal invisible. The repository-language request
+never carried `GITHUB_TOKEN`, though the advisory requests beside it
+did, so it stayed anonymous even for someone who had a token. And a
+request that failed was kept like an answer, so the rest of the run was
+served from it.
+
+`config` now offers a GitHub token beside the NVD key, stored under
+`[github]` and checked against `/rate_limit`, which costs no quota. It
+needs no scopes at all, since everything read here is public, and
+`GITHUB_TOKEN` still overrides it for a single run. A request that could
+not be made is now a different thing from one that answered nothing: it
+is not cached, and it leaves the CVE's ecosystem unknown rather than
+settled against it.
+
+### fedora-cve-triage: read the fix from the project's own advisory
+
+A bug could be reported as having no fixed version while the advisory
+it links states one. CVE-2026-93600 against `sandogasa` printed `No
+fixed version in NVD (2)` even though rustls/webpki's advisory records
+the flaw as patched in 0.103.12, and the Fedora builds had 0.103.13 and
+0.103.15 vendored inside them — a question answerable from the data
+already in hand was left for a human to look up by hand.
+
+Two things stood in the way. GitHub's global database held a record for
+the CVE naming no affected package at all, which is what an entry it has
+not reviewed yet looks like; the fallback to the project's own advisory
+ran only when there was *no* record, so an empty one passed for an
+answer. And the bundled-library check — the one that judges a vendored
+crate — never consulted the advisories at all, reading NVD and the
+hand-supplied answers alone.
+
+Both now take the same path: ask the global database, and fall back to
+the repository advisory when what comes back names nothing. The CVE's
+references are what lead there, and that is the only thing that can: a
+repository advisory carries no CVE id of its own, so `GHSA-965h-392x-2mh5`
+answers to no search by CVE and is reachable as a reference or not at
+all. The two bugs above now read `at or past the fix in 0.103.12, so its
+binary carries the fixed code`.
+
+Following the reference means asking the global database for that GHSA
+id, and only then the project's own endpoint. The same advisory reads
+better there: the global record states an affected range per series with
+the version that closed it, where the project's form flattens every
+series into one range and lists the patched versions together. The
+difference decides cases — this advisory patched both 0.103.12 and
+0.104.0-alpha.6, and against the flattened form an affected
+0.104.0-alpha.3 clears itself on the 0.103 fix. The project's endpoint
+stays the fallback, since a fresh advisory lives there before GitHub
+reviews it in.
+
 ### ebranch: submit builds by NVR, not only from a side tag (breaking)
 
 `check-update --submit` could only submit builds that lived in a Koji

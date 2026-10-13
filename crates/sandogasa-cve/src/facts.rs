@@ -472,6 +472,42 @@ mod tests {
         )
     }
 
+    /// An advisory that patched two series states a range and a fix
+    /// for each. A copy is cleared only by the fix for *its* series:
+    /// 0.103.15 is past 0.103.12 and inside no range, while an alpha
+    /// below 0.104.0-alpha.6 is still inside the second one, however
+    /// far past 0.103.12 it reads. CVE-2026-93600, as GitHub's global
+    /// database states it.
+    #[test]
+    fn a_fix_in_a_later_series_does_not_clear_an_earlier_one() {
+        let json = r#"{"ghsa_id":"GHSA-965h-392x-2mh5","vulnerabilities":[
+            {"package":{"ecosystem":"rust","name":"rustls-webpki"},
+             "vulnerable_version_range":">= 0.101.0, < 0.103.12",
+             "first_patched_version":"0.103.12"},
+            {"package":{"ecosystem":"rust","name":"rustls-webpki"},
+             "vulnerable_version_range":">= 0.104.0-alpha.1, < 0.104.0-alpha.6",
+             "first_patched_version":"0.104.0-alpha.6"}]}"#;
+        let records = crate::advisory::ghsa_records(json);
+        let (resolved, _) = resolved_from_ghsa(&records);
+        let resolved = resolved.expect("the advisory names patched versions");
+        let fixed: Vec<&str> = resolved.fixed.iter().map(|f| f.version.as_str()).collect();
+        assert_eq!(fixed, vec!["0.103.12", "0.104.0-alpha.6"]);
+        let cleared = |v: &str| {
+            resolved
+                .fixed
+                .iter()
+                .any(|f| crate::version::version_gte(v, &f.version))
+                && !resolved.ranges.iter().any(|r| in_vulnerable_range(r, v))
+        };
+        assert!(cleared("0.103.15"), "past the fix for its own series");
+        assert!(cleared("0.103.12"));
+        assert!(!cleared("0.103.11"), "below the fix for its series");
+        assert!(
+            !cleared("0.104.0-alpha.3"),
+            "an alpha below 0.104.0-alpha.6 is still in the second range"
+        );
+    }
+
     #[test]
     fn resolved_from_ghsa_takes_fixes_then_inferred_bounds_then_notes() {
         let protobuf = ghsa(
