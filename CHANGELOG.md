@@ -20,10 +20,20 @@ safe to repeat.
 
 Reads are now retried, a failure that outlasts them is reported whatever
 the verbosity — it changes the answer rather than explaining it — and it
-is not cached, so the next question gets a fresh attempt. The release is
-still left out of the verdict for now; saying so is the first half of
-the fix, and letting a release be *unknown* rather than empty is
-[#46](https://github.com/slopfest/sandogasa/issues/46).
+is not cached, so the next question gets a fresh attempt.
+
+A release that still cannot be read is now *unknown* rather than empty,
+and a bug with one does not get settled. It is reported under "Could not
+be checked", naming the releases Bodhi would not answer for, and nothing
+is written: no close, no comment, no tracker block. A family tracker
+covers every release of its family, so a close built on the ones that
+happened to answer is accurate and incomplete — and `cf_fixed_in` is a
+record people trust. Re-running is cheap; an incomplete record is
+corrected by hand.
+
+The same applies to Bodhi's own list of active releases, which failed
+the same way: without it a family tracker resolved to no releases at all
+and was answered against nothing.
 
 ### sandogasa-bodhi, fedora-cve-triage: EPEL Next is an active release
 
