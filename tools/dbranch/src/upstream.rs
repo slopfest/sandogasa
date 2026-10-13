@@ -259,9 +259,26 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
                 ui.run_required(&plan::merge_argv(&tag), &dir)?;
             }
             complete_gbp_conf(ui, &dir, &opts.debian_branch, &format)?;
-            "review debian/ — it is upstream's packaging, and any change is an ordinary \
-             commit here"
-                .to_string()
+            // dh_make cannot fill the gaps in packaging that is
+            // already there -- it refuses a debian/ outright -- so
+            // incomplete packaging means writing those files, or
+            // starting over with --fresh, where dh_make does run.
+            match missing_essentials(|f| dir.join("debian").join(f).is_file()).as_slice() {
+                [] => "review debian/ — it is upstream's packaging, and any change is an \
+                       ordinary commit here"
+                    .to_string(),
+                missing => format!(
+                    "upstream's packaging has no {}, and dh_make cannot fill a gap in a \
+                     debian/ that already exists — write them here, or clone again with \
+                     --fresh to start from dh_make's skeleton; the rest is upstream's \
+                     packaging, and any change is an ordinary commit here",
+                    missing
+                        .iter()
+                        .map(|f| format!("debian/{f}"))
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                ),
+            }
         }
         None => {
             ui.step(&format!(
@@ -280,9 +297,11 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
             )?;
             format!(
                 "write the rest of debian/ — with no packaging anywhere, `{}` makes the \
-                 skeleton (its class, license and copyright answers are yours; the \
-                 provisional orig it creates is replaced by the first `gbp export-orig`)",
-                plan::dh_make_argv(&name.to_lowercase(), &version).join(" ")
+                 skeleton (dh_make refuses to run at all with a debian/ present, which \
+                 is why gbp.conf steps aside and comes back; its class, license and \
+                 copyright answers are yours; the provisional orig it creates is \
+                 replaced by the first `gbp export-orig`)",
+                plan::dh_make_shell_line(&name.to_lowercase(), &version)
             )
         }
     };
@@ -604,8 +623,12 @@ fn upstream_packaging(
         .and_then(|t| changelog::stanza_headers(&t).into_iter().next())
         .map(|h| h.version)
         .unwrap_or_else(|| "no changelog".to_string());
-    let what =
-        format!("upstream carries a {branch} branch — packaging by {by}, changelog {version}");
+    let missing =
+        missing_essentials(|f| git::show_file(repo, &rev, &format!("debian/{f}")).is_some());
+    let what = format!(
+        "upstream carries a {branch} branch — packaging by {by}, changelog {version}{}",
+        missing_phrase(&missing)
+    );
     if choice == Some(true) {
         eprintln!("{what}; starting from it");
         return Some(branch);
@@ -618,6 +641,35 @@ fn upstream_packaging(
     }
     ui.confirm(&format!("{what} — start from it?"))
         .then_some(branch)
+}
+
+/// The files `dpkg-source` needs to build a source package at all.
+/// `copyright` is not among them: policy wants it for an upload, but
+/// its absence does not stop the tree building, and guessing a
+/// licence is not dbranch's to do.
+const ESSENTIALS: [&str; 3] = ["control", "rules", "changelog"];
+
+/// Which of [`ESSENTIALS`] this packaging has not got, in the order
+/// listed. `present` answers for one name (`control`), so the caller
+/// decides whether that means a file on a branch or one on disk.
+fn missing_essentials(present: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    ESSENTIALS.into_iter().filter(|f| !present(f)).collect()
+}
+
+/// `, but no debian/control` — the clause naming what is missing, and
+/// empty when nothing is.
+fn missing_phrase(missing: &[&str]) -> String {
+    match missing {
+        [] => String::new(),
+        _ => format!(
+            ", but no {}",
+            missing
+                .iter()
+                .map(|f| format!("debian/{f}"))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        ),
+    }
 }
 
 /// Make upstream's gbp.conf serve this branch: `debian-branch` set to
@@ -939,6 +991,24 @@ mod tests {
             std::env::set_var("GIT_CONFIG_GLOBAL", config.path());
         }
         config
+    }
+
+    /// What dpkg-source needs, reported in the order listed so the
+    /// sentence reads the same way twice.
+    #[test]
+    fn packaging_without_the_essentials_is_named() {
+        assert!(missing_essentials(|_| true).is_empty());
+        assert_eq!(missing_essentials(|f| f != "control"), ["control"]);
+        assert_eq!(
+            missing_essentials(|f| f == "changelog"),
+            ["control", "rules"]
+        );
+        assert_eq!(missing_phrase(&[]), "");
+        assert_eq!(missing_phrase(&["control"]), ", but no debian/control");
+        assert_eq!(
+            missing_phrase(&["control", "rules"]),
+            ", but no debian/control or debian/rules"
+        );
     }
 
     #[test]

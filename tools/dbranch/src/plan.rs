@@ -371,6 +371,21 @@ pub fn dh_make_argv(name: &str, version: &str) -> Vec<String> {
     argv(&["dh_make", "-p", &pkg, "--createorig"])
 }
 
+/// The shell line that runs `dh_make` in a tree that already has a
+/// `debian/`, as one dbranch has just put a gbp.conf in.
+///
+/// `dh_make` refuses outright when the directory is there -- "You
+/// already have a debian/ subdirectory in the source tree. dh_make
+/// will not try to overwrite anything." -- and emptying it is not
+/// enough, because the check is on the directory itself. So gbp.conf
+/// steps aside, the directory goes, and both come back afterwards.
+pub fn dh_make_shell_line(name: &str, version: &str) -> String {
+    format!(
+        "mv debian/gbp.conf . && rmdir debian && {} && mv gbp.conf debian/",
+        dh_make_argv(name, version).join(" ")
+    )
+}
+
 /// `git remote add <name> <url>`.
 pub fn git_remote_add_argv(name: &str, url: &str) -> Vec<String> {
     argv(&["git", "remote", "add", name, url])
@@ -1272,6 +1287,15 @@ mod tests {
         assert_eq!(
             dh_make_argv("antifennel", "0.3.1"),
             ["dh_make", "-p", "antifennel_0.3.1", "--createorig"]
+        );
+        // dh_make will not run with a debian/ present, and dbranch has
+        // just created one holding gbp.conf, so the line it prints has
+        // to move that aside -- and remove the directory, since the
+        // check is on the directory and not on what is in it.
+        assert_eq!(
+            dh_make_shell_line("antifennel", "0.3.1"),
+            "mv debian/gbp.conf . && rmdir debian && \
+             dh_make -p antifennel_0.3.1 --createorig && mv gbp.conf debian/"
         );
         assert_eq!(
             push_tag_argv("origin", "0.3.1"),

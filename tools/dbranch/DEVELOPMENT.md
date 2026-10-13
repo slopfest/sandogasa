@@ -437,6 +437,25 @@ suite for an old Ubuntu LTS (better signal), and that is left untouched.
 to process **newest release first**. `--supported` (includes the devel
 release) is the not-EOL set; the complement within `--all` is EOL.
 
+### `dh_make` refuses any `debian/`, however little is in it
+
+`dh_make` stops with "You already have a debian/ subdirectory in the
+source tree. dh_make will not try to overwrite anything." and exits 1.
+The check is on the *directory*, not its contents, so emptying it is
+not enough -- it has to be gone.
+
+That makes it useless for filling gaps in packaging that already
+exists, and it also bit the path that creates packaging: `clone`
+without upstream packaging writes `debian/gbp.conf`, and then printed
+`dh_make -p <name>_<version> --createorig` as the next step. Running
+exactly what it printed failed, every time, for as long as the message
+existed. The line it prints now moves gbp.conf aside, removes the
+directory, runs dh_make and puts gbp.conf back
+(`plan::dh_make_shell_line`, pinned by a test).
+
+The lesson is not about dh_make: a next-step message is a command the
+user will run, so it is worth running once before printing it.
+
 ## Design decisions
 
 ### Packaging from upstream's git (`upstream.rs`: `clone`, merge-based `update`)

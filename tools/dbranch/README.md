@@ -103,7 +103,9 @@ or `%(version)s`, detected from the tags — with pristine-tar and
 branch, `clone` says who wrote it and which version its changelog is
 at, and offers to start from it instead (default yes;
 `--from-upstream-packaging` says yes unasked, `--fresh` ignores it, a
-non-interactive run starts fresh with a warning): the branch begins at
+non-interactive run starts fresh with a warning; the offer also names
+whichever of `debian/control`, `debian/rules` and `debian/changelog`
+that packaging has not got, so an incomplete one can be turned down): the branch begins at
 upstream's packaging branch without tracking it, the release tag is
 merged in, and their gbp.conf is completed — `debian-branch` set to
 yours, `upstream-tag` and the pristine-tar keys added when absent.
@@ -134,7 +136,12 @@ already in that layout is left alone with a note. A tag
 whose tree carries a `debian/` directory gets a warning (dpkg-source
 drops the orig's copy, so the two disagree). Writing the rest of
 `debian/` is up to you; with no packaging anywhere the next-step
-message prints the `dh_make -p <name>_<version> --createorig` to run.
+message prints a `dh_make` line to run. It moves `gbp.conf` aside and
+removes `debian/` first, because `dh_make` refuses to run at all when
+that directory exists — which is also why adopted packaging missing
+one of those three files cannot be completed with `dh_make`, and the
+next-step message says so, naming the files and offering `--fresh` as
+the way to get its skeleton instead.
 Two optional steps finish the setup: `--salsa <namespace>` creates the
 packaging project `<namespace>/<name>` on salsa.debian.org (public, CI
 config path preset to `debian/salsa-ci.yml`) and adds it as `origin` —

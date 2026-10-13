@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### dbranch: clone prints a dh_make line that runs
+
+`clone` with no upstream packaging creates `debian/gbp.conf` and then
+told you to run `dh_make -p <name>_<version> --createorig`. That
+command cannot work: `dh_make` refuses outright when a `debian/`
+directory is present — "You already have a debian/ subdirectory in the
+source tree" — and dbranch had just created one. It exited 1 every
+time, for as long as the message existed.
+
+The line it prints now moves `gbp.conf` aside, removes the directory,
+runs `dh_make` and puts `gbp.conf` back. Emptying the directory is not
+enough, because the check is on the directory itself. A test pins the
+line, and it was run verbatim before being printed.
+
+The same refusal means `dh_make` can never complete packaging that is
+already there, which matters when upstream's `debian/` is a partial
+one. So the offer to start from upstream's packaging now names
+whichever of `debian/control`, `debian/rules` and `debian/changelog`
+it has not got — the three `dpkg-source` needs — and an adopted
+packaging missing any of them gets a next-step message that names
+them, says `dh_make` cannot fill the gap, and points at `--fresh` for
+a run where it can.
+
 ### dbranch: adopted packaging names you, not upstream
 
 `clone --from-upstream-packaging` starts a Debian branch from
