@@ -1,0 +1,70 @@
+# The gate a pull request has to pass, mirroring `make check` so that
+# what CI runs and what a contributor runs locally cannot drift.
+#
+# `pull_request`, never `pull_request_target`: the latter runs a
+# fork's code with this repository's secrets. Nothing here needs a
+# secret, and the token is read-only besides.
+name: CI
+
+on:
+  pull_request:
+    paths-ignore:
+      - '**.md'
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Split from `make check` so the wall clock is the slowest job
+  # rather than the sum: locally the whole gate is about 90 seconds.
+  check:
+    name: fmt, clippy, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: make clippy
+      - run: make test
+      - run: make check-non-exhaustive
+
+  packaging:
+    name: packaging sandbox
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      # Runs the suite with external network removed and the distro
+      # tools shadowed, the way a Koji or buildd %check sees it. git
+      # has to be present: dbranch and ebranch build fixture repos.
+      - run: ./scripts/packaging-test.sh
+
+  msrv:
+    name: builds on the MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Read rust-version from the workspace
+        id: msrv
+        run: echo "version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      # The only check that catches *syntax* newer than the MSRV:
+      # clippy's incompatible_msrv reads rust-version and flags std
+      # APIs, but a language feature passes every lint and fails only
+      # under the old compiler. v0.24.1 shipped an `if let` guard that
+      # way and would not build for EPEL 9.
+      - run: cargo build --workspace --all-targets --locked

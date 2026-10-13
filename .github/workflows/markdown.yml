@@ -1,0 +1,25 @@
+# Markdown gets its own gate so a documentation-only change does not
+# wait on a full workspace build, and a code change does not wait on
+# a linter.
+name: Markdown
+
+on:
+  pull_request:
+    paths: ['**.md']
+  push:
+    branches: [main]
+    paths: ['**.md']
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # Rules live in .markdownlint-cli2.jsonc, which explains why the
+      # set is small: the default set reports 1127 findings here,
+      # nearly all cosmetic or wrong.
+      - uses: DavidAnson/markdownlint-cli2-action@v20

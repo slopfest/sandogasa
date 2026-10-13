@@ -1,0 +1,23 @@
+// Markdown rules that catch a rendering bug, not a style preference.
+//
+// Deliberately small. Running the default set over this repo reports
+// 1127 findings, nearly all of them cosmetic or wrong: MD013 would
+// flag AGENTS.md, whose lines are long on purpose; MD038 flags
+// `question [Y/n]: ` and `- `, where the trailing space is the thing
+// being documented; MD018 reads prose starting "#8 ..." as a broken
+// heading. A linter that is wrong more often than right gets ignored,
+// which is the state `make clippy` avoids by being -D warnings.
+//
+// Add a rule here once the repo passes it, not before.
+{
+  "config": {
+    "default": false,
+    // A fence not surrounded by blank lines can swallow the block
+    // after it.
+    "MD031": true,
+    // A file without a trailing newline concatenates with the next
+    // one in tooling that joins them.
+    "MD047": true
+  },
+  "globs": ["**/*.md", "!scratch", "!target"]
+}
