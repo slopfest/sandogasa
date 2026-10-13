@@ -3362,8 +3362,8 @@ packages = ["a"]
     #[test]
     fn a_library_dependency_is_ignored_whatever_auto_exclude_says() {
         // `--no-auto-exclude-install` used to turn symbol-versioned
-        // deps back on. It no longer does: neither form says anything
-        // about the rebuild, so neither is checked (issue #23).
+        // deps back on, and was removed in v0.26.0: neither form says
+        // anything about the rebuild, so neither is checked (#23).
         let mut resolver = MockResolver::new();
         resolver.add_buildrequires("a", &[]);
         resolver.add_subpkg_requires("a", &["libc.so.6(GLIBC_2.38)(64bit)"]);

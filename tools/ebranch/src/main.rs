@@ -180,23 +180,6 @@ it can't infer (e.g. epel8)."
     )]
     base_branch: Option<String>,
 
-    /// Disable auto-exclusion from installability checks.
-
-    #[arg(
-        long,
-        long_help = "\
-Deprecated; has no effect.
-
-It used to re-enable library dependencies
-(libc.so.6(GLIBC_2.38)(64bit)) in
-installability checks. Those record what the
-source branch's build linked against, not what
-a rebuild on the target needs, so they are
-never checked now and there is nothing to
-re-enable."
-    )]
-    no_auto_exclude_install: bool,
-
     /// Max recursion depth (0 = unlimited).
     #[arg(long, default_value = "0")]
     max_depth: usize,
@@ -1944,14 +1927,6 @@ fn main() -> ExitCode {
         source_offline: Default::default(),
         source_online: Default::default(),
     };
-    if args.no_auto_exclude_install {
-        eprintln!(
-            "warning: --no-auto-exclude-install is deprecated and does nothing. \
-             Library dependencies record what the source branch's build linked \
-             against; a rebuild on the target regenerates them, so they are never \
-             checked and there is nothing to re-enable."
-        );
-    }
     let source_label = branch_repo_label(args.source.as_deref(), args.source_repo.as_deref());
     let target_label = branch_repo_label(args.target.as_deref(), args.target_repo.as_deref());
     let options = ResolveOptions {

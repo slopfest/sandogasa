@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### ebranch: remove `resolve --no-auto-exclude-install` (breaking CLI)
+
+The flag has done nothing since v0.25.2, where it was deprecated: it
+re-enabled library dependencies (`libc.so.6(GLIBC_2.38)(64bit)`) in
+installability checks, and those stopped being checked at all, because
+they record what the source branch's build linked against rather than
+what a rebuild on the target needs. Passing it printed a warning and
+changed no behaviour. It is gone now.
+
+Migration: drop the flag. There is no replacement and nothing to
+replace — a run without it does exactly what a run with it did.
+
+Worth recording how this was nearly missed: `DEPRECATIONS.md` said "No
+active deprecations" for the whole time the flag was deprecated, so
+the file that exists to answer "what is due for removal" would have
+answered "nothing". The deprecation was announced in a CHANGELOG entry
+and enforced in the code, and never written down in the one place that
+tracks it. The entry above is in the completed list now; the lesson is
+that a deprecation is not done until that file says so.
+
 ### ebranch, poi-tracker: find the RPM Fusion inventory, and say how old it is
 
 `--rpmfusion-inventory` had to be given a path, so the inventory a
