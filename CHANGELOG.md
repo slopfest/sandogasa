@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### sandogasa-distgit, sandogasa-jira, sandogasa-nvd: refuse a credential on a plaintext endpoint (breaking)
+
+Three clients would attach an API token to a base URL of any scheme, so
+a mistyped or overridden endpoint could put the credential on the wire
+in cleartext. Six sibling crates — bugzilla, bodhi, github, gitlab,
+forgejo and sourcehut — already guard against exactly this by calling
+`sandogasa_cli::ensure_secure_url` when the credential is set; these
+three had simply been missed. CodeQL's `rust/cleartext-transmission`
+found them, which is the one thing that sweep was worth doing for: of
+its 22 findings, 15 were false and these 7 were not.
+
+The setters now validate the base URL and return a `Result`:
+
+- `DistGitClient::with_token(String) -> Result<Self, String>`
+- `JiraClient::with_api_key(String) -> Result<Self, String>`
+- `JiraClient::with_api_token(String, String) -> Result<Self, String>`
+- `NvdClient::with_api_key(impl Into<String>) -> Result<Self, String>`
+  (checked only when the key is non-empty, since an empty key is no key)
+
+Migration: add `?` where the client is built in a function returning an
+error, or `.expect(...)` where the base URL is a constant — the
+workspace's own callers are one or the other. Anything pointing at
+loopback keeps working: `ensure_secure_url` allows it, so wiremock
+tests need no change beyond unwrapping.
+
 ### fedora-cve-triage: a fix in some releases does not answer a family bug
 
 A bug fixed on one release and not another was closed on the strength of

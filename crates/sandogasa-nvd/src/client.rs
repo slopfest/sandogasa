@@ -40,10 +40,17 @@ impl NvdClient {
 
     /// Send `key` as the `apiKey` header on every request. An empty
     /// key is no key.
-    pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
+    ///
+    /// Errors if the base URL is not https, so a key cannot be put on
+    /// the wire in cleartext by a mistyped or overridden endpoint;
+    /// loopback is allowed, for tests against a local mock server.
+    pub fn with_api_key(mut self, key: impl Into<String>) -> Result<Self, String> {
         let key = key.into();
+        if !key.is_empty() {
+            sandogasa_cli::ensure_secure_url(&self.base_url)?;
+        }
         self.api_key = (!key.is_empty()).then_some(key);
-        self
+        Ok(self)
     }
 
     /// Whether a key is set, so callers can pace requests to the
@@ -119,11 +126,15 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"vulnerabilities": []}"#))
             .mount(&server)
             .await;
-        let keyed = NvdClient::with_base_url(&server.uri()).with_api_key("secret");
+        let keyed = NvdClient::with_base_url(&server.uri())
+            .with_api_key("secret")
+            .unwrap();
         assert!(keyed.has_api_key());
         assert!(keyed.cve_json("CVE-2026-1").await.is_ok());
         // Without the header the mock does not match: no key, no answer.
-        let bare = NvdClient::with_base_url(&server.uri()).with_api_key("");
+        let bare = NvdClient::with_base_url(&server.uri())
+            .with_api_key("")
+            .unwrap();
         assert!(!bare.has_api_key());
         assert!(bare.cve_json("CVE-2026-1").await.is_err());
     }

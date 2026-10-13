@@ -185,9 +185,15 @@ impl DistGitClient {
         }
     }
 
-    pub fn with_token(mut self, token: String) -> Self {
+    /// Attach a dist-git API token.
+    ///
+    /// Errors if the base URL is not https, so the token cannot be
+    /// put on the wire in cleartext by an overridden endpoint;
+    /// loopback is allowed, for tests against a local mock server.
+    pub fn with_token(mut self, token: String) -> Result<Self, String> {
+        sandogasa_cli::ensure_secure_url(&self.base_url)?;
         self.api_token = Some(token);
-        self
+        Ok(self)
     }
 
     /// Fetch the spec file for a package on a given dist-git branch.
@@ -886,8 +892,19 @@ mod tests {
 
     #[test]
     fn with_token_sets_token() {
-        let client = DistGitClient::new().with_token("secret".to_string());
+        let client = DistGitClient::new()
+            .with_token("secret".to_string())
+            .expect("dist-git's own base URL is https");
         assert_eq!(client.api_token.as_deref(), Some("secret"));
+
+        // And a plaintext endpoint is refused rather than used: the
+        // token would otherwise go out in the clear.
+        let refused =
+            DistGitClient::with_base_url("http://src.example.com").with_token("secret".to_string());
+        assert!(
+            refused.is_err_and(|e| e.contains("https")),
+            "a plaintext endpoint must not carry a token"
+        );
     }
 
     // ---- give_package / set_acl error surfacing ----
@@ -895,7 +912,9 @@ mod tests {
     #[tokio::test]
     async fn give_package_surfaces_the_pagure_error_body() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("t".to_string())
+            .unwrap();
         Mock::given(method("PATCH"))
             .and(path("/api/0/rpms/foo"))
             .respond_with(
@@ -917,7 +936,9 @@ mod tests {
     #[tokio::test]
     async fn set_acl_surfaces_the_pagure_error_body() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("t".to_string())
+            .unwrap();
         Mock::given(method("POST"))
             .and(path("/api/0/rpms/foo/git/modifyacls"))
             .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"error": "no ACL"}"#))
@@ -1043,7 +1064,9 @@ mod tests {
     #[tokio::test]
     async fn set_acl_sends_post_with_form_data() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("mytoken".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("mytoken".to_string())
+            .unwrap();
 
         Mock::given(method("POST"))
             .and(path("/api/0/rpms/freerdp/git/modifyacls"))
@@ -1064,7 +1087,9 @@ mod tests {
     #[tokio::test]
     async fn set_acl_group() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("tok".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("tok".to_string())
+            .unwrap();
 
         Mock::given(method("POST"))
             .and(path("/api/0/rpms/freerdp/git/modifyacls"))
@@ -1085,7 +1110,9 @@ mod tests {
     #[tokio::test]
     async fn set_acl_returns_error_on_403() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("badtoken".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("badtoken".to_string())
+            .unwrap();
 
         Mock::given(method("POST"))
             .and(path("/api/0/rpms/freerdp/git/modifyacls"))
@@ -1102,7 +1129,9 @@ mod tests {
     #[tokio::test]
     async fn remove_acl_sends_empty_acl() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("mytoken".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("mytoken".to_string())
+            .unwrap();
 
         Mock::given(method("POST"))
             .and(path("/api/0/rpms/freerdp/git/modifyacls"))
@@ -1123,7 +1152,9 @@ mod tests {
     #[tokio::test]
     async fn remove_acl_returns_error_on_server_failure() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("tok".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("tok".to_string())
+            .unwrap();
 
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(500))
@@ -1139,8 +1170,9 @@ mod tests {
     #[tokio::test]
     async fn verify_token_returns_username() {
         let server = MockServer::start().await;
-        let client =
-            DistGitClient::with_base_url(&server.uri()).with_token("goodtoken".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("goodtoken".to_string())
+            .unwrap();
 
         Mock::given(method("POST"))
             .and(path("/api/0/-/whoami"))
@@ -1160,7 +1192,9 @@ mod tests {
     #[tokio::test]
     async fn verify_token_returns_error_on_401() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("badtoken".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("badtoken".to_string())
+            .unwrap();
 
         Mock::given(method("POST"))
             .and(path("/api/0/-/whoami"))
@@ -1435,7 +1469,9 @@ mod tests {
     #[tokio::test]
     async fn give_package_sends_patch_with_main_admin() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("mytoken".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("mytoken".to_string())
+            .unwrap();
 
         Mock::given(method("PATCH"))
             .and(path("/api/0/rpms/freerdp"))
@@ -1453,7 +1489,9 @@ mod tests {
     #[tokio::test]
     async fn give_package_orphan() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("tok".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("tok".to_string())
+            .unwrap();
 
         Mock::given(method("PATCH"))
             .and(path("/api/0/rpms/freerdp"))
@@ -1470,7 +1508,9 @@ mod tests {
     #[tokio::test]
     async fn give_package_returns_error_on_403() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("bad".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("bad".to_string())
+            .unwrap();
 
         Mock::given(method("PATCH"))
             .and(path("/api/0/rpms/freerdp"))
@@ -1890,7 +1930,9 @@ mod tests {
     #[tokio::test]
     async fn take_orphan_returns_new_point_of_contact() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("tok".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("tok".to_string())
+            .unwrap();
         Mock::given(method("POST"))
             .and(path("/_dg/take_orphan/rpms/ccze"))
             .and(wiremock::matchers::header("Authorization", "token tok"))
@@ -1907,7 +1949,9 @@ mod tests {
     #[tokio::test]
     async fn take_orphan_surfaces_server_error_detail() {
         let server = MockServer::start().await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("tok".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("tok".to_string())
+            .unwrap();
         Mock::given(method("POST"))
             .and(path("/_dg/take_orphan/rpms/ccze"))
             .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({

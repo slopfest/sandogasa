@@ -1485,7 +1485,7 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
         eprintln!("warning: {warning}");
     }
 
-    let client = DistGitClient::new().with_token(token);
+    let client = DistGitClient::new().with_token(token)?;
     let rt = new_runtime()?;
     // Fail in seconds on a bad token rather than at the first give,
     // deep into the walk. A valid token can still lack the ACL scope
@@ -2873,7 +2873,7 @@ fn cmd_adopt(paths: &[String], args: &AdoptArgs) -> CmdResult {
     };
     let mut dg = sandogasa_distgit::DistGitClient::new();
     if let Some(token) = token {
-        dg = dg.with_token(token);
+        dg = dg.with_token(token)?;
     }
     let rt = new_runtime()?;
     // Cheap precondition: a bad token should fail in seconds, not

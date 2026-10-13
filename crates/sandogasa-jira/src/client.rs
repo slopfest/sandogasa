@@ -48,9 +48,13 @@ impl JiraClient {
     /// Attach a self-hosted Jira's personal access token, sent as a
     /// bearer. An Atlassian Cloud site ignores an API token sent this
     /// way; use [`with_api_token`](Self::with_api_token) there.
-    pub fn with_api_key(mut self, key: String) -> Self {
+    ///
+    /// Errors if the base URL is not https, so a token cannot be put
+    /// on the wire in cleartext; loopback is allowed, for tests.
+    pub fn with_api_key(mut self, key: String) -> Result<Self, String> {
+        sandogasa_cli::ensure_secure_url(&self.base_url)?;
         self.auth = Some(Auth::Bearer(key));
-        self
+        Ok(self)
     }
 
     /// Attach an Atlassian Cloud API token with the account's email,
@@ -58,9 +62,13 @@ impl JiraClient {
     /// this: the site host ignores a scoped token. A scoped token
     /// needs `read:jira-user` for [`myself`](Self::myself) and
     /// `read:jira-work` for issues.
-    pub fn with_api_token(mut self, email: String, token: String) -> Self {
+    ///
+    /// Errors if the base URL is not https, as [`Self::with_api_key`]
+    /// does and for the same reason.
+    pub fn with_api_token(mut self, email: String, token: String) -> Result<Self, String> {
+        sandogasa_cli::ensure_secure_url(&self.base_url)?;
         self.auth = Some(Auth::Basic { email, token });
-        self
+        Ok(self)
     }
 
     fn url(&self, path: &str) -> String {
@@ -258,7 +266,8 @@ mod tests {
     async fn with_api_token_sends_basic_auth_and_myself_reads_the_account() {
         let server = MockServer::start().await;
         let client = JiraClient::new(&server.uri())
-            .with_api_token("me@example.com".into(), "secret-token".into());
+            .with_api_token("me@example.com".into(), "secret-token".into())
+            .unwrap();
 
         Mock::given(method("GET"))
             .and(path("/rest/api/2/myself"))
@@ -301,8 +310,9 @@ mod tests {
     #[tokio::test]
     async fn myself_reports_a_rejected_token_by_status() {
         let server = MockServer::start().await;
-        let client =
-            JiraClient::new(&server.uri()).with_api_token("me@example.com".into(), "bad".into());
+        let client = JiraClient::new(&server.uri())
+            .with_api_token("me@example.com".into(), "bad".into())
+            .unwrap();
         Mock::given(method("GET"))
             .and(path("/rest/api/2/myself"))
             .respond_with(ResponseTemplate::new(401))
@@ -315,7 +325,9 @@ mod tests {
     #[tokio::test]
     async fn with_api_key_sends_bearer_auth() {
         let server = MockServer::start().await;
-        let client = JiraClient::new(&server.uri()).with_api_key("secret-token".to_string());
+        let client = JiraClient::new(&server.uri())
+            .with_api_key("secret-token".to_string())
+            .unwrap();
 
         Mock::given(method("GET"))
             .and(path("/rest/api/2/issue/RHEL-1"))

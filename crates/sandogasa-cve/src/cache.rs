@@ -65,7 +65,11 @@ impl<T> NvdCache<T> {
     /// which lifts the pace from one request per 6 s to one per 0.6 s.
     pub fn new(tool: &str, api_key: String, verbose: bool, refresh: bool) -> Self {
         Self::with(
-            NvdClient::new().with_api_key(api_key),
+            // `NvdClient::new()` is NVD's own https endpoint, so the
+            // scheme check the key setter makes cannot fail here.
+            NvdClient::new()
+                .with_api_key(api_key)
+                .expect("NVD's own base URL is https"),
             DiskCache::new(tool, "nvd", Some(NVD_TTL), refresh),
             NVD_BACKOFF,
             verbose,
@@ -199,11 +203,10 @@ pub enum KeyCheck {
 /// not know — the CVE asked for exists, so the key is what it did not
 /// find — and 403 or 429 when the window is spent.
 pub async fn check_api_key(key: &str) -> KeyCheck {
-    match NvdClient::new()
+    let client = NvdClient::new()
         .with_api_key(key)
-        .cve_json("CVE-2021-44228")
-        .await
-    {
+        .expect("NVD's own base URL is https");
+    match client.cve_json("CVE-2021-44228").await {
         Ok(_) => KeyCheck::Accepted,
         Err(e) if nvd_refused_key(&e) => KeyCheck::Refused,
         Err(e) if nvd_throttled(&e) => {
@@ -284,7 +287,9 @@ mod tests {
             .mount(&server)
             .await;
         let mut nvd = NvdCache::with(
-            NvdClient::with_base_url(&server.uri()).with_api_key("stale"),
+            NvdClient::with_base_url(&server.uri())
+                .with_api_key("stale")
+                .expect("loopback is allowed"),
             DiskCache::at(None, false, Some(NVD_TTL)),
             Duration::from_millis(10),
             false,

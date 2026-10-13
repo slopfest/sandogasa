@@ -37,9 +37,9 @@ pub async fn with_credentials(
     let site = crate::utils::jira_base();
     Ok(match (email, token) {
         (Some(e), Some(t)) => {
-            sandogasa_jira::JiraClient::new(&gateway_for(&site).await?).with_api_token(e, t)
+            sandogasa_jira::JiraClient::new(&gateway_for(&site).await?).with_api_token(e, t)?
         }
-        (None, Some(t)) => sandogasa_jira::JiraClient::new(&site).with_api_key(t),
+        (None, Some(t)) => sandogasa_jira::JiraClient::new(&site).with_api_key(t)?,
         (_, None) => sandogasa_jira::JiraClient::new(&site),
     })
 }

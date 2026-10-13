@@ -174,7 +174,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Show { package } => cmd_show(&package, json).await,
         Command::Take { packages } => {
-            let client = DistGitClient::new().with_token(resolve_token()?);
+            let client = DistGitClient::new().with_token(resolve_token()?)?;
             cmd_take(&client, &packages, json).await
         }
     }
@@ -222,7 +222,7 @@ async fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
             print!("Verifying API token... ");
             io::stdout().flush()?;
 
-            let client = DistGitClient::new().with_token(config.dist_git.api_token.clone());
+            let client = DistGitClient::new().with_token(config.dist_git.api_token.clone())?;
             match client.verify_token().await {
                 Ok(username) => {
                     println!("OK (authenticated as {username})");
@@ -246,7 +246,7 @@ async fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
 
     print!("Verifying token... ");
     io::stdout().flush()?;
-    let client = DistGitClient::new().with_token(token.clone());
+    let client = DistGitClient::new().with_token(token.clone())?;
     let username = client.verify_token().await?;
     println!("OK (authenticated as {username})");
 
@@ -410,7 +410,7 @@ async fn check_my_access(
             // `client` may be unauthenticated here, so verify
             // against a client built from the stored token.
             let token = resolve_token().ok()?;
-            let auth_client = DistGitClient::new().with_token(token);
+            let auth_client = DistGitClient::new().with_token(token).ok()?;
             current_username(&auth_client).await.ok()?
         }
     };
@@ -510,7 +510,7 @@ async fn cmd_give(
     token: &str,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let client = DistGitClient::new().with_token(token.to_string());
+    let client = DistGitClient::new().with_token(token.to_string())?;
 
     // Validate the target user exists (once, before any transfers).
     // The user endpoint 503s for prolific packagers — exactly the
@@ -711,7 +711,7 @@ async fn cmd_set(
     strict: bool,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let client = DistGitClient::new().with_token(token.to_string());
+    let client = DistGitClient::new().with_token(token.to_string())?;
     let acls = require_admin(&client, package).await?;
 
     let requested: AccessLevel = level.parse().unwrap();
@@ -809,7 +809,7 @@ async fn cmd_remove(
     token: &str,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let client = DistGitClient::new().with_token(token.to_string());
+    let client = DistGitClient::new().with_token(token.to_string())?;
     let acls = require_admin(&client, package).await?;
     // Cannot remove a package owner
     if user_type == "user" && acls.user_level(name) == Some(AccessLevel::Owner) {
@@ -863,7 +863,7 @@ async fn cmd_apply(
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = AclConfig::from_file(config_path)?;
-    let client = DistGitClient::new().with_token(token.to_string());
+    let client = DistGitClient::new().with_token(token.to_string())?;
 
     let mut all_results = Vec::new();
     let mut total_errors = 0usize;
@@ -1508,7 +1508,9 @@ mod tests {
             )
             .await;
         }
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("t".to_string())
+            .unwrap();
         cmd_take(
             &client,
             &["ccze".to_string(), "colorized-logs".to_string()],
@@ -1537,7 +1539,9 @@ mod tests {
                 .set_body_json(serde_json::json!({"point_of_contact": "salimma"})),
         )
         .await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("t".to_string())
+            .unwrap();
         let err = cmd_take(
             &client,
             &["ccze".to_string(), "colorized-logs".to_string()],
@@ -1566,7 +1570,9 @@ mod tests {
         // bug. The server answers a non-orphaned package with a bare
         // 401 "You are not allowed to modify this project", which
         // reads as a token problem rather than the truth.
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("t".to_string())
+            .unwrap();
         let err = cmd_take(&client, &["bash".to_string()], false)
             .await
             .unwrap_err()
@@ -1599,7 +1605,9 @@ mod tests {
                 .set_body_json(serde_json::json!({"point_of_contact": "salimma"})),
         )
         .await;
-        let client = DistGitClient::with_base_url(&server.uri()).with_token("t".to_string());
+        let client = DistGitClient::with_base_url(&server.uri())
+            .with_token("t".to_string())
+            .unwrap();
         cmd_take(&client, &["ccze".to_string()], false)
             .await
             .unwrap();

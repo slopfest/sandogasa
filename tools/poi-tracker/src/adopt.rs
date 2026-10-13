@@ -230,7 +230,9 @@ mod tests {
             .await;
 
         let inv = inventory(&["ccze", "bash"]);
-        let dg = DistGitClient::with_base_url(&server.uri()).with_token("tok".to_string());
+        let dg = DistGitClient::with_base_url(&server.uri())
+            .with_token("tok".to_string())
+            .unwrap();
         let report = run(
             &inv,
             &dg,
@@ -267,7 +269,9 @@ mod tests {
             .await;
 
         let inv = inventory(&["ccze"]);
-        let dg = DistGitClient::with_base_url(&server.uri()).with_token("tok".to_string());
+        let dg = DistGitClient::with_base_url(&server.uri())
+            .with_token("tok".to_string())
+            .unwrap();
         let report = run(
             &inv,
             &dg,
@@ -339,7 +343,9 @@ mod tests {
             .await;
 
         let inv = inventory(&["ccze", "colorized-logs"]);
-        let dg = DistGitClient::with_base_url(&server.uri()).with_token("tok".to_string());
+        let dg = DistGitClient::with_base_url(&server.uri())
+            .with_token("tok".to_string())
+            .unwrap();
         let report = run(
             &inv,
             &dg,
