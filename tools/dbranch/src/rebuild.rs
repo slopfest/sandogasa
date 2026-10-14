@@ -4315,6 +4315,133 @@ E: damo: an-error\n";
     }
 
     #[test]
+    fn lint_stage_dry_run_names_the_source_and_the_debs() {
+        // --dry-run cannot enumerate the result directory, so it
+        // narrates the .dsc beside the repo plus a shell-expandable
+        // glob of this build's .debs.
+        let dir = tempfile::tempdir().unwrap();
+        lint_stage(&ui_dry(), dir.path(), "unstable", "damo", "3.2.8-1").unwrap();
+    }
+
+    #[test]
+    fn lint_stage_with_nothing_built_warns_rather_than_failing() {
+        // Neither the source package nor any .deb is there. That is a
+        // sequencing mistake, not a lint failure, so the stage says so
+        // and returns Ok rather than reporting lintian trouble.
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: true,
+        };
+        lint_stage(&ui, dir.path(), "no-such-codename", "damo", "3.2.8-1").unwrap();
+    }
+
+    #[test]
+    fn ensure_upstream_branch_without_a_gbp_conf_does_nothing() {
+        // A repository with no debian/gbp.conf has nothing to correct;
+        // writing one is clone's job, not fixup's.
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: true,
+        };
+        ensure_upstream_branch(&ui, dir.path()).unwrap();
+        assert!(!dir.path().join("debian/gbp.conf").exists());
+    }
+
+    #[test]
+    fn first_nonempty_prefers_the_first_once_trimmed() {
+        assert_eq!(first_nonempty("  a  ", "b"), "a");
+        assert_eq!(first_nonempty("   ", "  b "), "b");
+        assert_eq!(first_nonempty("", ""), "");
+    }
+
+    #[test]
+    fn classify_target_type_falls_through_to_ppa() {
+        // Only the paths that reach no external tool: a PPA codename
+        // is not a debian/ branch at all, and the rolling suites are
+        // deliberately skipped before debian-distro-info is called, so
+        // a plain run never needs it for them.
+        assert!(matches!(
+            classify_target_type("noble", "noble").unwrap(),
+            TargetType::Ppa
+        ));
+        for rolling in ["unstable", "sid", "experimental", "rc-buggy"] {
+            let branch = format!("debian/{rolling}");
+            assert!(
+                matches!(
+                    classify_target_type(&branch, rolling).unwrap(),
+                    TargetType::Ppa
+                ),
+                "{branch} should classify as Ppa without a tool call"
+            );
+        }
+    }
+
+    #[test]
+    fn built_before_compares_against_the_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("damo_3.2.8-1_source.changes");
+        std::fs::write(&f, "x").unwrap();
+
+        // Written now, so it postdates the epoch and predates a far
+        // future commit.
+        assert!(!built_before(&f, 0));
+        assert!(built_before(&f, u64::MAX));
+        // An unreadable mtime is not evidence of staleness.
+        assert!(!built_before(&dir.path().join("nothing-here"), u64::MAX));
+    }
+
+    // dbranch's contract is that --dry-run narrates every stage and
+    // runs nothing: `Ui::run_status` returns Ok(0) before spawning.
+    // These pin that each stage still reaches its narration, which is
+    // what a reader following along is given instead of the command.
+
+    #[test]
+    fn source_stage_dry_run_narrates() {
+        let dir = setup();
+        source_stage(&ui_dry(), dir.path(), true, None).unwrap();
+        source_stage(&ui_dry(), dir.path(), false, None).unwrap();
+    }
+
+    #[test]
+    fn build_stage_dry_run_narrates_for_each_chroot_policy() {
+        let dir = setup();
+        for refresh in [
+            ChrootRefresh::Auto,
+            ChrootRefresh::Force,
+            ChrootRefresh::Never,
+        ] {
+            build_stage(&ui_dry(), dir.path(), "noble", "damo", "3.2.8-1", refresh).unwrap();
+        }
+    }
+
+    #[test]
+    fn tag_stage_dry_run_narrates() {
+        let dir = setup();
+        tag_stage(&ui_dry(), dir.path()).unwrap();
+    }
+
+    #[test]
+    fn upload_stage_dry_run_narrates_each_destination() {
+        let dir = setup();
+        let ui = ui_dry();
+        let p = dir.path();
+        upload_stage(&ui, p, "damo", "3.2.8-1", &UploadDest::Dput(None), true).unwrap();
+        upload_stage(
+            &ui,
+            p,
+            "damo",
+            "3.2.8-1",
+            &UploadDest::Dput(Some("ppa:michel/damo".to_string())),
+            true,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn lint_subject_names_what_was_linted() {
         assert_eq!(lint_subject(true, 3), "source + 3 .deb(s)");
         assert_eq!(lint_subject(true, 0), "source");

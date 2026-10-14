@@ -663,3 +663,94 @@ pub fn run(opts: &Options) -> Result<Report, String> {
     }
     Ok(report)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(name: &str) -> ClosureReport {
+        ClosureReport {
+            name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_skipped_closure_says_why_and_reports_nothing_else() {
+        let mut r = report("hyperscale");
+        r.skipped = Some("no graph yet".to_string());
+        // Populated, but a skipped pass did none of it.
+        r.new_keeps = vec!["nginx".to_string()];
+        let out = format_closure(&r);
+        assert_eq!(out, "closure hyperscale:\n  skipped — no graph yet\n");
+    }
+
+    #[test]
+    fn a_closure_that_changed_nothing_says_so() {
+        let out = format_closure(&report("hyperscale"));
+        assert_eq!(out, "closure hyperscale:\n  nothing changed\n");
+    }
+
+    #[test]
+    fn an_external_closure_is_marked_as_one() {
+        let mut r = report("rpmfusion");
+        r.external = true;
+        assert!(format_closure(&r).starts_with("closure rpmfusion (external):"));
+    }
+
+    #[test]
+    fn a_long_list_is_truncated_with_the_remainder_counted() {
+        let mut r = report("hyperscale");
+        r.closure_added = (0..15).map(|i| format!("pkg{i}")).collect();
+        let out = format_closure(&r);
+        assert!(out.contains("added to the closure inventory (15): pkg0, "));
+        assert!(out.contains("pkg11, … 3 more"), "{out}");
+        assert!(!out.contains("pkg12"), "the 13th entry should be elided");
+
+        // At the cut-off itself nothing is elided.
+        let mut r = report("hyperscale");
+        r.closure_added = (0..12).map(|i| format!("pkg{i}")).collect();
+        let out = format_closure(&r);
+        assert!(out.contains("pkg11"));
+        assert!(!out.contains("more"), "{out}");
+    }
+
+    #[test]
+    fn the_capability_tally_agrees_with_itself_on_number() {
+        let mut r = report("hyperscale");
+        r.new_keeps = vec!["nginx".to_string()];
+        r.capabilities_offline = 1;
+        r.capabilities_online = 4;
+        assert!(
+            format_closure(&r).contains("1 capability answered from the graph, 4 resolved live")
+        );
+
+        r.capabilities_offline = 2;
+        assert!(format_closure(&r).contains("2 capabilities answered from the graph"));
+    }
+
+    #[test]
+    fn each_kind_of_change_gets_its_own_line() {
+        let mut r = report("hyperscale");
+        r.dropped_keeps = vec!["old".to_string()];
+        r.closure_removed = vec!["gone".to_string()];
+        r.closure_unreached = vec!["orphan".to_string()];
+        r.derived_added = vec!["new-derived".to_string()];
+        r.derived_removed = vec!["ex-derived".to_string()];
+        r.promoted = vec!["up".to_string()];
+        r.demoted = vec!["down".to_string()];
+        let out = format_closure(&r);
+        for expected in [
+            "former keeps nothing reaches now (1): old",
+            "left the closure inventory (1): gone",
+            "kept; a full walk settles them) (1): orphan",
+            "entered the derived inventory (1): new-derived",
+            "left the derived inventory (1): ex-derived",
+            "promoted to essential (1): up",
+            "demoted to derived (1): down",
+        ] {
+            assert!(out.contains(expected), "missing {expected:?} in:\n{out}");
+        }
+        assert!(!out.contains("nothing changed"));
+    }
+}
