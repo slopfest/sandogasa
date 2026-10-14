@@ -496,6 +496,43 @@ has to reach EPEL before then, rewrite that one guard as a nested
 `match` (it is the only construct above 1.92 — `make msrv-check` with a
 1.92 toolchain confirms) and lower `rust-version` accordingly.
 
+## dbranch: restate the Debusine workflow URL after an upload (2026-10-14)
+
+dput prints the work request it created -- "Created workflow:
+https://debusine.debian.net/debian/<ws>/work-request/<id>/" -- and
+that URL is the only durable handle on the build. The instance-wide
+`debusine list-work-requests` has no workspace filter and ages entries
+out within the hour; `debusine artifact` only takes ids; and the
+workspace page does not index its builds. Lose the URL and the build
+is genuinely hard to find again, which cost an hour on 2026-10-14.
+
+dbranch's upload stage already runs the dput that prints it, so it can
+restate it at the end of the run, as the push stage restates the CI
+pipeline.
+
+Not done yet for want of a case to test it on: the uploads that
+prompted this are plain dput of debcargo trees, which dbranch does not
+drive. fnlfmt's first upload is the one to do it with.
+
+## dbranch: clone and fixup still write gbp.conf separately (2026-10-14)
+
+`clone --salsa` and `fixup` now share one implementation for
+`debian/salsa-ci.yml` (`ensure_salsa_ci`), so a repository gets the
+same file whichever wrote it. `gbp.conf` is still written twice over:
+`clone` builds it from the upstream tag format it just detected, and
+`fixup` adjusts an existing one for a rebuild target.
+
+Unifying them means `fixup` deriving the tag format for itself, which
+`clone` gets for free from having just looked at upstream's tags --
+re-deriving it needs the upstream remote, which a fixup run may not
+have (and the check deliberately runs before any remote is resolved,
+since the salsa-ci case needs none).
+
+Worth doing only if a packaging repository turns up with a gbp.conf
+that is wrong rather than missing. A missing one means the repository
+was not made by dbranch at all, which is a bigger question than this
+one.
+
 ## dbranch: lrc checks licences, not copyright holders (2026-10-13)
 
 `update` runs `lrc` before the source stage and offers `cme update
