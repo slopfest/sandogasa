@@ -4,6 +4,7 @@ description = "Bug classification (CVE, FTBFS, update request, etc.) across issu
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 

@@ -4,5 +4,6 @@ description = "Build-script helper: the git describe of the checkout a sandogasa
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true

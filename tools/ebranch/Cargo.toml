@@ -4,6 +4,7 @@ version.workspace = true
 description = "Cross-branch porting: build order, branch requests, update checks, Bodhi karma"
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 

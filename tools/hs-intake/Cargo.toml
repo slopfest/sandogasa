@@ -4,6 +4,7 @@ version.workspace = true
 description = "Hyperscale package intake tool — compare RPM package metadata between branches"
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 

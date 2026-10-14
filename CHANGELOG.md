@@ -36,6 +36,19 @@ absent.
 The listing now asks for the full ref name and strips `refs/heads/`,
 which is unambiguous by construction.
 
+### Every crate now names an author
+
+Packaging any of these crates for a distribution meant writing the
+copyright file by hand. `Cargo.toml` carried no `authors`, so debcargo
+produced `Copyright: FIXME (overlay) UNKNOWN-AUTHORS FIXME (overlay)
+UNKNOWN-YEARS` and a FIXME marker for the packager to clear — once per
+crate, forty-four times.
+
+`authors` is set on `[workspace.package]` and inherited by every
+member. Cargo treats the field as optional and nothing in the build
+depends on it, which is how it stayed empty; what depends on it is
+everyone downstream of a release.
+
 ### dbranch: lint the source package, not just the binaries
 
 A package could pass every local stage and still fail Salsa CI's

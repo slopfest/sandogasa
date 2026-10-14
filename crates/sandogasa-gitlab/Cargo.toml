@@ -4,6 +4,7 @@ description = "GitLab REST and GraphQL API client for issues and work items"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 

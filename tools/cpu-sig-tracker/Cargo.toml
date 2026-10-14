@@ -4,6 +4,7 @@ description = "Track CentOS Proposed Updates (CPU) SIG package state across Koji
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 

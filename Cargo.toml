@@ -60,6 +60,10 @@ edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/slopfest/sandogasa"
+# Cargo treats this as optional, but a crate without it gives
+# packagers nothing to put in a copyright file: debcargo writes
+# `Copyright: UNKNOWN-AUTHORS` and leaves a FIXME for every crate.
+authors = ["Michel Lind <michel@michel-slm.name>"]
 
 # Prebuilt binaries attached to GitHub releases, for `cargo binstall`.
 # Only dbranch ships this way for now: it is the one tool useful on
