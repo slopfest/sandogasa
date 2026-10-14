@@ -496,6 +496,39 @@ has to reach EPEL before then, rewrite that one guard as a nested
 `match` (it is the only construct above 1.92 — `make msrv-check` with a
 1.92 toolchain confirms) and lower `rust-version` accordingly.
 
+## Package the dbranch chain for Debian before 0.26.0 (2026-10-13)
+
+Upload them to Debusine (`r-michelin-*`), which is what makes them
+testable rather than merely built; Debian proper can wait for the DD
+application and the Rust Team. The point before 0.26.0 is to find out
+what still needs tweaking while tweaking is cheap.
+`librust-sandogasa-build-dev` built on 2026-10-13
+(debcargo → dh-cargo → .deb, Debian's rustc 1.96.1), which proves the
+mechanism; the rest of the chain is where the surprises will be:
+
+1. `sandogasa-config` — small, five deps, all in the archive
+2. `sandogasa-cli` — the one to watch. dbranch uses it with
+   `default-features = false`, but Debian builds a library across its
+   feature matrix, so `tls`/`http`/`man` are in scope and that means
+   rustls, reqwest and clap_mangen
+3. `dbranch` — needs `Build-Depends: git`, because its tests spawn
+   git 27 times for fixture repositories. Exactly what failed Koji's
+   `%check` at 0.15.0
+
+Note the upload is a plain `dput` to the Debusine workspace, not
+`dbranch update --debusine`: these are debcargo-generated trees, with
+no git packaging repo or gbp.conf for dbranch's flow to drive. Which
+is its own small irony worth noticing — dbranch cannot yet package
+itself the way it packages everything else.
+
+`cargo debstatus -p dbranch` reports every dependency in the archive,
+so nothing third-party is expected to block. Two local gotchas
+recorded for whoever runs it next: rustup's shims shadow Debian's
+rustc and dh-cargo relocates `HOME`, so a host build dies with "no
+default toolchain" unless `PATH` puts `/usr/bin` first — use
+sbuild/pbuilder instead; and debcargo leaves `FIXME` markers in
+changelog, control and copyright that want a `debcargo.toml`.
+
 ## anstream range: the floor cannot be tested here (2026-10-13, #47)
 
 `anstream = ">=0.6.21, <2"` in the workspace `Cargo.toml` is there so
