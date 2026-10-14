@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### dbranch: decopy is offered beside cme, and the prompt reads properly
+
+`update` offered one way to fix a `debian/copyright` that disagrees
+with the source. `cme update dpkg-copyright` reconciles the file that
+is there, which is right when it is broadly correct and wrong in a
+field; it is the wrong tool when the file has drifted far enough that
+starting from the source is cleaner, and `decopy` is what does that.
+Both are offered now, with "neither" as the third answer, and a
+non-interactive run names both rather than only one.
+
+The warning that run printed also carried ten literal spaces in the
+middle of a sentence — a line continuation eaten while the message was
+being written. It reads as a sentence now.
+
 ### Dependencies: anstream accepts Debian's 0.6.21
 
 `anstream = "1"` could not be resolved against Debian's archive, which

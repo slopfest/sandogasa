@@ -1196,19 +1196,34 @@ fn copyright_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error
         return Ok(());
     }
     eprint!("{out}");
-    let offer = format!(
-        "debian/copyright disagrees with the source — run `{}`? (it rewrites the whole          file, in its own commit)",
-        plan::cme_update_copyright_argv().join(" ")
-    );
+    let cme = plan::cme_update_copyright_argv().join(" ");
+    let decopy = plan::decopy_shell_line();
     if ui.dry_run || !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         eprintln!(
-            "warning: debian/copyright disagrees with the source; `{}` reconciles it",
-            plan::cme_update_copyright_argv().join(" ")
+            "warning: debian/copyright disagrees with the source; `{cme}` reconciles \
+             what is there, `{decopy}` regenerates it from a scan"
         );
         return Ok(());
     }
-    if !ui.confirm(&offer) {
-        return Ok(());
+    // Two tools for two amounts of damage: cme keeps the file that is
+    // there and argues with it, decopy throws it away and starts from
+    // what the source says. Which one fits is the packager's call.
+    let options = vec![
+        format!("{cme} (reconcile the file that is there)"),
+        format!("{decopy} (regenerate it from a scan)"),
+        "neither (leave it and decide later)".to_string(),
+    ];
+    match ui.choose("debian/copyright disagrees with the source", &options) {
+        Some(1) => {
+            if !ui.dry_run {
+                sandogasa_cli::require_tools(&[("decopy", "decopy", Some("--help"))])?;
+            }
+            ui.step("Regenerate debian/copyright from a scan of the source");
+            ui.run_required(&plan::shell_argv(&decopy), repo)?;
+            return commit_copyright(ui, repo, &file, "Regenerate debian/copyright with decopy");
+        }
+        Some(0) => {}
+        _ => return Ok(()),
     }
     // Required here, unlike lrc: the offer was accepted, so failing
     // is better than saying nothing and leaving the file as it was.
@@ -1217,24 +1232,38 @@ fn copyright_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error
     }
     ui.step("Reconcile debian/copyright with the source");
     ui.run_required(&plan::cme_update_copyright_argv(), repo)?;
-    if let Some(warning) = std::fs::read_to_string(&file)
+    commit_copyright(
+        ui,
+        repo,
+        &file,
+        "Reconcile debian/copyright with the source",
+    )
+}
+
+/// Commit whatever just rewrote `debian/copyright`, after saying what
+/// it left for a person to settle. A tool that changed nothing gets a
+/// note rather than an empty commit.
+fn commit_copyright(
+    ui: &Ui,
+    repo: &Path,
+    file: &Path,
+    subject: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(warning) = std::fs::read_to_string(file)
         .ok()
         .as_deref()
         .and_then(crate::copyright::placeholder_warning)
     {
         eprintln!("warning: {warning}");
     }
-    if !git::is_dirty(repo) {
-        eprintln!("note: debian/copyright was already reconciled; nothing to commit");
+    if !ui.dry_run && !git::is_dirty(repo) {
+        eprintln!("note: debian/copyright already said that; nothing to commit");
         return Ok(());
     }
     let rel = "debian/copyright";
     ui.run_required(&plan::git_add_argv(rel), repo)?;
     ui.explain_diff_cached(repo, &[rel]);
-    ui.run_required(
-        &plan::commit_file_argv("Reconcile debian/copyright with the source", rel),
-        repo,
-    )
+    ui.run_required(&plan::commit_file_argv(subject, rel), repo)
 }
 
 /// The shared `build → lint → push → upload → tag` tail, driven by both

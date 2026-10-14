@@ -340,9 +340,11 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   `licensecheck` finds. A new upstream release is what brings new
   files and new copyright holders, and checking before the source
   package is built means a fix does not invalidate it. When they
-  disagree, `lrc`'s table is printed and — interactively — `cme update
-  dpkg-copyright` is offered, in a commit of its own, since it
-  rewrites the whole file rather than the disputed field. A
+  disagree, `lrc`'s table is printed and — interactively — you are
+  offered `cme update dpkg-copyright`, which reconciles the file that
+  is there, or `decopy > debian/copyright`, which regenerates it from
+  a scan of the source; either lands in a commit of its own, since
+  both rewrite the whole file rather than the disputed field. A
   non-interactive run reports and carries on, and a missing `lrc` is a
   note rather than a failure. Placeholders are reported separately
   (`no-info-found` from `cme`, `TODO` from `decopy`): `lrc` passes

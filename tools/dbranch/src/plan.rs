@@ -390,6 +390,13 @@ pub fn cme_update_copyright_argv() -> Vec<String> {
     argv(&["cme", "update", "dpkg-copyright"])
 }
 
+/// `sh -c "<line>"` — for the few steps whose real command is a shell
+/// line rather than an argv, because it redirects. Shown as what it
+/// is, so the narration stays something a reader can paste.
+pub fn shell_argv(line: &str) -> Vec<String> {
+    argv(&["sh", "-c", line])
+}
+
 /// `decopy > debian/copyright` — write a DEP-5 copyright from a scan
 /// of the source.
 ///
