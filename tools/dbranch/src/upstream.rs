@@ -300,7 +300,26 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
         }
     };
     let origin = match &opts.salsa {
-        Some(namespace) => Some(publish_to_salsa(ui, &dir, namespace, &name)?),
+        Some(namespace) => {
+            let url = publish_to_salsa(ui, &dir, namespace, &name)?;
+            // Scaffolding, like gbp.conf, so it is written now rather
+            // than by the first push: nothing about it depends on the
+            // release, and created later it lands after the changelog
+            // entry meant to summarise the packaging -- and, before
+            // that was fixed, after the source package was built.
+            // Only with --salsa, since it is salsa's CI that reads it.
+            if !dir.join(plan::SALSA_CI_PATH).exists() {
+                ui.step(&format!("Create salsa-ci.yml for {}", opts.debian_branch));
+                crate::rebuild::create_packaging_file(
+                    ui,
+                    &dir,
+                    "salsa-ci.yml",
+                    &opts.debian_branch,
+                    crate::salsaci::TEMPLATE,
+                )?;
+            }
+            Some(url)
+        }
         None => None,
     };
     if from_upstream {

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### dbranch: say when the changelog is older than the branch
+
+The changelog version is the contract for the whole source stage:
+`gbp export-orig` builds the orig for that version, and `debuild -S`
+then diffs the tree against it. Run the stage on a branch carrying
+0.4.0 with a 0.3.2-1 changelog and dpkg-source refuses — "aborting due
+to unexpected upstream changes" — two commands after the mistake,
+having built a tarball for the wrong release on the way there.
+
+Both numbers are known before any of that happens, so the stage says
+it first, and names `--stage import` as the remedy. A note rather than
+an error: rebuilding an older release deliberately is a thing people
+do, and the stage still runs.
+
 ### dbranch: a copyright that has gone stale, and a CI file that shipped late
 
 Two things the copyright stage and the source stage each got slightly
