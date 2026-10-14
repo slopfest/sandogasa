@@ -343,7 +343,14 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   downstream would otherwise go on being reported as broken until
   upstream released it.
 
-  `lrc` (licenserecon) compares `debian/copyright` to what
+  Three checks, each seeing what the one before it cannot. `cme check
+  dpkg-copyright` validates the file against the DEP-5 model —
+  it reports only through its output and exits 0 either way, so
+  anything it prints is the finding. A stanza with two `Copyright:`
+  fields passes every other check here and loses a holder to a
+  stricter parser.
+
+  `lrc` (licenserecon) then compares `debian/copyright` to what
   `licensecheck` finds. A new upstream release is what brings new
   files and new copyright holders, and checking before the source
   package is built means a fix does not invalidate it. When they

@@ -1209,6 +1209,11 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
         );
         return Ok(());
     }
+    // Syntax before semantics: a file the model rejects makes the
+    // other two checks worth less, and a stanza whose second
+    // `Copyright:` field is silently dropped by a stricter parser is
+    // how a holder goes missing from a file that reads correctly.
+    check_copyright_syntax(ui, repo)?;
     ui.step("Check debian/copyright against the source (licensecheck)");
     let (code, out) = ui.run_capture(&plan::lrc_argv(), repo)?;
     if code == 0 {
@@ -1265,6 +1270,29 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
         &file,
         "Reconcile debian/copyright with the source",
     )
+}
+
+/// Validate `debian/copyright` against the DEP-5 model, with `cme`.
+///
+/// Everything it has to say arrives on its output: it exits 0 for a
+/// file it rejects as well as one it accepts, so there is no status
+/// to test and silence is the only pass. Advisory, like the rest of
+/// this stage -- a malformed copyright is for a person to fix, and
+/// the package still builds meanwhile.
+fn check_copyright_syntax(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if ui.dry_run || !sandogasa_cli::tool_exists("cme") {
+        return Ok(());
+    }
+    ui.step("Validate debian/copyright against the DEP-5 model (cme)");
+    let (_, out) = ui.run_capture(&plan::cme_check_copyright_argv(), repo)?;
+    if !out.trim().is_empty() {
+        eprint!("{out}");
+        eprintln!(
+            "warning: cme is unhappy with debian/copyright above; it exits 0 either \
+             way, so what it printed is the finding"
+        );
+    }
+    Ok(())
 }
 
 /// Say which copyright holders a scan of the source finds that

@@ -378,6 +378,17 @@ pub fn lrc_argv() -> Vec<String> {
     argv(&["lrc"])
 }
 
+/// `cme check dpkg-copyright` — validate the file against the DEP-5
+/// model.
+///
+/// Reports through its output and **always exits 0**, even for a file
+/// it rejects, so the status says nothing and anything it prints is
+/// the finding. Measured on a `Files: debian/*` stanza carrying two
+/// `Copyright:` fields: "double entry ... appending value", exit 0.
+pub fn cme_check_copyright_argv() -> Vec<String> {
+    argv(&["cme", "check", "dpkg-copyright"])
+}
+
 /// `cme update dpkg-copyright` — reconcile an existing
 /// debian/copyright with the source.
 ///

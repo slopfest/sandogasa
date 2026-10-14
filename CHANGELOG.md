@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### dbranch: validate debian/copyright before reading anything from it
+
+The copyright stage compared licences and holders but never asked
+whether the file was well formed. A `Files: debian/*` stanza carrying
+two `Copyright:` fields — one per holder, which looks entirely
+reasonable — is not valid deb822, and a stricter parser than cme's
+keeps one and drops the other. That is a holder vanishing from a file
+that reads correctly, and neither `lrc` nor the holder scan has
+anything to say about it.
+
+`cme check dpkg-copyright` runs first now. Syntax before semantics: a
+file the model rejects makes the other two checks worth less. It
+reports only through its output and **exits 0 for a file it rejects as
+well as one it accepts**, so the status is not the signal — anything
+it prints is. Advisory like the rest of the stage, and skipped with no
+fuss when cme is not installed.
+
 ### dbranch: copyright is its own stage, and it reads the patched source
 
 Two things were wrong with checking `debian/copyright` inside the
