@@ -496,6 +496,58 @@ has to reach EPEL before then, rewrite that one guard as a nested
 `match` (it is the only construct above 1.92 — `make msrv-check` with a
 1.92 toolchain confirms) and lower `rust-version` accordingly.
 
+## dbranch: lrc checks licences, not copyright holders (2026-10-13)
+
+`update` runs `lrc` before the source stage and offers `cme update
+dpkg-copyright` when it disagrees. fnlfmt shows the gap: `lrc`
+**passes** it, and its `debian/copyright` is still wrong. The package
+vendors `fennel` and `fennel.lua`, both Expat — the same licence as
+everything else, so `lrc` has nothing to report — while
+`Files: *` attributes them to "fnlfmt contributors" when `fennel.lua`
+is Calvin Rose's. A licence check that reads like a copyright check is
+exactly how that got past a maintainer and two tools.
+
+Two things to do, in order of certainty:
+
+1. Offer `decopy` as well as `cme` when `lrc` fails. Small, and asked
+   for. `cme` reconciles in place, `decopy` regenerates — they suit
+   different amounts of damage. Note this would **not** have caught
+   fnlfmt, since `lrc` never failed there.
+2. The real gap: something that compares *holders*. Generating with
+   `decopy` and diffing the `Copyright:` lines against the existing
+   file is the only thing that found this. Noisy, because decopy
+   restructures wholesale — reordered headers, regrouped `Files:`
+   paragraphs — so the design problem is reporting the holder
+   difference without drowning it in layout churn. Worth solving:
+   nothing else looks at this, and it is an upload blocker rather
+   than a nicety.
+
+## dbranch: the upstream-git flow cannot repack an orig (2026-10-13)
+
+`clone --from-upstream-packaging` packages straight from upstream's
+git tags, and the orig comes from `gbp export-orig`, which has no
+`--filter` or exclude option — the tarball is whatever the tag's tree
+holds. So the usual DFSG repack (`Files-Excluded:` in d/copyright, a
+`+dfsg` version, `mk-origtargz` doing the work) has nothing to act on:
+there is no upstream tarball to repack.
+
+That is a boundary on where the flow applies, not a bug. A package
+whose upstream ships files that must not be distributed cannot use it
+as it stands. The workarounds both cost something: a filtered upstream
+branch via `--upstream-tree` forfeits "package straight from
+upstream's tags", and getting upstream to stop shipping the files is
+slow and not always possible.
+
+Worth detecting rather than solving, at least at first: `clone` could
+say so when the tag's tree carries something that looks like a vendored
+copy, the way it already warns about a tag carrying `debian/`.
+
+fnlfmt does not need this — its vendored fennel is Expat, so it is
+DFSG-free and merely dead weight, unused by a build that sets
+`FENNEL=/usr/bin/fennel FENNEL_OPTS=` (no `--require-as-include`, so
+nothing is inlined into the binary either). It needs the copyright
+paragraph above, not a repack.
+
 ## dbranch: the debcargo-conf flow is a different shape (2026-10-13)
 
 Every dbranch flow today is gbp's: a packaging branch, merges,
