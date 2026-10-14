@@ -716,6 +716,11 @@ pub fn update(
     if opts.stages.copyright {
         copyright_stage(ui, repo)?;
     }
+    // Also before the source stage, and for the same reason: what
+    // ships in debian/ has to be there when debuild -S runs.
+    if opts.stages.source {
+        ensure_salsa_ci(ui, repo, &branch, true)?;
+    }
 
     // The Debian branch targets unstable, whose Debusine suite is `sid`
     // (the wiki's `publish-to-sid-<pkg>` example).
@@ -1166,6 +1171,32 @@ fn ensure_debusine_ready() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     Ok(())
+}
+
+/// Create `debian/salsa-ci.yml` when a Debian branch has none,
+/// returning whether the file is there afterwards.
+///
+/// Called before the source stage, because the file ships in
+/// `debian/`: created at push time, as it used to be, it landed in
+/// the tree *after* `debuild -S` had packaged it, so the first
+/// release's source package went out without the CI config its own
+/// git tree carried. A rebuild branch is not offered one -- it got
+/// its file, with the PPA preset, in the merge stage.
+fn ensure_salsa_ci(
+    ui: &Ui,
+    repo: &Path,
+    branch: &str,
+    debian_branch: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if repo.join(plan::SALSA_CI_PATH).exists() {
+        return Ok(true);
+    }
+    if !debian_branch {
+        return Ok(false);
+    }
+    ui.step(&format!("Create salsa-ci.yml for {branch}"));
+    create_packaging_file(ui, repo, "salsa-ci.yml", branch, salsaci::TEMPLATE)?;
+    Ok(true)
 }
 
 /// Check `debian/copyright` against the source, and offer to
@@ -1989,12 +2020,11 @@ fn push_stage(
     // upstream template — it builds against unstable, which is what the
     // Debian branch wants — so this push already runs a pipeline. A
     // rebuild branch got its file, with the preset, in the merge stage.
-    let mut has_ci = repo.join(plan::SALSA_CI_PATH).exists();
-    if target_type.is_none() && !has_ci {
-        ui.step(&format!("Create salsa-ci.yml for {branch}"));
-        create_packaging_file(ui, repo, "salsa-ci.yml", branch, salsaci::TEMPLATE)?;
-        has_ci = true;
-    }
+    // Normally already there: update creates it before the source
+    // stage, so the file ships in the source package it commits to.
+    // Still done here for a push-only run, which has no source stage
+    // to have done it.
+    let has_ci = ensure_salsa_ci(ui, repo, branch, target_type.is_none())?;
     if has_ci {
         ensure_ci_config_path(ui, repo, &project, target_type, assume_yes);
     }
