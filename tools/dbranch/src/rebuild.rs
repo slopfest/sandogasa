@@ -1173,6 +1173,38 @@ fn ensure_debusine_ready() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Say so when debian/changelog is older than the release the branch
+/// carries.
+///
+/// The changelog version is the contract for everything that follows:
+/// `gbp export-orig` builds the orig for *that* version, and
+/// `debuild -S` then diffs the tree against it. A branch holding 0.4.0
+/// with a 0.3.2-1 changelog therefore fails in dpkg-source --
+/// "aborting due to unexpected upstream changes" -- two commands after
+/// the mistake, having built a tarball for the wrong release on the
+/// way. Both numbers are known here, so it is worth saying first.
+///
+/// A note rather than an error: an intentional rebuild of an older
+/// release is a thing people do, and the stage still runs.
+fn warn_if_changelog_behind(ui: &Ui, repo: &Path, up: &UpstreamGit, version: &str) {
+    if ui.dry_run {
+        return;
+    }
+    let claimed = crate::changelog::debian_base(version);
+    let claimed = claimed.rsplit_once('-').map_or(claimed, |(up, _)| up);
+    let Ok((_, newest, _)) = upstream::release_tag(repo, Some(&up.tag_format), None) else {
+        return;
+    };
+    if claimed == newest {
+        return;
+    }
+    eprintln!();
+    eprintln!("note: debian/changelog is at {claimed}, the branch carries {newest}.");
+    eprintln!("  The orig tarball and the source package follow the changelog, so");
+    eprintln!("  dpkg-source will refuse the difference. Run --stage import first,");
+    eprintln!("  unless you mean to build {claimed} again.");
+}
+
 /// Create `debian/salsa-ci.yml` when a Debian branch has none,
 /// returning whether the file is there afterwards.
 ///
@@ -2500,8 +2532,9 @@ fn source_stage(
     // already there (a -2 of the same upstream) is left alone with a
     // note and no command: gbp would only rediscover it, and a green
     // command line is what the user would type by hand.
-    if upstream_git.is_some() {
+    if let Some(up) = upstream_git {
         let (package, version) = top_package_version(repo)?;
+        warn_if_changelog_behind(ui, repo, up, &version);
         ui.step("Generate the orig tarball from the upstream tag");
         match orig_tarball(repo, &package, plan::upstream_version(&version)) {
             Some(orig) => eprintln!("note: {} is already there; skipped", orig.display()),
