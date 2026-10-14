@@ -29,17 +29,17 @@ enum Command {
     #[command(long_about = "\
 Clone upstream's git to package it straight from its tags (gbp's
 \"upstream uses git, no tarballs\" flow): clone with upstream as
-remote `upstream`, start the Debian branch at the newest release tag,
+remote upstream, start the Debian branch at the newest release tag,
 and commit a debian/gbp.conf naming the tag style (upstream-tag) with
 pristine-tar enabled. When upstream itself carries a debian/* branch,
 offers to start from it instead (its packaging commits stay in the
 history, so diverging is ordinary commits), merging the tag in.
 --salsa NAMESPACE also creates the packaging project on salsa and adds
-it as origin (the first push is `update --stage push`, which adds the
+it as origin (the first push is update --stage push, which adds the
 CI file); --mr registers the clone with myrepos.
-Later releases are then merged in by `update`,
+Later releases are then merged in by update,
 which detects this layout, and the source stage generates the orig
-tarball from the tag with `gbp export-orig`. Writing the rest of
+tarball from the tag with gbp export-orig. Writing the rest of
 debian/ is left to you.")]
     Clone {
         /// Upstream git URL.
@@ -71,7 +71,7 @@ debian/ is left to you.")]
         fresh: bool,
 
         /// Create the packaging project on salsa.debian.org in this
-        /// namespace and add it as origin (pushing is `update`'s job).
+        /// namespace and add it as origin (pushing is update's job).
         #[arg(long, value_name = "NAMESPACE")]
         salsa: Option<String>,
 
@@ -166,7 +166,7 @@ Stages to run, repeatable or comma-separated:
   tag     dh clean + gbp tag the release
   all     merge + source + build + lint + push
           (upload and tag are opt-in)
-Defaults to `merge` (the others are opt-in for now)."
+Defaults to merge (the others are opt-in for now)."
         )]
         stage: Vec<String>,
 
@@ -208,7 +208,7 @@ Defaults to `merge` (the others are opt-in for now)."
         #[arg(long, help_heading = "Bulk (no branches given)")]
         include_eol: bool,
 
-        /// Upload stage: target PPA (e.g. `user/name`; `ppa:` optional).
+        /// Upload stage: target PPA (e.g. user/name; ppa: optional).
         #[arg(
             long,
             value_name = "PPA",
@@ -217,7 +217,7 @@ Defaults to `merge` (the others are opt-in for now)."
         )]
         ppa: Option<String>,
 
-        /// Upload stage: dput target host (e.g. `mentors`, `ftp-master`).
+        /// Upload stage: dput target host (e.g. mentors, ftp-master).
         #[arg(long, value_name = "TARGET", help_heading = "Upload")]
         upload_target: Option<String>,
 
@@ -236,7 +236,7 @@ prefix on debusine.debian.net); dbranch uploads with
 (--debusine-project replaces <srcpkg> for shared workspaces)
 where <suite> is the target's base release (a trixie backport
 publishes to trixie). Debian targets only. Needs debusine-client and
-a `debusine setup` token.
+a debusine setup token.
 See wiki.debian.org/DebusineDebianNet#Repositories."
         )]
         debusine: Option<String>,
@@ -289,10 +289,10 @@ names its project here. Requires --debusine."
 Stages to run, repeatable or comma-separated:
   import  gbp import-orig --uscan + gbp dch -c -R; or,
           when packaging from upstream's git (see
-          `clone`), merge its release tag instead
+          clone), merge its release tag instead
   wrap-and-sort
           normalize debian/ with wrap-and-sort; opt-in,
-          never part of `all`
+          never part of all
   copyright
           check debian/copyright against the source, with
           debian/patches applied; re-runnable on its own
@@ -304,11 +304,11 @@ Stages to run, repeatable or comma-separated:
   upload  dput the built package
   tag     dh clean + gbp tag the release
   all     import + copyright + source + build + lint + push
-Defaults to `import`."
+Defaults to import."
         )]
         stage: Vec<String>,
 
-        /// Debian suite to build against (e.g. `unstable`).
+        /// Debian suite to build against (e.g. unstable).
         #[arg(
             long,
             value_name = "SUITE",
@@ -318,7 +318,7 @@ Defaults to `import`."
         build_suite: String,
 
         /// Remote holding upstream's git, to merge releases from
-        /// (default: one named `upstream`, if present).
+        /// (default: one named upstream, if present).
         #[arg(long, value_name = "NAME", help_heading = "Stages")]
         upstream_remote: Option<String>,
 
@@ -370,7 +370,7 @@ prefix on debusine.debian.net); dbranch uploads with
        -O debusine_workflow=publish-to-sid-<srcpkg>
 (--debusine-project replaces <srcpkg> for shared workspaces; the
 Debian branch targets unstable, whose Debusine suite is sid).
-Needs debusine-client and a `debusine setup` token.
+Needs debusine-client and a debusine setup token.
 See wiki.debian.org/DebusineDebianNet#Repositories."
         )]
         debusine: Option<String>,
@@ -482,7 +482,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 quiet,
             };
             let stages = rebuild::parse_stages(&stage)?;
-            // --ppa is sugar for a `ppa:<name>` dput target.
+            // --ppa is sugar for a ppa:<name> dput target.
             let upload_target = ppa.map(|p| plan::ppa_target(&p)).or(upload_target);
             let chroot_refresh = if refresh_chroot {
                 ChrootRefresh::Force
@@ -616,7 +616,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     /// The committed man page is generated from this CLI; see
-    /// `sandogasa_cli::man` and `scripts/gen-man.sh`.
+    /// sandogasa_cli::man and scripts/gen-man.sh.
     #[test]
     fn man_page_matches_cli() {
         sandogasa_cli::man::check::<super::Cli>(

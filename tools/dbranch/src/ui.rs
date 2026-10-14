@@ -20,7 +20,7 @@ pub struct StageFailure {
 
 impl std::fmt::Display for StageFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "`{}` exited with status {}", self.command, self.code)
+        write!(f, "{} exited with status {}", self.command, self.code)
     }
 }
 

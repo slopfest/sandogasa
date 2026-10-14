@@ -290,11 +290,11 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
                 &text,
             )?;
             format!(
-                "write the rest of debian/ — with no packaging anywhere, `{}` makes the \
+                "write the rest of debian/ — with no packaging anywhere, {} makes the \
                  skeleton (dh_make refuses to run at all with a debian/ present, which \
                  is why gbp.conf steps aside and comes back; its class, license and \
                  copyright answers are yours; the provisional orig it creates is \
-                 replaced by the first `gbp export-orig`)",
+                 replaced by the first gbp export-orig)",
                 plan::dh_make_shell_line(&name.to_lowercase(), &version)
             )
         }
@@ -314,7 +314,7 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
         // of you.
         if !ui.dry_run && !dir.join("debian/copyright").is_file() {
             eprintln!(
-                "note: upstream's packaging has no debian/copyright — `{}` drafts one \
+                "note: upstream's packaging has no debian/copyright — {} drafts one \
                  from a scan of the source, to be read before it is uploaded",
                 plan::decopy_shell_line()
             );
@@ -336,8 +336,8 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
         None => ", add the packaging remote (git remote add origin <url>)".to_string(),
     };
     eprintln!(
-        "Next, in {}: {review}{remote}, then `dbranch update --stage push` for the first \
-         push (it adds debian/salsa-ci.yml so CI runs); later releases: `dbranch update`.",
+        "Next, in {}: {review}{remote}, then dbranch update --stage push for the first \
+         push (it adds debian/salsa-ci.yml so CI runs); later releases: dbranch update.",
         dir.display()
     );
     Ok(())
@@ -490,7 +490,7 @@ fn publish_to_salsa(
         let (code, out, err) = ui.run_query(&lookup, dir)?;
         if code != 0 {
             let msg = if err.trim().is_empty() { out } else { err };
-            return Err(format!("`glab api namespaces` failed: {}", msg.trim()).into());
+            return Err(format!("glab api namespaces failed: {}", msg.trim()).into());
         }
         let id = plan::namespace_id(&out, namespace)
             .ok_or_else(|| format!("no namespace {namespace} on {SALSA} (or no access to it)"))?;

@@ -20,17 +20,17 @@ Print version
 .PP
 Clone upstream\*(Aqs git to package it straight from its tags (gbp\*(Aqs
 "upstream uses git, no tarballs" flow): clone with upstream as
-remote `upstream`, start the Debian branch at the newest release tag,
+remote upstream, start the Debian branch at the newest release tag,
 and commit a debian/gbp.conf naming the tag style (upstream\-tag) with
 pristine\-tar enabled. When upstream itself carries a debian/* branch,
 offers to start from it instead (its packaging commits stay in the
 history, so diverging is ordinary commits), merging the tag in.
 \-\-salsa NAMESPACE also creates the packaging project on salsa and adds
-it as origin (the first push is `update \-\-stage push`, which adds the
+it as origin (the first push is update \-\-stage push, which adds the
 CI file); \-\-mr registers the clone with myrepos.
-Later releases are then merged in by `update`,
+Later releases are then merged in by update,
 which detects this layout, and the source stage generates the orig
-tarball from the tag with `gbp export\-orig`. Writing the rest of
+tarball from the tag with gbp export\-orig. Writing the rest of
 debian/ is left to you.
 .TP
 \fB\-\-upstream\-version\fR \fI<VERSION>\fR
@@ -49,7 +49,7 @@ Start from upstream\*(Aqs own debian/* branch without asking
 Ignore any debian/* branch upstream carries; start at the tag
 .TP
 \fB\-\-salsa\fR \fI<NAMESPACE>\fR
-Create the packaging project on salsa.debian.org in this namespace and add it as origin (pushing is `update`\*(Aqs job)
+Create the packaging project on salsa.debian.org in this namespace and add it as origin (pushing is update\*(Aqs job)
 .TP
 \fB\-\-wrap\-and\-sort\fR
 Normalize adopted debian/ with wrap\-and\-sort, in its own commit (devscripts)
@@ -135,7 +135,7 @@ Stages to run, repeatable or comma\-separated:
   tag     dh clean + gbp tag the release
   all     merge + source + build + lint + push
           (upload and tag are opt\-in)
-Defaults to `merge` (the others are opt\-in for now).
+Defaults to merge (the others are opt\-in for now).
 .TP
 \fB\-\-source\fR \fI<BRANCH>\fR
 Merge source branch (default: the checked\-out branch)
@@ -164,10 +164,10 @@ Bulk run: include EOL Ubuntu releases (default skips them)
 .SH UPLOAD
 .TP
 \fB\-\-ppa\fR \fI<PPA>\fR
-Upload stage: target PPA (e.g. `user/name`; `ppa:` optional)
+Upload stage: target PPA (e.g. user/name; ppa: optional)
 .TP
 \fB\-\-upload\-target\fR \fI<TARGET>\fR
-Upload stage: dput target host (e.g. `mentors`, `ftp\-master`)
+Upload stage: dput target host (e.g. mentors, ftp\-master)
 .TP
 \fB\-\-debusine\fR \fI<NAME>\fR
 Upload stage: publish to a Debusine personal repository instead of a
@@ -178,7 +178,7 @@ prefix on debusine.debian.net); dbranch uploads with
 (\-\-debusine\-project replaces <srcpkg> for shared workspaces)
 where <suite> is the target\*(Aqs base release (a trixie backport
 publishes to trixie). Debian targets only. Needs debusine\-client and
-a `debusine setup` token.
+a debusine setup token.
 See wiki.debian.org/DebusineDebianNet#Repositories.
 .TP
 \fB\-\-debusine\-project\fR \fI<PROJECT>\fR
@@ -219,10 +219,10 @@ Debian branch to update (defaults to the current branch)
 Stages to run, repeatable or comma\-separated:
   import  gbp import\-orig \-\-uscan + gbp dch \-c \-R; or,
           when packaging from upstream\*(Aqs git (see
-          `clone`), merge its release tag instead
+          clone), merge its release tag instead
   wrap\-and\-sort
           normalize debian/ with wrap\-and\-sort; opt\-in,
-          never part of `all`
+          never part of all
   copyright
           check debian/copyright against the source, with
           debian/patches applied; re\-runnable on its own
@@ -234,13 +234,13 @@ Stages to run, repeatable or comma\-separated:
   upload  dput the built package
   tag     dh clean + gbp tag the release
   all     import + copyright + source + build + lint + push
-Defaults to `import`.
+Defaults to import.
 .TP
 \fB\-\-build\-suite\fR \fI<SUITE>\fR [default: testing]
-Debian suite to build against (e.g. `unstable`)
+Debian suite to build against (e.g. unstable)
 .TP
 \fB\-\-upstream\-remote\fR \fI<NAME>\fR
-Remote holding upstream\*(Aqs git, to merge releases from (default: one named `upstream`, if present)
+Remote holding upstream\*(Aqs git, to merge releases from (default: one named upstream, if present)
 .TP
 \fB\-\-upstream\-version\fR \fI<VERSION>\fR
 Upstream release to merge in (default: the newest tag)
@@ -269,7 +269,7 @@ prefix on debusine.debian.net); dbranch uploads with
        \-O debusine_workflow=publish\-to\-sid\-<srcpkg>
 (\-\-debusine\-project replaces <srcpkg> for shared workspaces; the
 Debian branch targets unstable, whose Debusine suite is sid).
-Needs debusine\-client and a `debusine setup` token.
+Needs debusine\-client and a debusine setup token.
 See wiki.debian.org/DebusineDebianNet#Repositories.
 .TP
 \fB\-\-debusine\-project\fR \fI<PROJECT>\fR
