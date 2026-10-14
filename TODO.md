@@ -496,6 +496,36 @@ has to reach EPEL before then, rewrite that one guard as a nested
 `match` (it is the only construct above 1.92 — `make msrv-check` with a
 1.92 toolchain confirms) and lower `rust-version` accordingly.
 
+## anstream range: the floor cannot be tested here (2026-10-13, #47)
+
+`anstream = ">=0.6.21, <2"` in the workspace `Cargo.toml` is there so
+dh-cargo can resolve dbranch against Debian's archive, which has
+0.6.21. Unlike the ranges the Dependencies section of CLAUDE.md
+describes, **this one's floor cannot be verified by
+`cargo update -p anstream --precise 0.6.21`** — the attempt fails
+with:
+
+    error: failed to select a version for the requirement `anstream = "^1.0.0"`
+    required by package `clap_builder v4.6.6`
+
+Upstream `clap_builder` pins `anstream ^1`, so our tree resolves 1.0.0
+whatever our own requirement says. Debian's `librust-clap-builder-dev`
+4.6.7-1 declares `>= 0.6.21, << 2` instead, because the Rust Team
+patches requirements to match the archive — which is why the floor is
+reachable there and not here.
+
+So, at release time: do **not** treat this as a range needing both
+ends re-tested. There is one end in this tree. The ceiling is what we
+build and test; the floor is Debian's business, and the way to check
+it is a real dh-cargo build, not cargo.
+
+Tighten back to a single requirement once Debian ships anstream 1.x.
+
+Worth knowing either way: the Rust Team patches dependency
+requirements routinely, so Debian could carry this relaxation as a
+downstream patch instead. Doing it upstream only saves the packager —
+us — from carrying that patch.
+
 ## dbranch
 
 - (2026-09-17) Exercise the one step of the upstream-git flow no

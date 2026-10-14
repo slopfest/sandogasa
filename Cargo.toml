@@ -107,7 +107,13 @@ lto = "thin"
 debug = "line-tables-only"
 
 [workspace.dependencies]
-anstream = "1"
+# Not "1": Debian's archive has 0.6.21, and dh-cargo resolves against
+# that rather than Cargo.lock, so a stricter requirement cannot be
+# satisfied there. This is the same span Debian's own clap-builder and
+# toml-parser declare. It changes nothing here -- upstream clap_builder
+# pins anstream ^1, so this tree resolves 1.x regardless, and the floor
+# cannot be selected locally for that reason (see TODO.md).
+anstream = ">=0.6.21, <2"
 anstyle = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Dependencies: anstream accepts Debian's 0.6.21
+
+`anstream = "1"` could not be resolved against Debian's archive, which
+has 0.6.21, so a dh-cargo build of dbranch failed before it began. The
+requirement is `">=0.6.21, <2"` now — the same span Debian's own
+clap-builder and toml-parser declare.
+
+Nothing changes here: upstream `clap_builder` pins `anstream ^1`, so
+this tree still resolves 1.0.0 and `Cargo.lock` is untouched. The
+range exists for a resolver that is not ours.
+
+For the same reason its floor cannot be tested the way CLAUDE.md's
+range policy describes — `cargo update -p anstream --precise 0.6.21`
+fails on clap_builder's requirement, not ours. TODO.md records that,
+so a release does not go looking for a second end to test.
+
 ### dbranch: a release tag carrying debian/ is a warning at every update
 
 `clone` warned when an upstream release tag's tree carried a `debian/`
