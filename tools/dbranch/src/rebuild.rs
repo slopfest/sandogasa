@@ -613,6 +613,7 @@ pub fn fixup(
                 ui.run_required(&plan::checkout_argv(target), repo)?;
             }
             ensure_salsa_ci(ui, repo, target, true)?;
+            ensure_upstream_branch(ui, repo)?;
             continue;
         }
         let remote = resolve_remote(ui, repo, target, None, None)?;
@@ -1231,6 +1232,51 @@ fn warn_if_changelog_behind(ui: &Ui, repo: &Path, up: &UpstreamGit, version: &st
 fn debian_packaging_branch(repo: &Path) -> Option<String> {
     let text = std::fs::read_to_string(repo.join("debian/gbp.conf")).ok()?;
     gbpconf::parse(&text).debian_branch
+}
+
+/// Make `debian/gbp.conf` name upstream's mainline as
+/// `upstream-branch`, for a repository packaged from upstream's own
+/// git. gbp defaults that key to a branch literally called
+/// `upstream`, which this layout never creates -- upstream's history
+/// is the mainline the repository was cloned from -- so `gbp push`
+/// stops at `revision 'refs/heads/upstream' not found`.
+///
+/// Deliberately narrow: it does nothing unless the key is absent,
+/// there is no local `upstream` branch for gbp's default to find, and
+/// a remote called `upstream` records a HEAD worth copying. An
+/// ordinary packaging repository satisfies none of those and is left
+/// alone.
+fn ensure_upstream_branch(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let rel = "debian/gbp.conf";
+    let Ok(text) = std::fs::read_to_string(repo.join(rel)) else {
+        return Ok(());
+    };
+    if gbpconf::parse(&text).upstream_branch.is_some() {
+        return Ok(());
+    }
+    if git::local_branches(repo)?.iter().any(|b| b == "upstream") {
+        return Ok(());
+    }
+    let Some(up) = git::remote_head(repo, "upstream") else {
+        return Ok(());
+    };
+    ui.step(&format!("Name upstream's branch ({up}) in gbp.conf"));
+    let changed = edit_file(ui, repo, rel, |t| {
+        Some(gbpconf::set_key(
+            t,
+            "upstream-branch",
+            &up,
+            Some("debian-branch"),
+        ))
+    })?;
+    if changed {
+        ui.explain_diff(repo, &[rel]);
+        ui.run_required(
+            &plan::commit_file_argv("Name upstream's branch in gbp.conf", rel),
+            repo,
+        )?;
+    }
+    Ok(())
 }
 
 /// Create `debian/salsa-ci.yml` when a Debian branch has none,
@@ -2928,6 +2974,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         git(p, &["init", "-q", "-b", "debian/unstable"]);
+        // Repository-local, so a code path that shells out to a plain
+        // `git commit` -- rather than through the `git` helper below --
+        // still has an identity and does not stop on the developer's
+        // `commit.gpgsign`. Local config beats global and, unlike an
+        // environment variable, cannot tear between parallel tests.
+        git(p, &["config", "user.name", "T"]);
+        git(p, &["config", "user.email", "t@x"]);
+        git(p, &["config", "commit.gpgsign", "false"]);
         git(
             p,
             &[
@@ -3608,6 +3662,97 @@ mod tests {
         // Re-applying the same transform reports no change.
         let transform = |t: &str| Some(gbpconf::set_key(t, "debian-branch", "noble", None));
         assert!(!edit_file(&ui, p, "debian/gbp.conf", transform).unwrap());
+    }
+
+    #[test]
+    fn ensure_upstream_branch_names_the_mainline_once() {
+        let dir = setup();
+        let p = dir.path();
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: true,
+        };
+        std::fs::write(
+            p.join("debian/gbp.conf"),
+            "[DEFAULT]\ndebian-branch = debian/latest\n",
+        )
+        .unwrap();
+        git(p, &["add", "-A"]);
+        git(p, &["commit", "-q", "-m", "gbp.conf"]);
+
+        // No upstream remote: an ordinary packaging repo is left alone.
+        ensure_upstream_branch(&ui, p).unwrap();
+        let text = std::fs::read_to_string(p.join("debian/gbp.conf")).unwrap();
+        assert_eq!(gbpconf::parse(&text).upstream_branch, None);
+
+        // With one, the key is written from the remote's HEAD...
+        git(p, &["update-ref", "refs/remotes/upstream/main", "HEAD"]);
+        git(
+            p,
+            &[
+                "symbolic-ref",
+                "refs/remotes/upstream/HEAD",
+                "refs/remotes/upstream/main",
+            ],
+        );
+        ensure_upstream_branch(&ui, p).unwrap();
+        let text = std::fs::read_to_string(p.join("debian/gbp.conf")).unwrap();
+        assert_eq!(
+            gbpconf::parse(&text).upstream_branch.as_deref(),
+            Some("main")
+        );
+        // ...and committed, not left dirty for the next build to pick up.
+        let status = std::process::Command::new("git")
+            .args(["status", "--short"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty());
+    }
+
+    #[test]
+    fn ensure_upstream_branch_defers_to_an_existing_answer() {
+        let dir = setup();
+        let p = dir.path();
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: true,
+        };
+        git(p, &["update-ref", "refs/remotes/upstream/main", "HEAD"]);
+        git(
+            p,
+            &[
+                "symbolic-ref",
+                "refs/remotes/upstream/HEAD",
+                "refs/remotes/upstream/main",
+            ],
+        );
+
+        // A key already there is the packager's; never second-guessed.
+        std::fs::write(
+            p.join("debian/gbp.conf"),
+            "[DEFAULT]\ndebian-branch = debian/latest\nupstream-branch = upstream/latest\n",
+        )
+        .unwrap();
+        ensure_upstream_branch(&ui, p).unwrap();
+        let text = std::fs::read_to_string(p.join("debian/gbp.conf")).unwrap();
+        assert_eq!(
+            gbpconf::parse(&text).upstream_branch.as_deref(),
+            Some("upstream/latest")
+        );
+
+        // And a local `upstream` branch makes gbp's own default correct.
+        std::fs::write(
+            p.join("debian/gbp.conf"),
+            "[DEFAULT]\ndebian-branch = debian/latest\n",
+        )
+        .unwrap();
+        git(p, &["branch", "upstream"]);
+        ensure_upstream_branch(&ui, p).unwrap();
+        let text = std::fs::read_to_string(p.join("debian/gbp.conf")).unwrap();
+        assert_eq!(gbpconf::parse(&text).upstream_branch, None);
     }
 
     #[test]

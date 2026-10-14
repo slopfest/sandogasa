@@ -10,7 +10,12 @@ use std::process::Command;
 /// List local branch names in `repo`.
 pub fn local_branches(repo: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let out = Command::new("git")
-        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+        // `%(refname)` and strip, rather than `%(refname:short)`:
+        // `:short` gives the shortest *unambiguous* name, so in a
+        // repository cloned from upstream's git -- remote `upstream`
+        // by convention -- a local branch called `upstream` comes back
+        // as `heads/upstream` and matches nothing it is compared with.
+        .args(["for-each-ref", "--format=%(refname)", "refs/heads/"])
         .current_dir(repo)
         .output()?;
     if !out.status.success() {
@@ -22,9 +27,35 @@ pub fn local_branches(repo: &Path) -> Result<Vec<String>, Box<dyn std::error::Er
     }
     Ok(String::from_utf8_lossy(&out.stdout)
         .lines()
-        .map(|l| l.trim().to_string())
+        .map(|l| {
+            let l = l.trim();
+            l.strip_prefix("refs/heads/").unwrap_or(l).to_string()
+        })
         .filter(|l| !l.is_empty())
         .collect())
+}
+
+/// The branch a remote's HEAD points at — upstream's mainline, which
+/// `debian/gbp.conf` must name as `upstream-branch` because gbp's
+/// default is a branch called `upstream` that this layout has no
+/// reason to create. `None` when the remote has no HEAD recorded
+/// (a clone made with `--no-tags`, or a remote added by hand).
+pub fn remote_head(repo: &Path, remote: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args([
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            &format!("refs/remotes/{remote}/HEAD"),
+        ])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let full = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    full.strip_prefix(&format!("{remote}/")).map(str::to_string)
 }
 
 /// The currently checked-out branch in `repo` — the Debian branch

@@ -172,9 +172,12 @@ From then on `update` merges new releases in (below). `fixup [<branch>...]` appl
 the PPA-branch packaging adjustments — gbp.conf's `debian-branch` /
 `debian-tag` and the salsa-ci.yml preset, the same ones the `merge`
 stage makes for a new branch — to **existing** branches, to repair
-ones set up before (or outside) dbranch. It checks each branch out,
-adjusts, and commits what changed (idempotent; defaults to the current
-branch).
+ones set up before (or outside) dbranch. On the Debian packaging
+branch it writes `debian/salsa-ci.yml` and, for a repository packaged
+from upstream's git, gbp.conf's `upstream-branch` — the name of
+upstream's own mainline, which gbp otherwise looks for under the
+branch name `upstream`. It checks each branch out, adjusts, and
+commits what changed (idempotent; defaults to the current branch).
 
 `update [<branch>]` updates the **Debian** branch (`master`/`main`/
 `debian/unstable`, default the current branch) to a new upstream:

@@ -127,6 +127,28 @@ timestamp in the same session.
   not gbp.conf's `debian-branch` — an unadjusted branch may still point
   that at the Debian branch.
 
+### gbp reads `upstream-branch` even when dbranch never does
+
+The stages dbranch runs itself get by on `debian-branch` and
+`upstream-tag`, so a `debian/gbp.conf` missing `upstream-branch` looks
+fine right up until someone runs `gbp push` by hand and gets
+`revision 'refs/heads/upstream' not found`. gbp's default for that key
+is a branch literally called `upstream`, which the upstream-git layout
+never creates — upstream's history is the mainline the repository was
+cloned from.
+
+So `clone` writes the key and `fixup` repairs a repository that
+predates it, reading the name from `refs/remotes/upstream/HEAD` rather
+than assuming `main` or `master`. Both are deliberately narrow: an
+existing value is the packager's, a local `upstream` branch makes
+gbp's default correct, and a remote with no recorded HEAD is a
+question dbranch cannot answer.
+
+Watch out for the related trap in `git::local_branches`: git's
+`%(refname:short)` is the shortest *unambiguous* name, so with a
+remote called `upstream` a local branch of that name comes back as
+`heads/upstream`. Ask for `%(refname)` and strip the prefix.
+
 ### dput over sftp (paramiko)
 
 dput-ng's sftp uploader uses paramiko, which **reads**

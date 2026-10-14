@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### dbranch: gbp.conf now names upstream's branch
+
+`gbp push` failed outright in a repository packaged from upstream's
+git: `gbp:error: revision 'refs/heads/upstream' not found`.
+
+gbp's default `upstream-branch` is a branch literally called
+`upstream`. This layout never creates one — upstream's history *is*
+the mainline the repository was cloned from, `main` or `master` — and
+the gbp.conf written at clone time said nothing about it, so gbp fell
+through to a default that could not be satisfied. Nothing caught it
+earlier because the stages dbranch runs itself use `upstream-tag` and
+`debian-branch`; `upstream-branch` is read by the commands a person
+runs by hand.
+
+`clone` now writes the key, reading the name from the upstream
+remote's recorded HEAD rather than assuming either of the two in
+common use, and `fixup` adds it to a repository that already exists.
+Both leave an existing value alone, and both stay out of an ordinary
+packaging repository: the key is written only when it is absent, there
+is no local `upstream` branch for gbp's default to find, and a remote
+called `upstream` records a HEAD worth copying.
+
+### dbranch: a local branch sharing a remote's name went unrecognised
+
+Listing a repository's branches used git's shortest *unambiguous*
+name, which is only sometimes the branch name. With a remote called
+`upstream` — the convention for packaging from upstream's git — a
+local branch called `upstream` is reported as `heads/upstream`, so
+every comparison against it failed and dbranch treated the branch as
+absent.
+
+The listing now asks for the full ref name and strips `refs/heads/`,
+which is unambiguous by construction.
+
 ### dbranch: lint the source package, not just the binaries
 
 A package could pass every local stage and still fail Salsa CI's

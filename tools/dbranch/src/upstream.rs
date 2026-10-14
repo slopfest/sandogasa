@@ -235,6 +235,10 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
         )
     };
     let from_upstream = theirs.is_some();
+    // Upstream's mainline, for gbp.conf's `upstream-branch`. Read from
+    // the remote rather than assumed: `main` and `master` are both in
+    // use, and gbp's default (`upstream`) is neither.
+    let upstream_branch = git::remote_head(&dir, &opts.upstream_remote);
     let review = match theirs {
         Some(branch) => {
             let start = format!("{}/{branch}", opts.upstream_remote);
@@ -252,7 +256,13 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
                 ui.step(&format!("Merge upstream {version} (tag {tag}) into it"));
                 ui.run_required(&plan::merge_argv(&tag), &dir)?;
             }
-            complete_gbp_conf(ui, &dir, &opts.debian_branch, &format)?;
+            complete_gbp_conf(
+                ui,
+                &dir,
+                &opts.debian_branch,
+                &format,
+                upstream_branch.as_deref(),
+            )?;
             // dh_make cannot fill the gaps in packaging that is
             // already there -- it refuses a debian/ outright -- so
             // incomplete packaging means writing those files, or
@@ -281,7 +291,11 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
             ));
             ui.run_required(&plan::checkout_new_argv(&opts.debian_branch, &tag), &dir)?;
             ui.step("Create gbp.conf: package from upstream's git tags");
-            let text = gbpconf::upstream_git_config(&opts.debian_branch, &format);
+            let text = gbpconf::upstream_git_config(
+                &opts.debian_branch,
+                &format,
+                upstream_branch.as_deref(),
+            );
             crate::rebuild::create_packaging_file(
                 ui,
                 &dir,
@@ -731,11 +745,12 @@ fn complete_gbp_conf(
     repo: &Path,
     debian_branch: &str,
     tag_format: &str,
+    upstream_branch: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let rel = "debian/gbp.conf";
     if !repo.join(rel).exists() {
         ui.step("Create gbp.conf: package from upstream's git tags");
-        let text = gbpconf::upstream_git_config(debian_branch, tag_format);
+        let text = gbpconf::upstream_git_config(debian_branch, tag_format, upstream_branch);
         return crate::rebuild::create_packaging_file(
             ui,
             repo,
@@ -748,6 +763,11 @@ fn complete_gbp_conf(
     let changed = crate::rebuild::edit_file(ui, repo, rel, |text| {
         let cfg = gbpconf::parse(text);
         let mut t = gbpconf::set_key(text, "debian-branch", debian_branch, None);
+        if cfg.upstream_branch.is_none()
+            && let Some(up) = upstream_branch
+        {
+            t = gbpconf::set_key(&t, "upstream-branch", up, Some("debian-branch"));
+        }
         if cfg.upstream_tag.is_none() {
             t = gbpconf::set_key(&t, "upstream-tag", tag_format, Some("debian-branch"));
         }

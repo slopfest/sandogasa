@@ -143,12 +143,26 @@ pub fn new_config(debian_branch: &str, debian_tag: Option<&str>) -> String {
 }
 
 /// A fresh gbp.conf for a repository packaged from upstream's git tags
-/// (`dbranch clone`): the Debian branch, the tag format naming
-/// upstream's releases, and pristine-tar with `pristine-tar-commit` so
-/// `gbp export-orig` records the tarball it generates from the tag.
-pub fn upstream_git_config(debian_branch: &str, tag_format: &str) -> String {
+/// (`dbranch clone`): the Debian branch, upstream's own mainline as
+/// `upstream-branch`, the tag format naming upstream's releases, and
+/// pristine-tar with `pristine-tar-commit` so `gbp export-orig`
+/// records the tarball it generates from the tag.
+///
+/// `upstream_branch` is written whenever it is known, because gbp
+/// defaults to a branch literally called `upstream` and this layout
+/// has no reason to create one — upstream's history is the mainline
+/// it was cloned from. Without the key, `gbp push` stops at
+/// `revision 'refs/heads/upstream' not found`.
+pub fn upstream_git_config(
+    debian_branch: &str,
+    tag_format: &str,
+    upstream_branch: Option<&str>,
+) -> String {
+    let upstream = upstream_branch
+        .map(|b| format!("upstream-branch = {b}\n"))
+        .unwrap_or_default();
     format!(
-        "[DEFAULT]\ndebian-branch = {debian_branch}\nupstream-tag = {tag_format}\n\
+        "[DEFAULT]\ndebian-branch = {debian_branch}\n{upstream}upstream-tag = {tag_format}\n\
          pristine-tar = True\npristine-tar-commit = True\n"
     )
 }
@@ -278,6 +292,31 @@ upstream-branch = upstream
         // Plumbing keys are intentionally left to gbp's defaults.
         assert_eq!(cfg.upstream_branch, None);
         assert_eq!(cfg.pristine_tar, None);
+    }
+
+    #[test]
+    fn upstream_git_config_names_upstreams_mainline() {
+        // gbp's default upstream-branch is a branch called `upstream`,
+        // which this layout never creates; without the key `gbp push`
+        // dies on refs/heads/upstream.
+        let text = upstream_git_config("debian/latest", "%(version)s", Some("main"));
+        let cfg = parse(&text);
+        assert_eq!(cfg.upstream_branch.as_deref(), Some("main"));
+        assert_eq!(cfg.debian_branch.as_deref(), Some("debian/latest"));
+        assert_eq!(cfg.upstream_tag.as_deref(), Some("%(version)s"));
+
+        // master is as common as main, so the name is read, not assumed.
+        let text = upstream_git_config("debian/latest", "v%(version)s", Some("master"));
+        assert_eq!(parse(&text).upstream_branch.as_deref(), Some("master"));
+    }
+
+    #[test]
+    fn upstream_git_config_omits_an_unknown_mainline() {
+        // A remote with no recorded HEAD: say nothing rather than guess,
+        // so gbp's own default stands and the gap is visible.
+        let text = upstream_git_config("debian/latest", "%(version)s", None);
+        assert!(!text.contains("upstream-branch"));
+        assert_eq!(parse(&text).upstream_branch, None);
     }
 
     #[test]
