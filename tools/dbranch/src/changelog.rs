@@ -328,9 +328,12 @@ fnlfmt (0.4.0-1) unstable; urgency=medium
     /// and where a reader looks for it.
     #[test]
     fn the_release_is_said_before_the_packaging_work() {
-        let out = prepend_bullet(ENTRY, "New upstream release.").expect("a stanza");
+        let out = prepend_bullet(ENTRY, "New upstream release").expect("a stanza");
         let bullets: Vec<&str> = out.lines().filter(|l| l.starts_with("  * ")).collect();
-        assert_eq!(bullets[0], "  * New upstream release.");
+        assert_eq!(bullets[0], "  * New upstream release");
+        // Unpunctuated, like the commit subjects gbp turns into the
+        // bullets below it.
+        assert!(bullets[1..].iter().all(|b| !b.ends_with('.')));
         assert_eq!(bullets.len(), 3);
         assert!(out.starts_with("fnlfmt (0.4.0-1) unstable; urgency=medium\n\n"));
         assert!(out.ends_with("13:47:43 +0100\n"));
@@ -339,9 +342,9 @@ fnlfmt (0.4.0-1) unstable; urgency=medium
     /// Running the stage twice does not say it twice.
     #[test]
     fn saying_it_again_changes_nothing() {
-        let once = prepend_bullet(ENTRY, "New upstream release.").expect("a stanza");
+        let once = prepend_bullet(ENTRY, "New upstream release").expect("a stanza");
         assert_eq!(
-            prepend_bullet(&once, "New upstream release.").as_deref(),
+            prepend_bullet(&once, "New upstream release").as_deref(),
             Some(&once[..])
         );
     }

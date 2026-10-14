@@ -773,9 +773,15 @@ pub fn merge_release(
     // gbp writes the entry from the commits since the last one, which
     // are the packaging work; nothing among them says the release
     // itself happened, and that is what the entry is for.
+    //
+    // No trailing stop, because gbp takes those bullets from commit
+    // subjects and git's convention leaves a subject unpunctuated. The
+    // archive is split on the question -- 525 of this line end with a
+    // period against 381 that do not -- but within a generated entry
+    // the only consistency that matters is with its siblings.
     ui.step("Say it is a new upstream release");
     let changed = crate::rebuild::edit_file(ui, repo, "debian/changelog", |text| {
-        crate::changelog::prepend_bullet(text, "New upstream release.")
+        crate::changelog::prepend_bullet(text, "New upstream release")
     })?;
     if changed {
         ui.explain_diff(repo, &["debian/changelog"]);
