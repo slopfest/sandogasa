@@ -6,6 +6,38 @@ completed work lives in `CHANGELOG.md` and the git history. An entry
 here that has stopped asking for something should be removed rather
 than annotated as done.
 
+## rustls 0.23.45: why the four advisories do not apply (2026-10-14)
+
+RUSTSEC-2026-0346 through -0349 all landed against rustls 0.23.45 and
+are fixed in 0.23.46. Our `Cargo.lock` takes the fix; Fedora's
+`rust-rustls` was still at 0.23.45 on rawhide, f44, epel10 and epel9
+that day, so a Fedora build of ours bundles the affected version and
+prodsec may file a tracker against us for it. The answer, checked
+against the code rather than the severity numbers:
+
+- **0346** (4.0, `Debug` impls expose TLS secrets) needs a *custom*
+  `ClientSessionStore` that formats session values with `Debug`. We
+  implement none; the advisory states the built-in cache's output is
+  redacted.
+- **0347** (2.3, data sent to the outer server after ECH rejection)
+  needs Encrypted Client Hello. We never configure it, and the
+  advisory notes it is not exploitable by an unauthenticated party.
+- **0348** (3.7, Brotli certificate decompression allocates 1 GiB)
+  needs the non-default `brotli` feature. The whole workspace resolves
+  rustls with exactly `http1, http2, log, logging, ring, std, tls12`
+  (`cargo tree -e features -i rustls --workspace`) — no `brotli`, no
+  `zlib`.
+- **0349** (3.7, downgrade to classical key exchange) needs a hybrid
+  post-quantum group in `supported_groups`. We use the **ring**
+  provider; ML-KEM exists only under `src/crypto/aws_lc_rs/`, so there
+  is no post-quantum key exchange to downgrade from.
+
+No requirement change was needed: `rustls = "0.23"` already spans
+both, so cargo resolves 0.23.46 here while Fedora resolves its own.
+Re-run the feature check before reusing this reasoning — enabling
+`aws-lc-rs` or a certificate-compression feature would make 0348 or
+0349 real.
+
 ## cpu-sig-tracker: automate the Proposed Updates paperwork (2026-09-09)
 
 When a Hyperscale change is worth upstreaming, the SIG builds it as a
