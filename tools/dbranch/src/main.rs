@@ -133,7 +133,7 @@ debian/ is left to you.")]
         explain: bool,
     },
 
-    /// Fix up gbp.conf / salsa-ci.yml on existing PPA branch(es).
+    /// Fix up gbp.conf / salsa-ci.yml on existing branch(es).
     Fixup {
         /// Branch(es) to fix up (default: the current branch).
         #[arg(value_name = "BRANCH")]

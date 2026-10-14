@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### dbranch: fixup knew every branch except the one being packaged
+
+`fixup` exists to put gbp.conf and salsa-ci.yml right on a branch that
+has neither, which is exactly what a packaging repository cloned
+before dbranch wrote them needs. Run on the Debian branch, it did the
+wrong thing quietly: `classify_target_type` reads a branch name as a
+release codename, `debian/latest` matches no release, and the
+fall-through is `Ppa` — so it would have written the PPA preset
+(`RELEASE: "unstable"` plus the backports relaxations) into a branch
+that wants the plain template.
+
+It asks gbp now. What makes a branch the packaging branch is whatever
+`debian/gbp.conf` names in `debian-branch`, not the shape of the name
+— `debian/latest`, `master` and `debian/unstable` are all in use.
+
+That check runs before the remote is resolved, because this case needs
+no remote: what is missing is a local file. The repository that
+prompted this has two remotes, and resolving one is a question
+(`--remote`) asked before reaching work that never needed the answer.
+
 ### dbranch: say when the changelog is older than the branch
 
 The changelog version is the contract for the whole source stage:

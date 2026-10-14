@@ -599,6 +599,22 @@ pub fn fixup(
     };
     let all = git::local_branches(repo)?;
     for target in &targets {
+        // The Debian packaging branch is not a rebuild target.
+        // Classifying it by name reads `debian/latest` as a release
+        // codename, falls through to Ppa, and writes the PPA preset
+        // into a branch that wants the plain template. It also needs
+        // no remote: what it is missing is a local file, where a
+        // rebuild branch's fixup resolves a remote to find its
+        // counterpart -- and this repository has two, which is enough
+        // to stop the command before it reaches the work.
+        if debian_packaging_branch(repo).as_deref() == Some(target.as_str()) {
+            ui.step(&format!("Fix up {target}"));
+            if git::current_branch(repo)? != *target {
+                ui.run_required(&plan::checkout_argv(target), repo)?;
+            }
+            ensure_salsa_ci(ui, repo, target, true)?;
+            continue;
+        }
         let remote = resolve_remote(ui, repo, target, None, None)?;
         match classify_target(repo, &all, target, &remote) {
             TargetLocation::New => {
@@ -1205,6 +1221,18 @@ fn warn_if_changelog_behind(ui: &Ui, repo: &Path, up: &UpstreamGit, version: &st
     eprintln!("  unless you mean to build {claimed} again.");
 }
 
+/// The Debian packaging branch this repository names in its gbp.conf,
+/// if it names one.
+///
+/// What makes a branch *the* packaging branch is gbp's own answer, not
+/// its name: `debian/latest`, `master` and `debian/unstable` are all
+/// in use, and classifying by name reads `debian/latest` as a release
+/// codename.
+fn debian_packaging_branch(repo: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(repo.join("debian/gbp.conf")).ok()?;
+    gbpconf::parse(&text).debian_branch
+}
+
 /// Create `debian/salsa-ci.yml` when a Debian branch has none,
 /// returning whether the file is there afterwards.
 ///
@@ -1214,7 +1242,7 @@ fn warn_if_changelog_behind(ui: &Ui, repo: &Path, up: &UpstreamGit, version: &st
 /// release's source package went out without the CI config its own
 /// git tree carried. A rebuild branch is not offered one -- it got
 /// its file, with the PPA preset, in the merge stage.
-fn ensure_salsa_ci(
+pub(crate) fn ensure_salsa_ci(
     ui: &Ui,
     repo: &Path,
     branch: &str,
@@ -2992,6 +3020,39 @@ mod tests {
                 .unwrap_err()
                 .contains("unknown stage 'wrap-and-sort'")
         );
+    }
+
+    /// What makes a branch the packaging branch is gbp's answer, not
+    /// its name: classified by name, `debian/latest` reads as a
+    /// release codename, falls through to Ppa, and fixup would write
+    /// the PPA preset into a branch that wants the plain template.
+    #[test]
+    fn the_packaging_branch_is_whatever_gbp_conf_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        std::fs::create_dir_all(p.join("debian")).unwrap();
+
+        // No gbp.conf: nothing is the packaging branch.
+        assert_eq!(debian_packaging_branch(p), None);
+
+        std::fs::write(
+            p.join("debian/gbp.conf"),
+            "[DEFAULT]\ndebian-branch = debian/latest\n",
+        )
+        .unwrap();
+        assert_eq!(debian_packaging_branch(p).as_deref(), Some("debian/latest"));
+
+        // A repository packaging on master says so, and the answer
+        // follows it rather than the debian/ prefix.
+        std::fs::write(
+            p.join("debian/gbp.conf"),
+            "[DEFAULT]\ndebian-branch = master\n",
+        )
+        .unwrap();
+        assert_eq!(debian_packaging_branch(p).as_deref(), Some("master"));
+
+        // And a rebuild target is still not it.
+        assert_ne!(debian_packaging_branch(p).as_deref(), Some("ubuntu/noble"));
     }
 
     #[test]
