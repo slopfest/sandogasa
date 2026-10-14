@@ -81,16 +81,26 @@ pub fn holders(text: &str) -> Vec<String> {
 fn holder_name(entry: &str) -> String {
     entry
         .split_whitespace()
-        .filter(|w| {
-            let w = w.trim_matches(|c: char| !c.is_alphanumeric());
-            !w.is_empty() && !w.chars().all(|c| c.is_ascii_digit() || c == '-')
-        })
+        .filter(|w| !is_years(w.trim_matches(|c: char| !c.is_alphanumeric())))
         .map(|w| w.trim_start_matches(['©', ',']).trim_matches(','))
         .filter(|w| !w.is_empty() && !w.eq_ignore_ascii_case("(c)"))
         .collect::<Vec<_>>()
         .join(" ")
         .trim()
         .to_string()
+}
+
+/// Whether a word is a year or a span of them rather than part of a
+/// name: `2019`, `2019-2024`, and the `2020-present` that Debian
+/// copyright files write, which is not all digits and so needs saying
+/// explicitly.
+fn is_years(word: &str) -> bool {
+    if word.is_empty() {
+        return true;
+    }
+    word.split('-').all(|part| {
+        !part.is_empty() && (part.chars().all(|c| c.is_ascii_digit()) || part == "present")
+    })
 }
 
 /// Holders the generated file names that the existing one never
@@ -146,6 +156,36 @@ mod tests {
         );
         assert_eq!(holder_name("  Calvin Rose  "), "Calvin Rose");
         assert_eq!(holder_name("2019-2026"), "");
+        // Debian copyright files write open-ended spans this way, and
+        // `2020-present` is not all digits -- damo's file is written
+        // like that, and the year rode along in the name until it was.
+        assert_eq!(
+            holder_name("2020-present SeongJae Park <sjp38.park@gmail.com>"),
+            "SeongJae Park <sjp38.park@gmail.com>"
+        );
+        assert_eq!(holder_name("2020-present"), "");
+    }
+
+    /// A package whose copyright is complete says nothing at all --
+    /// damo, whose two holders both appear, written `2020-present`
+    /// against the scan's `2020,`. A check that only ever fires
+    /// cannot be told from a broken one.
+    #[test]
+    fn a_complete_copyright_reports_nothing() {
+        let existing = "Files: *\nCopyright:\n 2020-present SeongJae Park <sjp38@x.invalid>\n\
+                        License: GPL-2\n\nFiles: debian/*\nCopyright:\n 2023-present Michel \
+                        Lind <m@x.invalid>\nLicense: GPL-2\n";
+        let scanned = "Files: *\nCopyright: 2020, SeongJae Park <sjp38@x.invalid>\nLicense: \
+                       GPL-2\n\nFiles: debian/*\nCopyright: 2023, Michel Lind <m@x.invalid>\n\
+                       License: GPL-2\n";
+        assert_eq!(
+            holders(existing),
+            [
+                "SeongJae Park <sjp38@x.invalid>",
+                "Michel Lind <m@x.invalid>"
+            ]
+        );
+        assert!(unattributed(existing, scanned).is_empty());
     }
 
     /// What the check reports: a holder the scan found and the file
