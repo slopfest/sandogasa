@@ -220,6 +220,9 @@ Stages to run, repeatable or comma\-separated:
   import  gbp import\-orig \-\-uscan + gbp dch \-c \-R; or,
           when packaging from upstream\*(Aqs git (see
           `clone`), merge its release tag instead
+  wrap\-and\-sort
+          normalize debian/ with wrap\-and\-sort; opt\-in,
+          never part of `all`
   copyright
           check debian/copyright against the source, with
           debian/patches applied; re\-runnable on its own

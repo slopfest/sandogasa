@@ -439,7 +439,7 @@ fn claim_packaging(
 /// to leave their later changes mergeable, and an upstream still
 /// maintaining their `debian/` is one whose delta is worth keeping
 /// small -- which only the packager knows.
-fn normalize_packaging(ui: &Ui, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn normalize_packaging(ui: &Ui, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if !ui.dry_run {
         // --dry-run is a tutorial and must narrate anywhere, so the
         // tool is only required when it is about to be run.

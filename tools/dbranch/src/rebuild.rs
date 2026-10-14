@@ -59,6 +59,7 @@ pub enum ChrootRefresh {
 pub struct Stages {
     pub merge: bool,
     pub import: bool,
+    pub wrap_and_sort: bool,
     pub copyright: bool,
     pub source: bool,
     pub build: bool,
@@ -76,7 +77,8 @@ impl Stages {
     /// The copyright/source/build/lint/push/upload/tag tail — true if
     /// any is selected.
     fn any_tail(&self) -> bool {
-        self.copyright
+        self.wrap_and_sort
+            || self.copyright
             || self.source
             || self.build
             || self.lint
@@ -104,6 +106,7 @@ fn parse_stages_with(
     for token in tokens {
         match token.trim() {
             t if t == head => set_head(&mut s),
+            "wrap-and-sort" if copyright => s.wrap_and_sort = true,
             "copyright" if copyright => s.copyright = true,
             "source" => s.source = true,
             "build" => s.build = true,
@@ -122,7 +125,11 @@ fn parse_stages_with(
                 s.push = true;
             }
             other => {
-                let copyright = if copyright { "copyright, " } else { "" };
+                let copyright = if copyright {
+                    "wrap-and-sort, copyright, "
+                } else {
+                    ""
+                };
                 return Err(format!(
                     "unknown stage '{other}' \
                      (valid: {head}, {copyright}source, build, lint, push, upload, tag, all)"
@@ -700,6 +707,11 @@ pub fn update(
         ensure_on_branch(ui, repo, &branch)?;
     }
 
+    // Before the copyright check, so a hand-edited debian/ is
+    // normalized before anything reads it.
+    if opts.stages.wrap_and_sort {
+        upstream::normalize_packaging(ui, repo)?;
+    }
     // After the merge, before the source stage builds around the file.
     if opts.stages.copyright {
         copyright_stage(ui, repo)?;
@@ -2747,6 +2759,7 @@ mod tests {
     const MERGE: Stages = Stages {
         merge: true,
         import: false,
+        wrap_and_sort: false,
         copyright: false,
         source: false,
         build: false,
@@ -2758,6 +2771,7 @@ mod tests {
     const BUILD: Stages = Stages {
         merge: false,
         import: false,
+        wrap_and_sort: false,
         copyright: false,
         source: false,
         build: true,
@@ -2775,6 +2789,7 @@ mod tests {
             Stages {
                 merge: true,
                 import: false,
+                wrap_and_sort: false,
                 copyright: false,
                 source: true,
                 build: true,
@@ -2822,6 +2837,31 @@ mod tests {
     /// edit there would be a delta against the Debian branch. Being
     /// able to re-run just this stage is the point -- fixing a
     /// copyright file is iterative.
+    /// Re-runnable because hand-editing debian/ is what makes it
+    /// needed, and absent from `all` because reformatting somebody's
+    /// packaging unasked is the thing `clone --wrap-and-sort` is
+    /// opt-in to avoid.
+    #[test]
+    fn wrap_and_sort_is_opt_in_and_never_in_all() {
+        assert_eq!(
+            parse_update_stages(&["wrap-and-sort".to_string()]).unwrap(),
+            Stages {
+                wrap_and_sort: true,
+                ..Stages::default()
+            }
+        );
+        assert!(
+            !parse_update_stages(&["all".to_string()])
+                .unwrap()
+                .wrap_and_sort
+        );
+        assert!(
+            parse_stages(&["wrap-and-sort".to_string()])
+                .unwrap_err()
+                .contains("unknown stage 'wrap-and-sort'")
+        );
+    }
+
     #[test]
     fn copyright_is_a_stage_of_update_only() {
         assert_eq!(
@@ -2838,7 +2878,7 @@ mod tests {
         assert!(
             parse_update_stages(&["nonsense".to_string()])
                 .unwrap_err()
-                .contains("import, copyright, source")
+                .contains("import, wrap-and-sort, copyright, source")
         );
     }
 

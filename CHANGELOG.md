@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### dbranch: wrap-and-sort is re-runnable
+
+`clone --wrap-and-sort` normalized the packaging once, at adoption,
+and there was no way to do it again. But the editing that makes it
+necessary happens afterwards — `wrap-and-sort` reformats
+`debian/copyright` as well as `control`, and a session spent fixing a
+copyright file by hand is exactly when the layout drifts.
+
+`update --stage wrap-and-sort` runs it, in a commit of its own, and
+says so without committing anything when the packaging is already in
+that layout. It is deliberately absent from `all`: reformatting
+somebody's packaging unasked is what the `clone` flag is opt-in to
+avoid, and the same reasoning holds every release. `rebuild` does not
+take it either.
+
 ### dbranch: validate debian/copyright before reading anything from it
 
 The copyright stage compared licences and holders but never asked

@@ -335,6 +335,15 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   `Maintainer`, `Vcs-*`, the Debian changelog and the CI config are
   what make the packaging yours.
 
+  `update --stage wrap-and-sort` re-runs the normalization `clone
+  --wrap-and-sort` does, for packaging that has been edited by hand
+  since — `wrap-and-sort` reformats `debian/copyright` as well as
+  `control`, so an afternoon of editing often leaves something to
+  tidy. It is never part of `all`: reformatting packaging unasked is
+  exactly what the `clone` flag is opt-in to avoid. A `debian/`
+  already in that layout is left alone with a note rather than an
+  empty commit.
+
   In `update` only, and as its own `copyright` stage so it can be
   re-run while a copyright file is being fixed. `debian/patches` is
   applied first (`dpkg-source --before-build`) and unapplied
