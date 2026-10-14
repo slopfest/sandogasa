@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### dbranch: creating a Debusine repository, without an upload to hang it on
+
+`rebuild` and `update` check a Debusine personal repository exists
+before uploading to it, and offer to create what is missing — the
+`create-repository` workflow, then `archive suite create`, which is
+also what creates the publish workflow template. All of that lived
+inside the upload stage, reachable only from a packaging repository
+those commands can drive.
+
+An upload they are not driving cannot get at it. A package built from
+a debcargo tree has no such repository, and `dput` names a workspace
+but will not create one, so the upload fails against a 404 with
+nothing to do about it.
+
+`dbranch debusine-repo --owner NAME --project PROJECT` runs the same
+check and the same recipe on its own. What it knows is not the two
+commands — the client has those — but the shape around them: that the
+workspace is `r-<owner>-<project>`, that the suite is the base release
+plus the project, that `create-repository` is asynchronous so the
+suite cannot be created until it answers, and that creating the suite
+is what creates the workflow template.
+
+Used to create `r-michelin-dbranch` for packaging the sandogasa crates
+themselves, which is the case that prompted it.
+
 ### dbranch: say where a fix to an upstream file has to go
 
 The copyright stage's findings are mostly about upstream's files — a

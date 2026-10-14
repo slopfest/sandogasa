@@ -101,6 +101,38 @@ debian/ is left to you.")]
         quiet: bool,
     },
 
+    /// Create a Debusine personal repository, if it is not there.
+    ///
+    /// rebuild and update do this before an upload they are driving.
+    /// This is the same check and the same recipe for an upload they
+    /// are not: a package built from a debcargo tree, say, which has
+    /// no packaging repository for them to work in.
+    DebusineRepo {
+        /// Repository owner's Debusine name (workspace r-NAME-PROJECT).
+        #[arg(long, value_name = "NAME")]
+        owner: String,
+
+        /// Project the repository serves (its suite is SUITE-PROJECT).
+        #[arg(long, value_name = "PROJECT")]
+        project: String,
+
+        /// Base Debian suite the repository publishes to.
+        #[arg(long, default_value = "sid", value_name = "SUITE")]
+        suite: String,
+
+        /// Create what is missing without asking.
+        #[arg(short = 'y', long)]
+        assume_yes: bool,
+
+        /// Print the commands without running anything (a tutorial).
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Run, but narrate each step + command first (follow along).
+        #[arg(long)]
+        explain: bool,
+    },
+
     /// Fix up gbp.conf / salsa-ci.yml on existing PPA branch(es).
     Fixup {
         /// Branch(es) to fix up (default: the current branch).
@@ -442,6 +474,21 @@ fn main() -> ExitCode {
 
 fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
+        Command::DebusineRepo {
+            owner,
+            project,
+            suite,
+            assume_yes,
+            dry_run,
+            explain,
+        } => {
+            let ui = Ui {
+                explain,
+                dry_run,
+                quiet: false,
+            };
+            rebuild::debusine_repo(&ui, &owner, &project, &suite, assume_yes)
+        }
         Command::Fixup {
             branches,
             repo,

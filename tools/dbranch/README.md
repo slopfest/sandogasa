@@ -28,6 +28,17 @@ It is also a **learning tool**: `--explain` runs the workflow while
 narrating each step and the exact command it uses, so you can follow
 along or learn to do it by hand.
 
+`debusine-repo --owner NAME --project PROJECT` creates a Debusine
+personal repository when it does not exist: the workspace
+`r-<owner>-<project>` through the `create-repository` workflow, then
+the suite `<suite>-<project>`, which is also what creates the
+`publish-to-<suite>-<project>` template an upload needs. `rebuild` and
+`update` do this themselves before uploading; this is the same recipe
+for an upload they are not driving — a package built from a debcargo
+tree, say, which has no packaging repository for them to work in.
+`--suite` picks the base release (default `sid`), `-y` creates without
+asking.
+
 ## Installation
 
 ```

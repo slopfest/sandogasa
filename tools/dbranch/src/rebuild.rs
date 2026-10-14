@@ -1532,6 +1532,26 @@ fn tag_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
 /// the expensive stages. Two HTTP checks (`curl`, skipped with a note
 /// when curl is absent or an answer is neither 200 nor 404): the
 /// workflow template's page — 200 means all is there — then the
+/// Create a Debusine personal repository from outside an upload.
+///
+/// The same check and the same recipe `rebuild` and `update` run
+/// before uploading, for an upload they are not driving: a package
+/// built from a debcargo tree has no packaging repository for them to
+/// work in, and `dput` names a workspace but will not create one.
+///
+/// Runs in the current directory, which it only needs somewhere to
+/// spawn curl and the client from.
+pub fn debusine_repo(
+    ui: &Ui,
+    owner: &str,
+    project: &str,
+    suite: &str,
+    assume_yes: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let workspace = plan::debusine_workspace(owner, project);
+    ensure_debusine_workspace(ui, Path::new("."), &workspace, suite, project, assume_yes)
+}
+
 /// workspace's. What is missing is offered for creation, default yes
 /// and unasked under `-y`, by the wiki's recipe: the `create-repository`
 /// workflow in the shared `developers` workspace when the workspace is

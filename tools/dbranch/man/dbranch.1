@@ -77,6 +77,33 @@ Upstream git URL
 .TP
 [\fIDIR\fR]
 Directory to clone into (default: the repository\*(Aqs name)
+.SS dbranch debusine-repo
+\fBdbranch debusine\-repo\fR [\fB\-\-suite\fR] [\fB\-y\fR|\fB\-\-assume\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-owner\fR> <\fB\-\-project\fR> 
+.PP
+Create a Debusine personal repository, if it is not there.
+.PP
+rebuild and update do this before an upload they are driving. This is the same check and the same recipe for an upload they are not: a package built from a debcargo tree, say, which has no packaging repository for them to work in.
+.TP
+\fB\-\-owner\fR \fI<NAME>\fR
+Repository owner\*(Aqs Debusine name (workspace r\-NAME\-PROJECT)
+.TP
+\fB\-\-project\fR \fI<PROJECT>\fR
+Project the repository serves (its suite is SUITE\-PROJECT)
+.TP
+\fB\-\-suite\fR \fI<SUITE>\fR [default: sid]
+Base Debian suite the repository publishes to
+.TP
+\fB\-y\fR, \fB\-\-assume\-yes\fR
+Create what is missing without asking
+.TP
+\fB\-\-dry\-run\fR
+Print the commands without running anything (a tutorial)
+.TP
+\fB\-\-explain\fR
+Run, but narrate each step + command first (follow along)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS dbranch fixup
 \fBdbranch fixup\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
 .PP
