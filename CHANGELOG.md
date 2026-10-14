@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.26.0
 
 ### Published tool crates carry their dev-dependencies again
 
@@ -498,16 +498,33 @@ The user's copy is preferred over the packaged one deliberately: an
 inventory is a snapshot of somebody else's repositories taken when it
 was generated, and RPM Fusion moves underneath it.
 
-Which is why it now carries the day it was taken. `sync-rpmfusion`
-writes `synced` into `[inventory]`, and ebranch prints the inventory it
-read and that date — a counterpart that looks wrong is usually one
-added after the snapshot was. An inventory written before this, or by
-hand, has no date and says so.
-
 Note for packagers: install the inventory under `/usr/share`, not
 `/etc`. It is generated data rather than configuration, and `/etc`
 would make it `%config(noreplace)` — pinning every user to the
 snapshot they first installed while the real thing moves on.
+
+### sandogasa-inventory: an inventory records the day it was synced (breaking)
+
+An inventory generated from somebody else's repositories is a snapshot,
+and it goes stale without anything looking wrong: a counterpart that
+seems to be missing is usually one added after the snapshot was taken,
+and nothing on screen said how old the answer was.
+
+It carries the day it was taken now. `sync-rpmfusion` writes `synced`
+into `[inventory]`, and ebranch prints both the inventory it read and
+that date. An inventory written by hand, or before this existed, has
+no date and says so.
+
+What broke: `InventoryMeta` gains a public field, `synced:
+Option<String>`. The struct is exhaustively constructible on purpose —
+sandogasa-inventory is one of the two crates exempt from the
+`#[non_exhaustive]` rule, because the format is ours and the tools
+build it rather than deserializing somebody's API — so any existing
+struct literal has to add the field. It derives no `Default`, so the
+migration is to add `synced: None`.
+
+The TOML is additive: `[inventory]` gains an optional
+`synced = "YYYY-MM-DD"`, and a file without it still loads.
 
 ### sandogasa-distgit, sandogasa-jira, sandogasa-nvd: refuse a credential on a plaintext endpoint (breaking)
 

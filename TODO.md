@@ -774,6 +774,13 @@ ends re-tested. There is one end in this tree. The ceiling is what we
 build and test; the floor is Debian's business, and the way to check
 it is a real dh-cargo build, not cargo.
 
+That check has now been run. `rust-dbranch` 0.25.4-1 built on amd64
+and arm64 in Debusine on 2026-10-14 (work request 1462645, completed
+success), against a `debian/control` declaring
+`librust-anstream+default-dev (<< 2), (>= 0.6.21)` — so the floor
+resolves and builds where it is reachable. Repeat that, not a
+`--precise` update, whenever the floor needs re-checking.
+
 Tighten back to a single requirement once Debian ships anstream 1.x.
 
 Worth knowing either way: the Rust Team patches dependency
