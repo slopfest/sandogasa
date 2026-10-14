@@ -290,6 +290,9 @@ Stages to run, repeatable or comma-separated:
   import  gbp import-orig --uscan + gbp dch -c -R; or,
           when packaging from upstream's git (see
           `clone`), merge its release tag instead
+  copyright
+          check debian/copyright against the source, with
+          debian/patches applied; re-runnable on its own
   source  debuild -S the source package (-si for the
           Debian archive, -sa for anywhere else)
   build   pbuilder-dist scratch build of the .dsc
@@ -297,7 +300,7 @@ Stages to run, repeatable or comma-separated:
   push    git push the branch, then watch its CI
   upload  dput the built package
   tag     dh clean + gbp tag the release
-  all     import + source + build + lint + push
+  all     import + copyright + source + build + lint + push
 Defaults to `import`."
         )]
         stage: Vec<String>,

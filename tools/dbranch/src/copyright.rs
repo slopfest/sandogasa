@@ -46,6 +46,70 @@ pub fn placeholder_warning(text: &str) -> Option<String> {
     ))
 }
 
+/// The copyright holders a DEP-5 file names, one per entry, with the
+/// years stripped.
+///
+/// A `Copyright:` field holds one holder per line and continues onto
+/// indented lines, so the second and later holders are continuations
+/// -- which is how `fennel.lua`'s author hid in plain sight on
+/// fnlfmt: a grep for `^Copyright:` sees the first name only.
+pub fn holders(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_field = false;
+    for line in text.lines() {
+        let value = if let Some(v) = line.strip_prefix("Copyright:") {
+            in_field = true;
+            v
+        } else if in_field && (line.starts_with(' ') || line.starts_with('\t')) {
+            line
+        } else {
+            in_field = false;
+            continue;
+        };
+        let name = holder_name(value);
+        if !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// One holder entry with the years and their punctuation removed:
+/// `© 2019-2024 fnlfmt contributors` and `2019-2024, fnlfmt
+/// contributors` both become `fnlfmt contributors`, so two files
+/// written in different styles can still be compared.
+fn holder_name(entry: &str) -> String {
+    entry
+        .split_whitespace()
+        .filter(|w| {
+            let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+            !w.is_empty() && !w.chars().all(|c| c.is_ascii_digit() || c == '-')
+        })
+        .map(|w| w.trim_start_matches(['©', ',']).trim_matches(','))
+        .filter(|w| !w.is_empty() && !w.eq_ignore_ascii_case("(c)"))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+/// Holders the generated file names that the existing one never
+/// mentions anywhere.
+///
+/// One-directional on purpose. The question is "whose copyright is
+/// not written down", and a holder the existing file has but the scan
+/// missed is the ordinary case -- a tool that cannot read a header is
+/// not evidence of anything. Matched by name against the whole file
+/// rather than against its holder list, because the name may be
+/// recorded as an `Upstream-Contact` instead, and that counts.
+pub fn unattributed(existing: &str, generated: &str) -> Vec<String> {
+    let haystack = existing.to_lowercase();
+    holders(generated)
+        .into_iter()
+        .filter(|h| !haystack.contains(&h.to_lowercase()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,6 +117,53 @@ mod tests {
     /// The two the generators actually write, measured: cme leaves
     /// `Copyright: no-info-found` for a file it could not attribute,
     /// decopy leaves `Source: TODO`.
+    /// The real fnlfmt case, which is the reason this exists: decopy
+    /// puts both holders in one Files: * paragraph, and the second is
+    /// a continuation line, so anything reading `^Copyright:` alone
+    /// sees Calvin Rose and misses the contributors -- or, on the
+    /// committed file, sees the contributors and misses nobody.
+    #[test]
+    fn holders_include_the_continuation_lines() {
+        let generated = "Files: *\nCopyright: Calvin Rose\n           2019-2024, fnlfmt \
+                         contributors\nLicense: Expat\n";
+        assert_eq!(holders(generated), ["Calvin Rose", "fnlfmt contributors"]);
+        let committed = "Files: *\nCopyright: © 2019-2024 fnlfmt contributors\nLicense: Expat\n";
+        assert_eq!(holders(committed), ["fnlfmt contributors"]);
+    }
+
+    /// Years and their punctuation differ between the two files and
+    /// mean nothing here, so they come off before anything is
+    /// compared.
+    #[test]
+    fn years_and_symbols_are_not_part_of_a_name() {
+        assert_eq!(
+            holder_name("© 2019-2024 fnlfmt contributors"),
+            "fnlfmt contributors"
+        );
+        assert_eq!(
+            holder_name("2019-2024, fnlfmt contributors"),
+            "fnlfmt contributors"
+        );
+        assert_eq!(holder_name("  Calvin Rose  "), "Calvin Rose");
+        assert_eq!(holder_name("2019-2026"), "");
+    }
+
+    /// What the check reports: a holder the scan found and the file
+    /// never mentions. fnlfmt's answer is Calvin Rose alone -- the
+    /// contributors line is worded differently in each file but the
+    /// name is there, so it is not flagged.
+    #[test]
+    fn only_the_unmentioned_holder_is_reported() {
+        let generated = "Copyright: Calvin Rose\n           2019-2024, fnlfmt contributors\n";
+        let committed = "Upstream-Contact: Phil Hagelberg <phil@hagelb.org>\n\nFiles: *\n\
+                         Copyright: © 2019-2024 fnlfmt contributors\n";
+        assert_eq!(unattributed(committed, generated), ["Calvin Rose"]);
+        // A name recorded only as Upstream-Contact still counts.
+        assert!(unattributed(committed, "Copyright: 2019 Phil Hagelberg\n").is_empty());
+        // Nothing new to say about a file that already says it.
+        assert!(unattributed(committed, committed).is_empty());
+    }
+
     #[test]
     fn the_generators_placeholders_are_found() {
         assert_eq!(

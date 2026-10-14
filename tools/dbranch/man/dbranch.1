@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH dbranch 1 2026-10-13 "sandogasa 0.25.4" "Sandogasa Manual"
+.TH dbranch 1 2026-10-14 "sandogasa 0.25.4" "Sandogasa Manual"
 .SH NAME
 dbranch \- Propagate a Debian package across its Ubuntu PPA and Debian branches
 .SH SYNOPSIS
@@ -220,6 +220,9 @@ Stages to run, repeatable or comma\-separated:
   import  gbp import\-orig \-\-uscan + gbp dch \-c \-R; or,
           when packaging from upstream\*(Aqs git (see
           `clone`), merge its release tag instead
+  copyright
+          check debian/copyright against the source, with
+          debian/patches applied; re\-runnable on its own
   source  debuild \-S the source package (\-si for the
           Debian archive, \-sa for anywhere else)
   build   pbuilder\-dist scratch build of the .dsc
@@ -227,7 +230,7 @@ Stages to run, repeatable or comma\-separated:
   push    git push the branch, then watch its CI
   upload  dput the built package
   tag     dh clean + gbp tag the release
-  all     import + source + build + lint + push
+  all     import + copyright + source + build + lint + push
 Defaults to `import`.
 .TP
 \fB\-\-build\-suite\fR \fI<SUITE>\fR [default: testing]

@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### dbranch: copyright is its own stage, and it reads the patched source
+
+Two things were wrong with checking `debian/copyright` inside the
+source stage. It could not be re-run on its own, which is what fixing
+a copyright file actually needs — that work is iterative. And it read
+the packaging repository's tree, where a 3.0 (quilt) package keeps its
+patches unapplied, so a fix already carried in `debian/patches` went
+on being reported as broken until upstream released it.
+
+`update --stage copyright` now exists and is part of `all`, bracketed
+by `dpkg-source --before-build` / `--after-build` so both checks see
+the source as it ships. Both are no-ops for a package with no patches,
+and the tree is left as it was found. `rebuild` does not take the
+stage: it builds the same source for another suite, so there is
+nothing new to check.
+
+The stage also fills the hole `lrc` leaves. `lrc` compares licences,
+so a vendored file under the same licence as everything else gives it
+nothing to report — which is how fnlfmt passes while crediting
+"fnlfmt contributors" for `fennel.lua`, written by Calvin Rose. When
+`lrc` passes, `decopy` scans the source and names any holder that
+`debian/copyright` never mentions, writing the scan beside the build
+artefacts to compare by hand. Nothing is applied from it: decopy's
+grouping is its own guess, and it files upstream's own code under the
+vendored author.
+
+`debian/patches` is excluded from that scan. A patch file carries
+copies of upstream text, the lines it removes among them, and decopy
+reads those as copyright statements — so a patch fixing a malformed
+`Copyright ©` line in fnlfmt's man page went on reporting that line,
+out of its own diff, for as long as the patch existed.
+
 ### dbranch: decopy is offered beside cme, and the prompt reads properly
 
 `update` offered one way to fix a `debian/copyright` that disagrees

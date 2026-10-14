@@ -59,6 +59,7 @@ pub enum ChrootRefresh {
 pub struct Stages {
     pub merge: bool,
     pub import: bool,
+    pub copyright: bool,
     pub source: bool,
     pub build: bool,
     pub lint: bool,
@@ -72,10 +73,16 @@ impl Stages {
         self.merge || self.import || self.any_tail()
     }
 
-    /// The source/build/lint/push/upload/tag tail — true if any is
-    /// selected.
+    /// The copyright/source/build/lint/push/upload/tag tail — true if
+    /// any is selected.
     fn any_tail(&self) -> bool {
-        self.source || self.build || self.lint || self.push || self.upload || self.tag
+        self.copyright
+            || self.source
+            || self.build
+            || self.lint
+            || self.push
+            || self.upload
+            || self.tag
     }
 }
 
@@ -87,6 +94,7 @@ fn parse_stages_with(
     tokens: &[String],
     head: &str,
     set_head: fn(&mut Stages),
+    copyright: bool,
 ) -> Result<Stages, String> {
     let mut s = Stages::default();
     if tokens.is_empty() {
@@ -96,6 +104,7 @@ fn parse_stages_with(
     for token in tokens {
         match token.trim() {
             t if t == head => set_head(&mut s),
+            "copyright" if copyright => s.copyright = true,
             "source" => s.source = true,
             "build" => s.build = true,
             "lint" => s.lint = true,
@@ -106,15 +115,17 @@ fn parse_stages_with(
                 // `all` is the build-and-verify flow; `upload` and `tag`
                 // (deliberate publish/release steps) stay opt-in.
                 set_head(&mut s);
+                s.copyright = copyright;
                 s.source = true;
                 s.build = true;
                 s.lint = true;
                 s.push = true;
             }
             other => {
+                let copyright = if copyright { "copyright, " } else { "" };
                 return Err(format!(
                     "unknown stage '{other}' \
-                     (valid: {head}, source, build, lint, push, upload, tag, all)"
+                     (valid: {head}, {copyright}source, build, lint, push, upload, tag, all)"
                 ));
             }
         }
@@ -128,14 +139,14 @@ fn parse_stages_with(
 /// Parse the `--stage` selector. Empty defaults to **merge** only
 /// (the other stages are opt-in for now). `all` enables every stage.
 pub fn parse_stages(tokens: &[String]) -> Result<Stages, String> {
-    parse_stages_with(tokens, "merge", |s| s.merge = true)
+    parse_stages_with(tokens, "merge", |s| s.merge = true, false)
 }
 
 /// Parse the `update --stage` selector. Like [`parse_stages`] but the
 /// head stage is `import` (new upstream) instead of `merge`. Empty
 /// defaults to **import** only; `all` is import + build + lint + push.
 pub fn parse_update_stages(tokens: &[String]) -> Result<Stages, String> {
-    parse_stages_with(tokens, "import", |s| s.import = true)
+    parse_stages_with(tokens, "import", |s| s.import = true, true)
 }
 
 /// Where the upload stage sends the source package.
@@ -690,7 +701,7 @@ pub fn update(
     }
 
     // After the merge, before the source stage builds around the file.
-    if opts.stages.source {
+    if opts.stages.copyright {
         copyright_stage(ui, repo)?;
     }
 
@@ -1164,6 +1175,22 @@ fn ensure_debusine_ready() -> Result<(), Box<dyn std::error::Error>> {
 /// apply to somebody's packaging unasked -- so a non-interactive run
 /// says what it found and carries on.
 fn copyright_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Both checks read the source, so both have to read it patched:
+    // in a 3.0 (quilt) tree the patches are not applied here, and a
+    // fix already carried in debian/patches would otherwise go on
+    // being reported as broken until upstream released it. Unapplied
+    // afterwards whatever happened, so the tree is left as found.
+    if !ui.dry_run && repo.join("debian/patches/series").is_file() {
+        ui.run_required(&plan::dpkg_source_build_argv(true), repo)?;
+        let checked = copyright_checks(ui, repo);
+        ui.run_required(&plan::dpkg_source_build_argv(false), repo)?;
+        return checked;
+    }
+    copyright_checks(ui, repo)
+}
+
+/// The checks themselves, with the source in the state it ships in.
+fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let file = repo.join("debian/copyright");
     if !ui.dry_run && !file.is_file() {
         eprintln!(
@@ -1193,7 +1220,7 @@ fn copyright_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error
         {
             eprintln!("warning: {warning}");
         }
-        return Ok(());
+        return compare_holders(ui, repo, &file);
     }
     eprint!("{out}");
     let cme = plan::cme_update_copyright_argv().join(" ");
@@ -1238,6 +1265,50 @@ fn copyright_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error
         &file,
         "Reconcile debian/copyright with the source",
     )
+}
+
+/// Say which copyright holders a scan of the source finds that
+/// `debian/copyright` never mentions.
+///
+/// This is the hole `lrc` leaves. It compares licences, and a vendored
+/// file under the same licence as everything else gives it nothing to
+/// report -- which is how fnlfmt passed while crediting "fnlfmt
+/// contributors" for a file written by Calvin Rose.
+///
+/// The scan is written beside the build artefacts rather than into
+/// `debian/`, where it would land in the source package, and nothing
+/// is applied from it: decopy's grouping is its own guess (it files
+/// upstream's own code under the vendored author), and its holder
+/// list carries junk -- on fnlfmt it offered "Released", having
+/// mangled a file header. So the answer is two files and a person,
+/// not an edit.
+fn compare_holders(ui: &Ui, repo: &Path, file: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if ui.dry_run || !sandogasa_cli::tool_exists("decopy") {
+        return Ok(());
+    }
+    let (package, _) = top_package_version(repo)?;
+    let rel = format!("../{package}.copyright.decopy");
+    ui.step("Scan the source for copyright holders (decopy)");
+    if !ui.run(&plan::decopy_scan_argv(&rel), repo)? {
+        eprintln!("note: decopy failed; copyright holders not compared");
+        return Ok(());
+    }
+    let (existing, scanned) = (
+        std::fs::read_to_string(file)?,
+        std::fs::read_to_string(repo.join(&rel))?,
+    );
+    match crate::copyright::unattributed(&existing, &scanned).as_slice() {
+        [] => Ok(()),
+        missing => {
+            eprintln!(
+                "warning: the source names {}, which debian/copyright does not — \
+                 compare it with {rel}. That scan is a guess, junk entries and all, \
+                 so read it rather than copy it",
+                missing.join(" and ")
+            );
+            Ok(())
+        }
+    }
 }
 
 /// Commit whatever just rewrote `debian/copyright`, after saying what
@@ -2647,6 +2718,7 @@ mod tests {
     const MERGE: Stages = Stages {
         merge: true,
         import: false,
+        copyright: false,
         source: false,
         build: false,
         lint: false,
@@ -2657,6 +2729,7 @@ mod tests {
     const BUILD: Stages = Stages {
         merge: false,
         import: false,
+        copyright: false,
         source: false,
         build: true,
         lint: false,
@@ -2673,6 +2746,7 @@ mod tests {
             Stages {
                 merge: true,
                 import: false,
+                copyright: false,
                 source: true,
                 build: true,
                 lint: true,
@@ -2714,6 +2788,31 @@ mod tests {
         assert!(parse_stages(&["bogus".to_string()]).is_err());
     }
 
+    /// `copyright` is update's alone: a rebuild builds the same source
+    /// for another suite, so there is nothing new to check, and an
+    /// edit there would be a delta against the Debian branch. Being
+    /// able to re-run just this stage is the point -- fixing a
+    /// copyright file is iterative.
+    #[test]
+    fn copyright_is_a_stage_of_update_only() {
+        assert_eq!(
+            parse_update_stages(&["copyright".to_string()]).unwrap(),
+            Stages {
+                copyright: true,
+                ..Stages::default()
+            }
+        );
+        let refused = parse_stages(&["copyright".to_string()]).unwrap_err();
+        assert!(refused.contains("unknown stage 'copyright'"), "{refused}");
+        // The message offers what that selector does take.
+        assert!(refused.contains("merge, source"), "{refused}");
+        assert!(
+            parse_update_stages(&["nonsense".to_string()])
+                .unwrap_err()
+                .contains("import, copyright, source")
+        );
+    }
+
     #[test]
     fn parse_update_stages_defaults_and_values() {
         // Defaults to import; `all` is import + source + build + lint
@@ -2729,6 +2828,8 @@ mod tests {
             parse_update_stages(&["all".to_string()]).unwrap(),
             Stages {
                 import: true,
+                // `all` checks the copyright before building around it.
+                copyright: true,
                 source: true,
                 build: true,
                 lint: true,

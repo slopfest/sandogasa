@@ -335,8 +335,15 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   `Maintainer`, `Vcs-*`, the Debian changelog and the CI config are
   what make the packaging yours.
 
-  In `update` only, `debian/copyright` is checked against the source
-  first, with `lrc` (licenserecon), which compares it to what
+  In `update` only, and as its own `copyright` stage so it can be
+  re-run while a copyright file is being fixed. `debian/patches` is
+  applied first (`dpkg-source --before-build`) and unapplied
+  afterwards, so the checks read the source as it ships rather than as
+  the packaging repository stores it — a fix already carried
+  downstream would otherwise go on being reported as broken until
+  upstream released it.
+
+  `lrc` (licenserecon) compares `debian/copyright` to what
   `licensecheck` finds. A new upstream release is what brings new
   files and new copyright holders, and checking before the source
   package is built means a fix does not invalidate it. When they
@@ -353,6 +360,16 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   builds the same source for another suite, and an edit on a PPA or
   backport branch is a delta that conflicts with the Debian branch on
   every later merge.
+
+  `lrc` compares licences, not copyright holders, so a vendored file
+  under the same licence as everything else gives it nothing to
+  report. When it passes, `decopy` scans the source and names any
+  holder that `debian/copyright` never mentions, writing the scan
+  beside the build artefacts for you to compare. Nothing is applied
+  from it: decopy's grouping is its own guess, and its holder list
+  carries junk. `debian/patches` is excluded from that scan, because a
+  patch file carries copies of upstream text — the lines it removes
+  among them — which decopy reads as copyright statements.
 
   Whether the orig tarball is offered for upload depends on where the
   package is going. Uploads to the Debian archive — `update` to

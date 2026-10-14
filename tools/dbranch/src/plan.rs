@@ -390,6 +390,27 @@ pub fn cme_update_copyright_argv() -> Vec<String> {
     argv(&["cme", "update", "dpkg-copyright"])
 }
 
+/// `dpkg-source --before-build .` / `--after-build .` — apply and
+/// unapply `debian/patches` around a step that has to see the source
+/// as it ships.
+///
+/// A 3.0 (quilt) tree keeps its patches unapplied in the packaging
+/// repository, so anything reading the source -- a licence check, a
+/// copyright scan -- reads the unpatched files and misses a fix that
+/// is already carried downstream. Both are no-ops for a package with
+/// no patches.
+pub fn dpkg_source_build_argv(before: bool) -> Vec<String> {
+    argv(&[
+        "dpkg-source",
+        if before {
+            "--before-build"
+        } else {
+            "--after-build"
+        },
+        ".",
+    ])
+}
+
 /// `sh -c "<line>"` — for the few steps whose real command is a shell
 /// line rather than an argv, because it redirects. Shown as what it
 /// is, so the narration stays something a reader can paste.
@@ -405,6 +426,19 @@ pub fn shell_argv(line: &str) -> Vec<String> {
 /// the document alone.
 pub fn decopy_shell_line() -> String {
     "decopy > debian/copyright".to_string()
+}
+
+/// `decopy -X 'debian/patches/.*' -o <out>` — scan the source for
+/// copyright holders, writing the result where it will not land in
+/// the source package.
+///
+/// `debian/patches` is excluded because a patch file carries copies
+/// of upstream text, the lines it removes among them, and decopy
+/// reads those as copyright statements: on fnlfmt a patch fixing a
+/// malformed `Copyright ©` line went on reporting the malformed line,
+/// out of its own diff, for as long as the patch existed.
+pub fn decopy_scan_argv(out: &str) -> Vec<String> {
+    argv(&["decopy", "-X", "debian/patches/.*", "-o", out])
 }
 
 /// The shell line that runs `dh_make` in a tree that already has a
