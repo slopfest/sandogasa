@@ -1289,7 +1289,8 @@ fn compare_holders(ui: &Ui, repo: &Path, file: &Path) -> Result<(), Box<dyn std:
     let (package, _) = top_package_version(repo)?;
     let rel = format!("../{package}.copyright.decopy");
     ui.step("Scan the source for copyright holders (decopy)");
-    if !ui.run(&plan::decopy_scan_argv(&rel), repo)? {
+    let patched = repo.join("debian/patches/series").is_file();
+    if !ui.run(&plan::decopy_scan_argv(&rel, patched), repo)? {
         eprintln!("note: decopy failed; copyright holders not compared");
         return Ok(());
     }

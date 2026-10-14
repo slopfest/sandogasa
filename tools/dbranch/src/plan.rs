@@ -437,8 +437,13 @@ pub fn decopy_shell_line() -> String {
 /// reads those as copyright statements: on fnlfmt a patch fixing a
 /// malformed `Copyright ©` line went on reporting the malformed line,
 /// out of its own diff, for as long as the patch existed.
-pub fn decopy_scan_argv(out: &str) -> Vec<String> {
-    argv(&["decopy", "-X", "debian/patches/.*", "-o", out])
+pub fn decopy_scan_argv(out: &str, patched: bool) -> Vec<String> {
+    match patched {
+        true => argv(&["decopy", "-X", "debian/patches/.*", "-o", out]),
+        // decopy warns that an exclusion matched nothing, which on a
+        // package with no patches is a puzzle rather than a warning.
+        false => argv(&["decopy", "-o", out]),
+    }
 }
 
 /// The shell line that runs `dh_make` in a tree that already has a
@@ -1362,6 +1367,18 @@ mod tests {
         // just created one holding gbp.conf, so the line it prints has
         // to move that aside -- and remove the directory, since the
         // check is on the directory and not on what is in it.
+        // The patch exclusion is only passed when there are patches:
+        // decopy warns when an exclusion matches nothing, and on a
+        // package without them that reads as a fault rather than a
+        // note.
+        assert_eq!(
+            decopy_scan_argv("../x.decopy", true),
+            ["decopy", "-X", "debian/patches/.*", "-o", "../x.decopy"]
+        );
+        assert_eq!(
+            decopy_scan_argv("../x.decopy", false),
+            ["decopy", "-o", "../x.decopy"]
+        );
         assert_eq!(
             dh_make_shell_line("antifennel", "0.3.1"),
             "mv debian/gbp.conf . && rmdir debian && \
