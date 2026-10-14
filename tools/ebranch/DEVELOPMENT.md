@@ -5,12 +5,13 @@ describes the tool as it is; this file says why some of it is that way.
 
 ## check-update's local-repo fallback stands alone, like a side-tag repo
 
-A pending Bodhi update — or one pushed to testing that the mirrors do
-not carry yet — used to get the reduced report ("Provides can't be
-compared"), because neither `@testing` nor a side tag nor a COPR had
-its builds. Its builds are in koji, though, so `check-update` downloads
-them and indexes a local repository as the "new" side. Rules that fall
-out of how the pieces behave, each checked on a live update
+Builds that no repository carries yet used to get the reduced report
+("Provides can't be compared"): a pending Bodhi update, one pushed to
+testing that the mirrors do not have, builds named by NVR before any
+update exists, and EPEL 10, whose `@testing` fedrq cannot query at
+all. The builds are in koji, though, so `check-update` downloads them
+and indexes a local repository as the "new" side. Rules that fall out
+of how the pieces behave, each checked on a live update
 (FEDORA-2026-a67d0ddb5f, uxplay, 2026-09-18):
 
 - **`-r @baseurl:file://<dir>` replaces the branch's repositories**, it
@@ -23,9 +24,18 @@ out of how the pieces behave, each checked on a live update
 - **Download with `bodhi updates download --updateid <alias>` and no
   `--arch`.** bodhi's client then passes `--arch=noarch --arch=<host
   machine>` to `koji download-build`; an explicit `--arch x86_64` passes
-  only that and silently drops noarch subpackages. It also keys the
-  download by the alias `check-update` already holds, so there is no
-  per-NVR loop to get wrong.
+  only that and silently drops noarch subpackages.
+- **Without an alias, fetch the same thing from koji by NVR.** A check
+  run before the update is submitted has nothing for bodhi to name, and
+  that is the case most in need of a Provides comparison — the builds
+  are newest and least likely to be in `@testing`. The loop runs
+  `koji download-build --nofailarch -a <host arch> -a noarch <nvr>` per
+  build, reproducing by hand what bodhi's client passes, because the
+  two routes must feed the *same* comparison: fetch a different arch
+  set here and the same update would report different Provides
+  depending on whether Bodhi happened to have it yet. `--nofailarch`
+  because a build is allowed to have no noarch, or no arch-specific,
+  package.
 - **Reuse the side-tag arm's comparison, skip its staleness check.**
   `compute_changed_provides_via_koji` takes binary names from `koji
   buildinfo` and Provides from whatever repo it is handed; a repo built
@@ -34,12 +44,17 @@ out of how the pieces behave, each checked on a live update
 - **Cache under `$XDG_CACHE_HOME/ebranch/update-repos/<alias>/`** (the
   `dirs` crate, per the workspace rule), with the sorted NVR list beside
   the repodata: same list, reuse; different list, remove and rebuild so
-  no RPM from a superseded build lingers. The alias is validated to the
-  characters a Bodhi alias has before it becomes a path component.
-- **Both tools are preconditions**, checked with `require_tools` before
-  anything is downloaded; a missing tool or a failed download prints why
-  and falls through to the reverse-deps-only report rather than aborting
-  the run.
+  no RPM from a superseded build lingers. Without an alias the
+  directory is named `<first-nvr>-<digest of all of them>`, sanitised
+  to the characters a path component is validated for. Correctness does
+  not rest on that name — the recorded NVR list is what decides reuse —
+  but two build sets sharing a first build must not share a directory.
+- **The tools required depend on the route**, checked with
+  `require_tools` before anything is downloaded: `createrepo_c` always,
+  `bodhi` only for the alias download, `koji` only for the NVR one.
+  Demanding both would fail a run over a tool it was never going to
+  call. A missing tool or a failed download prints why and falls
+  through to the reverse-deps-only report rather than aborting the run.
 
 ## check-crate follows every real dev dependency; benchmarks are excluded, not capped
 

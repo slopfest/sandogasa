@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### ebranch: compare Provides for builds that are not in Bodhi yet
+
+Checking builds by NVR before submitting them gave up on the part of
+the check worth having:
+
+    > **Note:** no side tag, and the update isn't in `@testing`, so
+    > Provides can't be compared. Reverse dependencies are listed below
+    > for manual review.
+
+    check did not pass cleanly: no full provides analysis was possible
+
+ebranch already knows how to answer this. For an update fedrq cannot
+see, it downloads the builds and indexes a local repository, then runs
+the same comparison the side-tag path uses. That path was reached only
+when Bodhi had the update, because the download went through
+`bodhi updates download --updateid`. A check run *before* submitting
+has no update to name — which is exactly when the builds are newest
+and least likely to be in `@testing`, so the case that most wants a
+Provides comparison was the one case that could not have one.
+
+koji can fetch the same builds by NVR, so it does:
+`koji download-build --nofailarch -a <host arch> -a noarch <nvr>`,
+matching the `noarch` plus host architecture bodhi fetches, so both
+routes feed the identical comparison. The cache directory is named
+after the Bodhi alias when there is one and after the builds
+themselves when there is not.
+
+Dropping that condition also makes the local repository a fallback for
+the other two gaps it never covered: `@testing` metadata that lags
+behind Bodhi, and EPEL 10, whose `@testing` fedrq cannot query at all.
+Those reports said a side tag was the only way to compare Provides;
+now they try the builds first and only say so if the download fails.
+
 ## v0.26.0
 
 ### Published tool crates carry their dev-dependencies again

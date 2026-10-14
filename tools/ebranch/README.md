@@ -28,9 +28,10 @@ cargo install ebranch
 ```
 
 Requires `fedrq` to be installed and available in `$PATH`. `koji` is
-needed for side-tag inputs, and `bodhi-client` plus `createrepo_c` for
-`check-update` on a Bodhi update that has not reached `updates-testing`
-(it downloads the update's builds into a local repository).
+needed for side-tag inputs and for downloading builds by NVR, and
+`createrepo_c` — with `bodhi-client` when the input is a Bodhi update —
+for `check-update` on builds that have not reached `updates-testing`
+(it downloads them into a local repository).
 
 ## Usage
 
@@ -590,18 +591,23 @@ For new provides, ebranch checks these sources in order:
    banner listing the stale sources instead, and the remedy is
    a manual `koji regen-repo <side-tag>` followed by a rerun
    with `--refresh` (which clears both caches).
-3. **A local repository of the update's builds** — for a Bodhi
-   update fedrq cannot see yet: `pending`, or pushed to testing but
-   not on the mirrors. ebranch runs `bodhi updates download
-   --updateid <alias>` (no `--arch`, so bodhi fetches `noarch` plus
-   the host's architecture) into
-   `$XDG_CACHE_HOME/ebranch/update-repos/<alias>/`, indexes it with
-   `createrepo_c`, and queries it through fedrq's `@baseurl:file://`
-   class, which stands alone from the branch's repositories the way a
-   side-tag repo does; the comparison is then the side-tag one, with
-   binary names from `koji buildinfo`. The directory is reused while
-   the update's build list is unchanged and rebuilt when it changes.
-   Needs `bodhi-client` and `createrepo_c`; without them, or if the
+3. **A local repository of the builds** — for anything fedrq cannot
+   see yet: an update that is `pending` or pushed to testing but not
+   on the mirrors, builds given as NVRs before any update exists, and
+   EPEL 10, whose `@testing` fedrq cannot query at all. With a Bodhi
+   update ebranch runs `bodhi updates download --updateid <alias>`;
+   with builds alone it runs `koji download-build --nofailarch -a
+   <host arch> -a noarch <nvr>` for each, which fetches the same
+   `noarch` plus host architecture bodhi would. The directory is
+   `$XDG_CACHE_HOME/ebranch/update-repos/<alias>/`, or
+   `…/<first-nvr>-<digest>/` when there is no alias. ebranch indexes
+   it with `createrepo_c` and queries it through fedrq's
+   `@baseurl:file://` class, which stands alone from the branch's
+   repositories the way a side-tag repo does; the comparison is then
+   the side-tag one, with binary names from `koji buildinfo`. The
+   directory is reused while the build list is unchanged and rebuilt
+   when it changes. Needs `createrepo_c`, plus `bodhi-client` or
+   `koji` depending on which download applies; without them, or if the
    download fails, ebranch says so and falls through to the next mode.
 4. **Reverse deps only** — lists affected packages for manual review
 

@@ -544,15 +544,30 @@ impl RepoQuery for sandogasa_fedrq::Fedrq {
 /// reaches the network, and a test that wanders into it waits minutes
 /// for a real download.
 pub(crate) trait UpdateRepoBuilder: Sync {
-    fn build(&self, alias: &str, nvrs: &[String], verbose: bool) -> Result<PathBuf, String>;
+    /// `alias` is the Bodhi update to download when there is one; with
+    /// `None` the same builds come from koji by NVR, which is what a
+    /// check run before the update exists has to do.
+    fn build(
+        &self,
+        alias: Option<&str>,
+        nvrs: &[String],
+        profile: Option<&str>,
+        verbose: bool,
+    ) -> Result<PathBuf, String>;
 }
 
 /// The downloader a real run uses.
 pub(crate) struct BodhiDownload;
 
 impl UpdateRepoBuilder for BodhiDownload {
-    fn build(&self, alias: &str, nvrs: &[String], verbose: bool) -> Result<PathBuf, String> {
-        local_update_repo(alias, nvrs, verbose)
+    fn build(
+        &self,
+        alias: Option<&str>,
+        nvrs: &[String],
+        profile: Option<&str>,
+        verbose: bool,
+    ) -> Result<PathBuf, String> {
+        local_update_repo(alias, nvrs, profile, verbose)
     }
 }
 
@@ -1108,17 +1123,26 @@ pub(crate) fn check_update_with(
         );
     }
 
-    // A Bodhi update fedrq cannot see yet — pending, or pushed to
-    // testing but not on the mirrors — still has its builds in koji.
-    // Download them and index a local repository: as the "new" side it
-    // stands alone like a side-tag repo (`-r @baseurl:` replaces the
-    // branch's repos), so the side-tag arm's comparison applies as is,
-    // minus the staleness check a repo built from koji's own RPMs
-    // cannot fail.
-    if let Some(alias) = bodhi_alias.as_deref()
-        && !nvrs.is_empty()
-    {
-        match services.update_repo.build(alias, &nvrs, opts.verbose) {
+    // Builds fedrq cannot see yet still exist in koji. Download them
+    // and index a local repository: as the "new" side it stands alone
+    // like a side-tag repo (`-r @baseurl:` replaces the branch's
+    // repos), so the side-tag arm's comparison applies as is, minus the
+    // staleness check a repo built from koji's own RPMs cannot fail.
+    //
+    // This runs whether or not Bodhi has the update. It used to need an
+    // alias, because the download went through `bodhi updates
+    // download`; a check run *before* submitting has no update to name,
+    // which is exactly when the builds are newest and least likely to
+    // be in @testing. koji can fetch them by NVR instead, so the one
+    // case that most wants a Provides comparison stopped being the one
+    // case that could not have one.
+    if !nvrs.is_empty() {
+        match services.update_repo.build(
+            bodhi_alias.as_deref(),
+            &nvrs,
+            opts.koji_profile.as_deref(),
+            opts.verbose,
+        ) {
             Ok(dir) => {
                 let local_fq = services.repos.view(None, Some(&local_repo_class(&dir)));
                 if opts.verbose {
@@ -2291,11 +2315,31 @@ fn fetch_bodhi_update(alias: &str) -> Result<BodhiUpdateInfo, String> {
 /// changed list rebuilds from scratch.
 const LOCAL_REPO_NVRS: &str = ".ebranch-nvrs";
 
-/// Where a Bodhi update's downloaded builds are indexed:
-/// `$XDG_CACHE_HOME/ebranch/update-repos/<alias>/`.
+/// A cache key for a set of builds with no Bodhi update to name them:
+/// the first NVR, readable, plus a digest of all of them so two sets
+/// sharing a first build do not share a directory. Correctness does
+/// not rest on it — [`local_repo_is_current`] compares the recorded
+/// NVRs — but a stale directory should not be *silently* reused.
+fn nvrs_repo_key(nvrs: &[String]) -> String {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut sorted: Vec<&str> = nvrs.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    sorted.hash(&mut h);
+    let readable: String = sorted
+        .first()
+        .unwrap_or(&"builds")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    format!("{readable}-{:08x}", h.finish() as u32)
+}
+
+/// Where downloaded builds are indexed:
+/// `$XDG_CACHE_HOME/ebranch/update-repos/<alias or build key>/`.
 fn local_update_repo_dir(alias: &str) -> Result<PathBuf, String> {
     if alias.is_empty() || !alias.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Err(format!("unexpected Bodhi alias {alias:?}"));
+        return Err(format!("unexpected repository key {alias:?}"));
     }
     let base = dirs::cache_dir()
         .ok_or("cannot locate the cache directory: neither $XDG_CACHE_HOME nor $HOME is set")?;
@@ -2318,6 +2362,29 @@ fn bodhi_download_argv(alias: &str) -> Vec<String> {
         .into_iter()
         .map(String::from)
         .collect()
+}
+
+/// `koji download-build …` — the same builds a Bodhi update would
+/// carry, fetched when there is no update to ask bodhi for. Limited to
+/// the host's architecture plus noarch, matching what
+/// `bodhi updates download` fetches, so the comparison this feeds is
+/// the one the alias path produces. `--nofailarch` because a build is
+/// allowed to have no noarch (or no arch-specific) package.
+fn koji_download_argv(nvr: &str, profile: Option<&str>) -> Vec<String> {
+    let mut argv = vec!["koji".to_string()];
+    if let Some(p) = profile {
+        argv.push("--profile".to_string());
+        argv.push(p.to_string());
+    }
+    for a in ["download-build", "--noprogress", "--nofailarch"] {
+        argv.push(a.to_string());
+    }
+    for arch in [std::env::consts::ARCH, "noarch"] {
+        argv.push("-a".to_string());
+        argv.push(arch.to_string());
+    }
+    argv.push(nvr.to_string());
+    argv
 }
 
 /// `createrepo_c --update .` — index the directory in place.
@@ -2374,20 +2441,39 @@ fn run_in(dir: &Path, argv: &[String]) -> Result<(), String> {
 /// (see [`bodhi_download_argv`], [`createrepo_argv`]). Both tools are
 /// checked first; a directory built from a different NVR list is
 /// removed and rebuilt so no stale RPM lingers.
-fn local_update_repo(alias: &str, nvrs: &[String], verbose: bool) -> Result<PathBuf, String> {
+fn local_update_repo(
+    alias: Option<&str>,
+    nvrs: &[String],
+    profile: Option<&str>,
+    verbose: bool,
+) -> Result<PathBuf, String> {
+    // bodhi is only needed to download by update id; koji only to
+    // download by NVR. Demanding both would fail a run over a tool it
+    // was never going to call.
+    let downloader = match alias {
+        Some(_) => ("bodhi", "sudo dnf install bodhi-client", Some("--version")),
+        None => ("koji", "sudo dnf install koji", None),
+    };
     sandogasa_cli::require_tools(&[
-        ("bodhi", "sudo dnf install bodhi-client", Some("--version")),
+        downloader,
         (
             "createrepo_c",
             "sudo dnf install createrepo_c",
             Some("--version"),
         ),
     ])?;
-    let dir = local_update_repo_dir(alias)?;
+    let key = match alias {
+        Some(a) => a.to_string(),
+        None => nvrs_repo_key(nvrs),
+    };
+    let what = alias
+        .map(|a| format!("{a}'s"))
+        .unwrap_or_else(|| "the".to_string());
+    let dir = local_update_repo_dir(&key)?;
     if local_repo_is_current(&dir, nvrs) {
         if verbose {
             eprintln!(
-                "[check-update] reusing the local repo of {alias}'s builds in {}",
+                "[check-update] reusing the local repo of {what} builds in {}",
                 dir.display()
             );
         }
@@ -2400,12 +2486,19 @@ fn local_update_repo(alias: &str, nvrs: &[String], verbose: bool) -> Result<Path
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     if verbose {
         eprintln!(
-            "[check-update] downloading {alias}'s {} build(s) into {} and indexing them",
+            "[check-update] downloading {what} {} build(s) into {} and indexing them",
             nvrs.len(),
             dir.display()
         );
     }
-    run_in(&dir, &bodhi_download_argv(alias))?;
+    match alias {
+        Some(a) => run_in(&dir, &bodhi_download_argv(a))?,
+        None => {
+            for nvr in nvrs {
+                run_in(&dir, &koji_download_argv(nvr, profile))?;
+            }
+        }
+    }
     run_in(&dir, &createrepo_argv())?;
     std::fs::write(dir.join(LOCAL_REPO_NVRS), local_repo_nvrs_text(nvrs))
         .map_err(|e| format!("cannot write {}: {e}", dir.join(LOCAL_REPO_NVRS).display()))?;
@@ -2968,6 +3061,52 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn koji_download_argv_fetches_the_host_arch_and_noarch() {
+        let argv = koji_download_argv("wprof-0.7.1-1.el10_3", None);
+        assert_eq!(argv[0], "koji");
+        assert!(argv.contains(&"download-build".to_string()));
+        // bodhi downloads noarch plus the host arch; this path matches
+        // it so the two produce the same comparison.
+        assert!(argv.contains(&std::env::consts::ARCH.to_string()));
+        assert!(argv.contains(&"noarch".to_string()));
+        // A build may legitimately have no noarch (or no arch) package.
+        assert!(argv.contains(&"--nofailarch".to_string()));
+        assert_eq!(argv.last().unwrap(), "wprof-0.7.1-1.el10_3");
+        assert!(!argv.contains(&"--profile".to_string()));
+
+        // The profile has to reach the download, or it would fetch from
+        // a different hub than the one the check queried.
+        let argv = koji_download_argv("wprof-0.7.1-1.el10_3", Some("stream"));
+        let i = argv.iter().position(|a| a == "--profile").expect("profile");
+        assert_eq!(argv[i + 1], "stream");
+    }
+
+    #[test]
+    fn nvrs_repo_key_is_readable_stable_and_distinguishing() {
+        let a = vec![
+            "wprof-0.7.1-1.fc43".to_string(),
+            "wprof-0.7.1-1.fc44".to_string(),
+        ];
+        let mut reversed = a.clone();
+        reversed.reverse();
+        // Order is not part of the identity of a build set.
+        assert_eq!(nvrs_repo_key(&a), nvrs_repo_key(&reversed));
+
+        // A different set must not land in the same directory.
+        let b = vec!["wprof-0.7.1-1.fc43".to_string()];
+        assert_ne!(nvrs_repo_key(&a), nvrs_repo_key(&b));
+
+        // Readable at a glance, and acceptable to the directory check.
+        let key = nvrs_repo_key(&a);
+        assert!(key.starts_with("wprof-0-7-1-1-fc43-"), "{key}");
+        assert!(local_update_repo_dir(&key).is_ok(), "{key} was rejected");
+
+        // Empty is not expected, but must not produce an empty key that
+        // local_update_repo_dir would then refuse.
+        assert!(local_update_repo_dir(&nvrs_repo_key(&[])).is_ok());
+    }
 
     #[test]
     fn local_repo_commands_and_class() {
@@ -4458,8 +4597,17 @@ mod tests {
     struct NoDownload;
 
     impl UpdateRepoBuilder for NoDownload {
-        fn build(&self, alias: &str, _nvrs: &[String], _verbose: bool) -> Result<PathBuf, String> {
-            Err(format!("no local repo for {alias} in tests"))
+        fn build(
+            &self,
+            alias: Option<&str>,
+            nvrs: &[String],
+            _profile: Option<&str>,
+            _verbose: bool,
+        ) -> Result<PathBuf, String> {
+            Err(format!(
+                "no local repo for {} in tests",
+                alias.unwrap_or(nvrs.first().map(String::as_str).unwrap_or("(no builds)"))
+            ))
         }
     }
 
