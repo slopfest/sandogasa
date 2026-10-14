@@ -620,33 +620,6 @@ rather than `debcargo` directly, and how the team expects an MR for a
 crate nobody has packaged before (new `src/` directory vs some
 intake).
 
-## Published tool crates lose their dev-dependencies (2026-10-14)
-
-Every published **tool** crate has a `Cargo.toml` with no
-`[dev-dependencies]` at all — checked on dbranch 0.24.1, 0.25.0,
-0.25.2 and 0.25.4, and on ebranch and poi-tracker at 0.25.4. Every
-**library** crate keeps them (sandogasa-bugzilla, -gitlab, -cli,
--config). The tagged source declares them in both cases
-(`git show v0.25.4:tools/dbranch/Cargo.toml`), and a plain
-`cargo package -p dbranch --no-verify` here produces a tarball that
-has them — so the loss is somewhere in the publish step, not in the
-manifests. I have not identified where; `cargo ws publish` is the
-obvious suspect and has not been ruled in or out.
-
-It is not cosmetic. Our tests live in `#[cfg(test)] mod tests` inside
-`src/`, so they ship in the tarball, and debcargo runs `cargo test`
-during the build **only** for a crate with no extra dev-dependencies.
-A tool crate therefore looks dependency-free, gets its tests run at
-build time, and fails: rust-dbranch 0.25.4 died with
-`cannot find module or crate tempfile` on both architectures
-(work requests 1462630 and 1462631). The Debian package carries
-`patches/restore-dev-dependencies.patch` as a stopgap.
-
-Before publishing 0.26.0, and as a gate after it: unpack one tool
-crate's `.crate` from crates.io and confirm its `Cargo.toml` has a
-`[dev-dependencies]` table. `make check-published` proves a crate
-landed, not that what landed can build its own tests.
-
 ## Package the dbranch chain for Debian before 0.26.0 (2026-10-13)
 
 Upload them to Debusine (`r-michelin-*`), which is what makes them

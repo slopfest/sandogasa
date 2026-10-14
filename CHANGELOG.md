@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Published tool crates carry their dev-dependencies again
+
+Unpacking any released tool crate — dbranch, ebranch, poi-tracker and
+thirteen others — showed a `Cargo.toml` with no `[dev-dependencies]`
+table at all, while every library crate kept its own. Since our tests
+live in `#[cfg(test)] mod tests` inside `src/`, they ship in the
+tarball, so what was published could not build its own test suite.
+It surfaced when Debian did exactly that: debcargo runs `cargo test`
+during the build for a crate that looks dependency-free, and the
+first build of rust-dbranch died with `cannot find module or crate
+tempfile` on both architectures.
+
+The crates were fine; the upload was not. cargo-workspaces deletes a
+crate's whole `[dev-dependencies]` table when any entry refers to a
+workspace member with a version, which describes every crate under
+`tools/` — they all dev-depend on `sandogasa-cli` for the
+`man_page_matches_cli` test, and no library crate dev-depends on a
+member. Publishing now passes `--no-remove-dev-deps`, and
+`scripts/check-published.sh` fails the release if a published crate
+lost dev-dependencies its source declares, so this cannot ship
+unnoticed again.
+
 ### dbranch: gbp.conf now names upstream's branch
 
 `gbp push` failed outright in a repository packaged from upstream's
