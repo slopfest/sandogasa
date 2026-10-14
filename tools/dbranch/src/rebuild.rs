@@ -1574,8 +1574,8 @@ fn build_pipeline(
         build_stage(ui, repo, build_suite, package, version, chroot_refresh)?;
     }
     if stages.lint {
-        let (_, version) = pkg_ver.as_ref().unwrap();
-        lint_stage(ui, repo, build_suite, version)?;
+        let (package, version) = pkg_ver.as_ref().unwrap();
+        lint_stage(ui, repo, build_suite, package, version)?;
     }
     if stages.push {
         push_stage(
@@ -2627,55 +2627,89 @@ fn chroot_is_stale(path: &Path, max_age: Duration) -> bool {
         .is_some_and(|age| age > max_age)
 }
 
-/// The lint stage: run `lintian` on the **`.deb`s** the build
-/// produced in `~/pbuilder/<codename>_result/`. Linting the binaries
-/// directly (rather than the `.changes`) avoids lintian re-unpacking
-/// the source — the `.orig.tar.gz` isn't in the result dir, and
-/// `debuild -S` already linted the source anyway. A non-zero exit is
-/// reported but does not fail the run; rebuild lint tags are mostly
-/// inherited from Debian.
+/// How a lint run's targets are described in its summary line and in
+/// its failure message.
+fn lint_subject(source: bool, debs: usize) -> String {
+    match (source, debs) {
+        (true, 0) => "source".to_string(),
+        (false, n) => format!("{n} .deb(s)"),
+        (true, n) => format!("source + {n} .deb(s)"),
+    }
+}
+
+/// The lint stage: run `lintian` on the source package **and** on the
+/// `.deb`s the build produced in `~/pbuilder/<codename>_result/`.
+///
+/// `debuild -S` lints the source as well, but it exits 0 whatever
+/// lintian says, so an error-level source tag scrolls past mid-build
+/// and reaches Salsa CI — which lints with `--fail-on error` — having
+/// passed every local gate. Linting the `.dsc` rather than the
+/// `.changes` lets the `.deb`s join the same invocation; lintian
+/// unpacks the source from the parent directory, where the
+/// `.orig.tar` sits beside it. A non-zero exit fails the stage.
 fn lint_stage(
     ui: &Ui,
     repo: &Path,
     codename: &str,
+    package: &str,
     version: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    ui.step("Lint the built .deb packages");
-    let Some(dir) = plan::pbuilder_result_dir(codename) else {
-        eprintln!("could not locate the pbuilder result dir ($HOME unset); skipping lint");
-        return Ok(());
-    };
+    ui.step("Lint the source package and the built .debs");
     let ver = plan::version_no_epoch(version);
+    let dsc = format!("../{}", plan::dsc_filename(package, version));
 
     if ui.dry_run {
-        // Can't enumerate (the dir may not exist yet); narrate a
+        // Can't enumerate (the result dir may not exist yet); narrate a
         // shell-expandable glob of this build's .debs.
-        let pattern = format!("{}/*_{ver}_*.deb", dir.display());
-        ui.show_command(&plan::lintian_argv(&[pattern]));
+        let mut targets = vec![dsc];
+        targets.extend(
+            plan::pbuilder_result_dir(codename)
+                .map(|dir| format!("{}/*_{ver}_*.deb", dir.display())),
+        );
+        ui.show_command(&plan::lintian_argv(&targets));
         return Ok(());
     }
 
-    let debs = matching_debs(&dir, ver);
-    if debs.is_empty() {
-        eprintln!(
-            "no .deb files for {version} in {}; did the build stage run?",
-            dir.display()
-        );
+    let mut targets = Vec::new();
+    if repo.join(&dsc).exists() {
+        targets.push(dsc);
+    } else {
+        eprintln!("no {dsc} beside the repo; did the source stage run?");
+    }
+    let debs = match plan::pbuilder_result_dir(codename) {
+        Some(dir) => {
+            let debs = matching_debs(&dir, ver);
+            if debs.is_empty() {
+                eprintln!(
+                    "no .deb files for {version} in {}; did the build stage run?",
+                    dir.display()
+                );
+            }
+            debs
+        }
+        None => {
+            eprintln!("could not locate the pbuilder result dir ($HOME unset); skipping the .debs");
+            Vec::new()
+        }
+    };
+    let subject = lint_subject(!targets.is_empty(), debs.len());
+    targets.extend(debs);
+    if targets.is_empty() {
         return Ok(());
     }
-    let n = debs.len();
-    let (code, output) = ui.run_capture(&plan::lintian_argv(&debs), repo)?;
+
+    let (code, output) = ui.run_capture(&plan::lintian_argv(&targets), repo)?;
     // lintian is silent when clean — echo its tags (unless --quiet),
     // then always print a summary so a clean run is visibly confirmed.
     if !ui.quiet {
         print!("{output}");
     }
-    println!("lintian: {} ({n} .deb(s))", summarize_lintian(&output));
+    println!("lintian: {} ({subject})", summarize_lintian(&output));
     // Use lintian's own exit convention (non-zero on error-level tags)
     // and propagate it.
     if code != 0 {
         return Err(Box::new(crate::ui::StageFailure {
-            command: format!("lintian -I ({n} .deb(s))"),
+            command: format!("lintian -I ({subject})"),
             code,
         }));
     }
@@ -4133,6 +4167,13 @@ I: damo: an-info-tag
 I: python3-damo: another-info
 E: damo: an-error\n";
         assert_eq!(summarize_lintian(out), "1 error(s), 1 warning(s), 2 info");
+    }
+
+    #[test]
+    fn lint_subject_names_what_was_linted() {
+        assert_eq!(lint_subject(true, 3), "source + 3 .deb(s)");
+        assert_eq!(lint_subject(true, 0), "source");
+        assert_eq!(lint_subject(false, 2), "2 .deb(s)");
     }
 
     #[test]

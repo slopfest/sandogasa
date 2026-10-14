@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### dbranch: lint the source package, not just the binaries
+
+A package could pass every local stage and still fail Salsa CI's
+lintian job. fnlfmt did: `E: debian-watch-file-pubkey-file-is-missing`
+stopped the pipeline, and nothing dbranch ran had reported it.
+
+`debuild -S` does lint the source — the tag was sitting in
+`fnlfmt_0.4.0-1_source.build` — but debuild exits 0 whatever lintian
+says, so the error scrolled past in the middle of the source stage's
+output and failed nothing. The `lint` stage then looked only at the
+`.deb`s in the pbuilder result directory, where source tags cannot
+appear.
+
+It lints `../<pkg>_<ver>.dsc` alongside them now, in one invocation,
+and propagates lintian's exit status for either. The `.dsc` rather
+than the `.changes` so both kinds of target fit the same command;
+lintian unpacks the source from the parent directory, where the
+`.orig.tar` sits beside it. Running it on the package above reports
+the tag in a second and a half, which is the point: Salsa CI should be
+confirming the lint, not discovering it.
+
 ### dbranch: fixup knew every branch except the one being packaged
 
 `fixup` exists to put gbp.conf and salsa-ci.yml right on a branch that

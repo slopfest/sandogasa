@@ -441,13 +441,13 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   **no**) and otherwise stops, naming the stage to run. `--yes` accepts
   all of these, a non-interactive run takes the default (so a missing
   source package fails), and `--dry-run` skips the check.
-- **`lint`** — `lintian -I` on the built **`.deb`s** in
-  `~/pbuilder/<codename>_result/` (`-I` surfaces info-level tags too;
-  linting the binaries directly, rather than the `.changes`, avoids
-  lintian re-unpacking the source, which `debuild -S` already lints).
-  lintian is quiet when clean, so its output is echoed with a
-  tag-count summary. It uses lintian's default exit convention
-  (non-zero on error-level tags) and propagates that status.
+- **`lint`** — `lintian -I` on the source package (`../<pkg>_<ver>.dsc`)
+  and on the built **`.deb`s** in `~/pbuilder/<codename>_result/` (`-I`
+  surfaces info-level tags too). The `.dsc` rather than the `.changes`
+  so both can be linted in one invocation. lintian is quiet when clean,
+  so its output is echoed with a tag-count summary. It uses lintian's
+  default exit convention (non-zero on error-level tags) and propagates
+  that status.
 - **`push`** — for the Debian branch (`update`), first create
   `debian/salsa-ci.yml` from the upstream template when the branch has
   none (as is it builds against unstable, which is what that branch

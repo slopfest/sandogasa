@@ -184,6 +184,23 @@ tarball — without the chroot build being redone. Keep the source build
 out of `build_stage`; `all` runs both, so the everyday path is
 unchanged.
 
+### `debuild` runs lintian, then ignores its verdict
+
+`debuild -S` lints the `_source.changes` it has just built and prints
+the tags — and exits 0 whatever lintian found. An error-level source
+tag therefore scrolls past in the middle of the source stage's output
+and fails nothing, which is how fnlfmt reached Salsa CI with
+`E: debian-watch-file-pubkey-file-is-missing`: the tag was in
+`fnlfmt_0.4.0-1_source.build` all along, and every local stage passed.
+
+So the `lint` stage lints the **source package as well as the
+`.deb`s**, and propagates lintian's exit status for both. It takes the
+`.dsc` rather than the `.changes` so the two kinds of target can go
+into one invocation; lintian unpacks the source from the parent
+directory, where the `.orig.tar` sits beside it. Do not go back to
+trusting `debuild`'s pass — it is advisory output, not a gate, and
+Salsa CI's lintian job runs `--fail-on error`.
+
 ### What the source stage puts in the `.changes` (`-sa` / `-si`)
 
 `-si`/`-sa`/`-sd` are **`dpkg-genchanges`** options and decide what the
