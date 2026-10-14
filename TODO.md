@@ -496,6 +496,41 @@ has to reach EPEL before then, rewrite that one guard as a nested
 `match` (it is the only construct above 1.92 — `make msrv-check` with a
 1.92 toolchain confirms) and lower `rust-version` accordingly.
 
+## dbranch: the debcargo-conf flow is a different shape (2026-10-13)
+
+Every dbranch flow today is gbp's: a packaging branch, merges,
+import-orig, pristine-tar, a repo per package. Debian's Rust Team does
+not work that way. `debcargo-conf` is one shared repo holding only
+`src/<crate>/debian/` — a `debcargo.toml`, a changelog, copyright
+hints, patches — and the packaging is **regenerated** from the crate
+tarball plus that config at every new version. Nothing generated is
+committed. debcargo says so itself in what it writes:
+
+    Vcs-Git: https://salsa.debian.org/rust-team/debcargo-conf.git [src/sandogasa-build]
+
+So the unit of work is "bump a version in a config directory,
+regenerate, build, upload", with no packaging branch to merge into and
+no orig tarball to import — which makes it a new subcommand rather
+than a flag on `update`. Worth supporting eventually, since every
+sandogasa crate that reaches Debian goes through it, and the whole
+workspace is the kind of multi-crate case that would be tedious by
+hand.
+
+Shape settled (2026-10-13): a **fork of debcargo-conf**, with our
+crates staged in it as `src/sandogasa-*/debian/`. That makes the
+shared-repo question moot — the fork is the one checkout, many crates,
+and dbranch would operate inside it rather than cloning per package.
+It also pays off before anything is accepted: configs for crates
+Debian does not carry yet live in the right structure, can be built
+from locally and uploaded to Debusine, and the eventual contribution
+is an MR of files already where they belong instead of a
+restructuring. The cost is keeping the fork rebased on upstream.
+
+Still to settle: whether `release.sh` in that repo is the entry point
+rather than `debcargo` directly, and how the team expects an MR for a
+crate nobody has packaged before (new `src/` directory vs some
+intake).
+
 ## Package the dbranch chain for Debian before 0.26.0 (2026-10-13)
 
 Upload them to Debusine (`r-michelin-*`), which is what makes them
