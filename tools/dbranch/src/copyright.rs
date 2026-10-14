@@ -55,23 +55,81 @@ pub fn placeholder_warning(text: &str) -> Option<String> {
 /// fnlfmt: a grep for `^Copyright:` sees the first name only.
 pub fn holders(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut in_field = false;
-    for line in text.lines() {
-        let value = if let Some(v) = line.strip_prefix("Copyright:") {
-            in_field = true;
-            v
-        } else if in_field && (line.starts_with(' ') || line.starts_with('\t')) {
-            line
-        } else {
-            in_field = false;
-            continue;
-        };
-        let name = holder_name(value);
+    for line in copyright_lines(text) {
+        let name = holder_name(line);
         if !name.is_empty() && !out.contains(&name) {
             out.push(name);
         }
     }
     out
+}
+
+/// Every `Copyright:` field's value, one entry per line, continuations
+/// included -- the lines both the holder and the year questions are
+/// asked of.
+fn copyright_lines(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut in_field = false;
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix("Copyright:") {
+            in_field = true;
+            out.push(value);
+        } else if in_field && (line.starts_with(' ') || line.starts_with('\t')) {
+            out.push(line);
+        } else {
+            in_field = false;
+        }
+    }
+    out
+}
+
+/// The latest year a copyright file claims, or `None` when it claims
+/// an open-ended span.
+///
+/// `2020-present` is the form Debian copyright files use for "still
+/// going", and a file saying that cannot go out of date -- so it is
+/// not a year, it is an answer to the question.
+pub fn latest_year(text: &str) -> Option<u32> {
+    // The `Files: debian/*` stanza is the packaging's own copyright,
+    // and it is current by construction -- the packager just edited
+    // it. Counting it hides the question being asked: fnlfmt claimed
+    // 2024 for upstream's files while that stanza said 2026, and a
+    // comparison of whole-file maxima saw nothing wrong.
+    let lines: Vec<&str> = text
+        .split("\n\n")
+        .filter(|para| {
+            !para.lines().any(|l| {
+                l.strip_prefix("Files:")
+                    .is_some_and(|f| f.trim().starts_with("debian/"))
+            })
+        })
+        .flat_map(copyright_lines)
+        .collect();
+    if lines.iter().any(|l| l.to_lowercase().contains("present")) {
+        return None;
+    }
+    lines
+        .iter()
+        .flat_map(|l| {
+            l.split(|c: char| !c.is_ascii_digit())
+                .filter(|w| w.len() == 4)
+                .filter_map(|w| w.parse::<u32>().ok())
+        })
+        .filter(|y| (1970..=2200).contains(y))
+        .max()
+}
+
+/// `(claimed, found)` when a scan of the source mentions a year the
+/// copyright file does not reach.
+///
+/// The year is the half `licenserecon` and the holder comparison both
+/// miss: a file crediting the right people under the right licence
+/// still goes stale every January, and the release that ships it says
+/// so. fnlfmt claimed 2019-2024 while its own README said 2026.
+pub fn stale_years(existing: &str, generated: &str) -> Option<(u32, u32)> {
+    let claimed = latest_year(existing)?;
+    let found = latest_year(generated)?;
+    (found > claimed).then_some((claimed, found))
 }
 
 /// One holder entry with the years and their punctuation removed:
@@ -202,6 +260,35 @@ mod tests {
         assert!(unattributed(committed, "Copyright: 2019 Phil Hagelberg\n").is_empty());
         // Nothing new to say about a file that already says it.
         assert!(unattributed(committed, committed).is_empty());
+    }
+
+    /// The three real files this was tried against: fnlfmt before the
+    /// fix (claimed 2024 while its own README said 2026), fnlfmt
+    /// after, and damo, whose open-ended spans cannot go stale.
+    #[test]
+    fn a_later_year_in_the_source_is_what_is_reported() {
+        let scan = "Files: *\nCopyright: Phil Hagelberg\n           2019-2026, Phil \
+                    Hagelberg\nLicense: Expat\n";
+        let stale = "Files: *\nCopyright: © 2019-2024 fnlfmt contributors\nLicense: Expat\n";
+        assert_eq!(stale_years(stale, scan), Some((2024, 2026)));
+
+        let fixed = "Files: *\nCopyright: © 2019-2026 Phil Hagelberg and contributors\n";
+        assert_eq!(stale_years(fixed, scan), None);
+
+        // An open-ended span answers the question already.
+        let present = "Files: *\nCopyright:\n 2020-present SeongJae Park <s@x.invalid>\n";
+        assert_eq!(latest_year(present), None);
+        assert_eq!(stale_years(present, scan), None);
+    }
+
+    /// Years come from the Copyright fields alone -- a date elsewhere
+    /// in the file is not a claim about copyright.
+    #[test]
+    fn only_the_copyright_fields_are_read_for_years() {
+        let text = "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n\
+                    Source: https://example.invalid/thing-2099\n\n\
+                    Files: *\nCopyright: 2019 Someone\nLicense: Expat\n";
+        assert_eq!(latest_year(text), Some(2019));
     }
 
     #[test]

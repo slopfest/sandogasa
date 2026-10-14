@@ -401,6 +401,13 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   backport branch is a delta that conflicts with the Debian branch on
   every later merge.
 
+  It also reports when the source mentions a later year than
+  `debian/copyright` claims — the half neither other check sees, since
+  a file can credit the right people under the right licence and still
+  be two years out of date. The `Files: debian/*` stanza is ignored in
+  that comparison, being the packaging's own and current by
+  construction, and an open-ended `2020-present` is never stale.
+
   `lrc` compares licences, not copyright holders, so a vendored file
   under the same licence as everything else gives it nothing to
   report. When it passes, `decopy` scans the source and names any

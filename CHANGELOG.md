@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### dbranch: a copyright that has gone stale, and a CI file that shipped late
+
+Two things the copyright stage and the source stage each got slightly
+wrong, both found by running them against fnlfmt.
+
+`lrc` compares licences and the holder scan compares names, so a file
+crediting the right people under the right licence passes both while
+claiming years that ended two releases ago — fnlfmt's said 2019-2024
+while its own README said 2026. The stage now reports when the source
+mentions a later year than the file claims.
+
+The comparison deliberately ignores the `Files: debian/*` stanza. That
+one is the packaging's own copyright and is current by construction,
+the packager having just edited it; counting it is what made the first
+version of this check useless, since fnlfmt's `© 2026 Michel Lind`
+there hid the 2024 above it. An open-ended `2020-present` is not a
+year either — it is already the answer, so such a file is never
+reported.
+
+Separately, `debian/salsa-ci.yml` was created by the push stage, which
+runs *after* the source stage has packaged the tree. The first
+release's source package therefore went out without the CI config its
+own git tree carried — measured on fnlfmt: zero copies in the
+`.debian.tar.xz`, one in git. Creating it is now part of what happens
+before the source stage, and the push stage only creates it for a
+push-only run with no source stage to have done it. Setting the
+project's CI config path stays at push time, where the remote is.
+
 ### dbranch: creating a Debusine repository, without an upload to hang it on
 
 `rebuild` and `update` check a Debusine personal repository exists

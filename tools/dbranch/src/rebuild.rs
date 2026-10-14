@@ -1410,6 +1410,12 @@ fn compare_holders(ui: &Ui, repo: &Path, file: &Path) -> Result<(), Box<dyn std:
         std::fs::read_to_string(file)?,
         std::fs::read_to_string(repo.join(&rel))?,
     );
+    if let Some((claimed, found)) = crate::copyright::stale_years(&existing, &scanned) {
+        eprintln!();
+        eprintln!("warning: debian/copyright claims {claimed} at the latest, and the source");
+        eprintln!("  mentions {found}. A file crediting the right people under the right");
+        eprintln!("  licence still goes stale every January.");
+    }
     match crate::copyright::unattributed(&existing, &scanned).as_slice() {
         [] => Ok(()),
         missing => {
