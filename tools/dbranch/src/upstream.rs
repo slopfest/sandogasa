@@ -770,6 +770,17 @@ pub fn merge_release(
         &plan::gbp_dch_new_upstream_argv(&format!("{version}-1"), urgency),
         repo,
     )?;
+    // gbp writes the entry from the commits since the last one, which
+    // are the packaging work; nothing among them says the release
+    // itself happened, and that is what the entry is for.
+    ui.step("Say it is a new upstream release");
+    let changed = crate::rebuild::edit_file(ui, repo, "debian/changelog", |text| {
+        crate::changelog::prepend_bullet(text, "New upstream release.")
+    })?;
+    if changed {
+        ui.explain_diff(repo, &["debian/changelog"]);
+        ui.run_required(&plan::git_commit_amend_argv("debian/changelog"), repo)?;
+    }
     let _ = tag;
     Ok(())
 }

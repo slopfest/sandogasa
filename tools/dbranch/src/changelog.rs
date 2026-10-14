@@ -216,6 +216,30 @@ pub fn backports_version(changelog: &str, major: u32) -> Option<String> {
 /// The stanza's original footer (the date/maintainer line `gbp dch`
 /// finalized) is kept; lower stanzas are left untouched. Discarding the
 /// gbp dch body also drops any `UNRELEASED` it may have added.
+/// Put `line` first among the top stanza's bullets, if it is not
+/// already there.
+///
+/// `gbp dch` writes the entry from the commits since the last one, so
+/// for a new upstream release it lists the packaging work and never
+/// the release itself -- there is no commit that says "this is 0.4.0"
+/// in a form it would use. Convention puts that first, and only the
+/// tool knows it is a new-upstream entry at all.
+///
+/// `None` when the text has no stanza to add to.
+pub fn prepend_bullet(changelog: &str, line: &str) -> Option<String> {
+    let bullet = format!("  * {line}");
+    let start = changelog.find("\n\n")? + 2;
+    if changelog[start..].starts_with(&bullet) {
+        return Some(changelog.to_string());
+    }
+    let mut out = String::with_capacity(changelog.len() + bullet.len() + 1);
+    out.push_str(&changelog[..start]);
+    out.push_str(&bullet);
+    out.push('\n');
+    out.push_str(&changelog[start..]);
+    Some(out)
+}
+
 pub fn normalize_top_stanza(
     changelog: &str,
     version: &str,
@@ -284,6 +308,47 @@ fn join_and(items: &[String]) -> String {
         [a] => a.clone(),
         [a, b] => format!("{a} and {b}"),
         [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+    }
+}
+
+#[cfg(test)]
+mod prepend_tests {
+    use super::*;
+
+    const ENTRY: &str = "\
+fnlfmt (0.4.0-1) unstable; urgency=medium
+
+  * Set Maintainer and Vcs-* for this packaging repository
+  * Normalize debian/ with wrap-and-sort
+
+ -- Michel Lind <m@x.invalid>  Wed, 14 Oct 2026 13:47:43 +0100
+";
+
+    /// First among the bullets, which is where the convention puts it
+    /// and where a reader looks for it.
+    #[test]
+    fn the_release_is_said_before_the_packaging_work() {
+        let out = prepend_bullet(ENTRY, "New upstream release.").expect("a stanza");
+        let bullets: Vec<&str> = out.lines().filter(|l| l.starts_with("  * ")).collect();
+        assert_eq!(bullets[0], "  * New upstream release.");
+        assert_eq!(bullets.len(), 3);
+        assert!(out.starts_with("fnlfmt (0.4.0-1) unstable; urgency=medium\n\n"));
+        assert!(out.ends_with("13:47:43 +0100\n"));
+    }
+
+    /// Running the stage twice does not say it twice.
+    #[test]
+    fn saying_it_again_changes_nothing() {
+        let once = prepend_bullet(ENTRY, "New upstream release.").expect("a stanza");
+        assert_eq!(
+            prepend_bullet(&once, "New upstream release.").as_deref(),
+            Some(&once[..])
+        );
+    }
+
+    #[test]
+    fn a_file_with_no_stanza_is_refused() {
+        assert!(prepend_bullet("", "New upstream release.").is_none());
     }
 }
 

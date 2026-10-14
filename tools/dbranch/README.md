@@ -174,13 +174,26 @@ tail as `rebuild`. In a repository packaged from upstream's git (an
 `upstream-tag` in gbp.conf, the layout `clone` leaves) there is no
 tarball to import: the import stage runs `git fetch --tags upstream`,
 merges the newest release tag (`--upstream-version` for another) into
-the Debian branch and writes the entry with `gbp dch -N <version>-1`,
-and the source stage first runs `gbp export-orig --pristine-tar
+the Debian branch and writes the entry with `gbp dch -N <version>-1
+debian/`, and the source stage first runs `gbp export-orig --pristine-tar
 --pristine-tar-commit` to generate the orig tarball from that tag, so
 the tarball is reproducible from git and never downloaded (an orig for
 that upstream version already next to the repo — a `-2` — is noted and
 the step skipped, with no command). The
-upstream remote is never a push candidate. Unlike a rebuild the changelog is left as gbp writes it (a
+upstream remote is never a push candidate.
+
+That changelog entry is generated *from* the commits since the last
+one, which puts its place in a session at the end rather than the
+beginning: adopt the packaging, fix it up — maintainer,
+`wrap-and-sort`, copyright, `debian/patches` — and run the import
+stage last, when those commits exist for it to describe. The `debian/`
+path argument keeps upstream's own commits out of it, which a
+release-tag merge would otherwise pour in (on fnlfmt 0.4.0, twenty-odd
+lines of upstream development grouped by author), and `* New upstream
+release.` is prepended because no commit says that, folded into the
+commit `gbp dch -c` just made so the tree is left clean.
+
+Unlike a rebuild the changelog is otherwise left as gbp writes it (a
 real new-upstream entry — your other commits since the last release
 show up as bullets, nothing is normalized away); the distribution is
 pinned to `unstable` so dch's release heuristic can't substitute the

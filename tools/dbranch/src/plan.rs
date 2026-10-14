@@ -140,6 +140,18 @@ pub fn wrap_and_sort_argv() -> Vec<String> {
     ])
 }
 
+/// `git commit --amend --no-edit <file>` — fold a file into the commit
+/// just made, keeping its message.
+///
+/// For finishing a commit another tool started: `gbp dch -c` writes
+/// the changelog entry and commits it in one go, so a line added
+/// afterwards would either sit uncommitted -- enough to make `gbp pq
+/// import` refuse the tree -- or need a second commit saying half of
+/// what the first one said.
+pub fn git_commit_amend_argv(file: &str) -> Vec<String> {
+    argv(&["git", "commit", "--amend", "--no-edit", file])
+}
+
 /// `git add <file>` — stage a newly created file so it can be shown with
 /// `git diff --cached` and committed (a brand-new file isn't picked up by
 /// a bare `git commit <file>`).
@@ -275,12 +287,23 @@ pub fn gbp_tag_argv() -> Vec<String> {
     argv(&["gbp", "tag"])
 }
 
-/// [`gbp_dch_release_argv`] plus `-N <version>`: the new-upstream entry
-/// for a release merged from upstream's git, where the version comes
-/// from the tag rather than a tarball name.
+/// [`gbp_dch_release_argv`] plus `-N <version>` and a `debian/` path:
+/// the new-upstream entry for a release merged from upstream's git,
+/// where the version comes from the tag rather than a tarball name.
+///
+/// The path argument is what keeps upstream's own history out of the
+/// changelog. Merging a release tag puts every commit upstream made
+/// since the last one onto this branch, and `gbp dch` writes them all
+/// up -- on fnlfmt 0.4.0 that was twenty-odd lines of upstream
+/// development, grouped by author, where the entry should say "New
+/// upstream release" and list the packaging work. gbp's own manual
+/// recommends it: "using debian/ is a good choice if upstream uses
+/// Git and you don't want the upstream history to end up in
+/// debian/changelog". Nothing is lost by it, because a change outside
+/// `debian/` on this branch is one `dpkg-source` would refuse anyway.
 pub fn gbp_dch_new_upstream_argv(version: &str, urgency: &str) -> Vec<String> {
     let mut a = gbp_dch_release_argv(urgency);
-    a.extend(["-N".to_string(), version.to_string()]);
+    a.extend(["-N".to_string(), version.to_string(), "debian/".to_string()]);
     a
 }
 
@@ -420,6 +443,38 @@ pub fn dpkg_source_build_argv(before: bool) -> Vec<String> {
         },
         ".",
     ])
+}
+
+/// The DEP-3 fields to offer as a git commit template, for a patch
+/// being written on a `gbp pq` branch.
+///
+/// quilt's `header -e --dep3` templates every DEP-3 field, which is
+/// right when the patch file is what you edit. Here the commit
+/// message *becomes* the header -- `gbp pq export` writes `Subject:`
+/// and `From:`, which DEP-3 reads as the description and the author
+/// -- so templating those again would have the patch say each twice.
+/// What is left is what a person forgets.
+pub fn dep3_commit_template() -> String {
+    // No date substituted, and so no date dependency: dbranch carries
+    // none, and every crate it does carry is a package somebody has to
+    // maintain in Debian.
+    ("\n\
+         # Leave a blank line after the subject, then the long description.\n\
+         # Below: DEP-3 fields, kept by `gbp pq export` as the patch header.\n\
+         # Uncomment the ones that apply -- git drops every line still\n\
+         # commented, so a field you ignore cannot reach the patch half\n\
+         # filled in. Subject and author come from this commit, so DEP-3's\n\
+         # Description and Author are not repeated here.\n\
+         #\n\
+         # Origin: <upstream|backport|vendor|other>, <URL, required unless you wrote it>\n\
+         # Bug: <URL of the upstream bug, implies the patch was forwarded>\n\
+         # Forwarded: <URL|no|not-needed>\n\
+         # Applied-Upstream: <version|URL|commit>\n\
+         # Reviewed-by: <name and email>\n\
+         # Last-Update: <YYYY-MM-DD>\n\
+         #\n\
+         # DEP-3: https://dep-team.pages.debian.net/deps/dep3/\n")
+        .to_string()
 }
 
 /// `sh -c "<line>"` — for the few steps whose real command is a shell
@@ -1478,7 +1533,9 @@ mod tests {
         );
         let dch = gbp_dch_new_upstream_argv("0.3.1-1", "medium");
         assert!(dch.starts_with(&gbp_dch_release_argv("medium")));
-        assert_eq!(&dch[dch.len() - 2..], ["-N", "0.3.1-1"]);
+        // The trailing `debian/` keeps upstream's own commits, which a
+        // release-tag merge brings onto this branch, out of the entry.
+        assert_eq!(&dch[dch.len() - 3..], ["-N", "0.3.1-1", "debian/"]);
         assert_eq!(
             gbp_export_orig_argv(),
             [

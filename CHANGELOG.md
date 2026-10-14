@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+### dbranch: say where a fix to an upstream file has to go
+
+The copyright stage's findings are mostly about upstream's files — a
+licence that disagrees, a holder nobody wrote down, a malformed notice
+in a man page — and on a `3.0 (quilt)` package none of those can be
+fixed by committing to the Debian branch. The orig comes from the
+upstream tag, so `dpkg-source -b` stops with "aborting due to
+unexpected upstream changes", and the packager learns this at build
+time, having already made the commit.
+
+A finding now names the route: `gbp pq import`, edit, commit, `gbp pq
+export` — and mentions that a `Forwarded:` line in that commit message
+becomes the patch's DEP-3 header, since the patch and the submission
+upstream are the same work. Only for quilt packages; a native one has
+no patch system and the advice would be wrong.
+
+It also writes a commit template under `.git` and names it in the
+command, because the fields are what people forget. `quilt header -e
+--dep3` templates every DEP-3 field, which suits editing a patch file;
+here the commit message *is* the header, and `gbp pq export` writes
+`Subject:` and `From:` — DEP-3's description and author — so the
+template carries only the rest. The fields are commented, since git
+drops a commented line: an ignored field cannot reach the patch half
+filled in, and `git commit -t` refuses a message nobody edited.
+
+### dbranch: a new-upstream changelog entry, not upstream's history
+
+Merging a release tag puts every commit upstream made since the last
+one onto the Debian branch, and `gbp dch` wrote them all up. On fnlfmt
+0.4.0 the generated entry was twenty-odd lines of upstream
+development grouped by author — "Bump to 0.3.3-dev", "Link to
+contributing guide" — where a Debian changelog should say the release
+happened and list the packaging work.
+
+`gbp dch` is now passed `debian/`, which is what gbp's own manual
+recommends for this case: "using debian/ is a good choice if upstream
+uses Git and you don't want the upstream history to end up in
+debian/changelog". Nothing is lost by it, because a change outside
+`debian/` on that branch is one `dpkg-source` would refuse anyway. The
+same entry becomes the two packaging commits that actually happened.
+
+And since no commit among them says the release itself happened, the
+stage adds `* New upstream release.` first, where the convention puts
+it. It is folded into the commit `gbp dch -c` just made rather than
+left loose: an uncommitted changelog is enough to make `gbp pq import`
+refuse the tree, which is the next thing a packager runs.
+
+This also settles where that step belongs in a session. The entry is
+generated *from* the packaging commits, so it is written last, once
+the fixups are done — not at clone time, when it would describe
+nothing.
+
 ### dbranch: wrap-and-sort is re-runnable
 
 `clone --wrap-and-sort` normalized the packaging once, at adoption,
