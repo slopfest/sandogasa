@@ -455,25 +455,39 @@ pub fn dpkg_source_build_argv(before: bool) -> Vec<String> {
 /// -- so templating those again would have the patch say each twice.
 /// What is left is what a person forgets.
 pub fn dep3_commit_template() -> String {
-    // No date substituted, and so no date dependency: dbranch carries
-    // none, and every crate it does carry is a package somebody has to
-    // maintain in Debian.
+    // The field lines are quilt's own wording, from `quilt header -e
+    // --dep3`, so a packager reads the same text whichever tool put
+    // the header there. Three of quilt's lines are left out, because
+    // the commit message is not a patch file:
+    //
+    //   Description / Author  -- `gbp pq export` writes Subject: and
+    //     From: from this commit, and DEP-3 reads those as exactly
+    //     these two fields. Templating them again has the patch say
+    //     each twice.
+    //   The `---` and its "follows DEP-3" trailer -- `git am` ends the
+    //     message at `---`, so the line survives one export and is
+    //     gone after the next import. Measured: a round trip drops it.
+    //
+    // Commented out, which quilt's are not: a field quilt leaves
+    // unedited sits in the patch as a placeholder, while git drops
+    // every line still commented.
     ("\n\
-         # Leave a blank line after the subject, then the long description.\n\
-         # Below: DEP-3 fields, kept by `gbp pq export` as the patch header.\n\
-         # Uncomment the ones that apply -- git drops every line still\n\
-         # commented, so a field you ignore cannot reach the patch half\n\
-         # filled in. Subject and author come from this commit, so DEP-3's\n\
-         # Description and Author are not repeated here.\n\
-         #\n\
-         # Origin: <upstream|backport|vendor|other>, <URL, required unless you wrote it>\n\
-         # Bug: <URL of the upstream bug, implies the patch was forwarded>\n\
-         # Forwarded: <URL|no|not-needed>\n\
-         # Applied-Upstream: <version|URL|commit>\n\
-         # Reviewed-by: <name and email>\n\
-         # Last-Update: <YYYY-MM-DD>\n\
-         #\n\
-         # DEP-3: https://dep-team.pages.debian.net/deps/dep3/\n")
+      # Subject and From come from this commit, which DEP-3 reads as its\n\
+      # Description and Author, so neither is repeated below. Uncomment\n\
+      # what applies: a line left commented is dropped by git and cannot\n\
+      # reach the patch half filled in.\n\
+      #\n\
+      # The fields below come verbatim from quilt --dep3; note that per the\n\
+      # DEP-3 documentation, Origin is actually optional if Author is set.\n\
+      # https://dep-team.pages.debian.net/deps/dep3/\n\
+      #\n\
+      # Origin: <upstream|backport|vendor|other>, <URL, required except if Author is present>\n\
+      # Bug: <URL to the upstream bug report if any, implies patch has been forwarded, optional>\n\
+      # Bug-<Vendor>: <URL to the vendor bug report if any, optional>\n\
+      # Forwarded: <URL|no|not-needed, useless if you have a Bug field, optional>\n\
+      # Applied-Upstream: <version|URL|commit, identifies patches merged upstream, optional>\n\
+      # Reviewed-by: <name and email of a reviewer, optional>\n\
+      # Last-Update: <YYYY-MM-DD, last update of the meta-information, optional>\n")
         .to_string()
 }
 

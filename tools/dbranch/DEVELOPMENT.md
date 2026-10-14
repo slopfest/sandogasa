@@ -456,6 +456,35 @@ directory, runs dh_make and puts gbp.conf back
 The lesson is not about dh_make: a next-step message is a command the
 user will run, so it is worth running once before printing it.
 
+### A `---` in a commit message is lost on the next `gbp pq import`
+
+`gbp pq export` writes the commit message into the patch header, so a
+DEP-3 field in the message becomes a DEP-3 field in the patch. The
+reverse is not symmetric. `gbp pq import` applies patches with
+`git am`, which ends the message at the first `---`, and everything
+below it is dropped.
+
+This bites the obvious thing to do, which is to paste quilt's
+`header -e --dep3` template into the commit message: it ends with
+
+    ---
+    This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+and that trailer survives one export and is gone after the next
+import. Measured on a fixture: export, re-import, and the message
+comes back without it. The patch file and the commit then disagree,
+and nothing in the symptom points at `git am`.
+
+So the template dbranch offers (`plan::dep3_commit_template`) carries
+the field lines and not the trailer. It also leaves out `Description:`
+and `Author:`, which is a different reason -- not harm, just
+duplication, since `gbp pq export` writes `Subject:` and `From:` and
+DEP-3 reads those as exactly those two fields. The field lines
+themselves are quilt's wording verbatim, so a packager meets the same
+text whichever tool wrote the header; the only change is that they are
+commented, because a quilt field left unedited stays in the patch as a
+placeholder while git drops a commented line.
+
 ## Design decisions
 
 ### Packaging from upstream's git (`upstream.rs`: `clone`, merge-based `update`)

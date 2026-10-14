@@ -1160,7 +1160,7 @@ fn ensure_debusine_ready() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var_os("HOME").map(|h| Path::new(&h).join(".config/debusine/client/config.ini"));
     if !config.is_some_and(|c| c.exists()) {
         return Err(
-            "uploading to Debusine needs an API token: run `debusine setup` (from \
+            "uploading to Debusine needs an API token: run debusine setup (from \
              debusine-client) to authenticate against debusine.debian.net"
                 .into(),
         );
@@ -1206,7 +1206,7 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
     let file = repo.join("debian/copyright");
     if !ui.dry_run && !file.is_file() {
         eprintln!(
-            "note: no debian/copyright to check — `{}` writes one from a scan of the              source (review it: a generated copyright is a claim about other people's              licences)",
+            "note: no debian/copyright to check — {} writes one from a scan of the source (review it: a generated copyright is a claim about other people's licences)",
             plan::decopy_shell_line()
         );
         return Ok(());
@@ -1216,7 +1216,7 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
     // wanted the check can install it and run the stage again.
     if !ui.dry_run && !sandogasa_cli::tool_exists("lrc") {
         eprintln!(
-            "note: debian/copyright not checked — install licenserecon for `lrc`, \
+            "note: debian/copyright not checked — install licenserecon for lrc, \
              which compares it against what licensecheck finds in the source"
         );
         return Ok(());
@@ -1245,8 +1245,8 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
     let decopy = plan::decopy_shell_line();
     if ui.dry_run || !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         eprintln!(
-            "warning: debian/copyright disagrees with the source; `{cme}` reconciles \
-             what is there, `{decopy}` regenerates it from a scan"
+            "warning: debian/copyright disagrees with the source; {cme} reconciles \
+             what is there, {decopy} regenerates it from a scan"
         );
         return Ok(());
     }
@@ -1305,18 +1305,23 @@ fn note_upstream_fix_route(repo: &Path) {
         return;
     }
     // Written under .git, which is neither committed nor shipped, so
-    // offering it costs the package nothing.
-    let template = repo.join(".git/dbranch-dep3-template");
-    let named = match std::fs::write(&template, plan::dep3_commit_template()) {
-        Ok(()) => format!(" -t {}", template.display()),
+    // offering it costs the package nothing. Named relative to the
+    // repository, because that is where the commands are run.
+    let rel = ".git/dbranch-dep3-template";
+    let named = match std::fs::write(repo.join(rel), plan::dep3_commit_template()) {
+        Ok(()) => format!(" -t {rel}"),
         Err(_) => String::new(),
     };
-    eprintln!(
-        "note: fixing this in a file outside debian/ means a patch, not a commit on \
-         this branch — `gbp pq import`, edit, `git commit{named}`, `gbp pq export`. \
-         That commit message becomes the patch header, so its DEP-3 fields \
-         (Forwarded: above all) are what say the fix was sent upstream"
-    );
+    eprintln!();
+    eprintln!("note: a fix outside debian/ is a patch, not a commit on this branch.");
+    eprintln!("  The commit message becomes the patch header, so its DEP-3 fields");
+    eprintln!("  -- Forwarded: above all -- are what say the fix went upstream:");
+    eprintln!();
+    eprintln!("    gbp pq import");
+    eprintln!("    ...edit the file...");
+    eprintln!("    git commit{named}");
+    eprintln!("    gbp pq export");
+    eprintln!();
 }
 
 /// Validate `debian/copyright` against the DEP-5 model, with `cme`.
@@ -1333,6 +1338,7 @@ fn check_copyright_syntax(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error
     ui.step("Validate debian/copyright against the DEP-5 model (cme)");
     let (_, out) = ui.run_capture(&plan::cme_check_copyright_argv(), repo)?;
     if !out.trim().is_empty() {
+        eprintln!();
         eprint!("{out}");
         eprintln!(
             "warning: cme is unhappy with debian/copyright above; it exits 0 either \
@@ -1376,12 +1382,13 @@ fn compare_holders(ui: &Ui, repo: &Path, file: &Path) -> Result<(), Box<dyn std:
     match crate::copyright::unattributed(&existing, &scanned).as_slice() {
         [] => Ok(()),
         missing => {
+            eprintln!();
             eprintln!(
-                "warning: the source names {}, which debian/copyright does not — \
-                 compare it with {rel}. That scan is a guess, junk entries and all, \
-                 so read it rather than copy it",
+                "warning: the source names {}, which debian/copyright does not.",
                 missing.join(" and ")
             );
+            eprintln!("  Compare it with {rel} -- that scan is a guess,");
+            eprintln!("  junk entries and all, so read it rather than copy it.");
             note_upstream_fix_route(repo);
             Ok(())
         }
@@ -1893,7 +1900,7 @@ fn ensure_ci_config_path(
         Ok((0, out, _)) => plan::ci_config_path(&out),
         Ok((_, out, err)) => {
             eprintln!(
-                "warning: `glab api` failed: {}; skipping the CI config path check",
+                "warning: glab api failed: {}; skipping the CI config path check",
                 first_nonempty(&err, &out)
             );
             return;
@@ -2004,7 +2011,7 @@ fn push_stage(
     ui.run_required(&push, repo)?;
 
     if nowait {
-        eprintln!("--nowait: pushed; not watching CI (use `dbranch watch-ci {branch}` later)");
+        eprintln!("--nowait: pushed; not watching CI (use dbranch watch-ci {branch} later)");
         return Ok(());
     }
     ui.step("Watch the CI pipeline");
@@ -2047,7 +2054,7 @@ fn watch_pipeline(
         if code != 0 {
             // A real error (auth / host / network), not "no pipeline".
             return Err(format!(
-                "`glab ci list --sha {short}` failed: {}",
+                "glab ci list --sha {short} failed: {}",
                 first_nonempty(&err, &out)
             )
             .into());
