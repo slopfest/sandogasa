@@ -1240,6 +1240,7 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
         return compare_holders(ui, repo, &file);
     }
     eprint!("{out}");
+    note_upstream_fix_route(repo);
     let cme = plan::cme_update_copyright_argv().join(" ");
     let decopy = plan::decopy_shell_line();
     if ui.dry_run || !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
@@ -1282,6 +1283,40 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
         &file,
         "Reconcile debian/copyright with the source",
     )
+}
+
+/// Say where a fix to a file outside `debian/` has to go, after
+/// something has been found that may need one.
+///
+/// The findings above are usually about upstream's files -- a licence
+/// that disagrees, a holder nobody wrote down, a malformed notice in
+/// a man page -- and on a `3.0 (quilt)` package those cannot be fixed
+/// by committing to this branch. The orig comes from the upstream tag,
+/// so `dpkg-source -b` stops with "aborting due to unexpected upstream
+/// changes" and the packager finds out at build time, having already
+/// made the commit.
+///
+/// Said only for quilt packages: a native one has no patch system and
+/// the advice would be wrong.
+fn note_upstream_fix_route(repo: &Path) {
+    let quilt = std::fs::read_to_string(repo.join("debian/source/format"))
+        .is_ok_and(|f| f.trim_start().starts_with("3.0 (quilt)"));
+    if !quilt {
+        return;
+    }
+    // Written under .git, which is neither committed nor shipped, so
+    // offering it costs the package nothing.
+    let template = repo.join(".git/dbranch-dep3-template");
+    let named = match std::fs::write(&template, plan::dep3_commit_template()) {
+        Ok(()) => format!(" -t {}", template.display()),
+        Err(_) => String::new(),
+    };
+    eprintln!(
+        "note: fixing this in a file outside debian/ means a patch, not a commit on \
+         this branch — `gbp pq import`, edit, `git commit{named}`, `gbp pq export`. \
+         That commit message becomes the patch header, so its DEP-3 fields \
+         (Forwarded: above all) are what say the fix was sent upstream"
+    );
 }
 
 /// Validate `debian/copyright` against the DEP-5 model, with `cme`.
@@ -1347,6 +1382,7 @@ fn compare_holders(ui: &Ui, repo: &Path, file: &Path) -> Result<(), Box<dyn std:
                  so read it rather than copy it",
                 missing.join(" and ")
             );
+            note_upstream_fix_route(repo);
             Ok(())
         }
     }
