@@ -112,10 +112,18 @@ async fn screen_bugs(
         return Ok(bugs.to_vec());
     }
 
+    let shown: Vec<String> = misfiled
+        .iter()
+        .map(|b| {
+            format!(
+                "  #{} {}\n    no {} among the update's packages",
+                b.bug_id, b.summary, b.package
+            )
+        })
+        .collect();
     eprintln!("\nThis update builds nothing for these bugs' packages:");
-    for bug in &misfiled {
-        eprintln!("  #{} {}", bug.bug_id, bug.summary);
-        eprintln!("    no {} among the update's packages", bug.package);
+    for bug in &shown {
+        eprintln!("{bug}");
     }
     if assume_yes {
         eprintln!(
@@ -123,12 +131,16 @@ async fn screen_bugs(
         );
         return Ok(bugs.to_vec());
     }
-    if !sandogasa_cli::confirm("Leave these bugs off the update?", true)
-        .map_err(|e| e.to_string())?
-    {
-        return Ok(bugs.to_vec());
-    }
-    let dropped: Vec<u64> = misfiled.iter().map(|b| b.bug_id).collect();
+    let dropped: Vec<u64> = sandogasa_cli::confirm_each(
+        "Leave these bugs off the update?",
+        "Leave this bug off?",
+        &shown,
+        true,
+    )
+    .map_err(|e| e.to_string())?
+    .into_iter()
+    .map(|i| misfiled[i].bug_id)
+    .collect();
     Ok(bugs
         .iter()
         .copied()
@@ -188,15 +200,24 @@ async fn propose_bugs(
         return Ok(Vec::new());
     }
 
+    let shown: Vec<String> = candidates
+        .iter()
+        .map(|c| format!("  #{} {}\n    {}", c.bug_id, c.summary, c.source))
+        .collect();
     eprintln!("\nThis update looks like it closes:");
-    for c in &candidates {
-        eprintln!("  #{} {}", c.bug_id, c.summary);
-        eprintln!("    {}", c.source);
+    for candidate in &shown {
+        eprintln!("{candidate}");
     }
-    if !sandogasa_cli::confirm("Add these bugs to the update?", true).map_err(|e| e.to_string())? {
-        return Ok(Vec::new());
-    }
-    Ok(candidates.iter().map(|c| c.bug_id).collect())
+    Ok(sandogasa_cli::confirm_each(
+        "Add these bugs to the update?",
+        "Add this bug?",
+        &shown,
+        true,
+    )
+    .map_err(|e| e.to_string())?
+    .into_iter()
+    .map(|i| candidates[i].bug_id)
+    .collect())
 }
 
 /// Whether the update may autopush, given what the operator asked

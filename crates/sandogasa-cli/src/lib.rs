@@ -245,6 +245,62 @@ pub fn confirm(question: &str, default_yes: bool) -> std::io::Result<bool> {
     Ok(parse_confirm(&line, default_yes))
 }
 
+/// Ask about a list of items the caller has already shown: take all
+/// of them, take none, or decide one at a time.
+///
+/// `items` holds each entry's display block — the same text the
+/// caller printed in its summary — so that walking the list reshows
+/// *why* an item is being offered, not just its headline. The
+/// returned indices are positions in `items`, for the caller to map
+/// back to whatever it is choosing between.
+///
+/// The common case stays one keystroke: Enter takes the default and
+/// `n` refuses the lot; only `each` walks, where `default_yes` is the
+/// per-item default too, so Entering through a walk lands where the
+/// one-shot answer would have. Like [`confirm`], callers
+/// must not prompt when stdin isn't a terminal or in `--json` mode —
+/// EOF there takes the default for the whole list, never a partial
+/// one, so a non-interactive run behaves exactly as it did before.
+pub fn confirm_each(
+    question: &str,
+    each: &str,
+    items: &[String],
+    default_yes: bool,
+) -> std::io::Result<Vec<usize>> {
+    use std::io::{BufRead, Write};
+    let hint = if default_yes {
+        "[Y/n/each]"
+    } else {
+        "[y/N/each]"
+    };
+    eprint!("{question} {hint}: ");
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    match parse_list_answer(&line, default_yes) {
+        ListAnswer::All => Ok((0..items.len()).collect()),
+        ListAnswer::None => Ok(Vec::new()),
+        ListAnswer::Each => {
+            let mut taken = Vec::new();
+            for (i, item) in items.iter().enumerate() {
+                eprintln!("\n{item}");
+                if confirm(each, default_yes)? {
+                    taken.push(i);
+                }
+            }
+            Ok(taken)
+        }
+    }
+}
+
+/// What a [`confirm_each`] prompt was answered with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListAnswer {
+    All,
+    None,
+    Each,
+}
+
 /// Pure core of [`confirm`], unit-testable without stdin.
 fn parse_confirm(answer: &str, default_yes: bool) -> bool {
     let answer = answer.trim();
@@ -254,6 +310,22 @@ fn parse_confirm(answer: &str, default_yes: bool) -> bool {
         false
     } else {
         default_yes
+    }
+}
+
+/// Pure core of [`confirm_each`], unit-testable without stdin.
+///
+/// Only `e`/`each` is new: everything else falls through to
+/// [`parse_confirm`], so Enter, EOF and a typo all land on the
+/// default rather than on a partial selection.
+fn parse_list_answer(answer: &str, default_yes: bool) -> ListAnswer {
+    let answer = answer.trim();
+    if answer.eq_ignore_ascii_case("e") || answer.eq_ignore_ascii_case("each") {
+        ListAnswer::Each
+    } else if parse_confirm(answer, default_yes) {
+        ListAnswer::All
+    } else {
+        ListAnswer::None
     }
 }
 
@@ -329,6 +401,28 @@ mod tests {
         for other in ["", "\n", "maybe"] {
             assert!(parse_confirm(other, true));
             assert!(!parse_confirm(other, false));
+        }
+    }
+
+    #[test]
+    fn parse_list_answer_adds_each_without_disturbing_yes_or_no() {
+        for each in ["e", "E", "each", "EACH", " each "] {
+            assert_eq!(parse_list_answer(each, true), ListAnswer::Each);
+            assert_eq!(parse_list_answer(each, false), ListAnswer::Each);
+        }
+        assert_eq!(parse_list_answer("y", false), ListAnswer::All);
+        assert_eq!(parse_list_answer("no", true), ListAnswer::None);
+    }
+
+    #[test]
+    fn an_unreadable_answer_takes_the_whole_list_not_part_of_it() {
+        // Enter, EOF and a typo must land on the default. A partial
+        // selection is only ever something the operator asked for
+        // item by item, so a non-interactive run keeps taking the
+        // list whole, exactly as it did before `each` existed.
+        for other in ["", "\n", "maybe", "1 3"] {
+            assert_eq!(parse_list_answer(other, true), ListAnswer::All);
+            assert_eq!(parse_list_answer(other, false), ListAnswer::None);
         }
     }
 

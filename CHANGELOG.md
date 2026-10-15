@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### ebranch: accept or refuse discovered bugs one at a time
+
+`check-update --submit` offers the bugs it thinks an update closes as
+a single block, so the only answers were all of them or none:
+
+```console
+This update looks like it closes:
+  #2523222 wprof-0.6 is available
+    named in wprof's new changelog entries
+  #2536211 wprof-0.7 is available
+    named in wprof's new changelog entries
+Add these bugs to the update? [Y/n]:
+```
+
+That list is produced by matching, not by certainty — a changelog can
+name a bug it does not fix — so one wrong entry cost every right one.
+The way out was to decline and file the references by hand, which
+throws away the discovery that is the feature's whole point.
+
+The prompt now also takes `each`, which walks the list one bug at a
+time and reshows how each was found before asking about it. Enter
+still takes the whole list and `n` still refuses it, so the common
+case is unchanged at one keystroke. The same now applies to the bugs
+`--bug` names that the update builds nothing for: they can be left off
+individually instead of as a set.
+
+Non-interactive runs are untouched. `--yes`, `--json` and a
+non-terminal stdin keep taking the list whole — Enter, EOF and an
+unparseable answer all fall through to the default for the entire
+list, so a run nobody is watching can never end up with a subset
+nobody chose.
+
+New in `sandogasa-cli`: `confirm_each`, which is this prompt as shared
+surface. The same shape — here is a list we found, take some of it —
+is waiting in `fedora-cve-triage` and `poi-tracker reconcile`.
+
 ### quick-xml 0.42 (breaking for EPEL 10.3)
 
 0.42 is now the primary `rust-quick-xml` in Fedora — stable in

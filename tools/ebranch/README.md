@@ -766,9 +766,12 @@ changelog entries it introduces — the second matters because a bug
 fixed in Rawhide is closed when that build lands, so a branch update
 carrying the same fix would otherwise have nothing to attach. Only
 bugs that would be voted `+1` are proposed, and each is shown with how
-it was found. The open-bug search is not scoped to the update's
-release: update requests are filed against Rawhide and package reviews
-under Fedora, so an EPEL update's bugs are mostly not EPEL bugs. CVE
+it was found. Answering `each` walks the list one bug at a time,
+reshowing that reason before each question, so a single wrong match
+can be dropped without losing the rest. The open-bug search is not
+scoped to the update's release: update requests are filed against
+Rawhide and package reviews under Fedora, so an EPEL update's bugs are
+mostly not EPEL bugs. CVE
 trackers among them are judged as described above, so a security
 update is offered the trackers filed against its release whose fix its
 build reaches, each with the CVE, the fixed version and the source:
@@ -777,7 +780,7 @@ build reaches, each with the CVE, the fixed version and the source:
 This update looks like it closes:
   #2504649 rust-fd-find: FTBFS in Fedora rawhide/f45
     open against rust-fd-find
-Add these bugs to the update? [Y/n]: y
+Add these bugs to the update? [Y/n/each]: y
 
 Submission plan for f45-build-side-146637:
   packages (1): rust-fd-find

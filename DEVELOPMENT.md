@@ -255,6 +255,39 @@ ships keeps its tree pure Rust and the runner free of a C toolchain.
 `dist plan` shows what a release would produce and
 `dist build --artifacts=local --target=<triple>` builds one for real.
 
+## A list offered for approval is approved item by item
+
+When a tool proposes a *set* of things it found — bugs an update looks
+like it closes, CVEs that look misfiled, candidates to triage — the
+prompt must let the operator take part of it. One `confirm` over the
+whole list means a single wrong entry costs every right one, and the
+workaround is to decline and redo the work by hand, which throws away
+the discovery that was the point of running the tool.
+
+The reason this keeps coming up is that these lists are produced by
+*matching*, not by certainty. `ebranch`'s candidates come from a
+changelog naming a bug number, which is good evidence and not proof: a
+changelog can mention a bug it does not fix, and a bug can turn out to
+be a different problem with the same version. So each candidate
+carries a `source` line saying how it was found, and that line is what
+a person actually judges it on.
+
+`sandogasa_cli::confirm_each(question, each, items, default_yes)` is
+the shared shape. `items` holds each entry's already-formatted display
+block, so the walk reshows the *reason* and not just the headline;
+the return is the indices taken. Two rules it exists to keep:
+
+- **The common case stays one keystroke.** Enter takes the whole list
+  and `n` refuses it; only `each` walks. A prompt that made the
+  operator answer per item on every run would be worse than the
+  all-or-nothing one it replaced.
+- **A partial selection is only ever something that was asked for.**
+  Enter, EOF and an unparseable answer all fall through to the
+  default for the *whole* list. That is what keeps `-y`, `--json` and
+  a non-terminal stdin behaving exactly as they did — per the
+  CLI-behavior rule that interactive prompts never fire there, a
+  non-interactive run must never end up with a subset nobody chose.
+
 ## Take a setting and its override together, or neither
 
 If a crate adopts a tuneable that another crate already has — a timeout, a

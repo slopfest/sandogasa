@@ -5,7 +5,9 @@ Shared CLI utilities for sandogasa tools.
 Provides helpers for common CLI patterns such as checking external tool
 availability at startup and asking the user a yes/no question
 (`confirm(question, default_yes)`, which prompts on stderr so stdout
-stays clean for piped or `--json` output).
+stays clean for piped or `--json` output). `confirm_each` asks the
+same way about a list the caller has already printed: all of it, none
+of it, or `each` to walk it item by item, returning the indices taken.
 
 The optional `http` feature adds an `http` module with the plumbing
 sandogasa's API clients share: `builder`/`blocking_builder` return a
